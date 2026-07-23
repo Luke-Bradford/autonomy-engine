@@ -520,6 +520,24 @@ export const FAILURE_CODES = {
   CONNECTION_KIND_INVALID: 'connection_kind_invalid',
   /** No adapter is registered for the bound connection's kind. */
   NO_ADAPTER: 'no_adapter',
+  /**
+   * #2 L13b — a node's resolved `connectionParams` binds a key the connection's
+   * `parameters` allowlist does not declare. The allowlist is the connection
+   * OWNER's opt-in (a shared connection's borrower must not override e.g.
+   * `baseUrl` and redirect the decrypted credential), so an undeclared key is
+   * refused, never silently dropped or merged. `permanent` — the doc or the
+   * connection must change.
+   */
+  CONNECTION_PARAM_UNDECLARED: 'connection_param_undeclared',
+  /**
+   * #2 L13b — a resolved `connectionParams` VALUE is (or embeds) a
+   * `{ "$secret": … }` marker. Parameters are non-secret by design, and a `${}`
+   * binding can resolve run-supplied json — so a marker can be INJECTED at run
+   * time past the save gate; this judges the RESOLVED value. Fail-closed:
+   * nothing resolves markers in connection config today, but a smuggled marker
+   * would lie in wait for the first mechanism that does (A11/S4).
+   */
+  CONNECTION_PARAM_SECRET_MARKER: 'connection_param_secret_marker',
   /** The connection's `secretRef` resolves to no row. */
   SECRET_NOT_FOUND: 'secret_not_found',
   /** The connection's secret exists but could not be decrypted. */
@@ -1333,6 +1351,19 @@ export const EngineCommandSchema = z.discriminatedUnion('type', [
      * adding it carries no replay/migration concern.
      */
     resolvedConnectionId: z.string().optional(),
+    /**
+     * #2 L13b — the node's `connectionParams` after the reducer resolved each
+     * value's `${}` expressions against the run env (type-PRESERVING: a
+     * whole-value ref keeps the referenced value's runtime type, unlike the
+     * `String()`-coerced id above; literals pass through untouched). The
+     * EXECUTOR gates these against the resolved connection's declared
+     * `parameters` allowlist and shallow-merges them over its static `config`
+     * — the reducer is pure and never sees connection rows, so declaration
+     * enforcement cannot live here. Ephemeral like `resolvedConnectionId`:
+     * commands are re-derived on each reduce, never persisted, so no
+     * replay/migration concern.
+     */
+    resolvedConnectionParams: z.record(z.string(), z.unknown()).optional(),
   }),
   z.object({
     // Spawn a `call_pipeline` child. `childRunId` is DETERMINISTIC from

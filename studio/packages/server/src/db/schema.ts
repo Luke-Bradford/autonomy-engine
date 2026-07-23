@@ -79,6 +79,14 @@ export const connections = sqliteTable(
       .notNull()
       .$type<ConnectionKind>(),
     config: text('config', { mode: 'json' }).notNull().$type<Record<string, unknown>>(),
+    // #2 L13b — the per-dispatch override allowlist (see the 0023 migration +
+    // `ConnectionSchema.parameters`). NOT NULL with a DB-side DEFAULT '[]' so
+    // pre-L13b rows read as "nothing overridable" (fail-closed) rather than
+    // NULL; the app write path always supplies a value (`ConnectionSchema`'s
+    // read default), so the DB default only ever serves the migration.
+    // (`mode: 'json'` defaults take the JS value — Drizzle serializes it; a
+    // string here would double-encode to '"[]"' and read back as a string.)
+    parameters: text('parameters', { mode: 'json' }).notNull().default([]).$type<string[]>(),
     // Nullable (a connection need not use a secret), but when present it MUST
     // resolve to a real `secrets.ref` row — RESTRICT so a secret can't be
     // deleted out from under a connection still pointing at it. Forward

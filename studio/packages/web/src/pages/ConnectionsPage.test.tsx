@@ -30,6 +30,7 @@ function conn(overrides: Partial<ConnectionPublic> = {}): ConnectionPublic {
     name: 'Claude',
     kind: 'anthropic_api',
     config: { model: 'claude-opus-4-8' },
+    parameters: [],
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

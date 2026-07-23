@@ -1023,6 +1023,113 @@ describe('createExecutor — #2 L13a dynamic connectionId routing', () => {
   });
 });
 
+describe('createExecutor — #2 L13b connection parameters (dispatch-time merge)', () => {
+  // A version whose http node binds `model` (+ optionally more) per-dispatch.
+  function paramsVersion(
+    db: Db,
+    connectionId: string,
+    connectionParams: Record<string, unknown>,
+  ): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    return createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [{ name: 'm', type: 'json', required: false }],
+      outputs: [],
+      nodes: [
+        {
+          ...httpNode('n1', connectionId, { url: 'https://x/y', outputs: [] }),
+          connectionParams,
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    }).id;
+  }
+  function paramsRun(db: Db, pvId: string, params: Record<string, unknown> = {}) {
+    return createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params,
+    });
+  }
+  function capturingAdapter(sink: { config?: Record<string, unknown> }): ConnectorRegistry {
+    return fakeHttpAdapter(async function* (ctx) {
+      sink.config = ctx.connectionConfig;
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+  }
+
+  it('shallow-merges a DECLARED binding over the static config; un-bound keys survive', async () => {
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: { tag: 'static', model: 'default-model' },
+      parameters: ['model'],
+      secretRef: null,
+    }).id;
+    const pvId = paramsVersion(db, connId, { model: 'override-model' });
+
+    const sink: { config?: Record<string, unknown> } = {};
+    const state = await startRun(
+      deps(db, { adapters: capturingAdapter(sink) }),
+      paramsRun(db, pvId),
+    );
+    expect(state.status).toBe('success');
+    // `model` overridden, `tag` untouched — the static value is the default.
+    expect(sink.config).toEqual({ tag: 'static', model: 'override-model' });
+  });
+
+  it('REFUSES an UNDECLARED binding key — permanent, its own code, allowlist is the connection owner\u2019s', async () => {
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: { tag: 'static' },
+      parameters: [], // nothing declared — nothing overridable
+      secretRef: null,
+    }).id;
+    const pvId = paramsVersion(db, connId, { model: 'sneaky' });
+    const run = paramsRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining("does not declare parameter 'model'"),
+      kind: 'permanent',
+      code: 'connection_param_undeclared',
+    });
+  });
+
+  it('REFUSES a resolved binding value that is (or embeds) a {$secret} marker', async () => {
+    // Parameters are NON-secret by design. A `${}` binding can resolve to a
+    // run-param-supplied json value, so a marker can be INJECTED at run time —
+    // the guard must judge the RESOLVED value, not the authored config.
+    const db = freshDb().db;
+    const connId = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['model'],
+      secretRef: null,
+    }).id;
+    const pvId = paramsVersion(db, connId, { model: '${params.m}' });
+    const run = paramsRun(db, pvId, { m: { nested: { $secret: 'smuggled' } } });
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      kind: 'permanent',
+      code: 'connection_param_secret_marker',
+    });
+  });
+});
+
 describe('createExecutor — the ActivityDefinition contract (#1 D6 / F9a)', () => {
   /**
    * A one-entry catalog. The MVP set is entirely `execution`-with-a-connection,

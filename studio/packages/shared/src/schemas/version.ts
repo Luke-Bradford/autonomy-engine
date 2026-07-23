@@ -163,7 +163,22 @@
 // L12 export at import (`portability/envelope.ts`) rather than run a
 // conversation node without its conversation. (A config with neither key is
 // byte-identical across the bump.)
-export const CATALOG_VERSION = 17;
+// 18 (#2 L13b): CONNECTION PARAMETERS. A node may carry top-level
+// `connectionParams` — per-dispatch `${}`-bound overrides the executor
+// shallow-merges over the bound connection's static `config` (gated by the
+// connection's declared `parameters` allowlist). `NodeSchema` is a plain
+// `z.object` (read-tolerant, strips unknown keys), so a pre-18 build importing
+// a connectionParams doc silently DROPS the field and dispatches on the
+// connection's UNMODIFIED static config — wrong model/endpoint/knobs sent,
+// the silent-WRONG shape (worse than a loud failure) that mandates a bump on
+// its own. The same bump covers CONNECTION envelopes: `parameters` rides
+// `ConnectionPublicSchema` into exports, and `parseAndUpgradeEnvelope`
+// refuses a newer `catalogVersion` for every envelope kind, so a pre-18 build
+// refuses (rather than silently strips the allowlist from) a v18 connection
+// export. (A doc/connection without the new keys is byte-identical across the
+// bump; pre-18 exports lacking `parameters` are healed by its fail-closed
+// `.default([])` on read.)
+export const CATALOG_VERSION = 18;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the

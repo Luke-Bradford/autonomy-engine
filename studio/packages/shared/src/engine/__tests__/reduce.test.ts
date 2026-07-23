@@ -512,6 +512,96 @@ describe('#2 L13a — connectionId resolution on dispatchNode', () => {
 });
 
 // ===========================================================================
+// #2 L13b — connectionParams resolution on dispatchNode
+// ===========================================================================
+
+/** A node with a connectionId + per-dispatch parameter bindings. */
+function cpNode(
+  id: string,
+  connectionParams: Record<string, unknown>,
+  config: Record<string, unknown> = {},
+): Node {
+  return { ...node(id, config), connectionId: 'conn_1', connectionParams };
+}
+
+describe('#2 L13b — connectionParams resolution on dispatchNode', () => {
+  it('resolves ${} bindings TYPE-PRESERVINGLY and threads resolvedConnectionParams', () => {
+    // A whole-value expression keeps the referenced value's runtime type
+    // (number here), and a literal non-string binding passes through as-is —
+    // no String() coercion anywhere (unlike connectionId, which IS a string).
+    const eng = engine([
+      cpNode('a', {
+        model: '${params.model}',
+        maxTokens: '${params.budget}',
+        flags: { beta: true },
+      }),
+    ]);
+    const r = eng.reduce(eng.seedState(), started({ model: 'claude-sonnet', budget: 4096 }));
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionParams).toEqual({
+      model: 'claude-sonnet',
+      maxTokens: 4096,
+      flags: { beta: true },
+    });
+  });
+
+  it('leaves resolvedConnectionParams undefined when the node carries none', () => {
+    const eng = engine([connNode('a', 'conn-fixed-123')]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(dispatchCmd(r.commands, 'a').resolvedConnectionParams).toBeUndefined();
+  });
+
+  it('resolves against the SAME env as config: an upstream output feeds a binding', () => {
+    const eng = engine(
+      [node('a'), cpNode('b', { model: '${nodes.a.output.pick}' }, { msg: 'hi' })],
+      [edge('a', 'b', 'success')],
+    );
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), { pick: 'claude-opus' }));
+    const b = dispatchCmd(r.commands, 'b');
+    expect(b.resolvedConnectionParams).toEqual({ model: 'claude-opus' });
+    expect(b.preparedInput).toEqual({ msg: 'hi' });
+  });
+
+  it('fails the run (invalid_event) on a binding referencing an unknown var', () => {
+    const eng = engine([cpNode('a', { model: '${nodes.ghost.output.x}' })]);
+    const r = eng.reduce(eng.seedState(), started());
+    expect(r.commands.some((c) => c.type === 'dispatchNode')).toBe(false);
+    expect(r.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+  });
+
+  it('the run.resumed re-emit re-derives resolvedConnectionParams', () => {
+    const eng = engine([cpNode('a', { model: '${params.model}' })]);
+    const s = eng.reduce(eng.seedState(), started({ model: 'ollama-local' })).state;
+    expect(s.nodes.a!.status).toBe('ready');
+    const resumed = eng.reduce(s, { type: 'run.resumed', runId: RUN, reason: 'boot_reconcile' });
+    expect(dispatchCmd(resumed.commands, 'a').resolvedConnectionParams).toEqual({
+      model: 'ollama-local',
+    });
+  });
+
+  it('re-resolves identically on a retry re-dispatch', () => {
+    const eng = engine([cpNode('a', { model: '${params.model}' })]);
+    let s = eng.reduce(eng.seedState(), started({ model: 'openai-eu' })).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const retry = eng.reduce(s, {
+      type: 'node.retryRequested',
+      runId: RUN,
+      nodeId: 'a',
+      previousAttemptId: attempt('a'),
+      reason: 'boot_reconcile',
+    });
+    expect(dispatchCmd(retry.commands, 'a').resolvedConnectionParams).toEqual({
+      model: 'openai-eu',
+    });
+  });
+});
+
+// ===========================================================================
 // #6 E3 — ${run.startedAt} + ${nodes.<id>.status} resolve from LOGGED FACTS
 // ===========================================================================
 

@@ -357,6 +357,21 @@ export const NodeSchema = z.object({
   type: z.string().min(1),
   config: z.record(z.string(), z.unknown()),
   connectionId: z.string().min(1).optional(),
+  /**
+   * #2 L13b — per-dispatch bindings for the bound connection's declared
+   * `parameters` allowlist (`ConnectionSchema.parameters`). String values may
+   * be `${}` expressions; the reducer resolves them at dispatch (same env as
+   * `config` — `prepDispatch` in `engine/reduce.ts`) and the EXECUTOR
+   * shallow-merges the resolved record over the connection's static `config`.
+   * The allowlist check lives at DISPATCH, not save: connections are mutable
+   * rows (a save-time check would go stale) and `connectionId` may itself be a
+   * `${}` ref, so the target connection is unknowable here. Save-time rules
+   * (`engine/params.ts`): refs are scanned, and bindings without a
+   * `connectionId` — or on a `call` node — are refused (silently-inert config
+   * is refused, never ignored; the L12 call-node precedent). Adding this field
+   * bumped `CATALOG_VERSION` 17→18 (`schemas/version.ts`).
+   */
+  connectionParams: z.record(z.string(), z.unknown()).optional(),
   position: PositionSchema,
   call: CallConfigSchema.optional(),
   /**

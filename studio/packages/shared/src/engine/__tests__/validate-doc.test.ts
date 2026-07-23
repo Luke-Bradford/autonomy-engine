@@ -1117,3 +1117,46 @@ describe('validateDoc — branch edges route against the declared-branch rule (#
     expect(errors).toMatch(/is not a branching activity/);
   });
 });
+
+// ===========================================================================
+// connectionParams — shape rules at SAVE time (#2 L13b)
+// ===========================================================================
+
+describe('validateDoc — connectionParams shape (L13b)', () => {
+  it('accepts connectionParams alongside a connectionId (literal or ${})', () => {
+    const literal = node('n', {}, { connectionId: 'conn_1', connectionParams: { model: 'x' } });
+    expect(validateDoc(doc([literal]))).toEqual([]);
+    const dynamic = node(
+      'd',
+      {},
+      { connectionId: '${params.provider}', connectionParams: { model: '${params.model}' } },
+    );
+    const params: Param[] = [
+      { name: 'provider', type: 'string', required: true },
+      { name: 'model', type: 'string', required: true },
+    ];
+    expect(validateDoc(doc([dynamic], [], [], params))).toEqual([]);
+  });
+
+  it('rejects connectionParams without a connectionId (silently-inert config)', () => {
+    const d = doc([node('n', {}, { connectionParams: { model: 'x' } })]);
+    const errors = validateDoc(d).join(' ');
+    expect(errors).toMatch(/node\.n: connectionParams .*connectionId/);
+  });
+
+  it('rejects connectionParams on a call node (child pipeline owns dispatch)', () => {
+    const withConn = {
+      ...callNode('c', 'ver_1'),
+      connectionId: 'conn_1',
+      connectionParams: { model: 'x' },
+    };
+    const errors = validateDoc(doc([withConn])).join(' ');
+    expect(errors).toMatch(/node\.c: connectionParams .*call node/);
+  });
+
+  it('rejects an EMPTY connectionParams record without a connectionId too', () => {
+    // {} binds nothing but still signals intent — same inert-config refusal.
+    const d = doc([node('n', {}, { connectionParams: {} })]);
+    expect(validateDoc(d).join(' ')).toMatch(/node\.n: connectionParams/);
+  });
+});

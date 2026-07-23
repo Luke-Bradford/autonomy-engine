@@ -52,6 +52,46 @@ describe('connections routes', () => {
     expect(missingRes.statusCode).toBe(404);
   });
 
+  it('#2 L13b — a PATCH that omits `parameters` PRESERVES the stored allowlist', async () => {
+    // The Zod-partial-applies-default gotcha: were `parameters` defaulted on
+    // the write body, this rename would silently reset the allowlist to [].
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/connections',
+      payload: {
+        name: 'Parameterized',
+        kind: 'anthropic_api',
+        config: { model: 'claude-sonnet' },
+        parameters: ['model', 'maxTokens'],
+      },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const created = createRes.json();
+    expect(created.parameters).toEqual(['model', 'maxTokens']);
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: `/api/connections/${created.id}`,
+      payload: { name: 'Renamed' },
+    });
+    expect(patchRes.statusCode).toBe(200);
+    expect(patchRes.json().parameters).toEqual(['model', 'maxTokens']);
+
+    // An EXPLICIT parameters patch still updates (and [] still clears).
+    const explicit = await app.inject({
+      method: 'PATCH',
+      url: `/api/connections/${created.id}`,
+      payload: { parameters: ['model'] },
+    });
+    expect(explicit.json().parameters).toEqual(['model']);
+    const cleared = await app.inject({
+      method: 'PATCH',
+      url: `/api/connections/${created.id}`,
+      payload: { parameters: [] },
+    });
+    expect(cleared.json().parameters).toEqual([]);
+  });
+
   it('POST with a plaintext secret never returns it, and stores an encrypted row', async () => {
     const plaintext = 'sk-super-secret-plaintext';
     const res = await app.inject({

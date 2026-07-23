@@ -1294,6 +1294,33 @@ export function validateRefs(
         foreachChildIds.has(node.id),
       );
     }
+    // #2 L13b — per-dispatch connection-parameter bindings. `scan` walks the
+    // whole record (nested records/arrays included), so an embedded `${}`
+    // string anywhere in a binding value is validated against the SAME env the
+    // reducer resolves it in at dispatch (`resolveConnectionParams`). Like
+    // `connectionId` above: literals no-op, and values are NOT secret sinks
+    // (the executor separately refuses a `$secret`-marker-shaped resolved
+    // value — parameters are non-secret by design). The allowlist check
+    // (which keys the target connection declares) is dispatch-time only:
+    // connections are mutable rows and `connectionId` may itself be a `${}`
+    // ref, so the target is unknowable at save (see `schemas/pipeline.ts`).
+    if (node.connectionParams !== undefined) {
+      scan(
+        `nodes.${node.id}.connectionParams`,
+        node.connectionParams,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+      // Bindings are NEVER secret sinks (parameters are non-secret by design),
+      // so an empty sink list refuses every authored `{$secret}` marker here
+      // with a save-time diagnostic. The executor separately refuses a marker
+      // in the RESOLVED value (`containsSecretMarker`) — a `${}` binding can
+      // resolve run-supplied json this gate never sees.
+      scanSecretSinks(`nodes.${node.id}.connectionParams`, node.connectionParams, [], errors);
+    }
     // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
     // declared sink field of this node's activity. `getActivity` reads the
     // shared module catalog (no signature change to this fn or its callers,
@@ -1477,6 +1504,24 @@ export function collectSecretSinkMarkers(
   return out;
 }
 
+/**
+ * #2 L13b — does `value` contain a `{ "$secret": … }` marker ANYWHERE in its
+ * tree? The executor's connection-parameter guard: parameters are non-secret
+ * by design, and a `${}` binding can resolve run-supplied json, so a marker
+ * can arrive at dispatch that no save gate ever saw. Reuses the marker walk
+ * (`walkMarkerRegion`) rather than a parallel traversal, so "what counts as a
+ * marker" (`isSecretRef`, loose) and the depth-cap semantics cannot drift from
+ * the sink gate's. A marker below `MAX_CONFIG_DEPTH` is not seen — consistent
+ * with the resolver, which can never resolve below the cap either.
+ */
+export function containsSecretMarker(value: unknown): boolean {
+  let found = false;
+  walkMarkerRegion('', value, false, () => {
+    found = true;
+  });
+  return found;
+}
+
 /** Shape-validate a marker at a declared sink: strict schema + literal name (§2). */
 function validateSecretMarker(where: string, value: unknown, errors: string[]): void {
   const parsed = SecretRefSchema.safeParse(value);
@@ -1656,6 +1701,26 @@ export function validateDoc(
     }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
+    // #2 L13b — connectionParams shape rules (activity-agnostic: any
+    // connection-bound node may carry bindings). Both refusals follow the L12
+    // call-node precedent: config that would be silently INERT is refused with
+    // a diagnostic, never dropped. On a call node the child pipeline owns
+    // dispatch (the executor never resolves a connection for it); without a
+    // `connectionId` there is no connection to bind, so the record could never
+    // apply. An EMPTY `{}` still signals intent and is refused the same way.
+    if (node.connectionParams !== undefined) {
+      if (node.call !== undefined) {
+        errors.push(
+          `node.${node.id}: connectionParams have no effect on a call node ` +
+            "(its dispatch and connection are the child pipeline's) — remove them",
+        );
+      } else if (node.connectionId === undefined) {
+        errors.push(
+          `node.${node.id}: connectionParams need a connectionId to bind against ` +
+            '(without one the bindings are silently inert) — bind a connection or remove them',
+        );
+      }
+    }
   }
 
   // Node-only forward reachability + the container index, for the back-edge

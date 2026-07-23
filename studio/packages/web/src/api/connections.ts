@@ -20,8 +20,19 @@ import { fetchAllPages, pageQuery } from './pagination';
 export const ConnectionWriteSchema = NewConnectionSchema.omit({
   ownerId: true,
   secretRef: true,
+  parameters: true,
 }).extend({
   secret: z.string().min(1).optional(),
+  /**
+   * #2 L13b — mirrors the server body's re-declaration WITHOUT the shared
+   * schema's `.default([])`, and for the same load-bearing reason: were the
+   * default inherited, `safeParse` would manufacture `parameters: []` on
+   * every submit, so an EDIT of any other field would PATCH an explicit `[]`
+   * and silently clear the stored allowlist (the server treats explicit `[]`
+   * as a deliberate clear — correctly). No editor exists for it yet (UI
+   * epic); omitting the key preserves the stored value.
+   */
+  parameters: z.array(z.string().min(1)).optional(),
 });
 export type ConnectionWrite = z.input<typeof ConnectionWriteSchema>;
 

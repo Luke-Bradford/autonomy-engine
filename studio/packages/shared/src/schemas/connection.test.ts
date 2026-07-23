@@ -12,6 +12,7 @@ const validConnection = {
   name: 'My Claude key',
   kind: 'anthropic_api',
   config: { model: 'claude-sonnet' },
+  parameters: [],
   secretRef: 'secret_1',
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
@@ -52,6 +53,28 @@ describe('ConnectionSchema', () => {
 
   it('rejects a non-record config', () => {
     expect(() => ConnectionSchema.parse({ ...validConnection, config: 'not-an-object' })).toThrow();
+  });
+
+  // #2 L13b — the per-dispatch override allowlist.
+  it('accepts a declared parameters allowlist and round-trips it', () => {
+    const value = { ...validConnection, parameters: ['model', 'baseUrl'] };
+    expect(ConnectionSchema.parse(value)).toEqual(value);
+  });
+
+  it('defaults an absent parameters to [] (pre-L13b rows declare nothing — fail-closed)', () => {
+    const { parameters, ...withoutParameters } = validConnection;
+    void parameters;
+    expect(ConnectionSchema.parse(withoutParameters).parameters).toEqual([]);
+  });
+
+  it('rejects an empty-string parameter name', () => {
+    expect(() => ConnectionSchema.parse({ ...validConnection, parameters: [''] })).toThrow();
+  });
+
+  it('rejects a non-array parameters', () => {
+    expect(() =>
+      ConnectionSchema.parse({ ...validConnection, parameters: { model: true } }),
+    ).toThrow();
   });
 });
 

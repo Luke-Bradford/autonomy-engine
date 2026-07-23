@@ -1,0 +1,13 @@
+-- #2 L13b — connection parameters: the per-dispatch override ALLOWLIST.
+-- `parameters` is the list of `config` keys a node may override via its
+-- `${}`-bound `connectionParams` (resolved by the reducer, gated + merged by
+-- the executor). Declared on the CONNECTION because connections can be shared
+-- (null-owner) and carry a secret: the owner opts in per key, or a borrower
+-- node could override e.g. `baseUrl` and point the decrypted credential at a
+-- hostile host.
+--
+-- A plain ADD COLUMN (new column, no CHECK edit on an existing constraint —
+-- the 0019 recreate reasoning does not apply). DEFAULT '[]' is the HONEST,
+-- fail-closed value for every existing row: a pre-L13b connection declared
+-- nothing overridable, so nothing is.
+ALTER TABLE connections ADD COLUMN parameters TEXT NOT NULL DEFAULT '[]';

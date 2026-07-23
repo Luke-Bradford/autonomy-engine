@@ -33,6 +33,28 @@ export const ConnectionSchema = z.object({
   name: z.string().min(1),
   kind: ConnectionKindSchema,
   config: z.record(z.string(), z.unknown()),
+  /**
+   * #2 L13b — the per-dispatch override ALLOWLIST: the `config` keys a node may
+   * override via its `${}`-bound `connectionParams` (resolved at dispatch,
+   * shallow-merged over `config` — the static value IS the default). Declared
+   * on the CONNECTION, not the node, because connections can be shared
+   * (null-owner) and carry a secret: without the owner's opt-in per key, a
+   * borrower node could override e.g. `baseUrl` and point the decrypted
+   * credential at a hostile host. Names only in v1 — richer metadata
+   * (types/defaults) is a widening, not a break. `.default([])` is the READ
+   * heal for pre-L13b rows/exports and is fail-closed here (an absent
+   * allowlist declares NOTHING overridable); the WRITE body must NOT inherit
+   * this default — Zod applies a `.default()` even through `.partial()`, so a
+   * defaulted PATCH field would silently reset a stored allowlist to `[]`
+   * (see `routes/connections.ts`).
+   *
+   * Parameters are NON-secret by design: the dispatch merge refuses any
+   * resolved value that is `{$secret:…}`-marker-shaped (executor). Connection
+   * `config` itself carries no secret sinks today (see the A10
+   * marker-subsumption note below) — if A11/S4 ever adds them, the merge must
+   * also refuse a declared parameter naming a sink path.
+   */
+  parameters: z.array(z.string().min(1)).default([]),
   secretRef: z.string().min(1).nullable(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),

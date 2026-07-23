@@ -104,6 +104,19 @@ describe('NodeSchema', () => {
     void position;
     expect(() => NodeSchema.parse(rest)).toThrow();
   });
+
+  // #2 L13b — per-dispatch connection-parameter bindings.
+  it('round-trips connectionParams (values stay untyped: literals or ${} strings)', () => {
+    const value = {
+      ...node,
+      connectionParams: { model: '${params.model}', maxTokens: 1024, flags: { beta: true } },
+    };
+    expect(NodeSchema.parse(value)).toEqual(value);
+  });
+
+  it('rejects a non-record connectionParams', () => {
+    expect(() => NodeSchema.parse({ ...node, connectionParams: ['model'] })).toThrow();
+  });
 });
 
 describe('EdgeOnSchema', () => {

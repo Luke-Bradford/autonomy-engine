@@ -823,6 +823,59 @@ describe('#2 L13a — connectionId ${} refs at SAVE time', () => {
   });
 });
 
+describe('#2 L13b — connectionParams ${} refs at SAVE time', () => {
+  /** A node with a connectionId + per-dispatch parameter bindings. */
+  function paramsNode(id: string, connectionParams: Record<string, unknown>): Node {
+    return { ...node(id, {}), connectionId: 'conn_1', connectionParams };
+  }
+
+  it('ACCEPTS literal binding values (no ${} — the scan no-ops)', () => {
+    const errors = validateRefs(
+      doc([paramsNode('n', { model: 'claude-sonnet', maxTokens: 1024 })], []),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} binding whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [paramsNode('n', { model: '${params.model}' })],
+        [],
+        [{ name: 'model', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS a ${} binding referencing an undeclared param', () => {
+    const errors = validateRefs(doc([paramsNode('n', { model: '${params.nope}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/connectionParams/);
+  });
+
+  it('REJECTS a malformed ${} binding expression at save', () => {
+    const errors = validateRefs(doc([paramsNode('n', { model: '${params.a[0}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionParams/);
+  });
+
+  it('REJECTS an authored {$secret} marker in a binding (bindings are never sinks)', () => {
+    const errors = validateRefs(doc([paramsNode('n', { apiKey: { $secret: 'my-key' } })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionParams/);
+    expect(errors[0]).toMatch(/secret/);
+  });
+
+  it('scans NESTED binding values (a record/array value may embed ${} strings)', () => {
+    const errors = validateRefs(
+      doc([paramsNode('n', { flags: { region: '${params.nope}' } })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+  });
+});
+
 describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () => {
   const producer = node('a', {
     outputs: [
