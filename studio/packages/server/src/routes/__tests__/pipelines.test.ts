@@ -1,7 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
-import { appendRunEvent, createPipeline, createRun } from '../../repo/index.js';
+import {
+  appendRunEvent,
+  createPipeline,
+  createPipelineVersion,
+  createRun,
+  createTrigger,
+  getPipeline,
+  getTrigger,
+} from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 const emptyVersionBody = { params: [], outputs: [], nodes: [], edges: [] };
@@ -259,6 +267,83 @@ describe('pipelines routes', () => {
     expect(listRes.json().items.map((p: { id: string }) => p.id)).not.toContain(other.id);
     const getRes = await app.inject({ method: 'GET', url: `/api/pipelines/${other.id}` });
     expect(getRes.statusCode).toBe(404);
+  });
+
+  describe('#3 G5a — POST /api/pipelines/:id/archive', () => {
+    function seedBoundEnabledTrigger(pipelineId: string) {
+      const version = createPipelineVersion(app.db, {
+        pipelineId,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      return createTrigger(app.db, {
+        ownerId: 'local',
+        name: 'Nightly',
+        pipelineVersionId: version.id,
+        params: {},
+        mode: 'schedule',
+        schedule: '0 2 * * *',
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: true,
+      });
+    }
+
+    it('archives the pipeline, disables its dependent triggers, and drops it off the list', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'ToArchive' });
+      const trigger = seedBoundEnabledTrigger(pipeline.id);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/archive`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().archived).toBe(true);
+      expect(getTrigger(app.db, trigger.id)!.enabled).toBe(false);
+
+      // Dropped from the default list, still reachable by id.
+      const listRes = await app.inject({ method: 'GET', url: '/api/pipelines' });
+      expect(listRes.json().items.map((p: { id: string }) => p.id)).not.toContain(pipeline.id);
+      const getRes = await app.inject({ method: 'GET', url: `/api/pipelines/${pipeline.id}` });
+      expect(getRes.statusCode).toBe(200);
+      expect(getRes.json().archived).toBe(true);
+    });
+
+    it('is idempotent (a second archive still 200s)', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'ArchiveTwice' });
+      const first = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/archive`,
+      });
+      expect(first.statusCode).toBe(200);
+      const second = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/archive`,
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json().archived).toBe(true);
+    });
+
+    it('404s for a missing pipeline and for one owned by someone else (authz)', async () => {
+      const missing = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/pipe_missing/archive',
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const other = createPipeline(app.db, { ownerId: 'someone-else', name: 'NotMineArchive' });
+      const notMine = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${other.id}/archive`,
+      });
+      expect(notMine.statusCode).toBe(404);
+      // Untouched — authz refused before any write (still un-archived).
+      expect(getPipeline(app.db, other.id)!.archived).toBe(false);
+    });
   });
 
   it('validation: bad body -> 400', async () => {

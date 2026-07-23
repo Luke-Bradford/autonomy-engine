@@ -8,6 +8,7 @@ import {
 } from '@autonomy-studio/shared';
 import {
   aggregatePipelineCost,
+  archivePipeline,
   createPipeline,
   createPipelineVersion,
   deletePipeline,
@@ -84,6 +85,35 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     // handler) when the pipeline has run history — see `repo/pipelines.ts`.
     deletePipeline(db, existing.id);
     reply.status(204).send();
+  });
+
+  /**
+   * #3 G5a (Foundation Spec #3 reshape item ②) — ARCHIVE a pipeline
+   * (soft-delete). Unlike DELETE (which hard-deletes and 409s once runs exist),
+   * archive PRESERVES the immutable versions + runs, drops the pipeline off the
+   * default list, disables every dependent trigger, and bars dispatch (the
+   * launcher refuses an archived pipeline). This is the manual counterpart to
+   * the G5b import delete-classification, sharing the `archivePipeline` service.
+   *
+   * Idempotent: archiving an archived pipeline returns 200 with the same shape.
+   * `requireOwned` enforces authorization (authentication ≠ authorization); the
+   * post-commit `scheduler.sync()` drops the now-disabled triggers' pending
+   * wakeups (the composite reconciler — schedule + tumbling).
+   */
+  fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/archive', async (request) => {
+    const existing = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const result = archivePipeline(db, existing.id);
+    // `existing` was owner-checked above, so a null here means it vanished
+    // between the read and the archive (a concurrent delete) — surface as 404,
+    // never a manufactured success.
+    if (!result) throw new NotFoundError('pipeline', existing.id);
+    fastify.scheduler.sync();
+    return result.pipeline;
   });
 
   fastify.post<{ Params: { id: string } }>(

@@ -22,7 +22,7 @@ import {
   queuedTriggerCandidatesForPipeline,
 } from '../repo/runs.js';
 import { getPipelineIdForVersion } from '../repo/pipeline-versions.js';
-import { getPipeline } from '../repo/pipelines.js';
+import { getPipeline, isPipelineArchived } from '../repo/pipelines.js';
 import { getParsedTrigger } from '../repo/triggers.js';
 import { startRun, terminalizeInterrupted, type DriveDeps, type DriveLog } from './driver.js';
 
@@ -132,6 +132,29 @@ export class UnboundTriggerError extends Error {
   constructor(public readonly triggerId: string) {
     super(`trigger '${triggerId}' has no bound pipeline version — an unbound trigger never fires`);
     this.name = 'UnboundTriggerError';
+  }
+}
+
+/**
+ * #3 G5a (item ②) — thrown by `fire()` when the trigger's bound pipeline is
+ * ARCHIVED. The DISPATCH-time guarantee behind archive: disabling dependent
+ * triggers on archive is the primary stop, but this guard closes the gap where
+ * a trigger is later re-enabled or a fresh trigger is bound to an archived
+ * pipeline's version (mirrors the reshape's "secret gate at DISPATCH, not just
+ * enable-time"). Message carries ids only — client-safe. Every fire caller maps
+ * it: schedule/tumbling suppress, the ledger finalizes-as-skipped, the manual
+ * route → 409 via the global error handler (`errors.ts`).
+ */
+export class ArchivedPipelineError extends Error {
+  constructor(
+    public readonly triggerId: string,
+    public readonly pipelineId: string,
+  ) {
+    super(
+      `pipeline '${pipelineId}' is archived — an archived pipeline never dispatches ` +
+        `(trigger '${triggerId}')`,
+    );
+    this.name = 'ArchivedPipelineError';
   }
 }
 
@@ -463,6 +486,22 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
       return { outcome: 'skipped', reason: SHUTDOWN_SKIP_REASON };
     }
 
+    // #3 G5a (item ②) — refuse to DISPATCH an archived pipeline. Resolved HERE,
+    // before the binding/replay-safety refusals below, so "archived" is a
+    // DETERMINISTIC reason a caller can act on (a `SubstituteError` from a stale
+    // binding must not mask it) — yet still AFTER the transient shutdown skip
+    // above (a shutting-down launcher is not a decision about the pipeline). A
+    // version whose row is GONE resolves `pipelineId === null`; that fire can
+    // never run anyway and the drive's doc-resolve fault owns it (same reasoning
+    // as the per-pipeline concurrency gate below reuses this `firePipelineId`).
+    // `isPipelineArchived` is a single-column projection (not a whole-row
+    // strict parse), so the guard adds one indexed read without widening the
+    // strict-read surface on the fire hot path.
+    const firePipelineId = getPipelineIdForVersion(db, trigger.pipelineVersionId);
+    if (firePipelineId !== null && isPipelineArchived(db, firePipelineId)) {
+      throw new ArchivedPipelineError(trigger.id, firePipelineId);
+    }
+
     // #547 boundary 3 (#5 S8) — refuse a non-finite number ANYWHERE in the fire
     // body BEFORE it is frozen into the durable `run.triggerContext`:
     // `JSON.parse('{"x":1e999}')` is valid JSON yielding `Infinity`, which
@@ -510,13 +549,13 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
     const active = countActiveRunsForTrigger(db, trigger.id);
     const { policy, max } = trigger.concurrency;
 
-    // #5 S6b — the per-PIPELINE half of both-must-pass admission. Resolved via
-    // the trigger's bound version (a run row only carries `pipelineVersionId`;
-    // the version row carries the pipeline identity). A version whose row is
-    // GONE resolves `null` → the gate is bypassed (uncapped): such a fire can
-    // never run anyway — the drive's doc-resolve failure path (#508 territory)
-    // owns that fault, and refusing it HERE would mask it as a capacity skip.
-    const pipelineId = getPipelineIdForVersion(db, trigger.pipelineVersionId);
+    // #5 S6b — the per-PIPELINE half of both-must-pass admission. Reuses the
+    // `firePipelineId` resolved above for the archived guard (a version whose
+    // row is GONE resolved `null` → the gate is bypassed/uncapped: such a fire
+    // can never run anyway — the drive's doc-resolve failure path, #508
+    // territory, owns that fault, and refusing it HERE would mask it as a
+    // capacity skip).
+    const pipelineId = firePipelineId;
     const pipelineFull = pipelineId !== null && !pipelineHasRoom(pipelineId);
 
     /** Per-pipeline overflow QUEUES (spec: "max concurrent runs across all its

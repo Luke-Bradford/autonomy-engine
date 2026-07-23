@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
-import { createPipeline, createPipelineVersion, createTrigger } from '../../repo/index.js';
+import {
+  archivePipelineRow,
+  createPipeline,
+  createPipelineVersion,
+  createTrigger,
+} from '../../repo/index.js';
 import { getRun } from '../../repo/runs.js';
 import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import { SCHEDULE_TICK_KIND } from '../../scheduler/schedule-tick.js';
@@ -298,6 +303,32 @@ describe('triggers routes', () => {
       expect(fireRes.statusCode).toBe(202);
       expect(fireRes.json().outcome).toBe('started');
       await app.runLauncher.whenIdle();
+    });
+
+    it('#3 G5a — refuses to manually fire a trigger bound to an ARCHIVED pipeline: 409 conflict', async () => {
+      // Own pipeline + version + trigger, then archive the pipeline row (trigger
+      // stays enabled) so the manual fire hits the launcher's dispatch guard.
+      const ownPipeline = createPipeline(app.db, { ownerId: 'local', name: 'ArchivedForFire' });
+      const ownVersion = createPipelineVersion(app.db, {
+        pipelineId: ownPipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: triggerBody(ownVersion.id),
+        })
+      ).json();
+      archivePipelineRow(app.db, ownPipeline.id);
+
+      const fireRes = await app.inject({ method: 'POST', url: `/api/triggers/${created.id}/fire` });
+      expect(fireRes.statusCode).toBe(409);
+      expect(fireRes.json().error).toBe('conflict');
     });
 
     it('refuses to fire an unbound trigger: 400 bad_request ("unbound never fires")', async () => {

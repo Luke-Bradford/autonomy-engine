@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
 import {
+  archivePipelineRow,
   createPipeline,
   createPipelineVersion,
   createTrigger,
@@ -133,6 +134,32 @@ describe('POST /api/events', () => {
   it('a disabled subscriber is reported skipped (matched by name, gated like a webhook fire)', async () => {
     const trig = createTrigger(app.db, eventTriggerInput('t4.created', { enabled: false }));
     const res = await publish({ name: 't4.created' });
+    const result = (res.json().results as Array<{ triggerId: string; outcome: string }>).find(
+      (r) => r.triggerId === trig.id,
+    );
+    expect(result?.outcome).toBe('skipped');
+    expect(listRuns(app.db, { triggerId: trig.id })).toHaveLength(0);
+  });
+
+  it('#3 G5a — a subscriber bound to an ARCHIVED pipeline is reported skipped, never a run', async () => {
+    // Own pipeline + version, subscriber still ENABLED, then archive the row so
+    // the fire reaches the launcher's dispatch guard (not a caller enabled-gate).
+    const ownPipeline = createPipeline(app.db, { ownerId: 'local', name: 'ArchivedForEvent' });
+    const ownVersion = createPipelineVersion(app.db, {
+      pipelineId: ownPipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const trig = createTrigger(
+      app.db,
+      eventTriggerInput('t-archived.created', { pipelineVersionId: ownVersion.id }),
+    );
+    archivePipelineRow(app.db, ownPipeline.id);
+
+    const res = await publish({ name: 't-archived.created' });
     const result = (res.json().results as Array<{ triggerId: string; outcome: string }>).find(
       (r) => r.triggerId === trig.id,
     );

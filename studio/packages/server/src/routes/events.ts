@@ -134,6 +134,9 @@ function fireSubscriber(
           outcome: 'skipped',
           reason: 'trigger param binding could not be resolved',
         };
+      case 'archived':
+        // #3 G5a — the bound pipeline is archived; a permanent skip decision.
+        return { ...base, outcome: 'skipped', reason: 'pipeline is archived' };
       case 'unbound':
         // Defense-in-depth: the write API refuses to enable an unbound trigger.
         return { ...base, outcome: 'skipped', reason: 'trigger has no bound pipeline version' };

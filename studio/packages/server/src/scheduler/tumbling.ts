@@ -30,7 +30,12 @@ import {
 } from '../repo/tumbling-windows.js';
 import type { Db } from '../repo/types.js';
 import type { RunEventBus } from '../run/event-bus.js';
-import { UnboundTriggerError, type FireContext, type FireResult } from '../run/launcher.js';
+import {
+  ArchivedPipelineError,
+  UnboundTriggerError,
+  type FireContext,
+  type FireResult,
+} from '../run/launcher.js';
 import type { WakeupFireResult, WakeupHandler } from './alarms.js';
 import type { SchedulerLog } from './scheduler.js';
 
@@ -680,6 +685,15 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
     } catch (err) {
       if (err instanceof UnboundTriggerError) {
         log.debug({ triggerId: trigger.id }, 'tumbling: skip — trigger became unbound');
+        return 'stop';
+      }
+      // #3 G5a — the bound pipeline is archived; stop materializing this
+      // window's fire. Operator-visible (`warn`, the `SubstituteError`
+      // severity): an enabled trigger bound to a permanently-archived pipeline
+      // (the re-enable edge case) would otherwise stop producing runs silently —
+      // NOT a self-healing race like the unbound case above.
+      if (err instanceof ArchivedPipelineError) {
+        log.warn({ triggerId: trigger.id }, 'tumbling: skip — pipeline archived');
         return 'stop';
       }
       if (err instanceof SubstituteError) {

@@ -130,6 +130,11 @@ export const pipelines = sqliteTable(
     // pre-S6b rows are genuinely uncapped, so the nullable ADD COLUMN backfill
     // is truthful, not manufactured (#473's lesson does not apply).
     concurrency: integer('concurrency'),
+    // #3 G5a (item ②) — soft-delete/archive flag. NOT NULL DEFAULT false: every
+    // pre-G5a row is un-archived (a truthful backfill, not a manufactured
+    // absent value). Archiving disables dependent triggers and bars dispatch;
+    // versions + runs are preserved (immutable audit history). Boolean mode.
+    archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
-import { createPipeline, createPipelineVersion, listRuns } from '../../repo/index.js';
+import {
+  archivePipelineRow,
+  createPipeline,
+  createPipelineVersion,
+  listRuns,
+} from '../../repo/index.js';
 import { loadEngineEvents } from '../../run/events.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 import { signWebhook } from '../../webhooks/verify.js';
@@ -223,6 +228,32 @@ describe('webhook routes', () => {
       );
       expect(retry.json().outcome).toBe('duplicate');
     });
+  });
+
+  it('#3 G5a — a delivery to an ARCHIVED pipeline is a recorded skip (finalize-as-skipped), never a run', async () => {
+    // A webhook trigger bound to its OWN pipeline (not the shared one), still
+    // ENABLED — then the pipeline is archived at the row level, so the fire
+    // reaches the launcher's dispatch guard rather than a caller enabled-gate.
+    const ownPipeline = createPipeline(app.db, { ownerId: 'local', name: 'ToArchiveHook' });
+    const ownVersion = createPipelineVersion(app.db, {
+      pipelineId: ownPipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const { id, secret } = await makeWebhookTrigger({ pipelineVersionId: ownVersion.id });
+    archivePipelineRow(app.db, ownPipeline.id);
+
+    const key = 'evt-archived';
+    const res = await app.inject(signedRequest(id, secret, { idempotencyKey: key }));
+    expect(res.statusCode).toBe(202);
+    expect(res.json().outcome).toBe('skipped');
+    expect(listRuns(app.db, { triggerId: id })).toHaveLength(0);
+    // Finalized under the key — a verbatim retry dedupes, never re-attempts.
+    const retry = await app.inject(signedRequest(id, secret, { idempotencyKey: key }));
+    expect(retry.json().outcome).toBe('duplicate');
   });
 
   it('rejects a bad signature (401) and does NOT fire', async () => {

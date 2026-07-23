@@ -1,0 +1,12 @@
+-- #3 G5a (Foundation Spec #3 reshape item ②) — a real ARCHIVED state on
+-- pipelines. Archive is soft-delete: the immutable versions + runs (audit
+-- history) are PRESERVED, the pipeline drops off the default list, its
+-- dependent triggers are disabled, and the launcher refuses to dispatch it.
+-- It is the buildable alternative to hard-delete (blocked by
+-- `PipelineHasRunsError` once runs exist) and the DB target of the G5b import
+-- delete-classification ("git-delete → archive, never DB-delete on import").
+--
+-- NOT NULL DEFAULT 0 (false): every pre-G5a row is un-archived — a truthful
+-- backfill, not a manufactured absent value (#473). SQLite permits a NOT NULL
+-- ADD COLUMN with a constant default (the `runs.origin`/`attempt` precedent).
+ALTER TABLE pipelines ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
