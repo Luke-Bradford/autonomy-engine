@@ -3,16 +3,14 @@ import {
   DEFAULT_LLM_TIMEOUT_MS,
   buildCapture,
   coerceStopReason,
-  httpStatusFailure,
   llmCallConfigSchema,
   llmConnectionConfigSchema,
-  llmPost,
   llmProbeGet,
   meterUsage,
   noCompletionFailure,
   normalizeLlmRequest,
   parseAndValidateStructured,
-  parseJsonBody,
+  postJsonAndParse,
   resolveModel,
   runStructuredWithRepair,
   runTextWithTools,
@@ -105,22 +103,33 @@ export const ollamaAdapter: ConnectorAdapter = {
       systemParts.push(structuredOutputInstruction(structuredOutput));
     const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
 
-    // Assemble the wire body for a set of (non-system) turns. Only `messages`
-    // changes across L4c repair calls, so the static scaffold is rebuilt from the
-    // passed turns each call. Sampling (under `options`) + `think` apply in BOTH
-    // modes; `format` only in structured mode (so text mode is byte-identical to
-    // pre-L4c).
-    const buildBody = (msgTurns: LlmTurn[]): Record<string, unknown> => {
-      const messages: { role: string; content: string }[] = [];
-      if (systemContent !== undefined) messages.push({ role: 'system', content: systemContent });
-      messages.push(...msgTurns);
+    // Prepend the (possibly structured-extended) system message to a set of
+    // author turns, producing the full wire `messages` array. Shared by the
+    // structured/text callers of `buildBody` and the tools path's initial
+    // conversation seed.
+    const wireMessages = (msgTurns: LlmTurn[]): readonly unknown[] =>
+      systemContent !== undefined
+        ? [{ role: 'system', content: systemContent }, ...msgTurns]
+        : [...msgTurns];
+
+    // #648 — ONE wire-body builder for all three paths (text / structured L4c /
+    // tools L10a); previously the `options` stanza was duplicated per path.
+    // `msgs` is the FULL wire messages array (system included). Sampling (under
+    // `options`) + `think` apply in every mode; `format` only in structured mode
+    // (which the config coupling forbids from co-occurring with `wireTools`);
+    // `tools` only when the tools path passes them (no choice arg — Ollama has
+    // no forced-choice wire surface).
+    const buildBody = (
+      msgs: readonly unknown[],
+      wireTools?: unknown[],
+    ): Record<string, unknown> => {
       const options: Record<string, unknown> = {};
       if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
       if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
       if (sampling.topP !== undefined) options.top_p = sampling.topP;
       if (sampling.stop !== undefined) options.stop = sampling.stop;
       if (sampling.seed !== undefined) options.seed = sampling.seed;
-      const body: Record<string, unknown> = { model, messages, stream: false };
+      const body: Record<string, unknown> = { model, messages: msgs, stream: false };
       if (Object.keys(options).length > 0) body.options = options;
       // #2 L4b — Ollama's NATIVE structured output: the TOP-LEVEL `format` accepts a
       // JSON Schema and constrains decoding. Ollama is lenient about schema shape
@@ -134,7 +143,16 @@ export const ollamaAdapter: ConnectorAdapter = {
       // documented Ollama level and may be ignored/rejected. No key when unset, so
       // a node with no `reasoningEffort` is byte-identical to pre-L3.
       if (reasoningEffort !== undefined) body.think = reasoningEffort;
+      if (wireTools !== undefined) body.tools = wireTools;
       return body;
+    };
+
+    // #648 — Ollama reports token counts at the TOP LEVEL (`prompt_eval_count`/
+    // `eval_count`), not under a `usage` object; a model still warming up may
+    // omit them → `unknown`. Previously extracted inline per path.
+    const usageOf = (json: unknown) => {
+      const counts = json as { prompt_eval_count?: unknown; eval_count?: unknown };
+      return meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count);
     };
 
     // #2 L4c — STRUCTURED path with bounded internal repair. Each call meters (a
@@ -144,28 +162,19 @@ export const ollamaAdapter: ConnectorAdapter = {
     // terminalizing `permanent`. Covers the no-completion case here too.
     if (structuredOutput !== undefined) {
       yield* runStructuredWithRepair('ollama', turns, async (msgTurns) => {
-        const res = await llmPost(ctx, url, headers, buildBody(msgTurns), timeoutMs);
-        if (res.type === 'failed') return { type: 'terminal', event: res.event };
-        if (res.status < 200 || res.status >= 300) {
-          return {
-            type: 'terminal',
-            event: httpStatusFailure(
-              'ollama',
-              res.status,
-              res.bodyText,
-              res.retryAfterHeader,
-              Date.now(),
-            ),
-          };
-        }
-        const body = parseJsonBody(res.bodyText);
-        if (!body.ok) return { type: 'terminal', event: body.event };
-        const counts = body.json as { prompt_eval_count?: unknown; eval_count?: unknown };
-        const usage = meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count);
-        const content = (body.json as { message?: { content?: unknown } }).message?.content;
+        const res = await postJsonAndParse(
+          ctx,
+          'ollama',
+          url,
+          headers,
+          buildBody(wireMessages(msgTurns)),
+          timeoutMs,
+        );
+        if (!res.ok) return { type: 'terminal', event: res.event };
+        const content = (res.json as { message?: { content?: unknown } }).message?.content;
         return {
           type: 'validated',
-          usage,
+          usage: usageOf(res.json),
           result: parseAndValidateStructured(structuredOutput, content),
           echo: structuredEcho(content),
         };
@@ -192,64 +201,42 @@ export const ollamaAdapter: ConnectorAdapter = {
           parameters: toolWireParameters(t.parameters),
         },
       }));
-      const buildToolBody = (msgs: readonly unknown[]): Record<string, unknown> => {
-        const options: Record<string, unknown> = {};
-        if (sampling.temperature !== undefined) options.temperature = sampling.temperature;
-        if (sampling.maxTokens !== undefined) options.num_predict = sampling.maxTokens;
-        if (sampling.topP !== undefined) options.top_p = sampling.topP;
-        if (sampling.stop !== undefined) options.stop = sampling.stop;
-        if (sampling.seed !== undefined) options.seed = sampling.seed;
-        const body: Record<string, unknown> = { model, messages: msgs, stream: false };
-        if (Object.keys(options).length > 0) body.options = options;
-        if (reasoningEffort !== undefined) body.think = reasoningEffort;
-        body.tools = wireTools;
-        return body;
-      };
       // The conversation value `C` is the WIRE messages array (leading system
       // included); the continuation appends the response's RAW assistant
       // message + one `role:'tool'` result per call (Ollama tool calls carry no
       // ids — results map back by order).
-      const initial: readonly unknown[] =
-        systemContent !== undefined
-          ? [{ role: 'system', content: systemContent }, ...turns]
-          : [...turns];
       yield* runTextWithTools<readonly unknown[]>(
         'ollama',
         tools,
-        initial,
+        wireMessages(turns),
         authorChoice,
         async (conv): Promise<ToolRoundOutcome<readonly unknown[]>> => {
-          const started = Date.now();
-          const res = await llmPost(ctx, url, headers, buildToolBody(conv), timeoutMs);
-          const latencyMs = Date.now() - started;
+          const res = await postJsonAndParse(
+            ctx,
+            'ollama',
+            url,
+            headers,
+            buildBody(conv, wireTools),
+            timeoutMs,
+          );
           // First-exchange capture semantics (#2 L9a): request = the author's
           // turns; the generator emits only the round-0 capture (#605 owns
-          // continuation-turn representation).
+          // continuation-turn representation). Emitted for EVERY post-request
+          // outcome — a terminal carries the capture alongside its event.
           const captureOf = (completionText?: string) =>
-            buildCapture({ provider: 'ollama', model, latencyMs, turns, system, completionText });
-          if (res.type === 'failed') {
+            buildCapture({
+              provider: 'ollama',
+              model,
+              latencyMs: res.latencyMs,
+              turns,
+              system,
+              completionText,
+            });
+          if (!res.ok) {
             return { type: 'terminal', event: res.event, capture: captureOf() };
           }
-          if (res.status < 200 || res.status >= 300) {
-            return {
-              type: 'terminal',
-              event: httpStatusFailure(
-                'ollama',
-                res.status,
-                res.bodyText,
-                res.retryAfterHeader,
-                Date.now(),
-              ),
-              capture: captureOf(),
-            };
-          }
-          const parsed = parseJsonBody(res.bodyText);
-          if (!parsed.ok) {
-            return { type: 'terminal', event: parsed.event, capture: captureOf() };
-          }
-          const counts = parsed.json as { prompt_eval_count?: unknown; eval_count?: unknown };
-          const usage = meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count);
-          const message = (parsed.json as { message?: unknown }).message;
+          const usage = usageOf(res.json);
+          const message = (res.json as { message?: unknown }).message;
           // Tool calls FIRST: a tool-calls response commonly carries an empty
           // `content` the text branch would accept as a real (empty) completion.
           const rawCalls = (message as { tool_calls?: unknown } | undefined | null)?.tool_calls;
@@ -299,9 +286,7 @@ export const ollamaAdapter: ConnectorAdapter = {
               type: 'succeeded',
               outputs: {
                 text,
-                stopReason: coerceStopReason(
-                  (parsed.json as { done_reason?: unknown }).done_reason,
-                ),
+                stopReason: coerceStopReason((res.json as { done_reason?: unknown }).done_reason),
               },
             },
           };
@@ -316,9 +301,14 @@ export const ollamaAdapter: ConnectorAdapter = {
     }
 
     // TEXT path.
-    const started = Date.now();
-    const result = await llmPost(ctx, url, headers, buildBody(turns), timeoutMs);
-    const latencyMs = Date.now() - started;
+    const result = await postJsonAndParse(
+      ctx,
+      'ollama',
+      url,
+      headers,
+      buildBody(wireMessages(turns)),
+      timeoutMs,
+    );
     // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
     // terminal. `completionText` is passed ONLY on success (failure omits it).
     const captureOf = (completionText?: string): ActivityEvent => ({
@@ -326,32 +316,15 @@ export const ollamaAdapter: ConnectorAdapter = {
       capture: buildCapture({
         provider: 'ollama',
         model,
-        latencyMs,
+        latencyMs: result.latencyMs,
         turns,
         system,
         completionText,
       }),
     });
-    if (result.type === 'failed') {
+    if (!result.ok) {
       yield captureOf();
       yield result.event;
-      return;
-    }
-    if (result.status < 200 || result.status >= 300) {
-      yield captureOf();
-      yield httpStatusFailure(
-        'ollama',
-        result.status,
-        result.bodyText,
-        result.retryAfterHeader,
-        Date.now(),
-      );
-      return;
-    }
-    const parsed = parseJsonBody(result.bodyText);
-    if (!parsed.ok) {
-      yield captureOf();
-      yield parsed.event;
       return;
     }
     // #461 — a present string (even '') is a real completion; anything else is
@@ -360,7 +333,7 @@ export const ollamaAdapter: ConnectorAdapter = {
     // present message whose `content` is non-string/absent is `malformed_block`.
     // ollama has no `empty_completion_set` — its response is a single message,
     // not a candidate set (see `NoCompletionReason`).
-    const message = (parsed.json as { message?: { content?: unknown } }).message;
+    const message = (result.json as { message?: { content?: unknown } }).message;
     if (typeof message !== 'object' || message === null) {
       yield captureOf();
       yield noCompletionFailure('ollama', 'absent_content');
@@ -372,16 +345,10 @@ export const ollamaAdapter: ConnectorAdapter = {
       yield noCompletionFailure('ollama', 'malformed_block');
       return;
     }
-    // #2 L2 — capture the metering fact before the terminal event. Ollama reports
-    // token counts at the TOP LEVEL (`prompt_eval_count`/`eval_count`), not under
-    // a `usage` object; a model still warming up may omit them → `unknown`.
-    const counts = parsed.json as { prompt_eval_count?: unknown; eval_count?: unknown };
-    yield {
-      type: 'metered',
-      usage: meterUsage('ollama', model, counts.prompt_eval_count, counts.eval_count),
-    };
+    // #2 L2 — capture the metering fact before the terminal event.
+    yield { type: 'metered', usage: usageOf(result.json) };
     yield captureOf(text);
-    const doneReason = (parsed.json as { done_reason?: unknown }).done_reason;
+    const doneReason = (result.json as { done_reason?: unknown }).done_reason;
     yield {
       type: 'succeeded',
       outputs: {
