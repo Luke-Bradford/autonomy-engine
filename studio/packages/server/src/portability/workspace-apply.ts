@@ -1,11 +1,17 @@
 import {
+  NewTriggerSchema,
   connectionContentForm,
   interpolationMode,
   pipelineVersionContentForm,
+  triggerContentForm,
+  windowBindingErrors,
+  type NewTrigger,
   type Node,
   type NodeExport,
   type PipelineVersion,
   type PipelineVersionExport,
+  type Trigger,
+  type TriggerExportData,
   type WorkspaceGitAppliedAction,
   type WorkspaceGitAppliedResource,
   type WorkspaceGitApplyResult,
@@ -31,6 +37,7 @@ import {
   getLatestPipelineVersion,
   listPipelineVersions,
 } from '../repo/pipeline-versions.js';
+import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
 import {
@@ -38,7 +45,7 @@ import {
   type ParsedPipeline,
   type ParsedWorkspace,
 } from './workspace-parse.js';
-import { serializeWorkspace } from './workspace-serialize.js';
+import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './workspace-serialize.js';
 
 /**
  * #3 G5c-1 — the transactional reconcile APPLY write-path: the WRITE inverse of
@@ -58,10 +65,44 @@ import { serializeWorkspace } from './workspace-serialize.js';
  * - ARCHIVE: a DB pipeline whose file is ABSENT from the branch → `archivePipeline`
  *   (soft-delete + disable dependent triggers), reusing the G5a service.
  *
- * Deliberately DEFERRED to G5c-2 (#670): TRIGGER apply (binding remap,
- * mode-consistency, enabled/unbound). An incoming trigger is REPORTED in
- * `deferred` with its classifier disposition (honest round-trip — the preview
- * shows it, the apply names it as not-yet-applied), never silently applied.
+ * #3 G5c-2 (#670) — TRIGGERS now apply too (create / update / rename), AFTER the
+ * pipeline version mints so the version map is complete for the binding remap:
+ * - `trigger.pipelineVersionId` is remapped resourceId → DB id via the same
+ *   `versionById` the node call-refs use (owner versions ∪ in-batch mints). A
+ *   `null` binding stays null; anything that does not resolve to a real owned
+ *   version — an unresolved resourceId, or a hand-crafted `${}` (a trigger
+ *   binding is a FK, never dynamic — see `resolveTriggerBinding`) — reconciles to
+ *   null (unbound) rather than aborting: the G7 "absent → disabled" charter, NOT
+ *   the node-ref hard-abort. Any resulting NULL binding forces `enabled:false`
+ *   (belt: an unbound trigger must never be enabled; the P4 scheduler's
+ *   null-check is the primary guard).
+ * - Cross-field mode-consistency is forced exactly as `portability/import.ts`
+ *   does (a collab branch is hand-editable, and `updateTrigger` re-parses through
+ *   the LENIENT `TriggerSchema`, so an inconsistent row would otherwise persist
+ *   and then 400 on every subsequent PATCH): `windowBindingErrors` on a
+ *   non-tumbling trigger REFUSES the apply; `event` is nulled off event-mode and
+ *   `window` off tumbling-mode. The full resolved write is ALSO re-validated
+ *   through `NewTriggerSchema` on the update path so the concurrency (`parallel
+ *   ⇒ max`) and param-binding (`${trigger.*}`-only) write rules the CREATE path
+ *   gets for free are enforced symmetrically (not silently laundered by the
+ *   lenient update).
+ * - `webhook` is never reconstructed from the branch (the file carries only the
+ *   PUBLIC config — no `secretRef`, which `NewTriggerSchema` requires): CREATE
+ *   starts a webhook trigger with no secret (operator provisions it, G8); UPDATE
+ *   PRESERVES the existing local `webhook` when the trigger stays webhook-mode
+ *   (never dropping a local secret) and clears it on a mode change away.
+ *
+ * Known, DOCUMENTED non-idempotencies (each re-classifies `update` on the next
+ * import until a later slice lands — honest, not a silent write): a
+ * force-disabled unbound trigger (branch: enabled+bound, DB: disabled+null) until
+ * G7; a mode-inconsistency the apply force-corrected (branch keeps the field, DB
+ * nulled it) until the branch is hand-fixed; a webhook trigger CREATED
+ * cross-workspace (source secret → serialized `{}`, target create → null) until
+ * G8 secret provisioning — tracked in #674 for the `triggerContentForm`
+ * webhook-presence exclusion the content-form OPEN DECISION note anticipates.
+ * The `deferred`
+ * result array now has NO producers (every recognised resource is applied); it
+ * is retained in the contract for forward-compatibility.
  *
  * Inverse ref-remap (the precise inverse of `serializeWorkspace`'s `remapNode`):
  * a node's `connectionId` and `call.pipelineVersionId` are stable `resourceId`s
@@ -219,6 +260,112 @@ function mintOrder(minters: Minter[]): number[] {
     }
   }
   return order;
+}
+
+/**
+ * Remap a branch trigger's `pipelineVersionId` to a concrete DB id. A `null`
+ * binding stays null; a resourceId is resolved via `versionById` (owner versions
+ * ∪ in-batch mints). Anything that does NOT resolve to a real owned version —
+ * an UNRESOLVED resourceId, or a hand-crafted `${}` expression — becomes `null`
+ * (unbound), NOT a thrown abort like a node ref: a dangling trigger binding is
+ * the G7 "absent → disabled" charter, so the apply reconciles it to unbound
+ * rather than refusing the whole import (the caller force-disables it).
+ *
+ * Unlike a NODE's `call.pipelineVersionId` (plain JSON — a `${}` dynamic binding
+ * is real and preserved by `remapNodeToDb`), a TRIGGER's `pipelineVersionId` is
+ * a FOREIGN KEY to `pipeline_versions.id`, so it is ALWAYS a literal id or null —
+ * a dynamic value could never have been stored, and one arriving on a hand-edited
+ * branch is invalid, reconciled here to unbound rather than left to FK-crash the
+ * insert. (`serializeTrigger`'s `remapRef` still nominally handles `${}` for
+ * symmetry with node refs, but a real trigger never carries one.)
+ */
+function resolveTriggerBinding(
+  ref: string | null,
+  versionById: Map<string, string>,
+): string | null {
+  if (ref === null) return null;
+  return versionById.get(ref) ?? null; // unresolved id / non-literal → unbound (G7)
+}
+
+/** The content form of a STORED DB trigger, in resourceId-space — the baseline
+ * the branch's incoming trigger is compared against to decide update vs rename
+ * vs no-op. Computed via `serializeTrigger` (the EXACT inverse Commit uses:
+ * webhook-secret strip + binding remap), so the two sides can never drift. For a
+ * valid stored trigger the binding always resolves in `maps.versionResourceId`,
+ * so `serializeTrigger`'s `remapRef` never throws here. */
+function dbTriggerContentForm(trigger: Trigger, maps: OwnerRefMaps): string {
+  const envelope = serializeTrigger(trigger, maps);
+  // 'trigger' by construction — narrow to the trigger export-data type.
+  if (envelope.kind !== 'trigger') {
+    throw new WorkspaceApplyError('serializeTrigger produced a non-trigger envelope');
+  }
+  return triggerContentForm(envelope.data);
+}
+
+/**
+ * The resolved DB write shape for one branch trigger — the forced, remapped
+ * authoring content shared by the CREATE and UPDATE paths. `binding` is the
+ * already-remapped `pipelineVersionId`; `webhook` is resolved by the caller
+ * (null on create — no secret to reconstruct; preserved-or-cleared on update).
+ * Mode-consistency (`event`/`window` off-mode → null) mirrors `import.ts`; the
+ * `windowBindingErrors` refusal is the caller's (it aborts the apply).
+ */
+function buildTriggerWriteInput(
+  data: TriggerExportData,
+  ownerId: string,
+  binding: string | null,
+  webhook: Trigger['webhook'],
+): NewTrigger {
+  return {
+    ownerId,
+    name: data.name,
+    pipelineVersionId: binding,
+    params: data.params,
+    mode: data.mode,
+    schedule: data.schedule,
+    recurrence: data.recurrence,
+    webhook,
+    // #5 S8 — a subscription only makes sense on event-mode; #5 S9 — a window
+    // geometry only on tumbling-mode. Force null off-mode (import.ts parity).
+    event: data.mode === 'event' ? data.event : null,
+    window: data.mode === 'tumbling' ? data.window : null,
+    concurrency: data.concurrency,
+    runWindows: data.runWindows,
+    // Belt-and-braces: a NULL binding (authored-null OR an unresolved id) can
+    // never be enabled — an unbound trigger must not fire (the P4 scheduler's
+    // null-check is the primary guard). A resolved binding preserves the authored
+    // `enabled`.
+    enabled: binding === null ? false : data.enabled,
+  };
+}
+
+/** The applied `action` for a trigger whose `resourceId` already matches a DB
+ * row: a canonical CONTENT edit → `updated`; else a display-name-only change →
+ * `renamed`; else `unchanged`. (Triggers have no version to mint and no archive
+ * state, so `created`/the pipeline-only `restored` never arise here.) */
+function triggerAction(contentChanged: boolean, nameChanged: boolean): WorkspaceGitAppliedAction {
+  if (contentChanged) return 'updated';
+  if (nameChanged) return 'renamed';
+  return 'unchanged';
+}
+
+/**
+ * `${trigger.windowStart/End}` param bindings are tumbling-ONLY (the route's
+ * `assertWindowBindingsConsistent`, which the collab-branch write path bypasses).
+ * A hand-edited non-tumbling trigger carrying them would create/patch a row whose
+ * every subsequent PATCH 400s on the cross-field rule — so REFUSE the whole apply
+ * (import.ts:165-173 parity), never persist it. Params are user content, so
+ * (unlike `event`/`window`) they cannot be surgically forced consistent.
+ */
+function assertTriggerWindowBindingsConsistent(data: TriggerExportData, label: string): void {
+  if (data.mode === 'tumbling') return;
+  const offending = windowBindingErrors(data.params);
+  if (offending.length > 0) {
+    throw new WorkspaceApplyError(
+      `trigger "${label}" binds \${trigger.windowStart/End} on a '${data.mode}' trigger — ` +
+        `window-field bindings are only valid on 'tumbling': ${offending.join('; ')}`,
+    );
+  }
 }
 
 export function applyWorkspace(
@@ -472,15 +619,76 @@ export function applyWorkspace(
       if (m.versionRid !== null) versionById.set(m.versionRid, created.id);
     }
 
-    // --- Triggers: deferred to G5c-2 (#670) — report, do not apply ---
-    const deferred: WorkspaceGitDeferredResource[] = plan.resources
-      .filter((r) => r.kind === 'trigger')
-      .map((r) => ({
-        path: r.path,
-        kind: 'trigger' as const,
-        resourceId: r.resourceId,
-        disposition: r.disposition,
-      }));
+    // --- Triggers (#3 G5c-2 #670): applied AFTER the version mints, so a binding
+    // to a co-created pipeline's brand-new version resolves via `versionById`. ---
+    // The reverse maps (DB id → resourceId) are the exact `OwnerRefMaps`
+    // `serializeTrigger` needs to render a stored trigger's DB-side content form.
+    const dbRefMaps: OwnerRefMaps = {
+      versionResourceId: versionRidByDbId,
+      connectionResourceId: connRidByDbId,
+    };
+    for (const inc of incoming.triggers) {
+      const data = inc.data;
+      // Existence by DB `resourceId` (getTriggerByResourceId), NOT the classifier
+      // plan: the plan's DB snapshot OMITS triggers bound to archived pipelines'
+      // versions (serialize omission), so trusting it for create-vs-update could
+      // mis-create an existing trigger into a `resourceId` UNIQUE collision.
+      const existing =
+        inc.resourceId === null ? null : getTriggerByResourceId(db, ownerId, inc.resourceId);
+      const label = inc.resourceId ?? '(pre-G1)';
+
+      let action: WorkspaceGitAppliedAction;
+      let resourceId: string;
+      if (existing === null) {
+        assertTriggerWindowBindingsConsistent(data, label);
+        const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+        // webhook: the branch carries only the PUBLIC config (no `secretRef`,
+        // which `NewTriggerSchema` requires), so a fresh webhook trigger starts
+        // with no secret — the operator provisions it via the normal route (G8).
+        const created = createTrigger(
+          db,
+          buildTriggerWriteInput(data, ownerId, binding, null),
+          inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
+        );
+        action = 'created';
+        resourceId = created.resourceId;
+      } else {
+        const contentChanged =
+          triggerContentForm(data) !== dbTriggerContentForm(existing, dbRefMaps);
+        action = triggerAction(contentChanged, data.name !== existing.name);
+        if (action === 'updated') {
+          assertTriggerWindowBindingsConsistent(data, label);
+          const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+          // webhook: PRESERVE the existing local secret while the trigger stays a
+          // webhook (never drop it — the branch can't carry it back); clear a
+          // now-stale config on a mode change away from webhook.
+          const webhook = data.mode === 'webhook' ? existing.webhook : null;
+          const writeInput = buildTriggerWriteInput(data, ownerId, binding, webhook);
+          // `updateTrigger` re-parses through the LENIENT `TriggerSchema`, so it
+          // does NOT run the concurrency (`parallel ⇒ max`) or param-binding
+          // (`${trigger.*}`-only) WRITE rules the CREATE path gets via
+          // `NewTriggerSchema`. Gate the fully-resolved write through it here so a
+          // corrupt branch is refused symmetrically, never silently laundered.
+          NewTriggerSchema.parse(writeInput);
+          updateTrigger(db, existing.id, writeInput);
+        } else if (action === 'renamed') {
+          updateTrigger(db, existing.id, { name: data.name });
+        }
+        resourceId = existing.resourceId;
+      }
+
+      applied.push({
+        path: inc.path,
+        kind: 'trigger',
+        resourceId,
+        action,
+        versionMinted: false, // triggers have no versions
+      });
+    }
+
+    // No resource kind is DEFERRED any more (every recognised resource is applied
+    // above); the field is retained in the result contract for forward-compat.
+    const deferred: WorkspaceGitDeferredResource[] = [];
 
     // --- Archive: a DB pipeline whose file is absent from the branch ---
     const archived: WorkspaceGitArchivedResult[] = [];

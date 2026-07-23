@@ -360,11 +360,12 @@ export const WorkspaceGitAppliedResourceSchema = z.object({
 export type WorkspaceGitAppliedResource = z.infer<typeof WorkspaceGitAppliedResourceSchema>;
 
 /**
- * #3 G5c — a branch resource the apply recognised but did NOT write this slice.
- * G5c-1 applies connections + pipelines (+ archive); TRIGGER apply is G5c-2
- * (#670), so an incoming trigger is reported here with its classifier
- * `disposition` (honest round-trip: the preview shows it, the apply names it as
- * not-yet-applied) rather than silently ignored. `resourceId` may be `null` for
+ * #3 G5c — a branch resource the apply recognised but did NOT write. This was
+ * how G5c-1 reported an incoming TRIGGER (connections + pipelines + archive
+ * applied; triggers deferred). As of G5c-2 (#670) triggers apply too, so EVERY
+ * recognised resource is now in `applied` and this array has NO producers — it
+ * is retained in the result contract for forward-compatibility (a future
+ * resource kind added ahead of its apply slice). `resourceId` may be `null` for
  * a pre-G1 file.
  */
 export const WorkspaceGitDeferredResourceSchema = z.object({
@@ -389,9 +390,11 @@ export type WorkspaceGitArchivedResult = z.infer<typeof WorkspaceGitArchivedResu
  * any parse diagnostic the whole import is REFUSED (`refused: true`, everything
  * empty) rather than partially applying a known-corrupt branch — fail-closed,
  * the merge-gate "a `gh` failure is never CI-green" posture. When not refused,
- * `diagnostics` is empty and `applied`/`deferred`/`archived` describe every
- * write. `head` is the collab-branch commit the snapshot was taken at (`null`
- * for an empty repo, where nothing is applied).
+ * `diagnostics` is empty and `applied`/`archived` describe every write
+ * (connections, pipelines, AND triggers as of G5c-2 #670); `deferred` now has no
+ * producers (see `WorkspaceGitDeferredResourceSchema`). `head` is the
+ * collab-branch commit the snapshot was taken at (`null` for an empty repo,
+ * where nothing is applied).
  */
 export const WorkspaceGitApplyResultSchema = z.object({
   head: z.string().min(1).nullable(),

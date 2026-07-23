@@ -326,16 +326,17 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   });
 
   /**
-   * #3 G5c-1 — APPLY the branch into the DB working copy (the transactional
+   * #3 G5c — APPLY the branch into the DB working copy (the transactional
    * write-path the preview describes). Fetch first (shared with fetch/preview),
    * read the collab-branch snapshot, then `applyWorkspace` reconciles it inside
    * ONE `db.transaction`: connections + pipelines (create/restore/update/rename)
-   * + archive; TRIGGER apply is G5c-2 (#670), so triggers are reported as
-   * `deferred`, not written. A parse diagnostic REFUSES the whole import
-   * (fail-closed). The post-commit `scheduler.sync()` drops the wakeups of any
-   * triggers an archive disabled (the composite reconciler; same contract the
-   * pipeline archive route uses) — run OUTSIDE the queue's tx, as the alarm clock
-   * owns its own db handle.
+   * + archive, and — as of G5c-2 (#670) — TRIGGERS (create/update/rename, with
+   * binding remap + mode-consistency forcing). A parse diagnostic REFUSES the
+   * whole import (fail-closed). The `scheduler.sync()` below both drops the
+   * wakeups of triggers an archive disabled AND registers the wakeups of any
+   * enabled schedule/tumbling trigger this import just applied (the idempotent
+   * composite reconciler; same contract the pipeline archive + trigger routes
+   * use) — run OUTSIDE the queue's tx, as the alarm clock owns its own db handle.
    */
   fastify.post('/api/workspace/git/import', async (request) => {
     const ownerId = request.principal.ownerId;
@@ -373,8 +374,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     });
 
     // Reconcile the scheduler AFTER the tx commits: an archive disabled its
-    // dependent triggers, whose pending wakeups must now be dropped. Idempotent,
-    // so calling it on a no-op import is harmless.
+    // dependent triggers (drop their pending wakeups) AND — as of G5c-2 — this
+    // import may have APPLIED an enabled schedule/tumbling trigger whose wakeup
+    // must now be seeded. `sync()` is a full drop+seed reconcile, so it does
+    // both; idempotent, so calling it on a no-op import is harmless.
     if (!result.refused) fastify.scheduler.sync();
 
     return { import: result };
