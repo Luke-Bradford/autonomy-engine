@@ -2,7 +2,7 @@
 --
 -- Every authored resource (and every immutable pipeline VERSION — a
 -- `(pipeline_id, version)` pair is NOT stable across machines) gains a
--- `resource_id`: the identity a git file carries (#3 G3+), classified by on
+-- `resource_id`: the identity a git file carries (#3 G3+), classified on
 -- workspace import (#3 G4/G5), and referenced by CAS-publish provenance
 -- (#3 G6). The DB `id` stays the runtime key; `resource_id` is the PORTABLE
 -- key. Server-minted on create; this migration backfills every pre-G1 row

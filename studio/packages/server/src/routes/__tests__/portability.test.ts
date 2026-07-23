@@ -379,6 +379,58 @@ describe('portability routes (export + import)', () => {
       expect(canonicalStringify(res.json())).toBe(res.body);
     });
 
+    it('the connection and trigger export routes serve canonical bytes too', async () => {
+      const connRes = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'CanonConn', kind: 'http', config: {} },
+      });
+      const connection = connRes.json();
+      const connExport = await app.inject({
+        method: 'GET',
+        url: `/api/connections/${connection.id}/export`,
+      });
+      expect(connExport.statusCode).toBe(200);
+      expect(connExport.headers['content-type']).toContain('application/json');
+      expect(canonicalStringify(connExport.json())).toBe(connExport.body);
+
+      const pipelineRes = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'CanonTrigPipe' },
+      });
+      const pipeline = pipelineRes.json();
+      const versionRes = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      });
+      const version = versionRes.json();
+      const trigRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          name: 'CanonTrig',
+          pipelineVersionId: version.id,
+          params: {},
+          mode: 'manual',
+          schedule: null,
+          webhook: null,
+          concurrency: { policy: 'queue' },
+          runWindows: null,
+          enabled: false,
+        },
+      });
+      const trigger = trigRes.json();
+      const trigExport = await app.inject({
+        method: 'GET',
+        url: `/api/triggers/${trigger.id}/export`,
+      });
+      expect(trigExport.statusCode).toBe(200);
+      expect(trigExport.headers['content-type']).toContain('application/json');
+      expect(canonicalStringify(trigExport.json())).toBe(trigExport.body);
+    });
+
     it('two exports of identical content are byte-identical apart from exportedAt', async () => {
       const pipelineRes = await app.inject({
         method: 'POST',
