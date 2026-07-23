@@ -140,7 +140,7 @@ reconcile are core. Corrections:
 | --- | --- |
 | **G1** | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy — **SHIPPED 2026-07-23** (see the built-block below the table) |
 | G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking — **SHIPPED 2026-07-23** (built-block below) |
-| G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message |
+| G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** classification |
 | G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active |
@@ -236,6 +236,103 @@ reconcile are core. Corrections:
   design-driving consumer (Publish); accepted loss: pre-G6 connect/disconnect *history* is
   unrecorded (the live row survives). Working-branch-prefix column → G3 (its consumer; ADD COLUMN
   is cheap). Stored-PAT auth + multi-remote → G10.
+
+### G3 working-copy model — SETTLED (operator #662, 2026-07-23): **(a) + (i)**
+
+The v2 open item ③ ("a defined WORKING-COPY / draft model") is now pinned, unblocking G3.
+
+- **D1 = (a): the working copy Commit serializes is the LATEST immutable version of each
+  resource** (+ current connections/triggers) — **NO new draft/dirty schema.** Consistent with
+  settled Option A: the DB is the runtime SSOT and the managed checkout is derived/disposable.
+  This deliberately does NOT re-architect the load-bearing `save = mint-immutable-version`
+  invariant (run binding / trigger pins / RS rerun / immutability triggers all depend on it). A
+  mutable draft row (option b) can be layered LATER without invalidating (a): commits record
+  provenance by `resourceId` + content-hash, not by "which row was the draft".
+- **D2 = (i): Commit is an EXPLICIT command-bar action; Save keeps minting a version; git stays
+  opt-in.** NOT auto-commit-per-save (option ii — it would couple authoring latency to git
+  clone/fetch/push). The UI command bar becomes THREE distinct acts: Save / Commit / Publish (a
+  per-workspace "save writes the working branch" toggle can arrive later, no schema change).
+- **Drift is ADVISORY:** uncommitted iff `canonicalHash(latest version, G1 volatile-exclusions)`
+  ≠ the blob last committed/imported for that `resourceId`. The descendant-guard base is **the
+  commit the DB was imported from** (NOT collab-HEAD — that defeats feature branches); the real
+  serialization point is push non-fast-forward / PR-merge, so the gate is advisory. A version is
+  publishable (G6) only if committed.
+
+### G3a built-block (2026-07-23) — serialize + Commit + push to the working branch
+
+First G3 slice. Delivers the explicit **Commit**: turn the DB working copy into canonical JSON
+files in the managed checkout and land them on a studio-owned working branch. Descendant/drift
+guard, PR-open, and the persisted working-branch column are later slices (see deferrals).
+
+- **`serializeWorkspace(db, ownerId)` — the workspace-git EXPORT fork** (distinct from the
+  portable `portability/export.ts`, which NULLs internal refs for cross-workspace copy). It
+  PRESERVES resource identity and **remaps every internal ref to a `resourceId`**, because a
+  same-workspace re-import mints a NEW DB version id under the SAME `resourceId` (G1 built-block:
+  "workspace-git import PRESERVES ids") — a ref stored as a concrete DB id would dangle on the
+  first round-trip. Per-pipeline the file carries the pipeline row + its **latest version only**
+  (`versions:[latest]`, per D1) — NOT all versions (git history IS the version trail; bundling
+  the DB trail would double-track it). Remaps: literal `trigger.pipelineVersionId` /
+  `node.call.pipelineVersionId` → that version's `resourceId`; literal `node.connectionId` → that
+  connection's `resourceId`; a `${}` DYNAMIC ref (classified by the SSOT `interpolationMode`,
+  same as export.ts) is PRESERVED verbatim (it routes on run values, not an env-specific row). A
+  `null` source ref stays `null`.
+- **Owner-scoped remap, no manufactured absence.** The remap resolves ids through owner-scoped
+  maps built from the owner's own resources (`Map<versionDbId, resourceId>`,
+  `Map<connectionDbId, resourceId>`); a NON-null id that fails to resolve to an owned row **fails
+  the Commit loudly** — never coerced to `null` (#473: an absent fact is not a benign default;
+  the merge-gate "a `gh` failure is never CI-green" shape). `null`-stays-`null` only when the
+  source was already absent.
+- **Deterministic, order-independent bytes.** Both the emission order and the slug-collision rule
+  are keyed on `resourceId`, never DB row order (the `list*` repo fns issue no `ORDER BY`): when
+  2+ resources of a kind share a slug, **ALL** of them get a `resourceId` suffix (a rule decided
+  by content, so it can't flip with iteration order). `exportedAt` — the ONE volatile envelope
+  field (`Date.now()`) — is normalized to `0` in the file (a valid `int`, so the file still
+  re-parses through `ExportEnvelopeSchema`); everything else goes through `canonicalStringify`.
+  Byte-stability: identical DB content → identical files, pinned by a reversed-order test.
+- **Path policy (G1's, slug util lands here):** `pipelines/<slug>.json` etc.; slug = the resource
+  NAME lowercased, non-alphanumeric → `-`; identity is `resourceId`, the path cosmetic (same-id
+  new-path = rename, resolved on import G5). The slug neutralizes `.`/`/` (→ `-`), so a hostile
+  resource name can't traverse; each file write is additionally containment-asserted within the
+  checkout, and the `add`/clear steps touch ONLY the three managed dirs — never the user's own
+  files.
+- **Commit flow** (`POST /api/workspace/git/commit` `{message}`, inside the per-owner
+  `KeyedQueue`): ensure the checkout is present (the fetch route's re-clone helper, now shared) +
+  fetch (recording the same `observedCollabHead`/`lastFetchError` tracking the fetch route does —
+  identical semantics); pick the base — `origin/<workingBranch>` if it exists (continue the branch
+  so the push FAST-FORWARDS), else `origin/<collabBranch>`, else **orphan** (empty repo, the
+  onboarding state); `checkout -f -B` the working branch off the base (`-f`: the checkout is
+  disposable, so force past any crash-left dirt). Then reconcile ONLY the three managed dirs:
+  `git rm -r --cached --ignore-unmatch -- pipelines connections triggers` (stage the removal of
+  every previously-committed managed file), clear those dirs on disk, write the fresh serialized
+  set, `git add -f -- <exact written paths>` (the exact set, never a wildcard — so no stray
+  untracked file can enter studio's commit; `-f` because a base-branch `.gitignore` matching a
+  managed dir would otherwise make `add` of a named ignored path exit non-zero and brick every
+  Commit; a removed resource stays a staged deletion from the `rm --cached`, an unchanged file's
+  re-add nets to zero). No-op detection is `git diff --cached --quiet` (staged-index-scoped, so an
+  untracked file OUTSIDE the managed dirs is never mistaken for a change — where a whole-tree
+  `status --porcelain` would be): nothing staged → **no-op** (`committed:false`); else commit
+  (author = the principal, via `-c user.name`/`user.email` — headless servers have no ambient git
+  identity) + push. The push **never passes `--force`**. Because each Commit fetches and BASES on
+  the working branch's own current tip, the push is a fast-forward BY CONSTRUCTION — an out-of-band
+  advance of the working branch is absorbed (rebased onto), not rejected. A non-fast-forward can
+  therefore only arise from a concurrent cross-process push in the fetch→push window, surfacing as
+  a `git_error` (502) rather than silently force-overwriting. Real drift detection (base = the
+  imported-from commit) is the deferred descendant-guard slice; G3a's push safety is advisory only.
+- **Working branch is DERIVED `studio/<ownerId>/work` this slice** (no client override — an
+  unpersisted override with no reader would be inert surface). The persisted `working_branch`
+  column + feature-branch selection land with their first reader (G9 PR-open).
+- **Message validation:** a shared `CommitMessageSchema` (`trim().min(1)`, capped, no
+  control-only) at the route boundary — `git commit -m ""` refuses, and the boundary is where
+  input policy lives (the G2 pattern).
+- **Non-latest binding is faithful, not a fork:** a trigger bound to v3 while latest is v5
+  serializes v3's `resourceId` (every version has its own) even though only v5's file is
+  committed. The dangling-ref reconcile ("absent → disabled") is G7's charter, not a re-point
+  (that would violate immutability / "unbound never fires"). Pinned by test.
+- **Deferrals:** descendant/drift guard (base = the imported-from commit — needs G4 import);
+  drift-status reporting; `global-params.json`/`workspace.json` files (need NEW envelope KINDS
+  that don't exist yet); the persisted `working_branch` column (→ G9). `git status --porcelain`
+  + `merge-base --is-ancestor` — G2 deferred `merge-base` to "G3 with its consumer"; its consumer
+  is the descendant guard, so it lands with that slice, not G3a.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

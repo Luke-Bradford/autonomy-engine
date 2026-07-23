@@ -11,9 +11,10 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * `execFile` (arg ARRAYS, never a shell — user-controlled values can't
  * inject; `--` separates positionals where git accepts it).
  *
- * Ops are ONLY what G2 consumes (version/clone/fetch/rev-parse). G3 adds
- * `status --porcelain` + `merge-base --is-ancestor` with their consumers —
- * the no-inert-surface rule.
+ * Ops are added per consumer (the no-inert-surface rule): G2 —
+ * version/clone/fetch/rev-parse; G3a — checkout/rm-cached/add/diff-cached/
+ * commit/push (the Commit path). `merge-base --is-ancestor` still waits for
+ * its consumer, the descendant guard (a later G3 slice).
  *
  * AUTH MODEL (pinned, G2): the operator's own environment — SSH agent +
  * credential helper of the user running the server. Nothing interactive can
@@ -28,6 +29,7 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
 /** Timeouts per op class: remote ops get minutes, local plumbing gets seconds. */
 const DEFAULT_CLONE_TIMEOUT_MS = 120_000;
 const DEFAULT_FETCH_TIMEOUT_MS = 60_000;
+const DEFAULT_PUSH_TIMEOUT_MS = 60_000;
 const DEFAULT_LOCAL_TIMEOUT_MS = 10_000;
 /** Collected-output cap — git porcelain output here is tiny; a megabyte means something is wrong. */
 const MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -174,6 +176,157 @@ export class CliGitProvider {
   }
 
   /**
+   * #3 G3a — put the working tree on `branch`, creating or resetting it.
+   *
+   * With a `baseRef` (e.g. `origin/studio/local/work` to continue the branch,
+   * or `origin/main` to start it): `checkout -f -B` — the managed checkout is
+   * DERIVED/disposable, so `-f` force-discards any dirt a crash between a prior
+   * serialize and commit may have left, guaranteeing the tree matches
+   * `baseRef` before the caller rewrites the managed dirs.
+   *
+   * With `baseRef === null` (the empty-repo onboarding case — no collaboration
+   * branch to base on): `checkout --orphan` starts a parentless branch, then
+   * the index is cleared (`rm -r --cached`, `--ignore-unmatch` tolerating an
+   * already-empty index) so ONLY the caller's scoped `add` decides the first
+   * commit — never carrying over a default branch's tree.
+   */
+  async checkoutWorkingBranch(dir: string, branch: string, baseRef: string | null): Promise<void> {
+    if (baseRef !== null) {
+      await this.execOk(
+        'checkout',
+        ['-C', dir, 'checkout', '-f', '-B', branch, baseRef],
+        this.localTimeoutMs,
+        dir,
+      );
+      return;
+    }
+    await this.execOk(
+      'checkout',
+      ['-C', dir, 'checkout', '--orphan', branch],
+      this.localTimeoutMs,
+      dir,
+    );
+    await this.execOk(
+      'rm',
+      ['-C', dir, 'rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '.'],
+      this.localTimeoutMs,
+      dir,
+    );
+  }
+
+  /**
+   * #3 G3a — remove the given pathspecs from the INDEX only (`--cached`, worktree
+   * untouched), tolerating pathspecs that match nothing (`--ignore-unmatch`).
+   * The Commit route calls this on the three studio-managed dirs before
+   * re-adding the freshly-serialized files: every previously-tracked managed
+   * file is staged as a deletion, so a removed resource's file disappears and
+   * an unchanged file's re-add nets back to zero (no-op detection stays
+   * precise). Scoped to the managed dirs — never `.` at the root — so nothing
+   * outside them is ever touched. Local op.
+   */
+  async rmCached(dir: string, pathspecs: readonly string[]): Promise<void> {
+    await this.execOk(
+      'rm',
+      ['-C', dir, 'rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '--', ...pathspecs],
+      this.localTimeoutMs,
+      dir,
+    );
+  }
+
+  /**
+   * #3 G3a — force-stage the given file paths (`add -f -- <paths>`). The Commit
+   * route passes the EXACT set of serialized files it just wrote (all of which
+   * exist, so no "pathspec did not match" abort) — never a bare `add -A` at the
+   * checkout root, so a stray untracked file (crash debris, an operator's local
+   * edit) can never enter studio's commit. Deletions are handled by the
+   * preceding `rmCached`.
+   *
+   * `-f` is load-bearing: studio OWNS the three managed dirs on its working
+   * branch, but a base branch may carry a `.gitignore` matching one of them (or
+   * a broad `*.json`), and `git add` of an explicitly-named IGNORED path EXITS
+   * NON-ZERO (not a silent skip) — which would make every Commit a permanent
+   * 502 for such a repo. Forcing is safe here precisely because the path set is
+   * the exact, containment-checked serialized set, never a wildcard. Local op;
+   * a no-op when `paths` is empty.
+   */
+  async add(dir: string, paths: readonly string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.execOk('add', ['-C', dir, 'add', '-f', '--', ...paths], this.localTimeoutMs, dir);
+  }
+
+  /**
+   * #3 G3a — whether the index differs from `HEAD` (`diff --cached --quiet`:
+   * exit 0 = nothing staged, exit 1 = staged changes). The Commit route reads
+   * this AFTER staging to decide a no-op Commit — precise where a whole-tree
+   * `status --porcelain` is not: an untracked file OUTSIDE the managed dirs
+   * (which the scoped staging never touches) must not be mistaken for a change
+   * to commit. Local op.
+   */
+  async hasStagedChanges(dir: string): Promise<boolean> {
+    const result = await this.exec(
+      'diff',
+      ['-C', dir, 'diff', '--cached', '--quiet'],
+      this.localTimeoutMs,
+      dir,
+    );
+    if (result.code === 0) return false;
+    if (result.code === 1) return true;
+    throw new GitOperationError(
+      'diff',
+      this.redact(result.stderr.trim() || `exit ${result.code}`, dir),
+    );
+  }
+
+  /**
+   * #3 G3a — commit the staged tree with an explicit author/committer identity
+   * (`-c user.name`/`user.email`), returning the new commit sha. The identity
+   * is passed per-invocation rather than read from ambient gitconfig: a
+   * headless server has no `user.name`/`user.email` set, and the author is the
+   * request principal (#1 audit), not the OS user. Returns the resolved
+   * `HEAD`. Local op.
+   */
+  async commit(
+    dir: string,
+    message: string,
+    author: { name: string; email: string },
+  ): Promise<string> {
+    await this.execOk(
+      'commit',
+      [
+        '-c',
+        `user.name=${author.name}`,
+        '-c',
+        `user.email=${author.email}`,
+        '-C',
+        dir,
+        'commit',
+        '-m',
+        message,
+      ],
+      this.localTimeoutMs,
+      dir,
+    );
+    const { stdout } = await this.execOk(
+      'rev-parse',
+      ['-C', dir, 'rev-parse', 'HEAD'],
+      this.localTimeoutMs,
+      dir,
+    );
+    return stdout.trim();
+  }
+
+  /**
+   * #3 G3a — push `branch` to origin. NEVER `--force`: a non-fast-forward is a
+   * REAL rejection (the working branch moved underneath — another session, a
+   * manual push) and is surfaced as a `GitOperationError` (502). That rejection
+   * IS the advisory drift gate until the descendant guard lands (spec #3: "the
+   * real serialization point is the push non-fast-forward"). Remote op.
+   */
+  async push(dir: string, branch: string): Promise<void> {
+    await this.execOk('push', ['-C', dir, 'push', 'origin', branch], DEFAULT_PUSH_TIMEOUT_MS, dir);
+  }
+
+  /**
    * Secrets out (the `secretsToRedact` seam), then the op's checkout dir →
    * `<checkout>` — subpaths under it become `<checkout>/…`, so no error text
    * ever quotes the server-internal absolute checkout path.
@@ -244,8 +397,18 @@ export class CliGitProvider {
   }
 }
 
-/** The capability seam G3+ will widen (commit/push/status/is-ancestor land with their consumers). */
+/** The capability seam (widened per consumer; `merge-base --is-ancestor` lands
+ * with the descendant guard, a later G3 slice). */
 export type GitProvider = Pick<
   CliGitProvider,
-  'version' | 'clone' | 'fetch' | 'revParseRemoteBranch'
+  | 'version'
+  | 'clone'
+  | 'fetch'
+  | 'revParseRemoteBranch'
+  | 'checkoutWorkingBranch'
+  | 'rmCached'
+  | 'add'
+  | 'hasStagedChanges'
+  | 'commit'
+  | 'push'
 >;

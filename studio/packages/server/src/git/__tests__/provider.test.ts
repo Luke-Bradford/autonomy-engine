@@ -168,3 +168,67 @@ describe('CliGitProvider', () => {
     expect((err as Error).message).toContain('***');
   });
 });
+
+describe('CliGitProvider — G3a commit primitives', () => {
+  /** A managed checkout: OUR clone of a bare remote (the G2 model). */
+  function checkoutOf() {
+    const { dir, remote } = seededRemote();
+    const checkout = join(dir, 'checkout');
+    execFileSync('git', ['clone', '--quiet', '--origin', 'origin', remote, checkout], {
+      encoding: 'utf8',
+    });
+    return { dir, remote, checkout };
+  }
+
+  it('checkoutWorkingBranch(baseRef) resets the branch and hasStagedChanges tracks the index', async () => {
+    const provider = new CliGitProvider();
+    const { checkout } = checkoutOf();
+
+    await provider.checkoutWorkingBranch(checkout, 'studio/local/work', 'origin/main');
+    // A clean tree off the base has nothing staged.
+    expect(await provider.hasStagedChanges(checkout)).toBe(false);
+
+    mkdirSync(join(checkout, 'pipelines'));
+    writeFileSync(join(checkout, 'pipelines/a.json'), '{"x":1}');
+    await provider.add(checkout, ['pipelines/a.json']);
+    expect(await provider.hasStagedChanges(checkout)).toBe(true);
+
+    const sha = await provider.commit(checkout, 'add a', {
+      name: 'local',
+      email: 'local@studio.local',
+    });
+    expect(sha).toMatch(/^[0-9a-f]{40}$/);
+    // The author identity is the one we passed, not the ambient gitconfig.
+    const author = execFileSync('git', ['-C', checkout, 'log', '-1', '--format=%an <%ae>'], {
+      encoding: 'utf8',
+    }).trim();
+    expect(author).toBe('local <local@studio.local>');
+    expect(await provider.hasStagedChanges(checkout)).toBe(false);
+  });
+
+  it('checkoutWorkingBranch(null) starts an orphan branch with an empty index', async () => {
+    const provider = new CliGitProvider();
+    const { checkout } = checkoutOf();
+
+    await provider.checkoutWorkingBranch(checkout, 'studio/local/work', null);
+    // Orphan cleared the index: the base commit's README is no longer staged.
+    expect(await provider.hasStagedChanges(checkout)).toBe(false);
+    const tracked = execFileSync('git', ['-C', checkout, 'ls-files'], { encoding: 'utf8' }).trim();
+    expect(tracked).toBe('');
+  });
+
+  it('rmCached stages deletions and tolerates never-tracked pathspecs', async () => {
+    const provider = new CliGitProvider();
+    const { checkout } = checkoutOf();
+    await provider.checkoutWorkingBranch(checkout, 'studio/local/work', 'origin/main');
+    mkdirSync(join(checkout, 'pipelines'));
+    writeFileSync(join(checkout, 'pipelines/a.json'), '{"x":1}');
+    await provider.add(checkout, ['pipelines/a.json']);
+    await provider.commit(checkout, 'add a', { name: 'local', email: 'local@studio.local' });
+
+    // rmCached on all three managed dirs — only `pipelines` is tracked; the
+    // other two match nothing and must not error (--ignore-unmatch).
+    await provider.rmCached(checkout, ['pipelines', 'connections', 'triggers']);
+    expect(await provider.hasStagedChanges(checkout)).toBe(true); // the deletion is staged
+  });
+});

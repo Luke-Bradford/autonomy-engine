@@ -1,9 +1,12 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  CommitWorkspaceGitBodySchema,
   ConnectWorkspaceGitBodySchema,
+  WorkspaceGitBranchSchema,
+  WorkspaceGitCommitResultSchema,
   deriveWorkspaceGitState,
   WorkspaceGitStatusSchema,
   type WorkspaceGit,
@@ -15,6 +18,7 @@ import {
   updateWorkspaceGitSync,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
+import { serializeWorkspace } from '../portability/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
 import {
   CliGitProvider,
@@ -24,23 +28,32 @@ import {
 } from '../git/provider.js';
 import { KeyedQueue } from '../git/queue.js';
 import { NotFoundError } from '../errors.js';
+import type { Db } from '../repo/types.js';
 
 /**
- * #3 G2 — connect/status/fetch/disconnect for the workspace↔git association.
+ * #3 G2 + G3a — connect/status/fetch/disconnect + Commit for the workspace↔git
+ * association.
  *
  * Every git-touching handler runs inside the per-owner `KeyedQueue`, so a
- * concurrent connect/fetch/disconnect can never interleave filesystem work on
- * the same managed checkout. The checkout is DERIVED state throughout:
+ * concurrent connect/fetch/commit/disconnect can never interleave filesystem
+ * work on the same managed checkout. The checkout is DERIVED state throughout:
  * connect clears any orphaned dir before cloning (no row ⇒ the dir is a
- * crash-mid-clone leftover by definition), fetch re-clones a wiped checkout,
- * disconnect removes it — every divergence between row and disk self-heals.
+ * crash-mid-clone leftover by definition), fetch/commit re-clone a wiped
+ * checkout, disconnect removes it — every divergence between row and disk
+ * self-heals.
  *
- * Security model: `repoUrl`/`collabBranch` are user input validated by the
- * shared allowlist schemas (scheme allowlist, no embedded credentials,
- * check-ref-format branch shape) BEFORE reaching a git argv; ownerId comes
- * from `request.principal`, never the client; git runs with the master-key
- * env vars stripped and can never prompt (see `git/provider.ts`).
+ * Security model: `repoUrl`/`collabBranch`/`message` are user input validated by
+ * the shared boundary schemas (scheme allowlist, no embedded credentials,
+ * check-ref-format branch shape, non-empty message) BEFORE reaching a git argv;
+ * ownerId comes from `request.principal`, never the client; git runs with the
+ * master-key env vars stripped and can never prompt (see `git/provider.ts`).
+ * The working branch is DERIVED `studio/<ownerId>/work` (G3a) — no client
+ * override — and the Commit only ever writes/stages the three studio-managed
+ * dirs, never the user's own repo files.
  */
+
+/** The three repo directories a Commit owns (the G1 path policy dirs). */
+const MANAGED_DIRS = ['pipelines', 'connections', 'triggers'] as const;
 
 export interface WorkspaceGitRoutesOptions {
   workspaceGitRoot: string;
@@ -50,6 +63,65 @@ export interface WorkspaceGitRoutesOptions {
 
 function statusOf(row: WorkspaceGit) {
   return WorkspaceGitStatusSchema.parse({ ...row, state: deriveWorkspaceGitState(row) });
+}
+
+/**
+ * Ensure the owner's managed checkout is present and freshly fetched, recording
+ * the sync outcome on the row EXACTLY as the fetch route does — the single
+ * source of the "is the checkout present + up to date" behaviour, shared by the
+ * fetch and commit handlers so their fetch-state semantics can't diverge. The
+ * checkout is derived state: a wiped one is re-cloned rather than failing
+ * forever. On a git failure the (client-safe, redacted) message is stored in
+ * `lastFetchError` (state → `fetch_error`) AND rethrown; any non-git error gets
+ * a fixed string (GET surfaces this field, so it must never quote a
+ * server-internal absolute path). Returns the updated row (non-null — the
+ * caller checked it exists inside the same queue slot).
+ */
+async function ensureCheckoutFetched(
+  db: Db,
+  provider: GitProvider,
+  workspaceGitRoot: string,
+  ownerId: string,
+  row: WorkspaceGit,
+): Promise<WorkspaceGit> {
+  const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+  try {
+    if (!existsSync(join(checkout, '.git'))) {
+      await removeCheckoutDir(workspaceGitRoot, ownerId);
+      await mkdir(dirname(checkout), { recursive: true });
+      await provider.clone(row.repoUrl, checkout);
+    } else {
+      await provider.fetch(checkout);
+    }
+    const head = await provider.revParseRemoteBranch(checkout, row.collabBranch);
+    return updateWorkspaceGitSync(db, ownerId, {
+      observedCollabHead: head,
+      lastFetchAt: Date.now(),
+      lastFetchError: null,
+    })!;
+  } catch (err) {
+    const clientSafe = err instanceof GitOperationError || err instanceof GitUnavailableError;
+    updateWorkspaceGitSync(db, ownerId, {
+      observedCollabHead: row.observedCollabHead,
+      lastFetchAt: Date.now(),
+      lastFetchError: clientSafe ? (err as Error).message : 'internal error during fetch',
+    });
+    throw err;
+  }
+}
+
+/**
+ * Resolve a repo-relative serialized path to an absolute path, asserting it
+ * stays inside the checkout. Belt-and-braces (the G1 slug already neutralizes
+ * `.`/`/` in a resource name, so a serialized path can't traverse) — the same
+ * containment posture `git/checkout.ts` takes on its own destructive paths.
+ */
+function resolveInCheckout(checkout: string, relPath: string): string {
+  const abs = resolve(checkout, relPath);
+  if (abs !== checkout && !abs.startsWith(checkout + sep)) {
+    throw new Error(`serialized path "${relPath}" escapes the managed checkout`);
+  }
+  return abs;
 }
 
 export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> = async (
@@ -111,45 +183,84 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const updated = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
-
-      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
-      try {
-        // The checkout is derived state: if it was wiped (operator cleanup,
-        // disk recovery), re-clone rather than failing forever.
-        if (!existsSync(join(checkout, '.git'))) {
-          await removeCheckoutDir(workspaceGitRoot, ownerId);
-          await mkdir(dirname(checkout), { recursive: true });
-          await provider.clone(row.repoUrl, checkout);
-        } else {
-          await provider.fetch(checkout);
-        }
-        const head = await provider.revParseRemoteBranch(checkout, row.collabBranch);
-        return updateWorkspaceGitSync(db, ownerId, {
-          observedCollabHead: head,
-          lastFetchAt: Date.now(),
-          lastFetchError: null,
-        });
-      } catch (err) {
-        // Record the failure on the row (state → fetch_error) AND rethrow —
-        // the caller gets the honest 502, the row remembers it for the next
-        // GET. ONLY provider-error messages are recorded verbatim: they are
-        // client-safe by construction (redacted at the provider). Anything
-        // else (an fs errno from the recovery path, say) would quote
-        // server-internal absolute paths — GET surfaces this field, so those
-        // get a fixed string, mirroring errors.ts's no-raw-message rule.
-        const clientSafe = err instanceof GitOperationError || err instanceof GitUnavailableError;
-        updateWorkspaceGitSync(db, ownerId, {
-          observedCollabHead: row.observedCollabHead,
-          lastFetchAt: Date.now(),
-          lastFetchError: clientSafe ? (err as Error).message : 'internal error during fetch',
-        });
-        throw err;
-      }
+      return ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
     });
 
-    // `updated` is non-null here: the row existed inside the same queue slot,
-    // and only this route's queue serializes deletes for this owner.
-    return { git: statusOf(updated!) };
+    return { git: statusOf(updated) };
+  });
+
+  fastify.post('/api/workspace/git/commit', async (request) => {
+    const body = CommitWorkspaceGitBodySchema.parse(request.body);
+    const ownerId = request.principal.ownerId;
+    const principalId = request.principal.id;
+    // DERIVED working branch (G3a) — validated through the same check-ref-format
+    // schema every branch crosses, defensively (ownerId is principal-derived).
+    const workingBranch = WorkspaceGitBranchSchema.parse(`studio/${ownerId}/work`);
+
+    const result = await queue.run(ownerId, async () => {
+      const row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+      // Fetch first (shared with the fetch route) so the base refs below are
+      // current; a fetch failure records + rethrows before any commit work.
+      await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+
+      // Base the working branch on its own remote tip if it exists (so the push
+      // fast-forwards), else the collaboration branch, else orphan (empty repo).
+      const workingHead = await provider.revParseRemoteBranch(checkout, workingBranch);
+      let baseRef: string | null;
+      if (workingHead !== null) {
+        baseRef = `origin/${workingBranch}`;
+      } else {
+        const collabHead = await provider.revParseRemoteBranch(checkout, row.collabBranch);
+        baseRef = collabHead !== null ? `origin/${row.collabBranch}` : null;
+      }
+      await provider.checkoutWorkingBranch(checkout, workingBranch, baseRef);
+
+      // Serialize the DB working copy (latest version of each resource), then
+      // reconcile the managed dirs: stage the removal of every previously
+      // committed managed file, clear them on disk, write the fresh set, and
+      // stage exactly those files. An unchanged file's re-add nets back to
+      // zero; a removed resource stays a staged deletion.
+      const files = serializeWorkspace(db, ownerId);
+      await provider.rmCached(checkout, MANAGED_DIRS);
+      for (const managedDir of MANAGED_DIRS) {
+        await rm(resolveInCheckout(checkout, managedDir), { recursive: true, force: true });
+      }
+      const writtenPaths: string[] = [];
+      for (const file of files) {
+        const abs = resolveInCheckout(checkout, file.path);
+        await mkdir(dirname(abs), { recursive: true });
+        await writeFile(abs, file.contents);
+        writtenPaths.push(file.path);
+      }
+      await provider.add(checkout, writtenPaths);
+
+      if (!(await provider.hasStagedChanges(checkout))) {
+        return WorkspaceGitCommitResultSchema.parse({
+          committed: false,
+          branch: workingBranch,
+          commitSha: null,
+          files: writtenPaths,
+        });
+      }
+
+      const commitSha = await provider.commit(checkout, body.message, {
+        name: principalId,
+        email: `${principalId}@studio.local`,
+      });
+      // Never `--force`: a non-fast-forward rejection is the advisory drift gate.
+      await provider.push(checkout, workingBranch);
+      return WorkspaceGitCommitResultSchema.parse({
+        committed: true,
+        branch: workingBranch,
+        commitSha,
+        files: writtenPaths,
+      });
+    });
+
+    return { commit: result };
   });
 
   fastify.delete('/api/workspace/git', async (request, reply) => {
