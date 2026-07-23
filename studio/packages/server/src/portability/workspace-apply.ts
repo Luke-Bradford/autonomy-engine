@@ -4,6 +4,7 @@ import {
   pipelineVersionContentForm,
   type Node,
   type NodeExport,
+  type PipelineVersion,
   type PipelineVersionExport,
   type WorkspaceGitAppliedAction,
   type WorkspaceGitAppliedResource,
@@ -25,7 +26,11 @@ import {
   restorePipeline,
   updatePipeline,
 } from '../repo/pipelines.js';
-import { createPipelineVersion, listPipelineVersions } from '../repo/pipeline-versions.js';
+import {
+  createPipelineVersion,
+  getLatestPipelineVersion,
+  listPipelineVersions,
+} from '../repo/pipeline-versions.js';
 import type { Db } from '../repo/types.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
 import {
@@ -244,17 +249,20 @@ export function applyWorkspace(
     for (const c of dbSnapshot.connections) {
       if (c.resourceId !== null) dbConnFormByRid.set(c.resourceId, connectionContentForm(c.data));
     }
-    const dbPipelineByRid = new Map<string, ParsedPipeline>();
-    for (const p of dbSnapshot.pipelines) {
-      if (p.resourceId !== null) dbPipelineByRid.set(p.resourceId, p);
-    }
     const plan = classifyWorkspace(dbSnapshot, incoming);
 
     const applied: WorkspaceGitAppliedResource[] = [];
 
     // --- Connections (leaf: they reference nothing) ---
+    // `connById` (resourceId → DB id) resolves node connection refs on the way
+    // IN; `connRidByDbId` (the inverse) is used to compute a stored version's
+    // content form in resourceId-space for the change decision below.
     const connById = new Map<string, string>();
-    for (const c of listConnections(db, ownerId)) connById.set(c.resourceId, c.id);
+    const connRidByDbId = new Map<string, string>();
+    for (const c of listConnections(db, ownerId)) {
+      connById.set(c.resourceId, c.id);
+      connRidByDbId.set(c.id, c.resourceId);
+    }
 
     for (const inc of incoming.connections) {
       const data = inc.data;
@@ -306,10 +314,12 @@ export function applyWorkspace(
     // already materialised (a restore that preserved it, or a DB-ahead re-pull)
     // is a no-op, never a UNIQUE-index collision.
     const versionById = new Map<string, string>();
+    const versionRidByDbId = new Map<string, string>();
     const existingVersionRids = new Set<string>();
     for (const pipeline of listPipelines(db, ownerId)) {
       for (const v of listPipelineVersions(db, pipeline.id)) {
         versionById.set(v.resourceId, v.id);
+        versionRidByDbId.set(v.id, v.resourceId);
         existingVersionRids.add(v.resourceId);
       }
     }
@@ -354,32 +364,40 @@ export function applyWorkspace(
         if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
         if (Object.keys(rowPatch).length > 0) updatePipeline(db, existing.id, rowPatch);
 
+        // The version write is decided UNIFORMLY for a live OR an archived
+        // (restore) pipeline: compare the branch's latest version doc against the
+        // pipeline's ACTUAL latest DB version — which survives archive — in
+        // resourceId-space via the reverse maps. A branch whose latest doc
+        // DIFFERS but reuses an EXISTING immutable version `resourceId` is a
+        // contradiction (immutable rows can't be edited in place — a hand-edit
+        // that kept the id, or a git-revert to a superseded version): fail closed
+        // (#473, never silently skip a real edit), for archived and live alike.
+        // A benign no-op (identical doc) does NOT trip this — `versionChanged` is
+        // false. This is the ONE place `willMint` is decided, so the reported
+        // `action` can never disagree with what is written.
+        const dbLatest = getLatestPipelineVersion(db, existing.id);
+        const dbLatestForm = dbLatest
+          ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
+          : undefined;
+        const versionChanged =
+          version !== undefined &&
+          (dbLatestForm === undefined || pipelineVersionContentForm(version) !== dbLatestForm);
+        if (versionChanged && alreadyMaterialised) {
+          throw new WorkspaceApplyError(
+            `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
+          );
+        }
+        willMint = versionChanged; // alreadyMaterialised + changed already threw
+
         if (existing.archived) {
           restorePipeline(db, existing.id);
           action = 'restored';
-          willMint = version !== undefined && !alreadyMaterialised;
+        } else if (willMint || rowPatch.concurrency !== undefined) {
+          action = 'updated';
+        } else if (rowPatch.name !== undefined) {
+          action = 'renamed';
         } else {
-          const dbVersion = dbVersionFor(dbPipelineByRid, existing.resourceId);
-          const versionChanged =
-            version !== undefined &&
-            (dbVersion === undefined ||
-              pipelineVersionContentForm(version) !== pipelineVersionContentForm(dbVersion));
-          // A branch whose latest version doc DIFFERS from the DB's latest but
-          // reuses an EXISTING immutable version `resourceId` is a contradiction
-          // (immutable rows can't be edited in place) — most likely a hand-edit
-          // that kept the id, or a git-revert to an older version the DB has
-          // already superseded. Fail closed (never silently skip a real edit,
-          // #473) — author a new version instead. A benign no-op (identical doc)
-          // does NOT trip this: `versionChanged` is false.
-          if (versionChanged && alreadyMaterialised) {
-            throw new WorkspaceApplyError(
-              `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
-            );
-          }
-          willMint = versionChanged; // alreadyMaterialised + changed already threw
-          if (willMint || rowPatch.concurrency !== undefined) action = 'updated';
-          else if (rowPatch.name !== undefined) action = 'renamed';
-          else action = 'unchanged';
+          action = 'unchanged';
         }
       }
 
@@ -433,13 +451,49 @@ export function applyWorkspace(
   });
 }
 
-/** The DB baseline's latest version for a pipeline resourceId (from the
- * serialize+parse snapshot), or `undefined` if absent (a fresh create, or an
- * archived pipeline omitted by serialize). */
-function dbVersionFor(
-  dbPipelineByRid: Map<string, ParsedPipeline>,
-  resourceId: string,
-): PipelineVersionExport | undefined {
-  const p = dbPipelineByRid.get(resourceId);
-  return p ? latestVersion(p) : undefined;
+/**
+ * Remap a STORED DB node's concrete ids back to stable `resourceId`s (the
+ * forward direction serialize uses), so a stored version can be compared to a
+ * branch version in the SAME resourceId-space. `${}` dynamic refs stay verbatim;
+ * an absent `connectionId` becomes `null` (the export shape). An id absent from
+ * the owner-scoped reverse map is kept as-is (defensive — an owned row's refs
+ * always map; a mismatch just makes the content forms differ, never a false
+ * "unchanged"). Reads no DB — pure over the passed maps.
+ */
+function forwardRemapNode(
+  node: Node,
+  connRidByDbId: Map<string, string>,
+  versionRidByDbId: Map<string, string>,
+): NodeExport {
+  const { connectionId, call, ...rest } = node;
+  let connExport: string | null;
+  if (connectionId === undefined) connExport = null;
+  else if (interpolationMode(connectionId).mode !== 'literal') connExport = connectionId;
+  else connExport = connRidByDbId.get(connectionId) ?? connectionId;
+
+  const exported: NodeExport = { ...rest, connectionId: connExport };
+  if (call) {
+    const ref = call.pipelineVersionId;
+    const refExport =
+      interpolationMode(ref).mode !== 'literal' ? ref : (versionRidByDbId.get(ref) ?? ref);
+    exported.call = { ...call, pipelineVersionId: refExport };
+  }
+  return exported;
+}
+
+/** The content form of a STORED DB version, in resourceId-space — the baseline
+ * the branch's incoming version is compared against to decide "mint a new
+ * version vs no-op vs a divergent-content contradiction". Uses the reverse maps
+ * so archived pipelines' versions (omitted from the serialize snapshot) are
+ * comparable too. */
+function dbVersionForm(
+  version: PipelineVersion,
+  connRidByDbId: Map<string, string>,
+  versionRidByDbId: Map<string, string>,
+): string {
+  const exportForm = {
+    ...version,
+    nodes: version.nodes.map((n) => forwardRemapNode(n, connRidByDbId, versionRidByDbId)),
+  } as PipelineVersionExport;
+  return pipelineVersionContentForm(exportForm);
 }

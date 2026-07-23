@@ -192,6 +192,24 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(listPipelineVersions(db, pipe.id)).toHaveLength(1);
   });
 
+  it('RESTORE also fails closed on a reused immutable version id with divergent content', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'orig', type: 'string' }],
+    });
+    const incoming = snapshot(db);
+    archivePipeline(db, pipe.id);
+    // Tamper the reappearing file: SAME version resourceId, different content —
+    // the restore path must not silently drop the edit (the review's BLOCKING gap).
+    incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
+
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    // Atomic: the pipeline stays archived, nothing half-restored.
+    expect(getPipeline(db, pipe.id)!.archived).toBe(true);
+  });
+
   it('ARCHIVES a DB pipeline absent from the branch and disables its dependent trigger', () => {
     const db = freshDb().db;
     const gone = createPipeline(db, { ownerId: 'local', name: 'Gone' });
