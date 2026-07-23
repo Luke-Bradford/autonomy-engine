@@ -251,6 +251,27 @@ export function applyWorkspace(
     }
     const plan = classifyWorkspace(dbSnapshot, incoming);
 
+    // A version `resourceId` is globally unique by construction, but
+    // `parseWorkspaceFiles` only dedupes top-level pipeline/connection/trigger
+    // ids, not nested version ids — so a hand-crafted branch could put the SAME
+    // version resourceId in two different pipeline files. Both would mint under
+    // distinct `pipeline_id`s (the version UNIQUE index is `(pipeline_id,
+    // resource_id)`, not global) and the second would silently overwrite
+    // `versionById`, mis-wiring a `call_pipeline` ref to the wrong pipeline's
+    // version. Fail closed up front (before any write), the same posture the
+    // per-pipeline guards take against a collision with an EXISTING DB version.
+    const seenIncomingVersionRids = new Set<string>();
+    for (const inc of incoming.pipelines) {
+      const rid = latestVersion(inc)?.resourceId;
+      if (rid == null) continue;
+      if (seenIncomingVersionRids.has(rid)) {
+        throw new WorkspaceApplyError(
+          `branch reuses version resourceId "${rid}" across two pipelines — version ids are unique per resource`,
+        );
+      }
+      seenIncomingVersionRids.add(rid);
+    }
+
     const applied: WorkspaceGitAppliedResource[] = [];
 
     // --- Connections (leaf: they reference nothing) ---

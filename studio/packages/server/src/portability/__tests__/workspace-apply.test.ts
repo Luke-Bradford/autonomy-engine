@@ -322,6 +322,24 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(listPipelines(db, 'local').map((p) => p.name)).toEqual(['A']);
   });
 
+  it('REFUSES a branch where two pipelines share a version resourceId (intra-batch dup)', () => {
+    const src = freshDb().db;
+    const a = createPipeline(src, { ownerId: 'local', name: 'A' });
+    createPipelineVersion(src, baseVersion(a.id));
+    const b = createPipeline(src, { ownerId: 'local', name: 'B' });
+    const bV = createPipelineVersion(src, baseVersion(b.id));
+    const incoming = snapshot(src);
+    // Force A's file to claim B's version resourceId — two NEW pipelines in one
+    // batch sharing a version id would otherwise both mint and mis-wire refs.
+    const aFile = incoming.pipelines.find((p) => p.resourceId === a.resourceId)!;
+    aFile.data.versions[0]!.resourceId = bV.resourceId;
+
+    const tgt = freshDb().db;
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    // Atomic: neither pipeline was created.
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
+  });
+
   it('REFUSES the whole import (nothing written) when the branch has any parse diagnostic', () => {
     const db = freshDb().db;
     const incoming = parseWorkspaceFiles([
