@@ -347,6 +347,17 @@ export function applyWorkspace(
       let willMint: boolean;
 
       if (existing === null) {
+        // A brand-new pipeline claiming a version `resourceId` that already
+        // exists (under ANY of the owner's pipelines) is a contradiction —
+        // version ids are globally unique by construction, so this is a corrupt
+        // / hand-crafted branch. Fail closed, symmetric to the existing-pipeline
+        // path below (#473): never create a version-less shell + report
+        // `created` while silently dropping the version.
+        if (version !== undefined && alreadyMaterialised) {
+          throw new WorkspaceApplyError(
+            `new pipeline "${inc.resourceId ?? '(pre-G1)'}" branch version "${versionRid}" reuses an existing immutable version id — version ids are unique per resource`,
+          );
+        }
         const created = createPipeline(
           db,
           { ownerId, name: row.name, concurrency: row.concurrency },
@@ -355,7 +366,7 @@ export function applyWorkspace(
         pipelineId = created.id;
         resourceId = created.resourceId;
         action = 'created';
-        willMint = version !== undefined && !alreadyMaterialised;
+        willMint = version !== undefined;
       } else {
         pipelineId = existing.id;
         resourceId = existing.resourceId;

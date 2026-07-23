@@ -303,6 +303,25 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
   });
 
+  it('REFUSES a NEW pipeline whose version reuses an existing version id (create-path fail-open)', () => {
+    const db = freshDb().db;
+    const a = createPipeline(db, { ownerId: 'local', name: 'A' });
+    const aV = createPipelineVersion(db, baseVersion(a.id));
+
+    // A branch describing a NEW pipeline B whose version reuses A's version
+    // resourceId (globally unique by construction) — a corrupt/hand-crafted
+    // branch. The create path must fail closed, not create a version-less shell.
+    const src = freshDb().db;
+    const b = createPipeline(src, { ownerId: 'local', name: 'B' });
+    createPipelineVersion(src, baseVersion(b.id));
+    const incoming = snapshot(src);
+    incoming.pipelines[0]!.data.versions[0]!.resourceId = aV.resourceId;
+
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    // Atomic: B was never created (and A untouched).
+    expect(listPipelines(db, 'local').map((p) => p.name)).toEqual(['A']);
+  });
+
   it('REFUSES the whole import (nothing written) when the branch has any parse diagnostic', () => {
     const db = freshDb().db;
     const incoming = parseWorkspaceFiles([
