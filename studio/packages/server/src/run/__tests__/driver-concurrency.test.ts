@@ -3,6 +3,7 @@ import {
   CATALOG_VERSION,
   type Edge,
   type EdgeOn,
+  type EngineEvent,
   type NewPipelineVersion,
   type Node,
 } from '@autonomy-studio/shared';
@@ -302,6 +303,32 @@ describe('driver — intra-run concurrent dispatch (#4 A4b slice 1)', () => {
     expect(events.some((e) => e.type === 'node.succeeded' && e.nodeId === 'b')).toBe(false);
     expect(finishedAt).toBe(events.length - 1);
     expect(state.nodes.b!.status).toBe('dispatched');
+  });
+
+  it('a fold error on the channel path rejects the drive — never hangs the lock', async () => {
+    const { db } = freshDb();
+    const { nodes, edges } = fanOut(['a', 'b']);
+    const run = seedRun(db, seedVersion(db, nodes, edges));
+
+    // `a` yields an event the append-path schema re-parse REJECTS, making
+    // `fold` itself throw while sibling `b` is suspended mid-push. The pump
+    // must settle the shifted entry before rethrowing — an unsettled entry
+    // would strand `b`'s pusher and hang teardown under the drive lock (the
+    // pre-fix failure both review lenses flagged).
+    const base = makeStubExecutor({ nodes: { b: { delayMs: 30 } } });
+    const malforming: DriverDeps['executor'] = {
+      async *perform(command, runId) {
+        if (command.type === 'dispatchNode' && command.nodeId === 'a') {
+          yield* base.perform(command, runId);
+          yield { type: 'not.an.event' } as unknown as EngineEvent;
+          return;
+        }
+        yield* base.perform(command, runId);
+      },
+    };
+
+    const d = deps(db);
+    await expect(startRun({ ...d, executor: malforming }, run)).rejects.toThrow();
   });
 
   it('a stream that throws mid-flight tears down cleanly and rethrows', async () => {

@@ -1010,7 +1010,21 @@ export async function pump(
         // else sleep until a pusher pushes or settles, else we are done.
         const next = pendingFolds.shift();
         if (next !== undefined) {
-          const terminal = fold(next.event);
+          let terminal: boolean;
+          try {
+            terminal = fold(next.event);
+          } catch (err) {
+            // Settle BEFORE rethrowing: the entry is already shifted OUT of
+            // `pendingFolds`, so the teardown sweep below cannot reach it — an
+            // unsettled entry would strand its pusher mid-push and hang the
+            // `Promise.all(pushers)` await forever, holding the per-run drive
+            // lock with the error swallowed. `'dropped'` is safe on both
+            // sub-cases: a parse throw appended nothing; a post-append throw
+            // leaves the pusher breaking without resuming its generator — the
+            // crash-equivalent posture boot reconcile already recovers.
+            next.settle('dropped');
+            throw err;
+          }
           next.settle('folded');
           if (terminal) break;
           continue;
