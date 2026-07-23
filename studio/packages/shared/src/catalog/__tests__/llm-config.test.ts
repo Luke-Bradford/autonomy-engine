@@ -681,3 +681,166 @@ describe('toolWireParameters (#2 L10a)', () => {
     expect(wire.required).toEqual(['a']);
   });
 });
+
+// ===========================================================================
+// #2 L12 — multi-turn via stateless dataflow: the `history` input + the
+// `emitMessages` transcript-output opt-in + their coupling/normalization.
+// ===========================================================================
+
+describe('llmCallConfigSchema — L12 conversation surface (dispatch shape)', () => {
+  it('accepts a resolved `history` array of role-tagged turns alongside `prompt`', () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'and then?',
+      history: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'hello' },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts `history` alongside v2 `messages` (exactly-one-of is about authored turns only)', () => {
+    const r = llmCallConfigSchema.safeParse({
+      messages: [{ role: 'user', content: 'next' }],
+      history: [{ role: 'user', content: 'prior' }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts an EMPTY `history` array (a first-iteration loop shape is a valid no-op)', () => {
+    const r = llmCallConfigSchema.safeParse({ prompt: 'p', history: [] });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects a `history` turn with an unknown role or empty content', () => {
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'p',
+        history: [{ role: 'tool', content: 'x' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      llmCallConfigSchema.safeParse({
+        prompt: 'p',
+        history: [{ role: 'user', content: '' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a non-array `history` (an unresolved save-time string must fail loud at dispatch)', () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      history: '${nodes.a.output.messages}',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('accepts `emitMessages: true` on a text-mode node', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'p', emitMessages: true }).success).toBe(true);
+  });
+
+  it('accepts `emitMessages: false` (same as absent)', () => {
+    expect(llmCallConfigSchema.safeParse({ prompt: 'p', emitMessages: false }).success).toBe(true);
+  });
+
+  it("rejects `emitMessages: true` with outputMode:'structured' (v1: transcript needs the text completion)", () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      emitMessages: true,
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts `history` with outputMode:'structured' (the INPUT side composes everywhere)", () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      history: [{ role: 'user', content: 'prior' }],
+      outputMode: 'structured',
+      outputSchema: { type: 'object', properties: { a: { type: 'string' } } },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('accepts `emitMessages` + `tools` (tool exchanges stay driver-internal by construction)', () => {
+    const r = llmCallConfigSchema.safeParse({
+      prompt: 'p',
+      emitMessages: true,
+      tools: [
+        {
+          name: 'add',
+          description: 'add',
+          parameters: { type: 'object', properties: { a: { type: 'number' } } },
+          expression: '${add(tool.args.a, 1)}',
+        },
+      ],
+    });
+    expect(r.success).toBe(true);
+  });
+});
+
+describe('normalizeLlmRequest — L12 history threading', () => {
+  it('prepends history turns before the authored prompt turn', () => {
+    const r = normalizeLlmRequest(
+      llmCallConfigSchema.parse({
+        prompt: 'and then?',
+        history: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'hello' },
+        ],
+      }),
+    );
+    expect(r.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'user', content: 'and then?' },
+    ]);
+  });
+
+  it('prepends history turns before authored `messages`', () => {
+    const r = normalizeLlmRequest(
+      llmCallConfigSchema.parse({
+        messages: [{ role: 'user', content: 'next' }],
+        history: [{ role: 'assistant', content: 'prior answer' }],
+      }),
+    );
+    expect(r.messages).toEqual([
+      { role: 'assistant', content: 'prior answer' },
+      { role: 'user', content: 'next' },
+    ]);
+  });
+
+  it('folds a history system turn into the single system string — config `system` first, then encounter order', () => {
+    const r = normalizeLlmRequest(
+      llmCallConfigSchema.parse({
+        system: 'node instruction',
+        messages: [
+          { role: 'system', content: 'authored system' },
+          { role: 'user', content: 'next' },
+        ],
+        history: [
+          { role: 'system', content: 'history system' },
+          { role: 'user', content: 'prior' },
+        ],
+      }),
+    );
+    expect(r.system).toBe('node instruction\n\nhistory system\n\nauthored system');
+    expect(r.messages).toEqual([
+      { role: 'user', content: 'prior' },
+      { role: 'user', content: 'next' },
+    ]);
+  });
+
+  it('an empty history array is a no-op (byte-identical to absent)', () => {
+    const withEmpty = normalizeLlmRequest(llmCallConfigSchema.parse({ prompt: 'p', history: [] }));
+    const without = normalizeLlmRequest(llmCallConfigSchema.parse({ prompt: 'p' }));
+    expect(withEmpty).toEqual(without);
+  });
+
+  it('history alone does NOT satisfy the prompt/messages requirement (bypassed parse throws)', () => {
+    expect(() =>
+      normalizeLlmRequest({ history: [{ role: 'user', content: 'x' }] } as never),
+    ).toThrow();
+  });
+});

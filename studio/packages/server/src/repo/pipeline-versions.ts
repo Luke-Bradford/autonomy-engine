@@ -2,6 +2,7 @@ import { asc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   lowerAgentTaskStructuredOutputs,
+  lowerLlmEmitMessages,
   lowerLlmStructuredOutputs,
   lowerNodeOutputs,
   NewPipelineVersionSchema,
@@ -103,12 +104,23 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
   // `config.outputs` is derived from its `outputSchema` (opt-in by presence), so it
   // too must run before `lowerNodeOutputs` seeds the `[output, exitCode]` default.
   // An invalid schema is left un-lowered and reported by `validateAgentTaskOutput`.
+  //
+  // #2 L12 — `lowerLlmEmitMessages` runs LAST (after `lowerNodeOutputs`, unlike
+  // the two structured passes): the transcript row APPENDS to the seeded
+  // `[text, stopReason]` default rather than replacing it, so the base contract
+  // must already be present. Composed INSIDE the strict re-parse below, so the
+  // appended row goes through F13a's strict-on-write validation like every
+  // other lowered contract.
   const lowered = {
     ...parsed,
     nodes: z
       .array(StrictNodeSchema)
       .parse(
-        lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(parsed.nodes))),
+        lowerLlmEmitMessages(
+          lowerNodeOutputs(
+            lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(parsed.nodes)),
+          ),
+        ),
       ),
   };
 

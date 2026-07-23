@@ -5,6 +5,9 @@ import {
   collectSecretSinkMarkers,
   computeCostEstimate,
   FAILURE_CODES,
+  LLM_CALL_ACTIVITY_TYPE,
+  llmCallConfigSchema,
+  normalizeLlmRequest,
   parseConnectionPriceTable,
   resolvePrice,
   type ActivityCatalog,
@@ -129,6 +132,51 @@ function redactEventPlaintexts(
     return { ...ev, error: redactSecrets(ev.error, plaintexts) };
   }
   return ev;
+}
+
+/**
+ * #2 L12 — augment a successful `emitMessages: true` `llm_call`'s outputs with
+ * the `messages` TRANSCRIPT: the request's non-system turns (history + authored,
+ * exactly as `normalizeLlmRequest` ordered them for the wire) plus the final
+ * assistant completion. This is multi-turn as STATELESS DATAFLOW — the
+ * conversation is a VALUE a downstream node threads via
+ * `history: '${nodes.x.output.messages}'`, never engine state.
+ *
+ * Assembled HERE (the one point every adapter's `succeeded` flows through)
+ * rather than per-adapter: one site covers the three API adapters, `agent_cli`,
+ * and the L10b tool loop uniformly, and adds none of the per-adapter
+ * boilerplate #648 is about. Recomputing the turns from `ctx.input` is
+ * wire-faithful for the text path (the adapters send exactly
+ * `normalizeLlmRequest(config)`), and DELIBERATELY excludes tool exchanges —
+ * the agentic loop owns its internal history (the L12 ticket's own boundary);
+ * tool traffic is `activity.toolCalled` telemetry, not conversation.
+ *
+ * Fail-safe gates, each returning the outputs UNTOUCHED:
+ * - not an `llm_call`, or a config that no longer parses (the adapter already
+ *   ran on it, so a non-parsing config cannot have succeeded — defence, not a
+ *   reachable state), or the flag absent/false;
+ * - a non-string `text` output (a structured node — its coupling refusal means
+ *   `emitMessages` can't be set, so this is again defence in depth).
+ *
+ * An EMPTY completion (`text: ''` — a real, succeeded result per #461) appends
+ * NO assistant turn: an empty turn is not a conversation fact (and the message
+ * schema's `min(1)` would refuse it on the next node's `history` parse) — the
+ * `stopReason` output carries the why. The executor emits `messages` exactly
+ * when the save-time lowering declared the row (both gates read the SAME
+ * literal `emitMessages === true`), so contract and emission cannot desync.
+ */
+function withTranscript(
+  ctx: ActivityContext,
+  outputs: Record<string, unknown>,
+): Record<string, unknown> {
+  if (ctx.activityType !== LLM_CALL_ACTIVITY_TYPE) return outputs;
+  const cfg = llmCallConfigSchema.safeParse(ctx.input);
+  if (!cfg.success || cfg.data.emitMessages !== true) return outputs;
+  const text = outputs['text'];
+  if (typeof text !== 'string') return outputs;
+  const turns: { role: string; content: string }[] = [...normalizeLlmRequest(cfg.data).messages];
+  if (text.length > 0) turns.push({ role: 'assistant', content: text });
+  return { ...outputs, messages: turns };
 }
 
 export function createExecutor(deps: ExecutorDeps): Executor {
@@ -466,7 +514,13 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             ...(call.resultHash !== undefined ? { resultHash: call.resultHash } : {}),
           });
         } else if (ev.type === 'succeeded') {
-          events.push({ type: 'node.succeeded', runId, nodeId, attemptId, outputs: ev.outputs });
+          events.push({
+            type: 'node.succeeded',
+            runId,
+            nodeId,
+            attemptId,
+            outputs: withTranscript(ctx, ev.outputs),
+          });
           return events;
         } else {
           // F0: map the adapter's PROVIDER kind onto the engine's retry axis and

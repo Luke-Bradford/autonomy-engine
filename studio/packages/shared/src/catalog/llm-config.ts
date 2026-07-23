@@ -382,6 +382,57 @@ function refineLlmToolsCoupling(
 }
 
 /**
+ * #2 L12 — the conversation COUPLING rule, extracted (the
+ * `refineOutputModeCoupling` pattern) so the DISPATCH schema and the save-time
+ * SURFACE slice enforce ONE rule: `emitMessages: true` is refused with
+ * `outputMode:'structured'` in v1 — the transcript's final turn IS the text
+ * completion, and a structured node's completion is a provider tool payload
+ * (its capture half is likewise deferred with L9b, #605); wiring a structured
+ * transcript is that deferral's plumbing, not an oversight. The `history`
+ * INPUT side carries no coupling: prepended turns compose with text,
+ * structured, and tools alike.
+ */
+function refineLlmConversationCoupling(
+  c: { emitMessages?: boolean; outputMode?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (c.emitMessages === true && c.outputMode === 'structured') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['emitMessages'],
+      message:
+        "emitMessages is not supported with outputMode:'structured' " +
+        '(the transcript needs the text completion; structured capture is deferred with L9b)',
+    });
+  }
+}
+
+/**
+ * #2 L12 — the exact `{ emitMessages, history, outputMode }` SLICE of a node's
+ * config the save-time validator reads (`params.ts::validateLlmCallConversation`),
+ * mirroring `llmToolsSurfaceSchema`. NON-STRICT: only the conversation fields are
+ * picked; everything else passes through untouched.
+ *
+ * `history` is `z.unknown()` here ON PURPOSE: at SAVE time the field is a
+ * whole-value `${...}` STRING (the dataflow ref this surface exists for — its
+ * mode/type rules live in `params.ts`, where the expression machinery is), while
+ * the DISPATCH schema (`llmCallConfigSchema`) sees the post-substitution ARRAY.
+ * Validating either concrete shape here would wrongly refuse the other side.
+ */
+export const llmConversationSurfaceSchema = z
+  .object({
+    emitMessages: z.boolean().optional(),
+    history: z.unknown().optional(),
+    // Read LOOSELY on purpose — the coupling rule only asks "is it 'structured'";
+    // `llmStructuredOutputSurfaceSchema` owns the enum's own diagnostic (the same
+    // division `llmToolsSurfaceSchema` documents).
+    outputMode: z.unknown().optional(),
+  })
+  .superRefine(refineLlmConversationCoupling);
+
+export type LlmConversationSurface = z.infer<typeof llmConversationSurfaceSchema>;
+
+/**
  * #2 L10a/L10b — the exact `{ tools, toolChoice, maxToolIterations, outputMode }`
  * SLICE of a node's config the save-time validator reads
  * (`params.ts::validateLlmCallTools`), mirroring
@@ -561,6 +612,22 @@ export const llmCallConfigSchema = z
     // (absent = 1, the L10a single round-trip). Coupled to `tools` by the shared
     // `refineLlmToolsCoupling` rule below.
     maxToolIterations: maxToolIterationsSchema.optional(),
+    // L12 conversation surface — multi-turn via STATELESS DATAFLOW (open
+    // question 5's v1 answer: no run-variable magic, no conversation object —
+    // history is a VALUE threaded through node outputs). At SAVE the field is a
+    // whole-value `${...}` expression (enforced by `params.ts::
+    // validateLlmCallConversation` + the `validateRefs` type half); dispatch-prep
+    // substitution's whole-value native-type preservation resolves it to the
+    // ARRAY validated here. A still-string value (a pre-gate stored doc) fails
+    // this parse loud at dispatch — never sent to a provider as an inert literal.
+    history: z.array(llmMessageSchema).optional(),
+    // L12 transcript opt-in — lowers an extra `{messages, json}` output row at
+    // save (`catalog/lower.ts::lowerLlmEmitMessages`); the executor then augments
+    // a successful text completion with the full author-visible transcript
+    // (history + authored turns + the final assistant text). A LITERAL boolean
+    // only (`z.boolean()` refuses a `${...}` string), so the save-time lowering
+    // gate and the dispatch-time emission gate can never disagree about opt-in.
+    emitMessages: z.boolean().optional(),
   })
   .refine((c) => (c.prompt !== undefined) !== (c.messages !== undefined), {
     message: 'llm_call requires exactly one of `prompt` or `messages`',
@@ -569,7 +636,8 @@ export const llmCallConfigSchema = z
     message: 'llm_call `messages` must contain at least one non-system (user/assistant) message',
   })
   .superRefine(refineOutputModeCoupling)
-  .superRefine(refineLlmToolsCoupling);
+  .superRefine(refineLlmToolsCoupling)
+  .superRefine(refineLlmConversationCoupling);
 
 export type LlmCallConfig = z.infer<typeof llmCallConfigSchema>;
 
@@ -632,11 +700,19 @@ export function normalizeLlmRequest(cfg: LlmCallConfig): NormalizedLlmRequest {
   // `.refine`, not the TS type — so a caller that skips `safeParse` could reach
   // here with neither. Guard at the boundary rather than assert `cfg.prompt!`
   // and emit `content: undefined` typed as `string` (a lie to the type system).
-  const messages: LlmMessage[] =
+  // L12: `history` is deliberately NOT counted toward the requirement — a node
+  // must author at least one turn of its own (the exactly-one-of rule is about
+  // AUTHORED turns; history is threaded conversation past).
+  const authored: LlmMessage[] =
     cfg.messages ?? (cfg.prompt !== undefined ? [{ role: 'user', content: cfg.prompt }] : []);
-  if (messages.length === 0) {
+  if (authored.length === 0) {
     throw new Error('normalizeLlmRequest requires a validated config with `prompt` or `messages`');
   }
+  // L12 — history turns come FIRST (they are the conversation's past); authored
+  // turns follow. A history system turn folds into the single system string
+  // below like any other system turn (encounter order), after the node's own
+  // `system` shorthand — the node's instruction stays the leading part.
+  const messages: LlmMessage[] = [...(cfg.history ?? []), ...authored];
   const systemParts: string[] = [];
   if (cfg.system !== undefined && cfg.system.length > 0) systemParts.push(cfg.system);
   for (const m of messages) {

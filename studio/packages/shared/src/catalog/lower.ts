@@ -141,6 +141,52 @@ export function lowerLlmStructuredOutputs(nodes: Node[]): Node[] {
 }
 
 /**
+ * #2 L12 — APPEND the transcript output row (`{messages, json}`) to an
+ * `emitMessages: true` `llm_call`'s `config.outputs`. The row is DERIVED from
+ * the flag (like a structured node's schema-derived contract), so adding it to
+ * a present contract is the same justified exception to `lowerNodeOutputs`'s
+ * never-overwrite rule that `lowerLlmStructuredOutputs` documents — but
+ * APPEND-ONLY: existing rows are never touched, and a present row already named
+ * `messages` leaves the node alone entirely (whatever its declared type — the
+ * save-time validator `validateLlmCallConversation` reports a non-`json`
+ * conflict; lowering over it would mask the author's declaration).
+ *
+ * Runs AFTER `lowerNodeOutputs` in `createPipelineVersion` (unlike the two
+ * structured passes, which must run BEFORE it): the appended row EXTENDS the
+ * seeded `[text, stopReason]` default rather than replacing it, so the base
+ * contract must already be present. An explicit author `outputs: []` is still
+ * appended to — the flag IS the author's opt-in, and honouring "declares
+ * nothing" over it would silently drop the very output the flag requests.
+ *
+ * No-ops (each mirrors a sibling pass's rule): flag absent/false or a non-`true`
+ * value (opt-in is a LITERAL `true` — the schema's `z.boolean()` refuses a
+ * `${...}` string, so lowering and the executor's emission gate read one rule);
+ * a structured node (emitMessages+structured is refused at save — lowering a row
+ * for it would persist a contract the refusal then orphans); a call node (child
+ * projection owns its outputs); a corrupt non-array `outputs` (left for the
+ * StrictNodeSchema parse to refuse — never masked, per `lowerNodeOutputs`'s
+ * fail-closed note).
+ */
+export function lowerLlmEmitMessages(nodes: Node[]): Node[] {
+  return nodes.map((node) => {
+    if (node.type !== LLM_CALL_ACTIVITY_TYPE) return node;
+    if (node.config['emitMessages'] !== true) return node;
+    if (node.config['outputMode'] === 'structured') return node;
+    if (node.call !== undefined) return node;
+    const outputs = node.config['outputs'];
+    if (!Array.isArray(outputs)) return node;
+    const hasMessagesRow = outputs.some(
+      (o) => typeof o === 'object' && o !== null && (o as { name?: unknown }).name === 'messages',
+    );
+    if (hasMessagesRow) return node;
+    return {
+      ...node,
+      config: { ...node.config, outputs: [...outputs, { name: 'messages', type: 'json' }] },
+    };
+  });
+}
+
+/**
  * #2 L11b — DERIVE a structured `agent_task` node's `config.outputs` from its
  * `outputSchema`, the `agent_task` counterpart of `lowerLlmStructuredOutputs`.
  * `agent_task` has no `outputMode` flag: the PRESENCE of a valid `outputSchema` IS

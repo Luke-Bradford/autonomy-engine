@@ -762,3 +762,75 @@ describe('pipeline-versions repo', () => {
     ).toThrow();
   });
 });
+
+describe('pipeline-versions repo — L12 emitMessages transcript lowering (#2 L12)', () => {
+  function llmInput(
+    pipelineId: string,
+    config: Record<string, unknown>,
+    edges: NewPipelineVersion['edges'] = [],
+    nodes: NewPipelineVersion['nodes'] = [],
+  ): NewPipelineVersion {
+    return {
+      pipelineId,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'chat', type: 'llm_call', config, position: { x: 0, y: 0 } }, ...nodes],
+      edges,
+      catalogVersion: CATALOG_VERSION,
+    };
+  }
+
+  it('APPENDS the messages row to the seeded default and pins it in the immutable version', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const pv = createPipelineVersion(
+      db,
+      llmInput(pipeline.id, { prompt: 'hi', emitMessages: true }),
+    );
+    expect(pv.nodes[0]!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+      { name: 'messages', type: 'json' },
+    ]);
+  });
+
+  it('lets a downstream history ref bind to the APPENDED contract (validateRefs)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(
+        db,
+        llmInput(
+          pipeline.id,
+          { prompt: 'hi', emitMessages: true },
+          [{ id: 'chat->next', from: 'chat', to: 'next', on: 'success' }],
+          [
+            {
+              id: 'next',
+              type: 'llm_call',
+              config: { prompt: 'and then?', history: '${nodes.chat.output.messages}' },
+              position: { x: 1, y: 0 },
+            },
+          ],
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  it('REFUSES a hand-declared messages row without the flag (nothing persists)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(
+        db,
+        llmInput(pipeline.id, {
+          prompt: 'hi',
+          outputs: [
+            { name: 'text', type: 'string' },
+            { name: 'messages', type: 'json' },
+          ],
+        }),
+      ),
+    ).toThrow(/emitMessages/);
+  });
+});

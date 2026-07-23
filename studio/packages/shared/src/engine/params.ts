@@ -28,6 +28,7 @@ import {
   WEBHOOK_ACTIVITY_TYPE,
 } from '../catalog/types.js';
 import {
+  llmConversationSurfaceSchema,
   llmOutputSchemaSchema,
   llmStructuredOutputSurfaceSchema,
   llmToolDefSchema,
@@ -1268,6 +1269,12 @@ export function validateRefs(
         foreachChildIds.has(node.id),
       );
     }
+    // #2 L12 — an llm_call's `history` is whole-value-REQUIRED and must not be a
+    // definite scalar. Runs on BOTH scan branches above (with or without `tools`
+    // — `history` is never part of the deferred-eval subtree): the generic walk
+    // just scanned its refs; this adds the MODE + TYPE halves, which need the
+    // node's `scope`.
+    if (node.type === LLM_CALL_ACTIVITY_TYPE) scanLlmHistoryRef(node, scope, errors);
     // #2 L13a — a node's top-level `connectionId` may be a `${}` expression
     // (dynamic connection routing), resolved at dispatch by the reducer against
     // the SAME env `scan` scopes here (params/nodes/run/trigger, plus `${item}`
@@ -1644,6 +1651,7 @@ export function validateDoc(
     if (node.type === LLM_CALL_ACTIVITY_TYPE) {
       validateLlmCallOutput(node, errors);
       validateLlmCallTools(node, errors); // #2 L10a — the tools config surface
+      validateLlmCallConversation(node, errors); // #2 L12 — the conversation surface
     }
     // #2 L11b — an `agent_task`'s optional structured `outputSchema` subset.
     if (node.type === AGENT_TASK_ACTIVITY_TYPE) validateAgentTaskOutput(node, errors);
@@ -2095,6 +2103,71 @@ function validateLlmCallTools(node: Node, errors: string[]): void {
 }
 
 /**
+ * #2 L12 — the conversation-surface counterpart of `validateLlmCallTools`: the
+ * config-SHAPE half of the multi-turn rules. The EXPRESSION half (whole-value
+ * mode + non-scalar type of `history`) is `scanLlmHistoryRef`'s (validateRefs —
+ * it needs the per-node `ScanScope`, which only exists there).
+ *
+ * Checks, in order:
+ * 1. The `{emitMessages, history, outputMode}` slice parses through
+ *    `llmConversationSurfaceSchema` — the emitMessages/structured coupling and
+ *    the emitMessages-is-a-literal-boolean rule, shared with the DISPATCH schema
+ *    so "what saves" and "what dispatches" read one rule.
+ * 2. A present `history` must be a STRING (the whole-value `${...}` dataflow
+ *    ref). A literal turn ARRAY is refused — literal turns belong in `messages`;
+ *    admitting both shapes would make the save-time gate and dispatch-time
+ *    shape (the resolved array) ambiguous about which side produced the value.
+ * 3. The `messages` OUTPUT row rules — skipped for a structured node (its rows
+ *    are DERIVED from `outputSchema`, where a property legitimately named
+ *    `messages` is the author's own typed field, not a transcript) and for a
+ *    call node (child-projected contract, same skip as `lowerNodeOutputs`):
+ *    - a `messages` row WITHOUT `emitMessages: true` is refused — the flag is
+ *      the opt-in; a hand-declared row alone makes EVERY run fail
+ *      `missing declared output 'messages'` (the executor emits only on the
+ *      flag), a guaranteed run-time failure caught here at save;
+ *    - with the flag, a row not typed `json` is refused (the transcript is a
+ *      turn array; a scalar-typed row would fail `validateOutputs` on every
+ *      success — the same guaranteed-failure class).
+ */
+function validateLlmCallConversation(node: Node, errors: string[]): void {
+  const parsed = llmConversationSurfaceSchema.safeParse(node.config);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      const path = issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+      errors.push(`node.${node.id}: ${path}${issue.message}`);
+    }
+  }
+  const history = node.config['history'];
+  if (history !== undefined && typeof history !== 'string') {
+    errors.push(
+      `node.${node.id}: history must be a whole-value \${...} expression referencing ` +
+        'a turn array (literal turns belong in `messages`)',
+    );
+  }
+  if (node.config['outputMode'] === 'structured') return;
+  if (node.call !== undefined) return;
+  const outputs = node.config['outputs'];
+  if (!Array.isArray(outputs)) return;
+  const row = outputs.find(
+    (o) => typeof o === 'object' && o !== null && (o as { name?: unknown }).name === 'messages',
+  );
+  if (row === undefined) return;
+  if (node.config['emitMessages'] !== true) {
+    errors.push(
+      `node.${node.id}: a \`messages\` output row on an llm_call is DERIVED — ` +
+        'declare the transcript via emitMessages: true, not a hand-written row ' +
+        '(without the flag nothing emits it, so every run would fail ' +
+        "`missing declared output 'messages'`)",
+    );
+  } else if ((row as { type?: unknown }).type !== 'json') {
+    errors.push(
+      `node.${node.id}: the emitMessages transcript row \`messages\` must be declared ` +
+        "type 'json' (it carries a turn array)",
+    );
+  }
+}
+
+/**
  * #2 L11b — the `agent_task` counterpart of `validateLlmCallOutput`: an OPTIONAL
  * structured `outputSchema`, opted into by presence (no `outputMode` coupling), so
  * the gate is `llmOutputSchemaSchema` on the raw field directly — the SAME
@@ -2112,6 +2185,47 @@ function validateAgentTaskOutput(node: Node, errors: string[]): void {
   for (const issue of parsed.error.issues) {
     const suffix = issue.path.length > 0 ? `.${issue.path.join('.')}` : '';
     errors.push(`node.${node.id}: outputSchema${suffix}: ${issue.message}`);
+  }
+}
+
+/**
+ * #2 L12 — the EXPRESSION half of the `history` rules (the config-SHAPE half is
+ * `validateLlmCallConversation`). Two checks, mirroring `validateExitWhen`'s
+ * E2/E6 split:
+ *
+ * - MODE: `history` is whole-value-REQUIRED — an interpolated or literal string
+ *   can only resolve to a STRING, never the turn array the dispatch schema
+ *   demands, so text around the braces is a guaranteed dispatch failure caught
+ *   here at save (`validateWholeValue`, the shared SSOT wording).
+ * - TYPE: a DEFINITE scalar (`string`/`number`/`boolean`) is refused — e.g.
+ *   `${nodes.a.output.text}` can never be a turn array. `array` and `any` pass:
+ *   a declared `json` output (the transcript's own lowered type) infers `any`
+ *   (`sigOfDeclared`), and a wrong `any` still fails LOUD at the dispatch
+ *   schema's array parse — the same run-time-checked-only cost E4 recorded.
+ *
+ * A non-string `history` is skipped here — `validateLlmCallConversation` reports
+ * it (scanning a non-string would mis-parse). A malformed expression is skipped
+ * after `validateWholeValue`, and grammar/ref defects are the generic `scan`'s
+ * (which already walked the field) — each defect reports exactly once.
+ */
+function scanLlmHistoryRef(node: Node, scope: ScanScope, errors: string[]): void {
+  const raw = node.config['history'];
+  if (raw === undefined || typeof raw !== 'string') return;
+  const where = `nodes.${node.id}.config.history`;
+  const whole = validateWholeValue(where, raw, errors, 'history');
+  if (whole === null) return;
+  let parsed: Expr;
+  try {
+    parsed = parseExpr(whole.body);
+  } catch {
+    return; // malformed — already reported by the generic `scan`
+  }
+  const type = inferExprType(parsed, scope);
+  if (type === 'string' || type === 'number' || type === 'boolean') {
+    errors.push(
+      `${where}: history must resolve to an array of {role, content} turns, got ${type} — ` +
+        'reference a json/array value (e.g. ${nodes.<id>.output.messages})',
+    );
   }
 }
 

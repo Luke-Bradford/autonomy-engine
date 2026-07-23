@@ -1864,3 +1864,128 @@ describe('#2 L14c — quota admission gate (executor pre-flight)', () => {
     expect(armed!.ref).toMatchObject({ runId: run.id, nodeId: 'n1' });
   });
 });
+
+// ===========================================================================
+// #2 L12 — the transcript augmentation: an `emitMessages: true` llm_call's
+// `node.succeeded` gains a `messages` output (history + authored turns + the
+// final assistant text), assembled at the executor's single succeeded site.
+// ===========================================================================
+
+describe('createExecutor — L12 emitMessages transcript + history threading', () => {
+  function llmNode(id: string, connectionId: string, config: Record<string, unknown>): Node {
+    seq += 1;
+    return { id, type: 'llm_call', config, connectionId, position: { x: seq, y: 0 } };
+  }
+
+  /** A fake anthropic adapter that answers `ANS(<prompt-or-last-turn>)`. */
+  function fakeLlmAdapter(text: (input: Record<string, unknown>) => string): ConnectorRegistry {
+    const adapter: ConnectorAdapter = {
+      kind: 'anthropic_api',
+      configSchema: testRegistry().get('anthropic_api')!.configSchema,
+      testConnection: () => Promise.resolve({ ok: true }),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      runActivity: async function* (ctx) {
+        yield {
+          type: 'succeeded',
+          outputs: { text: text(ctx.input), stopReason: 'end_turn' },
+        } satisfies ActivityEvent;
+      },
+    };
+    return new Map([['anthropic_api', adapter]]);
+  }
+
+  function seedLlmVersion(db: Db, nodes: Node[], edges: { from: string; to: string }[]): string {
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const input: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes,
+      edges: edges.map(({ from, to }) => ({ id: `${from}->${to}`, from, to, on: 'success' })),
+      catalogVersion: CATALOG_VERSION,
+    };
+    return createPipelineVersion(db, input).id;
+  }
+
+  it('emits the transcript output and threads it through a downstream history ref (end-to-end)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-test');
+    const pvId = seedLlmVersion(
+      db,
+      [
+        llmNode('a', connId, { prompt: 'first question', emitMessages: true }),
+        llmNode('b', connId, {
+          prompt: 'follow-up',
+          history: '${nodes.a.output.messages}',
+          emitMessages: true,
+        }),
+      ],
+      [{ from: 'a', to: 'b' }],
+    );
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, { adapters: fakeLlmAdapter((input) => `ANS(${String(input['prompt'])})`) }),
+      run,
+    );
+
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const succeededA = events.find((e) => e.type === 'node.succeeded' && e.nodeId === 'a');
+    expect(succeededA).toMatchObject({
+      outputs: {
+        text: 'ANS(first question)',
+        messages: [
+          { role: 'user', content: 'first question' },
+          { role: 'assistant', content: 'ANS(first question)' },
+        ],
+      },
+    });
+    // b's transcript COMPOUNDS: a's turns (via the history ref), b's own turn,
+    // b's completion — the multi-turn chain with zero mutable state.
+    const succeededB = events.find((e) => e.type === 'node.succeeded' && e.nodeId === 'b');
+    expect(succeededB).toMatchObject({
+      outputs: {
+        messages: [
+          { role: 'user', content: 'first question' },
+          { role: 'assistant', content: 'ANS(first question)' },
+          { role: 'user', content: 'follow-up' },
+          { role: 'assistant', content: 'ANS(follow-up)' },
+        ],
+      },
+    });
+  });
+
+  it('emits NO messages key without the flag (contract and emission stay in lockstep)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-test');
+    const pvId = seedLlmVersion(db, [llmNode('a', connId, { prompt: 'q' })], []);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters: fakeLlmAdapter(() => 'A') }), run);
+
+    expect(state.status).toBe('success');
+    const succeeded = loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded');
+    expect(succeeded).toMatchObject({ outputs: { text: 'A', stopReason: 'end_turn' } });
+    expect((succeeded as { outputs: Record<string, unknown> }).outputs['messages']).toBeUndefined();
+  });
+
+  it('omits the assistant turn from the transcript on an EMPTY completion (never a manufactured empty turn)', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'anthropic_api', {}, 'sk-test');
+    const pvId = seedLlmVersion(
+      db,
+      [llmNode('a', connId, { prompt: 'q', emitMessages: true })],
+      [],
+    );
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db, { adapters: fakeLlmAdapter(() => '') }), run);
+
+    expect(state.status).toBe('success');
+    const succeeded = loadEngineEvents(db, run.id).find((e) => e.type === 'node.succeeded');
+    expect(succeeded).toMatchObject({
+      outputs: { text: '', messages: [{ role: 'user', content: 'q' }] },
+    });
+  });
+});
