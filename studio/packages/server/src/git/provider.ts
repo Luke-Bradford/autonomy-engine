@@ -327,6 +327,48 @@ export class CliGitProvider {
   }
 
   /**
+   * #3 G4 — the repo-relative paths of every blob under `pathspecs` at `ref`,
+   * read STRAIGHT FROM THE OBJECT STORE (`ls-tree -r`), so it never touches the
+   * working tree / index the Commit path owns — a read at any ref is safe to run
+   * inside the same `KeyedQueue` slot without disturbing HEAD. `-z` NUL-delimits
+   * the names (git would otherwise quote/escape a name with special bytes; the
+   * caller splits on `\0`), `--name-only` drops the mode/type/sha columns, `--`
+   * separates the pathspecs. `ref` is a resolved sha (the caller passes the
+   * observed collab head), so the read is a single immutable snapshot. A
+   * pathspec absent from the tree simply contributes no entries (no error).
+   * Local op.
+   */
+  async lsTreeManaged(dir: string, ref: string, pathspecs: readonly string[]): Promise<string[]> {
+    const { stdout } = await this.execOk(
+      'ls-tree',
+      ['-C', dir, 'ls-tree', '-r', '-z', '--name-only', ref, '--', ...pathspecs],
+      this.localTimeoutMs,
+      dir,
+    );
+    return stdout.split('\0').filter((path) => path.length > 0);
+  }
+
+  /**
+   * #3 G4 — the contents of the blob at `ref:path`, read from the object store
+   * (`git show`). `path` is a repo-relative path that came from `lsTreeManaged`
+   * (git's own tree output, never raw client input); `ref` is a resolved sha.
+   * The blob is emitted verbatim (no trailing newline added), so a file written
+   * by the Commit path re-reads byte-identical. A blob exceeding the 1 MiB
+   * collected-output cap surfaces as a `GitOperationError` (a studio-serialized
+   * config is tiny — a megabyte means the committed file is not one of ours).
+   * Local op.
+   */
+  async showBlob(dir: string, ref: string, path: string): Promise<string> {
+    const { stdout } = await this.execOk(
+      'show',
+      ['-C', dir, 'show', `${ref}:${path}`],
+      this.localTimeoutMs,
+      dir,
+    );
+    return stdout;
+  }
+
+  /**
    * Secrets out (the `secretsToRedact` seam), then the op's checkout dir →
    * `<checkout>` — subpaths under it become `<checkout>/…`, so no error text
    * ever quotes the server-internal absolute checkout path.
@@ -411,4 +453,6 @@ export type GitProvider = Pick<
   | 'hasStagedChanges'
   | 'commit'
   | 'push'
+  | 'lsTreeManaged'
+  | 'showBlob'
 >;

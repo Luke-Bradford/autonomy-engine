@@ -5,10 +5,13 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   CommitWorkspaceGitBodySchema,
   ConnectWorkspaceGitBodySchema,
+  MANAGED_DIRS,
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
+  WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
   WorkspaceGitStatusSchema,
+  type WorkspaceGitPreviewResource,
   type WorkspaceGit,
 } from '@autonomy-studio/shared';
 import {
@@ -18,8 +21,9 @@ import {
   updateWorkspaceGitSync,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
-import { serializeWorkspace } from '../portability/index.js';
+import { parseWorkspaceFiles, serializeWorkspace } from '../portability/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
+import { readWorkspaceFilesAtRef } from '../git/workspace-read.js';
 import {
   CliGitProvider,
   GitOperationError,
@@ -50,10 +54,10 @@ import type { Db } from '../repo/types.js';
  * The working branch is DERIVED `studio/<ownerId>/work` (G3a) — no client
  * override — and the Commit only ever writes/stages the three studio-managed
  * dirs, never the user's own repo files.
+ *
+ * The `MANAGED_DIRS` a Commit owns and an import-preview reads come from the
+ * shared G1 path policy (single source of truth) — never re-hardcoded here.
  */
-
-/** The three repo directories a Commit owns (the G1 path policy dirs). */
-const MANAGED_DIRS = ['pipelines', 'connections', 'triggers'] as const;
 
 export interface WorkspaceGitRoutesOptions {
   workspaceGitRoot: string;
@@ -261,6 +265,65 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     });
 
     return { commit: result };
+  });
+
+  fastify.post('/api/workspace/git/import-preview', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const preview = await queue.run(ownerId, async () => {
+      const row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+      // Fetch first (shared with the fetch/commit routes) so the preview reflects
+      // the current collaboration branch; the returned row carries the RESOLVED
+      // collab head we read the snapshot at. This is READ-ONLY over the DB
+      // workspace — no pipeline/connection/trigger row is read or written; the
+      // parse never compares against the DB (that diff/classify is G5).
+      const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+      const head = updated.observedCollabHead;
+      if (head === null) {
+        // No collaboration branch yet (empty repo / pre-first-push) — nothing to
+        // preview, not an error.
+        return WorkspaceGitImportPreviewSchema.parse({
+          head: null,
+          resources: [],
+          diagnostics: [],
+        });
+      }
+
+      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+      const files = await readWorkspaceFilesAtRef(provider, checkout, head, MANAGED_DIRS);
+      const parsed = parseWorkspaceFiles(files);
+
+      const resources: WorkspaceGitPreviewResource[] = [
+        ...parsed.pipelines.map((p) => ({
+          path: p.path,
+          kind: 'pipeline' as const,
+          resourceId: p.resourceId,
+          name: p.data.pipeline.name,
+        })),
+        ...parsed.connections.map((c) => ({
+          path: c.path,
+          kind: 'connection' as const,
+          resourceId: c.resourceId,
+          name: c.data.name,
+        })),
+        ...parsed.triggers.map((t) => ({
+          path: t.path,
+          kind: 'trigger' as const,
+          resourceId: t.resourceId,
+          name: t.data.name,
+        })),
+      ];
+
+      return WorkspaceGitImportPreviewSchema.parse({
+        head,
+        resources,
+        diagnostics: parsed.diagnostics,
+      });
+    });
+
+    return { preview };
   });
 
   fastify.delete('/api/workspace/git', async (request, reply) => {

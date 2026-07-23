@@ -18,14 +18,47 @@
  *   byte-stability contract).
  */
 
-export type ResourceKind = 'pipeline' | 'connection' | 'trigger';
+/**
+ * The resource kinds in a fixed canonical order — drives `MANAGED_DIRS` and is
+ * the ONE list every other kind/dir construct derives from (`ResourceKind`
+ * below is derived from it, so the two can never drift). The serializer emits
+ * in this same order, though it currently spells its three loops out rather
+ * than iterating this list.
+ */
+export const RESOURCE_KINDS = ['pipeline', 'connection', 'trigger'] as const;
 
-/** The repo directory each kind serializes into. */
-const KIND_DIR: Record<ResourceKind, string> = {
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+/**
+ * The repo directory each kind serializes into — the SSOT for the dir↔kind
+ * relationship. `resourceFilePaths` (write side), `kindForDir` (G4 parse side),
+ * and the Commit route's `MANAGED_DIRS` all derive from THIS map, so a dir name
+ * is never a second magic string that can drift.
+ */
+export const RESOURCE_KIND_DIRS: Record<ResourceKind, string> = {
   pipeline: 'pipelines',
   connection: 'connections',
   trigger: 'triggers',
 };
+
+/** The three studio-managed repo directories, in `RESOURCE_KINDS` order. */
+export const MANAGED_DIRS: readonly string[] = RESOURCE_KINDS.map(
+  (kind) => RESOURCE_KIND_DIRS[kind],
+);
+
+const DIR_TO_KIND: Record<string, ResourceKind> = Object.fromEntries(
+  RESOURCE_KINDS.map((kind) => [RESOURCE_KIND_DIRS[kind], kind]),
+) as Record<string, ResourceKind>;
+
+/**
+ * The resource kind a managed directory holds (the inverse of
+ * `RESOURCE_KIND_DIRS`), or `null` when `dir` is not one of the three managed
+ * dirs. Used by the G4 workspace parser to decide the kind a committed file is
+ * EXPECTED to carry from its path alone.
+ */
+export function kindForDir(dir: string): ResourceKind | null {
+  return DIR_TO_KIND[dir] ?? null;
+}
 
 /**
  * The cosmetic slug for a resource name: lowercased, every run of
@@ -56,7 +89,7 @@ export function resourceFilePaths(
   kind: ResourceKind,
   items: readonly ResourcePathInput[],
 ): Map<string, string> {
-  const dir = KIND_DIR[kind];
+  const dir = RESOURCE_KIND_DIRS[kind];
   const sorted = [...items].sort((a, b) =>
     a.resourceId < b.resourceId ? -1 : a.resourceId > b.resourceId ? 1 : 0,
   );
