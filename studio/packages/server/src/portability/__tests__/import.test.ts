@@ -103,6 +103,65 @@ describe('importEnvelope: pipeline', () => {
     expect(result.attention).toEqual([]);
   });
 
+  it('#2 L13b — a literal-bound node with connectionParams round-trips WITHOUT bricking the import', () => {
+    // The write gate refuses connectionParams without a connectionId, and export
+    // nulls a literal connectionId — so export must have stripped the bindings
+    // too, or this import would roll back the whole pipeline.
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['model'],
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'Bound' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [
+        { name: 'provider', type: 'string', required: true },
+        { name: 'model', type: 'string', required: true },
+      ],
+      outputs: [],
+      nodes: [
+        {
+          id: 'lit',
+          type: 'llm_call',
+          config: {},
+          connectionId: connection.id,
+          connectionParams: { model: 'claude-sonnet' },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'dyn',
+          type: 'llm_call',
+          config: {},
+          connectionId: '${params.provider}',
+          connectionParams: { model: '${params.model}' },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    const nodes = result.versions[0]!.nodes;
+    const lit = nodes.find((n) => n.id === 'lit')!;
+    const dyn = nodes.find((n) => n.id === 'dyn')!;
+    // Literal route: id AND bindings gone; the rebind attention item covers both.
+    expect(lit.connectionId).toBeUndefined();
+    expect(lit.connectionParams).toBeUndefined();
+    // Dynamic route: expression + bindings survive verbatim.
+    expect(dyn.connectionId).toBe('${params.provider}');
+    expect(dyn.connectionParams).toEqual({ model: '${params.model}' });
+    expect(result.attention).toEqual([{ type: 'unresolvedConnectionRef', nodeId: 'lit' }]);
+  });
+
   // #444 + #459. The gate makes mid-import rejection a REAL class (before it,
   // only a Zod parse could reject), so the import's atomicity stops being
   // theoretical: without a transaction, a refused version leaves an orphan
@@ -573,6 +632,22 @@ describe('importEnvelope: connection', () => {
     expect(JSON.stringify(result)).not.toContain(secret.ref);
     expect(JSON.stringify(result)).not.toContain(secret.ciphertext);
     expect(result.attention).toEqual([{ type: 'requiresSecret' }]);
+  });
+
+  it('#2 L13b — the parameters allowlist survives export → import (#473 anti-test)', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'owner-a',
+      name: 'Parameterized',
+      kind: 'anthropic_api',
+      config: { model: 'claude-sonnet' },
+      parameters: ['model', 'maxTokens'],
+      secretRef: null,
+    });
+    const envelope = exportConnection(db, connection.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'connection') throw new Error('unreachable');
+    expect(result.connection.parameters).toEqual(['model', 'maxTokens']);
   });
 
   it('no attention item when the original connection had no secret', () => {

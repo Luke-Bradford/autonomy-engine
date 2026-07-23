@@ -29,6 +29,7 @@ describe('ImportResultSchema', () => {
       name: 'Imported',
       kind: 'http',
       config: {},
+      parameters: [],
       createdAt: 1,
       updatedAt: 1,
     },

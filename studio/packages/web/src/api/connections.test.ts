@@ -12,6 +12,7 @@ const sample = {
   name: 'Claude',
   kind: 'anthropic_api' as const,
   config: { model: 'claude-opus-4-8' },
+  parameters: [],
   createdAt: 1,
   updatedAt: 1,
 };

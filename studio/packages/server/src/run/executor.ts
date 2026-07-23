@@ -4,6 +4,7 @@ import {
   catalog as sharedCatalog,
   collectSecretSinkMarkers,
   computeCostEstimate,
+  containsSecretMarker,
   FAILURE_CODES,
   findLlmMessagesRowIndex,
   LLM_CALL_ACTIVITY_TYPE,
@@ -278,6 +279,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     kinds: readonly string[],
     activityType: string,
     ownerId: string | null,
+    resolvedParams: Record<string, unknown> | undefined,
   ): Promise<
     | { error: string; code: string; kind?: FailureKind; retryAfterSeconds?: number }
     | {
@@ -329,6 +331,46 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.NO_ADAPTER,
       };
     }
+    // #2 L13b — gate + merge the node's resolved `connectionParams` over the
+    // connection's static `config`. Two refusals, both `permanent` (placed with
+    // the other config-shape checks, BEFORE the L14c transient gate, for the
+    // same reason it sits after them: a genuine misconfig must surface its
+    // permanent error, never a spurious transient):
+    //   (i) every bound key must be on the connection's declared `parameters`
+    //       allowlist — the OWNER's per-key opt-in (a shared connection's
+    //       borrower must not override e.g. `baseUrl` and redirect the
+    //       decrypted credential). Enforced HERE, not at save: connections are
+    //       mutable rows and `connectionId` may itself be `${}`-resolved, so
+    //       the target is unknowable at save time.
+    //  (ii) no resolved VALUE may be (or embed) a `{$secret}` marker —
+    //       parameters are non-secret by design, and a `${}` binding can
+    //       resolve run-supplied json the save gate never saw.
+    // The merge is SHALLOW ({...config, ...params}): the static value is the
+    // default, an allowlisted binding replaces it whole. The adapter's own
+    // `configSchema` then validates the EFFECTIVE config — the existing
+    // boundary, unchanged.
+    let connectionConfig = connection.config;
+    if (resolvedParams !== undefined) {
+      for (const [key, value] of Object.entries(resolvedParams)) {
+        if (!connection.parameters.includes(key)) {
+          return {
+            error:
+              `connection '${connectionId}' does not declare parameter '${key}' ` +
+              '(its parameters allowlist is the owner’s opt-in for per-dispatch overrides)',
+            code: FAILURE_CODES.CONNECTION_PARAM_UNDECLARED,
+          };
+        }
+        if (containsSecretMarker(value)) {
+          return {
+            error:
+              `connection parameter '${key}' resolved to a value containing a ` +
+              'secret marker — parameters are non-secret; use a declared secret sink',
+            code: FAILURE_CODES.CONNECTION_PARAM_SECRET_MARKER,
+          };
+        }
+      }
+      connectionConfig = { ...connection.config, ...resolvedParams };
+    }
     // #2 L14c — the quota ADMISSION GATE. A subscription CLI (`agent_cli`) shares
     // ONE rolling usage quota across every run that binds it. When an earlier
     // dispatch discovered exhaustion, the driver recorded the reset window here
@@ -377,7 +419,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         };
       }
     }
-    return { adapter, secret, connectionConfig: connection.config };
+    return { adapter, secret, connectionConfig };
   }
 
   /**
@@ -641,6 +683,7 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         entry.connectionKinds,
         node.type,
         ownerId,
+        command.resolvedConnectionParams,
       );
       if ('error' in resolved) {
         // Most pre-flight failures are PERMANENT (a config typo does not self-heal);

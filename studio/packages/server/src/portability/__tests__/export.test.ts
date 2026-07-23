@@ -149,6 +149,63 @@ describe('exportPipeline', () => {
     expect(JSON.stringify(envelope)).not.toContain(connection.id);
   });
 
+  it('#2 L13b — strips connectionParams alongside a LITERAL connectionId, keeps them on a dynamic one', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      parameters: ['model'],
+      secretRef: null,
+    });
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Param routes' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [
+        { name: 'provider', type: 'string', required: true },
+        { name: 'model', type: 'string', required: true },
+      ],
+      outputs: [],
+      nodes: [
+        {
+          id: 'dynamic',
+          type: 'llm_call',
+          config: {},
+          connectionId: '${params.provider}',
+          connectionParams: { model: '${params.model}' },
+          position: { x: 0, y: 0 },
+        },
+        {
+          id: 'literal',
+          type: 'llm_call',
+          config: {},
+          connectionId: connection.id,
+          connectionParams: { model: 'claude-sonnet' },
+          position: { x: 1, y: 1 },
+        },
+      ],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    const nodes = envelope.data.versions[0]!.nodes;
+    const dyn = nodes.find((n) => n.id === 'dynamic')!;
+    const lit = nodes.find((n) => n.id === 'literal')!;
+
+    // Dynamic route: portable — both the expression AND its bindings survive.
+    expect(dyn.connectionId).toBe('${params.provider}');
+    expect(dyn.connectionParams).toEqual({ model: '${params.model}' });
+    // Literal route: the id is nulled, so the bindings would be silently-inert
+    // config on import (validateDoc refuses connectionParams without a
+    // connectionId) — stripped WITH it; the node is already flagged for rebind.
+    expect(lit.connectionId).toBeNull();
+    expect(lit.connectionParams).toBeUndefined();
+    expect(envelope.data.strippedConnectionRefs).toEqual(['literal']);
+  });
+
   it('strippedConnectionRefs is empty when no node has a connectionId', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'No connections' });

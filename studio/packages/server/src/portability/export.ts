@@ -39,11 +39,21 @@ import type { Db } from '../repo/types.js';
 function stripNodeConnectionId(node: Node, strippedIds: Set<string>): NodeExport {
   const { connectionId, ...rest } = node;
   if (connectionId != null && interpolationMode(connectionId).mode !== 'literal') {
-    // Dynamic (`${}`) — portable, keep it, no rebind needed.
+    // Dynamic (`${}`) — portable, keep it (and any `connectionParams`: they
+    // bind against whatever the expression routes to, so they are portable
+    // with it), no rebind needed.
     return { ...rest, connectionId };
   }
   if (connectionId != null) strippedIds.add(node.id);
-  return { ...rest, connectionId: null };
+  // #2 L13b — a nulled (literal, env-specific) connectionId takes its
+  // `connectionParams` with it: the write gate refuses bindings without a
+  // connectionId (silently-inert config), so keeping them would make every
+  // re-import of this envelope roll back. The node is already flagged in
+  // `strippedConnectionRefs`; the rebind workflow is where bindings get
+  // re-authored against the NEW connection's declared allowlist.
+  const { connectionParams, ...portable } = rest;
+  void connectionParams;
+  return { ...portable, connectionId: null };
 }
 
 function toPipelineVersionExport(

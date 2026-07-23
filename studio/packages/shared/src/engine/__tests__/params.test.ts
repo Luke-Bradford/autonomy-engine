@@ -14,6 +14,7 @@ import {
   RUN_FIELDS,
   TRIGGER_FIELDS,
   assertJsonReplaySafe,
+  containsSecretMarker,
   jsonReplaySafetyErrors,
   resolveRunParams,
   resolveTriggerBindings,
@@ -820,6 +821,78 @@ describe('#2 L13a — connectionId ${} refs at SAVE time', () => {
     const errors = validateRefs(doc([connNode('n', '${params.a[0}')], []));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/connectionId/);
+  });
+});
+
+describe('#2 L13b — connectionParams ${} refs at SAVE time', () => {
+  /** A node with a connectionId + per-dispatch parameter bindings. */
+  function paramsNode(id: string, connectionParams: Record<string, unknown>): Node {
+    return { ...node(id, {}), connectionId: 'conn_1', connectionParams };
+  }
+
+  it('ACCEPTS literal binding values (no ${} — the scan no-ops)', () => {
+    const errors = validateRefs(
+      doc([paramsNode('n', { model: 'claude-sonnet', maxTokens: 1024 })], []),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} binding whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [paramsNode('n', { model: '${params.model}' })],
+        [],
+        [{ name: 'model', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS a ${} binding referencing an undeclared param', () => {
+    const errors = validateRefs(doc([paramsNode('n', { model: '${params.nope}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/connectionParams/);
+  });
+
+  it('REJECTS a malformed ${} binding expression at save', () => {
+    const errors = validateRefs(doc([paramsNode('n', { model: '${params.a[0}' })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionParams/);
+  });
+
+  it('containsSecretMarker: finds a nested marker, treats OVER-DEPTH as a hit (fail-closed)', () => {
+    // Whole-value `${}` bindings SPLICE resolved values without re-walking
+    // them, so a resolved param can be deeper than MAX_CONFIG_DEPTH (e.g. an
+    // http node's parsed response body). Unverifiable must read as
+    // "contains" — a marker parked below the cap must not sail through.
+    expect(containsSecretMarker({ nested: { $secret: 'k' } })).toBe(true);
+    expect(containsSecretMarker([{ deep: [{ $secret: 'k' }] }])).toBe(true);
+    expect(containsSecretMarker({ model: 'claude', flags: { beta: true } })).toBe(false);
+
+    let deepMarker: unknown = { $secret: 'smuggled' };
+    let deepClean: unknown = 'leaf';
+    for (let i = 0; i <= MAX_CONFIG_DEPTH + 5; i += 1) {
+      deepMarker = { a: deepMarker };
+      deepClean = { a: deepClean };
+    }
+    expect(containsSecretMarker(deepMarker)).toBe(true); // below the cap — still refused
+    expect(containsSecretMarker(deepClean)).toBe(true); // unverifiable — fail-closed
+  });
+
+  it('REJECTS an authored {$secret} marker in a binding (bindings are never sinks)', () => {
+    const errors = validateRefs(doc([paramsNode('n', { apiKey: { $secret: 'my-key' } })], []));
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/connectionParams/);
+    expect(errors[0]).toMatch(/secret/);
+  });
+
+  it('scans NESTED binding values (a record/array value may embed ${} strings)', () => {
+    const errors = validateRefs(
+      doc([paramsNode('n', { flags: { region: '${params.nope}' } })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
   });
 });
 

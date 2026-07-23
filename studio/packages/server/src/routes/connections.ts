@@ -33,8 +33,22 @@ import { exportConnection } from '../portability/index.js';
 const ConnectionWriteBodySchema = NewConnectionSchema.omit({
   ownerId: true,
   secretRef: true,
+  parameters: true,
 }).extend({
   secret: z.string().min(1).optional(),
+  /**
+   * #2 L13b — re-declared WITHOUT `ConnectionSchema`'s `.default([])`, and the
+   * difference is load-bearing: Zod applies a `.default()` even through the
+   * PATCH handler's `.partial()` (a recorded repo gotcha), so inheriting it
+   * would turn EVERY patch that omits `parameters` — e.g. the web form's
+   * rename, which sends only `{name, kind, config}` — into a silent reset of
+   * the stored allowlist to `[]`, permanently failing every pipeline bound to
+   * those parameters. `.optional()` leaves the key ABSENT when the body omits
+   * it, so `updateConnection`'s spread preserves the stored value; the CREATE
+   * path gets `[]` from `NewConnectionSchema`'s own default inside
+   * `createConnection`.
+   */
+  parameters: z.array(z.string().min(1)).optional(),
 });
 
 function toPublic(connection: Connection) {

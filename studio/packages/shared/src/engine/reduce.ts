@@ -293,6 +293,20 @@ type Readiness = 'ready' | 'skipped' | 'pending';
 type EndpointOutcome = TerminalNodeStatus | null;
 
 /**
+ * The bundle `prepDispatch` resolves for every `dispatchNode` emission — ONE
+ * named shape so the four emission sites' local annotations cannot drift from
+ * the constructor's parameter when a field is added (adding
+ * `resolvedConnectionParams` (#2 L13b) surfaced exactly that: four duplicated
+ * inline annotations, each a silent-drop hazard).
+ */
+type PreparedDispatch = {
+  preparedInput: Record<string, unknown>;
+  resolvedConnectionId: string | undefined;
+  /** #2 L13b — per-dispatch connection-parameter bindings, `${}`-resolved. */
+  resolvedConnectionParams: Record<string, unknown> | undefined;
+};
+
+/**
  * A STABLE key for an edge, from (from, to, on, branch) — NOT an array index —
  * so a doc save/reorder never changes which `bounces[...]` counter a back-edge
  * maps to (CP1). `\x00` is a delimiter that cannot occur in an id/enum.
@@ -956,19 +970,42 @@ export function createEngine(doc: EngineDoc): Engine {
   }
 
   /**
+   * #2 L13b — resolve a node's per-dispatch `connectionParams` bindings against
+   * the run env. One `substitute` over the whole record (it walks nested
+   * records/arrays), same `buildCtx`/`item` env as `prepInput` and
+   * `resolveConnectionId`, so a binding sees exactly what the config sees.
+   * TYPE-PRESERVING — no `String()`: a whole-value `${params.budget}` stays a
+   * number, a literal object passes through untouched (`substitute` returns
+   * non-strings as-is). The ALLOWLIST check (which keys the target connection
+   * declares) is the EXECUTOR's: this reducer is pure and has no connection
+   * rows. Throws exactly as `prepInput` does, covered by the caller's existing
+   * try/catch → `prepFailure`.
+   */
+  function resolveConnectionParams(
+    state: RunState,
+    node: Node,
+  ): Record<string, unknown> | undefined {
+    if (node.connectionParams === undefined) return undefined;
+    return substitute(
+      node.connectionParams,
+      buildCtx(state),
+      0,
+      foreachItemOf(state, node.id),
+    ) as Record<string, unknown>;
+  }
+
+  /**
    * Bundle the two dispatch-prep resolutions so every `dispatchNode` emission
    * site threads a resolved `connectionId` alongside the substituted config with
    * NO drift — both run against the SAME `(state, node)` the site passes. Kept as
    * ONE helper (rather than two calls per site) so a future site cannot ship the
    * config resolution and forget the connection one.
    */
-  function prepDispatch(
-    state: RunState,
-    node: Node,
-  ): { preparedInput: Record<string, unknown>; resolvedConnectionId: string | undefined } {
+  function prepDispatch(state: RunState, node: Node): PreparedDispatch {
     return {
       preparedInput: prepInput(state, node),
       resolvedConnectionId: resolveConnectionId(state, node),
+      resolvedConnectionParams: resolveConnectionParams(state, node),
     };
   }
 
@@ -983,7 +1020,7 @@ export function createEngine(doc: EngineDoc): Engine {
   function dispatchNodeCommand(
     nodeId: string,
     attemptId: string,
-    prepared: { preparedInput: Record<string, unknown>; resolvedConnectionId: string | undefined },
+    prepared: PreparedDispatch,
   ): Extract<EngineCommand, { type: 'dispatchNode' }> {
     return {
       type: 'dispatchNode',
@@ -991,6 +1028,7 @@ export function createEngine(doc: EngineDoc): Engine {
       attemptId,
       preparedInput: prepared.preparedInput,
       resolvedConnectionId: prepared.resolvedConnectionId,
+      resolvedConnectionParams: prepared.resolvedConnectionParams,
     };
   }
 
@@ -1248,10 +1286,7 @@ export function createEngine(doc: EngineDoc): Engine {
       return { state: next, changed: true };
     }
 
-    let prepared: {
-      preparedInput: Record<string, unknown>;
-      resolvedConnectionId: string | undefined;
-    };
+    let prepared: PreparedDispatch;
     try {
       prepared = prepDispatch(state, node);
     } catch (err) {
@@ -2691,10 +2726,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // reach). `onRetryRequested` recovers a node from `ready`/`dispatched`, which
     // a `node.output` observability event cannot populate either — but it has the
     // clear, so this asymmetry is deliberate and stated rather than silent.
-    let prepared: {
-      preparedInput: Record<string, unknown>;
-      resolvedConnectionId: string | undefined;
-    };
+    let prepared: PreparedDispatch;
     try {
       prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
     } catch (err) {
@@ -2983,10 +3015,7 @@ export function createEngine(doc: EngineDoc): Engine {
       delete outputs[event.nodeId];
       next = { ...next, outputs };
     }
-    let prepared: {
-      preparedInput: Record<string, unknown>;
-      resolvedConnectionId: string | undefined;
-    };
+    let prepared: PreparedDispatch;
     try {
       prepared = prepDispatch(next, nodeById.get(event.nodeId)!);
     } catch (err) {
@@ -3211,10 +3240,7 @@ export function createEngine(doc: EngineDoc): Engine {
           });
           continue;
         }
-        let prepared: {
-          preparedInput: Record<string, unknown>;
-          resolvedConnectionId: string | undefined;
-        };
+        let prepared: PreparedDispatch;
         try {
           prepared = prepDispatch(state, node);
         } catch (err) {
