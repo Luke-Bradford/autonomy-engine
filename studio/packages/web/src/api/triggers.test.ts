@@ -10,6 +10,7 @@ import {
 
 const sample = {
   id: 'trg_1',
+  resourceId: 'res_trg1',
   ownerId: 'local',
   name: 'Nightly',
   pipelineVersionId: 'plv_1',

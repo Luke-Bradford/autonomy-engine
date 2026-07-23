@@ -73,6 +73,12 @@ export const connections = sqliteTable(
   'connections',
   {
     id: text('id').primaryKey(),
+    // #3 G1 — stable cross-workspace identity (see the 0024 migration).
+    // Nullable in SQL (ADD COLUMN can't be NOT NULL without a constant-DEFAULT
+    // sentinel a stray insert could silently inherit); NOT NULL is enforced at
+    // the Zod read boundary — `ConnectionSchema` REQUIRES it, so a NULL row
+    // fails loudly on read. Same pattern on all four resource tables.
+    resourceId: text('resource_id'),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
     kind: text('kind', { enum: asEnumTuple(ConnectionKindSchema.options) })
@@ -98,7 +104,14 @@ export const connections = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
-  (table) => [index('connections_owner_id_idx').on(table.ownerId)],
+  (table) => [
+    index('connections_owner_id_idx').on(table.ownerId),
+    // OWNER-scoped uniqueness (never global): workspace-git import (#3 G4/G5)
+    // PRESERVES resourceIds, so two owners importing the same repo must not
+    // collide. NULL owner_ids compare distinct in SQLite unique indexes
+    // (legacy single-user rows) — documented in the 0024 migration.
+    uniqueIndex('connections_owner_resource_id_idx').on(table.ownerId, table.resourceId),
+  ],
 );
 
 /** A reusable pipeline template (`Pipeline`); the graph itself lives on
@@ -107,6 +120,9 @@ export const pipelines = sqliteTable(
   'pipelines',
   {
     id: text('id').primaryKey(),
+    // #3 G1 — stable cross-workspace identity; nullable-in-SQL, Zod-enforced
+    // NOT NULL (see the `connections.resourceId` note + the 0024 migration).
+    resourceId: text('resource_id'),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
     // #5 S6b — per-pipeline concurrency cap (max concurrent runs across ALL
@@ -117,7 +133,11 @@ export const pipelines = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
-  (table) => [index('pipelines_owner_id_idx').on(table.ownerId)],
+  (table) => [
+    index('pipelines_owner_id_idx').on(table.ownerId),
+    // See `connections_owner_resource_id_idx` for why owner-scoped.
+    uniqueIndex('pipelines_owner_resource_id_idx').on(table.ownerId, table.resourceId),
+  ],
 );
 
 /**
@@ -129,6 +149,10 @@ export const pipelineVersions = sqliteTable(
   'pipeline_versions',
   {
     id: text('id').primaryKey(),
+    // #3 G1 — stable cross-workspace identity for THIS immutable version
+    // ((pipelineId, version#) is not stable across machines). Nullable-in-SQL,
+    // Zod-enforced NOT NULL (see `connections.resourceId` + the 0024 migration).
+    resourceId: text('resource_id'),
     pipelineId: text('pipeline_id')
       .notNull()
       .references(() => pipelines.id, { onDelete: 'cascade' }),
@@ -148,6 +172,11 @@ export const pipelineVersions = sqliteTable(
   (table) => [
     uniqueIndex('pipeline_versions_pipeline_id_version_idx').on(table.pipelineId, table.version),
     index('pipeline_versions_pipeline_id_idx').on(table.pipelineId),
+    // Versions scope uniqueness by PIPELINE (owner rides the pipeline FK).
+    uniqueIndex('pipeline_versions_pipeline_resource_id_idx').on(
+      table.pipelineId,
+      table.resourceId,
+    ),
   ],
 );
 
@@ -159,6 +188,9 @@ export const triggers = sqliteTable(
   'triggers',
   {
     id: text('id').primaryKey(),
+    // #3 G1 — stable cross-workspace identity; nullable-in-SQL, Zod-enforced
+    // NOT NULL (see the `connections.resourceId` note + the 0024 migration).
+    resourceId: text('resource_id'),
     ownerId: text('owner_id'),
     name: text('name').notNull(),
     // Nullable (see `TriggerSchema.pipelineVersionId` in
@@ -196,6 +228,8 @@ export const triggers = sqliteTable(
   (table) => [
     index('triggers_pipeline_version_id_idx').on(table.pipelineVersionId),
     index('triggers_owner_id_idx').on(table.ownerId),
+    // See `connections_owner_resource_id_idx` for why owner-scoped.
+    uniqueIndex('triggers_owner_resource_id_idx').on(table.ownerId, table.resourceId),
   ],
 );
 

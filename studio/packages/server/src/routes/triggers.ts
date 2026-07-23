@@ -5,6 +5,7 @@ import {
   NewTriggerSchema,
   SubstituteError,
   TriggerPublicSchema,
+  canonicalStringify,
   windowBindingErrors,
   type ConcurrencyPolicy,
   type EventConfig,
@@ -303,8 +304,10 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
 
   // Version-stamped JSON export (P1c). `exportTrigger` does its own
   // owner-check (404 if not owned), same outcome as `requireOwned` above.
-  fastify.get<{ Params: { id: string } }>('/api/triggers/:id/export', async (request) => {
-    return exportTrigger(db, request.params.id, request.principal.ownerId);
+  // #3 G1: canonical-JSON body (see the pipelines export route).
+  fastify.get<{ Params: { id: string } }>('/api/triggers/:id/export', async (request, reply) => {
+    const envelope = exportTrigger(db, request.params.id, request.principal.ownerId);
+    return reply.type('application/json').send(canonicalStringify(envelope));
   });
 
   /**

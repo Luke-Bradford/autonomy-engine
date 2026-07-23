@@ -60,6 +60,8 @@ export function createTrigger(db: Db, input: NewTrigger): Trigger {
   const now = Date.now();
   const row: Trigger = {
     id: newId('trig'),
+    // #3 G1 — stable identity, server-minted once (see `createPipeline`).
+    resourceId: newId('res'),
     ...parsed,
     recurrence,
     // #5 S8 — same 3-state write field as `recurrence`: omitted = "no

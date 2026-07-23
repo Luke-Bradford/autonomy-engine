@@ -150,6 +150,12 @@ export const TriggerParamsWriteSchema = TriggerParamsSchema.superRefine((params,
  */
 export const TriggerSchema = z.object({
   id: z.string().min(1),
+  /**
+   * #3 G1 — stable cross-workspace identity (see `PipelineSchema.resourceId`
+   * for the full contract): server-minted, never client-writable, unique per
+   * owner, backfilled for pre-G1 rows by migration 0024.
+   */
+  resourceId: z.string().min(1),
   ownerId: z.string().min(1).nullable(),
   name: z.string().min(1),
   /**
@@ -212,6 +218,8 @@ export type Trigger = z.infer<typeof TriggerSchema>;
 // on read (see `ConcurrencySchema`).
 export const NewTriggerSchema = TriggerSchema.omit({
   id: true,
+  // Server-minted, like `id` — no write path (create OR patch) may supply it.
+  resourceId: true,
   createdAt: true,
   updatedAt: true,
 }).extend({

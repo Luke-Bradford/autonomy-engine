@@ -1037,6 +1037,7 @@ describe('reconcileOnBoot — #491: a run wedged by a PRE-GATE doc drains at boo
     db.insert(pipelineVersions)
       .values({
         id: pvId,
+        resourceId: `res_${pvId}`,
         pipelineId: pipeline.id,
         version: 1,
         params: [],
@@ -1380,6 +1381,7 @@ describe('makeDocResolver — the production resolver classifies a gone version 
     db.insert(pipelineVersions)
       .values({
         id: pvId,
+        resourceId: `res_${pvId}`,
         pipelineId: pipeline.id,
         version: 1,
         params: [],
@@ -1476,6 +1478,7 @@ describe('reconcileOnBoot — #515 a present-but-unparseable version terminalize
     db.insert(pipelineVersions)
       .values({
         id: pvId,
+        resourceId: `res_${pvId}`,
         pipelineId: pipeline.id,
         version: 1,
         params: [],

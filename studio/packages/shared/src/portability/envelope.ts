@@ -17,12 +17,35 @@ export const NodeExportSchema = NodeSchema.omit({ connectionId: true }).extend({
 });
 export type NodeExport = z.infer<typeof NodeExportSchema>;
 
+/**
+ * #3 G1 — `resourceId` as it appears in an EXPORT: required-nullable, unlike
+ * the stored schemas where it is required non-null. `null` means "exported
+ * before G1 existed" (the v3→v4 upgrader backfills it — an upgrader must be
+ * DETERMINISTIC, so it cannot mint a random id; `null` is the honest
+ * "never had one"). PORTABLE import ignores this field entirely (it mints new
+ * ids by design — that IS portable semantics); only the workspace-git import
+ * (#3 G4/G5) will read it, treating `null` as legacy-no-identity → create-new.
+ */
+const exportResourceId = z.string().min(1).nullable();
+
 /** A `PipelineVersion` as it appears in an export: identical to the stored
- * row except every node's `connectionId` is nulled (see `NodeExportSchema`). */
-export const PipelineVersionExportSchema = PipelineVersionSchema.omit({ nodes: true }).extend({
+ * row except every node's `connectionId` is nulled (see `NodeExportSchema`)
+ * and `resourceId` is nullable (see `exportResourceId`). */
+export const PipelineVersionExportSchema = PipelineVersionSchema.omit({
+  nodes: true,
+  resourceId: true,
+}).extend({
   nodes: z.array(NodeExportSchema),
+  resourceId: exportResourceId,
 });
 export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
+
+/** The pipeline row as it appears in an export: `resourceId` nullable (see
+ * `exportResourceId`). */
+export const PipelineExportSchema = PipelineSchema.omit({ resourceId: true }).extend({
+  resourceId: exportResourceId,
+});
+export type PipelineExport = z.infer<typeof PipelineExportSchema>;
 
 /**
  * `data` for a `kind: 'pipeline'` envelope: the pipeline row plus EVERY one
@@ -41,7 +64,7 @@ export type PipelineVersionExport = z.infer<typeof PipelineVersionExportSchema>;
  * `unresolvedConnectionRef` attention items on import.
  */
 export const PipelineExportDataSchema = z.object({
-  pipeline: PipelineSchema,
+  pipeline: PipelineExportSchema,
   versions: z.array(PipelineVersionExportSchema),
   strippedConnectionRefs: z.array(z.string().min(1)).default([]),
 });
@@ -53,8 +76,11 @@ export type PipelineExportData = z.infer<typeof PipelineExportDataSchema>;
  * `requiresSecret` so the importing UI knows a secret must be re-entered
  * before this connection can call its provider.
  */
-export const ConnectionExportDataSchema = ConnectionPublicSchema.extend({
+export const ConnectionExportDataSchema = ConnectionPublicSchema.omit({
+  resourceId: true,
+}).extend({
   requiresSecret: z.boolean(),
+  resourceId: exportResourceId,
 });
 export type ConnectionExportData = z.infer<typeof ConnectionExportDataSchema>;
 
@@ -82,9 +108,11 @@ export type WebhookExportConfig = z.infer<typeof WebhookExportConfigSchema>;
 export const TriggerExportDataSchema = TriggerPublicSchema.omit({
   pipelineVersionId: true,
   webhook: true,
+  resourceId: true,
 }).extend({
   pipelineVersionId: z.string().min(1).nullable(),
   webhook: WebhookExportConfigSchema.nullable(),
+  resourceId: exportResourceId,
 });
 export type TriggerExportData = z.infer<typeof TriggerExportDataSchema>;
 
@@ -184,9 +212,40 @@ function upgradeV2ToV3(env: unknown): unknown {
   return upgraded;
 }
 
+/**
+ * v3→v4 (#3 G1): backfill the required-nullable `resourceId` added to EVERY
+ * exported resource — unlike v1→v2/v2→v3 (trigger-only), this touches ALL
+ * THREE kinds, including the NESTED `data.pipeline` and every entry of
+ * `data.versions[]` for a pipeline envelope. `null` is the honest "exported
+ * before stable identity existed" value (an upgrader must be deterministic,
+ * so it can never MINT an id — see `exportResourceId`); an already-present
+ * key is never clobbered.
+ */
+function upgradeV3ToV4(env: unknown): unknown {
+  if (!isPlainObject(env)) return env; // parseAndUpgradeEnvelope rejects it next
+  const upgraded: Record<string, unknown> = { ...env, schemaVersion: 4 };
+  if (!isPlainObject(env.data)) return upgraded; // final validation rejects it
+  if (env.kind === 'pipeline') {
+    const data: Record<string, unknown> = { ...env.data };
+    if (isPlainObject(data.pipeline)) {
+      data.pipeline = { resourceId: null, ...data.pipeline };
+    }
+    if (Array.isArray(data.versions)) {
+      data.versions = data.versions.map((version) =>
+        isPlainObject(version) ? { resourceId: null, ...version } : version,
+      );
+    }
+    upgraded.data = data;
+  } else if (env.kind === 'connection' || env.kind === 'trigger') {
+    upgraded.data = { resourceId: null, ...env.data };
+  }
+  return upgraded;
+}
+
 export const UPGRADERS: Map<number, Upgrader> = new Map([
   [1, upgradeV1ToV2],
   [2, upgradeV2ToV3],
+  [3, upgradeV3ToV4],
 ]);
 
 function parseJson(raw: string): unknown {

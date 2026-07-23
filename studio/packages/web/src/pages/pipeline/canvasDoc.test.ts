@@ -19,6 +19,7 @@ function edge(id: string, from: string, to: string, on: EdgeOn = 'success'): Edg
 
 const loaded: PipelineVersion = PipelineVersionSchema.parse({
   id: 'plv_1',
+  resourceId: 'res_plv1',
   pipelineId: 'pl_1',
   version: 2,
   params: [{ name: 'topic', type: 'string', required: true }],

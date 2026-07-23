@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   NewPipelineSchema,
   NewPipelineVersionSchema,
+  canonicalStringify,
   rollupFromAggregates,
 } from '@autonomy-studio/shared';
 import {
@@ -167,8 +168,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
 
   // Version-stamped JSON export (P1c), the pipeline + ALL of its versions.
   // `exportPipeline` does its own owner-check (404 if not owned), same
-  // outcome as `requireOwned` above.
-  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/export', async (request) => {
-    return exportPipeline(db, request.params.id, request.principal.ownerId);
+  // outcome as `requireOwned` above. #3 G1: the body is CANONICAL JSON
+  // (sorted keys, stable bytes) — identical content downloads as identical
+  // bytes, so exports diff cleanly; `.type()` is required, a bare
+  // `send(string)` would ship text/plain.
+  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/export', async (request, reply) => {
+    const envelope = exportPipeline(db, request.params.id, request.principal.ownerId);
+    return reply.type('application/json').send(canonicalStringify(envelope));
   });
 };

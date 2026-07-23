@@ -37,6 +37,7 @@ const listVersionsMock = vi.mocked(pipelinesApi.listPipelineVersions);
 function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
   return {
     id: 'trg_1',
+    resourceId: 'res_trg1',
     ownerId: 'local',
     name: 'Nightly',
     pipelineVersionId: 'plv_1',
@@ -58,6 +59,7 @@ function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
 
 const pipeline: Pipeline = {
   id: 'pl_1',
+  resourceId: 'res_pl1',
   ownerId: 'local',
   name: 'My pipeline',
   concurrency: null,
@@ -67,6 +69,7 @@ const pipeline: Pipeline = {
 
 const version: PipelineVersion = {
   id: 'plv_1',
+  resourceId: 'res_plv1',
   pipelineId: 'pl_1',
   version: 3,
   params: [],

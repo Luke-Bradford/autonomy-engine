@@ -107,6 +107,7 @@ describe('owner scope holds under a cross-owner cursor replay (the #534 security
       { owner: 'bob', id: 'conn_b4', createdAt: 4000 },
     ].map((r) => ({
       id: r.id,
+      resourceId: `res_${r.id}`,
       ownerId: r.owner,
       name: `n-${r.id}`,
       kind: 'http' as const,
@@ -135,6 +136,7 @@ describe('owner scope holds under a cross-owner cursor replay (the #534 security
       { owner: 'bob', id: 'pipe_b4', createdAt: 4000 },
     ].map((r) => ({
       id: r.id,
+      resourceId: `res_${r.id}`,
       ownerId: r.owner,
       name: `n-${r.id}`,
       createdAt: r.createdAt,

@@ -16,6 +16,8 @@ export function createConnection(db: Db, input: NewConnection): Connection {
   const now = Date.now();
   const row: Connection = {
     id: newId('conn'),
+    // #3 G1 — stable identity, server-minted once (see `createPipeline`).
+    resourceId: newId('res'),
     ...parsed,
     createdAt: now,
     updatedAt: now,

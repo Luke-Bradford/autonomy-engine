@@ -113,6 +113,7 @@ describe('WebhookConfigSchema', () => {
 
 const trigger = {
   id: 'trig_1',
+  resourceId: 'res_trig1',
   ownerId: null,
   name: 'Nightly run',
   pipelineVersionId: 'pv_1',
@@ -269,8 +270,9 @@ describe('NewTriggerSchema.window (write-side 3-state, the recurrence/event prec
 });
 
 describe('NewTriggerSchema', () => {
-  const { id, createdAt, updatedAt, ...insert } = trigger;
+  const { id, resourceId, createdAt, updatedAt, ...insert } = trigger;
   void id;
+  void resourceId;
   void createdAt;
   void updatedAt;
 

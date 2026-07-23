@@ -138,7 +138,7 @@ reconcile are core. Corrections:
 
 | # | Ticket |
 | --- | --- |
-| G1 | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy |
+| **G1** | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy — **SHIPPED 2026-07-23** (see the built-block below the table) |
 | G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking |
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) |
@@ -148,6 +148,45 @@ reconcile are core. Corrections:
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
 | G10 | Conflict/divergence UX; multi-remote/auth polish |
+
+### G1 built-block (2026-07-23)
+
+- **`resourceId` on all four resource tables** (pipelines, pipeline_versions, connections,
+  triggers — every immutable VERSION gets its own, per ①: `(pipelineId, version#)` is not stable
+  across machines). Server-minted `newId('res')` in the repo create fns; write schemas OMIT it (no
+  client/patch path); read schemas REQUIRE it non-null (no `.default()` — #473). Migration 0024
+  backfills pre-G1 rows (`res_` + randomblob — the format difference from nanoid mints is cosmetic per
+  `repo/ids.ts`); on `pipeline_versions` the backfill drops/recreates the `no_update` immutability
+  trigger around the ONE system UPDATE (pinned by test). Nullable-in-SQL, NOT-NULL-at-the-Zod-read
+  boundary (SQLite ADD COLUMN can't be NOT NULL without a constant-default sentinel; a NULL row
+  fails loudly on read instead). **Uniqueness is OWNER-scoped** (`(owner_id, resource_id)`;
+  versions `(pipeline_id, resource_id)`) because workspace-git import PRESERVES ids — two owners
+  importing the same repo must not collide.
+- **Envelope v4** (SCHEMA_VERSION 3→4): every export carries `resourceId` as REQUIRED-NULLABLE
+  (`null` = "exported pre-G1"; the deterministic v3→v4 upgrader backfills `null` on all THREE
+  kinds incl. the nested `data.pipeline` + every `data.versions[]` — an upgrader must never MINT a
+  random id). PORTABLE import IGNORES it and keeps minting fresh ids (that IS the copy contract,
+  pinned by test); preserve-by-resourceId lands with the workspace-git import (G4/G5).
+- **`canonicalStringify`** (`shared/src/portability/canonical.ts`): THE canonical JSON serializer —
+  UTF-16-code-unit-sorted keys at every depth, arrays ordered, `JSON.stringify` string/number
+  formatting, skips `undefined` object props (JSON parity), REFUSES loudly (with path) non-finite
+  numbers, `undefined` array elements, BigInt/function/symbol, and non-plain objects. Live
+  consumer: all three `/export` routes serve `canonicalStringify(envelope)` bytes as
+  `application/json` — identical content downloads byte-identical, and the G3 file writer reuses
+  this exact serialization. **Content HASHING + the volatile-exclusion set** (id/resourceId/version/
+  createdAt/catalogVersion/node.position, enumerated in v2 below) deliberately NOT built — lands
+  with its first consumer (G4/G5 classifier), no-inert-surface rule.
+- **`exportedAt` churn trap (for G3):** the envelope stamps `Date.now()` — the ONE volatile field.
+  The G3 git file writer MUST omit/normalize it or every re-serialize dirties the file (byte-
+  stability-modulo-exportedAt is pinned by test).
+- **Per-file schemaVersion is DISCHARGED by the existing envelope**: a workspace file's content is
+  ONE canonical P1c envelope per resource (each already carrying `schemaVersion`/`catalogVersion` +
+  the upgrader chain). G3 must NOT invent a second stamp.
+- **Path policy (decision recorded; slug util lands in G3 with its first consumer):**
+  `pipelines/<slug>.json`, `connections/<slug>.json`, `triggers/<slug>.json` — slug from the
+  resource NAME (lowercased, non-alphanumerics → `-`); **identity is `resourceId`, the path is
+  cosmetic** (same-id-new-path = rename, per the Codex-hardened block). A slug collision within a
+  kind appends a short `resourceId` suffix; renames regenerate the path.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

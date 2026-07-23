@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   ConnectionPublicSchema,
   NewConnectionSchema,
+  canonicalStringify,
   type Connection,
 } from '@autonomy-studio/shared';
 import {
@@ -152,7 +153,9 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
 
   // Version-stamped JSON export (P1c). `exportConnection` does its own
   // owner-check (404 if not owned) and NEVER includes `secretRef`.
-  fastify.get<{ Params: { id: string } }>('/api/connections/:id/export', async (request) => {
-    return exportConnection(db, request.params.id, request.principal.ownerId);
+  // #3 G1: canonical-JSON body (see the pipelines export route).
+  fastify.get<{ Params: { id: string } }>('/api/connections/:id/export', async (request, reply) => {
+    const envelope = exportConnection(db, request.params.id, request.principal.ownerId);
+    return reply.type('application/json').send(canonicalStringify(envelope));
   });
 };

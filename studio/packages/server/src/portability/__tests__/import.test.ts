@@ -417,7 +417,10 @@ describe('importEnvelope: pipeline', () => {
     // CLASS assertion: the fixture must populate every field the import is meant
     // to preserve. A field added to `PipelineVersionSchema` with no fixture
     // value fails HERE, forcing this test to be extended, not silently skipped.
-    const NOT_PRESERVED = ['id', 'version', 'createdAt', 'pipelineId'];
+    // `resourceId` (#3 G1) is deliberately NOT preserved by PORTABLE import —
+    // portable semantics mint a fresh identity (that IS the copy contract; the
+    // workspace-git import #3 G4/G5 is the mode that preserves it).
+    const NOT_PRESERVED = ['id', 'resourceId', 'version', 'createdAt', 'pipelineId'];
     const preserved = Object.keys(PipelineVersionSchema.shape).filter(
       (key) => !NOT_PRESERVED.includes(key),
     );
@@ -870,5 +873,71 @@ describe('importEnvelope: refusals', () => {
         data: {},
       }),
     ).toThrow(ImportError);
+  });
+});
+
+// #3 G1 — PORTABLE import mints a FRESH resourceId, never adopting the
+// exported one: portable semantics are a COPY (new identity), exactly like
+// `id`. The workspace-git import (#3 G4/G5) is the mode that preserves it.
+describe('#3 G1 — portable import mints fresh resourceIds', () => {
+  it('imported pipeline + versions get resourceIds distinct from the exported ones', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'P' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'owner-a');
+    const result = importEnvelope(db, 'owner-b', envelope);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+
+    const imported = listPipelines(db, 'owner-b').find((p) => p.id === result.pipeline.id);
+    expect(imported).toBeDefined();
+    expect(imported!.resourceId).toBeTruthy();
+    expect(imported!.resourceId).not.toBe(pipeline.resourceId);
+
+    const importedVersions = listPipelineVersions(db, result.pipeline.id);
+    const exportedVersionResourceIds = listPipelineVersions(db, pipeline.id).map(
+      (v) => v.resourceId,
+    );
+    expect(importedVersions).toHaveLength(1);
+    expect(importedVersions[0]!.resourceId).toBeTruthy();
+    expect(exportedVersionResourceIds).not.toContain(importedVersions[0]!.resourceId);
+  });
+
+  it('a v3 (pre-G1, resourceId-less) envelope imports cleanly and still mints identity', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'owner-a', name: 'P' });
+    createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    // Rebuild the envelope as a pre-G1 v3 export: no resourceId anywhere.
+    const raw = JSON.parse(JSON.stringify(exportPipeline(db, pipeline.id, 'owner-a'))) as {
+      schemaVersion: number;
+      data: {
+        pipeline: Record<string, unknown>;
+        versions: Array<Record<string, unknown>>;
+      };
+    };
+    raw.schemaVersion = 3;
+    delete raw.data.pipeline.resourceId;
+    for (const version of raw.data.versions) delete version.resourceId;
+
+    const result = importEnvelope(db, 'owner-b', raw);
+    if (result.kind !== 'pipeline') throw new Error('unreachable');
+    const imported = listPipelines(db, 'owner-b').find((p) => p.id === result.pipeline.id);
+    expect(imported!.resourceId).toBeTruthy();
+    expect(listPipelineVersions(db, result.pipeline.id)[0]!.resourceId).toBeTruthy();
   });
 });
