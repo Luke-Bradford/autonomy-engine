@@ -386,4 +386,41 @@ describe('driver — intra-run concurrent dispatch (#4 A4b slice 1)', () => {
     const messages = (err as AggregateError).errors.map((e) => (e as Error).message).sort();
     expect(messages).toEqual(['a exploded', 'b exploded']);
   });
+
+  it('a fold error aggregates with already-collected stream errors instead of discarding them', async () => {
+    const { db } = freshDb();
+    const { nodes, edges } = fanOut(['a', 'b']);
+    const run = seedRun(db, seedVersion(db, nodes, edges));
+
+    // `b`'s stream throws IMMEDIATELY (before any yield) while `a` — delayed so
+    // b's error is already collected — later yields an event the append-path
+    // re-parse rejects, making `fold` itself throw on the channel path. The
+    // fold error must NOT exit past the streamErrors check and silently drop
+    // b's diagnostic: both surface in one AggregateError.
+    const base = makeStubExecutor({ nodes: { a: { delayMs: 30 } } });
+    const mixed: DriverDeps['executor'] = {
+      async *perform(command, runId) {
+        if (command.type === 'dispatchNode' && command.nodeId === 'b') {
+          throw new Error('b exploded');
+        }
+        if (command.type === 'dispatchNode' && command.nodeId === 'a') {
+          yield* base.perform(command, runId);
+          yield { type: 'not.an.event' } as unknown as EngineEvent;
+          return;
+        }
+        yield* base.perform(command, runId);
+      },
+    };
+
+    const d = deps(db);
+    const err = await startRun({ ...d, executor: mixed }, run).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AggregateError);
+    const errors = (err as AggregateError).errors;
+    expect(errors).toHaveLength(2);
+    // The fold (drive) error leads; the concurrent stream diagnostic survives.
+    expect(errors.some((e) => e instanceof Error && e.message === 'b exploded')).toBe(true);
+  });
 });

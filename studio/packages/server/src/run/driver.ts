@@ -1003,6 +1003,11 @@ export async function pump(
     return TERMINAL_RUN.has(state.status);
   };
 
+  // A pump-side (fold) error is CAPTURED, not thrown past teardown: a direct
+  // rethrow would exit before the streamErrors merge below, silently discarding
+  // any concurrently-failed streams' diagnostics (the review WARNING on #657).
+  let pumpError: unknown;
+  let pumpThrew = false;
   try {
     pumping: while (true) {
       if (queue.length === 0) {
@@ -1180,6 +1185,9 @@ export async function pump(
         if (fold(event)) break pumping;
       }
     }
+  } catch (err) {
+    pumpError = err;
+    pumpThrew = true;
   } finally {
     // Teardown — reached on terminal, on queue-drained-and-streams-idle, and on
     // a thrown fold error alike. Resolve every queued (and future) channel push
@@ -1192,12 +1200,16 @@ export async function pump(
     await Promise.all(pushers);
   }
   // A stream that THREW (an executor bug — expected errors map to terminal
-  // events, see the `Executor` doc) fails the drive after teardown, exactly as
-  // the serial pump's in-line `for await` used to propagate it. Concurrent
-  // streams can fail TOGETHER — aggregate so no diagnostic is silently dropped.
-  if (streamErrors.length === 1) throw streamErrors[0];
-  if (streamErrors.length > 1) {
-    throw new AggregateError(streamErrors, `${streamErrors.length} dispatch streams threw`);
+  // events, see the `Executor` doc) or a pump-side fold error fails the drive
+  // after teardown, exactly as the serial pump's in-line `for await` used to
+  // propagate it. Failures can land TOGETHER (streams with each other, or a
+  // fold error with already-failed streams) — a lone error rethrows with its
+  // identity intact (pump error first: it is what stopped the drive); several
+  // aggregate so no diagnostic is silently dropped.
+  const driveErrors = pumpThrew ? [pumpError, ...streamErrors] : streamErrors;
+  if (driveErrors.length === 1) throw driveErrors[0];
+  if (driveErrors.length > 1) {
+    throw new AggregateError(driveErrors, `${driveErrors.length} drive failures`);
   }
 
   return state;
