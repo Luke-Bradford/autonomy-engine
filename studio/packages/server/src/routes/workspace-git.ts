@@ -16,7 +16,12 @@ import {
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
-import { CliGitProvider, type GitProvider } from '../git/provider.js';
+import {
+  CliGitProvider,
+  GitOperationError,
+  GitUnavailableError,
+  type GitProvider,
+} from '../git/provider.js';
 import { KeyedQueue } from '../git/queue.js';
 import { NotFoundError } from '../errors.js';
 
@@ -125,13 +130,18 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
           lastFetchError: null,
         });
       } catch (err) {
-        // Record the failure on the row (state → fetch_error; the message is
-        // already redacted by the provider) AND rethrow — the caller gets the
-        // honest 502, the row remembers it for the next GET.
+        // Record the failure on the row (state → fetch_error) AND rethrow —
+        // the caller gets the honest 502, the row remembers it for the next
+        // GET. ONLY provider-error messages are recorded verbatim: they are
+        // client-safe by construction (redacted at the provider). Anything
+        // else (an fs errno from the recovery path, say) would quote
+        // server-internal absolute paths — GET surfaces this field, so those
+        // get a fixed string, mirroring errors.ts's no-raw-message rule.
+        const clientSafe = err instanceof GitOperationError || err instanceof GitUnavailableError;
         updateWorkspaceGitSync(db, ownerId, {
           observedCollabHead: row.observedCollabHead,
           lastFetchAt: Date.now(),
-          lastFetchError: err instanceof Error ? err.message : String(err),
+          lastFetchError: clientSafe ? (err as Error).message : 'internal error during fetch',
         });
         throw err;
       }

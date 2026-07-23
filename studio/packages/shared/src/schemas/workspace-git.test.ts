@@ -33,6 +33,11 @@ describe('WorkspaceGitRepoUrlSchema', () => {
     'repos/widgets',
     // Non-TLS http is not sanctioned (use https, ssh, file, or a path).
     'http://github.com/acme/widgets.git',
+    // Option-shaped host/user — git blocks "strange hostnames" itself, but
+    // the boundary defence is self-contained.
+    'ssh://-oProxyCommand=evil/x',
+    'git@-oBatchMode:path',
+    '-o@localhost:path',
     '',
   ])('refuses %s', (url) => {
     expect(WorkspaceGitRepoUrlSchema.safeParse(url).success).toBe(false);

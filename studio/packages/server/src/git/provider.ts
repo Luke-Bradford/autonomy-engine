@@ -85,11 +85,8 @@ export interface CliGitProviderOptions {
   gitBinary?: string;
   /** Values to scrub from stderr/error text — EMPTY in G2 (no stored git credentials exist); the G10 PAT hook. */
   secretsToRedact?: readonly string[];
-  cloneTimeoutMs?: number;
-  fetchTimeoutMs?: number;
+  /** Local-op timeout override — exercised by the hung-command test. Remote-op timeouts are the module constants (no consumer overrides them; no inert options). */
   localTimeoutMs?: number;
-  /** Env to derive the child env from (default `process.env`); a test seam. */
-  baseEnv?: NodeJS.ProcessEnv;
 }
 
 interface ExecResult {
@@ -101,18 +98,14 @@ interface ExecResult {
 export class CliGitProvider {
   private readonly gitBinary: string;
   private readonly secretsToRedact: readonly string[];
-  private readonly cloneTimeoutMs: number;
-  private readonly fetchTimeoutMs: number;
   private readonly localTimeoutMs: number;
   private readonly env: NodeJS.ProcessEnv;
 
   constructor(options: CliGitProviderOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
     this.secretsToRedact = options.secretsToRedact ?? [];
-    this.cloneTimeoutMs = options.cloneTimeoutMs ?? DEFAULT_CLONE_TIMEOUT_MS;
-    this.fetchTimeoutMs = options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
     this.localTimeoutMs = options.localTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS;
-    this.env = buildGitEnv(options.baseEnv ?? process.env);
+    this.env = buildGitEnv(process.env);
   }
 
   /** Probe that git exists and runs; throws `GitUnavailableError` when it doesn't. */
@@ -124,10 +117,18 @@ export class CliGitProvider {
   /**
    * Clone `src` into `dir` (creating it). `--` guards against an
    * option-shaped src/dir; an EMPTY remote clones fine (git warns only) —
-   * that is the connect-a-new-repo onboarding state.
+   * that is the connect-a-new-repo onboarding state. `--origin origin` PINS
+   * the remote name: the child inherits the operator's gitconfig (that IS the
+   * auth model), and a `clone.defaultRemoteName` there would otherwise name
+   * the remote something else — permanently breaking every `origin`-addressed
+   * fetch/rev-parse on this checkout (verified empirically in review).
    */
   async clone(src: string, dir: string): Promise<void> {
-    await this.execOk('clone', ['clone', '--', src, dir], this.cloneTimeoutMs);
+    await this.execOk(
+      'clone',
+      ['clone', '--origin', 'origin', '--', src, dir],
+      DEFAULT_CLONE_TIMEOUT_MS,
+    );
   }
 
   /**
@@ -137,7 +138,7 @@ export class CliGitProvider {
    * no longer exists (verified empirically in the plan review).
    */
   async fetch(dir: string): Promise<void> {
-    await this.execOk('fetch', ['-C', dir, 'fetch', '--prune', 'origin'], this.fetchTimeoutMs);
+    await this.execOk('fetch', ['-C', dir, 'fetch', '--prune', 'origin'], DEFAULT_FETCH_TIMEOUT_MS);
   }
 
   /**

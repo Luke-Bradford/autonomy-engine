@@ -1,5 +1,5 @@
 import { realpath, rm } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { resolve, sep } from 'node:path';
 
 /**
  * #3 G2 — where an owner's managed checkout lives: `<root>/<ownerId>/repo`.
@@ -8,7 +8,16 @@ import { join, resolve, sep } from 'node:path';
  * state — safe to delete and cheap to re-create by re-cloning.
  */
 export function checkoutDirFor(workspaceGitRoot: string, ownerId: string): string {
-  return join(resolve(workspaceGitRoot), ownerId, 'repo');
+  const root = resolve(workspaceGitRoot);
+  const dir = resolve(root, ownerId, 'repo');
+  // Same belt-and-braces containment as `removeCheckoutDir` below (symmetric:
+  // a hostile ownerId must be refused on the WRITE path, not just the
+  // destructive one). Sync string-level check only — the rm path adds the
+  // realpath canonicalization it needs.
+  if (dir !== root && !dir.startsWith(root + sep)) {
+    throw new Error(`checkout path for owner "${ownerId}" escapes the workspace git root`);
+  }
+  return dir;
 }
 
 /**

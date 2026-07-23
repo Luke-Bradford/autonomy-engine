@@ -16,6 +16,11 @@ describe('checkoutDirFor', () => {
     const root = tmp();
     expect(checkoutDirFor(root, 'local')).toBe(join(root, 'local', 'repo'));
   });
+
+  it('refuses an escaping ownerId on the WRITE path too (symmetric with removeCheckoutDir)', () => {
+    const root = tmp();
+    expect(() => checkoutDirFor(root, '../victim')).toThrow(/escapes/);
+  });
 });
 
 describe('removeCheckoutDir', () => {

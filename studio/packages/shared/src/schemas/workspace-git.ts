@@ -50,14 +50,23 @@ export const WorkspaceGitRepoUrlSchema = z
           'repoUrl must not embed a credential (user:password@…) — use the SSH agent or a git credential helper',
         );
       }
+      // Option-shaped userinfo/host (`ssh://-oProxyCommand=…`). Git ≥2.14.1
+      // blocks dash-leading hostnames itself; refusing here keeps the
+      // boundary defence self-contained rather than leaning on git's.
+      if (/^[a-z]+:\/\/(?:[^/@]*@)?-/.test(value)) {
+        refuse('repoUrl host must not start with "-"');
+      }
       return;
     }
 
     // scp-like `user@host:path` (the classic `git@github.com:org/repo.git`).
-    // Conservative charset on user/host — a `:` in the user part (an embedded
-    // `user:password@` credential) fails this match and falls through to the
-    // refusal below, so the credential rule holds here by construction.
-    if (/^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^:]/.test(value)) return;
+    // Conservative charset on user/host, first char never `-` (an
+    // option-shaped user/host like `git@-oBatchMode:…` must not pass — git
+    // blocks "strange hostnames" itself, but the boundary defence stays
+    // self-contained). A `:` in the user part (an embedded `user:password@`
+    // credential) fails this match and falls through to the refusal below,
+    // so the credential rule holds here by construction.
+    if (/^[A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9._][A-Za-z0-9._-]*:[^:]/.test(value)) return;
 
     // Absolute local path (the clone REMOTE for a local repo).
     if (value.startsWith('/')) return;
@@ -103,8 +112,14 @@ export const WorkspaceGitBranchSchema = z
 export const WorkspaceGitSchema = z.object({
   id: z.string(),
   ownerId: z.string().nullable(),
-  repoUrl: WorkspaceGitRepoUrlSchema,
-  collabBranch: WorkspaceGitBranchSchema,
+  // STRUCTURAL strings, deliberately NOT the input-policy validators above:
+  // policy is enforced once, at the connect boundary (`ConnectWorkspaceGitBody`).
+  // The ROW schema re-parses on every read — if it embedded the allowlist, any
+  // future policy TIGHTENING (G10 revisiting a scheme, say) would turn
+  // previously-valid stored rows into read-time throws (500 on GET) instead of
+  // only refusing new connects.
+  repoUrl: z.string().min(1),
+  collabBranch: z.string().min(1),
   /** Last observed `refs/remotes/origin/<collabBranch>` sha; null = the branch was not found at the last sync. */
   observedCollabHead: z.string().nullable(),
   /** Epoch-ms of the last sync attempt (connect counts); null = never synced. */

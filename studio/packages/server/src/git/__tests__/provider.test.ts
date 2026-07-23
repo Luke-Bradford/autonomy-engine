@@ -11,41 +11,23 @@ import {
   GitOperationError,
   GitUnavailableError,
 } from '../provider.js';
+import { fixtureGit, pushNewCommit, seedRemote } from './fixtures.js';
 
 /**
- * #3 G2 — GitProvider tests against REAL git repos (no mocked git): a bare
- * "remote" seeded through a plumbing work clone, exactly the shape the
- * managed checkout will see. The only fake binaries are the two shim scripts
- * for the timeout/redaction paths, injected via the `gitBinary` option.
+ * #3 G2 — GitProvider tests against REAL git repos (fixtures in
+ * `fixtures.ts`, shared with the route tests). The only fake binaries are
+ * the two shim scripts for the timeout/redaction paths, injected via the
+ * `gitBinary` option.
  */
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'studio-git-provider-test-'));
 }
 
-/** Runs a real git command for FIXTURE setup (identity pinned inline so the
- * developer's global config is never a dependency). */
-function fixtureGit(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@test', ...args], {
-    cwd,
-    encoding: 'utf8',
-  });
-}
-
 /** A bare remote with one commit on `main`, plus the work clone that seeded it. */
 function seededRemote() {
   const dir = tmp();
-  const remote = join(dir, 'remote.git');
-  const work = join(dir, 'work');
-  execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
-  execFileSync('git', ['init', '-b', 'main', work], { encoding: 'utf8' });
-  writeFileSync(join(work, 'README.md'), 'hello\n');
-  fixtureGit(work, ['add', '.']);
-  fixtureGit(work, ['commit', '-m', 'first']);
-  fixtureGit(work, ['remote', 'add', 'origin', remote]);
-  fixtureGit(work, ['push', 'origin', 'main']);
-  const headSha = fixtureGit(work, ['rev-parse', 'HEAD']).trim();
-  return { dir, remote, work, headSha };
+  return { dir, ...seedRemote(dir) };
 }
 
 describe('buildGitEnv', () => {
@@ -103,11 +85,7 @@ describe('CliGitProvider', () => {
     const checkout = join(dir, 'checkout');
     const provider = new CliGitProvider();
     await provider.clone(remote, checkout);
-    writeFileSync(join(work, 'second.md'), 'more\n');
-    fixtureGit(work, ['add', '.']);
-    fixtureGit(work, ['commit', '-m', 'second']);
-    fixtureGit(work, ['push', 'origin', 'main']);
-    const newSha = fixtureGit(work, ['rev-parse', 'HEAD']).trim();
+    const newSha = pushNewCommit(work, 'second.md');
     await provider.fetch(checkout);
     await expect(provider.revParseRemoteBranch(checkout, 'main')).resolves.toBe(newSha);
   });

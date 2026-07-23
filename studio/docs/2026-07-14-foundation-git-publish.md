@@ -208,8 +208,10 @@ reconcile are core. Corrections:
   (`MASTER_KEY_ENV_VARS`, hoisted to `secrets/secrets.ts` as the ONE list) and ambient
   `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`.
 - **Concrete commands (only what G2 consumes — no inert surface):** `git version` (probe →
-  503 `git_unavailable`), `git clone -- <src> <dir>` (empty remote clones fine = the onboarding
-  state), `git -C <dir> fetch --prune origin` (**`--prune` is load-bearing**: without it a
+  503 `git_unavailable`), `git clone --origin origin -- <src> <dir>` (empty remote clones fine =
+  the onboarding state; `--origin` pins the remote name against an operator
+  `clone.defaultRemoteName` gitconfig, which would otherwise break every origin-addressed op on
+  the checkout), `git -C <dir> fetch --prune origin` (**`--prune` is load-bearing**: without it a
   remotely-deleted collab branch resolves its stale head forever — verified empirically),
   `git -C <dir> rev-parse --verify --quiet refs/remotes/origin/<branch>` (silent exit-1 =
   branch-missing, a real state, distinct from failure). `status --porcelain` +

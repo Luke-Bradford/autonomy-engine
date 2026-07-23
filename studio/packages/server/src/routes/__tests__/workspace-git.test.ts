@@ -4,33 +4,14 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkoutDirFor } from '../../git/checkout.js';
+import { fixtureGit, pushNewCommit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
 /**
  * #3 G2 — workspace-git routes against a REAL local bare remote (a path used
- * as the clone remote — exactly the "local repo" connect mode). No git mocks.
+ * as the clone remote — exactly the "local repo" connect mode). No git mocks;
+ * fixtures shared with the provider tests (`git/__tests__/fixtures.ts`).
  */
-
-function fixtureGit(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@test', ...args], {
-    cwd,
-    encoding: 'utf8',
-  });
-}
-
-/** Seeds `<tmp>/remote.git` (bare, one commit on main) + returns the head sha. */
-function seedRemote(tmpDir: string): { remote: string; work: string; headSha: string } {
-  const remote = join(tmpDir, 'remote.git');
-  const work = join(tmpDir, 'work');
-  execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
-  execFileSync('git', ['init', '-b', 'main', work], { encoding: 'utf8' });
-  writeFileSync(join(work, 'README.md'), 'hello\n');
-  fixtureGit(work, ['add', '.']);
-  fixtureGit(work, ['commit', '-m', 'first']);
-  fixtureGit(work, ['remote', 'add', 'origin', remote]);
-  fixtureGit(work, ['push', 'origin', 'main']);
-  return { remote, work, headSha: fixtureGit(work, ['rev-parse', 'HEAD']).trim() };
-}
 
 describe('workspace-git routes', () => {
   let testApp: TestApp;
@@ -112,11 +93,7 @@ describe('workspace-git routes', () => {
   it('fetch observes a new remote commit', async () => {
     const { remote, work } = seedRemote(testApp.tmpDir);
     await connect(remote);
-    writeFileSync(join(work, 'second.md'), 'more\n');
-    fixtureGit(work, ['add', '.']);
-    fixtureGit(work, ['commit', '-m', 'second']);
-    fixtureGit(work, ['push', 'origin', 'main']);
-    const newSha = fixtureGit(work, ['rev-parse', 'HEAD']).trim();
+    const newSha = pushNewCommit(work, 'second.md');
     const res = await app.inject({ method: 'POST', url: '/api/workspace/git/fetch' });
     expect(res.statusCode).toBe(200);
     expect(res.json().git.observedCollabHead).toBe(newSha);
@@ -223,11 +200,7 @@ describe('workspace-git routes', () => {
   it('a non-default collab branch is honoured', async () => {
     const { remote, work } = seedRemote(testApp.tmpDir);
     fixtureGit(work, ['checkout', '-b', 'develop']);
-    writeFileSync(join(work, 'dev.md'), 'dev\n');
-    fixtureGit(work, ['add', '.']);
-    fixtureGit(work, ['commit', '-m', 'dev']);
-    fixtureGit(work, ['push', 'origin', 'develop']);
-    const devSha = fixtureGit(work, ['rev-parse', 'HEAD']).trim();
+    const devSha = pushNewCommit(work, 'dev.md', 'develop');
     const res = await connect(remote, 'develop');
     expect(res.statusCode).toBe(201);
     expect(res.json().git.collabBranch).toBe('develop');
