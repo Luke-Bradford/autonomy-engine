@@ -28,6 +28,22 @@ export interface NodePlan {
    * drive has already finished before the alarm fires.
    */
   delayMs?: number;
+  /**
+   * #4 A4b slice 1 — concurrency probe: called the moment the stub's
+   * "adapter phase" begins, i.e. AFTER `node.dispatched` is yielded (and so
+   * folded + durable) and before `gate`/`delayMs`/the terminal event. Lets a
+   * test observe wall-clock overlap between two in-flight dispatches.
+   */
+  onStart?: () => void;
+  /**
+   * #4 A4b slice 1 — concurrency latch: awaited during the "adapter phase"
+   * (after `onStart`, before `delayMs`/the terminal event). A test that wants
+   * to HOLD node A in flight until node B reaches a known point resolves this
+   * from B's `onStart`. MUST be bounded by the test (race against a timeout
+   * that records failure) — an unconditional latch under a serial pump would
+   * hang the suite instead of failing it.
+   */
+  gate?: () => Promise<void>;
 }
 
 /** How the stub should resolve a `startChild` (a `call_pipeline` child). */
@@ -83,7 +99,10 @@ export function makeStubExecutor(opts: StubExecutorOptions = {}): RecordingExecu
         // AFTER `node.dispatched` is yielded (and so folded + durable), never
         // before: that ordering is the executor's crash-safety contract, and a
         // delay in front of it would make this stub violate the very rule the
-        // reconciler's `ready`-vs-`dispatched` recovery depends on.
+        // reconciler's `ready`-vs-`dispatched` recovery depends on. `onStart`/
+        // `gate` (A4b concurrency probes) sit in the same "adapter phase" slot.
+        plan.onStart?.();
+        if (plan.gate !== undefined) await plan.gate();
         if (plan.delayMs !== undefined) {
           await new Promise((resolve) => setTimeout(resolve, plan.delayMs));
         }

@@ -18,6 +18,7 @@ import {
   type TriggerContext,
 } from '@autonomy-studio/shared';
 import { ZodError } from 'zod';
+import pLimit from 'p-limit';
 import { getRun, updateRun } from '../repo/runs.js';
 import { getConnection } from '../repo/connections.js';
 import { recordConnectionQuotaExhaustion } from '../repo/connection-quota.js';
@@ -883,13 +884,55 @@ function recordQuotaWindowIfExhausted(db: Db, event: EngineEvent, eventTs: numbe
 }
 
 /**
+ * #4 A4b (slice 1, #566) — the per-run cap on concurrently in-flight executor
+ * streams. Before this existed the pump was wall-clock SERIAL within a run, so
+ * `batchCount > 1` (slice 2) would have been inert surface and even parallel
+ * top-level siblings ran one at a time. The cap is a fixed constant, not
+ * config: it bounds how many `performDispatch` pre-flights (DB reads + secret
+ * decrypts) a single wide run can hold live at once — the global executor
+ * `p-limit` caps only the ADAPTER phase, which sits after the pre-flight — and
+ * it is the admission seam slice 2's `foreach` fan-out will ride. Widen it only
+ * with evidence (#559's YAGNI posture applies to making it a knob).
+ */
+const PER_RUN_DISPATCH_CONCURRENCY = 4;
+
+/** How a stream event left the pump's fold channel (see `pump`). */
+type SinkOutcome = 'folded' | 'dropped';
+
+/**
  * The reduce↔persist fixpoint. Drains `commands` (and everything they cascade),
  * appending every produced event and folding it. Stops when the queue empties
- * or the run reaches a terminal fact. Returns the final projected state.
+ * (with no stream still in flight) or the run reaches a terminal fact. Returns
+ * the final projected state.
  *
  * `finishRun` is the DRIVER's own command — REDUCE-FIRST (`driveFinishRun`, #477:
  * append only a finish the reducer accepts); `dispatchNode`/`startChild` go to
  * the executor (append-before-fold, the crash-safety contract).
+ *
+ * CONCURRENCY (#4 A4b slice 1): executor-bound commands no longer block the
+ * loop — each spawns a pusher task that pulls its `perform` stream and hands
+ * every event to THIS loop through a FIFO channel, so adapter side effects of
+ * different nodes overlap wall-clock while the fold path stays strictly
+ * serialized. Two properties are load-bearing:
+ *
+ *  - **Single appender.** A pusher only ENQUEUES; every append+fold happens in
+ *    this loop, on the one in-memory `state`, under the one drive lock
+ *    (`drives.ts`). The F2c invariant was never "adapters are serial" — it is
+ *    "one drive per run, one appender" — and that survives unchanged.
+ *  - **Per-stream backpressure = crash-safety.** A pusher's channel push
+ *    resolves only AFTER its event is appended+folded, so the async-generator
+ *    executor resumes past `yield node.dispatched` (i.e. starts the side
+ *    effect) only once `node.dispatched` is durable — the same pull-based
+ *    guarantee the serial loop gave, per stream (see the `Executor` doc).
+ *
+ * Teardown (terminal fact reached, or a fold/stream error): remaining queued
+ * channel events are resolved `dropped` (never appended — a run that failed on
+ * one branch does not record phantom progress on another), and the pump AWAITS
+ * every pusher's settlement before returning, so no untracked work survives
+ * under the drive lock. A generator mid-adapter finishes that adapter
+ * unobserved (its `finally` releases the abort controller and the global
+ * p-limit slot) — the same "in-flight side effect completes, its events are
+ * dropped" posture the serial pump's mid-stream `break` had.
  */
 export async function pump(
   deps: DriverDeps,
@@ -901,158 +944,272 @@ export async function pump(
   const queue: EngineCommand[] = [...commands];
   let steps = 0;
 
-  while (queue.length > 0) {
-    if (++steps > MAX_DRIVER_STEPS) {
-      // Fail-safe: terminalize rather than hang. See MAX_DRIVER_STEPS.
-      const capped: EngineEvent = {
-        type: 'run.finished',
-        runId: state.runId,
-        outcome: 'failure',
-        reason: 'capped',
-      };
-      state = appendAndFold(deps.db, deps.bus, engine, state, capped, deps.log).state;
-      syncRunLifecycle(deps.db, state.runId, state.status);
-      break;
-    }
+  // ---- stream plumbing (see the CONCURRENCY doc block above) ---------------
+  const streamLimit = pLimit(PER_RUN_DISPATCH_CONCURRENCY);
+  const pendingFolds: { event: EngineEvent; settle: (outcome: SinkOutcome) => void }[] = [];
+  const pushers: Promise<void>[] = [];
+  const streamErrors: unknown[] = [];
+  let liveStreams = 0;
+  let dropped = false;
+  let waker: (() => void) | null = null;
+  const wake = (): void => {
+    const w = waker;
+    waker = null;
+    w?.();
+  };
+  const spawn = (command: ExecutorCommand): void => {
+    liveStreams += 1;
+    const pusher = streamLimit(async () => {
+      // Teardown already began while this stream sat in the per-run cap's
+      // queue: never START a stream whose events can only be dropped.
+      if (dropped) return;
+      for await (const event of deps.executor.perform(command, state.runId)) {
+        const outcome = await new Promise<SinkOutcome>((settle) => {
+          if (dropped) {
+            settle('dropped');
+            return;
+          }
+          pendingFolds.push({ event, settle });
+          wake();
+        });
+        // `break` runs the generator's implicit `.return()`: the executor
+        // resumes from its current suspension point, finishes any in-flight
+        // adapter work, and runs its `finally` blocks — awaited via `pushers`.
+        if (outcome === 'dropped') break;
+      }
+    })
+      .catch((err: unknown) => {
+        streamErrors.push(err);
+      })
+      .finally(() => {
+        liveStreams -= 1;
+        wake();
+      });
+    pushers.push(pusher);
+  };
 
-    const command = queue.shift()!;
+  // Append+fold ONE event on the serialized path; true = the run is terminal.
+  const fold = (event: EngineEvent): boolean => {
+    // Fold the PARSED event, never the raw input: they differ wherever the
+    // schema has a `.default()`, and `node.failed.kind` — the field F2b's
+    // retry-eligibility keys off — is exactly that. See `appendEngineEvent`.
+    // `appendAndFold` also records the fold's diagnostics against the seq it
+    // just appended at (#497) — the run's main derivation site.
+    const result = appendAndFold(deps.db, deps.bus, engine, state, event, deps.log);
+    state = result.state;
+    recordQuotaWindowIfExhausted(deps.db, event, result.record.ts);
+    syncRunLifecycle(deps.db, state.runId, state.status);
+    queue.push(...result.commands);
+    return TERMINAL_RUN.has(state.status);
+  };
 
-    // The driver's OWN `finishRun` is REDUCE-FIRST (#477): fold before append, so
-    // a `run.finished` the reducer would reject is never made durable. It always
-    // terminalizes, so nothing cascades and the pump stops here.
-    if (command.type === 'finishRun') {
-      state = driveFinishRun(deps, engine, state, command);
-      break;
-    }
-
-    // `scheduleRetry` and `evaluateControl` are the driver's OWN commands — each
-    // a single synchronous event (a sync array, which `for await` iterates too),
-    // needing no executor. `dispatchNode`/`startChild` go to the executor, which
-    // STREAMS its events so `node.dispatched` is folded (durable) before the side
-    // effect runs — see the `Executor` contract doc.
-    //
-    // They route through this `source` rather than appending on their own: the
-    // loop below is what publishes to the P6 bus (so a watching client's raw
-    // event feed sees the retry/branch as it happens), folds the PARSED event,
-    // and syncs the row. `armRetry` runs while building the array, keeping the arm
-    // strictly BEFORE the append. Unlike `finishRun`, neither event is a verdict
-    // on its own event, so append-before-fold is fine. `evaluateControl` carries
-    // the branch the reducer already computed PURELY (#4 A1) — the driver just
-    // makes it durable as `condition.evaluated`.
-    let source: Iterable<EngineEvent> | AsyncIterable<EngineEvent>;
-    if (command.type === 'scheduleRetry') {
-      source = [armRetry(deps, state, command)];
-    } else if (command.type === 'scheduleWait') {
-      // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks
-      // on a durable timer): ARM S1's alarm then append `timer.waitScheduled`, whose
-      // fold parks the node `wait_pending`. `armWait` runs while building the array,
-      // keeping the arm strictly BEFORE the append (so a `wait_pending` node always
-      // has a live alarm — the property that removes the boot-reconcile burden). The
-      // alarm clock's `node_wait` handler later appends `timer.due` when it fires. No
-      // executor, like `scheduleRetry`/`evaluateControl`.
-      source = [armWait(deps, state, command)];
-    } else if (command.type === 'scheduleExternalWait') {
-      // #4 A13 — the driver's OWN `scheduleExternalWait` command (a `control`
-      // `webhook` parks awaiting an inbound callback): DERIVE the token, ARM S1's
-      // EXPIRY alarm + RECORD the correlation row, then append `externalWait.created`,
-      // whose fold parks the node `external_wait_pending`. `armExternalWait` runs
-      // while building the array, keeping the arm+record strictly BEFORE the append
-      // (so a parked webhook always has a live alarm + row). The clock's
-      // `node_external_wait` handler appends `externalWait.expired` on timeout, and
-      // the `POST /api/external-wait/:token` route appends `externalWait.completed` on
-      // a callback. No executor, like `scheduleWait`.
-      source = [armExternalWait(deps, state, command)];
-    } else if (command.type === 'scheduleContainerTimeout') {
-      // #4 A17 — the driver's OWN `scheduleContainerTimeout` command (a `loop`
-      // container just went `active` with a wall-clock `timeout`): ARM S1's timeout
-      // alarm then append `container.timeoutScheduled`, whose fold stamps the loop's
-      // `timeoutDueAt`. `armContainerTimeout` runs while building the array, keeping
-      // the arm strictly BEFORE the append (so a loop that records the marker always
-      // has a live alarm). The clock's `container_timeout` handler appends
-      // `container.timedOut` when it fires, failing the loop. No executor, like
-      // `scheduleWait` — parks nothing (children keep running).
-      source = [armContainerTimeout(deps, state, command)];
-    } else if (command.type === 'evaluateControl') {
-      // The control node's durable event is named by `command.event`
-      // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
-      // A1/A2) — the reducer already computed the `branch` PURELY; the driver just
-      // makes it durable under the right event type. Both fold identically
-      // (`onControlBranchEvaluated`); the distinct type preserves the log's
-      // if-vs-switch distinction.
-      source = [
-        {
-          type: command.event,
-          runId: state.runId,
-          nodeId: command.nodeId,
-          attemptId: command.attemptId,
-          branch: command.branch,
-        },
-      ];
-    } else if (command.type === 'failNode') {
-      // #4 A7 — the driver's OWN `failNode` command (a `control` `fail` force-fails):
-      // append `node.failed` with the message the reducer already resolved PURELY,
-      // fixed `kind:'permanent'` (a deliberate fail is deterministic → never
-      // retry-eligible) and `code:'forced_fail'`. Folded by the SAME `onFailed`
-      // handler a connector failure reaches, so the graph's `failure` edges (or an
-      // unhandled → run-fail) handle it. No executor, like `evaluateControl`.
-      source = [
-        {
-          type: 'node.failed',
-          runId: state.runId,
-          nodeId: command.nodeId,
-          attemptId: command.attemptId,
-          error: command.error,
-          kind: 'permanent',
-          code: FAILURE_CODES.FORCED_FAIL,
-        },
-      ];
-    } else if (command.type === 'succeedControl') {
-      // #4 A8 — the driver's OWN `succeedControl` command (a `control` `filter`
-      // succeeds): append `node.succeeded` with the `outputs` the reducer already
-      // resolved PURELY (the filtered `{ result }`). Folded by the SAME `onSucceeded`
-      // handler a connector success reaches (a `ready` control node IS `LIVE_NODE`),
-      // so the declared-output contract applies unchanged. No executor, like
-      // `evaluateControl`/`failNode`.
-      source = [
-        {
-          type: 'node.succeeded',
-          runId: state.runId,
-          nodeId: command.nodeId,
-          attemptId: command.attemptId,
-          outputs: command.outputs,
-        },
-      ];
-    } else if (command.type === 'parkRun') {
-      // #5 S3 (#619) — the driver's OWN `parkRun` command (the run parked on a
-      // durable timer/callback): append `run.waiting{reason}`, whose fold flips the
-      // run running→waiting. No executor, like `evaluateControl`. `run.waiting` is
-      // NOT terminal, so the pump continues — but a parked run has no further
-      // command, so the queue drains and the pump returns with the run `waiting`
-      // (its row synced by the `syncRunLifecycle` in the fold loop below). The
-      // reverse edge waiting→running is the reducer's, on the resolving event.
-      source = [{ type: 'run.waiting', runId: state.runId, reason: command.reason }];
-    } else {
-      source = deps.executor.perform(command, state.runId);
-    }
-
-    let terminal = false;
-    for await (const event of source) {
-      // Fold the PARSED event, never the raw input: they differ wherever the
-      // schema has a `.default()`, and `node.failed.kind` — the field F2b's
-      // retry-eligibility keys off — is exactly that. See `appendEngineEvent`.
-      // `appendAndFold` also records the fold's diagnostics against the seq it
-      // just appended at (#497) — the run's main derivation site.
-      const result = appendAndFold(deps.db, deps.bus, engine, state, event, deps.log);
-      state = result.state;
-      recordQuotaWindowIfExhausted(deps.db, event, result.record.ts);
-      syncRunLifecycle(deps.db, state.runId, state.status);
-      queue.push(...result.commands);
-      if (TERMINAL_RUN.has(state.status)) {
-        terminal = true;
+  // A pump-side (fold) error is CAPTURED, not thrown past teardown: a direct
+  // rethrow would exit before the streamErrors merge below, silently discarding
+  // any concurrently-failed streams' diagnostics (the review WARNING on #657).
+  let pumpError: unknown;
+  let pumpThrew = false;
+  try {
+    pumping: while (true) {
+      if (queue.length === 0) {
+        // No command to drive: fold the next stream event if one is queued,
+        // else sleep until a pusher pushes or settles, else we are done.
+        const next = pendingFolds.shift();
+        if (next !== undefined) {
+          let terminal: boolean;
+          try {
+            terminal = fold(next.event);
+          } catch (err) {
+            // Settle BEFORE rethrowing: the entry is already shifted OUT of
+            // `pendingFolds`, so the teardown sweep below cannot reach it — an
+            // unsettled entry would strand its pusher mid-push and hang the
+            // `Promise.all(pushers)` await forever, holding the per-run drive
+            // lock with the error swallowed. `'dropped'` is safe on both
+            // sub-cases: a parse throw appended nothing; a post-append throw
+            // leaves the pusher breaking without resuming its generator — the
+            // crash-equivalent posture boot reconcile already recovers.
+            next.settle('dropped');
+            throw err;
+          }
+          next.settle('folded');
+          if (terminal) break;
+          continue;
+        }
+        if (liveStreams > 0) {
+          await new Promise<void>((resolve) => {
+            waker = resolve;
+          });
+          continue;
+        }
         break;
       }
+
+      if (++steps > MAX_DRIVER_STEPS) {
+        // Fail-safe: terminalize rather than hang. See MAX_DRIVER_STEPS.
+        fold({
+          type: 'run.finished',
+          runId: state.runId,
+          outcome: 'failure',
+          reason: 'capped',
+        });
+        break;
+      }
+
+      const command = queue.shift()!;
+
+      // The driver's OWN `finishRun` is REDUCE-FIRST (#477): fold before append, so
+      // a `run.finished` the reducer would reject is never made durable. It always
+      // terminalizes, so nothing cascades and the pump stops here.
+      if (command.type === 'finishRun') {
+        state = driveFinishRun(deps, engine, state, command);
+        break;
+      }
+
+      // `dispatchNode`/`startChild` go to the executor CONCURRENTLY (A4b slice 1):
+      // spawn the stream's pusher and keep driving — its events reach the fold
+      // path through the channel, `node.dispatched` still folded (durable) before
+      // the side effect runs via per-stream backpressure. See the CONCURRENCY doc.
+      if (command.type === 'dispatchNode' || command.type === 'startChild') {
+        spawn(command);
+        continue;
+      }
+
+      // Everything else is the driver's OWN command — each a single synchronous
+      // event, needing no executor, folded INLINE on the serialized path.
+      //
+      // They route through this `source` rather than appending on their own: the
+      // fold below is what publishes to the P6 bus (so a watching client's raw
+      // event feed sees the retry/branch as it happens), folds the PARSED event,
+      // and syncs the row. `armRetry` runs while building the array, keeping the arm
+      // strictly BEFORE the append. Unlike `finishRun`, neither event is a verdict
+      // on its own event, so append-before-fold is fine. `evaluateControl` carries
+      // the branch the reducer already computed PURELY (#4 A1) — the driver just
+      // makes it durable as `condition.evaluated`.
+      let source: EngineEvent[];
+      if (command.type === 'scheduleRetry') {
+        source = [armRetry(deps, state, command)];
+      } else if (command.type === 'scheduleWait') {
+        // #4 A6 — the driver's OWN `scheduleWait` command (a `control` `wait` parks
+        // on a durable timer): ARM S1's alarm then append `timer.waitScheduled`, whose
+        // fold parks the node `wait_pending`. `armWait` runs while building the array,
+        // keeping the arm strictly BEFORE the append (so a `wait_pending` node always
+        // has a live alarm — the property that removes the boot-reconcile burden). The
+        // alarm clock's `node_wait` handler later appends `timer.due` when it fires. No
+        // executor, like `scheduleRetry`/`evaluateControl`.
+        source = [armWait(deps, state, command)];
+      } else if (command.type === 'scheduleExternalWait') {
+        // #4 A13 — the driver's OWN `scheduleExternalWait` command (a `control`
+        // `webhook` parks awaiting an inbound callback): DERIVE the token, ARM S1's
+        // EXPIRY alarm + RECORD the correlation row, then append `externalWait.created`,
+        // whose fold parks the node `external_wait_pending`. `armExternalWait` runs
+        // while building the array, keeping the arm+record strictly BEFORE the append
+        // (so a parked webhook always has a live alarm + row). The clock's
+        // `node_external_wait` handler appends `externalWait.expired` on timeout, and
+        // the `POST /api/external-wait/:token` route appends `externalWait.completed` on
+        // a callback. No executor, like `scheduleWait`.
+        source = [armExternalWait(deps, state, command)];
+      } else if (command.type === 'scheduleContainerTimeout') {
+        // #4 A17 — the driver's OWN `scheduleContainerTimeout` command (a `loop`
+        // container just went `active` with a wall-clock `timeout`): ARM S1's timeout
+        // alarm then append `container.timeoutScheduled`, whose fold stamps the loop's
+        // `timeoutDueAt`. `armContainerTimeout` runs while building the array, keeping
+        // the arm strictly BEFORE the append (so a loop that records the marker always
+        // has a live alarm). The clock's `container_timeout` handler appends
+        // `container.timedOut` when it fires, failing the loop. No executor, like
+        // `scheduleWait` — parks nothing (children keep running).
+        source = [armContainerTimeout(deps, state, command)];
+      } else if (command.type === 'evaluateControl') {
+        // The control node's durable event is named by `command.event`
+        // (`condition.evaluated` for an `if`, `switch.evaluated` for a `switch`, #4
+        // A1/A2) — the reducer already computed the `branch` PURELY; the driver just
+        // makes it durable under the right event type. Both fold identically
+        // (`onControlBranchEvaluated`); the distinct type preserves the log's
+        // if-vs-switch distinction.
+        source = [
+          {
+            type: command.event,
+            runId: state.runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            branch: command.branch,
+          },
+        ];
+      } else if (command.type === 'failNode') {
+        // #4 A7 — the driver's OWN `failNode` command (a `control` `fail` force-fails):
+        // append `node.failed` with the message the reducer already resolved PURELY,
+        // fixed `kind:'permanent'` (a deliberate fail is deterministic → never
+        // retry-eligible) and `code:'forced_fail'`. Folded by the SAME `onFailed`
+        // handler a connector failure reaches, so the graph's `failure` edges (or an
+        // unhandled → run-fail) handle it. No executor, like `evaluateControl`.
+        source = [
+          {
+            type: 'node.failed',
+            runId: state.runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            error: command.error,
+            kind: 'permanent',
+            code: FAILURE_CODES.FORCED_FAIL,
+          },
+        ];
+      } else if (command.type === 'succeedControl') {
+        // #4 A8 — the driver's OWN `succeedControl` command (a `control` `filter`
+        // succeeds): append `node.succeeded` with the `outputs` the reducer already
+        // resolved PURELY (the filtered `{ result }`). Folded by the SAME `onSucceeded`
+        // handler a connector success reaches (a `ready` control node IS `LIVE_NODE`),
+        // so the declared-output contract applies unchanged. No executor, like
+        // `evaluateControl`/`failNode`.
+        source = [
+          {
+            type: 'node.succeeded',
+            runId: state.runId,
+            nodeId: command.nodeId,
+            attemptId: command.attemptId,
+            outputs: command.outputs,
+          },
+        ];
+      } else {
+        // #5 S3 (#619) — the driver's OWN `parkRun` command (the run parked on a
+        // durable timer/callback): append `run.waiting{reason}`, whose fold flips the
+        // run running→waiting. No executor, like `evaluateControl`. `run.waiting` is
+        // NOT terminal, so the pump continues — but a parked run has no further
+        // command, so the queue drains and the pump returns with the run `waiting`
+        // (its row synced by the `syncRunLifecycle` in the fold loop below). The
+        // reverse edge waiting→running is the reducer's, on the resolving event.
+        // (`else`, not `else if`: after the executor-bound + `finishRun` splits
+        // above, `parkRun` is the last member of the command union — TS proves
+        // `source` assigned on every path.)
+        source = [{ type: 'run.waiting', runId: state.runId, reason: command.reason }];
+      }
+
+      for (const event of source) {
+        if (fold(event)) break pumping;
+      }
     }
-    if (terminal) break;
+  } catch (err) {
+    pumpError = err;
+    pumpThrew = true;
+  } finally {
+    // Teardown — reached on terminal, on queue-drained-and-streams-idle, and on
+    // a thrown fold error alike. Resolve every queued (and future) channel push
+    // as `dropped` so blocked pushers break out, then AWAIT their settlement:
+    // a pusher's `break` runs the generator's `.return()`, which finishes any
+    // in-flight adapter work and its `finally` blocks, so nothing untracked
+    // survives past the drive lock. Dropped events are NEVER appended.
+    dropped = true;
+    for (const pending of pendingFolds.splice(0)) pending.settle('dropped');
+    await Promise.all(pushers);
+  }
+  // A stream that THREW (an executor bug — expected errors map to terminal
+  // events, see the `Executor` doc) or a pump-side fold error fails the drive
+  // after teardown, exactly as the serial pump's in-line `for await` used to
+  // propagate it. Failures can land TOGETHER (streams with each other, or a
+  // fold error with already-failed streams) — a lone error rethrows with its
+  // identity intact (pump error first: it is what stopped the drive); several
+  // aggregate so no diagnostic is silently dropped.
+  const driveErrors = pumpThrew ? [pumpError, ...streamErrors] : streamErrors;
+  if (driveErrors.length === 1) throw driveErrors[0];
+  if (driveErrors.length > 1) {
+    throw new AggregateError(driveErrors, `${driveErrors.length} drive failures`);
   }
 
   return state;
