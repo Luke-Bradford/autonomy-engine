@@ -262,6 +262,48 @@ describe('driver — intra-run concurrent dispatch (#4 A4b slice 1)', () => {
     expect(maxInFlight).toBeGreaterThanOrEqual(2);
   });
 
+  it('a terminal fact while a sibling is IN FLIGHT drops its remaining events and returns', async () => {
+    const { db } = freshDb();
+    // r -> b (slow) and r -> x -> a, where `a`'s dispatch prep THROWS at run
+    // time: `${nodes.x.output.v}` passes the #444 write gate (`x` is
+    // uncatalogued, so its output contract is `absent` and the static checker
+    // cannot type the ref) but `x` actually emits `{}`, so the prep's walk
+    // fails. `x` finishes while `b` is still in flight, `a`'s prep failure
+    // emits finishRun{invalid_event}, and the pump must tear down — drop b's
+    // undelivered events, await b's stream settlement — not hang and not
+    // append past the terminal.
+    const { nodes, edges } = fanOut(['b', 'x']);
+    const pvId = seedVersion(
+      db,
+      [...nodes, node('a', { config: { bad: '${nodes.x.output.v}' } })],
+      [...edges, edge('x', 'a')],
+    );
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(
+      deps(db, {
+        nodes: {
+          // Bounded, released by nothing: b outlives the run's terminal fact.
+          b: { gate: () => new Promise((resolve) => setTimeout(resolve, 200)) },
+        },
+      }),
+      run,
+    );
+
+    expect(state.status).toBe('failure');
+    const events = loadEngineEvents(db, run.id);
+    const finishedAt = events.findIndex((e) => e.type === 'run.finished');
+    expect(finishedAt).toBeGreaterThan(-1);
+    // Pin the terminal to the PREP failure (not a stall or drain outcome), so
+    // the fixture's "runtime-only throw" premise is itself asserted.
+    expect(events[finishedAt]).toMatchObject({ outcome: 'failure', reason: 'invalid_event' });
+    // b's terminal never landed — its stream's remaining events were dropped,
+    // and NOTHING was appended after the run's terminal fact.
+    expect(events.some((e) => e.type === 'node.succeeded' && e.nodeId === 'b')).toBe(false);
+    expect(finishedAt).toBe(events.length - 1);
+    expect(state.nodes.b!.status).toBe('dispatched');
+  });
+
   it('a stream that throws mid-flight tears down cleanly and rethrows', async () => {
     const { db } = freshDb();
     const { nodes, edges } = fanOut(['a', 'b']);
