@@ -3,6 +3,7 @@ import {
   createConnection,
   deleteConnection,
   getConnection,
+  getConnectionByResourceId,
   listConnections,
   updateConnection,
 } from '../connections.js';
@@ -126,5 +127,29 @@ describe('connections repo', () => {
 
     expect(() => getConnection(db, 'conn_corrupt')).toThrow();
     expect(() => listConnections(db)).toThrow();
+  });
+
+  // #3 G5c — the workspace-git reconcile apply primitives.
+  describe('resourceId preservation + lookup (G5c)', () => {
+    it('preserves a supplied resourceId on create (else mints fresh)', () => {
+      const { db } = freshDb();
+      const preserved = createConnection(db, newConnection, { resourceId: 'res_c' });
+      expect(preserved.resourceId).toBe('res_c');
+      const minted = createConnection(db, newConnection);
+      expect(minted.resourceId).toMatch(/^res_/);
+      expect(minted.resourceId).not.toBe('res_c');
+    });
+
+    it('resolves a connection by (ownerId, resourceId), owner-scoped', () => {
+      const { db } = freshDb();
+      const mine = createConnection(
+        db,
+        { ...newConnection, ownerId: 'me' },
+        { resourceId: 'res_c' },
+      );
+      createConnection(db, { ...newConnection, ownerId: 'other' }, { resourceId: 'res_c' });
+      expect(getConnectionByResourceId(db, 'me', 'res_c')?.id).toBe(mine.id);
+      expect(getConnectionByResourceId(db, 'me', 'res_missing')).toBeNull();
+    });
   });
 });

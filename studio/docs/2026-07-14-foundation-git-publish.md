@@ -142,7 +142,7 @@ reconcile are core. Corrections:
 | G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking — **SHIPPED 2026-07-23** (built-block below) |
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
-| G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); the transactional APPLY write-path is **G5c** (next) |
+| G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); **G5c-1 (the transactional APPLY write-path for connections + pipelines + archive) SHIPPED 2026-07-23** (built-block below); TRIGGER apply is **G5c-2** (#670, next) |
 | G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
@@ -407,6 +407,71 @@ writes NOTHING to the DB.
   `enabled` content-vs-readiness decision (see `content-form.ts`) is a G7/G8
   fork, tracked separately. (3) Connection/trigger orphan-delete semantics
   (absent from branch) are still owed.
+
+### G5c-1 built-block (2026-07-23) — transactional reconcile APPLY (connections + pipelines + archive)
+
+The APPLY write-path the G5b classifier previews. Sliced (operator "large/risky
+for one unattended fire" + a planning-gate adversarial review): **G5c-1 =
+connections + pipelines + archive**; **G5c-2 (#670) = triggers**. Triggers are
+the pure LEAF (nothing references a trigger), so deferring them cannot break the
+pipeline/connection apply, and the murkiest deferred semantics (mode-consistency,
+`enabled`-as-content-vs-readiness, "absent→disabled"/G7) are all trigger-specific.
+
+- **Atomic**: `applyWorkspace(db, ownerId, incoming, head)` (`portability/workspace-apply.ts`)
+  does every write in ONE `db.transaction`; a mid-way refusal (invalid doc,
+  unresolved ref, call cycle) rolls the DB fully back. `archivePipeline`'s own
+  nested tx composes as a SAVEPOINT (the `import.ts` idiom).
+- **Fail-closed on a corrupt branch**: ANY parse diagnostic
+  (unparseable/duplicate-resourceId/unknown-dir) → the WHOLE import is REFUSED
+  (`refused: true`, nothing written), never a partial apply of a known-broken
+  tree (the merge-gate "a `gh` failure is never CI-green" posture). A stray file
+  is cheap to remove; a half-applied branch is not.
+- **resourceId PRESERVED on every create** (G1 "import preserves ids"): a new
+  `{resourceId?}` option on `createPipeline`/`createConnection`/`createPipelineVersion`
+  (CRUD + portable import omit it → still mint fresh). Without it every pull
+  re-mints and all bindings dangle forever.
+- **Row-fields vs version-doc split** (the planning-gate G2/G3 fixes): the apply
+  drives off the INDEPENDENT signals, never the collapsed `disposition` enum. A
+  `concurrency`-only change patches the pipeline ROW (`updatePipeline`) and mints
+  NO version — `concurrency` is in `pipelineContentForm` so it reads as an
+  `update`, but minting an identical-graph immutable version would be #473-class
+  churn + silent cap loss. A pure NAME change patches `name`, no mint. A version
+  mint happens only when `pipelineVersionContentForm` (a new shared helper, the
+  version doc minus volatile/position) actually differs — with a **skip-if-present
+  guard**: an incoming version resourceId already materialised (a restore, or a
+  DB-ahead re-pull) is a no-op, never a `(pipeline_id, resource_id)` UNIQUE
+  collision.
+- **Restore-vs-create** (spec note 1): a `create` disposition whose resourceId
+  matches a soft-ARCHIVED pipeline (serialize omits archived, so it classifies
+  `create`) → `restorePipeline` (new; un-archive the row, does NOT re-enable the
+  triggers archive disabled — that's G7/G8 readiness) rather than a duplicate row.
+- **Inverse ref-remap** (the precise inverse of serialize's `remapNode`): a node's
+  `connectionId` / `call.pipelineVersionId` resourceId → concrete DB id via
+  owner-scoped maps seeded from the owner's rows PLUS everything created in THIS
+  apply. `${}` dynamic refs preserved verbatim (`interpolationMode` SSOT); a
+  `null` connection ref stays absent; a non-null LITERAL ref resolving to nothing
+  throws `WorkspaceApplyError` (unmapped → 500, exactly as `WorkspaceSerializeError`
+  is treated — a corrupt COMMIT is an internal-consistency violation, not user
+  input; message names only ids, redaction-safe). New owner-scoped by-resourceId
+  getters (`getPipelineByResourceId` — NOT archive-filtered so restore sees it —
+  `getConnectionByResourceId`).
+- **Topological mint order**: `createPipelineVersion`'s doc validator resolves a
+  callee's nodes FROM THE DB, so a co-created `call_pipeline` callee must be
+  inserted before its caller. Kahn over the in-batch call edges (a ref to an
+  already-materialised version needs no edge — it resolves from the seed);
+  deterministic (file order within each ready set); a cycle among co-created
+  chains → `WorkspaceApplyError`.
+- **Route** `POST /api/workspace/git/import`: fetch (shared with fetch/preview) →
+  read collab-branch snapshot → `applyWorkspace` → post-commit `scheduler.sync()`
+  (OUTSIDE the tx; drops the wakeups of triggers an archive disabled). Empty repo
+  (no collab branch) → a no-op result. `WorkspaceGitApplyResultSchema`:
+  `{head, refused, applied[], deferred[] (triggers, with disposition), archived[], diagnostics[]}`.
+- **For G5c-2 (#670)**: TRIGGER apply — binding remap (versionMap, `${}`/null,
+  unresolved literal → null + `enabled:false`, "absent→disabled" is G7), the
+  `import.ts` mode-consistency forcing (collab branches are hand-editable), and
+  the documented perpetual-`update` idempotency exception for a force-disabled
+  unbound trigger (until G7's readiness reconcile). Connection/trigger
+  orphan-delete (absent from branch) semantics still owed.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

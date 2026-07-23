@@ -886,4 +886,22 @@ describe('pipeline-versions repo — L12 emitMessages toggle-off heal', () => {
       { name: 'stopReason', type: 'string' },
     ]);
   });
+
+  // #3 G5c — the workspace-git reconcile apply preserves the file's version
+  // resourceId so a re-pull recognises the same immutable version.
+  it('preserves a supplied version resourceId (else mints fresh)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const preserved = createPipelineVersion(db, buildVersionInput(pipeline.id), {
+      resourceId: 'res_v_preserved',
+    });
+    expect(preserved.resourceId).toBe('res_v_preserved');
+    // The version number is still server-assigned (per-pipeline sequence), never
+    // taken from the caller — cross-machine numbering stays local.
+    expect(preserved.version).toBe(1);
+    const minted = createPipelineVersion(db, buildVersionInput(pipeline.id));
+    expect(minted.resourceId).toMatch(/^res_/);
+    expect(minted.resourceId).not.toBe('res_v_preserved');
+    expect(minted.version).toBe(2);
+  });
 });

@@ -8,6 +8,7 @@ import {
   MANAGED_DIRS,
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
+  WorkspaceGitApplyResultSchema,
   WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
   WorkspaceGitStatusSchema,
@@ -21,6 +22,7 @@ import {
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
 import {
+  applyWorkspace,
   classifyWorkspace,
   parseWorkspaceFiles,
   serializeWorkspace,
@@ -314,6 +316,53 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     });
 
     return { preview };
+  });
+
+  /**
+   * #3 G5c-1 — APPLY the branch into the DB working copy (the transactional
+   * write-path the preview describes). Fetch first (shared with fetch/preview),
+   * read the collab-branch snapshot, then `applyWorkspace` reconciles it inside
+   * ONE `db.transaction`: connections + pipelines (create/restore/update/rename)
+   * + archive; TRIGGER apply is G5c-2 (#670), so triggers are reported as
+   * `deferred`, not written. A parse diagnostic REFUSES the whole import
+   * (fail-closed). The post-commit `scheduler.sync()` drops the wakeups of any
+   * triggers an archive disabled (the composite reconciler; same contract the
+   * pipeline archive route uses) — run OUTSIDE the queue's tx, as the alarm clock
+   * owns its own db handle.
+   */
+  fastify.post('/api/workspace/git/import', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const result = await queue.run(ownerId, async () => {
+      const row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+      const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+      const head = updated.observedCollabHead;
+      if (head === null) {
+        // No collaboration branch yet (empty repo) — nothing to import.
+        return WorkspaceGitApplyResultSchema.parse({
+          head: null,
+          refused: false,
+          applied: [],
+          deferred: [],
+          archived: [],
+          diagnostics: [],
+        });
+      }
+
+      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+      const files = await readWorkspaceFilesAtRef(provider, checkout, head, MANAGED_DIRS);
+      const incoming = parseWorkspaceFiles(files);
+      return WorkspaceGitApplyResultSchema.parse(applyWorkspace(db, ownerId, incoming, head));
+    });
+
+    // Reconcile the scheduler AFTER the tx commits: an archive disabled its
+    // dependent triggers, whose pending wakeups must now be dropped. Idempotent,
+    // so calling it on a no-op import is harmless.
+    if (!result.refused) fastify.scheduler.sync();
+
+    return { import: result };
   });
 
   fastify.delete('/api/workspace/git', async (request, reply) => {

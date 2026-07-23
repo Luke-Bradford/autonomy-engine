@@ -306,3 +306,79 @@ export const WorkspaceGitImportPreviewSchema = z.object({
   diagnostics: z.array(WorkspaceParseDiagnosticSchema),
 });
 export type WorkspaceGitImportPreview = z.infer<typeof WorkspaceGitImportPreviewSchema>;
+
+/**
+ * #3 G5c — what the transactional apply DID to one branch resource:
+ * - `created`: no DB resource had this `resourceId` → a fresh row (+ version) was
+ *   inserted, PRESERVING the file's `resourceId`.
+ * - `restored`: the `resourceId` matched a soft-archived pipeline whose file
+ *   reappeared → the existing row was un-archived (not duplicated; spec note 1).
+ * - `updated`: the version doc and/or a row field (`concurrency`) changed → a new
+ *   immutable version was minted and/or the row patched.
+ * - `renamed`: only the display name changed → the row's `name` was patched, no
+ *   version minted.
+ * - `unchanged`: a matching resource was identical → no write.
+ */
+export const WorkspaceGitAppliedActionSchema = z.enum([
+  'created',
+  'restored',
+  'updated',
+  'renamed',
+  'unchanged',
+]);
+export type WorkspaceGitAppliedAction = z.infer<typeof WorkspaceGitAppliedActionSchema>;
+
+/** #3 G5c — one resource the apply wrote (or confirmed unchanged), with the
+ * concrete `action` taken. `resourceId` is the resource's stable identity after
+ * apply (never null — a pre-G1 file's create mints one). */
+export const WorkspaceGitAppliedResourceSchema = z.object({
+  path: z.string().min(1),
+  kind: ExportKindSchema,
+  resourceId: z.string().min(1),
+  action: WorkspaceGitAppliedActionSchema,
+});
+export type WorkspaceGitAppliedResource = z.infer<typeof WorkspaceGitAppliedResourceSchema>;
+
+/**
+ * #3 G5c — a branch resource the apply recognised but did NOT write this slice.
+ * G5c-1 applies connections + pipelines (+ archive); TRIGGER apply is G5c-2
+ * (#670), so an incoming trigger is reported here with its classifier
+ * `disposition` (honest round-trip: the preview shows it, the apply names it as
+ * not-yet-applied) rather than silently ignored. `resourceId` may be `null` for
+ * a pre-G1 file.
+ */
+export const WorkspaceGitDeferredResourceSchema = z.object({
+  path: z.string().min(1),
+  kind: ExportKindSchema,
+  resourceId: z.string().min(1).nullable(),
+  disposition: WorkspaceGitDispositionSchema,
+});
+export type WorkspaceGitDeferredResource = z.infer<typeof WorkspaceGitDeferredResourceSchema>;
+
+/** #3 G5c — a pipeline the apply ARCHIVED (its file was absent from the branch),
+ * with the dependent triggers that archive flipped enabled→disabled. */
+export const WorkspaceGitArchivedResultSchema = z.object({
+  resourceId: z.string().min(1),
+  name: z.string(),
+  disabledTriggerIds: z.array(z.string().min(1)),
+});
+export type WorkspaceGitArchivedResult = z.infer<typeof WorkspaceGitArchivedResultSchema>;
+
+/**
+ * #3 G5c — the `POST /api/workspace/git/import` result. The apply is ATOMIC: on
+ * any parse diagnostic the whole import is REFUSED (`refused: true`, everything
+ * empty) rather than partially applying a known-corrupt branch — fail-closed,
+ * the merge-gate "a `gh` failure is never CI-green" posture. When not refused,
+ * `diagnostics` is empty and `applied`/`deferred`/`archived` describe every
+ * write. `head` is the collab-branch commit the snapshot was taken at (`null`
+ * for an empty repo, where nothing is applied).
+ */
+export const WorkspaceGitApplyResultSchema = z.object({
+  head: z.string().min(1).nullable(),
+  refused: z.boolean(),
+  applied: z.array(WorkspaceGitAppliedResourceSchema),
+  deferred: z.array(WorkspaceGitDeferredResourceSchema),
+  archived: z.array(WorkspaceGitArchivedResultSchema),
+  diagnostics: z.array(WorkspaceParseDiagnosticSchema),
+});
+export type WorkspaceGitApplyResult = z.infer<typeof WorkspaceGitApplyResultSchema>;
