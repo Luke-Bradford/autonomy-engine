@@ -51,16 +51,26 @@ import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
  * CONCURRENCY: one shared `p-limit(concurrency)` caps ADAPTER runs across all
  * concurrently-driven runs (P4's scheduler). It wraps only the side effect —
  * `node.dispatched` is not gated (it is cheap + must be durable first). Within a
- * single run the driver's `pump` is sequential; the cap bites across runs.
+ * single run, adapter side effects of DIFFERENT nodes may overlap wall-clock
+ * (#4 A4b slice 1: the pump multiplexes its executor streams, bounded by its
+ * own per-run cap); what stays strictly serial is the run's FOLD/APPEND path.
  *
- * That "within a single run the `pump` is sequential" is a real invariant this
- * module relies on — and it is now ENFORCED, by `run/drives.ts`'s per-run lock,
+ * The real invariant this module relies on is "one DRIVE per run — one
+ * in-memory state, one appender" — ENFORCED by `run/drives.ts`'s per-run lock,
  * rather than merely true. It used to hold only because the LAUNCHER was the one
  * thing that could pump a run; when F2c's retry alarm became a second entry
  * point, nothing serialized them, and the measured result was a shared successor
  * dispatched twice under one `attemptId` (a real adapter call billed twice) and
  * then a permanent hang. If you add a THIRD way to start a drive, it goes through
- * `driveRun` — this sentence is not a description, it is a requirement.
+ * `driveRun` — this sentence is not a description, it is a requirement. (A4b's
+ * multiplexing lives INSIDE the single pump and per-stream events still fold in
+ * stream order, so it changes neither property.)
+ *
+ * Known best-effort degradation under overlap (L14c): parallel siblings sharing
+ * a spent `agent_cli` connection can all pass the quota-window admission gate
+ * before the first `rate_limit` failure records the window — concurrent doomed
+ * subprocesses that each fail and re-record it. Only the optimisation is lost;
+ * correctness (failure → window → later admissions skip) is unchanged.
  */
 export interface ExecutorDeps {
   db: Db;

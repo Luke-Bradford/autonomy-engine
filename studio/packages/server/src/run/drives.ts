@@ -4,8 +4,10 @@ import pLimit, { type LimitFunction } from 'p-limit';
  * #1 F2c — the per-run DRIVE registry: the primitive that makes "exactly one
  * drive per run" structural rather than accidental.
  *
- * `executor.ts` states the invariant this enforces: *"within a single run the
- * driver's `pump` is sequential"*. Until F2c that was true only because the
+ * `executor.ts` states the invariant this enforces: *one DRIVE per run — one
+ * in-memory state, one appender* (the pump may overlap adapter side effects
+ * across nodes since #4 A4b slice 1, but there is only ever one pump folding).
+ * Until F2c that was true only because the
  * LAUNCHER was the sole thing that could pump a run. The retry alarm is a SECOND
  * entry point, and nothing serialized the two: each `pump` carries its own
  * in-memory `RunState` (`driver.ts` — `let state = initialState`) and never
