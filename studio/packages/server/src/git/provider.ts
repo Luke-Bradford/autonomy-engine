@@ -68,10 +68,12 @@ export class GitUnavailableError extends Error {
 /**
  * A git operation ran and failed (non-zero exit, or killed at the timeout).
  * `message` is client-safe BY CONSTRUCTION: stderr passes through
- * `redactSecrets` with the provider's `secretsToRedact` before it lands here,
- * and G2 stores no git credentials at all (embedded-credential URLs are
- * refused at the Zod boundary), so today's stderr can only quote what the
- * caller already supplied.
+ * `redactSecrets` with the provider's `secretsToRedact`, AND the op's
+ * checkout dir is replaced with `<checkout>` (git stderr readily quotes the
+ * destination path — a server-internal absolute path that must not reach a
+ * 502 body), before it lands here. G2 stores no git credentials at all
+ * (embedded-credential URLs are refused at the Zod boundary), so what
+ * remains can only quote what the caller already supplied.
  */
 export class GitOperationError extends Error {
   constructor(op: string, detail: string) {
@@ -128,6 +130,7 @@ export class CliGitProvider {
       'clone',
       ['clone', '--origin', 'origin', '--', src, dir],
       DEFAULT_CLONE_TIMEOUT_MS,
+      dir,
     );
   }
 
@@ -138,7 +141,12 @@ export class CliGitProvider {
    * no longer exists (verified empirically in the plan review).
    */
   async fetch(dir: string): Promise<void> {
-    await this.execOk('fetch', ['-C', dir, 'fetch', '--prune', 'origin'], DEFAULT_FETCH_TIMEOUT_MS);
+    await this.execOk(
+      'fetch',
+      ['-C', dir, 'fetch', '--prune', 'origin'],
+      DEFAULT_FETCH_TIMEOUT_MS,
+      dir,
+    );
   }
 
   /**
@@ -155,24 +163,39 @@ export class CliGitProvider {
       'rev-parse',
       ['-C', dir, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`],
       this.localTimeoutMs,
+      dir,
     );
     if (result.code === 0) return result.stdout.trim();
     if (result.code === 1 && result.stderr.trim() === '') return null;
     throw new GitOperationError(
       'rev-parse',
-      this.redact(result.stderr.trim() || `exit ${result.code}`),
+      this.redact(result.stderr.trim() || `exit ${result.code}`, dir),
     );
   }
 
-  private redact(text: string): string {
-    return redactSecrets(text, this.secretsToRedact);
+  /**
+   * Secrets out (the `secretsToRedact` seam), then the op's checkout dir →
+   * `<checkout>` — subpaths under it become `<checkout>/…`, so no error text
+   * ever quotes the server-internal absolute checkout path.
+   */
+  private redact(text: string, dir?: string): string {
+    const scrubbed = redactSecrets(text, this.secretsToRedact);
+    return dir === undefined ? scrubbed : scrubbed.split(dir).join('<checkout>');
   }
 
   /** Like `exec`, but a non-zero exit is already an error. */
-  private async execOk(op: string, args: string[], timeoutMs: number): Promise<ExecResult> {
-    const result = await this.exec(op, args, timeoutMs);
+  private async execOk(
+    op: string,
+    args: string[],
+    timeoutMs: number,
+    dir?: string,
+  ): Promise<ExecResult> {
+    const result = await this.exec(op, args, timeoutMs, dir);
     if (result.code !== 0) {
-      throw new GitOperationError(op, this.redact(result.stderr.trim() || `exit ${result.code}`));
+      throw new GitOperationError(
+        op,
+        this.redact(result.stderr.trim() || `exit ${result.code}`, dir),
+      );
     }
     return result;
   }
@@ -182,7 +205,7 @@ export class CliGitProvider {
    * rejects only for "git itself couldn't run": spawn ENOENT →
    * `GitUnavailableError`, killed at the timeout → `GitOperationError`.
    */
-  private exec(op: string, args: string[], timeoutMs: number): Promise<ExecResult> {
+  private exec(op: string, args: string[], timeoutMs: number, dir?: string): Promise<ExecResult> {
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         this.gitBinary,
@@ -212,8 +235,9 @@ export class CliGitProvider {
             return;
           }
           // Anything else (maxBuffer overflow, unexpected signal): surface as
-          // an op failure with the (redacted) library message.
-          rejectPromise(new GitOperationError(op, this.redact(errno.message)));
+          // an op failure with the (redacted) library message — which can
+          // embed the full argv, so the dir redaction applies here too.
+          rejectPromise(new GitOperationError(op, this.redact(errno.message, dir)));
         },
       );
     });

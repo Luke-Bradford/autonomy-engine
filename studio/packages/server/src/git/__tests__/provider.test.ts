@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,6 +120,23 @@ describe('CliGitProvider', () => {
     await expect(
       provider.clone(join(dir, 'no-such-remote'), join(dir, 'checkout')),
     ).rejects.toBeInstanceOf(GitOperationError);
+  });
+
+  it('an op failure naming the checkout dir has the path REDACTED from the error message', async () => {
+    // git stderr readily quotes the destination path (`fatal: destination
+    // path '<dir>' already exists…`) — a server-internal absolute path that
+    // must not reach a 502 body. The provider redacts the op's dir the same
+    // way it redacts secrets, keeping GitOperationError client-safe BY
+    // CONSTRUCTION.
+    const { dir, remote } = seededRemote();
+    const dest = join(dir, 'dest');
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, 'occupied.txt'), 'x');
+    const provider = new CliGitProvider();
+    const err = await provider.clone(remote, dest).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitOperationError);
+    expect((err as Error).message).not.toContain(dest);
+    expect((err as Error).message).toContain('<checkout>');
   });
 
   it('a missing git binary is GitUnavailableError (distinct from an op failure)', async () => {

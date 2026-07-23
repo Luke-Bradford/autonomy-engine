@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -41,6 +41,20 @@ describe('removeCheckoutDir', () => {
 
   it('is tolerant of a missing root entirely', async () => {
     await expect(removeCheckoutDir(join(tmp(), 'never-created'), 'local')).resolves.toBeUndefined();
+  });
+
+  it('refuses to TRAVERSE a symlinked ownerId segment (parent is canonicalized before rm)', async () => {
+    // A planted link at `<root>/<ownerId>` pointing outside the root: the
+    // string-level prefix check passes (the un-canonicalized path looks
+    // contained) but `rm` would follow the link during traversal and delete
+    // `<elsewhere>/repo`. The parent realpath must catch it.
+    const root = tmp();
+    const outside = tmp();
+    mkdirSync(join(outside, 'repo'), { recursive: true });
+    writeFileSync(join(outside, 'repo', 'victim.txt'), 'x');
+    symlinkSync(outside, join(root, 'local'));
+    await expect(removeCheckoutDir(root, 'local')).rejects.toThrow(/escapes/);
+    expect(existsSync(join(outside, 'repo', 'victim.txt'))).toBe(true);
   });
 
   it('refuses an ownerId that would escape the root (belt-and-braces — ownerId is principal-derived)', async () => {

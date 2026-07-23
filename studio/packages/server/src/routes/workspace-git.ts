@@ -162,8 +162,17 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // Row first, then dir: if the rm fails midway the leftover dir is an
       // orphan the next connect clears (the reverse order would leave a LIVE
       // row pointing at a missing checkout — also healed, by fetch's
-      // re-clone, but an orphan dir is the cheaper debris).
-      await removeCheckoutDir(workspaceGitRoot, ownerId);
+      // re-clone, but an orphan dir is the cheaper debris). A cleanup failure
+      // is therefore logged, NOT surfaced: the connection IS gone at this
+      // point, and a 500 here would be a lie whose retry then 404s.
+      try {
+        await removeCheckoutDir(workspaceGitRoot, ownerId);
+      } catch (err) {
+        request.log.warn(
+          { err },
+          'workspace git checkout cleanup failed after disconnect; orphan dir left for the next connect to clear',
+        );
+      }
     });
 
     reply.status(204).send();

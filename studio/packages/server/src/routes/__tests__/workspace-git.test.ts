@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -168,6 +168,27 @@ describe('workspace-git routes', () => {
     // And a fresh connect works again after disconnect.
     const reconnect = await connect(remote);
     expect(reconnect.statusCode).toBe(201);
+  });
+
+  it('disconnect is 204 even when checkout cleanup fails (row gone; debris self-heals)', async () => {
+    // Force the cleanup to fail: replace the owner dir with a symlink
+    // pointing OUTSIDE the root, so `removeCheckoutDir` refuses (containment).
+    // The connection row is already deleted at that point — the route must
+    // report the truth (204, connection gone) rather than a 500 whose retry
+    // would then 404; the leftover dir is exactly the orphan debris the next
+    // connect clears.
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const ownerDir = join(testApp.workspaceGitRoot, 'local');
+    const outside = join(testApp.tmpDir, 'victim');
+    mkdirSync(join(outside, 'repo'), { recursive: true });
+    rmSync(ownerDir, { recursive: true, force: true });
+    symlinkSync(outside, ownerDir);
+    const res = await app.inject({ method: 'DELETE', url: '/api/workspace/git' });
+    expect(res.statusCode).toBe(204);
+    expect(existsSync(join(outside, 'repo'))).toBe(true);
+    const got = await app.inject({ method: 'GET', url: '/api/workspace/git' });
+    expect(got.json()).toEqual({ git: null });
   });
 
   it('disconnect with no connection is a 404', async () => {
