@@ -141,8 +141,8 @@ reconcile are core. Corrections:
 | **G1** | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy — **SHIPPED 2026-07-23** (see the built-block below the table) |
 | G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking — **SHIPPED 2026-07-23** (built-block below) |
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
-| G4 | Workspace-git import PARSER/upgrader (per-file, no writes) |
-| G5 | Transactional reconcile: create/update/**rename**/**delete-archive** classification |
+| G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
+| G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); the transactional APPLY write-path is **G5c** (next) |
 | G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
@@ -333,6 +333,80 @@ guard, PR-open, and the persisted working-branch column are later slices (see de
   that don't exist yet); the persisted `working_branch` column (→ G9). `git status --porcelain`
   + `merge-base --is-ancestor` — G2 deferred `merge-base` to "G3 with its consumer"; its consumer
   is the descendant guard, so it lands with that slice, not G3a.
+
+### G5b built-block (2026-07-23) — reconcile CLASSIFIER + canonical content-form + #666
+
+First G5 slice. The transactional reconcile is large/risky for one unattended
+fire, so G5 is split: **G5b = the read-only CLASSIFIER** (what a pull WOULD do,
+surfaced in the existing import-preview) + the content-comparison primitive both
+it and the drift gate need + the #666 data-correctness fix; **G5c = the
+transactional APPLY write-path** (create/update/rename version-mint + upsert +
+archive, ref-remap `resourceId`→DB-id, the `POST …/import` route). This slice
+writes NOTHING to the DB.
+
+- **#666 (folded, data-correctness): `serializeWorkspace` OMITS archived
+  pipelines AND their dependent triggers.** Git represents an archived pipeline
+  as file ABSENCE (the delete-classification below), so leaving it in the
+  serialized set would RESURRECT it on the next Commit → import round-trip. The
+  version→`resourceId` ref map is still built over ALL pipelines (incl.
+  archived), so a LIVE pipeline's `call_pipeline` node or trigger that references
+  an archived version still remaps faithfully to that version's real
+  `resourceId` (the dangle-on-import is G7's "absent → disabled" charter, not a
+  serialize-time drop). Slug-collision suffixing is computed over the EMITTED
+  (non-archived) sets only, so an archived resource can never perturb a kept
+  resource's path. A trigger is omitted iff its LITERAL `pipelineVersionId`
+  resolves to an archived pipeline's version (`null`/`${}` bindings are kept; a
+  literal ref to a non-existent version still THROWS `WorkspaceSerializeError` —
+  #473, never a silent drop).
+- **Canonical CONTENT FORM (`shared/portability/content-form.ts`)** — the
+  primitive that answers "did this resource's authoring content change, or only
+  its identity/position/local-state." A STRING over `canonicalStringify` of the
+  export `data` with the volatile/identity/local-runtime fields removed;
+  equality IS the comparison ("parsed-object compare"; SHA-256 over the form is
+  an explicit deferred optimization). The exclusion set is **structure-aware, per
+  resource LEVEL — never a blanket key-strip** (load-bearing): resource-envelope
+  `id`/`resourceId`/`ownerId`/`createdAt`/`updatedAt` are machine-specific →
+  excluded; a version's `id`/`resourceId`/`pipelineId`/`version`/`catalogVersion`
+  → excluded; `node.position` (canvas geometry) → excluded; connection
+  `requiresSecret` (local readiness, G8's charter) → excluded; the resource
+  `name` → excluded from CONTENT (tracked as the separate `nameChanged` signal).
+  But `node.id`/`edge.id`/`container.id`, `param.name`/`output.name`, and a
+  binding (`trigger.pipelineVersionId`/`node.call.pipelineVersionId`/
+  `node.connectionId`, all already `resourceId`s in an export) are KEPT — they
+  are graph content, and a blanket "strip every id" would collapse two different
+  graphs to equal and mint no version for a real edit (the inverse of the #473
+  fail-open shape). Reused later by the G3 drift gate.
+- **Classifier (`server/portability/workspace-reconcile.ts`) — PURE over two
+  `ParsedWorkspace`s.** The DB side is `parseWorkspaceFiles(serializeWorkspace(
+  db, ownerId))` — the DB run through the IDENTICAL serialize+parse path the
+  incoming files took, so both get the same volatile treatment for free and
+  #666's archived-omission flows into the baseline automatically. Matches by
+  stable `resourceId` (path is cosmetic, G1). Per resource: `create` (id absent
+  from DB, or a pre-G1 `null`-id file), `unchanged`, `update` (content differs),
+  `rename` (content identical, only the name differs) — carrying INDEPENDENT
+  `nameChanged`/`contentChanged` flags so a rename-that-also-edits loses neither
+  signal (the label folds to `update`; G5c reads both). Plus pipeline ARCHIVE
+  proposals: a DB pipeline whose `resourceId` is absent from the branch.
+- **Scope boundary (deferred to G5c):** only PIPELINES surface an archive
+  proposal (the only kind with an archive state, G5a). A connection/trigger
+  present in the DB but ABSENT from the branch is DELIBERATELY not surfaced —
+  its delete/orphan semantics are undecided in the spec ("never DB-delete on
+  import") and belong with the apply. Explicitly a preview non-goal, not an
+  omission. `conflict` (same-path-diff-id) is a non-goal by construction: our
+  identity is `resourceId` and a git tree path is unique, so a reused path with a
+  new id reads as create + rename, never a conflict.
+- **Wiring (no inert surface):** the classifier feeds the existing read-only
+  `POST /api/workspace/git/import-preview` (each resource gains `disposition` +
+  the two change flags; the result gains an `archive` list). The route now READS
+  DB rows (still writes nothing).
+- **For G5c (the apply write-path):** (1) a pipeline ARCHIVED in the DB but
+  whose file is still PRESENT on the branch (archive not yet committed)
+  classifies `create` here, because `serializeWorkspace` omits it from the DB
+  baseline — the apply MUST handle that as restore-vs-create (its `resourceId`
+  already exists, archived), not blindly mint a second pipeline. (2) The trigger
+  `enabled` content-vs-readiness decision (see `content-form.ts`) is a G7/G8
+  fork, tracked separately. (3) Connection/trigger orphan-delete semantics
+  (absent from branch) are still owed.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

@@ -197,20 +197,53 @@ function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEnvelope 
  * the returned files. A version-less pipeline (a shell with no committable
  * version yet) is skipped — there is nothing runnable to serialize; its file
  * appears once it has a version.
+ *
+ * #666 / #3 G5b — an ARCHIVED pipeline (soft-deleted, G5a) is OMITTED, and so
+ * is every trigger bound to one of its versions. Git represents archive as file
+ * ABSENCE (the G5b reconcile's delete-classification), so leaving an archived
+ * pipeline (or its now-disabled dependent trigger) in the serialized set would
+ * RESURRECT it on the next Commit → import round-trip. The version ref map is
+ * still built over ALL pipelines (incl. archived), so a LIVE pipeline's
+ * `call_pipeline` node or a live trigger that references an archived version
+ * still remaps faithfully to that version's (real) `resourceId` — the resulting
+ * dangling reference on import is G7's "absent → disabled" charter, not a
+ * serialize-time drop.
  */
 export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
-  const pipelines = listPipelines(db, ownerId);
+  const allPipelines = listPipelines(db, ownerId);
   const connections = listConnections(db, ownerId);
   const triggers = listTriggers(db, { ownerId });
-  const maps = buildOwnerRefMaps(db, pipelines, connections);
+  // Ref map over ALL pipelines (incl. archived) so a live ref to an archived
+  // version still resolves (faithful; dangle-on-import is G7's concern).
+  const maps = buildOwnerRefMaps(db, allPipelines, connections);
+
+  // Every version DB id that belongs to an archived pipeline — used to omit the
+  // archived pipelines themselves and their dependent triggers.
+  const archivedVersionIds = new Set<string>();
+  for (const pipeline of allPipelines) {
+    if (!pipeline.archived) continue;
+    for (const version of listPipelineVersions(db, pipeline.id)) {
+      archivedVersionIds.add(version.id);
+    }
+  }
+
+  const livePipelines = allPipelines.filter((pipeline) => !pipeline.archived);
+  // A trigger concretely bound to an archived pipeline's version is omitted
+  // alongside it (a `null`/`${}` dynamic binding never matches a DB version id,
+  // so it is kept). Slug-collision suffixing is computed over the EMITTED sets
+  // only, so an archived resource can never perturb a kept resource's path.
+  const liveTriggers = triggers.filter(
+    (trigger) =>
+      trigger.pipelineVersionId === null || !archivedVersionIds.has(trigger.pipelineVersionId),
+  );
 
   const files: WorkspaceFile[] = [];
 
   const pipelinePaths = resourceFilePaths(
     'pipeline',
-    pipelines.map((p) => ({ resourceId: p.resourceId, name: p.name })),
+    livePipelines.map((p) => ({ resourceId: p.resourceId, name: p.name })),
   );
-  for (const pipeline of pipelines) {
+  for (const pipeline of livePipelines) {
     const latest = getLatestPipelineVersion(db, pipeline.id);
     if (!latest) continue;
     files.push({
@@ -232,9 +265,9 @@ export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
 
   const triggerPaths = resourceFilePaths(
     'trigger',
-    triggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
+    liveTriggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
   );
-  for (const trigger of triggers) {
+  for (const trigger of liveTriggers) {
     files.push({
       path: triggerPaths.get(trigger.resourceId)!,
       contents: canonicalStringify(serializeTrigger(trigger, maps)),

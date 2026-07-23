@@ -11,7 +11,6 @@ import {
   WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
   WorkspaceGitStatusSchema,
-  type WorkspaceGitPreviewResource,
   type WorkspaceGit,
 } from '@autonomy-studio/shared';
 import {
@@ -21,7 +20,11 @@ import {
   updateWorkspaceGitSync,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
-import { parseWorkspaceFiles, serializeWorkspace } from '../portability/index.js';
+import {
+  classifyWorkspace,
+  parseWorkspaceFiles,
+  serializeWorkspace,
+} from '../portability/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
 import { readWorkspaceFilesAtRef } from '../git/workspace-read.js';
 import {
@@ -276,9 +279,9 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
 
       // Fetch first (shared with the fetch/commit routes) so the preview reflects
       // the current collaboration branch; the returned row carries the RESOLVED
-      // collab head we read the snapshot at. This is READ-ONLY over the DB
-      // workspace — no pipeline/connection/trigger row is read or written; the
-      // parse never compares against the DB (that diff/classify is G5).
+      // collab head we read the snapshot at. The classify READS DB rows (via
+      // `serializeWorkspace`) but WRITES nothing — the transactional apply of the
+      // dispositions is G5c.
       const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
       const head = updated.observedCollabHead;
       if (head === null) {
@@ -287,39 +290,26 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         return WorkspaceGitImportPreviewSchema.parse({
           head: null,
           resources: [],
+          archive: [],
           diagnostics: [],
         });
       }
 
       const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
       const files = await readWorkspaceFilesAtRef(provider, checkout, head, MANAGED_DIRS);
-      const parsed = parseWorkspaceFiles(files);
+      const incoming = parseWorkspaceFiles(files);
 
-      const resources: WorkspaceGitPreviewResource[] = [
-        ...parsed.pipelines.map((p) => ({
-          path: p.path,
-          kind: 'pipeline' as const,
-          resourceId: p.resourceId,
-          name: p.data.pipeline.name,
-        })),
-        ...parsed.connections.map((c) => ({
-          path: c.path,
-          kind: 'connection' as const,
-          resourceId: c.resourceId,
-          name: c.data.name,
-        })),
-        ...parsed.triggers.map((t) => ({
-          path: t.path,
-          kind: 'trigger' as const,
-          resourceId: t.resourceId,
-          name: t.data.name,
-        })),
-      ];
+      // Diff against the DB working copy run through the IDENTICAL serialize+parse
+      // path, so both sides get the same volatile treatment and #666's
+      // archived-omission flows into the baseline for free.
+      const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
+      const plan = classifyWorkspace(dbSnapshot, incoming);
 
       return WorkspaceGitImportPreviewSchema.parse({
         head,
-        resources,
-        diagnostics: parsed.diagnostics,
+        resources: plan.resources,
+        archive: plan.archive,
+        diagnostics: incoming.diagnostics,
       });
     });
 
