@@ -353,4 +353,37 @@ describe('driver — intra-run concurrent dispatch (#4 A4b slice 1)', () => {
     const d = deps(db);
     await expect(startRun({ ...d, executor: throwing }, run)).rejects.toThrow('adapter exploded');
   });
+
+  it('two streams that throw concurrently reject with an AggregateError carrying both', async () => {
+    const { db } = freshDb();
+    const { nodes, edges } = fanOut(['a', 'b']);
+    const run = seedRun(db, seedVersion(db, nodes, edges));
+
+    // BOTH parallel streams throw (each mid-flight, like the fixture above; b
+    // delayed so the failures overlap rather than serialize): the drive must
+    // reject with an AggregateError carrying BOTH diagnostics — rethrowing only
+    // `streamErrors[0]` would silently drop the second failure's detail.
+    const base = makeStubExecutor({ nodes: { b: { delayMs: 30 } } });
+    const throwing: DriverDeps['executor'] = {
+      async *perform(command, runId) {
+        if (command.type === 'dispatchNode' && command.nodeId !== 'r') {
+          for await (const event of base.perform(command, runId)) {
+            if (event.type === 'node.succeeded') throw new Error(`${command.nodeId} exploded`);
+            yield event;
+          }
+          return;
+        }
+        yield* base.perform(command, runId);
+      },
+    };
+
+    const d = deps(db);
+    const err = await startRun({ ...d, executor: throwing }, run).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AggregateError);
+    const messages = (err as AggregateError).errors.map((e) => (e as Error).message).sort();
+    expect(messages).toEqual(['a exploded', 'b exploded']);
+  });
 });

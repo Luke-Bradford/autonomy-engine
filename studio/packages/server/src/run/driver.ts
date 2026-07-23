@@ -1193,8 +1193,12 @@ export async function pump(
   }
   // A stream that THREW (an executor bug — expected errors map to terminal
   // events, see the `Executor` doc) fails the drive after teardown, exactly as
-  // the serial pump's in-line `for await` used to propagate it.
-  if (streamErrors.length > 0) throw streamErrors[0];
+  // the serial pump's in-line `for await` used to propagate it. Concurrent
+  // streams can fail TOGETHER — aggregate so no diagnostic is silently dropped.
+  if (streamErrors.length === 1) throw streamErrors[0];
+  if (streamErrors.length > 1) {
+    throw new AggregateError(streamErrors, `${streamErrors.length} dispatch streams threw`);
+  }
 
   return state;
 }
