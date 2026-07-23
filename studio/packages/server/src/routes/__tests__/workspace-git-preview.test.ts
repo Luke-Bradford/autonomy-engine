@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -112,7 +112,7 @@ describe('workspace-git import-preview route', () => {
 
     // A human commits garbage under a managed dir straight onto the collab branch.
     fixtureGit(work, ['rm', '-q', 'README.md']);
-    execFileSync('mkdir', ['-p', join(work, 'pipelines')]);
+    mkdirSync(join(work, 'pipelines'), { recursive: true });
     writeFileSync(join(work, 'pipelines/broken.json'), '{ not valid json');
     fixtureGit(work, ['add', '.']);
     fixtureGit(work, ['commit', '-m', 'garbage']);

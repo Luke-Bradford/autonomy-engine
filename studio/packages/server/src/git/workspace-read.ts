@@ -21,9 +21,9 @@ export async function readWorkspaceFilesAtRef(
   const paths = (await provider.lsTreeManaged(checkout, ref, dirs)).filter((path) =>
     path.endsWith('.json'),
   );
-  const files: WorkspaceFile[] = [];
-  for (const path of paths) {
-    files.push({ path, contents: await provider.showBlob(checkout, ref, path) });
-  }
-  return files;
+  // Object-store reads are read-only and concurrency-safe; `Promise.all` over
+  // `map` preserves `paths` order so the returned `WorkspaceFile[]` stays stable.
+  return Promise.all(
+    paths.map(async (path) => ({ path, contents: await provider.showBlob(checkout, ref, path) })),
+  );
 }
