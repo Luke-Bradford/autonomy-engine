@@ -78,7 +78,7 @@ export interface WorkspaceFile {
   contents: string;
 }
 
-interface OwnerRefMaps {
+export interface OwnerRefMaps {
   /** Every owned pipeline VERSION's DB id → its stable `resourceId`. */
   versionResourceId: Map<string, string>;
   /** Every owned connection's DB id → its stable `resourceId`. */
@@ -175,7 +175,16 @@ function serializeConnection(connection: Connection): ExportEnvelope {
   });
 }
 
-function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEnvelope {
+/**
+ * #3 G5c-2 — EXPORTED (was module-private) so the reconcile APPLY can compute a
+ * stored trigger's DB-side content form as `triggerContentForm(serializeTrigger(
+ * existing, maps).data)` — the EXACT inverse it is reversing, webhook-secret
+ * strip and binding remap included, guaranteed in lockstep with what Commit
+ * emits (no parallel reimplementation to drift). For a VALID stored trigger the
+ * binding is always in `maps.versionResourceId` (seeded from all versions, incl.
+ * archived), so `remapRef` never throws on that path.
+ */
+export function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEnvelope {
   const webhook = trigger.webhook ? WebhookPublicConfigSchema.parse(trigger.webhook) : null;
   const pipelineVersionId = remapRef(
     trigger.pipelineVersionId,

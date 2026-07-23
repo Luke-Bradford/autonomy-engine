@@ -10,12 +10,15 @@ import {
   getLatestPipelineVersion,
   getPipeline,
   getPipelineByResourceId,
+  getTrigger,
+  getTriggerByResourceId,
   listConnections,
   listPipelineVersions,
   listPipelines,
   listTriggers,
   updateConnection,
   updatePipeline,
+  updateTrigger,
 } from '../../repo/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { applyWorkspace, WorkspaceApplyError } from '../workspace-apply.js';
@@ -441,7 +444,37 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(listPipelines(db, 'local')).toHaveLength(0);
   });
 
-  it('DEFERS triggers (G5c-2 #670): reported, never applied', () => {
+  it('APPLIES a trigger from a branch (#3 G5c-2), preserving resourceId + remapping the binding', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+
+    // Triggers are no longer deferred — they land in `applied`, deferred is empty.
+    expect(result.deferred).toHaveLength(0);
+    const appliedTrig = result.applied.find((a) => a.kind === 'trigger');
+    expect(appliedTrig?.action).toBe('created');
+    expect(appliedTrig?.versionMinted).toBe(false); // triggers have no versions
+
+    const tgtTrig = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId);
+    expect(tgtTrig).not.toBeNull();
+    // resourceId preserved (a re-pull recognises the same trigger).
+    expect(tgtTrig!.resourceId).toBe(srcTrig.resourceId);
+    // The binding is remapped to the TARGET version's DB id — not the source id,
+    // not the resourceId.
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const tgtVersion = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(tgtTrig!.pipelineVersionId).toBe(tgtVersion.id);
+    expect(tgtTrig!.pipelineVersionId).not.toBe(version.id);
+    // A resolved binding preserves the authored `enabled`.
+    expect(tgtTrig!.enabled).toBe(true);
+  });
+
+  it('is idempotent for triggers: re-applying writes nothing new', () => {
     const src = freshDb().db;
     const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
     const version = createPipelineVersion(src, baseVersion(pipe.id));
@@ -449,15 +482,287 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(1);
 
-    const deferredTrigger = result.deferred.find((d) => d.kind === 'trigger');
-    expect(deferredTrigger).toBeDefined();
-    expect(deferredTrigger!.disposition).toBe('create');
-    // No trigger was actually written.
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
+    expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(1);
+  });
+
+  it('a trigger CONTENT edit → updated; a pure RENAME → renamed', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, triggerOn(version.id));
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const tgtTrig0 = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+
+    // A content edit (schedule) → 'updated', schedule carried over, binding kept.
+    updateTrigger(src, srcTrig.id, { schedule: '0 5 * * *' });
+    const r1 = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    expect(r1.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
+    const afterEdit = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+    expect(afterEdit.schedule).toBe('0 5 * * *');
+    expect(afterEdit.id).toBe(tgtTrig0.id); // same row, never re-created
+
+    // A pure rename → 'renamed', name changed, schedule untouched.
+    updateTrigger(src, srcTrig.id, { name: 'Renamed Trigger' });
+    const r2 = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    expect(r2.applied.find((a) => a.kind === 'trigger')?.action).toBe('renamed');
+    const afterRename = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+    expect(afterRename.name).toBe('Renamed Trigger');
+    expect(afterRename.schedule).toBe('0 5 * * *');
+  });
+
+  it('an UNRESOLVED literal binding reconciles to null + force-disables (G7 belt)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+    // Tamper: the trigger binds a literal version resourceId absent from branch + DB.
+    incoming.triggers[0]!.data.pipelineVersionId = 'res_nonexistent';
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    expect(result.refused).toBe(false);
+    const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    // Unbound (null) — NOT an aborted apply (that is the node-ref hard-abort).
+    expect(tgtTrig.pipelineVersionId).toBeNull();
+    // Belt-and-braces: an unbound trigger is force-disabled.
+    expect(tgtTrig.enabled).toBe(false);
+  });
+
+  it('an authored NULL binding with enabled:true is force-disabled (finding 1)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+    // A branch trigger that is unbound (null) yet authored enabled:true — a
+    // nonsensical inert state the apply must not persist as enabled.
+    incoming.triggers[0]!.data.pipelineVersionId = null;
+    incoming.triggers[0]!.data.enabled = true;
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(tgtTrig.pipelineVersionId).toBeNull();
+    expect(tgtTrig.enabled).toBe(false);
+  });
+
+  it('a hand-crafted ${} trigger binding reconciles to unbound + disabled (FK, never dynamic)', () => {
+    // A trigger's pipelineVersionId is a FOREIGN KEY (unlike a node call ref), so
+    // a `${}` value could never be stored. One arriving on a hand-edited branch
+    // must reconcile to unbound + disabled, NOT FK-crash the insert.
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+    incoming.triggers[0]!.data.pipelineVersionId = '${trigger.version}';
+    incoming.triggers[0]!.data.enabled = true;
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    expect(result.refused).toBe(false); // reconciled, not refused
+    const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(tgtTrig.pipelineVersionId).toBeNull();
+    expect(tgtTrig.enabled).toBe(false);
+  });
+
+  it('binds a trigger to a co-created pipeline version minted in the SAME apply', () => {
+    // The trigger's binding resolves only AFTER the version mint loop runs — the
+    // ordering guarantee (triggers applied after mints).
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db; // pipeline AND trigger are both fresh creates here
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    expect(result.refused).toBe(false);
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const tgtVersion = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(tgtTrig.pipelineVersionId).toBe(tgtVersion.id);
+  });
+
+  it('REFUSES + rolls back when a non-tumbling trigger binds ${trigger.windowStart}', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, {
+      ...triggerOn(version.id),
+      mode: 'schedule',
+      params: { win: '${trigger.windowStart}' }, // window binding on a NON-tumbling trigger
+    });
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    // Atomic: the pipeline the loop created BEFORE the trigger is rolled back.
+    expect(listPipelines(tgt, 'local')).toHaveLength(0);
     expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(0);
-    // But the pipeline WAS applied.
-    expect(getPipelineByResourceId(tgt, 'local', pipe.resourceId)).not.toBeNull();
+  });
+
+  it('round-trips an EVENT-mode trigger (create then unchanged), event subscription intact', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, {
+      ...triggerOn(version.id),
+      mode: 'event',
+      schedule: null,
+      event: { name: 'order.created' },
+    });
+    const tgt = freshDb().db;
+    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    expect(created.applied.find((a) => a.kind === 'trigger')?.action).toBe('created');
+    const tgtTrig = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+    expect(tgtTrig.mode).toBe('event');
+    expect(tgtTrig.event).toEqual({ name: 'order.created' });
+
+    // Re-applying the same branch → unchanged (idempotent for event triggers too).
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
+  });
+
+  it('DOCUMENTED non-idempotency: a webhook trigger created cross-workspace re-classifies update (G8)', () => {
+    // The source's secret serializes to a public `{}`; the target create forces
+    // webhook null (no secret to reconstruct), so the target serializes null.
+    // `{}` ≠ null in the content form → the branch re-classifies `update` on the
+    // NEXT import until the operator provisions the secret (G8 charter). Pinned
+    // so a future `triggerContentForm` webhook-presence exclusion is a conscious
+    // change, not a silent regression.
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, {
+      ownerId: 'local',
+      name: 'Hook',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'webhook',
+      schedule: null,
+      webhook: { secretRef: 'src_only_secret' },
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1'); // cross-workspace CREATE
+    // The target trigger has no secret (never imported).
+    const t = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(t.webhook).toBeNull();
+    // Re-import the SAME branch → not `unchanged` but `updated` (the known churn).
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
+  });
+
+  it('forces event null off event-mode and window null off tumbling-mode (import.ts parity)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    // A schedule trigger carrying a stray `event` subscription AND a stray
+    // `window` geometry — both mode-inconsistent; the apply must null both.
+    createTrigger(src, {
+      ...triggerOn(version.id),
+      mode: 'schedule',
+      event: { name: 'stray' },
+      window: { frequency: 'hour', interval: 1, startTime: '2026-01-01T00:00:00.000Z' },
+    });
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(tgtTrig.event).toBeNull();
+    expect(tgtTrig.window).toBeNull();
+  });
+
+  it('a webhook trigger round-trips UNCHANGED and never drops its local secret', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, baseVersion(pipe.id));
+    const trig = createTrigger(db, {
+      ownerId: 'local',
+      name: 'Hook',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'webhook',
+      schedule: null,
+      webhook: { secretRef: 'secret_stays_local' },
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+
+    // Same-workspace round-trip: the existing row already holds the secret, so
+    // the serialized public `{}` equals both sides → unchanged, secret intact.
+    const result = applyWorkspace(db, 'local', snapshot(db), 'sha1');
+    expect(result.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
+    expect(getTrigger(db, trig.id)!.webhook).toEqual({ secretRef: 'secret_stays_local' });
+  });
+
+  it('UPDATE preserves the existing webhook secret across a content edit that stays webhook-mode', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, {
+      ownerId: 'local',
+      name: 'Hook',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'webhook',
+      schedule: null,
+      webhook: { secretRef: 'src_secret' },
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: true,
+    });
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    // Provision a DIFFERENT local secret on the target (the collaborator's own).
+    const tgtTrig = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+    updateTrigger(tgt, tgtTrig.id, { webhook: { secretRef: 'tgt_local_secret' } });
+
+    // A content edit on the source (rename is not enough — change concurrency).
+    updateTrigger(src, srcTrig.id, { concurrency: { policy: 'skip_if_running' } });
+    const r = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    expect(r.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
+    const after = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
+    // The content edit applied...
+    expect(after.concurrency.policy).toBe('skip_if_running');
+    // ...but the TARGET's local secret is untouched (never overwritten by the branch).
+    expect(after.webhook).toEqual({ secretRef: 'tgt_local_secret' });
+  });
+
+  it('REFUSES an UPDATE whose resolved write violates a write-boundary rule (parallel⇒max)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    const srcTrig = createTrigger(src, triggerOn(version.id));
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+
+    // A hand-edited branch update carrying a write-invalid concurrency (parallel
+    // with no `max`). The lenient `updateTrigger` would persist it silently; the
+    // apply's `NewTriggerSchema` gate must refuse it, symmetric with create.
+    const incoming = snapshot(src);
+    incoming.triggers[0]!.data.name = 'Edited'; // force a content change → update path
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (incoming.triggers[0]!.data.concurrency as any) = { policy: 'parallel' };
+
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha2')).toThrow();
+    // Atomic: the target trigger keeps its original (valid) concurrency.
+    expect(getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!.concurrency.policy).toBe(
+      'skip_if_running',
+    );
   });
 
   it('ABORTS atomically (nothing written) when a node references an absent connection', () => {

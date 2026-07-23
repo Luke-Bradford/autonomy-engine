@@ -7,16 +7,19 @@ import {
   createConnection,
   createPipeline,
   createPipelineVersion,
+  createTrigger,
   getConnectionByResourceId,
+  getLatestPipelineVersion,
   getPipelineByResourceId,
+  getTriggerByResourceId,
 } from '../../repo/index.js';
 import { fixtureGit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
 /**
- * #3 G5c-1 — the `POST /api/workspace/git/import` route against a REAL local bare
+ * #3 G5c — the `POST /api/workspace/git/import` route against a REAL local bare
  * remote: it reads the collaboration branch (`main`) and APPLIES it into the DB
- * working copy (connections + pipelines + archive; triggers deferred to G5c-2).
+ * working copy (connections + pipelines + archive + triggers, G5c-2 #670).
  * The apply LOGIC is unit-tested in `portability/__tests__/workspace-apply.test.ts`;
  * this exercises the WIRING (fetch → read → apply → scheduler.sync → response),
  * the not-connected + empty-repo paths, and a real collaborator PULL (a second
@@ -140,11 +143,25 @@ describe('workspace-git import route', () => {
       secretRef: null,
     });
     const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Shared Pipeline' });
-    createPipelineVersion(app.db, {
+    const version = createPipelineVersion(app.db, {
       ...baseVersion(pipeline.id),
       nodes: [
         { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
       ],
+    });
+    // #3 G5c-2 — a trigger too, so the real wiring (fetch → read → apply →
+    // scheduler.sync) is exercised for a bound, enabled schedule trigger.
+    const trigger = createTrigger(app.db, {
+      ownerId: 'local',
+      name: 'Shared Nightly',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'schedule',
+      schedule: '0 2 * * *',
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled: true,
     });
     expect((await commit('author shared')).json().commit.committed).toBe(true);
     mergeWorkingIntoMain(work);
@@ -162,17 +179,26 @@ describe('workspace-git import route', () => {
       expect(res.statusCode).toBe(200);
       const { import: result } = res.json();
       expect(result.refused).toBe(false);
+      // connection + pipeline + trigger all created; no resource is deferred.
       expect(result.applied.map((a: { action: string }) => a.action).sort()).toEqual([
         'created',
         'created',
+        'created',
       ]);
+      expect(result.deferred).toHaveLength(0);
 
       // The resources landed in app2's DB, preserving their resourceIds, with the
       // node's connection ref remapped to app2's OWN connection row.
       const c2 = getConnectionByResourceId(app2.db, 'local', conn.resourceId);
-      const p2 = getPipelineByResourceId(app2.db, 'local', pipeline.resourceId);
+      const p2 = getPipelineByResourceId(app2.db, 'local', pipeline.resourceId)!;
       expect(c2).not.toBeNull();
       expect(p2).not.toBeNull();
+      // The trigger landed too, bound to app2's OWN version row (remapped), enabled.
+      const t2 = getTriggerByResourceId(app2.db, 'local', trigger.resourceId)!;
+      expect(t2).not.toBeNull();
+      const v2 = getLatestPipelineVersion(app2.db, p2.id)!;
+      expect(t2.pipelineVersionId).toBe(v2.id);
+      expect(t2.enabled).toBe(true);
     } finally {
       await app2ctx.app.close();
     }

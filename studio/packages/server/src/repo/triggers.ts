@@ -11,6 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { pipelineVersions, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
+import type { CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
 
 /**
@@ -52,7 +53,7 @@ function resolveUpdateSchedule(
   return patch.schedule ?? null;
 }
 
-export function createTrigger(db: Db, input: NewTrigger): Trigger {
+export function createTrigger(db: Db, input: NewTrigger, opts?: CreateResourceOptions): Trigger {
   const parsed = NewTriggerSchema.parse(input);
   // `recurrence` is `.nullable().optional()` on the write schema — an omitted
   // (undefined) recurrence is "none" (null), the raw-cron path.
@@ -61,7 +62,9 @@ export function createTrigger(db: Db, input: NewTrigger): Trigger {
   const row: Trigger = {
     id: newId('trig'),
     // #3 G1 — stable identity, server-minted once (see `createPipeline`).
-    resourceId: newId('res'),
+    // #3 G5c-2 — a workspace-git reconcile apply may PRESERVE the branch file's
+    // `resourceId` (same-identity round-trip); else mint fresh.
+    resourceId: opts?.resourceId ?? newId('res'),
     ...parsed,
     recurrence,
     // #5 S8 — same 3-state write field as `recurrence`: omitted = "no
@@ -79,6 +82,30 @@ export function createTrigger(db: Db, input: NewTrigger): Trigger {
 
 export function getTrigger(db: Db, id: string): Trigger | null {
   const row = db.select().from(triggers).where(eq(triggers.id, id)).get();
+  return row ? TriggerSchema.parse(row) : null;
+}
+
+/**
+ * #3 G5c-2 — resolve a trigger by its stable `resourceId`, owner-scoped, for the
+ * workspace-git reconcile apply (index-backed by the G1 UNIQUE
+ * `triggers_owner_resource_id_idx`). The apply uses THIS (not the classifier's
+ * disposition) to decide create-vs-update, so a trigger bound to an archived
+ * pipeline's version — which `serializeWorkspace` OMITS from the DB snapshot the
+ * classifier diffs — is still recognised as existing, never mis-created into a
+ * `resourceId` UNIQUE collision. Triggers have no archive state of their own
+ * (they are disabled, not archived), so — like `getConnectionByResourceId` —
+ * there is no filtered/unfiltered nuance. Strict parse (a corrupt row surfaces).
+ */
+export function getTriggerByResourceId(
+  db: Db,
+  ownerId: string,
+  resourceId: string,
+): Trigger | null {
+  const row = db
+    .select()
+    .from(triggers)
+    .where(and(eq(triggers.ownerId, ownerId), eq(triggers.resourceId, resourceId)))
+    .get();
   return row ? TriggerSchema.parse(row) : null;
 }
 

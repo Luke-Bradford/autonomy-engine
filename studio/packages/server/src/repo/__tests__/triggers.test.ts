@@ -7,6 +7,7 @@ import {
   deleteTrigger,
   getParsedTrigger,
   getTrigger,
+  getTriggerByResourceId,
   listParsedTriggers,
   listTriggers,
   updateTrigger,
@@ -74,6 +75,39 @@ describe('triggers repo', () => {
     const created = createTrigger(db, buildTriggerInput(version.id));
     expect(created.id).toMatch(/^trig_/);
     expect(getTrigger(db, created.id)).toEqual(created);
+  });
+
+  it('#3 G5c-2 — createTrigger PRESERVES an import-supplied resourceId; else mints fresh', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const preserved = createTrigger(db, buildTriggerInput(version.id), { resourceId: 'res_kept' });
+    expect(preserved.resourceId).toBe('res_kept');
+    const minted = createTrigger(db, buildTriggerInput(version.id));
+    expect(minted.resourceId).toMatch(/^res_/);
+    expect(minted.resourceId).not.toBe('res_kept');
+  });
+
+  it('#3 G5c-2 — getTriggerByResourceId resolves owner-scoped; missing → null', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const mine = createTrigger(
+      db,
+      { ...buildTriggerInput(version.id), ownerId: 'me' },
+      {
+        resourceId: 'res_t',
+      },
+    );
+    // Another owner claiming a DIFFERENT resourceId must never be returned for 'me'.
+    createTrigger(
+      db,
+      { ...buildTriggerInput(version.id), ownerId: 'other' },
+      {
+        resourceId: 'res_other',
+      },
+    );
+    expect(getTriggerByResourceId(db, 'me', 'res_t')?.id).toBe(mine.id);
+    expect(getTriggerByResourceId(db, 'me', 'res_other')).toBeNull(); // owner-scoped
+    expect(getTriggerByResourceId(db, 'me', 'res_missing')).toBeNull();
   });
 
   it('rejects creating a trigger for a nonexistent pipeline version (FK enforced)', () => {
