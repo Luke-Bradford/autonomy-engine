@@ -16,7 +16,7 @@ import {
 import { pipelineVersions } from '../db/schema.js';
 import { ISSUE_LIST_CAP } from '../limits.js';
 import { newId } from './ids.js';
-import { getPipeline } from './pipelines.js';
+import { getPipeline, type CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
 
 /**
@@ -71,7 +71,11 @@ function summarizeIssues(issues: string[]): string {
  * UNIQUE index is the real backstop against any cross-connection race, not
  * this transaction.
  */
-export function createPipelineVersion(db: Db, input: NewPipelineVersion): PipelineVersion {
+export function createPipelineVersion(
+  db: Db,
+  input: NewPipelineVersion,
+  opts?: CreateResourceOptions,
+): PipelineVersion {
   const parsed = NewPipelineVersionSchema.parse(input);
 
   // #456 (F13b) — LOWER the catalog's canonical `outputs` into each known-type
@@ -222,7 +226,10 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
       id, // minted above (before validation) so the call graph had a `selfId`
       // #3 G1 — every immutable version gets its OWN stable identity
       // ((pipelineId, version#) is not stable across machines).
-      resourceId: newId('res'),
+      // #3 G5c — the workspace-git reconcile apply PRESERVES the file's version
+      // resourceId so a re-pull recognises the same immutable version instead of
+      // re-minting it (and any binding to it keeps resolving); else mint fresh.
+      resourceId: opts?.resourceId ?? newId('res'),
       ...lowered,
       version: nextVersion,
       createdAt: Date.now(),

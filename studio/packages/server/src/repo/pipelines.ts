@@ -11,14 +11,26 @@ import { newId } from './ids.js';
 import { afterCursor, pageOrder, toPage, type PageArgs } from './pagination.js';
 import type { Db } from './types.js';
 
-export function createPipeline(db: Db, input: NewPipeline): Pipeline {
+/**
+ * #3 G5c — the workspace-git reconcile APPLY may PRESERVE an incoming file's
+ * stable `resourceId` on create (G1: "workspace-git import preserves ids"), so a
+ * later pull recognises the same resource instead of re-minting it. Every OTHER
+ * create path (CRUD routes, portable import) omits this and mints a fresh
+ * identity — the option is import-only, never client-supplied.
+ */
+export interface CreateResourceOptions {
+  resourceId?: string;
+}
+
+export function createPipeline(db: Db, input: NewPipeline, opts?: CreateResourceOptions): Pipeline {
   const parsed = NewPipelineSchema.parse(input);
   const now = Date.now();
   const row: Pipeline = {
     id: newId('pipe'),
     // #3 G1 — the stable cross-workspace identity, minted exactly once here
     // (the write schemas omit it; no client/patch path may supply one).
-    resourceId: newId('res'),
+    // #3 G5c — an import may preserve the file's `resourceId`; else mint fresh.
+    resourceId: opts?.resourceId ?? newId('res'),
     ...parsed,
     // #3 G5a — a pipeline is always born un-archived (write schema omits it);
     // archive is a server-driven lifecycle action, never a create field.
@@ -51,6 +63,27 @@ export function isPipelineArchived(db: Db, id: string): boolean {
     .where(eq(pipelines.id, id))
     .get();
   return row?.archived === true;
+}
+
+/**
+ * #3 G5c — resolve a pipeline by its stable `resourceId`, owner-scoped, for the
+ * workspace-git reconcile apply. Index-backed by the G1 UNIQUE
+ * `pipelines_owner_resource_id_idx (owner_id, resource_id)`. NOT archive-filtered
+ * (unlike `listPipelinesPage`): the apply's restore-vs-create decision needs to
+ * SEE an archived pipeline whose file has reappeared on the branch, so it
+ * restores the existing row rather than minting a duplicate (spec #3 G5c note 1).
+ */
+export function getPipelineByResourceId(
+  db: Db,
+  ownerId: string,
+  resourceId: string,
+): Pipeline | null {
+  const row = db
+    .select()
+    .from(pipelines)
+    .where(and(eq(pipelines.ownerId, ownerId), eq(pipelines.resourceId, resourceId)))
+    .get();
+  return row ? PipelineSchema.parse(row) : null;
 }
 
 export function listPipelines(db: Db, ownerId?: string): Pipeline[] {
@@ -121,6 +154,29 @@ export function archivePipelineRow(db: Db, id: string): Pipeline | null {
   const existing = getPipeline(db, id);
   if (!existing) return null;
   const updated = PipelineSchema.parse({ ...existing, archived: true, updatedAt: Date.now() });
+  db.update(pipelines).set(updated).where(eq(pipelines.id, id)).run();
+  return updated;
+}
+
+/**
+ * #3 G5c — flip an archived pipeline back to LIVE (`archived = false`). The
+ * inverse of `archivePipelineRow`, added for the workspace-git reconcile apply:
+ * when a soft-archived pipeline's managed file reappears on the branch it
+ * classifies `create` (serialize omits archived pipelines, #666), and the apply
+ * RESTORES the existing row rather than minting a duplicate under the same
+ * `resourceId` (spec #3 G5c note 1). Idempotent at the row level (restoring a
+ * live pipeline re-writes `archived = false`). Returns `null` for "no such
+ * pipeline".
+ *
+ * Deliberately does NOT re-enable the triggers `archivePipeline` disabled —
+ * re-enabling is authoring intent, gated by the G7/G8 binding+secret readiness
+ * reconcile, never a silent side effect of a restore. Nor does it resync the
+ * scheduler; that is the caller's post-commit job (the archive/route contract).
+ */
+export function restorePipeline(db: Db, id: string): Pipeline | null {
+  const existing = getPipeline(db, id);
+  if (!existing) return null;
+  const updated = PipelineSchema.parse({ ...existing, archived: false, updatedAt: Date.now() });
   db.update(pipelines).set(updated).where(eq(pipelines.id, id)).run();
   return updated;
 }

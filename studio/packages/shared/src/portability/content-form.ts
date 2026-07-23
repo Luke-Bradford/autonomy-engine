@@ -92,13 +92,39 @@ const VERSION_VOLATILE = [
   'createdAt',
 ] as const;
 
+/**
+ * #3 G5c — the content form of a SINGLE pipeline version's authoring doc (nodes,
+ * edges, containers, params, outputs), with the version-level identity/derived
+ * fields and per-node canvas geometry removed. Separated from
+ * `pipelineContentForm` because the reconcile APPLY must decide "mint a new
+ * immutable version" from the VERSION doc alone, independently of the pipeline
+ * ROW fields (`name`/`concurrency`) — a `concurrency`-only change must patch the
+ * row WITHOUT minting a spurious immutable version. Operates on a value already
+ * in the export/`resourceId` space (bindings are `resourceId`s), so both sides
+ * of the apply's diff run through the SAME serialize+parse path and compare
+ * apples-to-apples.
+ */
+/** Strip a version's identity/derived fields + per-node canvas geometry, IN
+ * PLACE — the single definition of "a version's authoring content", shared by
+ * `pipelineVersionContentForm` and `pipelineContentForm` so the two can never
+ * drift on what a version's content is. */
+function scrubVersion(version: { nodes: unknown[] }): void {
+  omitKeys(version, VERSION_VOLATILE);
+  for (const node of version.nodes) omitKeys(node, ['position']);
+}
+
+export function pipelineVersionContentForm(
+  version: PipelineExportData['versions'][number],
+): string {
+  const clone = jsonClone(version);
+  scrubVersion(clone);
+  return canonicalStringify(clone);
+}
+
 export function pipelineContentForm(data: PipelineExportData): string {
   const clone = jsonClone(data);
   omitKeys(clone.pipeline, RESOURCE_VOLATILE);
-  for (const version of clone.versions) {
-    omitKeys(version, VERSION_VOLATILE);
-    for (const node of version.nodes) omitKeys(node, ['position']);
-  }
+  for (const version of clone.versions) scrubVersion(version);
   return canonicalStringify(clone);
 }
 

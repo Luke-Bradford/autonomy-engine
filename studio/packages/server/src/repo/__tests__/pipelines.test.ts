@@ -4,8 +4,11 @@ import {
   createPipeline,
   deletePipeline,
   getPipeline,
+  getPipelineByResourceId,
   listPipelines,
+  restorePipeline,
   updatePipeline,
+  archivePipelineRow,
   PipelineHasRunsError,
 } from '../pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../pipeline-versions.js';
@@ -96,6 +99,48 @@ describe('pipelines repo', () => {
       // Nothing was actually removed by the failed attempt.
       expect(getPipeline(db, pipeline.id)).not.toBeNull();
       expect(getPipelineVersion(db, version.id)).not.toBeNull();
+    });
+  });
+
+  // #3 G5c — the workspace-git reconcile apply primitives.
+  describe('resourceId preservation + lookup + restore (G5c)', () => {
+    it('preserves a supplied resourceId on create (else mints fresh)', () => {
+      const { db } = freshDb();
+      const preserved = createPipeline(db, newPipeline, { resourceId: 'res_preserved' });
+      expect(preserved.resourceId).toBe('res_preserved');
+      const minted = createPipeline(db, newPipeline);
+      expect(minted.resourceId).toMatch(/^res_/);
+      expect(minted.resourceId).not.toBe('res_preserved');
+    });
+
+    it('resolves a pipeline by (ownerId, resourceId), owner-scoped', () => {
+      const { db } = freshDb();
+      const mine = createPipeline(db, { ownerId: 'me', name: 'Mine' }, { resourceId: 'res_x' });
+      // Same resourceId under a DIFFERENT owner is a different row and must not
+      // leak across the owner scope.
+      createPipeline(db, { ownerId: 'other', name: 'Theirs' }, { resourceId: 'res_x' });
+      expect(getPipelineByResourceId(db, 'me', 'res_x')?.id).toBe(mine.id);
+      expect(getPipelineByResourceId(db, 'me', 'res_missing')).toBeNull();
+    });
+
+    it('finds an ARCHIVED pipeline by resourceId (restore-vs-create needs to see it)', () => {
+      const { db } = freshDb();
+      const p = createPipeline(db, newPipeline, { resourceId: 'res_arch' });
+      archivePipelineRow(db, p.id);
+      const found = getPipelineByResourceId(db, 'local', 'res_arch');
+      expect(found?.id).toBe(p.id);
+      expect(found?.archived).toBe(true);
+    });
+
+    it('restorePipeline flips archived back to false; null for a missing id', () => {
+      const { db } = freshDb();
+      const p = createPipeline(db, newPipeline);
+      archivePipelineRow(db, p.id);
+      expect(getPipeline(db, p.id)?.archived).toBe(true);
+      const restored = restorePipeline(db, p.id);
+      expect(restored?.archived).toBe(false);
+      expect(getPipeline(db, p.id)?.archived).toBe(false);
+      expect(restorePipeline(db, 'pipe_missing')).toBeNull();
     });
   });
 });

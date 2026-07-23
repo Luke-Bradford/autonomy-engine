@@ -9,15 +9,21 @@ import {
 import { connections } from '../db/schema.js';
 import { newId } from './ids.js';
 import { afterCursor, pageOrder, toPage, type PageArgs } from './pagination.js';
+import type { CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
 
-export function createConnection(db: Db, input: NewConnection): Connection {
+export function createConnection(
+  db: Db,
+  input: NewConnection,
+  opts?: CreateResourceOptions,
+): Connection {
   const parsed = NewConnectionSchema.parse(input);
   const now = Date.now();
   const row: Connection = {
     id: newId('conn'),
     // #3 G1 — stable identity, server-minted once (see `createPipeline`).
-    resourceId: newId('res'),
+    // #3 G5c — an import may preserve the file's `resourceId`; else mint fresh.
+    resourceId: opts?.resourceId ?? newId('res'),
     ...parsed,
     createdAt: now,
     updatedAt: now,
@@ -33,6 +39,25 @@ export function createConnection(db: Db, input: NewConnection): Connection {
  */
 export function getConnection(db: Db, id: string): Connection | null {
   const row = db.select().from(connections).where(eq(connections.id, id)).get();
+  return row ? ConnectionSchema.parse(row) : null;
+}
+
+/**
+ * #3 G5c — resolve a connection by its stable `resourceId`, owner-scoped, for
+ * the workspace-git reconcile apply (index-backed by the G1 UNIQUE
+ * `connections_owner_resource_id_idx`). Connections have no archive state, so —
+ * unlike `getPipelineByResourceId` — there is no filtered/unfiltered nuance.
+ */
+export function getConnectionByResourceId(
+  db: Db,
+  ownerId: string,
+  resourceId: string,
+): Connection | null {
+  const row = db
+    .select()
+    .from(connections)
+    .where(and(eq(connections.ownerId, ownerId), eq(connections.resourceId, resourceId)))
+    .get();
   return row ? ConnectionSchema.parse(row) : null;
 }
 
