@@ -847,6 +847,37 @@ describe('foreach container (#4 A4)', () => {
     expect(prepared).toEqual([{ x: 'x' }, { x: 'y' }, { x: 'z' }]);
   });
 
+  it('binds ${item} in a body node\u2019s connectionId AND connectionParams (#2 L13a/L13b)', () => {
+    // Per-item connection routing: both dispatch-prep resolutions run against
+    // the SAME foreach env as config, so `${item.*}` reaches them too.
+    const eng = engine(
+      [
+        {
+          ...node('work'),
+          connectionId: '${item.conn}',
+          connectionParams: { model: '${item.model}' },
+        },
+      ],
+      [],
+      [foreach('fe', ['work'], '${params.list}')],
+    );
+    const { commandsSeen } = drive(eng, {
+      list: [
+        { conn: 'conn-a', model: 'fast' },
+        { conn: 'conn-b', model: 'smart' },
+      ],
+    });
+    const dispatches = commandsSeen.filter(
+      (c): c is Extract<EngineCommand, { type: 'dispatchNode' }> =>
+        c.type === 'dispatchNode' && c.nodeId === 'work',
+    );
+    expect(dispatches.map((c) => c.resolvedConnectionId)).toEqual(['conn-a', 'conn-b']);
+    expect(dispatches.map((c) => c.resolvedConnectionParams)).toEqual([
+      { model: 'fast' },
+      { model: 'smart' },
+    ]);
+  });
+
   it('binds ${item} in a call_pipeline body child (params path)', () => {
     const eng = engine(
       [callNode('call', 'child_pv', { sku: '${item}' })],

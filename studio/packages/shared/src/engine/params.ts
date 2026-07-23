@@ -1510,15 +1510,30 @@ export function collectSecretSinkMarkers(
  * by design, and a `${}` binding can resolve run-supplied json, so a marker
  * can arrive at dispatch that no save gate ever saw. Reuses the marker walk
  * (`walkMarkerRegion`) rather than a parallel traversal, so "what counts as a
- * marker" (`isSecretRef`, loose) and the depth-cap semantics cannot drift from
- * the sink gate's. A marker below `MAX_CONFIG_DEPTH` is not seen — consistent
- * with the resolver, which can never resolve below the cap either.
+ * marker" (`isSecretRef`, loose) cannot drift from the sink gate's.
+ *
+ * OVER-DEPTH IS A HIT, not a miss: the walk stops at `MAX_CONFIG_DEPTH`, but a
+ * whole-value `${}` binding SPLICES its resolved value without re-walking it
+ * (`substitute`'s whole-value branch), so a resolved param can be arbitrarily
+ * deep — e.g. an `http_request` node's parsed response body, which no
+ * fire-time depth gate ever saw. A subtree this guard cannot finish verifying
+ * is unverifiable, and unverifiable must read as "contains" (fail-closed) —
+ * otherwise a marker parked below the cap sails through the exact gate built
+ * to refuse it.
  */
 export function containsSecretMarker(value: unknown): boolean {
   let found = false;
-  walkMarkerRegion('', value, false, () => {
-    found = true;
-  });
+  walkMarkerRegion(
+    '',
+    value,
+    false,
+    () => {
+      found = true;
+    },
+    () => {
+      found = true; // over-deep ⇒ unverifiable ⇒ treat as containing a marker
+    },
+  );
   return found;
 }
 
