@@ -16,3 +16,4 @@ export * from './secret.js';
 export * from './secret-ref.js';
 export * from './webhook-delivery.js';
 export * from './wakeup.js';
+export * from './workspace-git.js';

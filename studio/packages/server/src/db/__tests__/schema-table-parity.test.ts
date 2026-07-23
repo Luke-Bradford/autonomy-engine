@@ -8,6 +8,7 @@ import {
   RunSchema,
   SecretSchema,
   TriggerSchema,
+  WorkspaceGitSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
 import {
@@ -18,6 +19,7 @@ import {
   runs,
   secrets,
   triggers,
+  workspaceGit,
 } from '../schema.js';
 
 /**
@@ -74,6 +76,11 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     // field with no column is the #473 defect here too. Its public projection
     // crosses the API boundary; the full `SecretSchema` never does (ciphertext).
     { name: 'secrets', table: secrets, schema: SecretSchema },
+    // #3 G2 — `workspace_git` round-trips through `WorkspaceGitSchema` on
+    // every repo read, and its status projection crosses the API boundary.
+    // (`WorkspaceGitStatusSchema.state` is DERIVED, never persisted, so the
+    // guard runs against the row schema, not the status.)
+    { name: 'workspace_git', table: workspaceGit, schema: WorkspaceGitSchema },
   ];
 
 describe('drizzle table ⇔ Zod schema parity (#473)', () => {

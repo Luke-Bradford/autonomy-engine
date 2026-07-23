@@ -20,6 +20,10 @@ import {
 import type { NormalizedLlmRequest } from './llm-shared.js';
 import { redactSecrets } from './redact.js';
 import { sha256Hex } from '../util/hash.js';
+// The harness's own secret-bearing env vars — stripped from every spawned
+// child (see the export's doc in `secrets/secrets.ts`; hoisted there so this
+// list has ONE source across all child-process spawners, #3 G2).
+import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
 
 /**
  * The `agent_cli` connector adapter: runs an agent CLI (Claude Code, Codex, or
@@ -74,14 +78,6 @@ import { sha256Hex } from '../util/hash.js';
  * connection via `config.timeoutMs`.
  */
 const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60_000;
-
-/**
- * The harness's own secret-bearing env vars (the secrets master key — see
- * `secrets/secrets.ts` → `resolveMasterKey`). Stripped from every `agent_cli`
- * child so a subprocess can never read the key that decrypts all connection
- * secrets.
- */
-const MASTER_KEY_ENV_VARS = ['AUTONOMY_MASTER_KEY', 'AUTONOMY_MASTER_KEY_FILE'] as const;
 
 const agentConnectionConfigSchema = z.object({
   /** The executable to run (e.g. `claude`, `codex`). */
