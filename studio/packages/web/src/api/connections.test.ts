@@ -8,6 +8,7 @@ import {
 
 const sample = {
   id: 'conn_1',
+  resourceId: 'res_conn1',
   ownerId: 'local',
   name: 'Claude',
   kind: 'anthropic_api' as const,

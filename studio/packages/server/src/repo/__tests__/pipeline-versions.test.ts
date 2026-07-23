@@ -589,7 +589,8 @@ describe('pipeline-versions repo', () => {
     // to persist. A field added to `PipelineVersionSchema` with no fixture value
     // fails HERE, forcing this test to be extended rather than silently
     // under-covering — the same class-guard shape as `schema-table-parity`.
-    const SERVER_ASSIGNED = ['id', 'version', 'createdAt'];
+    // `resourceId` (#3 G1) is server-minted like `id` — the write schema omits it.
+    const SERVER_ASSIGNED = ['id', 'resourceId', 'version', 'createdAt'];
     const persistable = Object.keys(PipelineVersionSchema.shape).filter(
       (key) => !SERVER_ASSIGNED.includes(key),
     );

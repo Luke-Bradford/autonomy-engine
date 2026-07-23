@@ -16,6 +16,8 @@ const validPipelineEnvelope = {
   data: {
     pipeline: {
       id: 'pipe_1',
+      // #3 G1 — stable identity rides every current export.
+      resourceId: 'res_pipe1',
       ownerId: null,
       name: 'P',
       // #5 S6b — the per-pipeline cap rides the export envelope (a pre-S6b
@@ -27,6 +29,7 @@ const validPipelineEnvelope = {
     versions: [
       {
         id: 'pv_1',
+        resourceId: 'res_pv1',
         pipelineId: 'pipe_1',
         version: 1,
         params: [],
@@ -337,7 +340,15 @@ describe('parseAndUpgradeEnvelope', () => {
       const env = {
         ...v1TriggerEnvelope,
         schemaVersion: SCHEMA_VERSION,
-        data: { ...v1TriggerData, recurrence: null, event: null, window: null },
+        // A current envelope carries every stamped field, incl. #3 G1's
+        // resourceId (nullable in the export shape).
+        data: {
+          ...v1TriggerData,
+          recurrence: null,
+          event: null,
+          window: null,
+          resourceId: 'res_trig1',
+        },
       };
       const result = parseAndUpgradeEnvelope(env);
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
@@ -400,6 +411,133 @@ describe('parseAndUpgradeEnvelope', () => {
       const result = parseAndUpgradeEnvelope({ ...validPipelineEnvelope, schemaVersion: 2 });
       expect(result.schemaVersion).toBe(SCHEMA_VERSION);
       expect(result.kind).toBe('pipeline');
+    });
+  });
+
+  describe('v3→v4 upgrader (production registry, #3 G1 resourceId)', () => {
+    // A v3 export carries NO resourceId anywhere — strip them from the
+    // current fixture to build honest pre-G1 shapes.
+    const { resourceId: strippedPipelineResourceId, ...v3Pipeline } =
+      validPipelineEnvelope.data.pipeline;
+    const { resourceId: strippedVersionResourceId, ...v3Version } =
+      validPipelineEnvelope.data.versions[0]!;
+    void strippedPipelineResourceId;
+    void strippedVersionResourceId;
+    const v3PipelineEnvelope = {
+      ...validPipelineEnvelope,
+      schemaVersion: 3,
+      data: {
+        ...validPipelineEnvelope.data,
+        pipeline: v3Pipeline,
+        versions: [v3Version, { ...v3Version, id: 'pv_2', version: 2 }],
+      },
+    };
+
+    it('backfills resourceId:null on the NESTED pipeline AND every versions[] entry', () => {
+      const result = parseAndUpgradeEnvelope(v3PipelineEnvelope);
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      if (result.kind !== 'pipeline') throw new Error('expected a pipeline envelope');
+      expect(result.data.pipeline.resourceId).toBeNull();
+      expect(result.data.versions).toHaveLength(2);
+      for (const version of result.data.versions) {
+        expect(version.resourceId).toBeNull();
+      }
+    });
+
+    it('backfills resourceId:null on a v3 trigger envelope', () => {
+      const v3TriggerEnvelope = {
+        schemaVersion: 3,
+        catalogVersion: CATALOG_VERSION,
+        kind: 'trigger' as const,
+        exportedAt: 1700000000000,
+        data: {
+          id: 'trig_1',
+          ownerId: null,
+          name: 'pre-G1 trigger',
+          pipelineVersionId: null,
+          params: {},
+          mode: 'manual' as const,
+          schedule: null,
+          webhook: null,
+          recurrence: null,
+          event: null,
+          window: null,
+          concurrency: { policy: 'queue' as const },
+          runWindows: null,
+          enabled: false,
+          createdAt: 1700000000000,
+          updatedAt: 1700000000000,
+          // NO `resourceId` — the pre-G1 v3 shape.
+        },
+      };
+      const result = parseAndUpgradeEnvelope(v3TriggerEnvelope);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.resourceId).toBeNull();
+    });
+
+    it('backfills resourceId:null on a v3 connection envelope', () => {
+      const v3ConnectionEnvelope = {
+        schemaVersion: 3,
+        catalogVersion: CATALOG_VERSION,
+        kind: 'connection' as const,
+        exportedAt: 1700000000000,
+        data: {
+          id: 'conn_1',
+          ownerId: null,
+          name: 'pre-G1 connection',
+          kind: 'http' as const,
+          config: {},
+          parameters: [],
+          requiresSecret: false,
+          createdAt: 1700000000000,
+          updatedAt: 1700000000000,
+          // NO `resourceId` — the pre-G1 v3 shape.
+        },
+      };
+      const result = parseAndUpgradeEnvelope(v3ConnectionEnvelope);
+      if (result.kind !== 'connection') throw new Error('expected a connection envelope');
+      expect(result.data.resourceId).toBeNull();
+    });
+
+    it('does NOT clobber an already-present resourceId', () => {
+      // A hand-rolled v3-stamped envelope that (illegally early) carries
+      // resourceIds: the deterministic spread must keep them verbatim.
+      const env = { ...validPipelineEnvelope, schemaVersion: 3 };
+      const result = parseAndUpgradeEnvelope(env);
+      if (result.kind !== 'pipeline') throw new Error('expected a pipeline envelope');
+      expect(result.data.pipeline.resourceId).toBe('res_pipe1');
+      expect(result.data.versions[0]!.resourceId).toBe('res_pv1');
+    });
+
+    it('a v1 trigger envelope chains ALL the way: recurrence/event/window/resourceId backfilled', () => {
+      const v1TriggerEnvelope = {
+        schemaVersion: 1,
+        catalogVersion: CATALOG_VERSION,
+        kind: 'trigger' as const,
+        exportedAt: 1700000000000,
+        data: {
+          id: 'trig_1',
+          ownerId: null,
+          name: 'v1-era trigger',
+          pipelineVersionId: null,
+          params: {},
+          mode: 'manual' as const,
+          schedule: null,
+          webhook: null,
+          concurrency: { policy: 'queue' as const },
+          runWindows: null,
+          enabled: false,
+          createdAt: 1700000000000,
+          updatedAt: 1700000000000,
+        },
+      };
+      const result = parseAndUpgradeEnvelope(v1TriggerEnvelope);
+      expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+      if (result.kind !== 'trigger') throw new Error('expected a trigger envelope');
+      expect(result.data.recurrence).toBeNull();
+      expect(result.data.event).toBeNull();
+      expect(result.data.window).toBeNull();
+      expect(result.data.resourceId).toBeNull();
     });
   });
 });

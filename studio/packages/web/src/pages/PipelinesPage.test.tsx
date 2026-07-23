@@ -35,6 +35,7 @@ const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
 function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
   return {
     id: 'pl_1',
+    resourceId: 'res_pl1',
     ownerId: 'local',
     name: 'My pipeline',
     concurrency: null,

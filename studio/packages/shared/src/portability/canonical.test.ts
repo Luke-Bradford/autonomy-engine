@@ -1,0 +1,105 @@
+import { describe, expect, it } from 'vitest';
+import { canonicalStringify } from './canonical.js';
+
+describe('canonicalStringify', () => {
+  it('sorts object keys by UTF-16 code unit order at every depth', () => {
+    const a = { b: 1, a: { d: 2, c: 3 }, e: [{ z: 1, y: 2 }] };
+    const b = { e: [{ y: 2, z: 1 }], a: { c: 3, d: 2 }, b: 1 };
+    expect(canonicalStringify(a)).toBe(canonicalStringify(b));
+    expect(canonicalStringify(a)).toBe('{"a":{"c":3,"d":2},"b":1,"e":[{"y":2,"z":1}]}');
+  });
+
+  it('is byte-identical for the same content regardless of insertion order', () => {
+    const permutations = [
+      { name: 'x', kind: 'http', config: { url: 'u', retries: 2 } },
+      { config: { retries: 2, url: 'u' }, kind: 'http', name: 'x' },
+      { kind: 'http', config: { url: 'u', retries: 2 }, name: 'x' },
+    ];
+    const outputs = new Set(permutations.map((p) => canonicalStringify(p)));
+    expect(outputs.size).toBe(1);
+  });
+
+  it('preserves array element order (arrays are ordered, only object keys sort)', () => {
+    expect(canonicalStringify([3, 1, 2])).toBe('[3,1,2]');
+    expect(canonicalStringify(['b', 'a'])).toBe('["b","a"]');
+  });
+
+  it('round-trips through JSON.parse to a deep-equal value', () => {
+    const value = {
+      s: 'héllo\n"quoted"\u2028',
+      n: 1.5,
+      big: 1e21,
+      tiny: 1e-7,
+      neg: -0,
+      b: true,
+      nul: null,
+      arr: [1, 'two', { three: 3 }],
+    };
+    expect(JSON.parse(canonicalStringify(value))).toEqual(JSON.parse(JSON.stringify(value)));
+  });
+
+  it('escapes strings exactly as JSON.stringify does', () => {
+    // NB escape sequences (not raw characters) for the control/exotic entries
+    // — a raw NUL or U+2028/U+2029 would make git classify this FILE as
+    // binary, hiding its diff from every reviewer.
+    const tricky = ['"', '\\', '\n', '\t', '\u0000', '\u2028', '\u2029', '😀', 'ẞ'];
+    for (const s of tricky) {
+      expect(canonicalStringify(s)).toBe(JSON.stringify(s));
+    }
+  });
+
+  it('formats numbers exactly as JSON.stringify does (incl. -0 -> 0)', () => {
+    for (const n of [0, -0, 1, -1, 1.5, 1e21, 1e-7, Number.MAX_SAFE_INTEGER, 5e-324]) {
+      expect(canonicalStringify(n)).toBe(JSON.stringify(n));
+    }
+  });
+
+  it('SKIPS object properties whose value is undefined (JSON.stringify parity)', () => {
+    // A spread-built envelope can legitimately carry an explicitly-undefined
+    // key; JSON.stringify drops it silently and so do we — refusing here
+    // would 500 the live export path for a value JSON handles fine.
+    expect(canonicalStringify({ a: 1, gone: undefined })).toBe('{"a":1}');
+  });
+
+  it('REFUSES undefined array elements (JSON.stringify corrupts them to null)', () => {
+    expect(() => canonicalStringify([1, undefined, 3])).toThrow(/undefined/);
+  });
+
+  it('REFUSES a top-level undefined', () => {
+    expect(() => canonicalStringify(undefined)).toThrow(/undefined/);
+  });
+
+  it('REFUSES non-finite numbers (JSON.stringify corrupts them to null)', () => {
+    for (const n of [NaN, Infinity, -Infinity]) {
+      expect(() => canonicalStringify(n)).toThrow(/finite/);
+      expect(() => canonicalStringify({ n })).toThrow(/finite/);
+    }
+  });
+
+  it('REFUSES BigInt, functions and symbols', () => {
+    expect(() => canonicalStringify(10n)).toThrow();
+    expect(() => canonicalStringify({ f: () => 1 })).toThrow();
+    expect(() => canonicalStringify(Symbol('s'))).toThrow();
+  });
+
+  it('REFUSES non-plain objects (Date, Map, class instances) rather than guessing', () => {
+    // JSON.stringify would call Date#toJSON / serialize a Map to {} — both are
+    // silent shape changes a CANONICAL serializer must not make. Refuse loudly.
+    expect(() => canonicalStringify(new Date(0))).toThrow(/plain/);
+    expect(() => canonicalStringify(new Map())).toThrow(/plain/);
+    class Widget {
+      x = 1;
+    }
+    expect(() => canonicalStringify(new Widget())).toThrow(/plain/);
+  });
+
+  it('accepts null-prototype objects (JSON.parse output shape)', () => {
+    const o = Object.create(null) as Record<string, unknown>;
+    o.a = 1;
+    expect(canonicalStringify(o)).toBe('{"a":1}');
+  });
+
+  it('reports the path of a refused value', () => {
+    expect(() => canonicalStringify({ a: { b: [1, { c: NaN }] } })).toThrow(/a\.b\[1\]\.c/);
+  });
+});

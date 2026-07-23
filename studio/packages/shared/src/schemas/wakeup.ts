@@ -79,9 +79,10 @@ export type WakeupRef = z.infer<typeof WakeupRefSchema>;
  * `Object.values(ref).join(':')` would make `{a:'x:y'}` and `{a:'x',b:'y'}`
  * collide. Pinned by test.
  *
- * (Not to be confused with the canonicalizer #3 G1 WILL own — that one is
- * unbuilt, and will hash pipeline docs for git, owning the number formatting +
- * nesting this deliberately does not have.)
+ * (Not to be confused with `portability/canonical.ts`'s `canonicalStringify`
+ * (#3 G1) — that one serializes whole docs for git, owning the number
+ * formatting + nesting this deliberately does not have; content HASHING lands
+ * with its first consumer, the workspace-import classifier #3 G4/G5.)
  */
 function serializeRef(ref: WakeupRef): string {
   const entries = Object.keys(ref)

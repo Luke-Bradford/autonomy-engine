@@ -191,4 +191,11 @@ export const CATALOG_VERSION = 18;
 // does not carry the key, so it would fail the final Zod validation on import;
 // the registered v2→v3 upgrader (`portability/envelope.ts`) backfills `null` —
 // the honest "never had one" value — on `kind:'trigger'` envelopes only.
-export const SCHEMA_VERSION = 3;
+// SCHEMA_VERSION 4 (#3 G1): every exported resource gained the
+// required-nullable `resourceId` (stable cross-workspace identity — the
+// stored schemas require it NON-null; the export shape is nullable so the
+// deterministic v3→v4 upgrader can backfill `null` = "exported before stable
+// identity existed" rather than minting a random id). Unlike v1→v3 this
+// touches ALL THREE kinds, including the nested `data.pipeline` +
+// `data.versions[]` of a pipeline envelope.
+export const SCHEMA_VERSION = 4;

@@ -5,6 +5,7 @@ import { createCanvasStore } from './canvasStore';
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
     id: 'plv_1',
+    resourceId: 'res_plv1',
     pipelineId: 'pl_1',
     version: 1,
     params: [],

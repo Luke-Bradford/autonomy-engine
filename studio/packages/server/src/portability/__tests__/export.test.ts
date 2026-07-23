@@ -344,3 +344,81 @@ describe('exportTrigger', () => {
     expect(() => exportTrigger(db, other.id, 'local')).toThrow(NotFoundError);
   });
 });
+
+// #3 G1 — every export carries the STABLE resourceId of what it exported
+// (the identity the workspace-git import #3 G4/G5 will classify by; portable
+// import ignores it — pinned in import.test.ts).
+describe('#3 G1 — resourceId rides every envelope kind', () => {
+  it('pipeline envelope: the pipeline AND every version carry their real resourceIds', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const v2 = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+
+    const envelope = exportPipeline(db, pipeline.id, 'local');
+    if (envelope.kind !== 'pipeline') throw new Error('unreachable');
+    expect(pipeline.resourceId).toBeTruthy();
+    expect(envelope.data.pipeline.resourceId).toBe(pipeline.resourceId);
+    expect(envelope.data.versions.map((v) => v.resourceId)).toEqual([v1.resourceId, v2.resourceId]);
+    // Each version's identity is its OWN — never shared, never the pipeline's.
+    expect(new Set([pipeline.resourceId, v1.resourceId, v2.resourceId]).size).toBe(3);
+  });
+
+  it('connection envelope carries the real resourceId', () => {
+    const { db } = freshDb();
+    const connection = createConnection(db, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const envelope = exportConnection(db, connection.id, 'local');
+    if (envelope.kind !== 'connection') throw new Error('unreachable');
+    expect(connection.resourceId).toBeTruthy();
+    expect(envelope.data.resourceId).toBe(connection.resourceId);
+  });
+
+  it('trigger envelope carries the real resourceId', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const trigger = createTrigger(db, {
+      ownerId: 'local',
+      name: 'T',
+      pipelineVersionId: version.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'queue' },
+      runWindows: null,
+      enabled: false,
+    });
+    const envelope = exportTrigger(db, trigger.id, 'local');
+    if (envelope.kind !== 'trigger') throw new Error('unreachable');
+    expect(trigger.resourceId).toBeTruthy();
+    expect(envelope.data.resourceId).toBe(trigger.resourceId);
+  });
+});

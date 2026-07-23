@@ -9,6 +9,7 @@ import {
 
 const pipeline = {
   id: 'pl_1',
+  resourceId: 'res_pl1',
   ownerId: 'local',
   name: 'My pipeline',
   concurrency: null,
@@ -18,6 +19,7 @@ const pipeline = {
 
 const version = {
   id: 'plv_1',
+  resourceId: 'res_plv1',
   pipelineId: 'pl_1',
   version: 3,
   params: [],

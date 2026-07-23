@@ -25,6 +25,7 @@ describe('ImportResultSchema', () => {
     kind: 'connection' as const,
     connection: {
       id: 'conn_1',
+      resourceId: 'res_conn1',
       ownerId: 'local',
       name: 'Imported',
       kind: 'http',

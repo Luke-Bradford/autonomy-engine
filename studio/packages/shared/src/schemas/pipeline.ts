@@ -562,6 +562,16 @@ export type Container = z.infer<typeof ContainerSchema>;
 
 export const PipelineSchema = z.object({
   id: z.string().min(1),
+  /**
+   * #3 G1 — the STABLE cross-workspace identity (git-file identity is this,
+   * never the DB `id`, never the file path). Server-minted once at creation,
+   * never rewritten; migration 0024 backfilled every pre-G1 row. Required
+   * with NO `.default()` (#473 — an absent fact is a loud parse failure, not
+   * a manufactured value); uniqueness is per-owner (`(owner_id, resource_id)`
+   * index) because workspace-git import (#3 G4/G5) PRESERVES resourceIds, so
+   * two owners importing the same repo must not collide.
+   */
+  resourceId: z.string().min(1),
   ownerId: z.string().min(1).nullable(),
   name: z.string().min(1),
   /**
@@ -591,6 +601,8 @@ export type Pipeline = z.infer<typeof PipelineSchema>;
 
 export const NewPipelineSchema = PipelineSchema.omit({
   id: true,
+  // Server-minted, like `id` — no write path (create OR patch) may supply it.
+  resourceId: true,
   createdAt: true,
   updatedAt: true,
 }).extend({
@@ -610,6 +622,15 @@ export type NewPipeline = z.input<typeof NewPipelineSchema>;
  */
 export const PipelineVersionSchema = z.object({
   id: z.string().min(1),
+  /**
+   * #3 G1 — stable cross-workspace identity for THIS immutable version.
+   * `(pipelineId, version#)` is NOT stable across machines (each workspace
+   * numbers its own rows), and trigger→version, `call_pipeline`, and CAS
+   * publish provenance (#3 G6) all need an identity that survives a git
+   * round-trip. Unique per pipeline (`(pipeline_id, resource_id)` index;
+   * owner scoping rides the pipeline FK). See `PipelineSchema.resourceId`.
+   */
+  resourceId: z.string().min(1),
   pipelineId: z.string().min(1),
   version: z.number().int().positive(),
   params: z.array(ParamSchema),
@@ -632,6 +653,8 @@ export type PipelineVersion = z.infer<typeof PipelineVersionSchema>;
  */
 export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   id: true,
+  // Server-minted, like `id` (versions are immutable — there is no patch path).
+  resourceId: true,
   version: true,
   createdAt: true,
 }).extend({

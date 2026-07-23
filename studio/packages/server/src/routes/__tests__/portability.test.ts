@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { CATALOG_VERSION, SCHEMA_VERSION } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, SCHEMA_VERSION, canonicalStringify } from '@autonomy-studio/shared';
 import {
   createConnection,
   createPipeline,
@@ -352,6 +352,115 @@ describe('portability routes (export + import)', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('import_error');
+    });
+  });
+
+  // #3 G1 — export bodies are CANONICAL JSON: stable bytes for identical
+  // content (the git file writer #3 G3 will reuse this exact serialization).
+  describe('#3 G1 — canonical export bodies', () => {
+    it('the HTTP body IS canonicalStringify(envelope), served as application/json', async () => {
+      const pipelineRes = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'Canonical' },
+      });
+      const pipeline = pipelineRes.json();
+      await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/pipelines/${pipeline.id}/export` });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('application/json');
+      // Byte-level pin: re-canonicalizing the parsed body reproduces the body
+      // EXACTLY — proving the wire format is already canonical (sorted keys).
+      expect(canonicalStringify(res.json())).toBe(res.body);
+    });
+
+    it('the connection and trigger export routes serve canonical bytes too', async () => {
+      const connRes = await app.inject({
+        method: 'POST',
+        url: '/api/connections',
+        payload: { name: 'CanonConn', kind: 'http', config: {} },
+      });
+      const connection = connRes.json();
+      const connExport = await app.inject({
+        method: 'GET',
+        url: `/api/connections/${connection.id}/export`,
+      });
+      expect(connExport.statusCode).toBe(200);
+      expect(connExport.headers['content-type']).toContain('application/json');
+      expect(canonicalStringify(connExport.json())).toBe(connExport.body);
+
+      const pipelineRes = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'CanonTrigPipe' },
+      });
+      const pipeline = pipelineRes.json();
+      const versionRes = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      });
+      const version = versionRes.json();
+      const trigRes = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: {
+          name: 'CanonTrig',
+          pipelineVersionId: version.id,
+          params: {},
+          mode: 'manual',
+          schedule: null,
+          webhook: null,
+          concurrency: { policy: 'queue' },
+          runWindows: null,
+          enabled: false,
+        },
+      });
+      const trigger = trigRes.json();
+      const trigExport = await app.inject({
+        method: 'GET',
+        url: `/api/triggers/${trigger.id}/export`,
+      });
+      expect(trigExport.statusCode).toBe(200);
+      expect(trigExport.headers['content-type']).toContain('application/json');
+      expect(canonicalStringify(trigExport.json())).toBe(trigExport.body);
+    });
+
+    it('two exports of identical content are byte-identical apart from exportedAt', async () => {
+      const pipelineRes = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines',
+        payload: { name: 'Stable' },
+      });
+      const pipeline = pipelineRes.json();
+      await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+        payload: emptyVersionBody,
+      });
+
+      const first = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/export`,
+      });
+      const second = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/export`,
+      });
+      const stripStamp = (body: string) => {
+        const parsed = JSON.parse(body) as Record<string, unknown>;
+        delete parsed.exportedAt;
+        return canonicalStringify(parsed);
+      };
+      // `exportedAt` is the ONE volatile field (wall-clock stamp) — the #3 G3
+      // git file writer must normalize/omit it or every re-serialize dirties
+      // the file (recorded in the spec's G1 annotation).
+      expect(stripStamp(first.body)).toBe(stripStamp(second.body));
     });
   });
 });

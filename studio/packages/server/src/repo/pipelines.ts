@@ -16,6 +16,9 @@ export function createPipeline(db: Db, input: NewPipeline): Pipeline {
   const now = Date.now();
   const row: Pipeline = {
     id: newId('pipe'),
+    // #3 G1 — the stable cross-workspace identity, minted exactly once here
+    // (the write schemas omit it; no client/patch path may supply one).
+    resourceId: newId('res'),
     ...parsed,
     createdAt: now,
     updatedAt: now,

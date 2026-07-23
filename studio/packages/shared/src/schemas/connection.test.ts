@@ -8,6 +8,7 @@ import {
 
 const validConnection = {
   id: 'conn_1',
+  resourceId: 'res_conn1',
   ownerId: null,
   name: 'My Claude key',
   kind: 'anthropic_api',
@@ -80,8 +81,9 @@ describe('ConnectionSchema', () => {
 
 describe('NewConnectionSchema', () => {
   it('accepts a payload without server-set fields', () => {
-    const { id, createdAt, updatedAt, ...insert } = validConnection;
+    const { id, resourceId, createdAt, updatedAt, ...insert } = validConnection;
     void id;
+    void resourceId;
     void createdAt;
     void updatedAt;
     expect(NewConnectionSchema.parse(insert)).toEqual(insert);

@@ -68,17 +68,18 @@ function seedRawVersion(
   const pvId = `pv_${seq}`;
   sqlite
     .prepare(
-      'INSERT INTO pipelines (id, owner_id, name, created_at, updated_at) VALUES (?, ?, ?, 1, 1)',
+      'INSERT INTO pipelines (id, resource_id, owner_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 1)',
     )
-    .run(pipeId, 'local', 'P');
+    .run(pipeId, `res_${pipeId}`, 'local', 'P');
   sqlite
     .prepare(
       `INSERT INTO pipeline_versions
-         (id, pipeline_id, version, params, outputs, nodes, edges, containers, catalog_version, created_at)
-       VALUES (?, ?, 1, '[]', '[]', ?, ?, ?, ?, 1)`,
+         (id, resource_id, pipeline_id, version, params, outputs, nodes, edges, containers, catalog_version, created_at)
+       VALUES (?, ?, ?, 1, '[]', '[]', ?, ?, ?, ?, 1)`,
     )
     .run(
       pvId,
+      `res_${pvId}`,
       pipeId,
       JSON.stringify(nodes),
       JSON.stringify(edges),

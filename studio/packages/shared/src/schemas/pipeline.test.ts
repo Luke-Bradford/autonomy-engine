@@ -304,6 +304,7 @@ describe('NodeSchema call variant', () => {
 
 const pipeline = {
   id: 'pipe_1',
+  resourceId: 'res_pipe1',
   ownerId: null,
   name: 'My pipeline',
   concurrency: null,
@@ -342,8 +343,9 @@ describe('PipelineSchema', () => {
 
 describe('NewPipelineSchema', () => {
   it('accepts a payload without server-set fields', () => {
-    const { id, createdAt, updatedAt, ...insert } = pipeline;
+    const { id, resourceId, createdAt, updatedAt, ...insert } = pipeline;
     void id;
+    void resourceId;
     void createdAt;
     void updatedAt;
     expect(NewPipelineSchema.parse(insert)).toEqual(insert);
@@ -372,6 +374,7 @@ describe('NewPipelineSchema', () => {
 
 const pipelineVersion = {
   id: 'pv_1',
+  resourceId: 'res_pv1',
   pipelineId: 'pipe_1',
   version: 1,
   params: [{ name: 'topic', type: 'string', required: true }],

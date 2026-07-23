@@ -220,6 +220,9 @@ export function createPipelineVersion(db: Db, input: NewPipelineVersion): Pipeli
     // worst outcome (validation passes against a contract the runtime lacks).
     const row: PipelineVersion = {
       id, // minted above (before validation) so the call graph had a `selfId`
+      // #3 G1 — every immutable version gets its OWN stable identity
+      // ((pipelineId, version#) is not stable across machines).
+      resourceId: newId('res'),
       ...lowered,
       version: nextVersion,
       createdAt: Date.now(),
