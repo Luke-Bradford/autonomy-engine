@@ -500,7 +500,12 @@ describe('postJsonAndParse (#648)', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('socket hang up'));
     const res = await postJsonAndParse(pctx(), 'ollama', 'http://x/y', {}, {}, 1000);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.event).toMatchObject({ type: 'failed', kind: 'transient' });
+    if (!res.ok) {
+      expect(res.event).toMatchObject({ type: 'failed', kind: 'transient' });
+      // The failure arm carries latency too — the text/tools capture closures
+      // (#2 L9a) report the latency of a FAILED exchange as well.
+      expect(typeof res.latencyMs).toBe('number');
+    }
   });
 
   it('maps a non-2xx through httpStatusFailure, retry-after hint included', async () => {

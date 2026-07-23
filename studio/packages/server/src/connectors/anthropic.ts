@@ -223,7 +223,7 @@ export const anthropicAdapter: ConnectorAdapter = {
     // precludes the adaptive-thinking surface.
     const buildBody = (
       msgs: readonly unknown[],
-      opts: { toolWire?: { tools: unknown; choice: unknown }; allowThinking: boolean },
+      opts: { toolWire?: { tools: unknown[]; choice: unknown }; allowThinking: boolean },
     ): Record<string, unknown> => {
       const body: Record<string, unknown> = {
         model,
