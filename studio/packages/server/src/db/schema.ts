@@ -688,3 +688,27 @@ export const tumblingBackfillCursors = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.triggerId, table.configEpoch] })],
 );
+
+/**
+ * #3 G2 — the workspace↔git association (`WorkspaceGit` in
+ * `@autonomy-studio/shared`). ONE row per owner (unique index — the DB
+ * authority a concurrent double-connect cannot race past; the route's 409
+ * pre-check is just the nicer message). The managed checkout on disk is
+ * derived state; this row is the record. Tracking fields nullable = "not
+ * observed", stated honestly (#473). See the 0025 migration.
+ */
+export const workspaceGit = sqliteTable(
+  'workspace_git',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id'),
+    repoUrl: text('repo_url').notNull(),
+    collabBranch: text('collab_branch').notNull(),
+    observedCollabHead: text('observed_collab_head'),
+    lastFetchAt: integer('last_fetch_at'),
+    lastFetchError: text('last_fetch_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('workspace_git_owner_id_idx').on(table.ownerId)],
+);

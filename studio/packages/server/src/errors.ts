@@ -2,7 +2,12 @@ import { ZodError } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import { ImportError } from '@autonomy-studio/shared';
 import type { ApiErrorBody } from '@autonomy-studio/shared';
-import { InvalidPipelineDocError, PipelineHasRunsError } from './repo/index.js';
+import {
+  InvalidPipelineDocError,
+  PipelineHasRunsError,
+  WorkspaceGitAlreadyConnectedError,
+} from './repo/index.js';
+import { GitOperationError, GitUnavailableError } from './git/provider.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
@@ -164,6 +169,36 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       reply
         .status(400)
         .send({ error: 'bad_request', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G2 — a workspace is never silently re-pointed at a different repo;
+    // the message is author-constructed and client-safe.
+    if (error instanceof WorkspaceGitAlreadyConnectedError) {
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G2 — the host has no usable `git` binary: a LOCAL precondition
+    // failure (503), remedied by installing git, not by changing the request.
+    if (error instanceof GitUnavailableError) {
+      reply
+        .status(503)
+        .send({ error: 'git_unavailable', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G2 — a git operation against the connected repo failed (502: the
+    // failure is upstream — remote unreachable, auth refused, clone failed).
+    // `error.message` is client-safe by construction: the provider redacts
+    // stderr through its `secretsToRedact` seam before it lands in the error,
+    // and no stored git credential exists in G2 at all (embedded-credential
+    // URLs are refused at the Zod boundary). NOTE this branch must run before
+    // the numeric-statusCode passthrough/500 fallthrough — 502 is outside
+    // `hasNumericStatusCode`'s 4xx window.
+    if (error instanceof GitOperationError) {
+      request.log.warn({ err: error }, 'git operation failed');
+      reply.status(502).send({ error: 'git_error', message: error.message } satisfies ApiErrorBody);
       return;
     }
 

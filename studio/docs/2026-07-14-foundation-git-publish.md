@@ -139,7 +139,7 @@ reconcile are core. Corrections:
 | # | Ticket |
 | --- | --- |
 | **G1** | Resource envelopes: stable `resourceId`, canonical JSON, per-file schemaVersion, path policy — **SHIPPED 2026-07-23** (see the built-block below the table) |
-| G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking |
+| G2 | `workspace_git` (owner-scoped) + `GitProvider` CLI + repo status/fetch/HEAD tracking — **SHIPPED 2026-07-23** (built-block below) |
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** classification |
@@ -187,6 +187,53 @@ reconcile are core. Corrections:
   resource NAME (lowercased, non-alphanumerics → `-`); **identity is `resourceId`, the path is
   cosmetic** (same-id-new-path = rename, per the Codex-hardened block). A slug collision within a
   kind appends a short `resourceId` suffix; renames regenerate the path.
+
+### G2 built-block (2026-07-23)
+
+- **Worktree model (the v2 "highest unbuildability risk", now PINNED):** the managed checkout is
+  ALWAYS a clone the server itself creates at `<workspaceGitRoot>/<ownerId>/repo`
+  (`buildApp` opt `workspaceGitRoot` / env `WORKSPACE_GIT_ROOT` / default `data/git`, cwd-relative
+  like `dbPath` — safe because everything under it is DERIVED state). A "local repo" is connected
+  by using its path as the clone REMOTE — **the user's own repo is never studio's working tree**,
+  so disconnect can `rm` the checkout (realpath-canonicalized containment assert, fs.ts pattern).
+  Every row↔disk divergence self-heals: connect clears an orphaned dir (no row ⇒ crash-mid-clone
+  leftover), fetch re-clones a wiped checkout, a failed clone tidies its partial dir. All git ops
+  for one owner serialize through an in-process `KeyedQueue` (the server is the single writer to
+  its own checkouts — no lease table needed).
+- **Auth model (pinned, v1):** the operator's own environment — SSH agent + credential helper of
+  the user running the server. NO stored PATs until G10 (`CliGitProvider.secretsToRedact` is the
+  G10 seam, empty today, redaction path pinned by test). Nothing can ever HANG an unattended op:
+  `GIT_TERMINAL_PROMPT=0` + `GIT_ASKPASS=echo` + `ssh -oBatchMode=yes` (operator's own
+  `GIT_SSH_COMMAND` respected). Child env also strips the master-key vars
+  (`MASTER_KEY_ENV_VARS`, hoisted to `secrets/secrets.ts` as the ONE list) and ambient
+  `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`.
+- **Concrete commands (only what G2 consumes — no inert surface):** `git version` (probe →
+  503 `git_unavailable`), `git clone -- <src> <dir>` (empty remote clones fine = the onboarding
+  state), `git -C <dir> fetch --prune origin` (**`--prune` is load-bearing**: without it a
+  remotely-deleted collab branch resolves its stale head forever — verified empirically),
+  `git -C <dir> rev-parse --verify --quiet refs/remotes/origin/<branch>` (silent exit-1 =
+  branch-missing, a real state, distinct from failure). `status --porcelain` +
+  `merge-base --is-ancestor` land in G3 with their consumers. Execution: `execFile` arg-arrays
+  (never a shell; deliberately NOT the process-supervisor, which is a detached line-streaming
+  abstraction for long-lived agent workers), timeouts clone 120s / fetch 60s / local 10s, 1 MiB
+  output cap.
+- **Boundary validation:** `repoUrl` is a scheme ALLOWLIST (`https://`, `ssh://`, scp-like
+  `user@host:path`, `file://`, absolute path) — blocks `ext::` transport injection and
+  option-shaped values; embedded `user:password@` credentials are REFUSED (they would land in the
+  DB row + error text). `collabBranch` is check-ref-format-validated before it reaches the
+  `refs/remotes/origin/<branch>` interpolation.
+- **Schema/API:** `workspace_git` (0025) — one row per owner (DB unique index is the authority;
+  the route's 409 is the nicer message; re-point = disconnect + connect, never a mutation).
+  Tracking fields REQUIRED-nullable (#473: no manufactured defaults). Derived
+  `state = fetch_error > collab_branch_missing > ready` (precedence pinned: a failed fetch must
+  not render "ready" off a stale earlier head), shared FE/BE via `deriveWorkspaceGitState`.
+  Routes: GET/POST `/api/workspace/git`, POST `…/fetch` (failure recorded on the row AND
+  surfaced as 502 `git_error`), DELETE. New closed-enum API codes `git_error` (502) +
+  `git_unavailable` (503).
+- **Deliberate deferrals:** the workspace-audit log (`repo.connected` et al.) → G6 with its
+  design-driving consumer (Publish); accepted loss: pre-G6 connect/disconnect *history* is
+  unrecorded (the live row survives). Working-branch-prefix column → G3 (its consumer; ADD COLUMN
+  is cheap). Stored-PAT auth + multi-remote → G10.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

@@ -63,6 +63,14 @@ export class SecretDecryptionError extends Error {
  */
 export const DEFAULT_MASTER_KEY_FILE = join(homedir(), '.autonomy-studio', 'secrets', 'master.key');
 
+/**
+ * The harness's own secret-bearing env var NAMES (the two `resolveMasterKey`
+ * reads below). Exported as the ONE list every child-process spawner strips
+ * from its child env (`connectors/agent.ts`, `git/provider.ts` — #3 G2), so
+ * a subprocess can never read the key that decrypts all connection secrets.
+ */
+export const MASTER_KEY_ENV_VARS = ['AUTONOMY_MASTER_KEY', 'AUTONOMY_MASTER_KEY_FILE'] as const;
+
 const BLOB_VERSION = 1;
 /** Algorithm tag byte — 1 == XChaCha20-Poly1305-IETF (the only kind so far). */
 const ALGO_XCHACHA20POLY1305_IETF = 1;

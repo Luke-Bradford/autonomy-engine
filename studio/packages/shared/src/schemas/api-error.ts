@@ -31,6 +31,12 @@ export const ApiErrorCodeSchema = z.enum([
   'invalid_pipeline_doc',
   'bad_request',
   'internal_error',
+  // #3 G2 — a git operation against the connected repo failed (502: the
+  // failure is in the upstream repo/transport, not this request's shape).
+  'git_error',
+  // #3 G2 — the server host has no usable `git` binary (503: a local
+  // precondition, not the caller's fault; connect again once git exists).
+  'git_unavailable',
 ]);
 export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
 

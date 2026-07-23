@@ -40,6 +40,8 @@ import { externalWaitRoutes } from './routes/external-wait.js';
 import { runsRoutes } from './routes/runs.js';
 import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
+import { workspaceGitRoutes } from './routes/workspace-git.js';
+import type { GitProvider } from './git/provider.js';
 import './context.js';
 
 export function resolvePort(raw: string | undefined): number {
@@ -140,6 +142,10 @@ export interface BuildAppOptions {
   webhookRetentionMs?: number;
   /** #464/#421 — overrides the retention sweep interval (ms) for BOTH sweeps; defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable a sweep via its `*RetentionMs: 0`) to avoid a real hour-long timer. */
   retentionSweepMs?: number;
+  /** #3 G2 — where managed git checkouts live (`<root>/<ownerId>/repo`). Overrides `process.env.WORKSPACE_GIT_ROOT` / the `data/git` default. Call-time only, for test isolation. Everything under it is DERIVED state (always our own clone) — safe to wipe; a fetch re-clones. */
+  workspaceGitRoot?: string;
+  /** #3 G2 — test seam: a `GitProvider` override (e.g. a real `CliGitProvider` pointed at a missing binary to exercise the 503 path). Defaults to a real CLI provider. */
+  workspaceGitProvider?: GitProvider;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -568,6 +574,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(runsRoutes);
   await fastify.register(runStreamRoutes);
   await fastify.register(importRoutes);
+  // #3 G2 — cwd-relative default like `dbPath` (the checkout is derived
+  // state: worst case a different launch cwd just re-clones, unlike the
+  // master key, whose default must be cwd-independent — see secrets.ts).
+  await fastify.register(workspaceGitRoutes, {
+    workspaceGitRoot: opts?.workspaceGitRoot ?? process.env.WORKSPACE_GIT_ROOT ?? 'data/git',
+    provider: opts?.workspaceGitProvider,
+  });
 
   fastify.get('/health', async () => ({ ok: true }));
 
