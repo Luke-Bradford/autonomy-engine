@@ -370,13 +370,17 @@ export function createScheduleTickHandler(deps: ScheduleTickDeps): WakeupHandler
               log.debug({ triggerId: trigger.id }, 'schedule tick: skip — trigger became unbound');
               return;
             }
-            // #3 G5a — the bound pipeline was archived between arm and fire.
-            // Archive disables dependent triggers (so `sync()` normally drops
-            // this chain first), but a fire already in flight is skipped here —
-            // the launcher's dispatch guard is the guarantee. Benign like the
-            // unbound race: `debug`, not `warn`.
+            // #3 G5a — the bound pipeline is archived. Unlike the unbound race
+            // above (a transient rebind that `sync()` self-heals), an enabled
+            // schedule trigger bound to a PERMANENTLY-archived pipeline (the
+            // re-enable edge case: archive disables dependent triggers, but a
+            // user can re-enable one) re-arms and re-hits this every occurrence
+            // with no run to look at — so it needs an operator-visible signal,
+            // matching the `SubstituteError` severity below (persistent
+            // misconfiguration, not a self-healing race). The chain is already
+            // armed, so this only drops the one occurrence.
             if (err instanceof ArchivedPipelineError) {
-              log.debug({ triggerId: trigger.id }, 'schedule tick: skip — pipeline archived');
+              log.warn({ triggerId: trigger.id }, 'schedule tick: skip — pipeline archived');
               return;
             }
             // #5 S12b — a trigger param binding that cannot resolve for THIS

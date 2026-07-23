@@ -687,11 +687,13 @@ export function createTumblingService(deps: TumblingDeps): TumblingService {
         log.debug({ triggerId: trigger.id }, 'tumbling: skip — trigger became unbound');
         return 'stop';
       }
-      // #3 G5a — the bound pipeline was archived; stop materializing this
-      // window's fire (archive disables the trigger, the launcher guards
-      // dispatch). Benign like the unbound race: `debug`, and `'stop'`.
+      // #3 G5a — the bound pipeline is archived; stop materializing this
+      // window's fire. Operator-visible (`warn`, the `SubstituteError`
+      // severity): an enabled trigger bound to a permanently-archived pipeline
+      // (the re-enable edge case) would otherwise stop producing runs silently —
+      // NOT a self-healing race like the unbound case above.
       if (err instanceof ArchivedPipelineError) {
-        log.debug({ triggerId: trigger.id }, 'tumbling: skip — pipeline archived');
+        log.warn({ triggerId: trigger.id }, 'tumbling: skip — pipeline archived');
         return 'stop';
       }
       if (err instanceof SubstituteError) {
