@@ -2172,8 +2172,20 @@ export function createEngine(doc: EngineDoc): Engine {
         };
       }
       const bodySet = new Set(c.children);
+      // Endpoint check PLUS reset-body overlap: on a legacy pre-validation row a
+      // cross-boundary defect edge (refused at save, voided from routing) can put
+      // a body child on a back-edge's target..source path even though both
+      // endpoints sit outside the container — `fireBackEdges`' bodyTerminal check
+      // would then be permanently false (entries live under instance keys), the
+      // exact "silently dead machinery" this guard refuses. `validateDoc` needs
+      // only the endpoint check (it refuses cross-boundary edges in the same
+      // pass, so no save-time reset body can cross the container wall).
       const touching = backEdges.find(
-        (be) => bodySet.has(be.from) || bodySet.has(be.to) || be.to === c.id,
+        (be) =>
+          bodySet.has(be.from) ||
+          bodySet.has(be.to) ||
+          be.to === c.id ||
+          (backBodyByKey.get(stableEdgeKey(be)) ?? []).some((id) => bodySet.has(id)),
       );
       if (touching !== undefined) {
         diagnostics.push(
@@ -2224,13 +2236,27 @@ export function createEngine(doc: EngineDoc): Engine {
    *          item) → record `results[i]` = merged instance outputs and DELETE the
    *          item's instance entries from nodes/outputs/branches (state hygiene;
    *          a late terminal for a deleted instance folds to a benign no-op).
+   *          UNDER DOOM a TRUNCATED item — any child in `doomed.flipped`, i.e.
+   *          flipped to `skipped` before it ran — keeps a NULL HOLE (entries
+   *          still deleted): its merged outputs are partial, and recording them
+   *          would make a half-executed item indistinguishable from a completed
+   *          one. An item with NO flipped children genuinely completed
+   *          mid-drain and records normally.
    *        - blamed → DOOM the container (first blame wins): stop starting items,
    *          flip every non-in-flight non-terminal instance to `skipped`
-   *          (mirroring `abandonLiveChildren`, but genuinely in-flight work — a
-   *          live adapter call, a call child, a retry hold — drains to terminal
-   *          via its own events; their late results must keep folding cleanly).
-   *          A terminal-failed item under an EXISTING doom records nothing and
-   *          changes nothing — its null hole is the contract.
+   *          (recording each in `doomed.flipped` — the truncation record the
+   *          drain reads), and
+   *          CANCEL any `retry_pending` hold to terminal `failure` (its next act
+   *          would be to START a fresh billable attempt whose result doom
+   *          discards; the armed alarm's later `node.retryDue` folds to a benign
+   *          status-guard no-op). Genuinely in-flight work — a live adapter
+   *          call, a call child — drains to terminal via its own events; their
+   *          late results must keep folding cleanly. Parked waits/webhooks
+   *          (`wait_pending`/`external_wait_pending`) also drain: the exit waits
+   *          out their (bounded) timeout rather than tearing down live
+   *          alarms/correlation rows. A terminal-failed item under an EXISTING
+   *          doom records nothing and changes nothing — its null hole is the
+   *          contract.
    *   2. EXIT — success when every hole is filled and all items started; failure
    *      (`child_failed:<blame instance>`) when doomed and nothing remains in
    *      flight. Failure results keep FULL-LENGTH null holes (deliberately
@@ -2260,7 +2286,6 @@ export function createEngine(doc: EngineDoc): Engine {
         const scope: ItemScope = { container: c, itemIndex: i };
         const blamed = containerOutcomeFailure(c, state, scope);
         if (blamed === null) {
-          const merged = mergeChildOutputs(c, state, (ch) => instanceKey(ch, i));
           const nodes = { ...state.nodes };
           const outputs = { ...state.outputs };
           const branches = { ...state.branches };
@@ -2270,6 +2295,15 @@ export function createEngine(doc: EngineDoc): Engine {
             delete outputs[k];
             delete branches[k];
           }
+          // DOOM DRAIN — a TRUNCATED item (any child flipped `skipped` by the
+          // doom before it ran) keeps its NULL HOLE: its partial merge recorded
+          // here would read as a completed item downstream. An item with NO
+          // flipped children genuinely completed mid-drain and records normally
+          // (see the docblock).
+          if (cs.doomed?.flipped.some((k) => parseInstanceKey(k)?.itemIndex === i) === true) {
+            return { state: { ...state, nodes, outputs, branches }, changed: true };
+          }
+          const merged = mergeChildOutputs(c, state, (ch) => instanceKey(ch, i));
           const nextResults = [...results];
           nextResults[i] = merged;
           const next: RunState = {
@@ -2291,18 +2325,31 @@ export function createEngine(doc: EngineDoc): Engine {
               `no new items start`,
           );
           // Flip every non-in-flight, non-terminal instance to `skipped` so it
-          // can never dispatch; genuinely in-flight instances drain.
+          // can never dispatch; genuinely in-flight instances drain. A
+          // `retry_pending` hold is CANCELLED to terminal `failure` instead: it
+          // is "in flight" only in the run-parking sense — its next act would be
+          // to START a fresh billable attempt whose result doom discards (the
+          // item's slot stays a null hole either way), so the held failure
+          // stands. The armed alarm's later `node.retryDue` folds to a benign
+          // no-op (`onRetryDue`'s status guard).
           let nodes = state.nodes;
+          const flipped: string[] = [];
           for (const k of instanceKeysOf(state, c)) {
             const ns = nodes[k]!;
+            if (ns.status === 'retry_pending') {
+              if (nodes === state.nodes) nodes = { ...nodes };
+              nodes[k] = { ...ns, status: 'failure', currentAttemptId: undefined };
+              continue;
+            }
             if (TERMINAL_NODE.has(ns.status) || isNodeInFlight(ns.status)) continue;
             if (nodes === state.nodes) nodes = { ...nodes };
             nodes[k] = { ...ns, status: 'skipped', currentAttemptId: undefined };
+            flipped.push(k);
           }
           const next: RunState = {
             ...state,
             nodes,
-            containers: { ...state.containers, [cid]: { ...cs, doomed: { blame } } },
+            containers: { ...state.containers, [cid]: { ...cs, doomed: { blame, flipped } } },
           };
           return { state: next, changed: true };
         }

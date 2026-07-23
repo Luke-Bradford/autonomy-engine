@@ -579,3 +579,162 @@ describe('foreach batchCount: 1 — byte-identical sequential behaviour', () => 
     expect(explicit.state.containers.fe!.outputs).toEqual({ results: [{ v: 0 }] });
   });
 });
+
+// ===========================================================================
+// doom-drain refinements (pre-PR review findings)
+// ===========================================================================
+
+describe('parallel foreach — doom-truncated items keep their null holes', () => {
+  it('an item draining clean AFTER the doom records NO result (its body may be truncated)', () => {
+    // Body a → b: at doom time item 0 has a@0 in flight and b@0 still pending;
+    // the doom flips b@0 to `skipped`, so when a@0 later drains successfully the
+    // item is all-terminal and outcome-clean — but its body was TRUNCATED (b
+    // never ran). Recording the partial merge would make it indistinguishable
+    // from a completed item downstream; the slot must stay a null hole.
+    const eng = engine(
+      [node('a'), node('b'), node('recover')],
+      [edge('a', 'b', 'success'), edge('fe', 'recover', 'completion')],
+      [pfe('fe', ['a', 'b'], '${params.list}')],
+    );
+    const r0 = eng.reduce(eng.seedState(), started({ list: ['x', 'y'] }));
+    expect(dispatchIds(r0.commands)).toEqual(['a@0', 'a@1']);
+    let s = r0.state;
+    s = eng.reduce(s, dispatched('a@0', 'a@0#0')).state;
+    s = eng.reduce(s, dispatched('a@1', 'a@1#0')).state;
+    // item 1 fails → b@1 skips → item 1 blamed → DOOM: b@0 (pending) flipped.
+    s = eng.reduce(s, failed('a@1', 'a@1#0')).state;
+    expect(s.containers.fe!.doomed).toEqual({ blame: 'a@1', flipped: ['b@0'] });
+    expect(s.nodes['b@0']!.status).toBe('skipped');
+    // a@0 drains SUCCESSFULLY → item 0 is outcome-clean but truncated.
+    const done = eng.reduce(s, succeeded('a@0', 'a@0#0', { va: 1 }));
+    expect(done.state.containers.fe!.status).toBe('failure');
+    expect(done.state.containers.fe!.reason).toBe('child_failed:a@1');
+    // The truncated item's slot is a NULL HOLE — not the partial `{ va: 1 }`.
+    expect(done.state.containers.fe!.outputs).toEqual({ results: [null, null] });
+    // ... and its instance entries were still cleaned up.
+    expect(done.state.nodes['a@0']).toBeUndefined();
+    expect(done.state.nodes['b@0']).toBeUndefined();
+  });
+});
+
+describe('parallel foreach — doom cancels a retry hold', () => {
+  it('flips retry_pending to terminal failure at doom; the late alarm folds to a no-op', () => {
+    const eng = engine(
+      [node('w', {}, { policy: { retry: 1 } }), node('recover')],
+      [edge('fe', 'recover', 'completion')],
+      [pfe('fe', ['w'], '${params.list}')],
+    );
+    const r0 = eng.reduce(eng.seedState(), started({ list: ['x', 'y'] }));
+    let s = r0.state;
+    s = eng.reduce(s, dispatched('w@0', 'w@0#0')).state;
+    s = eng.reduce(s, dispatched('w@1', 'w@1#0')).state;
+    // item 0 fails TRANSIENTLY → held retry_pending (alarm armed by the driver).
+    s = eng.reduce(s, failed('w@0', 'w@0#0', 'flaky', 'transient')).state;
+    expect(s.nodes['w@0']!.status).toBe('retry_pending');
+    // item 1 fails PERMANENTLY → doom. The hold is CANCELLED (a fresh attempt's
+    // result would be discarded anyway) → nothing is live → immediate exit,
+    // WITHOUT waiting out the retry alarm.
+    const atDoom = eng.reduce(s, failed('w@1', 'w@1#0'));
+    s = atDoom.state;
+    expect(s.nodes['w@0']!.status).toBe('failure');
+    expect(s.containers.fe!.status).toBe('failure');
+    expect(s.containers.fe!.reason).toBe('child_failed:w@1');
+    expect(s.containers.fe!.outputs).toEqual({ results: [null, null] });
+    // No fresh dispatch was started for the cancelled hold.
+    expect(dispatchIds(atDoom.commands)).toEqual(['recover']);
+    // The armed alarm still fires later → benign status-guard no-op.
+    s = eng.reduce(s, dispatched('recover', 'recover#0')).state;
+    const stale = eng.reduce(s, {
+      type: 'node.retryDue',
+      runId: RUN,
+      nodeId: 'w@0',
+      previousAttemptId: 'w@0#0',
+    });
+    expect(stale.state).toEqual(s);
+    expect(stale.commands).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// downstream consumption of the aggregate (review gap)
+// ===========================================================================
+
+describe('parallel foreach — ${nodes.<fe>.output.results} downstream', () => {
+  it('a downstream node consumes the ORDER-STABLE aggregate off the success edge', () => {
+    const eng = engine(
+      [node('w'), node('after', { all: '${nodes.fe.output.results}' })],
+      [edge('fe', 'after', 'success')],
+      [pfe('fe', ['w'], '${params.list}')],
+    );
+    const { state, commandsSeen } = drive(
+      eng,
+      { list: ['a', 'b'] },
+      { outcomeFor: (nodeId) => ({ outcome: 'success', outputs: { v: nodeId } }) },
+    );
+    expect(state.status).toBe('success');
+    const after = commandsSeen.find(
+      (c): c is Extract<EngineCommand, { type: 'dispatchNode' }> =>
+        c.type === 'dispatchNode' && c.nodeId === 'after',
+    );
+    expect(after!.preparedInput).toEqual({ all: [{ v: 'w@0' }, { v: 'w@1' }] });
+  });
+});
+
+// ===========================================================================
+// runtime enter guards for LEGACY rows (validateDoc mirror — review gap)
+// ===========================================================================
+
+describe('parallel foreach — runtime enter guards (legacy pre-validation rows)', () => {
+  it("refuses a doc with an '@' entity id at parallel enter → finishRun invalid_event", () => {
+    // Bypasses validateDoc deliberately (an immutable legacy row the save-time
+    // gate never saw): the reducer must refuse rather than mis-fold `x@2`
+    // events onto another node's item instance.
+    const eng = engine([node('w'), node('x@2')], [], [pfe('fe', ['w'], '${params.list}')]);
+    const r0 = eng.reduce(eng.seedState(), started({ list: ['a'] }));
+    expect(r0.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    expect(r0.diagnostics.some((d) => d.includes("reserves '@'"))).toBe(true);
+  });
+
+  it('refuses a back-edge touching the parallel body at enter → finishRun invalid_event', () => {
+    const eng = engine(
+      [node('w1'), node('w2')],
+      [edge('w1', 'w2', 'success'), { ...edge('w2', 'w1', 'failure'), back: true }],
+      [pfe('fe', ['w1', 'w2'], '${params.list}')],
+    );
+    const r0 = eng.reduce(eng.seedState(), started({ list: ['a'] }));
+    expect(r0.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    expect(r0.diagnostics.some((d) => d.includes('back-edge'))).toBe(true);
+  });
+
+  it('refuses a back-edge whose RESET BODY overlaps the parallel body (endpoints outside)', () => {
+    // Legacy defect shape: a cross-boundary edge t→w (refused at save, voided
+    // from routing) puts body child w on the forward path t..u, so the back-edge
+    // u→t's reset body includes w even though neither endpoint touches the body.
+    // `fireBackEdges` would wait on `state.nodes['w']` forever (parallel children
+    // have no bare entries) — the guard must refuse at enter instead.
+    const eng = engine(
+      [node('t'), node('u'), node('w')],
+      [
+        edge('t', 'w', 'success'),
+        edge('w', 'u', 'success'),
+        { ...edge('u', 't', 'failure'), back: true },
+      ],
+      [pfe('fe', ['w'], '${params.list}')],
+    );
+    const r0 = eng.reduce(eng.seedState(), started({ list: ['a'] }));
+    expect(r0.commands).toContainEqual({
+      type: 'finishRun',
+      outcome: 'failure',
+      reason: 'invalid_event',
+    });
+    expect(r0.diagnostics.some((d) => d.includes('back-edge'))).toBe(true);
+  });
+});

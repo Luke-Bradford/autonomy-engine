@@ -3,7 +3,7 @@ import {
   createEngine,
   resolveRunParams,
   DEFAULT_RETRY_INTERVAL_SECONDS,
-  docNodeIdOf,
+  resolveDocNode,
   EngineEventSchema,
   FAILURE_CODES,
   MAX_WAIT_SECONDS,
@@ -448,10 +448,7 @@ export function retryArmInput(
   // the policy lives on the doc node behind it (exact id first — a legacy
   // literal `x@2` node resolves to itself). The alarm's ref/dedupe key keeps the
   // INSTANCE id, so two items' holds on the same doc node never collide.
-  const policy = (
-    doc.nodes.find((n) => n.id === args.nodeId) ??
-    doc.nodes.find((n) => n.id === docNodeIdOf(args.nodeId))
-  )?.policy;
+  const policy = resolveDocNode(doc.nodes, args.nodeId)?.policy;
   // #602 — floor a supplied provider hint at the 30s D4 anti-hot-loop minimum;
   // the no-hint path (reconciler) keeps the author's configured interval as-is.
   const flooredHint =

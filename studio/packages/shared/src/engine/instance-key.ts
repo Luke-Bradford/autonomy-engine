@@ -44,3 +44,19 @@ export function parseInstanceKey(id: string): { docId: string; itemIndex: number
 export function docNodeIdOf(id: string): string {
   return parseInstanceKey(id)?.docId ?? id;
 }
+
+/**
+ * Resolve the doc node behind an event/command/row nodeId over a node LIST:
+ * EXACT id first (a legacy sequential doc's literal `x@2` node resolves to
+ * itself), then the instance-suffix strip for a parallel-body instance key.
+ * The ONE resolution policy for every server-side `nodes.find` site (executor,
+ * external-wait callback, retry-policy read) — a hand-rolled pair of `find`s at
+ * a new site is exactly the drift this module's header warns about. (The
+ * reducer's `docNodeFor` applies the same policy over its prebuilt Map.)
+ */
+export function resolveDocNode<T extends { id: string }>(
+  nodes: readonly T[],
+  id: string,
+): T | undefined {
+  return nodes.find((n) => n.id === id) ?? nodes.find((n) => n.id === docNodeIdOf(id));
+}

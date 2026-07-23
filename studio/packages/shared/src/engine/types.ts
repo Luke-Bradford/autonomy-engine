@@ -357,12 +357,24 @@ export const ContainerRunStateSchema = z.object({
   /**
    * FOREACH PARALLEL mode only (#4 A4b): the fail-fast DRAIN marker. Set when an
    * item completes with a blamed failure: no new items start, non-in-flight
-   * instance nodes are skipped, genuinely in-flight instances drain to terminal,
-   * and once nothing is in flight the container exits
-   * `failure{child_failed:<blame>}`. `blame` is the blamed INSTANCE key
+   * instance nodes are flipped to `skipped` (recorded in `flipped` — see below),
+   * `retry_pending` holds are cancelled to terminal `failure` (no fresh billable
+   * attempt whose result doom would discard), genuinely in-flight instances
+   * drain to terminal, and once nothing is in flight the container exits
+   * `failure{child_failed:<blame>}`. An item draining clean AFTER the doom
+   * records its result ONLY if none of its children appear in `flipped` — a
+   * flipped child means the body was TRUNCATED by the doom, and recording its
+   * partial merge would be indistinguishable from a completed item; a truncated
+   * item keeps its NULL results hole. `blame` is the blamed INSTANCE key
    * (`<docNodeId>@<i>`). Unset while healthy and in sequential mode.
    */
-  doomed: z.object({ blame: z.string() }).optional(),
+  doomed: z
+    .object({
+      blame: z.string(),
+      /** Instance keys the doom flip turned to `skipped` (truncation record). */
+      flipped: z.array(z.string()),
+    })
+    .optional(),
 });
 export type ContainerRunState = z.infer<typeof ContainerRunStateSchema>;
 
