@@ -115,15 +115,30 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
   over the same children (clears outputs each round, `exitWhen`) — that's `until`. `foreach` is
   **item-based**: `items` array, `${item}` context, parallel `batchCount`, deterministic per-item
   output aggregation + per-item namespacing, and #1's parallel-variable-mutation reject applies.
-  - **BUILD SPLIT — A4a SHIPPED 2026-07-17 (sequential), A4b DEFERRED → #566 (parallel).** A4a is
+  - **BUILD SPLIT — A4a SHIPPED 2026-07-17 (sequential), A4b SHIPPED 2026-07-23 (parallel, #566
+    closed; slice 1 `fd3ecc6` + slice 2 `3ed6616`).** A4a is
     the SEQUENTIAL foreach: `round` doubles as the item index, one item per round, reusing the loop's
     `resetContainerRound`→`resetNodes` machinery; `${item}` seeded per-dispatch via `foreachItemOf`;
     the order-stable `{ results }` aggregate (`${nodes.<foreach>.output.results}`) accumulated on
     `ContainerRunState.results` (partial on a fail-fast child failure); zero-item → immediate success.
-    **`batchCount` and the F5c parallel-variable-mutation reject are #566** — true parallelism needs
-    per-item node-state namespacing (item 0's `childA` and item 1's `childA` collide on the single
-    global `state.nodes.childA`), a structural change; `results` is "input-order-stable regardless of
-    `batchCount`", so #566 is forward-compatible. No inert `batchCount` field shipped in A4a.
+  - **A4b SHIPPED SHAPE (two slices).** Slice 1 = intra-run concurrent dispatch (the driver pump
+    multiplexes adapter streams so >1 dispatched node progresses per run). Slice 2 =
+    `ContainerSchema.batchCount` (foreach-only, `1..50`; absent/`1` = sequential, byte-identical to
+    A4a — pinned by a log-equality test). Each in-flight item i's body-node state lives under
+    `<nodeId>@<i>` instance keys in `state.nodes`/`outputs`/`branches`; events carry the instance key
+    in the EXISTING `nodeId` field (no event-union change — bound logs re-fold unchanged);
+    `instance-key.ts` is the ONE grammar (build/parse/strip + `resolveDocNode`, exact-id-first so
+    legacy sequential docs with literal `@` ids keep working), shared by reducer, server lookups, and
+    the web run view. Save-time refusals (+ runtime mirrors for legacy immutable rows the validator
+    never saw): `batchCount` on loop/stage; `batchCount >= 2` with a back-edge touching the body; any
+    doc id containing `@`. Fail-fast doom: first blamed item dooms the container — no new items
+    start, non-in-flight instances flip to `skipped` (recorded in `doomed.flipped`), `retry_pending`
+    holds are CANCELLED to terminal failure (no fresh billable attempt whose result doom discards),
+    in-flight work drains; a doom-truncated item keeps its null `results` hole (failure `results` are
+    full-length null-holed — deliberately different from sequential's prefix shape, both pinned).
+    `recoverInFlight` re-derives per-item dispatches on crash recovery. **F5c
+    parallel-variable-mutation reject lands WITH the variables work (F5a)** — variables do not exist
+    yet, so there is nothing to reject (#566's own scope note; #566 closed with that disposition).
     **Static-checker limitation (#567):** `${nodes.<foreach>.output.results}` downstream and precise
     `items` dominance draw an ADVISORY save-time false-reject — container ids are not first-class
     producers in `computeGraph`/`outputsById` (a pre-existing loop/stage gap); the RUN path resolves
