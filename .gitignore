@@ -17,9 +17,8 @@ __pycache__/
 /var/events/
 .claude/agents/planner.md
 
-# The playwright MCP server (.mcp.json, #711) writes page snapshots / traces into
-# this dir in the CWD it is launched from. Every unattended fire that drives a
-# browser would otherwise leave git-VISIBLE dirt, which the supervisor's
-# "tree clean on origin/main" preflight stashes and a recovery hook can sweep
-# onto the working branch. Ignored so the browser is side-effect-free on the tree.
+# Page snapshots / traces the playwright MCP server writes into its launch CWD.
+# Unattended this is git-VISIBLE dirt: the supervisor's "tree clean on
+# origin/main" preflight stashes it and a recovery hook can sweep it onto the
+# working branch — same reason the /var/ artifacts above are ignored.
 /.playwright-mcp/
