@@ -45,6 +45,7 @@ import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
 import { readWorkspaceFilesAtRef } from '../git/workspace-read.js';
 import {
   CliGitProvider,
+  githubTokenTransportAuth,
   GitOperationError,
   GitUnavailableError,
   type GitProvider,
@@ -92,6 +93,10 @@ export interface WorkspaceGitRoutesOptions {
    * AND the remote is a GitHub host, the pull-request route auto-opens the PR via
    * the host API; otherwise it falls back to G9a's guided-manual compare URL.
    * Trimmed at the boundary — a whitespace-only value counts as absent.
+   *
+   * #3 G10 — when set, this token ALSO authenticates git HTTPS transport
+   * (clone/fetch/push) for a github.com remote (see `githubTokenTransportAuth`);
+   * a non-github remote is unaffected. Ignored when a test injects `provider`.
    */
   githubToken?: string | null;
   /** #3 G9b — test seam for the GitHub host API; defaults to a real `GitHubHostClient`. */
@@ -167,12 +172,23 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
 ) => {
   const { db } = fastify;
   const { workspaceGitRoot } = opts;
-  const provider = opts.provider ?? new CliGitProvider();
   const hostClient = opts.hostClient ?? new GitHubHostClient();
   // #3 G9b — normalize the operator-env token ONCE: a whitespace-only value (or
   // an empty/unset `GH_TOKEN`) counts as absent, so it falls back to guided-manual
   // rather than attempting an auth that would 401. `null` = no token.
   const githubToken = (opts.githubToken ?? '').trim() || null;
+  // #3 G10 — the SAME operator-env token also authenticates git HTTPS transport
+  // (clone/fetch/push) for a github.com remote, closing the gap where G9b opens a
+  // PR via REST but the preceding `git push` has no credential on a headless host
+  // with no credential helper. github.com-scoped + redacted; a non-github remote
+  // is unaffected. No token → the G2 auth model (SSH agent / credential helper).
+  const transportAuth = githubToken !== null ? githubTokenTransportAuth(githubToken) : null;
+  const provider =
+    opts.provider ??
+    new CliGitProvider({
+      httpAuth: transportAuth?.httpAuth,
+      secretsToRedact: transportAuth?.secrets ?? [],
+    });
   const queue = new KeyedQueue();
 
   fastify.get('/api/workspace/git', async (request) => {

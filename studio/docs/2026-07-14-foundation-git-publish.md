@@ -147,7 +147,7 @@ reconcile are core. Corrections:
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual — **G9a (persisted `working_branch` + feature-branch selection + GUIDED-MANUAL compare URL) SHIPPED 2026-07-24**; **G9b (GitHub REST auto-open + PR-observe via an operator-env token) SHIPPED 2026-07-24** (built-block below). G9 core shipped; conflict/divergence + stored-PAT/multi-remote polish is G10 |
-| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**. REMAINING: the PROACTIVE descendant guard (base = the commit the DB was imported from, #662 — needs a persisted imported-from-commit column; advisory, distinct from slice 2's reactive push-side classification), stored-PAT auth via `CliGitProvider.secretsToRedact` (the G10 auth seam), multi-remote |
+| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**; **slice 3 (the PROACTIVE descendant guard — advisory `POST /api/workspace/git/divergence`, base = the imported-from commit #662) SHIPPED 2026-07-24**; **slice 4 (operator-env token wired into git HTTPS transport auth — github.com-scoped `http.extraHeader`, redacted; closes the G9b push-auth gap) SHIPPED 2026-07-24** (built-block below). REMAINING: a DB-STORED PAT (encryption/UI/per-remote decisions), non-github hosts, multi-remote |
 
 ### G1 built-block (2026-07-23)
 
@@ -762,6 +762,43 @@ PR via the GitHub REST API when it can, guided-manual stays the fallback.
   delegates to it (pinned so the two can't drift). The route stays OUT of the
   per-owner `KeyedQueue` — a pure DB read + a bounded outbound call, no
   checkout/index mutation.
+
+### G10 built-block (2026-07-24) — operator-env token wired into git HTTPS transport auth
+
+Slices 1-3 shipped (advisory drift report; non-fast-forward push → 409 `conflict`;
+proactive descendant guard). This slice closes the auth gap G9b left: G9b opens a
+PR via the REST API using the operator-env token, but the `git push` of the
+working branch that must PRECEDE the PR had NO credential on a headless host with
+no OS credential helper — so a token-only operator could open a PR whose branch
+never landed. The SAME token now authenticates HTTPS transport too.
+
+- **Injection = a github.com-scoped `http.extraHeader` in the NETWORK ops' child
+  ENV, never the argv.** `githubTokenTransportAuth(token)` builds
+  `AUTHORIZATION: basic base64("x-access-token:<token>")` (the canonical
+  git-over-HTTPS token form — GitHub accepts basic auth with any username + the
+  token as password; `x-access-token` matches `actions/checkout`). NOTE the
+  deliberate asymmetry: git TRANSPORT wants **Basic**, the REST client
+  (`github-host.ts`) wants **Bearer** — do not unify. `applyHttpAuthEnv` overlays
+  it as `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` (git ≥ 2.31),
+  APPENDING at the next free index so an operator's own `GIT_CONFIG_*` survives. It
+  is env-not-argv on purpose: a base64'd token on the process command line is
+  readable via `ps` (a leak `secretsToRedact`, which scrubs only error TEXT, can't
+  cover).
+- **URL-scoping makes it safe to attach to EVERY network op.** Verified
+  empirically (`config --get-urlmatch`): git applies `http.https://github.com/.
+  extraHeader` ONLY to requests whose URL matches — a non-github remote (SSH, a
+  different host, a local path) never receives it, and git re-evaluates the match
+  per requested URL so a redirect to another host drops it too. So clone/fetch/push
+  carry the overlay unconditionally; only the LOCAL plumbing ops (rev-parse,
+  merge-base, commit, …) run on the base env, never even seeing the token.
+- **Redaction:** both the raw token AND its base64 credential go into
+  `secretsToRedact` (the seam G2 reserved), so no stderr/error can quote either.
+- **Storage: operator-env, NOT DB (deferred).** This reuses G9b's env-token model.
+  A DB-STORED PAT — with its own encryption/UI/per-remote-selection decisions — and
+  non-github hosts + multi-remote remain later G10 slices. Wired at the route:
+  `transportAuth = githubToken ? githubTokenTransportAuth(githubToken) : null` →
+  the default `CliGitProvider({ httpAuth, secretsToRedact })`; a test-injected
+  `provider` seam is unaffected.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

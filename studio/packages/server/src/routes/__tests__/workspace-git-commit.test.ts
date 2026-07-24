@@ -87,6 +87,44 @@ describe('workspace-git commit route', () => {
     expect(envelope.exportedAt).toBe(0);
   });
 
+  it('#3 G10 — with an operator-env token wired in, connect+commit+push to a NON-github remote still succeed (the github-scoped transport auth is inert)', async () => {
+    // Build a SEPARATE app whose real default provider is constructed WITH the
+    // transport auth (no injected `provider`), then drive the full clone→push
+    // flow against a path remote: the github.com-scoped `http.extraHeader` never
+    // matches it, so every network op is unaffected. Proves the route wiring
+    // (`new CliGitProvider({ httpAuth, secretsToRedact })`) end-to-end, not just
+    // by typecheck.
+    const tokenApp = await buildTestAppWithContext({ githubToken: 'ghp_operatorEnvToken' });
+    try {
+      const { remote } = seedRemote(tokenApp.tmpDir);
+      const connectRes = await tokenApp.app.inject({
+        method: 'POST',
+        url: '/api/workspace/git',
+        payload: { repoUrl: remote },
+      });
+      expect(connectRes.statusCode).toBe(201);
+
+      const pipeline = createPipeline(tokenApp.app.db, { ownerId: 'local', name: 'Tokened' });
+      createPipelineVersion(tokenApp.app.db, baseVersion(pipeline.id));
+
+      const res = await tokenApp.app.inject({
+        method: 'POST',
+        url: '/api/workspace/git/commit',
+        payload: { message: 'commit with token wired' },
+      });
+      expect(res.statusCode).toBe(200);
+      const { commit: result } = res.json();
+      expect(result.committed).toBe(true);
+      expect(result.commitSha).toMatch(/^[0-9a-f]{40}$/);
+
+      // The push really landed on the working branch of the (non-github) remote.
+      const verify = cloneWorkingBranch(remote);
+      expect(readFileSync(join(verify, 'pipelines/tokened.json'), 'utf8')).toContain('"pipeline"');
+    } finally {
+      await tokenApp.app.close();
+    }
+  });
+
   it('a second commit with no changes is a no-op (committed:false)', async () => {
     const { remote } = seedRemote(testApp.tmpDir);
     await connect(remote);
