@@ -19,7 +19,7 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
-import { getConnection } from '../repo/connections.js';
+import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getConnectionQuotaResetEpoch } from '../repo/connection-quota.js';
 import { getSecretByRef, getSecretByName } from '../repo/secrets.js';
 import { decrypt } from '../secrets/secrets.js';
@@ -360,16 +360,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // `SECRET_NOT_FOUND`/`SECRET_UNDECRYPTABLE` checks below remain the belt-
     // and-suspenders guard for a `ready` row whose secret later vanished / won't
     // decrypt.
-    if (!connection.enabled) {
+    // #3 G8b — one readiness decision, shared with the enable-time gate
+    // (`connectionNotReadyReason`) so the two can never drift; the distinct
+    // messages stay here (behaviour byte-identical to the G8a inline checks).
+    const notReadyReason = connectionNotReadyReason(connection);
+    if (notReadyReason !== null) {
       return {
-        error: `connection '${connectionId}' is disabled`,
-        code: FAILURE_CODES.CONNECTION_NOT_READY,
-        kind: 'permanent',
-      };
-    }
-    if (connection.secretStatus === 'needs_secret') {
-      return {
-        error: `connection '${connectionId}' is missing its required secret (needs_secret)`,
+        error:
+          notReadyReason === 'disabled'
+            ? `connection '${connectionId}' is disabled`
+            : `connection '${connectionId}' is missing its required secret (needs_secret)`,
         code: FAILURE_CODES.CONNECTION_NOT_READY,
         kind: 'permanent',
       };

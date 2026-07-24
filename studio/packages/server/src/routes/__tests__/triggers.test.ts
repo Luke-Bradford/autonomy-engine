@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import {
   archivePipelineRow,
+  createConnection,
   createPipeline,
   createPipelineVersion,
   createTrigger,
@@ -169,6 +170,129 @@ describe('triggers routes', () => {
       payload: { pipelineVersionId: null },
     });
     expect(unbindEnabled.statusCode).toBe(400);
+  });
+
+  describe('#3 G8b — enable-time connection-readiness gate', () => {
+    // A version whose only node (`llm_call`, connectionKinds includes ollama +
+    // anthropic_api) binds `connectionExpr` (a literal DB id, a `${}` ref, or
+    // none). `ollama` is credential-less ⟹ READY; `anthropic_api` w/o a secret ⟹
+    // needs_secret.
+    function versionBoundTo(connectionExpr: string | undefined): string {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Gated' });
+      return createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [{ name: 'c', type: 'string', required: false }],
+        outputs: [],
+        nodes: [
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            connectionId: connectionExpr,
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      }).id;
+    }
+    function readyConn(): string {
+      return createConnection(app.db, {
+        ownerId: 'local',
+        name: 'Ready',
+        kind: 'ollama',
+        config: {},
+        secretRef: null,
+      }).id;
+    }
+    function needsSecretConn(): string {
+      return createConnection(app.db, {
+        ownerId: 'local',
+        name: 'NoSecret',
+        kind: 'anthropic_api',
+        config: {},
+        secretRef: null,
+      }).id;
+    }
+
+    it('CREATE: an ENABLED trigger bound to a needs_secret-connection version is 400', async () => {
+      const versionId = versionBoundTo(needsSecretConn());
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(versionId),
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad_request');
+      expect(res.json().message).toContain('needs_secret');
+    });
+
+    it('CREATE: a DISABLED trigger bound to the same unready version IS allowed (author ahead of provisioning)', async () => {
+      const versionId = versionBoundTo(needsSecretConn());
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: { ...triggerBody(versionId), enabled: false },
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('CREATE: an ENABLED trigger bound to a READY (not_required) connection version is 201', async () => {
+      const versionId = versionBoundTo(readyConn());
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(versionId),
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('CREATE: a ${}-dynamic connection ref does NOT block enable (dispatch-time domain)', async () => {
+      const versionId = versionBoundTo('${params.c}');
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/triggers',
+        payload: triggerBody(versionId),
+      });
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('PATCH: enabling a disabled trigger bound to an unready version is 400', async () => {
+      const versionId = versionBoundTo(needsSecretConn());
+      const draft = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: { ...triggerBody(versionId), enabled: false },
+        })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${draft.id}`,
+        payload: { enabled: true },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad_request');
+    });
+
+    it('PATCH: rebinding an ENABLED trigger onto an unready version is 400 (effective binding is checked)', async () => {
+      const readyVersion = versionBoundTo(readyConn());
+      const unreadyVersion = versionBoundTo(needsSecretConn());
+      const bound = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/triggers',
+          payload: triggerBody(readyVersion),
+        })
+      ).json();
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${bound.id}`,
+        payload: { pipelineVersionId: unreadyVersion },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('bad_request');
+    });
   });
 
   describe('pipelineVersionId cross-owner reference seam', () => {
