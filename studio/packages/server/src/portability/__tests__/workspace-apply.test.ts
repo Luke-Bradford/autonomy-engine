@@ -598,6 +598,55 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(tgtTrig.enabled).toBe(false);
   });
 
+  it('#3 G7: an unresolvable-bound trigger re-imported is now idempotent (unchanged, no churn)', () => {
+    // A trigger authored enabled+bound to a version ABSENT from this workspace:
+    // the first apply reconciles it to (null, disabled) — the "absent → disabled"
+    // charter. A SECOND import of the SAME branch must now classify `unchanged`:
+    // the resolved-space content compare normalizes the branch's dangling binding
+    // to (null, disabled) too, matching the persisted DB row. (Was a DOCUMENTED
+    // perpetual-`update` non-idempotency until G7.)
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(src, baseVersion(pipe.id));
+    createTrigger(src, triggerOn(version.id));
+    const incoming = snapshot(src);
+    // The binding is a literal version resourceId absent from the TARGET workspace.
+    incoming.triggers[0]!.data.pipelineVersionId = 'res_absent';
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    const first = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(first.pipelineVersionId).toBeNull();
+    expect(first.enabled).toBe(false);
+
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
+  });
+
+  it('#3 G7: a trigger bound to a NON-LATEST but still-existing owned version stays bound + unchanged', () => {
+    // serialize emits only the latest version per pipeline, but the resolution
+    // domain is ALL owned versions — so a trigger pinned to an OLDER owned version
+    // resolves and stays bound; it is NOT over-disabled. Only a truly ABSENT
+    // version disables. (Regression guard for the resolved-space normalization.)
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(src, baseVersion(pipe.id));
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'o', type: 'string' }], // v2 — a newer, distinct version
+    });
+    createTrigger(src, triggerOn(v1.id)); // pinned to the OLDER version
+    const incoming = snapshot(src);
+    expect(incoming.triggers[0]!.data.pipelineVersionId).toBe(v1.resourceId);
+
+    // Reconcile the DB against its own branch (a re-pull): the v1 binding survives.
+    const result = applyWorkspace(src, 'local', incoming, 'sha1', 'main');
+    expect(result.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
+    const t = listTriggers(src, { ownerId: 'local' })[0]!;
+    expect(t.pipelineVersionId).toBe(v1.id); // still bound to v1, NOT disabled
+    expect(t.enabled).toBe(true);
+  });
+
   it('binds a trigger to a co-created pipeline version minted in the SAME apply', () => {
     // The trigger's binding resolves only AFTER the version mint loop runs — the
     // ordering guarantee (triggers applied after mints).

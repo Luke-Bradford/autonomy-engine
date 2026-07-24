@@ -144,7 +144,7 @@ reconcile are core. Corrections:
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); **G5c-1 (the transactional APPLY write-path for connections + pipelines + archive) SHIPPED 2026-07-23** (built-block below); TRIGGER apply is **G5c-2** (#670, next) |
 | G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b (git provenance on versions — reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import) SHIPPED** (built-block below); **G6c** further sliced: **G6c-1 (the `active` pointer projection + CAS Publish `pipeline.published` + route) SHIPPED** (built-block below); **G6c-2 (resolve-once bind-to-active — the trigger-creation convenience that reads this projection: git-mode → active, DB-only → latest) SHIPPED** (built-block below). G6 fully sliced + shipped |
-| G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
+| G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
 | G10 | Conflict/divergence UX; multi-remote/auth polish |
@@ -470,7 +470,8 @@ pipeline/connection apply, and the murkiest deferred semantics (mode-consistency
   unresolved literal → null + `enabled:false`, "absent→disabled" is G7), the
   `import.ts` mode-consistency forcing (collab branches are hand-editable), and
   the documented perpetual-`update` idempotency exception for a force-disabled
-  unbound trigger (until G7's readiness reconcile). Connection/trigger
+  unbound trigger (until G7's readiness reconcile — now SHIPPED, resolved by the
+  resolved-space compare in the G7 built-block below). Connection/trigger
   orphan-delete (absent from branch) semantics still owed.
 
 ### G6a built-block (2026-07-23) — the workspace-audit event log
@@ -660,6 +661,58 @@ The final G6 slice — the trigger-creation CONVENIENCE that reads the G6c-1
   concrete bind, so no new guard here); web-client mirroring (`bindToActive` is a
   server-route-local request-only field, deliberately NOT in shared
   `NewTriggerSchema` — no UI consumer until the post-P7 Git UI section).
+
+### G7 built-block (2026-07-24) — trigger-binding reconcile: resolved-space content compare
+
+The "absent → disabled" trigger-binding reconcile was ALREADY built in G5c-2
+(#670): `resolveTriggerBinding` remaps a branch trigger's binding resourceId →
+DB id, an unresolved id folds to `null`, and `buildTriggerWriteInput`
+force-disables an unbound trigger. What G7 adds is the READINESS reconcile that
+makes that force-disable IDEMPOTENT — the documented perpetual-`update` churn
+G5c-2 left for G7, which is exactly #668 ("is `enabled` authoring content or
+local-readiness?").
+
+- **#668 RESOLVED: `enabled` STAYS authoring content** in the shared
+  `triggerContentForm` — NOT excluded like `requiresSecret`. A pre-PR planner pass
+  proved the churn's real driver is the dangling BINDING field, not `enabled`:
+  the compare was `triggerContentForm(rawIncoming)` (binding = the absent
+  resourceId) vs `dbTriggerContentForm(existing)` (binding force-resolved to
+  `null`) — they differ on the BINDING regardless of `enabled`, so excluding
+  `enabled` would have fixed nothing and needlessly dropped authored
+  enable/disable propagation for healthy bound triggers.
+- **The fix is a RESOLVED-SPACE compare, one layer up from the shared form.** New
+  server module `server/src/portability/trigger-content.ts`:
+  `normalizedTriggerContentForm(data, resolves)` normalizes an incoming trigger
+  whose binding does not resolve to `(null, disabled)` — exactly what the apply
+  persists — BEFORE computing the raw `triggerContentForm`. The DB side needs no
+  normalization (`serializeTrigger` already renders a stored null binding as
+  `null`, a bound one via the all-versions map). `enabledForBinding(hasBinding,
+  authored)` is the SINGLE definition of the unbound⇒disabled rule, shared by
+  `normalizedTriggerContentForm` and `buildTriggerWriteInput` so the persisted row
+  and the content compare can never disagree. A genuine enable/disable on a BOUND
+  trigger still differs → still propagates.
+- **Two loci, one predicate.** LOCUS 1 = the APPLY (`workspace-apply.ts` update
+  path, the correctness site pinned by the characterization test) resolves via its
+  in-scope `versionById` (owner versions ∪ in-batch mints). LOCUS 2 = the PREVIEW
+  classifier (`classifyWorkspace`, advisory) gains a REQUIRED `ownedVersionRids`
+  param (no fail-open default) and unions it with the branch's own to-be-minted
+  version ids; the preview route + the apply's plan-build both pass
+  `listVersionResourceIds(db, ownerId)`.
+- **`listVersionResourceIds` = the apply's `versionById` domain 1:1** — ALL
+  versions of ALL owner pipelines INCLUDING archived (`listPipelines` has no
+  archived filter). It CANNOT be derived from the serialized DB snapshot, which
+  carries only the LATEST version per pipeline and omits archived pipelines — a
+  trigger pinned to a non-latest/archived-pipeline version must resolve and stay
+  bound (tested), else the fix would OVER-disable.
+- **Scheduler invariant unchanged, only re-proven.** `isSchedulable` is
+  DELIBERATELY not gated on the binding (schedule-tick.ts: eligibility is about
+  scheduling; FIRING re-checks the binding via the `trigger_unbound` suppression).
+  The reconcile's force-disable (`enabled:false`) keeps an unbound trigger out of
+  `isSchedulable`, so `sync()` arms nothing — pinned end-to-end by a new
+  `scheduler.test.ts` case (import an absent-bound trigger → disabled → no wakeup).
+- **#674 (webhook secret-PRESENCE) stays G8.** It is a genuinely separate
+  non-idempotency (differs even for a bound+enabled trigger) and is the secret
+  gate's charter, not the binding reconcile's.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

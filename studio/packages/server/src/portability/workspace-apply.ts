@@ -36,15 +36,13 @@ import {
   createPipelineVersion,
   getLatestPipelineVersion,
   listPipelineVersions,
+  listVersionResourceIds,
 } from '../repo/pipeline-versions.js';
 import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
+import { enabledForBinding, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
-import {
-  parseWorkspaceFiles,
-  type ParsedPipeline,
-  type ParsedWorkspace,
-} from './workspace-parse.js';
+import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
 import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './workspace-serialize.js';
 
 /**
@@ -92,17 +90,21 @@ import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './works
  *   PRESERVES the existing local `webhook` when the trigger stays webhook-mode
  *   (never dropping a local secret) and clears it on a mode change away.
  *
- * Known, DOCUMENTED non-idempotencies (each re-classifies `update` on the next
+ * #3 G7 — a force-disabled unbound trigger (branch: enabled+bound to an ABSENT
+ * version, DB: disabled+null) is now IDEMPOTENT: the content compare below runs
+ * the incoming trigger through `normalizedTriggerContentForm` (resolved space —
+ * an unresolvable binding folds to (null, disabled), matching the persisted row),
+ * so it re-classifies `unchanged`, not a perpetual `update`.
+ *
+ * Remaining DOCUMENTED non-idempotencies (each re-classifies `update` on the next
  * import until a later slice lands — honest, not a silent write): a
- * force-disabled unbound trigger (branch: enabled+bound, DB: disabled+null) until
- * G7; a mode-inconsistency the apply force-corrected (branch keeps the field, DB
- * nulled it) until the branch is hand-fixed; a webhook trigger CREATED
- * cross-workspace (source secret → serialized `{}`, target create → null) until
- * G8 secret provisioning — tracked in #674 for the `triggerContentForm`
- * webhook-presence exclusion the content-form OPEN DECISION note anticipates.
- * The `deferred`
- * result array now has NO producers (every recognised resource is applied); it
- * is retained in the contract for forward-compatibility.
+ * mode-inconsistency the apply force-corrected (branch keeps the field, DB nulled
+ * it) until the branch is hand-fixed; a webhook trigger CREATED cross-workspace
+ * (source secret → serialized `{}`, target create → null) until G8 secret
+ * provisioning — tracked in #674 for the `triggerContentForm` webhook-presence
+ * exclusion the content-form note anticipates. The `deferred` result array now
+ * has NO producers (every recognised resource is applied); it is retained in the
+ * contract for forward-compatibility.
  *
  * Inverse ref-remap (the precise inverse of `serializeWorkspace`'s `remapNode`):
  * a node's `connectionId` and `call.pipelineVersionId` are stable `resourceId`s
@@ -133,15 +135,6 @@ export class WorkspaceApplyError extends Error {
     super(message);
     this.name = 'WorkspaceApplyError';
   }
-}
-
-/** The last (latest) version in a pipeline file. `serializeWorkspace` emits
- * exactly one (latest) version per pipeline (git history IS the version trail),
- * so this is that version; a hand-authored multi-version file applies its LAST
- * only — mirroring the serialize contract (the older versions live in git). */
-function latestVersion(pipeline: ParsedPipeline): PipelineVersionExport | undefined {
-  const versions = pipeline.data.versions;
-  return versions.length > 0 ? versions[versions.length - 1] : undefined;
 }
 
 /** The literal (non-`${}`) `call.pipelineVersionId` resourceIds a version's
@@ -339,8 +332,10 @@ function buildTriggerWriteInput(
     // Belt-and-braces: a NULL binding (authored-null OR an unresolved id) can
     // never be enabled — an unbound trigger must not fire (the P4 scheduler's
     // null-check is the primary guard). A resolved binding preserves the authored
-    // `enabled`.
-    enabled: binding === null ? false : data.enabled,
+    // `enabled`. `enabledForBinding` is the SINGLE definition of this rule, shared
+    // with `normalizedTriggerContentForm` so the persisted row and the reconcile
+    // content compare can never disagree on an unbound trigger's enabled state.
+    enabled: enabledForBinding(binding !== null, data.enabled),
   };
 }
 
@@ -406,7 +401,12 @@ export function applyWorkspace(
     for (const c of dbSnapshot.connections) {
       if (c.resourceId !== null) dbConnFormByRid.set(c.resourceId, connectionContentForm(c.data));
     }
-    const plan = classifyWorkspace(dbSnapshot, incoming);
+    // #3 G7 — the resolution domain for the plan's incoming-trigger normalization
+    // (all owned versions incl. archived). The apply does NOT consume the plan's
+    // trigger dispositions (the trigger loop recomputes against the real DB row
+    // via `getTriggerByResourceId`), so this only keeps the plan internally
+    // consistent with the preview route.
+    const plan = classifyWorkspace(dbSnapshot, incoming, listVersionResourceIds(db, ownerId));
 
     // A version `resourceId` is globally unique by construction, but
     // `parseWorkspaceFiles` only dedupes top-level pipeline/connection/trigger
@@ -680,8 +680,15 @@ export function applyWorkspace(
         action = 'created';
         resourceId = created.resourceId;
       } else {
+        // #3 G7 — compare in RESOLVED space: a branch trigger whose binding does
+        // not resolve to an owned version normalizes to (null, disabled) — exactly
+        // what this apply would persist — so a force-disabled unbound trigger stops
+        // re-classifying `update` forever. The DB side is already resolved
+        // (`serializeTrigger` renders a stored null binding as null). A genuine
+        // enable/disable on a BOUND trigger still differs, so it still propagates.
         const contentChanged =
-          triggerContentForm(data) !== dbTriggerContentForm(existing, dbRefMaps);
+          normalizedTriggerContentForm(data, (rid) => versionById.has(rid)) !==
+          dbTriggerContentForm(existing, dbRefMaps);
         action = triggerAction(contentChanged, data.name !== existing.name);
         if (action === 'updated') {
           assertTriggerWindowBindingsConsistent(data, label);

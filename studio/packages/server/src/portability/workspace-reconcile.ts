@@ -6,11 +6,13 @@ import {
   type WorkspaceGitDisposition,
   type WorkspaceGitPreviewResource,
 } from '@autonomy-studio/shared';
-import type {
-  ParsedConnection,
-  ParsedPipeline,
-  ParsedTrigger,
-  ParsedWorkspace,
+import { normalizedTriggerContentForm } from './trigger-content.js';
+import {
+  latestVersion,
+  type ParsedConnection,
+  type ParsedPipeline,
+  type ParsedTrigger,
+  type ParsedWorkspace,
 } from './workspace-parse.js';
 
 /**
@@ -33,6 +35,14 @@ import type {
  * archived pipelines and version-less shells, #666), the classifier's DB
  * baseline is exactly the committable working copy — an archived pipeline never
  * appears as an `update`/`archive` against itself.
+ *
+ * #3 G7 — an incoming trigger's binding is diffed in RESOLVED space via
+ * `ownedVersionRids` (the caller passes `listVersionResourceIds` — ALL owned
+ * versions incl. archived, NOT derivable from the latest-only DB snapshot),
+ * unioned with the branch's own to-be-minted version ids. A binding that does
+ * not resolve normalizes to (null, disabled) — matching what the apply persists —
+ * so a force-disabled unbound trigger stops previewing a phantom `update` forever
+ * (the same resolved-space compare the apply does at `workspace-apply.ts`).
  *
  * Scope boundary (DELIBERATELY not here): only PIPELINES surface an archive
  * proposal (they are the only kind with an archive state, G5a). A connection or
@@ -138,7 +148,24 @@ const triggerName = (t: ParsedTrigger): string => t.data.name;
 export function classifyWorkspace(
   db: ParsedWorkspace,
   incoming: ParsedWorkspace,
+  ownedVersionRids: ReadonlySet<string>,
 ): WorkspaceReconcilePlan {
+  // #3 G7 — the resolution domain for an incoming trigger binding: every owned
+  // version (`ownedVersionRids`) PLUS the version this very branch would mint,
+  // so a trigger co-created with its pipeline resolves without a mint having run.
+  // EXACT parity with the apply's `versionById`: the apply materialises only the
+  // LATEST version per pipeline file, so a hand-crafted multi-version file's
+  // non-latest version is NOT resolvable (the apply would force-disable a trigger
+  // bound to it). Reuse the SHARED `latestVersion` the apply mints from — not an
+  // inline copy — so the two selections can never drift.
+  const incomingVersionRids = new Set<string>();
+  for (const pipeline of incoming.pipelines) {
+    const rid = latestVersion(pipeline)?.resourceId;
+    if (rid != null) incomingVersionRids.add(rid);
+  }
+  const bindingResolves = (rid: string): boolean =>
+    ownedVersionRids.has(rid) || incomingVersionRids.has(rid);
+
   const dbPipelines = dbMap(
     db.pipelines,
     (p) => p.resourceId,
@@ -185,7 +212,9 @@ export function classifyWorkspace(
         t.path,
         t.resourceId,
         triggerName(t),
-        triggerContentForm(t.data),
+        // #3 G7 — the incoming side is normalized to resolved space (the DB side,
+        // via `serializeTrigger`, is already resolved).
+        normalizedTriggerContentForm(t.data, bindingResolves),
         dbTriggers,
       ),
     ),

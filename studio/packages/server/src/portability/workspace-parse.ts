@@ -4,6 +4,7 @@ import {
   type ConnectionExportData,
   type ExportEnvelope,
   type PipelineExportData,
+  type PipelineVersionExport,
   type ResourceKind,
   type TriggerExportData,
   type WorkspaceParseDiagnostic,
@@ -65,6 +66,19 @@ export interface ParsedConnection {
   path: string;
   resourceId: string | null;
   data: ConnectionExportData;
+}
+
+/** The last (latest) version in a pipeline file. `serializeWorkspace` emits
+ * exactly one (latest) version per pipeline (git history IS the version trail),
+ * so this is that version; a hand-authored multi-version file applies its LAST
+ * only — mirroring the serialize contract (the older versions live in git). The
+ * SINGLE definition of "which version a pipeline file resolves to": the apply
+ * mints it, and the reconcile classifier's trigger-binding resolution domain
+ * uses its `resourceId` — the two must never drift, or preview↔apply parity
+ * (#3 G7) breaks. */
+export function latestVersion(pipeline: ParsedPipeline): PipelineVersionExport | undefined {
+  const versions = pipeline.data.versions;
+  return versions.length > 0 ? versions[versions.length - 1] : undefined;
 }
 
 export interface ParsedTrigger {

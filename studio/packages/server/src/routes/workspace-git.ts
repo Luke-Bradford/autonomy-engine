@@ -19,6 +19,7 @@ import {
   createWorkspaceGit,
   deleteWorkspaceGit,
   getWorkspaceGit,
+  listVersionResourceIds,
   updateWorkspaceGitSync,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
@@ -328,7 +329,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // path, so both sides get the same volatile treatment and #666's
       // archived-omission flows into the baseline for free.
       const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
-      const plan = classifyWorkspace(dbSnapshot, incoming);
+      // #3 G7 — the trigger-binding resolution domain (all owned versions incl.
+      // archived; not derivable from the latest-only serialized snapshot), so the
+      // preview normalizes a dangling binding identically to the apply.
+      const plan = classifyWorkspace(dbSnapshot, incoming, listVersionResourceIds(db, ownerId));
 
       return WorkspaceGitImportPreviewSchema.parse({
         head,
