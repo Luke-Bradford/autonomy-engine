@@ -2862,7 +2862,74 @@ export function createEngine(doc: EngineDoc): Engine {
       // `${trigger.*}` for every node dispatched by the settle below.
       triggerContext: state.triggerContext,
     };
+    // RS1 — rerun-from-failed DEFERS dispatch: a `run.started{rerunOf}` seeds the
+    // node/container map but must NOT settle, because the immediately-following
+    // `run.reseeded` marks the copied frontier terminal-`success` first — settling
+    // here would dispatch the very nodes the reseed is about to copy (double
+    // execution). `onReseeded` performs the single settle once the copy is folded.
+    // The producer's contract (RS2): `run.started{rerunOf}` is ALWAYS followed by
+    // `run.reseeded`, appended atomically (the deferred-`running` half-state is not
+    // crash-safe — see the event's `rerunOf` doc).
+    if (event.rerunOf !== undefined) {
+      return { state: started, commands: [], diagnostics };
+    }
     return settle(started, diagnostics);
+  }
+
+  function onReseeded(
+    state: RunState,
+    event: Extract<EngineEvent, { type: 'run.reseeded' }>,
+    diagnostics: string[],
+  ): ReduceResult {
+    // Impossible-log guard (mirrors `onRunTriggerContext`'s rigor): a reseed is
+    // valid ONLY on a fresh, un-progressed run — the deferred-start state a
+    // `run.started{rerunOf}` produced. If the run has advanced (any non-`pending`
+    // node/container, or any recorded output) it is either a DUPLICATE reseed or a
+    // reseed on an ordinary run whose `settle` already dispatched; either way the
+    // copy would corrupt live state, so no-op and report — never silently rewrite.
+    const progressed =
+      Object.keys(state.outputs).length > 0 ||
+      Object.values(state.nodes).some((n) => n.status !== 'pending') ||
+      Object.values(state.containers).some((c) => c.status !== 'pending');
+    if (progressed) {
+      diagnostics.push('impossible run.reseeded: the run has already progressed');
+      return { state, commands: [], diagnostics };
+    }
+
+    const nodes: Record<string, NodeRunState> = { ...state.nodes };
+    const outputs: Record<string, Record<string, unknown>> = { ...state.outputs };
+    for (const nodeId of event.frontier) {
+      if (nodes[nodeId] === undefined) {
+        // Keep the pure fold TOTAL (like the other impossible-log guards): a
+        // frontier id absent from the seeded node map is a malformed manifest —
+        // report and skip rather than throw out of the reducer. RS2's contract is
+        // that `frontier` lists only top-level ids; a container body-child would
+        // be present in the map and is RS2/RS3's to keep off the frontier.
+        diagnostics.push(`impossible run.reseeded: unknown frontier node '${nodeId}'`);
+        continue;
+      }
+      // Copied, NOT executed: terminal-`success` with a fresh attempt counter and
+      // NO live attempt id (a copied node never dispatches). A `success` node is
+      // in `TERMINAL_NODE`, so `settle`'s edge routing, `allTopLevelTerminal` and
+      // `runOutcomeFailure` treat it identically to an executed success.
+      nodes[nodeId] = { status: 'success', attempts: 0, retries: 0 };
+      // Raw write of the already-normalized copied outputs — see the event doc's
+      // sourcing contract. `?? {}` for a frontier node the manifest gave no
+      // outputs (a node with no declared outputs).
+      outputs[nodeId] = event.copiedOutputs[nodeId] ?? {};
+    }
+
+    const containers: Record<string, ContainerRunState> = { ...state.containers };
+    for (const [containerId, copied] of Object.entries(event.copiedContainers)) {
+      if (containers[containerId] === undefined) {
+        diagnostics.push(`impossible run.reseeded: unknown container '${containerId}'`);
+        continue;
+      }
+      containers[containerId] = copied;
+    }
+
+    // Settle ONCE from the copied successes — dispatch proceeds beyond the frontier.
+    return settle({ ...state, nodes, outputs, containers }, diagnostics);
   }
 
   function onDispatched(
@@ -3911,6 +3978,10 @@ export function createEngine(doc: EngineDoc): Engine {
         // folding it cannot change semantics. Captured once at dispatch, never
         // recomputed on replay (replay NEVER re-calls the model or the tools).
         return { state, commands: [], diagnostics };
+      case 'run.reseeded':
+        // RS1 — arrives on the `running`/all-pending run a `run.started{rerunOf}`
+        // deferred; applies the copied frontier + containers, then settles once.
+        return onReseeded(state, event, diagnostics);
       case 'node.dispatched':
         return onDispatched(state, event, diagnostics);
       case 'node.succeeded':

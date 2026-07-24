@@ -68,6 +68,16 @@ describe('#443 — terminalStatusOf', () => {
       // #5 S12 — the fire-time trigger seed. Non-terminal: it folds into the
       // pre-`run.started` `pending` state and never ends a run.
       { type: 'run.triggerContext', ...run, triggerId: 'trg-1' },
+      // RS1 — the rerun-from-failed reseed manifest. NON-terminal: it seeds the
+      // copied frontier onto a freshly-started run and settles; it never ends a run.
+      {
+        type: 'run.reseeded',
+        ...run,
+        sourceRunId: 'R1',
+        frontier: [],
+        copiedOutputs: {},
+        copiedContainers: {},
+      },
       { type: 'node.dispatched', ...run, nodeId: 'n1', attemptId: 'n1#0', idempotent: true },
       { type: 'node.succeeded', ...run, nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
       EngineEventSchema.parse({

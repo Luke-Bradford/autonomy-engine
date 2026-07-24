@@ -1,6 +1,11 @@
 # Foundation sub-spec (RS) — Rerun-from-failed
 
 **Status:** proposed 2026-07-14 (writes the RS sub-spec #1 F12 depends on + gates); pending Codex.
+**RS1 SHIPPED 2026-07-24** (built-block below) — `run.reseeded` event + reducer fold + `rerunOf`
+defer-settle. The headless build loop honoured the operator-pre-settled forks in place of Codex:
+frontier = strict successful prefix (Open-Q1); param-override FORBID on rerun-from-failed, allowed
+only on simple rerun F11 (Open-Q2 — and the Provenance contradiction below is fixed); a copied
+non-deterministic (LLM) output is reused verbatim (Open-Q3, the spec's own lean).
 **Scope:** the reseed-event semantics + frontier algorithm for **rerun-from-failed** — start a NEW run
 that skips already-succeeded work and resumes from the failure. Referenced-but-deferred by #1 D7/F12;
 must land before F12* builds. **Foundation layer — engine.**
@@ -16,14 +21,31 @@ self-deriving (replay/boot-reconcile would reconstruct a different state — the
 
 New run `R2` (rerun-from-failed of `R1`) begins:
 `run.started{ pipelineVersionId, params, rerunOf: R1 }` →
-**`run.reseeded{ sourceRunId: R1, frontier: NodeId[], copiedNodeStates, copiedOutputs,
-copiedVariables, copiedContainers, childLinks?, copiedTriggerContext }`** — **`copiedTriggerContext`
-carries R1's frozen `run.triggerContext` (cross-spec fix, git-challenge hunt): a rerun of a
-schedule/event/window-triggered run MUST reuse the original `${trigger.*}` values, or refs valid in R1
-fail on rerun.** → the reducer folds it, marking every `frontier`
+**`run.reseeded{ sourceRunId: R1, frontier: NodeId[], copiedOutputs, copiedContainers,
+childLinks? }`** → the reducer folds it, marking every `frontier`
 node **terminal-success (copied, not executed)** with its copied outputs, and seeding
-`run.variables`/container states. Dispatch then proceeds from the ready set beyond the frontier — the
+container states. Dispatch then proceeds from the ready set beyond the frontier — the
 same walk as a normal run.
+
+**RS1 shape reconciled against the SHIPPED engine (built-block below):**
+- The proposed `copiedNodeStates` + `copiedVariables` fields are DROPPED — the engine has **no
+  `run.variables` concept**; the only run-level writable channel is per-node `outputs`, so
+  `copiedOutputs` (`nodeId → {name → value}`) alone carries the copied prefix, and `frontier` +
+  `copiedOutputs` fully determine the copied node states.
+- `copiedTriggerContext` is DROPPED as a field — the "reuse R1's `${trigger.*}`" requirement (still
+  load-bearing) is met by **REPLAYING R1's `run.triggerContext` before `run.started`** (the existing
+  pre-start seed mechanism, single SSOT), exactly as an original trigger-launched run does. RS2's
+  reseed producer emits it for a trigger-launched rerun.
+- `frontier` lists **top-level node ids only**; container internals are copied via `copiedContainers`
+  (a mid-flight container re-runs whole; RS3). The reducer trusts the manifest (an internal engine
+  event); it guards structural totality (unknown node/container id → diagnostic + skip) but not the
+  frontier well-formedness RS2/RS3 own.
+- **`run.started{rerunOf}` DEFERS dispatch** (the fold returns no settle commands) so `run.reseeded`
+  marks the copied frontier BEFORE any node dispatches. **CRASH-SAFETY INVARIANT:** the intermediate
+  deferred-`running`-without-reseed state is NOT the `pending` half the reconciler resyncs harmlessly
+  — a resume of it re-dispatches the frontier. RS2's producer therefore MUST append
+  `run.triggerContext?` + `run.started{rerunOf}` + `run.reseeded` in ONE transaction; no crash window
+  may persist the half-state.
 
 ## The frontier (defined in ENGINE terms, not UI terms)
 
@@ -63,13 +85,17 @@ same walk as a normal run.
   lie). `runs.rerunOf = R1`; a rerun-history grouping + Run-type column (Original / Rerun /
   Rerun-from-failed) surfaces the lineage.
 - **Provenance:** R2 pins the SAME `pipelineVersionId` as R1 (rerun re-runs the same immutable
-  version); params may be overridden (recorded).
+  version). Params are **NOT** overridable on rerun-from-failed — the copied frontier outputs were
+  computed under R1's params, so a new-param/old-output mix is a silent inconsistency; params reuse
+  R1's exactly (Open-Q2 settled). Param override is allowed ONLY on simple rerun (F11), which copies
+  nothing. (This corrects the earlier "params may be overridden (recorded)" wording, which was true
+  for F11 but wrong for rerun-from-failed.)
 
 ## Tickets (RS-series; gate #1 F12*)
 
 | # | Ticket |
 | --- | --- |
-| RS1 | `run.reseeded` event schema + reducer fold (mark frontier terminal, seed vars/containers) |
+| RS1 | `run.reseeded` event schema + reducer fold (mark frontier terminal, seed outputs/containers) — **SHIPPED 2026-07-24** (`rerunOf` defer-settle + `onReseeded` fold + guards; built-block below) |
 | RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link |
 | RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) |
 | RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier |
@@ -86,3 +112,40 @@ same walk as a normal run.
    rerun F11); confirm.
 3. A frontier node with a non-deterministic output (LLM) — copying it is CORRECT (don't re-bill), but
    confirm the user understands the resumed run reuses the original LLM output verbatim.
+
+**Open-questions status (RS1):** Q1 (strict prefix), Q2 (forbid param-override on rerun-from-failed)
+and Q3 (reuse LLM output verbatim) are all settled per the operator pre-settled runway; the code
+honours them. They remain listed for the Codex pass on the RS2-RS6 tail.
+
+## RS1 built-block (2026-07-24) — `run.reseeded` event + reducer fold + `rerunOf` defer-settle
+
+RS1 delivers the reseed MECHANISM (schema + pure fold only); RS2 computes the `frontier` and wires
+the live producer. No storage migration — the `run_events` table stores `type`/`payload` as an open
+string + JSON blob, so a new `EngineEventSchema` variant is picked up by the append/replay parse with
+no DB change.
+
+- **`run.started.rerunOf` (optional) is the defer signal.** Present → `onRunStarted` seeds the
+  node/container map but returns NO settle commands, so no node dispatches before the copy. Absent →
+  an ordinary run starts + settles unchanged (durable back-compat; an old log carries none).
+- **`onReseeded` fold** (arrives on the deferred `running` run): guards that the run is fresh/
+  un-progressed (any non-`pending` node/container OR any recorded output ⇒ a duplicate reseed or a
+  reseed on an ordinary run ⇒ no-op + diagnostic, never a silent rewrite — the `onRunTriggerContext`
+  posture); marks each `frontier` node `{status:'success', attempts:0, retries:0}` (no live attempt —
+  copied, not executed) and writes `copiedOutputs[nodeId]` into `state.outputs`; seeds
+  `copiedContainers`; then **settles ONCE** so the walk dispatches beyond the frontier. A copied
+  `success` node is in `TERMINAL_NODE`, so edge routing / `allTopLevelTerminal` / `runOutcomeFailure`
+  treat it identically to an executed success. Unknown frontier node / container id → diagnostic +
+  skip (the pure fold stays total).
+- **Trust boundary:** `copiedOutputs` are written RAW (not re-`validateOutputs`/`storeOutputs`-d). The
+  RS2 sourcing contract: they come from R1's projected `state.outputs`, already `storeOutputs`-
+  normalized (undeclared keys filtered, optional→present-null), and R2 pins the SAME immutable
+  `pipelineVersionId` (⇒ same output contract) as R1. Consistent with "validate at boundaries, trust
+  internal code": the event is engine-generated and Zod-shape-validated on append/replay.
+- **CRASH-SAFETY invariant** (see "The reseed event" above): RS2's producer MUST append the reseed
+  pair (+ any `run.triggerContext` replay) atomically. RS1 pins the hazard with a characterization
+  test — a lone `run.started{rerunOf}` half-state, resumed, re-dispatches the frontier — so the
+  invariant can't bit-rot silently.
+- **Deferred to later slices:** `childLinks` (RS4, a backward-compatible optional-field addition — a
+  frontier `call_pipeline` node is copied-terminal and never re-spawns a child, so nothing needs it
+  until RS6 renders provenance); `secureOutput` non-copiable exclusion (RS5); the `runs.rerunOf` row
+  lineage + Monitor copied-vs-executed render (RS6).
