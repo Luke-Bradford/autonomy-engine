@@ -87,11 +87,17 @@ jobs:
       - name: Install Playwright browser
         run: pnpm exec playwright install chromium
 
+      # `test:e2e` rebuilds (it is the one self-contained command #713 asks CI
+      # and the loop to share). That duplicates the `Build` step above by
+      # ~20s — accepted, to keep one command with no CI-only variant.
       - name: E2E
+        id: e2e
         run: pnpm test:e2e
 
+      # Scoped to THIS step: a bare `if: failure()` also fires when Lint or
+      # Typecheck failed, when no report exists to upload.
       - name: Upload e2e report on failure
-        if: failure()
+        if: failure() && steps.e2e.conclusion == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report

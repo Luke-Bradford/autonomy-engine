@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
-import { collectPageProblems } from './support/console-guard';
+import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { CANVAS_TOKEN, FLUENT_ROOT, customProperty, fluentRootReady } from './support/theme';
 
 /**
  * U0 (#705) — the `--xy-*` -> Fluent-token theme bridge, asserted in a real
@@ -12,65 +15,65 @@ import { collectPageProblems } from './support/console-guard';
  * canvas chrome renders white-on-dark with a green test suite.
  */
 
-const FLUENT_ROOT = '.app-fluent-root';
-
-/** The Fluent token the bridge maps the canvas surface to. */
-const CANVAS_TOKEN = '--colorNeutralBackground1';
+const BRIDGE_CSS = join(
+  import.meta.dirname,
+  '..',
+  'packages',
+  'web',
+  'src',
+  'theme',
+  'xyThemeBridge.css',
+);
 
 /**
- * The provider root exists and Fluent has emitted its tokens ON it. Everything
- * else in this file reads custom properties off that element, so a spec that
- * ran before Fluent's Griffel styles were applied would read empty strings and
- * "pass" its var()-freedom check vacuously.
+ * The `--xy-*` overrides the bridge SOURCE declares.
+ *
+ * The expected set is derived from the stylesheet rather than written down
+ * here, so the spec cannot drift from the bridge and no magic number decides
+ * how much coverage is "enough": every override the source declares must show
+ * up in the browser, and any that does not is a failure naming itself.
  */
-async function fluentRootReady(page: Page): Promise<void> {
-  await expect(page.locator(FLUENT_ROOT)).toBeAttached();
-  await expect
-    .poll(() => customProperty(page, CANVAS_TOKEN), {
-      message: `Fluent never emitted ${CANVAS_TOKEN} on ${FLUENT_ROOT}`,
-    })
-    .not.toBe('');
-}
-
-/** Computed value of a custom property ON the FluentProvider root element. */
-function customProperty(page: Page, name: string): Promise<string> {
-  return page.evaluate(
-    ([sel, prop]) => {
-      const el = document.querySelector(sel as string);
-      if (!el) return '';
-      return getComputedStyle(el)
-        .getPropertyValue(prop as string)
-        .trim();
-    },
-    [FLUENT_ROOT, name],
-  );
+function declaredInSource(): string[] {
+  const css = readFileSync(BRIDGE_CSS, 'utf8');
+  return [...css.matchAll(/^\s*(--xy-[\w-]+)\s*:/gm)].map((m) => m[1] as string).sort();
 }
 
 /**
- * Every `--xy-*` custom property the bridge DECLARES, read back out of the
- * CSSOM rather than hard-coded here, so this spec keeps covering the bridge as
- * U2+ grow it — a hard-coded list would silently stop testing new overrides.
+ * The same list as the browser sees it — walked out of the live CSSOM.
+ *
+ * Recurses through `CSSGroupingRule` (`@media`/`@layer`/`@supports`), whose
+ * children are NOT top-level `cssRules` entries, and matches each selector in
+ * a grouped selector list, which a CSS minifier is entitled to produce when it
+ * merges identical declaration blocks. Without both, a future override could
+ * be invisible to this walk while the suite stayed green.
  */
-function declaredXyOverrides(page: Page): Promise<string[]> {
+function declaredInBrowser(page: Page): Promise<string[]> {
   return page.evaluate((sel) => {
     const names = new Set<string>();
+    const visit = (rules: CSSRuleList): void => {
+      for (const rule of Array.from(rules)) {
+        if (rule instanceof CSSGroupingRule) {
+          visit(rule.cssRules);
+          continue;
+        }
+        if (!(rule instanceof CSSStyleRule)) continue;
+        const selectors = rule.selectorText.split(',').map((s) => s.trim());
+        if (!selectors.includes(sel)) continue;
+        for (const prop of Array.from(rule.style)) {
+          if (prop.startsWith('--xy-')) names.add(prop);
+        }
+      }
+    };
     for (const sheet of Array.from(document.styleSheets)) {
-      let rules: CSSRuleList;
       try {
-        rules = sheet.cssRules;
+        visit(sheet.cssRules);
       } catch {
         // A cross-origin stylesheet cannot be inspected; the bridge is
         // same-origin, so skipping one is correct rather than a miss.
         continue;
       }
-      for (const rule of Array.from(rules)) {
-        if (!(rule instanceof CSSStyleRule) || rule.selectorText !== sel) continue;
-        for (const prop of Array.from(rule.style)) {
-          if (prop.startsWith('--xy-')) names.add(prop);
-        }
-      }
     }
-    return [...names];
+    return [...names].sort();
   }, FLUENT_ROOT);
 }
 
@@ -84,18 +87,24 @@ test.describe('U0 theme bridge', () => {
     expect(background).toMatch(/^(#|rgb|hsl)/);
   });
 
+  test('every override the bridge declares reaches the browser', async ({ page }) => {
+    await page.goto('/');
+    await fluentRootReady(page);
+
+    // Not a floor but an equality: if the bridge stylesheet did not load, or
+    // its selector moved off the provider root, the browser list is empty and
+    // this names every override that went missing.
+    expect(await declaredInBrowser(page)).toEqual(declaredInSource());
+  });
+
   test('no --xy-* override is left holding an unresolved var()', async ({ page }) => {
     await page.goto('/');
     await fluentRootReady(page);
 
-    const declared = await declaredXyOverrides(page);
-    // Guard the guard: if the CSSOM walk finds nothing (bridge renamed, class
-    // changed, stylesheet not loaded) the per-property loop below would be
-    // empty and this spec would pass having asserted nothing at all.
-    expect(
-      declared.length,
-      `found no --xy-* declarations on ${FLUENT_ROOT} — the bridge stylesheet did not load, or its selector moved`,
-    ).toBeGreaterThan(15);
+    const declared = await declaredInBrowser(page);
+    // Guard the guard: an empty list would make the loop below assert nothing.
+    // (The spec above proves the list is not merely non-empty but complete.)
+    expect(declared.length, `found no --xy-* declarations on ${FLUENT_ROOT}`).toBeGreaterThan(0);
 
     const resolved = await page.evaluate(
       ({ sel, names }) => {
@@ -133,6 +142,7 @@ test.describe('U0 theme bridge', () => {
       customProperty(page, '--xy-background-color'),
       customProperty(page, CANVAS_TOKEN),
     ]);
+    expect(token).not.toBe('');
     expect(surface).toBe(token);
   });
 
@@ -140,6 +150,6 @@ test.describe('U0 theme bridge', () => {
     const problems = collectPageProblems(page);
     await page.goto('/');
     await fluentRootReady(page);
-    expect(problems).toEqual([]);
+    await expectQuiet(page, problems);
   });
 });

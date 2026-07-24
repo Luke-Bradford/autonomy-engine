@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { collectPageProblems } from './support/console-guard';
+import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { CANVAS_TOKEN, customProperty, documentTheme, fluentRootReady } from './support/theme';
 
 /**
  * U1 — the runtime light/dark toggle. The claim under test is the SSOT one:
@@ -9,26 +10,6 @@ import { collectPageProblems } from './support/console-guard';
  * A change that re-themed only one of them would leave a half-light page and
  * would pass every jsdom unit test, because jsdom computes no styles.
  */
-
-const FLUENT_ROOT = '.app-fluent-root';
-const CANVAS_TOKEN = '--colorNeutralBackground1';
-
-function customProperty(page: Page, name: string): Promise<string> {
-  return page.evaluate(
-    ([sel, prop]) => {
-      const el = document.querySelector(sel as string);
-      if (!el) return '';
-      return getComputedStyle(el)
-        .getPropertyValue(prop as string)
-        .trim();
-    },
-    [FLUENT_ROOT, name],
-  );
-}
-
-function documentTheme(page: Page): Promise<string | undefined> {
-  return page.evaluate(() => document.documentElement.dataset.theme);
-}
 
 /** Snapshot of everything one store value is supposed to drive. */
 async function themedSurfaces(page: Page) {
@@ -47,6 +28,7 @@ function themeSwitch(page: Page) {
 test.describe('U1 theme toggle', () => {
   test('ships dark by default, with every themed surface agreeing', async ({ page }) => {
     await page.goto('/');
+    await fluentRootReady(page);
     await expect(themeSwitch(page)).toBeChecked();
 
     const dark = await themedSurfaces(page);
@@ -58,7 +40,14 @@ test.describe('U1 theme toggle', () => {
 
   test('one toggle re-themes Fluent AND the document root together', async ({ page }) => {
     await page.goto('/');
+    // The baseline must be REAL before it can be compared against. Without
+    // this the read races React's first commit, `customProperty` answers `''`
+    // for the absent root, and the "the colour changed" assertion below passes
+    // by comparing something to nothing.
+    await fluentRootReady(page);
     const dark = await themedSurfaces(page);
+    expect(dark.theme).toBe('dark');
+    expect(dark.token).not.toBe('');
 
     await themeSwitch(page).click();
     await expect(themeSwitch(page)).not.toBeChecked();
@@ -66,31 +55,38 @@ test.describe('U1 theme toggle', () => {
 
     const light = await themedSurfaces(page);
     // Fluent re-emitted its tokens: the canvas surface is a DIFFERENT colour...
-    expect(light.token).not.toBe(dark.token);
     expect(light.token).not.toBe('');
+    expect(light.token).not.toBe(dark.token);
     // ...and the React Flow bridge followed it in the same beat.
     expect(light.xyCanvas).toBe(light.token);
   });
 
   test('the preference survives a reload', async ({ page }) => {
     await page.goto('/');
+    await fluentRootReady(page);
     await themeSwitch(page).click();
     await expect.poll(() => documentTheme(page)).toBe('light');
+    const beforeReload = await themedSurfaces(page);
 
     await page.reload();
+    await fluentRootReady(page);
     await expect(themeSwitch(page)).not.toBeChecked();
+
     const restored = await themedSurfaces(page);
     expect(restored.theme).toBe('light');
+    // The SAME light colours came back, not merely "some" non-empty value.
+    expect(restored.token).toBe(beforeReload.token);
     expect(restored.xyCanvas).toBe(restored.token);
   });
 
   test('toggling produces no console errors or uncaught exceptions', async ({ page }) => {
     const problems = collectPageProblems(page);
     await page.goto('/');
+    await fluentRootReady(page);
     await themeSwitch(page).click();
     await expect.poll(() => documentTheme(page)).toBe('light');
     await themeSwitch(page).click();
     await expect.poll(() => documentTheme(page)).toBe('dark');
-    expect(problems).toEqual([]);
+    await expectQuiet(page, problems);
   });
 });

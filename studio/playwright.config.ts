@@ -23,6 +23,7 @@ import { defineConfig, devices } from '@playwright/test';
  *     `theme-bridge.spec.ts` exercises the production path;
  *   - it tests the artifact that actually ships.
  * The cost is that `test:e2e` builds first (see the root script) — accepted.
+ * When only the specs changed, `pnpm exec playwright test` skips the rebuild.
  */
 
 /** Studio workspace root — this file's directory. */
@@ -34,8 +35,13 @@ const ROOT = import.meta.dirname;
  * holds both on this machine. `reuseExistingServer: false` below means a busy
  * port fails loudly instead of silently testing whatever is already listening,
  * so the override exists for the rare genuine clash.
+ *
+ * `||`, not `??`: an empty `E2E_SERVER_PORT` must fall back, exactly as the
+ * server's own `resolvePort` treats `''` as unset. With `??` the base URL would
+ * lose its port (i.e. become 80) while the server bound its own default — a
+ * 60-second readiness timeout with nothing in the message to explain it.
  */
-const PORT = process.env.E2E_SERVER_PORT ?? '8199';
+const PORT = process.env.E2E_SERVER_PORT || '8199';
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 /**
@@ -45,6 +51,13 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
  * all three roots are pinned explicitly. `data/` is gitignored, and
  * `e2e/reset-state.mjs` wipes this directory as the server's launch command's
  * first step, so a spec never inherits a previous run's rows.
+ *
+ * Nothing is WRITTEN outside this directory. Reads are a different matter:
+ * Playwright merges `webServer.env` OVER `process.env`, so an ambient
+ * `AUTONOMY_MASTER_KEY`/`_FILE` would otherwise win over the pinned data dir
+ * and the e2e server would open the developer's real key file. Both are
+ * cleared below — `secrets.ts` treats `''` as unset — as are the git host
+ * credentials, which no spec needs and which should not reach a test server.
  */
 const DATA_DIR = join(ROOT, 'data', 'e2e');
 
@@ -91,6 +104,11 @@ export default defineConfig({
       AUTONOMY_DATA_DIR: DATA_DIR,
       WORKSPACE_GIT_ROOT: join(DATA_DIR, 'git'),
       WEB_ROOT: join(ROOT, 'packages', 'web', 'dist'),
+      // Neutralise ambient credentials (see the DATA_DIR note above).
+      AUTONOMY_MASTER_KEY: '',
+      AUTONOMY_MASTER_KEY_FILE: '',
+      GH_TOKEN: '',
+      GITHUB_TOKEN: '',
     },
   },
 });

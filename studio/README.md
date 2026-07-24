@@ -107,14 +107,15 @@ proxies `/api` and `/health` (WebSocket upgrades included) to the API. Open
 
 Other workspace scripts:
 
-| Command                   | What it does                                                   |
-| ------------------------- | -------------------------------------------------------------- |
-| `pnpm build`              | Build `shared`, `server`, and `web` for production.            |
-| `pnpm test`               | Run the vitest suites across all packages.                     |
-| `pnpm typecheck`          | Type-check every package (strict).                             |
-| `pnpm lint`               | ESLint (flat config) + Prettier check.                         |
-| `pnpm format`             | Apply Prettier formatting.                                     |
-| `pnpm run audit:licenses` | Fail-closed audit that every dependency license is permissive. |
+| Command                   | What it does                                                    |
+| ------------------------- | --------------------------------------------------------------- |
+| `pnpm build`              | Build `shared`, `server`, and `web` for production.             |
+| `pnpm test`               | Run the vitest suites across all packages.                      |
+| `pnpm test:e2e`           | Playwright browser specs (needs `playwright install chromium`). |
+| `pnpm typecheck`          | Type-check every package (strict).                              |
+| `pnpm lint`               | ESLint (flat config) + Prettier check.                          |
+| `pnpm format`             | Apply Prettier formatting.                                      |
+| `pnpm run audit:licenses` | Fail-closed audit that every dependency license is permissive.  |
 
 ## Example pipelines
 

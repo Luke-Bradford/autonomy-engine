@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 /**
  * Records everything the page reported that a user would consider broken:
@@ -22,4 +22,18 @@ export function collectPageProblems(page: Page): string[] {
     problems.push(`pageerror: ${err.message}`);
   });
   return problems;
+}
+
+/**
+ * Assert the page stayed quiet.
+ *
+ * The wait is a FLUSH, not a hopeful sleep: `problems` is appended to by async
+ * CDP events, so asserting the instant the last action resolves drops anything
+ * emitted a tick later — a rejected promise from an effect, a background fetch
+ * failing after the assertion. That is a "passes while broken" hole, which is
+ * the one failure mode this suite must not have.
+ */
+export async function expectQuiet(page: Page, problems: string[]): Promise<void> {
+  await page.waitForTimeout(150);
+  expect(problems).toEqual([]);
 }
