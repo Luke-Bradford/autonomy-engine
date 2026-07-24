@@ -324,6 +324,93 @@ Deliberately NOT in U2, from its own ticket row and the Shell description:
   landed immediately after U2 and before U3: until it did, an old bookmark hit the catch-all and
   landed on Home, and `#/runs/:id` lost the run id rather than resolving to that run.
 
+## U3 — secondary pane + command bar (AS BUILT, 2026-07-25)
+
+The shell is now the spec diagram's four zones. `AppShell` is the ONLY consumer of
+`useMatches()`; every other part takes what it needs as props, so each is unit-testable
+without a data router.
+
+```text
+grid-template-columns: 48px var(--pane-width, 0px) auto 1fr
+                       rail   pane                 split workspace
+                                                         └ grid-template-rows: auto 1fr
+                                                           (command bar / .content)
+```
+
+| Piece | Where | Notes |
+|---|---|---|
+| Pane width + collapse | `uiStore` (`autonomy-studio.pane`) | one JSON record, clamped 180–480, default 240 |
+| Which hub am I in | route `handle: { hub }` → `activeHubId()` | drives the pane's contents |
+| Breadcrumb | route `handle: { crumb }` → `crumbsFrom()` | hub crumb labels come from `HUBS` |
+| Pane sections | `HUBS[].sections` | SSOT for the pane's links AND the section crumb labels |
+
+Decisions worth not re-deriving:
+
+- **Route `handle` + `useMatches()` is the SSOT, and it is NOT the matcher U2 deleted.**
+  This closes the "revisit if U3's breadcrumb needs the matcher anyway" question the U2
+  section parks. The deleted helper was a *re-derivation* of `NavLink`'s answer; asking
+  the router for its own match list is the same single source, read directly. It is also
+  the idiom react-router documents for breadcrumbs.
+- **`:runId` moved from a SIBLING of `runs` to a CHILD of it**, so the trail reads
+  Monitor › Runs › run_42 with a linkable middle crumb. URLs are byte-identical; pinned
+  by a test asserting the matched route patterns, not just the rendered page.
+- **Shell children are pinned to explicit `grid-column`s.** Load-bearing, and found by
+  browser verification: a collapsed pane is `hidden` (`display: none`) and its splitter
+  is unmounted, so grid AUTO-PLACEMENT slid the workspace two tracks left into the now-0px
+  pane column and crushed the whole app into a zero-width sliver. `grid-template-columns`
+  read correctly the whole time — which is why the e2e measures element BOXES.
+- **`--pane-width` has a CSS fallback and is written inline for all three states.** An
+  undefined custom property makes `grid-template-columns` invalid at computed-value time,
+  dropping the template to `none`. A fixed track does not self-collapse, so "no pane"
+  (Home) and "collapsed" both have to write `0px` explicitly.
+- **The pane is mounted-but-`hidden` when collapsed**, not unmounted: the toggle's
+  `aria-controls` must name an element in the document, and `hidden` also removes it from
+  the accessibility tree. The zeroed track is what reclaims the space.
+- **ONE collapse toggle, in the command bar** — a deviation from the diagram's `«collapse`
+  at the pane's foot. A control inside the pane vanishes with it, forcing a second expand
+  control elsewhere: two controls and two code paths for one boolean. It is absent
+  entirely on a hub with no pane, because a disclosure button controlling nothing is worse
+  than no button.
+- **No pane on Home.** Home declares no sections; a one-entry list pointing at the page
+  you are on is furniture.
+- **The drag deliberately bypasses React.** `pointermove` fires at refresh rate; routing
+  each through the store would re-render the shell ~60×/s and persist to `localStorage`
+  per frame. The splitter previews by writing `--pane-width` straight onto the shell
+  element and commits once on `pointerup`. Consequence: store and DOM disagree mid-drag,
+  so an `AppShell` re-render during a drag would snap back. Nothing does (a captured
+  pointer means no other input is live). Keyboard steps take the opposite path — straight
+  to the store, never the preview, or the next render would revert them.
+- **Hand-rolled `<nav><ol>` breadcrumb, not Fluent's `Breadcrumb`** (which IS installed).
+  The honest reasons are bundle (U0's +64 kB budget) and plumbing — Fluent slots take an
+  intrinsic `as`, not a component, so react-router has to be wired in per crumb via
+  `useHref` + `useLinkClickHandler`, which is more code than the `<ol>`. Capability was
+  never the blocker.
+- **`@fluentui/react-nav` was rejected for the pane** (also installed): its selection is a
+  controlled `selectedValue`, i.e. a second opinion about where the user is. `NavLink`'s
+  `isActive` stays the only source. Worth not relitigating in U4.
+- **The crumb separator is `content: '›' / ''`.** Moving it into a `::before` is NOT
+  enough — browser-verified, Chromium exposes generated content to the accessibility tree
+  and the crumb announced as "› Pipelines". The empty alt text after the slash is what
+  marks it decorative; re-reading the a11y tree then gave "Pipelines".
+- **The shell is `height: 100vh` and `.content` is the scroller.** Previously the DOCUMENT
+  scrolled, which would carry the command bar off the top of the screen. Both `min-height: 0`
+  declarations are required: a `1fr` track's automatic minimum is `auto`, so without them
+  the container overflows instead of the child scrolling.
+- **Section labels are duplicated** between `hubs.ts` and the route `handle`s, on purpose —
+  a literal crumb beats a three-branch inference from a pathname. `routes.test.tsx` pins
+  them equal, and separately pins `sections[0].path` against each hub's index redirect.
+- **Fixed en route: `/manage/triggers` was unreachable by clicking.** Between U2 and U3
+  the rail reached Manage, Manage redirected to Connections, and nothing linked on.
+- **Fixed en route: U3r's trailing-slash test was vacuous.** It read
+  `router.state.matches` AFTER `render()`, which flushes the `<Navigate>` redirect inside
+  `act()`, so it described the DESTINATION route — also called `runs`. It would have
+  passed if `/runs/` had matched `:runId`. Now read from the router's initial state.
+
+NOT in U3, with owners: the command bar's **actions region** (Validate / Save→version /
+zoom-fit-layout) is **U9** — an empty container now would be dead code plus a seam chosen
+before its first consumer; real per-hub pane content is **U4** (Factory Resources tree) and
+**U10**; `#/settings` is **U15**.
+
 ## Non-goals (YAGNI)
 
 - No engine/reducer *semantics* changes (read-only read-models R1/R2 allowed).

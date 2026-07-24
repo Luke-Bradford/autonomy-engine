@@ -81,6 +81,26 @@ body {
   height: 100vh;
 }
 
+/* Every shell child is PINNED to its column rather than left to grid
+   auto-placement, and this is load-bearing, not tidiness.
+   A collapsed pane is `hidden` (i.e. `display: none`) and its splitter is not
+   rendered at all, so auto-placement would slide the workspace two tracks left
+   into the pane's own — now 0px — column and crush the entire app into a
+   zero-width sliver. Browser-verified: the layout looked correct by
+   `grid-template-columns` alone, which is why the e2e measures element boxes. */
+.hub-rail {
+  grid-column: 1;
+}
+.secondary-pane {
+  grid-column: 2;
+}
+.pane-splitter {
+  grid-column: 3;
+}
+.workspace {
+  grid-column: 4;
+}
+
 /* The workspace column: command bar over the routed page. This is the explicit
    `grid-template-rows` the U0 spike asks for — React Flow needs an explicitly
    sized parent, and a row track is what gives the canvas one.
@@ -326,16 +346,16 @@ body {
   background: var(--accent);
 }
 
-/* The drag handle. Its own grid track, so it cannot be clipped by the pane's
-   `overflow: hidden` the way an absolutely-positioned handle would be. */
+/* The drag handle. It gets its OWN grid track (the `auto` one) rather than
+   being absolutely positioned over the pane's edge: the pane scrolls and clips
+   its overflow, so an overlaid handle would be sliced off — and a real track
+   keeps the grid arithmetic legible, which is what `e2e/shell-pane.spec.ts`
+   measures. No negative margin, for the same reason: the track's size is then
+   exactly this width. */
 .pane-splitter {
   width: 5px;
-  margin-left: -3px;
   cursor: col-resize;
   background: transparent;
-  /* Above the pane's own border so the whole hit area is grabbable. */
-  position: relative;
-  z-index: 1;
   /* A touch drag must resize the pane, not scroll the page. */
   touch-action: none;
 }
@@ -385,11 +405,16 @@ body {
   font-size: 0.9rem;
 }
 
-/* The separator is a CSS `::before` rather than a character in the markup:
-   it is decoration, and a literal "›" between list items would be read out
-   by a screen reader on every crumb. */
+/* The crumb separator, with the `content: <string> / <alt-text>` form.
+   Moving it out of the markup into a `::before` is NOT enough on its own:
+   browser-verified against Chromium, generated content IS exposed to the
+   accessibility tree, and the crumb announced as "› Pipelines". The empty
+   ALT TEXT after the slash is what marks it decorative — verified in the same
+   session by re-reading the a11y tree, which then gave "Pipelines". A browser
+   without alt-text support falls back to announcing the glyph, which is the
+   status quo ante rather than a regression. */
 .command-bar__breadcrumb li + li::before {
-  content: '›';
+  content: '›' / '';
   color: var(--muted);
   margin-right: 0.35rem;
 }
