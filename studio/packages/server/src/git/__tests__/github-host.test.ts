@@ -177,6 +177,27 @@ describe('GitHubHostClient.openPullRequest', () => {
     expect((err as Error).message).toContain('timed out');
   });
 
+  it('a response whose headers arrive but whose BODY stalls is bounded too (timer covers res.json())', async () => {
+    // The fetch resolves (status 200) but the body read never completes except
+    // by the abort signal — the exact case a clear-timer-before-body bug leaves
+    // to hang forever.
+    const stalledBodyFetch = ((_url: string | URL | Request, init?: RequestInit) =>
+      Promise.resolve({
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('The operation was aborted.', 'AbortError')),
+            );
+          }),
+      } as unknown as Response)) as unknown as typeof fetch;
+    const client = new GitHubHostClient({ fetchImpl: stalledBodyFetch, timeoutMs: 5 });
+
+    const err = await client.openPullRequest(params()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitHostApiError);
+    expect((err as Error).message).toContain('timed out');
+  });
+
   it('a fetch throw quoting a malformed token is REDACTED before it escapes (never leaks the token)', async () => {
     // Node header validation throws a TypeError quoting the header value verbatim.
     const throwingFetch = (() => {

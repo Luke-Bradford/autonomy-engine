@@ -258,44 +258,58 @@ export class GitHubHostClient implements GitHostClient {
   ): Promise<RawResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let res: Response;
+    // The timer stays armed until BOTH the fetch AND the body read complete: the
+    // no-hang rail covers a response whose headers arrive but whose body then
+    // stalls/trickles (undici ties the body stream to `signal`, so the abort
+    // aborts the `res.json()` read too). Clearing it before the body read — the
+    // obvious mistake — would leave a slow body unbounded.
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': GITHUB_API_VERSION,
-        'User-Agent': USER_AGENT,
-      };
-      if (jsonBody !== undefined) headers['Content-Type'] = 'application/json';
-      res = await this.fetchImpl(url, {
-        method,
-        headers,
-        body: jsonBody !== undefined ? JSON.stringify(jsonBody) : undefined,
-        signal: controller.signal,
-      });
-    } catch (err) {
-      const aborted = controller.signal.aborted;
-      const detail = err instanceof Error ? err.message : String(err);
-      throw new GitHostApiError(
-        redactSecrets(
-          aborted
-            ? `GitHub request timed out after ${this.timeoutMs}ms`
-            : `GitHub request failed: ${detail}`,
-          [token],
-        ),
-      );
+      let res: Response;
+      try {
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': GITHUB_API_VERSION,
+          'User-Agent': USER_AGENT,
+        };
+        if (jsonBody !== undefined) headers['Content-Type'] = 'application/json';
+        res = await this.fetchImpl(url, {
+          method,
+          headers,
+          body: jsonBody !== undefined ? JSON.stringify(jsonBody) : undefined,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        throw this.requestFailure(err, controller.signal.aborted, token);
+      }
+
+      let json: unknown;
+      try {
+        json = await res.json();
+      } catch (err) {
+        // A body read aborted by the timeout is a HANG we cut short — surface it
+        // as a timeout, not a benign no-body. Otherwise the body was simply
+        // absent / not JSON (e.g. an HTML 5xx): callers treat an undefined body
+        // as "no GitHub detail", never as a valid PR payload.
+        if (controller.signal.aborted) throw this.requestFailure(err, true, token);
+        json = undefined;
+      }
+      return { status: res.status, json };
     } finally {
       clearTimeout(timer);
     }
+  }
 
-    let json: unknown;
-    try {
-      json = await res.json();
-    } catch {
-      // A non-JSON / empty body (e.g. an HTML 5xx page). Callers treat an
-      // undefined body as "no GitHub detail" — never as a valid PR payload.
-      json = undefined;
-    }
-    return { status: res.status, json };
+  /** A `fetch`/body-read throw → a token-redacted `GitHostApiError` (timeout vs failure). */
+  private requestFailure(err: unknown, aborted: boolean, token: string): GitHostApiError {
+    const detail = err instanceof Error ? err.message : String(err);
+    return new GitHostApiError(
+      redactSecrets(
+        aborted
+          ? `GitHub request timed out after ${this.timeoutMs}ms`
+          : `GitHub request failed: ${detail}`,
+        [token],
+      ),
+    );
   }
 }
