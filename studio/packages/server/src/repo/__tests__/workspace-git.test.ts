@@ -4,6 +4,7 @@ import {
   deleteWorkspaceGit,
   getWorkspaceGit,
   updateWorkspaceGitSync,
+  updateWorkspaceGitWorkingBranch,
 } from '../workspace-git.js';
 import { freshDb } from './helpers.js';
 
@@ -11,6 +12,7 @@ const input = {
   ownerId: 'local',
   repoUrl: '/repos/widgets',
   collabBranch: 'main',
+  workingBranch: 'studio/local/work',
   observedCollabHead: 'a'.repeat(40),
   lastFetchAt: 1_700_000_000_000,
   lastFetchError: null,
@@ -57,6 +59,25 @@ describe('workspace-git repo', () => {
         lastFetchError: null,
       }),
     ).toBeNull();
+  });
+
+  it('updateWorkspaceGitWorkingBranch sets only the working branch + updatedAt', () => {
+    const { db } = freshDb();
+    const created = createWorkspaceGit(db, input);
+    const updated = updateWorkspaceGitWorkingBranch(db, 'local', 'studio/luke/feature-x');
+    expect(updated).not.toBeNull();
+    expect(updated!.workingBranch).toBe('studio/luke/feature-x');
+    // Every other field is preserved (the narrow single-field mutation).
+    expect(updated!.repoUrl).toBe(created.repoUrl);
+    expect(updated!.collabBranch).toBe(created.collabBranch);
+    expect(updated!.observedCollabHead).toBe(created.observedCollabHead);
+    expect(updated!.createdAt).toBe(created.createdAt);
+    expect(getWorkspaceGit(db, 'local')).toEqual(updated);
+  });
+
+  it('updateWorkspaceGitWorkingBranch on an unconnected owner returns null', () => {
+    const { db } = freshDb();
+    expect(updateWorkspaceGitWorkingBranch(db, 'local', 'studio/luke/x')).toBeNull();
   });
 
   it('delete removes the row for that owner only', () => {

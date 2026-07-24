@@ -731,6 +731,11 @@ export const workspaceGit = sqliteTable(
     ownerId: text('owner_id'),
     repoUrl: text('repo_url').notNull(),
     collabBranch: text('collab_branch').notNull(),
+    // #3 G9a — the persisted working branch (feature-branch selection). Nullable
+    // in SQL (added via 0031 ADD COLUMN + backfill), NOT NULL at the read
+    // boundary (`WorkspaceGitSchema`); always set on write. The one
+    // post-connect-mutable field (see repo `updateWorkspaceGitWorkingBranch`).
+    workingBranch: text('working_branch'),
     observedCollabHead: text('observed_collab_head'),
     lastFetchAt: integer('last_fetch_at'),
     lastFetchError: text('last_fetch_error'),

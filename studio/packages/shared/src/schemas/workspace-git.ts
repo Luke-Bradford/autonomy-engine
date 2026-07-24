@@ -106,6 +106,22 @@ export const WorkspaceGitBranchSchema = z
   });
 
 /**
+ * #3 G9 — the DEFAULT working branch a workspace gets on connect: the
+ * studio-owned convention `studio/<ownerId>/work`. The SINGLE source of this
+ * convention (CLAUDE.md: one source of truth for constants) — the connect route
+ * seeds `working_branch` with it, and the `0031` migration backfill reproduces
+ * it in SQL (`'studio/' || COALESCE(owner_id,'null') || '/work'`) as a
+ * documented snapshot-duplicate (the same posture the `secret_status` kind list
+ * takes across `deriveSecretStatus` + its `0030` backfill). `ownerId` is the
+ * principal's owner (always a concrete string in v1, `'local'`); the `null`
+ * branch mirrors JS `` `studio/${null}/work` `` = `studio/null/work`, which the
+ * SQL `COALESCE` matches exactly.
+ */
+export function deriveDefaultWorkingBranch(ownerId: string | null): string {
+  return `studio/${ownerId}/work`;
+}
+
+/**
  * The full `workspace_git` row. Tracking fields are REQUIRED-nullable — a
  * `null` means "not observed" and must be stated, never manufactured by a
  * `.default()` (#473: an absent fact is not a benign default).
@@ -121,6 +137,19 @@ export const WorkspaceGitSchema = z.object({
   // only refusing new connects.
   repoUrl: z.string().min(1),
   collabBranch: z.string().min(1),
+  /**
+   * The studio-owned working branch a Commit lands on and a PR is opened FROM
+   * (#3 G9). Unlike `repoUrl`/`collabBranch` (fixed at connect), this is the ONE
+   * post-connect-mutable field — feature-branch selection re-points it (see
+   * `updateWorkspaceGitWorkingBranch`). STRUCTURAL string here for the same
+   * reason as the two above: the row re-parses on every read, so it must not
+   * embed the check-ref-format validator (`SetWorkingBranchBodySchema` enforces
+   * that at the input boundary). Defaults to `deriveDefaultWorkingBranch` on
+   * connect; never null (nullable-in-SQL + backfilled + always-set-on-write, the
+   * `secret_status` #473 posture — a null would fail loudly here, not read as a
+   * benign default).
+   */
+  workingBranch: z.string().min(1),
   /** Last observed `refs/remotes/origin/<collabBranch>` sha; null = the branch was not found at the last sync. */
   observedCollabHead: z.string().nullable(),
   /** Epoch-ms of the last sync attempt (connect counts); null = never synced. */
@@ -185,15 +214,29 @@ export const CommitMessageSchema = z
   .max(MAX_COMMIT_MESSAGE_LEN)
   .refine((value) => !value.includes('\x00'), 'commit message must not contain a NUL byte');
 
-/** Commit body: just the message — the working branch is derived
- * `studio/<ownerId>/work` this slice (the persisted column + feature-branch
- * selection land with their first reader, G9). */
+/** Commit body: just the message — the working branch is now the persisted,
+ * per-workspace `working_branch` (#3 G9; set via `SetWorkingBranchBodySchema`,
+ * defaulted on connect), no longer derived per-commit. */
 export const CommitWorkspaceGitBodySchema = z
   .object({
     message: CommitMessageSchema,
   })
   .strict();
 export type CommitWorkspaceGitBody = z.infer<typeof CommitWorkspaceGitBodySchema>;
+
+/**
+ * #3 G9 — feature-branch SELECTION: set which working branch the workspace
+ * commits to and opens PRs from. The check-ref-format policy validator lives
+ * HERE at the input boundary (not on the row schema — see `WorkspaceGitSchema`),
+ * so a hostile/typo'd branch is refused before it reaches the git argv or a
+ * `refs/…/<branch>` interpolation. `.strict()` — an unknown key is a 400.
+ */
+export const SetWorkingBranchBodySchema = z
+  .object({
+    workingBranch: WorkspaceGitBranchSchema,
+  })
+  .strict();
+export type SetWorkingBranchBody = z.infer<typeof SetWorkingBranchBodySchema>;
 
 /**
  * The Commit result. `committed:false` (with `commitSha:null`) is the no-op
@@ -405,3 +448,155 @@ export const WorkspaceGitApplyResultSchema = z.object({
   diagnostics: z.array(WorkspaceParseDiagnosticSchema),
 });
 export type WorkspaceGitApplyResult = z.infer<typeof WorkspaceGitApplyResultSchema>;
+
+/**
+ * #3 G9 — the git-host coordinates a `repoUrl` points at: `{ host, owner, repo }`.
+ * Parsed from the connect-allowlisted URL forms so a PR can be opened (G9b) or a
+ * guided-manual compare URL built (G9a). `null` for a form with no web host (a
+ * `file://` URL or a local absolute path — a local remote has no PR surface).
+ */
+export interface GitHostRepo {
+  host: string;
+  owner: string;
+  repo: string;
+}
+
+/**
+ * Extract `{ host, owner, repo }` from a `WorkspaceGitRepoUrlSchema`-allowlisted
+ * `repoUrl`. Regex/string-only (this package compiles against no DOM/node
+ * globals — no `new URL()`, same constraint the repoUrl validator works under).
+ * Handles `https://`/`ssh://` (strips userinfo + port) and scp-like
+ * `user@host:path`; returns `null` for `file://`, absolute paths, or any URL
+ * without at least an `owner/repo` tail. A trailing `.git` on the repo segment
+ * is stripped; owner/repo are the LAST two path segments (so a deeper GitLab-
+ * style group path degrades to its final `group/repo`).
+ */
+export function parseGitHostRepo(repoUrl: string): GitHostRepo | null {
+  const value = repoUrl.trim();
+  // A local remote (file:// or absolute path) has no web/API host.
+  if (value.startsWith('file://') || value.startsWith('/')) return null;
+
+  let host: string;
+  let path: string;
+  const scheme = /^(?:https|ssh):\/\/(.+)$/.exec(value);
+  if (scheme && scheme[1] !== undefined) {
+    const rest = scheme[1];
+    const slash = rest.indexOf('/');
+    if (slash < 0) return null; // authority but no path
+    let authority = rest.slice(0, slash);
+    path = rest.slice(slash + 1);
+    const at = authority.lastIndexOf('@');
+    if (at >= 0) authority = authority.slice(at + 1); // strip userinfo
+    const colon = authority.indexOf(':');
+    if (colon >= 0) authority = authority.slice(0, colon); // strip port
+    host = authority;
+  } else {
+    // scp-like `user@host:path` (the classic `git@github.com:org/repo.git`).
+    const scp = /^[^@]+@([^:]+):(.+)$/.exec(value);
+    if (!scp || scp[1] === undefined || scp[2] === undefined) return null;
+    host = scp[1];
+    path = scp[2];
+  }
+
+  if (!host) return null;
+  const segments = path.split('/').filter((s) => s.length > 0);
+  const owner = segments[segments.length - 2];
+  const lastSegment = segments[segments.length - 1];
+  if (owner === undefined || lastSegment === undefined) return null; // no owner/repo tail
+  const repo = lastSegment.endsWith('.git') ? lastSegment.slice(0, -'.git'.length) : lastSegment;
+  if (!repo) return null; // a bare ".git" segment
+  return { host, owner, repo };
+}
+
+/** Is this host GitHub? (GitHub is the only host G9a builds a compare URL for.)
+ * Accepts the `www.` alias — `https://www.github.com/…` is a legitimate remote
+ * (it redirects to the apex) and should still get a compare URL, which
+ * `buildGitHubCompareUrl` emits against the canonical `github.com` regardless.
+ * Module-private — its only consumer is `buildGuidedManualPullRequest`; G9b can
+ * export it if the host-API path needs a host discriminator. */
+function isGitHubHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === 'github.com' || h === 'www.github.com';
+}
+
+/**
+ * Encode a git branch name for a URL PATH position, preserving `/` (a git branch
+ * may contain slashes, e.g. `studio/local/work`, which GitHub compare URLs carry
+ * literally) while percent-encoding any other URL-significant char (`#`, `&`, …
+ * — git ref names permit some of these). Per-segment `encodeURIComponent`.
+ */
+function encodeBranchForUrl(branch: string): string {
+  return branch.split('/').map(encodeURIComponent).join('/');
+}
+
+/**
+ * The GitHub PR-create ("compare") URL for `working` → `collab`:
+ * `https://github.com/<owner>/<repo>/compare/<collab>...<working>?expand=1`
+ * (`base...head` = merge head into base; `expand=1` pre-opens the create form).
+ * Module-private — composed only by `buildGuidedManualPullRequest`.
+ *
+ * `owner`/`repo` are `encodeURIComponent`-encoded just like the branch segments:
+ * `WorkspaceGitRepoUrlSchema` restricts only scheme/credential shape, NOT the
+ * path charset, so a stored repoUrl path segment containing `#`/`?`/space (e.g.
+ * a directly-seeded row) would otherwise produce a malformed or silently
+ * truncated link. Both are single segments (no `/`), so a flat encode is right.
+ */
+function buildGitHubCompareUrl(
+  repo: GitHostRepo,
+  collabBranch: string,
+  workingBranch: string,
+): string {
+  const owner = encodeURIComponent(repo.owner);
+  const name = encodeURIComponent(repo.repo);
+  return `https://github.com/${owner}/${name}/compare/${encodeBranchForUrl(
+    collabBranch,
+  )}...${encodeBranchForUrl(workingBranch)}?expand=1`;
+}
+
+/** Which git host a PR flow recognises. `unknown` = no auto/guided PR surface
+ * (a local remote, or a non-GitHub host G9a does not build URLs for yet). */
+export const GitHostProviderSchema = z.enum(['github', 'unknown']);
+export type GitHostProvider = z.infer<typeof GitHostProviderSchema>;
+
+/** How a pull request was produced. `guided_manual` = studio returns a URL/branch
+ * pair for the user to open the PR themselves (G9a); `opened` = studio opened it
+ * via the host API (G9b). */
+export const PullRequestModeSchema = z.enum(['opened', 'guided_manual']);
+export type PullRequestMode = z.infer<typeof PullRequestModeSchema>;
+
+/**
+ * #3 G9 — the `POST /api/workspace/git/pull-request` result. G9a always returns
+ * `mode:'guided_manual'`: for a GitHub remote, `provider:'github'` + a compare
+ * `url` the user clicks to open the PR; for a local/non-GitHub remote,
+ * `provider:'unknown'` + `url:null` (open the PR by hand from the branch pair).
+ * The `mode`/`provider` enums already carry the G9b values (`opened`/host APIs)
+ * so upgrading to an auto-opened PR is not a contract change. `workingBranch` /
+ * `collabBranch` are echoed so a guided-manual client knows the branch pair.
+ */
+export const PullRequestResultSchema = z.object({
+  mode: PullRequestModeSchema,
+  provider: GitHostProviderSchema,
+  url: z.string().min(1).nullable(),
+  workingBranch: z.string().min(1),
+  collabBranch: z.string().min(1),
+});
+export type PullRequestResult = z.infer<typeof PullRequestResultSchema>;
+
+/**
+ * Build the GUIDED-MANUAL pull-request payload (G9a) from a repo's coordinates
+ * and its branch pair: a GitHub compare URL when the remote is GitHub, else
+ * `{ provider:'unknown', url:null }`. The one place the route composes
+ * `parseGitHostRepo` + `buildGitHubCompareUrl`, so the github-detection and
+ * url-building can't drift. G9b will add the `opened` path alongside this.
+ */
+export function buildGuidedManualPullRequest(
+  repoUrl: string,
+  collabBranch: string,
+  workingBranch: string,
+): { provider: GitHostProvider; url: string | null } {
+  const parsed = parseGitHostRepo(repoUrl);
+  if (parsed && isGitHubHost(parsed.host)) {
+    return { provider: 'github', url: buildGitHubCompareUrl(parsed, collabBranch, workingBranch) };
+  }
+  return { provider: 'unknown', url: null };
+}

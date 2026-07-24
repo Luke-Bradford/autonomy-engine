@@ -27,15 +27,19 @@ describe('0025 migration: workspace_git', () => {
       'owner_id',
       'repo_url',
       'updated_at',
+      'working_branch',
     ]);
     // Tracking fields are genuinely nullable (null = "not observed", stated
     // honestly — #473); the config fields are NOT NULL (a new table can say so
-    // directly, no ADD COLUMN sentinel hazard).
+    // directly, no ADD COLUMN sentinel hazard). `working_branch` (#3 G9a, added
+    // by 0031) is nullable IN SQL (ADD COLUMN + backfill; NOT NULL is enforced
+    // at the read boundary, the `secret_status` posture) — see the 0031 test.
     expect(byName.get('repo_url')!.notnull).toBe(1);
     expect(byName.get('collab_branch')!.notnull).toBe(1);
     expect(byName.get('observed_collab_head')!.notnull).toBe(0);
     expect(byName.get('last_fetch_at')!.notnull).toBe(0);
     expect(byName.get('last_fetch_error')!.notnull).toBe(0);
+    expect(byName.get('working_branch')!.notnull).toBe(0);
   });
 
   it('enforces ONE row per owner at the DB (unique index, not just the route pre-check)', () => {

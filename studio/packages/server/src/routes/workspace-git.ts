@@ -3,9 +3,13 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  buildGuidedManualPullRequest,
   CommitWorkspaceGitBodySchema,
   ConnectWorkspaceGitBodySchema,
+  deriveDefaultWorkingBranch,
   MANAGED_DIRS,
+  PullRequestResultSchema,
+  SetWorkingBranchBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
   WorkspaceGitApplyResultSchema,
@@ -21,6 +25,7 @@ import {
   getWorkspaceGit,
   listVersionResourceIds,
   updateWorkspaceGitSync,
+  updateWorkspaceGitWorkingBranch,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
 import {
@@ -60,9 +65,11 @@ import type { Db } from '../repo/types.js';
  * check-ref-format branch shape, non-empty message) BEFORE reaching a git argv;
  * ownerId comes from `request.principal`, never the client; git runs with the
  * master-key env vars stripped and can never prompt (see `git/provider.ts`).
- * The working branch is DERIVED `studio/<ownerId>/work` (G3a) — no client
- * override — and the Commit only ever writes/stages the three studio-managed
- * dirs, never the user's own repo files.
+ * The working branch is now the PERSISTED, per-workspace `working_branch` (#3
+ * G9a — defaulted to `studio/<ownerId>/work` on connect, re-pointed by the
+ * working-branch route; re-parsed through the branch validator at the commit
+ * argv boundary), and the Commit only ever writes/stages the three
+ * studio-managed dirs, never the user's own repo files.
  *
  * The `MANAGED_DIRS` a Commit owns and an import-preview reads come from the
  * shared G1 path policy (single source of truth) — never re-hardcoded here.
@@ -187,6 +194,12 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
           ownerId,
           repoUrl: body.repoUrl,
           collabBranch: body.collabBranch,
+          // #3 G9a — seed the working branch with the studio-owned default; the
+          // working-branch route re-points it for feature-branch selection.
+          // Validated at the SEED point (not just the commit boundary) so a
+          // branch-illegal owner id fails loudly here at connect, never storing
+          // a value the commit route would later throw on.
+          workingBranch: WorkspaceGitBranchSchema.parse(deriveDefaultWorkingBranch(ownerId)),
           observedCollabHead: head,
           lastFetchAt: Date.now(),
           lastFetchError: null,
@@ -220,13 +233,15 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const body = CommitWorkspaceGitBodySchema.parse(request.body);
     const ownerId = request.principal.ownerId;
     const principalId = request.principal.id;
-    // DERIVED working branch (G3a) — validated through the same check-ref-format
-    // schema every branch crosses, defensively (ownerId is principal-derived).
-    const workingBranch = WorkspaceGitBranchSchema.parse(`studio/${ownerId}/work`);
 
     const result = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      // The PERSISTED working branch (#3 G9a). Re-parsed through the same
+      // check-ref-format validator every branch crosses before it reaches a git
+      // argv / `refs/…/<branch>` interpolation — the row schema stores it as a
+      // structural string, so the input-policy check happens here at the boundary.
+      const workingBranch = WorkspaceGitBranchSchema.parse(row.workingBranch);
 
       // Fetch first (shared with the fetch route) so the base refs below are
       // current; a fetch failure records + rethrows before any commit work.
@@ -288,6 +303,56 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     });
 
     return { commit: result };
+  });
+
+  /**
+   * #3 G9a — feature-branch SELECTION: set which working branch the workspace
+   * commits to and opens PRs from. Runs inside the per-owner queue so it can't
+   * interleave with a concurrent commit that reads `working_branch` mid-flight.
+   * The branch value is policy-validated at the boundary (`SetWorkingBranchBody`)
+   * and the repo setter is the ONLY post-connect field mutation.
+   */
+  fastify.post('/api/workspace/git/working-branch', async (request) => {
+    const body = SetWorkingBranchBodySchema.parse(request.body);
+    const ownerId = request.principal.ownerId;
+
+    const updated = await queue.run(ownerId, async () => {
+      const row = updateWorkspaceGitWorkingBranch(db, ownerId, body.workingBranch);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      return row;
+    });
+
+    return { git: statusOf(updated) };
+  });
+
+  /**
+   * #3 G9a — open a pull request (working → collab). This slice is GUIDED-MANUAL
+   * only: for a GitHub remote it returns a compare `url` the user clicks to open
+   * the PR (`provider:'github'`); for a local/non-GitHub remote it returns
+   * `url:null` + the branch pair (`provider:'unknown'`). No git op and no host
+   * API call yet (G9b adds `mode:'opened'` via the host API + an operator-env
+   * token), so it needs neither the queue nor a fetch — a pure DB read + URL
+   * build. 404s when no repo is connected, matching the fetch/commit routes.
+   */
+  fastify.post('/api/workspace/git/pull-request', async (request) => {
+    const ownerId = request.principal.ownerId;
+    const row = getWorkspaceGit(db, ownerId);
+    if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+    const { provider: hostProvider, url } = buildGuidedManualPullRequest(
+      row.repoUrl,
+      row.collabBranch,
+      row.workingBranch,
+    );
+    const pullRequest = PullRequestResultSchema.parse({
+      mode: 'guided_manual',
+      provider: hostProvider,
+      url,
+      workingBranch: row.workingBranch,
+      collabBranch: row.collabBranch,
+    });
+
+    return { pullRequest };
   });
 
   fastify.post('/api/workspace/git/import-preview', async (request) => {
