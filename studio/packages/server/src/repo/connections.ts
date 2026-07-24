@@ -40,6 +40,26 @@ export function deriveSecretStatus(kind: ConnectionKind, secretRef: string | nul
   return secretRef !== null ? 'ready' : 'needs_secret';
 }
 
+/**
+ * #3 G8b — the SINGLE readiness decision for a resolved connection row, shared by
+ * the executor's DISPATCH gate (`resolveConnection`, G8a) and the enable-time
+ * gate (`unreadyConnectionsForVersion` → the trigger routes). Returns WHY a
+ * connection is not dispatchable, or `null` when it is ready. Extracting the
+ * boolean here (rather than re-inlining `!enabled`/`secretStatus` in each caller)
+ * means the two gates can never drift as later readiness axes are added — the
+ * same SSOT posture as `deriveSecretStatus`. The distinct human messages stay in
+ * each caller; only the decision is shared. The `missing`/cross-owner case is NOT
+ * part of this predicate: it is each caller's own earlier owner-scoped lookup
+ * branch (a null/foreign row never reaches here).
+ */
+export function connectionNotReadyReason(
+  connection: Connection,
+): 'disabled' | 'needs_secret' | null {
+  if (!connection.enabled) return 'disabled';
+  if (connection.secretStatus === 'needs_secret') return 'needs_secret';
+  return null;
+}
+
 export function createConnection(
   db: Db,
   input: NewConnection,

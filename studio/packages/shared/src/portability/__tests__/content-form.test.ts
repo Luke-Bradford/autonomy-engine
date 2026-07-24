@@ -192,4 +192,26 @@ describe('triggerContentForm', () => {
       triggerContentForm(triggerData()),
     );
   });
+
+  // #3 G8b (#674) — a webhook trigger's secret-PRESENCE is LOCAL readiness state,
+  // never authoring content. An exported webhook config has `secretRef` stripped,
+  // so a trigger WITH a local secret serializes `webhook: {}` while a fresh
+  // cross-workspace CREATE (which cannot reconstruct the secret) forces
+  // `webhook: null`. `{}` and `null` must compare EQUAL by content, exactly as
+  // `requiresSecret` is excluded for connections — else the trigger churns
+  // `update` on every import until the operator re-enters the secret.
+  it('is EQUAL for an empty webhook config {} vs null (secret-presence is local readiness, not content)', () => {
+    expect(triggerContentForm(triggerData({ webhook: {}, mode: 'webhook' }))).toBe(
+      triggerContentForm(triggerData({ webhook: null, mode: 'webhook' })),
+    );
+  });
+
+  it('DIFFERS when a NON-empty webhook config carries authoring content (a catchall field IS content)', () => {
+    // A future non-secret webhook field (e.g. replay-window config) is real
+    // authoring content and must NOT be normalized away — only the empty
+    // secret-presence signal is excluded.
+    expect(
+      triggerContentForm(triggerData({ webhook: { replayWindow: 5 }, mode: 'webhook' })),
+    ).not.toBe(triggerContentForm(triggerData({ webhook: null, mode: 'webhook' })));
+  });
 });

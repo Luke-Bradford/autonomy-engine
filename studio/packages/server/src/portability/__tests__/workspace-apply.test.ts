@@ -707,13 +707,13 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
   });
 
-  it('DOCUMENTED non-idempotency: a webhook trigger created cross-workspace re-classifies update (G8)', () => {
+  it('IDEMPOTENT (#674 RESOLVED, G8b): a webhook trigger created cross-workspace re-classifies unchanged', () => {
     // The source's secret serializes to a public `{}`; the target create forces
     // webhook null (no secret to reconstruct), so the target serializes null.
-    // `{}` ≠ null in the content form → the branch re-classifies `update` on the
-    // NEXT import until the operator provisions the secret (G8 charter). Pinned
-    // so a future `triggerContentForm` webhook-presence exclusion is a conscious
-    // change, not a silent regression.
+    // `triggerContentForm` now collapses the empty webhook `{}` to null (#674 —
+    // secret-PRESENCE is LOCAL readiness state, not authoring content), so `{}`
+    // and null compare EQUAL and the trigger no longer churns `update` on every
+    // import while the operator has not re-provisioned the secret.
     const src = freshDb().db;
     const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
     const version = createPipelineVersion(src, baseVersion(pipe.id));
@@ -735,9 +735,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // The target trigger has no secret (never imported).
     const t = listTriggers(tgt, { ownerId: 'local' })[0]!;
     expect(t.webhook).toBeNull();
-    // Re-import the SAME branch → not `unchanged` but `updated` (the known churn).
+    // Re-import the SAME branch → `unchanged` (#674 fixed — no perpetual churn).
     const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
-    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
+    expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
   });
 
   it('forces event null off event-mode and window null off tumbling-mode (import.ts parity)', () => {

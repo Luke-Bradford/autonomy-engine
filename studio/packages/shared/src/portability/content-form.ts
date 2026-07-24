@@ -55,10 +55,19 @@ import type { ConnectionExportData, PipelineExportData, TriggerExportData } from
  * matches what the apply persists. This raw form stays a pure branch-vs-branch
  * comparator; the resolution domain is a server concept, so it lives server-side.
  *
- * STILL OPEN for G8 (#674): a webhook trigger's secret-PRESENCE (`webhook: {}` on
- * a workspace that has the secret vs `null` on one that does not) is the
- * `requiresSecret` shape and churns a cross-workspace-created webhook trigger —
- * that exclusion lands with the G8 secret-readiness gate, not here.
+ * A webhook trigger's secret-PRESENCE (#3 G8b, #674 RESOLVED) is LOCAL readiness
+ * state, never authoring content — the `requiresSecret` shape one level down. An
+ * exported webhook config always has `secretRef` stripped
+ * (`WebhookPublicConfigSchema`), so a trigger WITH a local secret serializes
+ * `webhook: {}` while a fresh cross-workspace CREATE (which cannot reconstruct the
+ * secret — `NewTriggerSchema.webhook` requires `secretRef`) forces `webhook:
+ * null`. `{}` ≠ `null` would churn a `update` on every import forever. So
+ * `triggerContentForm` collapses an EMPTY webhook object to `null`: the two
+ * secret-presence states compare equal, exactly as `connectionContentForm`
+ * excludes `requiresSecret`. A NON-empty webhook config (a future non-secret
+ * catchall field — the schema is `.catchall(z.unknown())`) is real authoring
+ * content and is KEPT, so this stays structure-aware, never the #473 fail-open
+ * shape of blanket-dropping the whole `webhook` key.
  */
 
 /** Deep clone via a JSON round-trip. Export `data` is always JSON-safe (it was
@@ -155,5 +164,16 @@ export function connectionContentForm(data: ConnectionExportData): string {
 export function triggerContentForm(data: TriggerExportData): string {
   const clone = jsonClone(data);
   omitKeys(clone, RESOURCE_VOLATILE);
+  // #3 G8b (#674) — collapse an EMPTY webhook config to null: `{}` (secret
+  // present locally, stripped on export) and `null` (no secret) are the same
+  // secret-presence readiness signal, not authoring content. A non-empty config
+  // (a non-secret catchall field) is real content and stays untouched.
+  if (
+    clone.webhook !== null &&
+    typeof clone.webhook === 'object' &&
+    Object.keys(clone.webhook).length === 0
+  ) {
+    clone.webhook = null;
+  }
   return canonicalStringify(clone);
 }

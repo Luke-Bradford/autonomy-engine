@@ -35,6 +35,7 @@ import { encrypt } from '../secrets/secrets.js';
 import { BadRequestError, NotFoundError } from '../errors.js';
 import { requireOwned } from './util.js';
 import { UnboundTriggerError } from '../run/launcher.js';
+import { unreadyConnectionsForVersion } from '../run/connection-readiness.js';
 import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
@@ -296,6 +297,51 @@ function assertWindowBindingsConsistent(mode: TriggerMode, params: Record<string
   }
 }
 
+/**
+ * #3 G8b — the enable-time connection-readiness gate (git-publish spec 120-123):
+ * an ENABLED trigger cannot bind a pipeline version whose connections are not
+ * ready to dispatch (missing / disabled / missing-secret). Only enforced while
+ * `enabled` (a paused trigger may be authored ahead of provisioning its secrets),
+ * and only for a concrete binding (`assertBindableIfEnabled` already refuses an
+ * enabled+unbound trigger). Runs AFTER `requireOwnedPipelineVersion`, so a
+ * foreign version id 404s before its nodes are scanned; the scan is itself
+ * owner-scoped (`unreadyConnectionsForVersion`) so a foreign connection folds to
+ * `missing`, never confirming another owner's connection. This is the
+ * authoring-surface companion to the executor's fire-time dispatch gate (G8a) —
+ * the git-import enable path is gated separately (G8b-2); the dispatch gate
+ * backstops both.
+ *
+ * SCOPE: this gate covers secret-READINESS only. Connection KIND-compatibility
+ * (an `llm_call` node bound to a ready but wrong-kind connection) stays a
+ * dispatch-time refusal (`CONNECTION_KIND_INVALID`), deliberately not checked
+ * here — a version is immutable but a connection's kind is mutable, and a
+ * `connectionId` may be `${}`-dynamic, so kind-validity can only be judged at
+ * fire time (the same reason readiness is not checked at version SAVE).
+ *
+ * The check is against the FULL effective binding, not just the field this
+ * request touches — deliberately conservative: an enabled trigger's binding must
+ * be wholly ready. (A connection cannot yet drift to unready under a live enabled
+ * trigger — there is no disable / secret-removal API until G8b-2 — so this never
+ * refuses a benign unrelated PATCH today; the dispatch gate keeps it safe if it
+ * ever could.)
+ */
+function assertConnectionsReadyIfEnabled(
+  db: Db,
+  ownerId: string,
+  enabled: boolean,
+  pipelineVersionId: string | null,
+): void {
+  if (!enabled || pipelineVersionId === null) return;
+  const unready = unreadyConnectionsForVersion(db, ownerId, pipelineVersionId);
+  if (unready.length > 0) {
+    const detail = unready.map((u) => `'${u.connectionId}' (${u.reason})`).join(', ');
+    throw new BadRequestError(
+      `an enabled trigger cannot bind a pipeline version whose connections are not ready: ${detail}. ` +
+        `Supply the missing secret or enable the connection, then enable the trigger.`,
+    );
+  }
+}
+
 export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -313,6 +359,7 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     assertWindowConsistent(body.mode, body.window ?? null, body.enabled, body.concurrency.policy);
     assertWindowBindingsConsistent(body.mode, body.params);
     requireOwnedPipelineVersion(db, pipelineVersionId, request.principal);
+    assertConnectionsReadyIfEnabled(db, request.principal.ownerId, body.enabled, pipelineVersionId);
     const created = createTrigger(db, {
       ...body,
       pipelineVersionId,
@@ -355,6 +402,12 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
     const effPipelineVersionId =
       body.pipelineVersionId !== undefined ? body.pipelineVersionId : existing.pipelineVersionId;
     assertBindableIfEnabled(effEnabled, effPipelineVersionId);
+    assertConnectionsReadyIfEnabled(
+      db,
+      request.principal.ownerId,
+      effEnabled,
+      effPipelineVersionId,
+    );
     // Recurrence 3-state on the PATCH body: undefined = untouched (keep existing),
     // null = clear, object = set. `body.schedule` (a non-null string) is an
     // author-supplied raw cron in THIS patch.
