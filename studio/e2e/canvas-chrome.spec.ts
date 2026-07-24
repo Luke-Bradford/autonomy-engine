@@ -71,8 +71,10 @@ async function expectSurface(
 }
 
 async function openCanvas(page: Page, name: string): Promise<void> {
-  // U2 moved the pipelines list under the Author hub; the MVP's flat
-  // `#/pipelines` is gone (U3r is the ticket that adds a redirect for it).
+  // U2 moved the pipelines list under the Author hub. The MVP's flat
+  // `#/pipelines` still resolves (U3r redirects it, and `legacy-routes.spec.ts`
+  // covers that) — this spec navigates to the canonical path directly, so a
+  // canvas failure here can never be a routing failure in disguise.
   await page.goto('/#/author/pipelines');
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
   await fluentRootReady(page);

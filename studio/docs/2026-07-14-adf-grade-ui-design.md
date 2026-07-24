@@ -234,7 +234,36 @@ P7 single-container Fastify static route still needs no history-API fallback.
 | `#/manage` | index redirect (`replace`) → `#/manage/connections` |
 | `#/manage/connections` | Connections |
 | `#/manage/triggers` | Triggers |
-| `#/*` | catch-all → `#/` (**U3r** replaces this with real MVP-path redirects) |
+| `#/*` | catch-all → `#/` (an unknown path, once the U3r legacy paths below have had their turn) |
+
+### U3r — legacy MVP-path compatibility (AS BUILT, 2026-07-24)
+
+The MVP's flat route space still resolves. `LEGACY_REDIRECTS` in `routes.tsx` is the SSOT for the
+static hops; `#/runs/:runId` needs a component because it carries state.
+
+| Legacy path | Redirects to |
+|---|---|
+| `#/connections` | `#/manage/connections` |
+| `#/pipelines` | `#/author/pipelines` |
+| `#/triggers` | `#/manage/triggers` |
+| `#/runs` | `#/monitor/runs` |
+| `#/runs/:runId` | `#/monitor/runs/:runId` — **id preserved** |
+
+- **`#/` is deliberately NOT redirected.** The MVP rendered Connections at `/`; `/` is now the Home
+  hub. Honouring the old default would break Home for everyone to humour a stale bookmark.
+- **All legacy redirects `replace`.** Same history-trap reasoning as the hub indexes — a pushed
+  redirect leaves the dead URL in history, so Back returns to it and is bounced forward again.
+- **The run id is RE-ENCODED on the way through.** `useParams` returns it decoded and react-router
+  does not re-encode a string `to`, so interpolating the raw param would ship a half-decoded path
+  that `RunDetailRoute` then decodes a SECOND time. Pinned by a test whose id (`run%20x`) is not
+  idempotent under an extra decode; a plain id would let the bug through.
+- **Ordering before the catch-all is readability only** — react-router RANKS matches, so `*` loses
+  to a concrete path wherever it sits. The tests, not the ordering, are the guarantee.
+- **Query strings are not preserved.** The pre-U2 router treated the whole hash as the path, so
+  `#/runs?x=1` never matched `/runs` in the MVP either; nothing regresses.
+- The compatibility layer is exactly three things — the `LEGACY_REDIRECTS` table, the routes built
+  from it at the bottom of `ROUTES`, and the `LegacyRunRedirect` component — so **retiring** it once
+  the window for old bookmarks has closed is a small, findable job.
 
 Decisions worth not re-deriving:
 
@@ -266,9 +295,11 @@ Decisions worth not re-deriving:
   the index redirect then REPLACEs it back to `#/monitor/runs`. Fixing it means giving the rail a
   second path matcher to decide `replace`, which is exactly the duplicate source of truth deleted
   above; not worth it for one dead Back press. Revisit if U3's breadcrumb needs the matcher anyway.
-- **Run ids are `encodeURIComponent`d into the path** at the two call sites that build one
-  (`RunsPage`, `TriggersPage`). Today's ids are `run_` + a nanoid, whose alphabet is URL-safe, so
-  this is a no-op — it exists so the encode/decode pair is symmetric if the alphabet ever widens.
+- **Run ids are `encodeURIComponent`d into the path.** Today's ids are `run_` + a nanoid, whose
+  alphabet is URL-safe, so this is a no-op — it exists so the encode/decode pair is symmetric if the
+  alphabet ever widens. U3r made this a shared `runDetailPath()` helper: it added a third builder
+  (`LegacyRunRedirect`) alongside `RunsPage` and `TriggersPage`, and three copies of an invariant
+  that only bites on ids nobody mints yet is exactly the kind that drifts unnoticed.
   Note react-router uses `%2F` as an internal sentinel, so a literal `/` inside an id would still
   not round-trip; ids must stay path-safe.
 - **Navigation idiom.** In-app links that a user might want to open in a new tab or copy use
@@ -289,9 +320,9 @@ Deliberately NOT in U2, from its own ticket row and the Shell description:
 - **`uiStore` is untouched.** The U2 row names it, but U1 already added the theme slice and the
   pane width/collapse state it would otherwise hold belongs to **U3**. No second consumer exists
   yet, so the store stays a singleton with prop injection rather than moving behind a context.
-- **Legacy MVP-path redirects** — **U3r**. Between this merge and U3r, an old bookmark hits the
-  catch-all and lands on Home; the sharp case is `#/runs/:id`, which loses the run id rather than
-  resolving to that run. **U3r should therefore land before U3.**
+- **Legacy MVP-path redirects** — **U3r**, now BUILT (see the U3r section above), which is why it
+  landed immediately after U2 and before U3: until it did, an old bookmark hit the catch-all and
+  landed on Home, and `#/runs/:id` lost the run id rather than resolving to that run.
 
 ## Non-goals (YAGNI)
 

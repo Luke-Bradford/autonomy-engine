@@ -6,6 +6,37 @@ import { PipelinesPage } from './pages/PipelinesPage';
 import { TriggersPage } from './pages/TriggersPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
+import { LegacyRunRedirect } from './pages/runs/LegacyRunRedirect';
+
+/**
+ * U3r — compatibility redirects for the MVP's pre-hub paths.
+ *
+ * The MVP shipped a flat route space (`#/connections`, `#/pipelines`,
+ * `#/triggers`, `#/runs`, `#/runs/:id`); U2 moved every page under a hub. Until
+ * this table existed the catch-all swallowed all of them and sent an old
+ * bookmark to Home — losing the run id on `#/runs/:id`, the one legacy URL a
+ * user is actually likely to have shared.
+ *
+ * The compatibility layer is exactly three things, so retiring it once the
+ * window for old bookmarks has closed is a small, findable job: this table, the
+ * routes built from it near the bottom of `ROUTES`, and the `LegacyRunRedirect`
+ * component (which lives with the run pages because a file exporting constants
+ * must not also define components — eslint's `react-refresh` rule).
+ *
+ * `/` is deliberately absent. The MVP rendered Connections at `/`, but `/` is
+ * now the Home hub; honouring the old default would break Home for everyone to
+ * humour a stale bookmark.
+ *
+ * `from` is typed as a rooted path rather than a bare `string`: the route
+ * builder below strips the leading `/`, so an entry that forgot it would not
+ * fail to compile, it would silently register a route missing its first letter.
+ */
+export const LEGACY_REDIRECTS: readonly { from: `/${string}`; to: string }[] = [
+  { from: '/connections', to: '/manage/connections' },
+  { from: '/pipelines', to: '/author/pipelines' },
+  { from: '/triggers', to: '/manage/triggers' },
+  { from: '/runs', to: '/monitor/runs' },
+];
 
 /**
  * The hash-router route tree (U2).
@@ -21,8 +52,6 @@ import { RunDetailRoute } from './pages/runs/RunDetailRoute';
  * same tree under `createMemoryRouter` at any initial entry.
  *
  * NOT here, deliberately:
- * - Legacy `#/connections`-era redirects — ticket U3r owns those, and the
- *   catch-all below keeps an old bookmark landing somewhere real meanwhile.
  * - `/author/pipelines/:pipelineId` — opening a pipeline on the canvas is still
  *   local state inside `PipelinesPage`; U4 (Factory Resources) is where that
  *   becomes URL state. See the URL-state block in the UI design doc.
@@ -60,10 +89,21 @@ export const ROUTES: RouteObject[] = [
         ],
       },
 
-      /* Catch-all. An unknown path renders Home rather than a dead end — and
-         `replace` so the bad URL does not sit in history waiting for Back.
-         U3r replaces this blanket fallback with real redirects for the MVP's
-         old paths (`#/runs/:id` should reach that run, not Home). */
+      /* U3r compatibility layer. `replace` throughout: a legacy path that
+         pushed would leave the dead URL in history, so Back from the hub page
+         would return to it and be bounced forward again — the same trap the
+         hub indexes above avoid. Listed before the catch-all for readability
+         only; react-router RANKS matches, so `*` loses to a concrete path
+         wherever it sits. */
+      ...LEGACY_REDIRECTS.map(({ from, to }) => ({
+        path: from.slice(1),
+        element: <Navigate to={to} replace />,
+      })),
+      { path: 'runs/:runId', element: <LegacyRunRedirect /> },
+
+      /* Catch-all. A genuinely unknown path renders Home rather than a dead
+         end — and `replace` so the bad URL does not sit in history waiting for
+         Back. */
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

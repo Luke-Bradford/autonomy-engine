@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { ROUTES } from './routes';
+import { LEGACY_REDIRECTS, ROUTES } from './routes';
 import { HUBS } from './shell/hubs';
 import { uiStore } from './stores/uiStore';
 
@@ -163,6 +163,105 @@ describe('route tree', () => {
 
   it('sends an unknown path to Home', async () => {
     expect(await landedAt('/nope/not/a/route')).toBe('/');
+  });
+
+  /**
+   * U3r — route compatibility for the MVP's pre-hub paths.
+   *
+   * The expected pairs are written out here rather than derived from
+   * `LEGACY_REDIRECTS`, in the same spirit as the e2e specs' hard-coded hub
+   * list: a test that maps over the very table it is checking agrees with
+   * itself no matter what the table says. The completeness case below then
+   * pins the two together, so a redirect added to the SSOT cannot slip through
+   * untested.
+   *
+   * Each case asserts the landing path AND that the destination actually
+   * RENDERED its page. Path-only would pass if the target route were deleted
+   * (the catch-all would quietly absorb it); render-only would pass if the
+   * redirect went to the right page by the wrong path.
+   */
+  const LEGACY_CASES = [
+    ['/connections', '/manage/connections', 'Connections'],
+    ['/pipelines', '/author/pipelines', 'Pipelines'],
+    ['/triggers', '/manage/triggers', 'Triggers'],
+    ['/runs', '/monitor/runs', 'Runs'],
+  ] as const;
+
+  it.each(LEGACY_CASES)('redirects the legacy path %s to %s', async (from, to, heading) => {
+    const { router } = renderAt(from);
+    await waitFor(() => expect(router.state.location.pathname).toBe(to));
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+  });
+
+  /** Every redirect declared in the SSOT is covered by a case above. */
+  it('exercises every legacy redirect the route tree declares', () => {
+    expect(LEGACY_REDIRECTS.map((r) => `${r.from} -> ${r.to}`).sort()).toEqual(
+      LEGACY_CASES.map(([from, to]) => `${from} -> ${to}`).sort(),
+    );
+  });
+
+  /**
+   * The sharp case the catch-all got wrong: an old `#/runs/:id` bookmark must
+   * reach THAT run, not Home. Both halves are asserted — the id has to survive
+   * into the path and out the other side into the page.
+   */
+  it('redirects a legacy run-detail path, keeping the run id', async () => {
+    const { router } = renderAt('/runs/run_42');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs/run_42'));
+    expect(await screen.findByText('run_42')).toBeInTheDocument();
+  });
+
+  /**
+   * The redirect re-ENCODES the id on its way out.
+   *
+   * `useParams` hands back a decoded id, and react-router does not re-encode a
+   * string `to`, so interpolating the raw param would ship a half-decoded path
+   * that the destination then decodes a SECOND time. `run%20x` makes that
+   * visible: it encodes to `run%2520x`, one decode restores `run%20x`, and a
+   * second would collapse it to `run x`. A plain id would be idempotent under
+   * the extra decode and let the bug through.
+   */
+  it('re-encodes the run id exactly once on the way through', async () => {
+    const id = 'run%20x';
+    const { router } = renderAt(`/runs/${encodeURIComponent(id)}`);
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe(`/monitor/runs/${encodeURIComponent(id)}`),
+    );
+    expect(await screen.findByText(id)).toBeInTheDocument();
+  });
+
+  /**
+   * Same history-trap reasoning as the hub indexes: a legacy path that PUSHED
+   * its redirect would leave the dead URL sitting in history, so Back from the
+   * new path returns to it and is bounced straight forward again.
+   */
+  it('redirects legacy paths by REPLACE, so Back is not a trap', async () => {
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/', '/runs'] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs'));
+
+    await router.navigate(-1);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+  });
+
+  /**
+   * `/runs/` must reach the runs list, and must do so by matching the STATIC
+   * `runs` route — this react-router version strips a trailing slash when
+   * matching, and a dynamic segment does not match empty.
+   *
+   * The matched route pattern is asserted, not just the landing path, because
+   * `LegacyRunRedirect`'s empty-id guard also sends you to `/monitor/runs`:
+   * both worlds produce the same destination, so a destination-only assertion
+   * could not tell them apart and would pass whichever route matched.
+   */
+  it('matches a trailing-slash legacy path on the static route, not :runId', async () => {
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/runs/'] });
+    render(<RouterProvider router={router} />);
+
+    const matched = router.state.matches.at(-1)?.route.path;
+    expect(matched).toBe('runs');
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs'));
   });
 
   /**
