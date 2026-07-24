@@ -41,6 +41,7 @@ import { runsRoutes } from './routes/runs.js';
 import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
+import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import type { GitProvider } from './git/provider.js';
 import './context.js';
 
@@ -581,6 +582,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     workspaceGitRoot: opts?.workspaceGitRoot ?? process.env.WORKSPACE_GIT_ROOT ?? 'data/git',
     provider: opts?.workspaceGitProvider,
   });
+  await fastify.register(workspaceAuditRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));
 

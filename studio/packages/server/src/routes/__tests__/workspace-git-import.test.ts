@@ -129,6 +129,14 @@ describe('workspace-git import route', () => {
     expect(result.head).toMatch(/^[0-9a-f]{40}$/);
     expect(result.refused).toBe(false);
     expect(result.applied.every((a: { action: string }) => a.action === 'unchanged')).toBe(true);
+
+    // #3 G6a — an all-unchanged re-import is a no-op: it appends NO
+    // import.applied (only the earlier repo.connected is in the log; Commit is
+    // not itself an audit event in G6a).
+    const audit = await app.inject({ method: 'GET', url: '/api/workspace/audit' });
+    expect(
+      (audit.json().items as { payload: { type: string } }[]).map((e) => e.payload.type),
+    ).toEqual(['repo.connected']);
   });
 
   it('a collaborator PULL creates the resources a fresh workspace does not have', async () => {
@@ -199,6 +207,23 @@ describe('workspace-git import route', () => {
       const v2 = getLatestPipelineVersion(app2.db, p2.id)!;
       expect(t2.pipelineVersionId).toBe(v2.id);
       expect(t2.enabled).toBe(true);
+
+      // #3 G6a — the effectful import appended ONE import.applied audit event
+      // (app2's log: repo.connected then import.applied), carrying the commit
+      // provenance + the full write manifest.
+      const audit2 = await app2.inject({ method: 'GET', url: '/api/workspace/audit' });
+      const events2 = audit2.json().items as { payload: Record<string, unknown> }[];
+      expect(events2.map((e) => e.payload['type'])).toEqual(['repo.connected', 'import.applied']);
+      const applied = events2[1]!.payload as {
+        head: string;
+        branch: string;
+        applied: unknown[];
+        by: string;
+      };
+      expect(applied.head).toMatch(/^[0-9a-f]{40}$/);
+      expect(applied.branch).toBe('main');
+      expect(applied.applied).toHaveLength(3);
+      expect(applied.by).toBe('local');
     } finally {
       await app2ctx.app.close();
     }

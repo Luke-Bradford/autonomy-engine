@@ -59,6 +59,29 @@ describe('workspace-git routes', () => {
     expect(got.json().git.observedCollabHead).toBe(headSha);
   });
 
+  it('#3 G6a — a successful connect appends a repo.connected audit event', async () => {
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const audit = await app.inject({ method: 'GET', url: '/api/workspace/audit' });
+    expect(audit.statusCode).toBe(200);
+    const events = audit.json().items;
+    expect(events).toHaveLength(1);
+    expect(events[0].payload).toEqual({
+      type: 'repo.connected',
+      repoUrl: remote,
+      collabBranch: 'main',
+      by: 'local',
+    });
+    expect(events[0].seq).toBe(0);
+  });
+
+  it('#3 G6a — a FAILED connect stores no row AND no audit event (atomic)', async () => {
+    const res = await connect(join(testApp.tmpDir, 'no-such-remote'));
+    expect(res.statusCode).toBe(502);
+    const audit = await app.inject({ method: 'GET', url: '/api/workspace/audit' });
+    expect(audit.json().items).toEqual([]);
+  });
+
   it('connecting an EMPTY repo succeeds as collab_branch_missing (onboarding state)', async () => {
     const remote = join(testApp.tmpDir, 'empty.git');
     execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
