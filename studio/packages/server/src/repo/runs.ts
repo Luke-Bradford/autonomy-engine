@@ -36,6 +36,9 @@ export interface ListRunsFilter {
   pipelineVersionId?: string;
   triggerId?: string;
   parentRunId?: string;
+  /** RS6 — the rerun-history grouping scan: "reruns of R1" (backed by
+   * `runs_rerun_of_idx`). Filtered in SQL, never loaded-then-filtered. */
+  rerunOf?: string;
   /** Filters in SQL, like `listConnections`/`listPipelines` — never loaded
    * then filtered in the route. */
   ownerId?: string;
@@ -54,6 +57,9 @@ function listRunsConditions(filter: ListRunsFilter) {
   }
   if (filter.parentRunId !== undefined) {
     conditions.push(eq(runs.parentRunId, filter.parentRunId));
+  }
+  if (filter.rerunOf !== undefined) {
+    conditions.push(eq(runs.rerunOf, filter.rerunOf));
   }
   if (filter.ownerId !== undefined) {
     conditions.push(eq(runs.ownerId, filter.ownerId));

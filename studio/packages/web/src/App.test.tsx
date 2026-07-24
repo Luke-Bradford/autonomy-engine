@@ -20,6 +20,7 @@ vi.mock('./api/runs', async (importActual) => ({
     heartbeatAt: null,
     queuedAt: null,
     triggerContext: null,
+    rerunOf: null,
     startedAt: 1,
     finishedAt: null,
   }),

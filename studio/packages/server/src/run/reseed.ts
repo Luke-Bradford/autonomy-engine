@@ -142,6 +142,10 @@ export function createReseedService(deps: DriveDeps): ReseedService {
           triggerId: null,
           parentRunId: null,
           params: source.params,
+          // RS6 — durable lineage: the row records the rerun-from-failed link in
+          // the SAME tx as the `run.started{rerunOf}` event appended below, so
+          // the row projection and the event log can never disagree.
+          rerunOf: sourceRunId,
         });
         const events: EngineEvent[] = [];
         if (sourceTctx !== undefined && sourceTctx.type === 'run.triggerContext') {

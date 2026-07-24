@@ -82,6 +82,42 @@ describe('runs repo', () => {
     ).toThrow();
   });
 
+  it('defaults rerunOf to null, and persists an explicit rerunOf (RS6 lineage)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const source = createRun(db, buildRunInput(version.id));
+    expect(source.rerunOf).toBeNull();
+
+    const rerun = createRun(db, buildRunInput(version.id, { rerunOf: source.id }));
+    expect(rerun.rerunOf).toBe(source.id);
+    // Round-trips through the DB read path (RunSchema.parse), not just the insert.
+    expect(getRun(db, rerun.id)?.rerunOf).toBe(source.id);
+  });
+
+  it('rejects a rerun pointing at a nonexistent source run (rerunOf FK enforced)', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    expect(() =>
+      createRun(db, buildRunInput(version.id, { rerunOf: 'run_does_not_exist' })),
+    ).toThrow();
+  });
+
+  it('filters listRuns by rerunOf — the rerun-history grouping scan', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const source = createRun(db, buildRunInput(version.id));
+    const rerunA = createRun(db, buildRunInput(version.id, { rerunOf: source.id }));
+    const rerunB = createRun(db, buildRunInput(version.id, { rerunOf: source.id }));
+    createRun(db, buildRunInput(version.id)); // an unrelated original run
+
+    expect(
+      listRuns(db, { rerunOf: source.id })
+        .map((r) => r.id)
+        .sort(),
+    ).toEqual([rerunA.id, rerunB.id].sort());
+    expect(listRuns(db)).toHaveLength(4);
+  });
+
   it('filters listRuns by pipelineVersionId, triggerId, and parentRunId', () => {
     const { db } = freshDb();
     const version = setupPipelineVersion(db);

@@ -16,6 +16,8 @@ const ListRunsQuerystringSchema = z.object({
   pipelineVersionId: z.string().min(1).optional(),
   triggerId: z.string().min(1).optional(),
   parentRunId: z.string().min(1).optional(),
+  // RS6 — the rerun-history grouping filter: `?rerunOf=R1` lists R1's reruns.
+  rerunOf: z.string().min(1).optional(),
 });
 
 /**
@@ -28,13 +30,14 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
   fastify.get('/api/runs', async (request) => {
-    const { pipelineVersionId, triggerId, parentRunId } = ListRunsQuerystringSchema.parse(
+    const { pipelineVersionId, triggerId, parentRunId, rerunOf } = ListRunsQuerystringSchema.parse(
       request.query,
     );
     return listRuns(db, {
       pipelineVersionId,
       triggerId,
       parentRunId,
+      rerunOf,
       ownerId: request.principal.ownerId,
     });
   });

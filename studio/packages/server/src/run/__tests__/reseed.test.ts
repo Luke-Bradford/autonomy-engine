@@ -140,6 +140,8 @@ describe('RS2 producer — end-to-end rerun-from-failed', () => {
 
     // R2 succeeded this time; the copied `a` output is present in the projection.
     expect(getRun(db, r2)!.status).toBe('success');
+    // RS6 — the durable ROW lineage matches the event-log lineage.
+    expect(getRun(db, r2)!.rerunOf).toBe(r1);
   });
 
   it('commits the reseed pair contiguously and syncs the row off `pending` (end-state)', async () => {
@@ -158,6 +160,9 @@ describe('RS2 producer — end-to-end rerun-from-failed', () => {
     const { runId: r2, drive } = await svc.rerunFromFailed(r1); // assert BEFORE the drive
 
     expect(getRun(db, r2)!.status).not.toBe('pending');
+    // RS6 — the row's `rerunOf` is written in the SAME tx as the reseed pair, so
+    // it is set the moment the row is observable (before the background drive).
+    expect(getRun(db, r2)!.rerunOf).toBe(r1);
     const t = types(loadEngineEvents(db, r2));
     const startedIdx = t.indexOf('run.started');
     expect(startedIdx).toBeGreaterThanOrEqual(0);
