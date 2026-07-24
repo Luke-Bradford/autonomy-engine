@@ -92,9 +92,20 @@ export type PipelineExportData = z.infer<typeof PipelineExportDataSchema>;
  * `secretRef` (never exported — see `ConnectionPublicSchema`), plus
  * `requiresSecret` so the importing UI knows a secret must be re-entered
  * before this connection can call its provider.
+ *
+ * #3 G8a — `secretStatus` and `enabled` are LOCAL-readiness state, never
+ * authoring content: they are OMITTED here (like `resourceId` is re-shaped)
+ * so they cannot land in a committed git artifact. `requiresSecret` remains the
+ * export's single, machine-independent readiness signal. Leaving them in would
+ * re-introduce the cross-workspace content-form churn class #674 (G8b) exists to
+ * kill (`connectionContentForm` already strips `requiresSecret` for the same
+ * reason) — a machine that has not re-entered a secret would differ on
+ * `secretStatus`/`enabled` and re-classify `update` forever.
  */
 export const ConnectionExportDataSchema = ConnectionPublicSchema.omit({
   resourceId: true,
+  secretStatus: true,
+  enabled: true,
 }).extend({
   requiresSecret: z.boolean(),
   resourceId: exportResourceId,

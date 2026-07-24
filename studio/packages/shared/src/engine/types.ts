@@ -569,6 +569,19 @@ export const FAILURE_CODES = {
    * would lie in wait for the first mechanism that does (A11/S4).
    */
   CONNECTION_PARAM_SECRET_MARKER: 'connection_param_secret_marker',
+  /**
+   * #3 G8a — the bound connection is NOT ready to dispatch: it is operator-
+   * `enabled:false`, or its secret-readiness is `needs_secret` (a required
+   * connection credential is absent). Refused at DISPATCH, BEFORE any secret
+   * decrypt or adapter call — the gate is at fire time, not just enable time, so
+   * a secret removed after a trigger was enabled cannot fire a secretless run
+   * (git-publish spec 742-745). `permanent`: a missing secret / disabled
+   * connection does not self-heal on retry — the operator must supply the secret
+   * or re-enable the connection. Distinct from `SECRET_NOT_FOUND`
+   * (`secretStatus:'ready'` but the row vanished — defence in depth) so an
+   * operator can tell "never provisioned" from "provisioned then lost".
+   */
+  CONNECTION_NOT_READY: 'connection_not_ready',
   /** The connection's `secretRef` resolves to no row. */
   SECRET_NOT_FOUND: 'secret_not_found',
   /** The connection's secret exists but could not be decrypted. */

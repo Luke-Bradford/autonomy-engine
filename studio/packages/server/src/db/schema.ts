@@ -12,11 +12,13 @@ import {
   ConnectionKindSchema,
   ExternalWaitStatusSchema,
   RunStatusSchema,
+  SecretStatusSchema,
   TriggerModeSchema,
   WakeupStatusSchema,
   WebhookDeliveryOutcomeSchema,
   type Concurrency,
   type ConnectionKind,
+  type SecretStatus,
   type Container,
   type Edge,
   type ExternalWaitStatus,
@@ -101,6 +103,16 @@ export const connections = sqliteTable(
     secretRef: text('secret_ref').references((): AnySQLiteColumn => secrets.ref, {
       onDelete: 'restrict',
     }),
+    // #3 G8a — secret-readiness gate (`SecretStatusSchema`) + operator enable
+    // flag. `secret_status` is a DERIVED per-row value, so it has no single DB
+    // DEFAULT: nullable-in-SQL, backfilled per-row by the 0030 migration, and
+    // Zod-enforced NOT NULL at the read boundary (a NULL row fails loudly, like
+    // `resource_id`). `enabled` is a truthful NOT NULL DEFAULT true — every
+    // pre-G8 connection was usable (matches `pipelines.archived`).
+    secretStatus: text('secret_status', {
+      enum: asEnumTuple(SecretStatusSchema.options),
+    }).$type<SecretStatus>(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

@@ -113,6 +113,9 @@ describe('owner scope holds under a cross-owner cursor replay (the #534 security
       kind: 'http' as const,
       config: {},
       secretRef: null,
+      // #3 G8a — `secret_status` has no DB DEFAULT (derived per row); a raw
+      // insert must set it or the read-parse fails. `enabled` DB-defaults true.
+      secretStatus: 'not_required' as const,
       createdAt: r.createdAt,
       updatedAt: r.createdAt,
     }));

@@ -345,6 +345,35 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         code: FAILURE_CODES.NO_ADAPTER,
       };
     }
+    // #3 G8a — the SECRET-READINESS dispatch GATE (git-publish spec 742-745):
+    // refuse to dispatch a node whose connection is operator-disabled or is
+    // missing its required credential. Read LIVE per dispatch off the derived,
+    // server-maintained `secretStatus`/`enabled`, so a secret removed (or the
+    // connection disabled) AFTER a trigger was enabled cannot fire a secretless
+    // run — the gate is at fire time, not just enable time. Placed here, after
+    // the kind/adapter validation and BEFORE the L13b param merge + the L14c
+    // quota gate + any secret decrypt: a disabled/unprovisioned connection is a
+    // more fundamental refusal than validating per-dispatch overrides, and
+    // (`permanent`, like the other config-shape checks) it must surface its
+    // permanent error rather than a spurious transient — a missing secret does
+    // not self-heal on retry. `ready`/`not_required` pass; the existing
+    // `SECRET_NOT_FOUND`/`SECRET_UNDECRYPTABLE` checks below remain the belt-
+    // and-suspenders guard for a `ready` row whose secret later vanished / won't
+    // decrypt.
+    if (!connection.enabled) {
+      return {
+        error: `connection '${connectionId}' is disabled`,
+        code: FAILURE_CODES.CONNECTION_NOT_READY,
+        kind: 'permanent',
+      };
+    }
+    if (connection.secretStatus === 'needs_secret') {
+      return {
+        error: `connection '${connectionId}' is missing its required secret (needs_secret)`,
+        code: FAILURE_CODES.CONNECTION_NOT_READY,
+        kind: 'permanent',
+      };
+    }
     // #2 L13b — gate + merge the node's resolved `connectionParams` over the
     // connection's static `config`. Two refusals, both `permanent` (placed with
     // the other config-shape checks, BEFORE the L14c transient gate, for the

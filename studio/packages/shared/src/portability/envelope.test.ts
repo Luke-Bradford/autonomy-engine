@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, SCHEMA_VERSION } from '../schemas/version.js';
 import {
+  ConnectionExportDataSchema,
   ExportEnvelopeSchema,
   ImportError,
   NodeExportSchema,
@@ -497,6 +498,31 @@ describe('parseAndUpgradeEnvelope', () => {
       const result = parseAndUpgradeEnvelope(v3ConnectionEnvelope);
       if (result.kind !== 'connection') throw new Error('expected a connection envelope');
       expect(result.data.resourceId).toBeNull();
+    });
+
+    // #3 G8a — `secretStatus`/`enabled` are LOCAL readiness, never authoring
+    // content: they must never reach a committed git artifact (a machine that
+    // has not re-entered a secret would otherwise churn `update` forever — the
+    // #674 class `requiresSecret` already avoids). `ConnectionExportDataSchema`
+    // omits them, so Zod strips them even if a caller passes them in.
+    it('strips secretStatus/enabled from the connection export data (local readiness, never in git)', () => {
+      const parsed = ConnectionExportDataSchema.parse({
+        id: 'conn_1',
+        resourceId: 'res_conn1',
+        ownerId: null,
+        name: 'c',
+        kind: 'http' as const,
+        config: {},
+        parameters: [],
+        requiresSecret: true,
+        secretStatus: 'needs_secret',
+        enabled: false,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      expect(parsed).not.toHaveProperty('secretStatus');
+      expect(parsed).not.toHaveProperty('enabled');
+      expect(parsed.requiresSecret).toBe(true);
     });
 
     it('does NOT clobber an already-present resourceId', () => {
