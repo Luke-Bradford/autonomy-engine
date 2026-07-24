@@ -98,9 +98,13 @@ export function updateWorkspaceGitWorkingBranch(
  * #3 G10 — record the collab commit the most recent non-refused import read
  * from (the proactive descendant-guard base, #662). Called INSIDE the import
  * route's transaction so the stamp is atomic with the apply — never a committed
- * import with a stale/lost base. Preserves every other field via the `{...existing}`
- * spread (so a concurrent fetch's sync-tracking write is not clobbered). Returns
- * the updated row, or `null` when no connection exists for the owner.
+ * import with a stale/lost base. This narrow single-field setter carries every
+ * OTHER field forward from the read snapshot via the `{...existing}` spread
+ * (touching only the base + `updatedAt`); no-clobber against a concurrent
+ * fetch/commit is guaranteed by the per-owner `KeyedQueue` serializing all
+ * writes for an owner (the same posture as `updateWorkspaceGitSync`/
+ * `...WorkingBranch`), not by the spread itself. Returns the updated row, or
+ * `null` when no connection exists for the owner.
  */
 export function updateWorkspaceGitImportedCommit(
   db: Db,
