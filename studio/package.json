@@ -1,6 +1,7 @@
 {
   "name": "autonomy-studio",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -11,7 +12,8 @@
     "typecheck": "pnpm --filter @autonomy-studio/shared build && pnpm -r run typecheck",
     "test": "pnpm --filter @autonomy-studio/shared build && pnpm -r run test",
     "lint": "eslint . && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "audit:licenses": "pnpm --filter @autonomy-studio/cli run audit:licenses"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

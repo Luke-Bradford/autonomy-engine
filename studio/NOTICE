@@ -1,0 +1,26 @@
+autonomy-studio
+Copyright (c) 2026 Luke Bradford
+
+This product is licensed under the MIT License (see LICENSE).
+
+It builds on third-party open-source dependencies, all under permissive
+licenses. The zero-paid-dependency license audit
+(packages/cli/src/licenseAudit.ts, run via `pnpm run audit:licenses` and in CI)
+enforces that every production and dev/build dependency carries a permissive
+OSS license.
+
+Two build-time dependencies warrant explicit attribution / notice:
+
+- caniuse-lite, mdn-data — CC-BY-4.0 (Creative Commons Attribution 4.0). Browser
+  compatibility DATA consumed at build time (via browserslist). Attribution:
+  https://github.com/browserslist/caniuse-lite and
+  https://github.com/mdn/data respectively.
+
+- lightningcss (and its platform binaries) — MPL-2.0 (Mozilla Public License
+  2.0). A build-time CSS transform pulled in transitively. Used unmodified; MPL
+  §3.3 permits distributing the covered files within a Larger Work under other
+  terms provided the MPL-covered files themselves remain under the MPL.
+  Source: https://github.com/parcel-bundler/lightningcss
+
+The complete, always-current license inventory is produced by
+`pnpm licenses list` at the studio/ workspace root.
