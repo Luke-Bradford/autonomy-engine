@@ -7,15 +7,10 @@ import { PaneSplitter } from './PaneSplitter';
 import { PANE_ELEMENT_ID, SecondaryPane } from './SecondaryPane';
 import { hubById } from './hubs';
 import { activeHubId, crumbsFrom } from './routeHandle';
-import { uiStore, type UiStore } from '../stores/uiStore';
+import { uiStore } from '../stores/uiStore';
 
-/** The custom property the shell's grid reads its pane track from. */
+/** The custom property the secondary pane takes its width from. */
 const PANE_WIDTH_VAR = '--pane-width';
-
-interface AppShellProps {
-  /** Injectable for tests; the app uses the singleton, as `ThemeToggle` does. */
-  store?: UiStore;
-}
 
 /**
  * The shell layout route (U1–U3): the 48px hub rail, the active hub's
@@ -29,14 +24,13 @@ interface AppShellProps {
  * takes what it needs as props, so each shell part stays unit-testable without
  * a data router.
  *
- * PANE TRACK. The grid's middle column is `var(--pane-width)`, written here as
- * an inline custom property. It is `0px` whenever there is no pane to show —
- * the hub declares no sections (Home), or the user collapsed it — because a
- * fixed track does NOT collapse on its own: leaving it at 240px would inset the
- * workspace behind an empty box. `index.css` declares a fallback for the same
- * property, since an undefined custom property makes `grid-template-columns`
- * invalid at computed-value time, which drops the whole template to `none` and
- * stacks the shell into one column.
+ * PANE WIDTH. Written here as one inline custom property that the pane ELEMENT
+ * consumes (`index.css`: `.secondary-pane { width: var(--pane-width, 240px) }`),
+ * NOT as a grid track. That is deliberate: the shell's pane column is `auto`,
+ * so it is sized by the pane when there is one and collapses to 0 by itself
+ * when there is not — a hub with no sections renders no pane, and a collapsed
+ * pane is `hidden`, i.e. not a grid item. Neither case needs a special value
+ * here, which is why this is unconditional.
  *
  * The workspace keeps the `content` class deliberately. `index.css` hangs three
  * behaviours off it — page padding, a 900px reading cap for forms and lists,
@@ -44,15 +38,19 @@ interface AppShellProps {
  * full-bleed. Renaming it here would silently re-cap the canvas at 900px, which
  * no unit test can see (jsdom computes no layout).
  */
-export function AppShell({ store = uiStore }: AppShellProps) {
+export function AppShell() {
   const matches = useMatches();
   const hub = hubById(activeHubId(matches));
   const crumbs = crumbsFrom(matches);
 
-  const paneWidth = useStore(store, (s) => s.paneWidth);
-  const paneCollapsed = useStore(store, (s) => s.paneCollapsed);
-  const setPaneWidth = useStore(store, (s) => s.setPaneWidth);
-  const setPaneCollapsed = useStore(store, (s) => s.setPaneCollapsed);
+  /* The singleton, with no injectable seam. `HubRail`/`ThemeToggle` take one
+     because their own unit tests render them in isolation; the shell is only
+     ever exercised through the real route tree (`routes.test.tsx`), which
+     drives this same singleton directly. An unused seam is API that drifts. */
+  const paneWidth = useStore(uiStore, (s) => s.paneWidth);
+  const paneCollapsed = useStore(uiStore, (s) => s.paneCollapsed);
+  const setPaneWidth = useStore(uiStore, (s) => s.setPaneWidth);
+  const setPaneCollapsed = useStore(uiStore, (s) => s.setPaneCollapsed);
 
   const shellRef = useRef<HTMLDivElement>(null);
 
@@ -69,19 +67,17 @@ export function AppShell({ store = uiStore }: AppShellProps) {
   /* Cast because React's `CSSProperties` is the typed CSS property set and has
      no index signature for custom properties — a `--foo` key is valid CSS and
      valid at runtime, but not expressible in that type. */
-  const paneTrack = { [PANE_WIDTH_VAR]: paneShown ? `${paneWidth}px` : '0px' } as CSSProperties;
+  const paneStyle = { [PANE_WIDTH_VAR]: `${paneWidth}px` } as CSSProperties;
 
   return (
-    <div className="app-shell" ref={shellRef} style={paneTrack}>
-      {/* No `store` seam passed down to the rail: it takes one for its own unit
-          tests, and the composed tree deliberately runs on the `uiStore`
-          singleton — which is what `App.test.tsx` asserts the theme provider
-          shares. */}
+    <div className="app-shell" ref={shellRef} style={paneStyle}>
+      {/* The rail runs on the `uiStore` singleton too — which is what
+          `App.test.tsx` asserts the theme provider shares. */}
       <HubRail />
 
       {/* Mounted-but-`hidden` when collapsed, so the toggle's `aria-controls`
-          keeps naming an element that exists. The zeroed track above is what
-          actually reclaims the space. */}
+          keeps naming an element that exists. `display: none` also takes it out
+          of the grid, which is what reclaims its column. */}
       {hasPane && <SecondaryPane hub={hub!} collapsed={paneCollapsed} />}
       {paneShown && (
         <PaneSplitter
@@ -97,10 +93,7 @@ export function AppShell({ store = uiStore }: AppShellProps) {
           crumbs={crumbs}
           pane={
             hasPane
-              ? {
-                  collapsed: paneCollapsed,
-                  onToggle: () => setPaneCollapsed(!paneCollapsed),
-                }
+              ? { collapsed: paneCollapsed, onToggle: () => setPaneCollapsed(!paneCollapsed) }
               : undefined
           }
         />

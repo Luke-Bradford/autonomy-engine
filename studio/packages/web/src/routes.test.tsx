@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { LEGACY_REDIRECTS, ROUTES } from './routes';
 import { HUBS } from './shell/hubs';
+import { PANE_ELEMENT_ID } from './shell/SecondaryPane';
 import { PANE_DEFAULT_WIDTH, uiStore } from './stores/uiStore';
 
 // The pages behind these routes talk to the network / a WebSocket. Stub both so
@@ -390,10 +391,13 @@ describe('shell chrome over the real route tree', () => {
   });
 
   /**
-   * The section labels live in `hubs.ts`; the breadcrumb labels live in
-   * `routes.tsx`. That duplication is deliberate (a literal crumb beats a
-   * three-branch inference rule from a pathname) — so it is pinned here.
-   * Renaming a section without its crumb fails this.
+   * Every section the pane offers must actually RENDER as a hub+section trail.
+   *
+   * Since section crumbs read their label from `HUBS` via `sectionLabel()`,
+   * the two can no longer disagree — but that only removes the drift, not the
+   * wiring risk: a section route that forgot its `handle` entirely, or sat
+   * under the wrong hub, still produces the wrong trail. This walks the SSOT
+   * and mounts each one for real.
    */
   it('gives every hub section a breadcrumb with the SAME label', async () => {
     for (const hub of HUBS) {
@@ -413,54 +417,80 @@ describe('shell chrome over the real route tree', () => {
   });
 
   /**
-   * The grid's pane track.
+   * The pane's WIDTH mechanism, as far as jsdom can see it.
    *
-   * `--pane-width` is the single mechanism behind three behaviours — the pane's
-   * width, "no pane on Home", and collapse — and it is the one part of the
-   * layout jsdom CAN see, because it is an inline custom property rather than a
-   * computed track. (The track itself is measured in `e2e/shell-pane.spec.ts`;
-   * jsdom resolves no `grid-template-columns`.)
-   *
-   * A fixed track does NOT collapse on its own, so without the `0px` cases the
-   * workspace would sit inset behind 240px of nothing on Home and whenever the
-   * pane is put away — which looks like a broken layout, not a missing feature.
+   * `--pane-width` is an inline custom property, so it is readable here even
+   * though jsdom resolves no `grid-template-columns`. What it is NOT is the
+   * collapse mechanism: the shell's pane column is `auto`, sized by the pane
+   * ELEMENT, so "no pane on this hub" and "the user collapsed it" both reclaim
+   * their space by the element not being a grid item — not by any value
+   * written here. That is why the width stays put across a collapse, and why
+   * the reclaimed track is measured in `e2e/shell-pane.spec.ts` instead.
    */
-  function paneTrack() {
+  function paneWidthVar() {
     return document
       .querySelector<HTMLElement>('.app-shell')!
       .style.getPropertyValue('--pane-width');
   }
 
-  it('gives the pane track the stored width on a hub that has a pane', async () => {
+  it('publishes the stored width for the pane to consume', async () => {
     uiStore.getState().setPaneWidth(300);
     renderAt('/manage/connections');
     expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
-    expect(paneTrack()).toBe('300px');
+    expect(paneWidthVar()).toBe('300px');
+    expect(document.getElementById(PANE_ELEMENT_ID)).toBeVisible();
   });
 
-  it('zeroes the pane track on a hub with no pane', async () => {
-    uiStore.getState().setPaneWidth(300);
+  /** No pane ELEMENT at all — nothing to size, nothing to occupy the column. */
+  it('renders no pane element on a hub with no pane', async () => {
     renderAt('/');
     expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
-    expect(paneTrack()).toBe('0px');
+    expect(document.getElementById(PANE_ELEMENT_ID)).toBeNull();
+    expect(screen.queryByRole('separator')).toBeNull();
   });
 
-  it('zeroes the pane track when the pane is collapsed, and restores it', async () => {
+  it('hides the pane and its splitter on collapse, keeping the width', async () => {
     const user = userEvent.setup();
     uiStore.getState().setPaneWidth(300);
     renderAt('/manage/connections');
     expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Hide navigation pane' }));
-    expect(paneTrack()).toBe('0px');
+    // `display: none` takes it out of the grid, which is what frees the column.
+    expect(document.getElementById(PANE_ELEMENT_ID)).not.toBeVisible();
     // The splitter goes with it: a resize handle for a pane that is not on
     // screen is a focusable control with nothing to do.
     expect(screen.queryByRole('separator')).toBeNull();
+    // The width is REMEMBERED, not zeroed — that is what expanding restores.
+    expect(paneWidthVar()).toBe('300px');
 
     await user.click(screen.getByRole('button', { name: 'Show navigation pane' }));
-    // Restored to the width it had, not to the default — the collapse remembers.
-    expect(paneTrack()).toBe('300px');
+    expect(document.getElementById(PANE_ELEMENT_ID)).toBeVisible();
+    expect(paneWidthVar()).toBe('300px');
     expect(screen.getByRole('separator')).toBeInTheDocument();
+  });
+
+  /**
+   * Collapsing while focus is INSIDE the pane must not strand it on a hidden
+   * element — Tab would then restart from the top of the document. Focus goes
+   * to the control that caused the collapse.
+   *
+   * Driven with a direct `.focus()` + `fireEvent.click`, not `userEvent.click`:
+   * a real Chromium click focuses the button first, which would mask the bug.
+   * Safari does not, which is the browser this guard exists for.
+   */
+  it('returns focus to the toggle when collapsing from inside the pane', async () => {
+    renderAt('/manage/connections');
+    expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
+
+    const triggersLink = screen.getByRole('link', { name: 'Triggers' });
+    triggersLink.focus();
+    expect(triggersLink).toHaveFocus();
+
+    const toggle = screen.getByRole('button', { name: 'Hide navigation pane' });
+    fireEvent.click(toggle);
+
+    expect(screen.getByRole('button', { name: 'Show navigation pane' })).toHaveFocus();
   });
 
   /**

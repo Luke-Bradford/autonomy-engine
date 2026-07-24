@@ -35,10 +35,16 @@ interface PaneSplitterProps {
  * and, if the store persisted on every set, write to `localStorage` just as
  * often — synchronous main-thread I/O per frame. Instead the move handler hands
  * the width to `onPreview`, which sets the CSS custom property directly on the
- * shell element, and only `pointerup` commits to the store. The one consequence
- * worth knowing: mid-drag the store and the DOM disagree, so anything that
- * re-renders `AppShell` during a drag would snap the pane back to the committed
- * width. Nothing does today (a captured pointer means no other input is live).
+ * shell element, and only `pointerup` commits to the store.
+ *
+ * The hazard is NOT that a re-render mid-drag snaps the pane back: React writes
+ * an inline style key only when the PROP changes, so a re-render carrying the
+ * same `paneWidth` leaves an out-of-band write alone (browser-verified). It is
+ * the opposite — a preview that never reaches a commit is never reconciled by
+ * ANY later render, so the pane would keep a width the store has never heard
+ * of, indefinitely. `endDrag` running on every exit is what rules that out:
+ * pointer capture guarantees a `pointerup` or a `pointercancel`, and both
+ * commit. Hence `onPointerCancel` below is load-bearing, not defensive.
  *
  * The keyboard path takes the opposite route — straight to `onCommit`, never
  * `onPreview` — because a keyboard step is already a discrete, committed
@@ -53,8 +59,9 @@ export function PaneSplitter({ width, onPreview, onCommit, controls }: PaneSplit
     // `pointerup` on this element ever ends.
     if (event.button !== 0) return;
     drag.current = { startX: event.clientX, startWidth: width, latest: width };
-    // Optional-called: jsdom implements no pointer capture, and a future unit
-    // test that simulates a drag should fail on its assertion, not here.
+    // Optional-called: jsdom implements no pointer capture. That is what lets
+    // `PaneSplitter.test.tsx` drive the non-primary-button and pointercancel
+    // branches, which a real-browser drag never reaches.
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 

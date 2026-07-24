@@ -57,7 +57,23 @@ export function CommandBar({ crumbs, pane }: CommandBarProps) {
             aria-label={label}
             aria-expanded={!pane.collapsed}
             aria-controls={PANE_ELEMENT_ID}
-            onClick={pane.onToggle}
+            onClick={(event) => {
+              /* Collapsing hides the pane with `display: none`. If focus is
+                 INSIDE it, it would be stranded on a hidden element and Tab
+                 would restart from the top of the document. Chromium focuses a
+                 button on click so this is usually moot; Safari does NOT, so
+                 "Tab into the pane, then click Hide" is the real case. The
+                 button is `event.currentTarget` — no ref plumbing needed, and
+                 reading the DOM inside an event handler is exactly where this
+                 belongs. The spec's cross-cutting criteria name focus
+                 restoration for panes explicitly. */
+              const collapsing = !pane.collapsed;
+              const paneEl = document.getElementById(PANE_ELEMENT_ID);
+              if (collapsing && paneEl?.contains(document.activeElement)) {
+                event.currentTarget.focus();
+              }
+              pane.onToggle();
+            }}
           >
             <ToggleIcon aria-hidden="true" />
           </button>

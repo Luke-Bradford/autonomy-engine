@@ -126,6 +126,27 @@ export function hubById(id: HubId | undefined): Hub | undefined {
   return HUBS.find((hub) => hub.id === id);
 }
 
+/**
+ * The label of the section at `path`, for a route that wants it as its
+ * breadcrumb crumb.
+ *
+ * This exists so a section's name is written ONCE. `routes.tsx` used to repeat
+ * each label as a string literal in its `handle`, pinned equal to this list by
+ * a test — but the shell already resolves HUB crumb labels out of `HUBS` rather
+ * than out of the handle, and doing the same one level down removes the second
+ * copy, the drift, and the test that policed it.
+ *
+ * THROWS on an unknown path, at module-evaluation time, because `routes.tsx`
+ * calls it while building `ROUTES`. A section route whose path is not in `HUBS`
+ * is a route the pane cannot reach — the exact dead-end the rail-vs-routes test
+ * exists to catch — so it should be a loud boot failure, not a missing crumb.
+ */
+export function sectionLabel(path: string): string {
+  const section = HUBS.flatMap((hub) => hub.sections).find((s) => s.path === path);
+  if (!section) throw new Error(`no hub section declares the path ${path}`);
+  return section.label;
+}
+
 /*
  * There is deliberately NO `hubIdForPath(pathname)` helper here. An earlier cut
  * of U2 had one, and a mutation check showed it was inert: `NavLink` already

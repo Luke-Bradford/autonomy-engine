@@ -65,64 +65,59 @@ body {
   /* The spec's shell diagram: hub rail, secondary pane, its splitter, then the
      workspace. The rail is a FIXED 48px (not `max-content`) so its width cannot
      drift with its contents — the theme switch at its foot is wider than an
-     icon, and an intrinsic track would let it push the rail out. The splitter's
-     `auto` track collapses to 0 by itself when no splitter is rendered; the
-     pane's does NOT, which is why `AppShell` writes `--pane-width: 0px` for a
-     hub with no pane (Home) or a collapsed one.
+     icon, and an intrinsic track would let it push the rail out.
 
-     The fallback value is load-bearing, not tidiness: an UNDEFINED custom
-     property makes this declaration invalid at computed-value time, so the
-     whole template would drop to `none` and stack the four children into one
-     column. */
-  grid-template-columns: 48px var(--pane-width, 0px) auto 1fr;
+     The pane and splitter tracks are `auto`, i.e. sized BY THEIR ELEMENT — the
+     pane carries the `--pane-width` (below), this template does not. That is
+     what makes the two "no pane" states free: a hub with no pane renders no
+     pane element, and a COLLAPSED pane is `hidden` (`display: none`) and so is
+     not a grid item at all, and in both cases an `auto` track with nothing in
+     it resolves to 0 on its own. An earlier cut put `var(--pane-width)` in this
+     template instead, which meant a FIXED track that does not self-collapse,
+     so every one of those states had to be mirrored back into an inline `0px` —
+     and an undefined custom property would have made the whole declaration
+     invalid at computed-value time and dropped the template to `none`. */
+  grid-template-columns: 48px auto auto 1fr;
   /* `height`, not `min-height`: the command bar and the pane must stay put
      while a long page scrolls, so the SHELL is viewport-sized and `.content`
      is what scrolls. */
   height: 100vh;
 }
 
-/* Every shell child is PINNED to its column rather than left to grid
-   auto-placement, and this is load-bearing, not tidiness.
-   A collapsed pane is `hidden` (i.e. `display: none`) and its splitter is not
-   rendered at all, so auto-placement would slide the workspace two tracks left
-   into the pane's own — now 0px — column and crush the entire app into a
-   zero-width sliver. Browser-verified: the layout looked correct by
-   `grid-template-columns` alone, which is why the e2e measures element boxes. */
-.hub-rail {
-  grid-column: 1;
-}
-.secondary-pane {
-  grid-column: 2;
-}
-.pane-splitter {
-  grid-column: 3;
-}
-.workspace {
-  grid-column: 4;
-}
-
 /* The workspace column: command bar over the routed page. This is the explicit
    `grid-template-rows` the U0 spike asks for — React Flow needs an explicitly
    sized parent, and a row track is what gives the canvas one.
-   `min-height: 0` because a `1fr` row's automatic minimum is `auto`: without it
-   the row refuses to shrink below its content and the CONTAINER overflows
-   instead of `.content` scrolling. */
+   Both minimums are load-bearing HERE (unlike on `.content` and
+   `.secondary-pane`, which set `overflow`): a grid item's automatic minimum is
+   `auto` unless its overflow is other than `visible`, so without these the
+   track refuses to shrink below its content and the CONTAINER overflows
+   instead of `.content` scrolling. Verified by mutation — deleting either one
+   fails `e2e/shell-pane.spec.ts`. */
 .workspace {
+  grid-column: 4;
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 0;
-  /* Likewise for the column: a grid item's automatic minimum is its content
-     width, so a wide table would push the workspace out rather than scroll. */
   min-width: 0;
 }
 
 .hub-rail {
+  /* Every shell child names its own column rather than relying on grid
+     auto-placement, which would otherwise depend on DOM order AND on how many
+     siblings happen to be rendered — and the pane and splitter both come and
+     go. Browser-verified the hard way: with the workspace auto-placed, hiding
+     the pane slid it two tracks left and crushed the whole app into a
+     zero-width sliver, while `grid-template-columns` still read correctly.
+     That is why the e2e measures element BOXES, not just the template. */
+  grid-column: 1;
   background: var(--panel);
   border-right: 1px solid var(--border);
-  /* Column layout so the foot settles at the bottom. The grid track is as tall
-     as the DOCUMENT, so without pinning the rail to the viewport a
-     `margin-top: auto` foot parks itself below the fold of any long page (a
-     hundred-row Runs table) and the theme toggle becomes unreachable. */
+  /* Column layout so the foot settles at the bottom, with the rail pinned to
+     the viewport so a `margin-top: auto` foot cannot park itself below the
+     fold. Since the shell became `height: 100vh` the track is exactly the
+     viewport and the document no longer scrolls, so `position: sticky` is now
+     belt-and-braces rather than the load-bearing fix it was — kept because
+     `height: 100vh` here is what the flex column measures against. */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -272,13 +267,22 @@ body {
 /* --- Secondary pane + splitter + command bar (U3) ------------------------- */
 
 .secondary-pane {
+  grid-column: 2;
+  /* The pane's width lives HERE, on the element, not in the shell's track
+     template. Its `auto` track is then sized by this box when the pane exists
+     and collapses to 0 by itself when it does not — which is what makes "no
+     pane on this hub" and "the user collapsed it" the same free case.
+     `AppShell` writes `--pane-width` from the store; the fallback keeps a
+     missing property to a sane pane rather than an invalid declaration. */
+  width: var(--pane-width, 240px);
   background: var(--panel);
   border-right: 1px solid var(--border);
   padding: 0.75rem 0;
   /* The pane scrolls itself rather than growing the shell — the shell is
-     viewport-height so the rail, pane and command bar all stay put. */
+     viewport-height so the rail, pane and command bar all stay put. Setting
+     `overflow` also zeroes this item's automatic minimum size, so no explicit
+     `min-width: 0` is needed (unlike `.workspace`, which sets no overflow). */
   overflow-y: auto;
-  min-width: 0;
 }
 
 .secondary-pane__title {
@@ -353,6 +357,7 @@ body {
    measures. No negative margin, for the same reason: the track's size is then
    exactly this width. */
 .pane-splitter {
+  grid-column: 3;
   width: 5px;
   cursor: col-resize;
   background: transparent;
@@ -360,10 +365,23 @@ body {
   touch-action: none;
 }
 
-.pane-splitter:hover,
+.pane-splitter:hover {
+  background: var(--accent);
+}
+
+/* Keyboard focus gets a real OUTLINE, not just the hover fill. Two reasons it
+   cannot share the hover rule: a background-only indicator is pixel-identical
+   to hover, so a keyboard user cannot tell focus from a stray pointer; and
+   under `forced-colors: active` the UA replaces author background colours
+   outright, leaving a control with NO focus indicator at all. This is the one
+   control whose keyboard operability is a named spec criterion, so it is the
+   last place to suppress an outline. Positive offset (unlike the rail and pane
+   links, which are clipped by their own `overflow`): the shell does not clip,
+   and a 5px-wide element needs the ring drawn outside it to be visible. */
 .pane-splitter:focus-visible {
   background: var(--accent);
-  outline: none;
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 .command-bar {
@@ -437,12 +455,17 @@ body {
 .content {
   padding: 1.5rem 2rem;
   max-width: 900px;
-  /* The shell is viewport-height, so this is the element that scrolls. Both
-     minimums are needed: without them the grid row/column refuses to shrink
-     below its content and the shell overflows instead. */
+  /* The shell is viewport-height, so this is the element that scrolls. No
+     explicit minimums: a grid item's automatic minimum only applies while its
+     overflow is `visible`, and setting `overflow-y` computes `overflow-x` to
+     `auto` too — so this one declaration already zeroes both. (`.workspace`
+     sets no overflow, which is why it still needs its pair.) Confirmed by
+     mutation: deleting `min-height: 0`/`min-width: 0` here changed nothing,
+     while deleting either from `.workspace` fails the e2e.
+     NOTE for U7/U8a: this now CLIPS. An absolutely-positioned in-page overlay
+     (properties panel, expression flyout) must portal to body, as the U0
+     spike's portal policy already requires. */
   overflow-y: auto;
-  min-height: 0;
-  min-width: 0;
 }
 
 .page-header {

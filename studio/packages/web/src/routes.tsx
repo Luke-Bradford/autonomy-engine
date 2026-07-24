@@ -1,5 +1,6 @@
 import { Navigate, type RouteObject } from 'react-router';
 import { AppShell } from './shell/AppShell';
+import { sectionLabel } from './shell/hubs';
 import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
@@ -55,10 +56,11 @@ export const LEGACY_REDIRECTS: readonly { from: `/${string}`; to: string }[] = [
  * types `RouteObject.handle` as `any`, so `{ hub: 'moniter' }` would otherwise
  * compile, render a shell with no pane, and look merely empty.
  *
- * Section crumb strings duplicate `HUBS[].sections[].label` by design — the
- * alternative is inferring a crumb from a pathname, which is a rule with three
- * branches instead of a literal. `routes.test.tsx` pins the two equal, so the
- * duplication cannot drift.
+ * Section crumbs read their label from `HUBS` via `sectionLabel()` rather than
+ * repeating the string here: the shell already resolves HUB labels out of that
+ * same list, so doing it one level down keeps every hub and section name in
+ * exactly one place. `sectionLabel` throws at module-eval time for a path no
+ * hub declares, which makes a pane-unreachable section a boot failure.
  */
 const HUB_HANDLE = {
   author: { hub: 'author' } satisfies ShellRouteHandle,
@@ -100,7 +102,7 @@ export const ROUTES: RouteObject[] = [
           {
             path: 'pipelines',
             element: <PipelinesPage />,
-            handle: { crumb: 'Pipelines' } satisfies ShellRouteHandle,
+            handle: { crumb: sectionLabel('/author/pipelines') } satisfies ShellRouteHandle,
           },
         ],
       },
@@ -117,7 +119,7 @@ export const ROUTES: RouteObject[] = [
              `<Outlet/>` — the same defaulting the hub routes already rely on. */
           {
             path: 'runs',
-            handle: { crumb: 'Runs' } satisfies ShellRouteHandle,
+            handle: { crumb: sectionLabel('/monitor/runs') } satisfies ShellRouteHandle,
             children: [
               { index: true, element: <RunsPage /> },
               {
@@ -142,12 +144,12 @@ export const ROUTES: RouteObject[] = [
           {
             path: 'connections',
             element: <ConnectionsPage />,
-            handle: { crumb: 'Connections' } satisfies ShellRouteHandle,
+            handle: { crumb: sectionLabel('/manage/connections') } satisfies ShellRouteHandle,
           },
           {
             path: 'triggers',
             element: <TriggersPage />,
-            handle: { crumb: 'Triggers' } satisfies ShellRouteHandle,
+            handle: { crumb: sectionLabel('/manage/triggers') } satisfies ShellRouteHandle,
           },
         ],
       },

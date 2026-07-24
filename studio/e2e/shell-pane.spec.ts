@@ -138,7 +138,7 @@ test.describe('U3 pane splitter', () => {
    * the custom property — a preview that never commits, or a commit that never
    * reaches the layout, both fail here.
    */
-  test('dragging the splitter resizes the pane and it sticks', async ({ page }) => {
+  test('dragging the splitter resizes the pane, and the width persists', async ({ page }) => {
     const problems = collectPageProblems(page);
     await gotoManage(page);
     expect(await paneTrack(page)).toBe(240);
@@ -161,7 +161,39 @@ test.describe('U3 pane splitter', () => {
 
     await expect.poll(() => paneTrack(page)).toBe(300);
     expect((await pane(page).boundingBox())?.width).toBe(300);
+
+    // The POINTER path all the way to storage. The reload test below uses the
+    // keyboard; both funnel through the same commit, but "and it sticks" was
+    // in this test's name while nothing here reloaded.
+    await page.reload();
+    await fluentRootReady(page);
+    await expect.poll(() => paneTrack(page)).toBe(300);
     await expectQuiet(page, problems);
+  });
+
+  /**
+   * The splitter is the control the spec's "keyboard-operable splitter" and
+   * "visible focus rings" criteria both land on, so its focus indicator cannot
+   * be a background colour alone: that is pixel-identical to hover, and under
+   * `forced-colors: active` the UA replaces author backgrounds outright,
+   * leaving no indicator at all. Asserts the OUTLINE specifically — and not
+   * `outlineStyle !== 'none'`, which Chromium's own `outline: auto` default
+   * satisfies for free.
+   */
+  test('a keyboard-focused splitter has a real focus ring, not just a fill', async ({ page }) => {
+    await gotoManage(page);
+    const splitter = page.getByRole('separator');
+    await splitter.focus();
+
+    const ring = await splitter.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { style: cs.outlineStyle, width: cs.outlineWidth, background: cs.backgroundColor };
+    });
+    expect(ring.style).toBe('solid');
+    expect(parseFloat(ring.width)).toBeGreaterThan(0);
+    // The fill is still there for pointer affordance; the ring is what makes
+    // focus distinguishable from it.
+    expect(ring.background).not.toBe('rgba(0, 0, 0, 0)');
   });
 
   /** The keyboard path, end to end — the spec's keyboard-operable criterion. */

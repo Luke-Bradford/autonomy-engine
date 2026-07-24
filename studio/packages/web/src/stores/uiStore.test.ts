@@ -115,7 +115,14 @@ describe('uiStore secondary pane', () => {
     ['null, which typeof-reports as "object"', 'null'],
     ['an array, which also typeof-reports as "object"', '[240, false]'],
     ['a record with the wrong field types', '{"width":"300","collapsed":"yes"}'],
-    ['a non-finite width', '{"width":null,"collapsed":false}'],
+    ['a null width, which is not a number at all', '{"width":null,"collapsed":true}'],
+    // `1e999` overflows to Infinity, which IS `typeof 'number'` — so this is
+    // the only input that reaches the finiteness check, and the only one that
+    // kills it. The `null` case above was mislabelled "non-finite" and is
+    // rejected one guard earlier; both are kept because they fail differently.
+    // Note the `collapsed: true` in both: a fallback that only reset the WIDTH
+    // would still pass an assertion on width alone.
+    ['a width that overflows to Infinity', '{"width":1e999,"collapsed":true}'],
   ])('falls back to the defaults for %s', (_label, raw) => {
     const state = createUiStore(fakeStorage({ [PANE_STORAGE_KEY]: raw })).getState();
     expect(state.paneWidth).toBe(PANE_DEFAULT_WIDTH);

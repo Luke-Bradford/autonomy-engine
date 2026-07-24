@@ -371,31 +371,51 @@ Decisions worth not re-deriving:
   control elsewhere: two controls and two code paths for one boolean. It is absent
   entirely on a hub with no pane, because a disclosure button controlling nothing is worse
   than no button.
-- **No pane on Home.** Home declares no sections; a one-entry list pointing at the page
-  you are on is furniture.
+- **No pane on Home.** Home declares no sections, so no pane renders. This is NOT a rule
+  that a one-entry pane is not worth drawing — Author and Monitor ship exactly that today,
+  because the container has to exist for U4's resources tree and U10's filters to land in,
+  and Manage genuinely has two entries. Home is different in kind: it IS the overview, so
+  its pane could only ever point at the page you are already on.
 - **The drag deliberately bypasses React.** `pointermove` fires at refresh rate; routing
   each through the store would re-render the shell ~60×/s and persist to `localStorage`
   per frame. The splitter previews by writing `--pane-width` straight onto the shell
-  element and commits once on `pointerup`. Consequence: store and DOM disagree mid-drag,
-  so an `AppShell` re-render during a drag would snap back. Nothing does (a captured
-  pointer means no other input is live). Keyboard steps take the opposite path — straight
-  to the store, never the preview, or the next render would revert them.
+  element and commits once on `pointerup`.
+  A re-render mid-drag does NOT snap the pane back — browser-verified: React writes an
+  inline style key only when the PROP value changes, so a re-render with an unchanged
+  `paneWidth` leaves an out-of-band write alone. The real hazard is the inverse, and it
+  is worse: **a preview that is never followed by a commit is never reconciled by any
+  later render**, so the pane would keep a width neither the store nor `localStorage`
+  has, indefinitely. What rules it out is that `endDrag` always runs — pointer capture
+  guarantees a `pointerup` or a `pointercancel`, and both commit (each pinned by a unit
+  test). If that ever stops holding, the fix is to make the commit path idempotent by
+  writing the property from a layout effect, not to chase re-renders.
+  Keyboard steps take the opposite path — straight to the store, never the preview, or
+  the next render would revert them.
 - **Hand-rolled `<nav><ol>` breadcrumb, not Fluent's `Breadcrumb`** (which IS installed).
   The honest reasons are bundle (U0's +64 kB budget) and plumbing — Fluent slots take an
   intrinsic `as`, not a component, so react-router has to be wired in per crumb via
   `useHref` + `useLinkClickHandler`, which is more code than the `<ol>`. Capability was
   never the blocker.
-- **`@fluentui/react-nav` was rejected for the pane** (also installed): its selection is a
-  controlled `selectedValue`, i.e. a second opinion about where the user is. `NavLink`'s
-  `isActive` stays the only source. Worth not relitigating in U4.
+- **`@fluentui/react-nav` was rejected for the pane** (also installed): selection is a
+  `selectedValue`/`defaultSelectedValue` prop — controlled or uncontrolled, either way a
+  VALUE-based second opinion about where the user is, sitting beside the router's.
+  `NavLink`'s `isActive` stays the only source. Worth not relitigating in U4.
 - **The crumb separator is `content: '›' / ''`.** Moving it into a `::before` is NOT
   enough — browser-verified, Chromium exposes generated content to the accessibility tree
   and the crumb announced as "› Pipelines". The empty alt text after the slash is what
-  marks it decorative; re-reading the a11y tree then gave "Pipelines".
+  marks it decorative; re-reading the a11y tree then gave "Pipelines". Note the
+  degradation is VISUAL, not aural: CSS drops a declaration it cannot parse, so a browser
+  without alt-text support renders `content: normal` and generates no separator at all.
 - **The shell is `height: 100vh` and `.content` is the scroller.** Previously the DOCUMENT
-  scrolled, which would carry the command bar off the top of the screen. Both `min-height: 0`
-  declarations are required: a `1fr` track's automatic minimum is `auto`, so without them
-  the container overflows instead of the child scrolling.
+  scrolled, which would carry the command bar off the top of the screen. `.workspace` needs
+  an explicit `min-height: 0`/`min-width: 0` pair — a grid item's automatic minimum is
+  `auto`, so without them the track refuses to shrink and the container overflows instead
+  of the child scrolling. `.content` and `.secondary-pane` do NOT: setting `overflow` is
+  itself enough to zero that automatic minimum. Both claims mutation-checked — deleting
+  `.workspace`'s fails the e2e, deleting the others changes nothing.
+  Consequence worth knowing for **U7/U8a**: `.content` now CLIPS, so an
+  absolutely-positioned in-page overlay (properties panel, expression flyout) must portal
+  to body — which the U0 spike's portal policy already requires.
 - **Section labels are duplicated** between `hubs.ts` and the route `handle`s, on purpose —
   a literal crumb beats a three-branch inference from a pathname. `routes.test.tsx` pins
   them equal, and separately pins `sections[0].path` against each hub's index redirect.
@@ -405,6 +425,11 @@ Decisions worth not re-deriving:
   `router.state.matches` AFTER `render()`, which flushes the `<Navigate>` redirect inside
   `act()`, so it described the DESTINATION route — also called `runs`. It would have
   passed if `/runs/` had matched `:runId`. Now read from the router's initial state.
+
+- **Pane width and collapse are GLOBAL, not per-hub.** One `autonomy-studio.pane` record,
+  so collapsing in Manage keeps the pane collapsed in Author. The Shell section's "its own
+  secondary pane" reads as though it could be per-hub; global matches ADF and is what a
+  user putting the pane away almost certainly means. Pinned by an e2e that changes hub.
 
 NOT in U3, with owners: the command bar's **actions region** (Validate / Save→version /
 zoom-fit-layout) is **U9** — an empty container now would be dead code plus a seam chosen

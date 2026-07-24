@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PaneSplitter } from './PaneSplitter';
 import {
@@ -10,12 +10,18 @@ import {
 } from '../stores/uiStore';
 
 /**
- * The splitter's KEYBOARD half, which is a spec accessibility criterion in its
- * own right ("keyboard-operable splitter") and the half jsdom can actually
- * execute: jsdom implements no Pointer Events capture API at all, so a
- * simulated drag here would be testing the simulation. The pointer half is
- * covered in `e2e/shell-pane.spec.ts`, where a real browser drags a real
- * splitter and the grid track is measured afterwards.
+ * The splitter's KEYBOARD half — a spec accessibility criterion in its own
+ * right ("keyboard-operable splitter") — plus the pointer BRANCHES that a real
+ * browser drag never reaches.
+ *
+ * The happy-path drag belongs in `e2e/shell-pane.spec.ts`, where a real browser
+ * moves a real pointer and the resulting layout is measured; simulating that
+ * here would mostly be testing the simulation. But the guards around it —
+ * a non-primary button, and a cancelled drag — are unreachable from that spec
+ * (Playwright's drag uses the primary button and always ends with `pointerup`),
+ * so a mutation check found all three surviving. jsdom dispatches pointer
+ * events fine; it only lacks the CAPTURE API, which the component
+ * optional-calls precisely so these cases are reachable.
  */
 function renderSplitter(width = PANE_DEFAULT_WIDTH) {
   const onCommit = vi.fn();
@@ -99,6 +105,56 @@ describe('PaneSplitter', () => {
     const { onPreview, splitter } = renderSplitter();
     splitter.focus();
     await user.keyboard('{ArrowRight}');
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Home/End must `preventDefault`, or the browser ALSO scrolls the workspace
+   * to top/bottom while the pane resizes — two unrelated things happening from
+   * one key press.
+   */
+  it.each(['Home', 'End'])('prevents the default scroll on %s', (key) => {
+    const { splitter } = renderSplitter(300);
+    // `fireEvent`, not `userEvent`: the return value of `dispatchEvent` is the
+    // only way to observe that the default was prevented, and `userEvent` does
+    // not surface it.
+    const notPrevented = fireEvent.keyDown(splitter, { key });
+    expect(notPrevented).toBe(false);
+  });
+
+  /**
+   * A non-primary press must not begin a drag. A right-click starts no gesture
+   * the browser will finish — there is no `pointerup` on this element to end
+   * it — so without the guard the splitter would be left mid-drag and the next
+   * pointer move over it would resize the pane with no button held down.
+   */
+  it('ignores a non-primary button press', () => {
+    const { onPreview, onCommit, splitter } = renderSplitter();
+    fireEvent.pointerDown(splitter, { button: 2, clientX: 100 });
+    fireEvent.pointerMove(splitter, { clientX: 160 });
+    expect(onPreview).not.toHaveBeenCalled();
+    fireEvent.pointerUp(splitter, { clientX: 160 });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A cancelled drag (pointer lost to a system gesture, or dragged off-window)
+   * still commits the width reached, and — the part that matters — CLEARS the
+   * drag state. Without the `pointercancel` handler the drag would never end,
+   * so a later stray move would keep resizing the pane.
+   */
+  it('commits and ends the drag on pointercancel', () => {
+    const { onPreview, onCommit, splitter } = renderSplitter();
+    fireEvent.pointerDown(splitter, { button: 0, clientX: 100 });
+    fireEvent.pointerMove(splitter, { clientX: 160 });
+    expect(onPreview).toHaveBeenLastCalledWith(300);
+
+    fireEvent.pointerCancel(splitter, { clientX: 160 });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith(300);
+
+    // The drag is over: a further move must not preview anything.
+    onPreview.mockClear();
+    fireEvent.pointerMove(splitter, { clientX: 400 });
     expect(onPreview).not.toHaveBeenCalled();
   });
 
