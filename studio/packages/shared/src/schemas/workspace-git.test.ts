@@ -6,6 +6,7 @@ import {
   deriveWorkspaceGitState,
   parseGitHostRepo,
   PullRequestResultSchema,
+  resolvePullRequestTarget,
   SetWorkingBranchBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitRepoUrlSchema,
@@ -305,10 +306,78 @@ describe('buildGuidedManualPullRequest', () => {
     const parsed = PullRequestResultSchema.parse({
       mode: 'guided_manual',
       ...built,
+      // #3 G9b — `number` is REQUIRED-nullable; a guided-manual result has none.
+      number: null,
       workingBranch: 'studio/local/work',
       collabBranch: 'main',
     });
     expect(parsed.mode).toBe('guided_manual');
     expect(parsed.provider).toBe('github');
+    expect(parsed.number).toBeNull();
+  });
+});
+
+describe('resolvePullRequestTarget', () => {
+  it('a GitHub remote → github + parsed repo coords + a compare URL', () => {
+    const target = resolvePullRequestTarget(
+      'https://github.com/acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(target.provider).toBe('github');
+    expect(target.githubRepo).toEqual({ host: 'github.com', owner: 'acme', repo: 'widgets' });
+    expect(target.compareUrl).toBe(
+      'https://github.com/acme/widgets/compare/main...studio/local/work?expand=1',
+    );
+  });
+
+  it('the scp-like GitHub form resolves to github with coords', () => {
+    const target = resolvePullRequestTarget(
+      'git@github.com:acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(target.provider).toBe('github');
+    expect(target.githubRepo).toEqual({ host: 'github.com', owner: 'acme', repo: 'widgets' });
+  });
+
+  it('the www.github.com alias resolves to github (coords keep the aliased host)', () => {
+    const target = resolvePullRequestTarget(
+      'https://www.github.com/acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(target.provider).toBe('github');
+    // The parsed host is the literal www. alias; the compare URL canonicalizes.
+    expect(target.githubRepo?.host).toBe('www.github.com');
+    expect(target.compareUrl).toBe(
+      'https://github.com/acme/widgets/compare/main...studio/local/work?expand=1',
+    );
+  });
+
+  it('a local remote → unknown, no coords, no compare URL', () => {
+    expect(resolvePullRequestTarget('/repos/widgets', 'main', 'studio/local/work')).toEqual({
+      provider: 'unknown',
+      githubRepo: null,
+      compareUrl: null,
+    });
+  });
+
+  it('a non-GitHub host (GitHub Enterprise / GitLab) → unknown, no coords (auto-open is github.com-only)', () => {
+    expect(
+      resolvePullRequestTarget('https://github.mycorp.com/acme/widgets.git', 'main', 'work'),
+    ).toEqual({ provider: 'unknown', githubRepo: null, compareUrl: null });
+    expect(
+      resolvePullRequestTarget('https://gitlab.com/group/widgets.git', 'main', 'work'),
+    ).toEqual({ provider: 'unknown', githubRepo: null, compareUrl: null });
+  });
+
+  it('buildGuidedManualPullRequest stays consistent with resolvePullRequestTarget', () => {
+    const url = 'https://github.com/acme/widgets.git';
+    const target = resolvePullRequestTarget(url, 'main', 'studio/local/work');
+    expect(buildGuidedManualPullRequest(url, 'main', 'studio/local/work')).toEqual({
+      provider: target.provider,
+      url: target.compareUrl,
+    });
   });
 });

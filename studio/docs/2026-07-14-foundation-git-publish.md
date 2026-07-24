@@ -146,7 +146,7 @@ reconcile are core. Corrections:
 | G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b (git provenance on versions — reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import) SHIPPED** (built-block below); **G6c** further sliced: **G6c-1 (the `active` pointer projection + CAS Publish `pipeline.published` + route) SHIPPED** (built-block below); **G6c-2 (resolve-once bind-to-active — the trigger-creation convenience that reads this projection: git-mode → active, DB-only → latest) SHIPPED** (built-block below). G6 fully sliced + shipped |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
-| G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
+| G9 | PR open/observe via git-host API (GitHub first) — else guided manual — **G9a (persisted `working_branch` + feature-branch selection + GUIDED-MANUAL compare URL) SHIPPED 2026-07-24**; **G9b (GitHub REST auto-open + PR-observe via an operator-env token) SHIPPED 2026-07-24** (built-block below). G9 core shipped; conflict/divergence + stored-PAT/multi-remote polish is G10 |
 | G10 | Conflict/divergence UX; multi-remote/auth polish |
 
 ### G1 built-block (2026-07-23)
@@ -713,6 +713,55 @@ local-readiness?").
 - **#674 (webhook secret-PRESENCE) stays G8.** It is a genuinely separate
   non-idempotency (differs even for a bound+enabled trigger) and is the secret
   gate's charter, not the binding reconcile's.
+
+### G9b built-block (2026-07-24) — GitHub REST auto-open + PR-observe
+
+G9a shipped the persisted `working_branch` (feature-branch selection) + the
+GUIDED-MANUAL PR (a GitHub compare URL, or `unknown`+`null` for a local/non-GitHub
+remote). G9b adds the `mode:'opened'` path: studio opens (or observes an existing)
+PR via the GitHub REST API when it can, guided-manual stays the fallback.
+
+- **Auto-open fires ONLY for `github.com` WITH an operator-env token.** The token
+  is resolved once at wiring (`index.ts`): `GH_TOKEN ?? GITHUB_TOKEN` (`gh`-CLI
+  precedence), overridable per-call for tests; normalized in the route to
+  `(token ?? '').trim() || null` so an empty/whitespace value counts as ABSENT
+  (→ guided-manual, never an empty-`Bearer` attempt). Auth model unchanged from
+  G2: the operator's own environment, **NO stored PATs** — those + multi-remote +
+  a non-github host API are G10. The token is never stored, never client-supplied,
+  never logged; it rides ONLY the outbound `Authorization` header.
+- **`POST /repos/{owner}/{repo}/pulls`** (owner/repo `encodeURIComponent`'d) with
+  `{ title, head, base, body }` (server-generated title/body — no client-
+  customizable PR metadata in v1). `201` → `mode:'opened'` with the PR's
+  `html_url` + `number`. The response is VALIDATED (`number` a positive int,
+  `html_url` non-empty) before it is trusted — a malformed payload fails loudly,
+  never a manufactured result (#473 posture; `number` is REQUIRED-nullable on
+  `PullRequestResultSchema`, `null` for guided-manual).
+- **PR-observe = idempotency.** A `422` whose `message`/`errors[].message` says a
+  PR "already exists" → `GET …/pulls?state=open&head={owner}:{branch}&base={base}`
+  (head/base query values encoded) → the first open PR, returned as `opened`. An
+  EMPTY observe result (the PR was merged/closed in the race) fails HONESTLY
+  (`GitHostApiError`) — never a crash on `[0]`, never a null-url `opened`.
+- **Error posture, two classes.** `GitHostApiError` (network / timeout / auth /
+  5xx / malformed / lost-observe) → 502 `git_error` (the upstream-failure surface
+  a `GitOperationError` gets). `GitHostRequestError` (a `422` that is NOT
+  already-exists — e.g. "No commits between base and head", a legitimate
+  request-STATE refusal, nothing to PR) → 409 `conflict` (the `PublishRefusedError`
+  surface), NOT a 502. Both messages are GitHub-authored + `redactSecrets`'d for
+  the token; both `instanceof` branches precede the numeric-statusCode/500
+  fallthrough in `errors.ts`.
+- **No-hang rail.** Every request is bounded by an `AbortController` whose timer
+  stays armed across BOTH the `fetch` AND the `res.json()` body read (undici ties
+  the body stream to `signal`) — a headers-arrive-then-body-stalls response is cut
+  short as a timeout, not left to hang (the exact bug a clear-timer-before-body
+  would introduce, pinned by test).
+- **Seam parity.** `GitHostClient` (server `git/github-host.ts`, default
+  `GitHubHostClient` over Node `fetch`) mirrors the G2 `GitProvider` seam: injected
+  via `buildApp`'s `workspaceGitHostClient` / route `hostClient` option, faked in
+  tests (a scripted `fetch`, no network). `resolvePullRequestTarget` (shared) is
+  the SINGLE source of github-detection + compare-url; `buildGuidedManualPullRequest`
+  delegates to it (pinned so the two can't drift). The route stays OUT of the
+  per-owner `KeyedQueue` — a pure DB read + a bounded outbound call, no
+  checkout/index mutation.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

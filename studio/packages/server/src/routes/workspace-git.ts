@@ -3,12 +3,12 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import {
-  buildGuidedManualPullRequest,
   CommitWorkspaceGitBodySchema,
   ConnectWorkspaceGitBodySchema,
   deriveDefaultWorkingBranch,
   MANAGED_DIRS,
   PullRequestResultSchema,
+  resolvePullRequestTarget,
   SetWorkingBranchBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
@@ -43,6 +43,7 @@ import {
   GitUnavailableError,
   type GitProvider,
 } from '../git/provider.js';
+import { GitHubHostClient, type GitHostClient } from '../git/github-host.js';
 import { KeyedQueue } from '../git/queue.js';
 import { readyVersionResourceIds } from '../run/connection-readiness.js';
 import { NotFoundError } from '../errors.js';
@@ -79,6 +80,16 @@ export interface WorkspaceGitRoutesOptions {
   workspaceGitRoot: string;
   /** Test seam; defaults to a real `CliGitProvider`. */
   provider?: GitProvider;
+  /**
+   * #3 G9b — the operator-env GitHub token (`GH_TOKEN`/`GITHUB_TOKEN`, resolved at
+   * wiring time in `index.ts`), or `null`/absent when none is set. When present
+   * AND the remote is a GitHub host, the pull-request route auto-opens the PR via
+   * the host API; otherwise it falls back to G9a's guided-manual compare URL.
+   * Trimmed at the boundary — a whitespace-only value counts as absent.
+   */
+  githubToken?: string | null;
+  /** #3 G9b — test seam for the GitHub host API; defaults to a real `GitHubHostClient`. */
+  hostClient?: GitHostClient;
 }
 
 function statusOf(row: WorkspaceGit) {
@@ -151,6 +162,11 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   const { db } = fastify;
   const { workspaceGitRoot } = opts;
   const provider = opts.provider ?? new CliGitProvider();
+  const hostClient = opts.hostClient ?? new GitHubHostClient();
+  // #3 G9b — normalize the operator-env token ONCE: a whitespace-only value (or
+  // an empty/unset `GH_TOKEN`) counts as absent, so it falls back to guided-manual
+  // rather than attempting an auth that would 401. `null` = no token.
+  const githubToken = (opts.githubToken ?? '').trim() || null;
   const queue = new KeyedQueue();
 
   fastify.get('/api/workspace/git', async (request) => {
@@ -326,32 +342,65 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   });
 
   /**
-   * #3 G9a — open a pull request (working → collab). This slice is GUIDED-MANUAL
-   * only: for a GitHub remote it returns a compare `url` the user clicks to open
-   * the PR (`provider:'github'`); for a local/non-GitHub remote it returns
-   * `url:null` + the branch pair (`provider:'unknown'`). No git op and no host
-   * API call yet (G9b adds `mode:'opened'` via the host API + an operator-env
-   * token), so it needs neither the queue nor a fetch — a pure DB read + URL
-   * build. 404s when no repo is connected, matching the fetch/commit routes.
+   * #3 G9 — open a pull request (working → collab).
+   *
+   * G9b: when the remote is a GitHub host AND an operator-env token is present,
+   * studio auto-opens (or observes an already-open) PR via the GitHub REST API
+   * and returns `mode:'opened'` with the PR's `url`/`number`. Otherwise it falls
+   * back to G9a's GUIDED-MANUAL result: a GitHub compare `url` for a GitHub
+   * remote (`provider:'github'`), else `url:null` + the branch pair
+   * (`provider:'unknown'`) — the user opens the PR by hand.
+   *
+   * NOT in the per-owner `KeyedQueue`: this touches no checkout/index (a pure DB
+   * read + an outbound host call), and the host call is bounded (~20s) —
+   * borrowing the queue slot would needlessly block a concurrent commit/fetch for
+   * the whole network round-trip. The branch pair is a point-in-time snapshot; a
+   * concurrent working-branch change simply targets the next PR. 404s when no
+   * repo is connected, matching the fetch/commit routes.
+   *
+   * Security model: the token is operator-env (never client-supplied, never
+   * stored, never logged — see `git/github-host.ts`); `owner`/`repo` come from the
+   * connect-allowlisted `repoUrl` (parsed once in `resolvePullRequestTarget`) and
+   * are URL-encoded into the host request; all host-API failures surface as
+   * token-redacted 502/409 errors.
    */
   fastify.post('/api/workspace/git/pull-request', async (request) => {
     const ownerId = request.principal.ownerId;
     const row = getWorkspaceGit(db, ownerId);
     if (!row) throw new NotFoundError('workspace git connection', ownerId);
 
-    const { provider: hostProvider, url } = buildGuidedManualPullRequest(
-      row.repoUrl,
-      row.collabBranch,
-      row.workingBranch,
-    );
+    const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, row.workingBranch);
+
+    // Auto-open via the host API only for a GitHub remote WITH a token.
+    if (target.provider === 'github' && target.githubRepo !== null && githubToken !== null) {
+      const opened = await hostClient.openPullRequest({
+        repo: target.githubRepo,
+        base: row.collabBranch,
+        head: row.workingBranch,
+        title: `Studio changes: ${row.workingBranch}`,
+        body: `Opened by Autonomy Studio from working branch \`${row.workingBranch}\` into \`${row.collabBranch}\`.`,
+        token: githubToken,
+      });
+      const pullRequest = PullRequestResultSchema.parse({
+        mode: 'opened',
+        provider: 'github',
+        url: opened.htmlUrl,
+        number: opened.number,
+        workingBranch: row.workingBranch,
+        collabBranch: row.collabBranch,
+      });
+      return { pullRequest };
+    }
+
+    // Guided-manual fallback (no token, or a non-GitHub / local remote).
     const pullRequest = PullRequestResultSchema.parse({
       mode: 'guided_manual',
-      provider: hostProvider,
-      url,
+      provider: target.provider,
+      url: target.compareUrl,
+      number: null,
       workingBranch: row.workingBranch,
       collabBranch: row.collabBranch,
     });
-
     return { pullRequest };
   });
 

@@ -37,6 +37,12 @@ export async function buildTestAppWithContext(
     dbPath: join(tmpDir, 'test.sqlite'),
     masterKeyFile: join(tmpDir, 'master.key'),
     workspaceGitRoot,
+    // #3 G9b — isolate every test app from an AMBIENT `GH_TOKEN`/`GITHUB_TOKEN`
+    // (e.g. a CI runner's) by defaulting to an EXPLICIT no-token; a test that
+    // exercises auto-open overrides this. `process.env` is process-global and
+    // shared across concurrent test files, so without this default a stray env
+    // token would make the pull-request route attempt a real network auto-open.
+    githubToken: null,
     ...overrides,
   });
   await app.ready();

@@ -8,6 +8,7 @@ import {
   WorkspaceGitAlreadyConnectedError,
 } from './repo/index.js';
 import { GitOperationError, GitUnavailableError } from './git/provider.js';
+import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
@@ -233,6 +234,29 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof GitOperationError) {
       request.log.warn({ err: error }, 'git operation failed');
       reply.status(502).send({ error: 'git_error', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G9b — the GitHub PR host-API could not fulfil the request (network,
+    // timeout, auth/permission refusal, 5xx, malformed/lost response). Same
+    // upstream-failure surface as a git operation (502 `git_error`); the message
+    // is client-safe by construction (status + GitHub's own text, token-redacted
+    // — see `git/github-host.ts`). Must precede the numeric-statusCode/500
+    // fallthrough, as 502 is outside `hasNumericStatusCode`'s 4xx window.
+    if (error instanceof GitHostApiError) {
+      request.log.warn({ err: error }, 'git host API failed');
+      reply.status(502).send({ error: 'git_error', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G9b — the PR request was well-formed but GitHub semantically refused it
+    // (a 422 that is NOT "already exists" — e.g. "No commits between base and
+    // head": nothing to PR). A request-STATE conflict, not an upstream outage, so
+    // 409 `conflict` (the `PublishRefusedError` surface), not 502. GitHub-authored
+    // message, token-redacted.
+    if (error instanceof GitHostRequestError) {
+      request.log.warn({ err: error }, 'git host API refused the request');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
