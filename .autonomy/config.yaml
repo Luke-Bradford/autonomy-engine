@@ -13,15 +13,17 @@ engine:
 
 agent:
   type: claude               # claude | codex
-  effort: high               # executor keeps high while we baseline the pair; revisit with ticket_effort data
+  effort: high
   model:
-    # #320 planner/coder pair (operator decision 2026-07-08): the coder session
-    # runs the cheap executor; the thinking-tier work happens in the `planner`
-    # subagent (.claude/agents/planner.md, its own model: override). Opus is
-    # ~5x sonnet quota weight -- measure ~10 tickets via ticket_effort before
-    # judging the swap.
-    primary: claude-sonnet-5
-    fallback: claude-sonnet-4-6
+    # #320 planner/coder pair, AMENDED by the operator 2026-07-24 (#707): the
+    # coder runs OPUS 5 too -- the cheap-executor cost tradeoff is withdrawn.
+    # The pair's shape is unchanged (the `planner` subagent,
+    # .claude/agents/planner.md, is still dispatched twice per ticket and is
+    # still the gate); both halves are now thinking-tier. Fallback is sonnet-5
+    # so a rate-limited primary degrades to a CURRENT model, not a stale one.
+    # See docs/settled-decisions.md SD-33 (amended).
+    primary: claude-opus-5
+    fallback: claude-sonnet-5
 
 merge_gate:
   # bot_comment: safe_merge.sh merges once the review bot posts APPROVE on the
