@@ -43,6 +43,12 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      # Zero-paid-dependency audit (P7, #409): every prod + dev dependency must
+      # carry a permissive OSS license. Fails closed on any non-permissive or
+      # unknown license, or a degenerate/empty tree. See packages/cli/src/licenseAudit.ts.
+      - name: Audit licenses
+        run: pnpm run audit:licenses
+
       - name: Typecheck
         run: pnpm typecheck
 
