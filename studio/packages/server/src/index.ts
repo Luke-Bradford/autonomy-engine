@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import Fastify from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import { eq } from 'drizzle-orm';
@@ -43,6 +45,7 @@ import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
+import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
 import './context.js';
@@ -129,7 +132,14 @@ export function resolveRetentionCount(
 }
 
 const PORT = resolvePort(process.env.PORT);
-const HOST = '127.0.0.1';
+// #409 P7 — bind loopback by DEFAULT (safe for local dev), but let a packaged
+// image opt into `0.0.0.0` via `HOST` so `docker run -p 8080:8080` is reachable:
+// a process bound to loopback inside the container netns is NOT reachable
+// through Docker's published-port NAT. Binding non-loopback exposes an
+// UNAUTHENTICATED app (single fixed `LOCAL_PRINCIPAL`) — the operator's
+// deployment decision; see the Dockerfile/compose + the PR security section.
+const HOST =
+  process.env.HOST !== undefined && process.env.HOST !== '' ? process.env.HOST : '127.0.0.1';
 
 /**
  * How often the alarm clock sweeps for due wakeups (#5 S1 / #1 F2c).
@@ -183,6 +193,17 @@ export interface BuildAppOptions {
   githubToken?: string | null;
   /** #3 G9b — test seam: a `GitHostClient` override (a fake fetch-backed client). Defaults to a real `GitHubHostClient` (Node global `fetch`). */
   workspaceGitHostClient?: GitHostClient;
+  /**
+   * #409 P7 — directory of the built web bundle to serve the SPA from (same
+   * server as the API). Overrides `process.env.WEB_ROOT`. Unlike `dbPath` /
+   * `workspaceGitRoot` this has NO built-in filesystem default ON PURPOSE: with
+   * nothing configured (dev — vite serves the web; tests — no build present)
+   * the server keeps its plain JSON-404 behavior for every route. A packaged
+   * image sets `WEB_ROOT` explicitly. Static serving is only wired up when this
+   * points at a directory containing an `index.html`, so a misconfigured or
+   * empty mount degrades to a clean 404 rather than a 500 on every navigation.
+   */
+  webRoot?: string;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -679,6 +700,18 @@ export async function buildApp(opts?: BuildAppOptions) {
     const hello: Hello = { message: 'hello from @autonomy-studio/server', ts: Date.now() };
     return HelloSchema.parse(hello);
   });
+
+  // #409 P7 — serve the built web SPA from this same server (single-container
+  // self-host). The specific `/api/*` + `/health` routes always win over the
+  // static `/*` catch-all because Fastify (find-my-way) matches by route
+  // SPECIFICITY, not registration order — registering here, after the API
+  // routes, is just for readability. Guarded on an actual `index.html`: with no
+  // `webRoot` (dev/test) or an incomplete build, we register nothing and keep
+  // the plain JSON-404 behavior — never a 500 on every navigation.
+  const webRoot = opts?.webRoot ?? process.env.WEB_ROOT;
+  if (webRoot !== undefined && webRoot !== '' && existsSync(join(webRoot, 'index.html'))) {
+    await registerStaticWeb(fastify, webRoot);
+  }
 
   // The P0b process-supervisor contract: that module is a LIBRARY and
   // deliberately does not own process exit, so the HOST app must call
