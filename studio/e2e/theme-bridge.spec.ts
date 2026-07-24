@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { customProps, readCssSource, ruleBody } from '../packages/web/src/testing/cssSource';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { CANVAS_TOKEN, FLUENT_ROOT, customProperty, fluentRootReady } from './support/theme';
 
@@ -32,10 +32,19 @@ const BRIDGE_CSS = join(
  * here, so the spec cannot drift from the bridge and no magic number decides
  * how much coverage is "enough": every override the source declares must show
  * up in the browser, and any that does not is a failure naming itself.
+ *
+ * Parsed with the SAME `testing/cssSource` helpers the unit suite uses on this
+ * very file, rather than a second regex of its own. That module exists because
+ * a hand-rolled copy of a CSS guard drifted from the original once already, and
+ * a copy here would drift in two specific ways: `readCssSource` strips block
+ * comments (a commented-out `--xy-*` line would otherwise join the expected set
+ * and fail this spec spuriously, since the browser rightly never sees it), and
+ * `ruleBody` is brace-balanced (so the extraction cannot silently run past the
+ * rule and pick up overrides declared somewhere else entirely).
  */
 function declaredInSource(): string[] {
-  const css = readFileSync(BRIDGE_CSS, 'utf8');
-  return [...css.matchAll(/^\s*(--xy-[\w-]+)\s*:/gm)].map((m) => m[1] as string).sort();
+  const body = ruleBody(readCssSource(BRIDGE_CSS), FLUENT_ROOT);
+  return [...customProps(body).keys()].filter((name) => name.startsWith('--xy-')).sort();
 }
 
 /**
