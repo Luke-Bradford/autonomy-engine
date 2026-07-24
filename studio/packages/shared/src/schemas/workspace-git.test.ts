@@ -5,10 +5,12 @@ import {
   deriveDefaultWorkingBranch,
   deriveWorkspaceGitState,
   parseGitHostRepo,
+  precheckDivergence,
   PullRequestResultSchema,
   resolvePullRequestTarget,
   SetWorkingBranchBodySchema,
   WorkspaceGitBranchSchema,
+  WorkspaceGitDivergenceSchema,
   WorkspaceGitRepoUrlSchema,
   WorkspaceGitSchema,
   WorkspaceGitStatusSchema,
@@ -113,6 +115,7 @@ const row = {
   collabBranch: 'main',
   workingBranch: 'studio/local/work',
   observedCollabHead: 'a'.repeat(40),
+  importedFromCommit: null,
   lastFetchAt: 1_700_000_000_000,
   lastFetchError: null,
   createdAt: 1_700_000_000_000,
@@ -128,6 +131,66 @@ describe('WorkspaceGitSchema', () => {
     const missing: Partial<typeof row> = { ...row };
     delete missing.observedCollabHead;
     expect(WorkspaceGitSchema.safeParse(missing).success).toBe(false);
+  });
+
+  it('requires importedFromCommit to be present (required-nullable, #473)', () => {
+    const missing: Partial<typeof row> = { ...row };
+    delete missing.importedFromCommit;
+    expect(WorkspaceGitSchema.safeParse(missing).success).toBe(false);
+  });
+});
+
+describe('precheckDivergence (#3 G10 — the git-independent classification)', () => {
+  it('is unknown when no import base is recorded', () => {
+    expect(precheckDivergence(null, 'a'.repeat(40))).toBe('unknown');
+  });
+
+  it('is unknown when the collab branch is absent (empty repo / deleted since import)', () => {
+    expect(precheckDivergence('a'.repeat(40), null)).toBe('unknown');
+  });
+
+  it('is unknown when both are absent', () => {
+    expect(precheckDivergence(null, null)).toBe('unknown');
+  });
+
+  it('is current when the import base IS the collab head', () => {
+    const sha = 'a'.repeat(40);
+    expect(precheckDivergence(sha, sha)).toBe('current');
+  });
+
+  it('needs a history walk when the heads differ', () => {
+    expect(precheckDivergence('a'.repeat(40), 'b'.repeat(40))).toBe('needs-history');
+  });
+});
+
+describe('WorkspaceGitDivergenceSchema (#3 G10)', () => {
+  it('round-trips a verdict with echoed shas', () => {
+    const parsed = WorkspaceGitDivergenceSchema.parse({
+      state: 'behind',
+      importBase: 'a'.repeat(40),
+      collabHead: 'b'.repeat(40),
+    });
+    expect(parsed.state).toBe('behind');
+    expect(parsed.importBase).toBe('a'.repeat(40));
+  });
+
+  it('accepts null shas for the unknown verdict', () => {
+    const parsed = WorkspaceGitDivergenceSchema.parse({
+      state: 'unknown',
+      importBase: null,
+      collabHead: null,
+    });
+    expect(parsed.state).toBe('unknown');
+  });
+
+  it('rejects an out-of-enum state', () => {
+    expect(
+      WorkspaceGitDivergenceSchema.safeParse({
+        state: 'ahead',
+        importBase: null,
+        collabHead: null,
+      }).success,
+    ).toBe(false);
   });
 });
 

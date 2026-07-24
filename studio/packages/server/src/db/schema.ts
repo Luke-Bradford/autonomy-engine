@@ -737,6 +737,10 @@ export const workspaceGit = sqliteTable(
     // post-connect-mutable field (see repo `updateWorkspaceGitWorkingBranch`).
     workingBranch: text('working_branch'),
     observedCollabHead: text('observed_collab_head'),
+    // #3 G10 — the collab commit the most recent non-refused import read from (the
+    // proactive descendant-guard base, #662). Nullable; NO backfill (an absent
+    // import fact is stated null, never manufactured — #473).
+    importedFromCommit: text('imported_from_commit'),
     lastFetchAt: integer('last_fetch_at'),
     lastFetchError: text('last_fetch_error'),
     createdAt: integer('created_at').notNull(),

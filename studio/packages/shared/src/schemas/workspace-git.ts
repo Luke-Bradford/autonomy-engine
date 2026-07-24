@@ -152,6 +152,19 @@ export const WorkspaceGitSchema = z.object({
   workingBranch: z.string().min(1),
   /** Last observed `refs/remotes/origin/<collabBranch>` sha; null = the branch was not found at the last sync. */
   observedCollabHead: z.string().nullable(),
+  /**
+   * #3 G10 — the collab commit the most recent NON-REFUSED import read from (the
+   * PROACTIVE descendant-guard base, settled #662: "the commit the DB was
+   * imported from — NOT collab-HEAD, that defeats feature branches"). It records
+   * PROVENANCE/ancestry, NOT content-equality: an import can leave `deferred`
+   * resources, so this never claims "the DB equals this commit" (that is DRIFT's
+   * job, `/drift`). `null` = no import has ever been applied for this owner (a
+   * pre-G10 row, or a workspace that only ever committed OUT) — the divergence
+   * report is `unknown` until the first import stamps it. REQUIRED-nullable, no
+   * `.default()`: an absent import fact is stated `null`, never manufactured
+   * (#473 — the same posture as `observedCollabHead`).
+   */
+  importedFromCommit: z.string().nullable(),
   /** Epoch-ms of the last sync attempt (connect counts); null = never synced. */
   lastFetchAt: z.number().int().nullable(),
   /** REDACTED failure message from the last sync attempt; null = it succeeded. */
@@ -418,6 +431,74 @@ export const WorkspaceGitDriftSchema = z.object({
   diagnostics: z.array(WorkspaceParseDiagnosticSchema),
 });
 export type WorkspaceGitDrift = z.infer<typeof WorkspaceGitDriftSchema>;
+
+/**
+ * #3 G10 — the PROACTIVE descendant-guard verdict: has the collaboration branch
+ * moved relative to the commit the DB was last imported from (settled #662)? The
+ * ADVISORY, commit-source-side complement to slice-2's reactive push-conflict
+ * classification. Never blocks — the real serialization point is push
+ * non-fast-forward / PR-merge.
+ * - `current`: the import base IS the current collab head — the DB was imported
+ *   from exactly where collab sits now.
+ * - `behind`: collab has fast-forwarded PAST the import base (the base is an
+ *   ancestor of the current head) — a pull/re-import would fast-forward. The
+ *   normal "collab advanced since you imported" advisory.
+ * - `diverged`: the current collab head is NOT a descendant of the import base —
+ *   collab history was rewritten (force-push) relative to the base, so a merge
+ *   would not fast-forward.
+ * - `unknown`: no base to guard against — either no import has ever been applied
+ *   (`importBase` null) OR the collaboration branch is absent at the last sync
+ *   (`collabHead` null: empty repo, or the branch was DELETED since import —
+ *   the deleted case is subsumed here rather than distinguished, because a null
+ *   head is also the empty-repo state and the two are indistinguishable; a
+ *   missing collab branch is already surfaced by the main status'
+ *   `collab_branch_missing`). Raw `importBase`/`collabHead` are echoed so a
+ *   caller can see which null it was.
+ */
+export const WorkspaceGitDivergenceStateSchema = z.enum([
+  'current',
+  'behind',
+  'diverged',
+  'unknown',
+]);
+export type WorkspaceGitDivergenceState = z.infer<typeof WorkspaceGitDivergenceStateSchema>;
+
+/**
+ * #3 G10 — the `POST /api/workspace/git/divergence` result. `importBase` is the
+ * persisted `importedFromCommit` (the collab commit the last non-refused import
+ * read from); `collabHead` is the freshly-fetched `observedCollabHead`. Both are
+ * echoed (required-nullable) so the raw shas are visible alongside the verdict.
+ */
+export const WorkspaceGitDivergenceSchema = z.object({
+  state: WorkspaceGitDivergenceStateSchema,
+  importBase: z.string().nullable(),
+  collabHead: z.string().nullable(),
+});
+export type WorkspaceGitDivergence = z.infer<typeof WorkspaceGitDivergenceSchema>;
+
+/**
+ * The GIT-INDEPENDENT part of the divergence classification (a pure fn so it is
+ * unit-tested without a real repo, mirroring the reconcile/drift pure
+ * classifiers). Decides the cases that need no history walk; a `needs-history`
+ * result tells the route to run the one `merge-base --is-ancestor` git read that
+ * splits `behind` (base is an ancestor of head) from `diverged` (it is not).
+ * Keeping the null/equality logic here means the route's only impurity is that
+ * single git call.
+ */
+export type DivergencePrecheck = 'unknown' | 'current' | 'needs-history';
+export function precheckDivergence(
+  importBase: string | null,
+  collabHead: string | null,
+): DivergencePrecheck {
+  // No base to guard against, or no head to compare it to (empty repo /
+  // deleted-since-import collab branch) — cannot classify divergence.
+  if (importBase === null || collabHead === null) return 'unknown';
+  // Imported from exactly where collab sits now — no walk needed.
+  if (importBase === collabHead) return 'current';
+  // The heads differ: only a history walk (`merge-base --is-ancestor`) can tell
+  // a fast-forward (`behind`) from a rewrite (`diverged`).
+  return 'needs-history';
+}
 
 /**
  * #3 G5c — what the transactional apply DID to one branch resource:

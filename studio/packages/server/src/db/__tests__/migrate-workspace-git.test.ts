@@ -21,6 +21,7 @@ describe('0025 migration: workspace_git', () => {
       'collab_branch',
       'created_at',
       'id',
+      'imported_from_commit',
       'last_fetch_at',
       'last_fetch_error',
       'observed_collab_head',
@@ -40,6 +41,10 @@ describe('0025 migration: workspace_git', () => {
     expect(byName.get('last_fetch_at')!.notnull).toBe(0);
     expect(byName.get('last_fetch_error')!.notnull).toBe(0);
     expect(byName.get('working_branch')!.notnull).toBe(0);
+    // `imported_from_commit` (#3 G10, added by 0032) is nullable and DELIBERATELY
+    // not backfilled — null = "no import base recorded" (an absent fact stated
+    // honestly, #473); NOT NULL is enforced at the read boundary.
+    expect(byName.get('imported_from_commit')!.notnull).toBe(0);
   });
 
   it('enforces ONE row per owner at the DB (unique index, not just the route pre-check)', () => {

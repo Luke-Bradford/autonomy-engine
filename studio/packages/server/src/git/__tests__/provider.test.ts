@@ -286,6 +286,62 @@ describe('CliGitProvider — G10 non-fast-forward push conflict', () => {
   });
 });
 
+describe('CliGitProvider — G10 isAncestor (descendant guard history walk)', () => {
+  /** A checkout of a seeded remote plus the pieces the ancestry tests share. */
+  async function clonedCheckout() {
+    const { dir, remote, work, headSha } = seededRemote();
+    const checkout = join(dir, 'checkout');
+    const provider = new CliGitProvider();
+    await provider.clone(remote, checkout);
+    return { provider, dir, remote, work, checkout, firstSha: headSha };
+  }
+
+  it('true: the earlier commit is an ancestor of a later one (a fast-forward)', async () => {
+    const { provider, work, checkout, firstSha } = await clonedCheckout();
+    const secondSha = pushNewCommit(work, 'second.txt', 'main');
+    await provider.fetch(checkout);
+    expect(await provider.isAncestor(checkout, firstSha, secondSha)).toBe(true);
+  });
+
+  it('true: a commit is its own ancestor (reflexive — the `current` boundary)', async () => {
+    const { provider, checkout, firstSha } = await clonedCheckout();
+    expect(await provider.isAncestor(checkout, firstSha, firstSha)).toBe(true);
+  });
+
+  it('false: the later commit is NOT an ancestor of the earlier one (order matters)', async () => {
+    const { provider, work, checkout, firstSha } = await clonedCheckout();
+    const secondSha = pushNewCommit(work, 'second.txt', 'main');
+    await provider.fetch(checkout);
+    expect(await provider.isAncestor(checkout, secondSha, firstSha)).toBe(false);
+  });
+
+  it('false: unrelated histories (a force-push rewrite → `diverged`)', async () => {
+    const { provider, remote, work, checkout, firstSha } = await clonedCheckout();
+    // Rewrite `main` on the remote to an unrelated root history, then fetch it —
+    // the new head shares no ancestry with our import base.
+    const orphan = join(work, '..', 'orphan');
+    execFileSync('git', ['init', '-b', 'main', orphan], { encoding: 'utf8' });
+    writeFileSync(join(orphan, 'other.txt'), 'other\n');
+    fixtureGit(orphan, ['add', '.']);
+    fixtureGit(orphan, ['commit', '-m', 'orphan root']);
+    fixtureGit(orphan, ['remote', 'add', 'origin', remote]);
+    fixtureGit(orphan, ['push', '--force', 'origin', 'main']);
+    await provider.fetch(checkout);
+    const rewrittenSha = fixtureGit(orphan, ['rev-parse', 'HEAD']).trim();
+    expect(await provider.isAncestor(checkout, firstSha, rewrittenSha)).toBe(false);
+  });
+
+  it('throws a GitOperationError on a missing commit (never a manufactured false)', async () => {
+    const { provider, checkout, firstSha } = await clonedCheckout();
+    const err = await provider
+      .isAncestor(checkout, 'f'.repeat(40), firstSha)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitOperationError);
+    // Client-safe: never quotes the server-internal checkout path.
+    expect((err as Error).message).not.toContain(checkout);
+  });
+});
+
 describe('CliGitProvider — G4 read primitives', () => {
   /** A checkout with managed files committed on `main`; returns the head sha. */
   function withCommittedFiles() {

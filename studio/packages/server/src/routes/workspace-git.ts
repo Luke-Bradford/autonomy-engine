@@ -13,11 +13,14 @@ import {
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
   WorkspaceGitApplyResultSchema,
+  WorkspaceGitDivergenceSchema,
   WorkspaceGitDriftSchema,
   WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
+  precheckDivergence,
   WorkspaceGitStatusSchema,
   type WorkspaceGit,
+  type WorkspaceGitDivergenceState,
 } from '@autonomy-studio/shared';
 import {
   appendWorkspaceEvent,
@@ -25,6 +28,7 @@ import {
   deleteWorkspaceGit,
   getWorkspaceGit,
   listVersionResourceIds,
+  updateWorkspaceGitImportedCommit,
   updateWorkspaceGitSync,
   updateWorkspaceGitWorkingBranch,
   WorkspaceGitAlreadyConnectedError,
@@ -401,6 +405,65 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   });
 
   /**
+   * #3 G10 — the PROACTIVE descendant guard (settled #662): has the
+   * COLLABORATION branch moved relative to the commit the DB was last imported
+   * from? ADVISORY, the commit-source-side complement to slice-2's REACTIVE
+   * push-conflict classification — it never blocks (the real serialization point
+   * is push non-fast-forward / PR-merge), it answers "is my imported base stale".
+   *
+   * BASE = the persisted `importedFromCommit` (the collab commit the last
+   * non-refused import read from), DELIBERATELY not collab-HEAD: guarding against
+   * the current head would flag every feature branch as diverged the moment
+   * collab advanced (#662 — "NOT collab-HEAD, that defeats feature branches").
+   *
+   * The git-independent cases (no base, no head, equal heads) are decided by the
+   * pure `precheckDivergence`; only a genuine head DIFFERENCE runs the one
+   * `merge-base --is-ancestor` OBJECT-STORE read that splits `behind` (the base
+   * is an ancestor of the head — a fast-forward) from `diverged` (a rewrite). A
+   * `null` collab head folds into `unknown` — it is the empty-repo state AND the
+   * deleted-since-import state, indistinguishable from a null and already
+   * surfaced by the main status' `collab_branch_missing`. A missing/pruned base
+   * makes `isAncestor` THROW → the existing `git_error` 502 (fail-safe — never a
+   * manufactured `current`/`behind`, the #473 / merge-gate posture). Fetch-first
+   * so the head is current; the read never touches HEAD/the index the Commit path
+   * owns, so it is safe in the same per-owner `KeyedQueue` slot.
+   */
+  fastify.post('/api/workspace/git/divergence', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const divergence = await queue.run(ownerId, async () => {
+      const row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+
+      // Fetch first (records the same tracking the fetch route does) so the
+      // collab head is current; a fetch failure records + rethrows before any
+      // divergence work.
+      const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+
+      const importBase = updated.importedFromCommit;
+      const collabHead = updated.observedCollabHead;
+      const precheck = precheckDivergence(importBase, collabHead);
+
+      let state: WorkspaceGitDivergenceState;
+      if (precheck === 'needs-history') {
+        // Both shas are non-null here (precheck returned needs-history), so the
+        // non-null assertions are sound; the walk splits fast-forward from rewrite.
+        state = (await provider.isAncestor(checkout, importBase!, collabHead!))
+          ? 'behind'
+          : 'diverged';
+      } else {
+        // 'unknown' | 'current' map straight through.
+        state = precheck;
+      }
+
+      return WorkspaceGitDivergenceSchema.parse({ state, importBase, collabHead });
+    });
+
+    return { divergence };
+  });
+
+  /**
    * #3 G9a — feature-branch SELECTION: set which working branch the workspace
    * commits to and opens PRs from. Runs inside the per-owner queue so it can't
    * interleave with a concurrent commit that reads `working_branch` mid-flight.
@@ -610,6 +673,14 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
           by: request.principal.id,
         });
         if (event) appendWorkspaceEvent(db, ownerId, event);
+        // #3 G10 — stamp the descendant-guard base atomically with the apply. On
+        // every NON-refused import (effectful OR no-op), because both mean the
+        // DB was reconciled FROM collab@head, so `head` is a valid ancestry base
+        // — advancing it suppresses a false `behind`. This is broader than the
+        // effectful-only `import.applied` audit event (which stays quiet on a
+        // no-op by design); a refused import applied nothing, so it must not move
+        // the base. `head` is non-null here (the empty-repo path early-returned).
+        if (!applyResult.refused) updateWorkspaceGitImportedCommit(db, ownerId, head);
         return applyResult;
       });
     });
