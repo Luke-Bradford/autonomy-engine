@@ -2937,7 +2937,9 @@ export function createEngine(doc: EngineDoc): Engine {
         );
         continue;
       }
-      containers[containerId] = copied;
+      // Fresh object, not the aliased event payload — matches the node branch's
+      // immutable style (the fold never stores a reference into event data).
+      containers[containerId] = { ...copied };
       // Mirror the container's outputs into `state.outputs` — the SOLE source
       // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as
       // `exitContainer` does on a live completion. Without this a downstream
