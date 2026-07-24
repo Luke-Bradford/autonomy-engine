@@ -1,0 +1,74 @@
+/*
+ * --xy-* -> Fluent-token THEME BRIDGE (U0, the headline deliverable).
+ *
+ * Theming the Fluent app does NOT theme React Flow's own chrome. RF drives its
+ * Controls, MiniMap, edge-labels, handles and canvas background off its own
+ * `--xy-*` custom properties, which default LIGHT (`#fff`/`#fefefe`) unless RF's
+ * `colorMode="dark"` is set — so in the app's dark theme those surfaces render
+ * WHITE. This stylesheet remaps every colour-bearing `--xy-*` var to a Fluent
+ * DESIGN TOKEN (`var(--colorXxx)`), so the canvas chrome follows the active
+ * Fluent theme automatically under BOTH light and dark. No per-theme block and
+ * no RF `colorMode` are needed: RF reads each var as
+ * `var(--xy-x, var(--xy-x-default))`, so setting the non-`-default` var here
+ * short-circuits RF's light fallback regardless of stylesheet load order, and
+ * FluentProvider re-emits the `--colorXxx` values per theme.
+ *
+ * SCOPE IS LOAD-BEARING: keyed on `.app-fluent-root`, the class passed to
+ * `<FluentProvider>` (see FLUENT_ROOT_CLASS). Fluent emits the `--colorXxx`
+ * tokens as a rule on the provider element itself (NOT on `:root`/`html`); this
+ * class lands on that SAME element, so `var(--colorNeutralBackground1)` resolves
+ * here. Keyed on `html`/`:root` the tokens would be undefined and every override
+ * would silently fall back to RF's white light default — the exact bug this
+ * bridge exists to kill.
+ */
+.app-fluent-root {
+  /*
+   * Layout-neutral: the interposed provider element must not introduce a box or
+   * paint its own background over the MVP shell (non-breaking requirement). It
+   * still carries the token vars, and CSS custom properties inherit through a
+   * `display: contents` element.
+   */
+  display: contents;
+
+  /* Canvas surface + background pattern. RF reads ONE override slot for the
+     pattern colour (`--xy-background-pattern-color`), shared by the dots/lines/
+     cross variants — the per-variant `-*-color` forms exist only as RF's own
+     `-default` fallbacks and are never read as overrides. */
+  --xy-background-color: var(--colorNeutralBackground1);
+  --xy-background-pattern-color: var(--colorNeutralStroke2);
+
+  /* Controls (white in dark before the bridge) */
+  --xy-controls-button-background-color: var(--colorNeutralBackground3);
+  --xy-controls-button-background-color-hover: var(--colorNeutralBackground3Hover);
+  --xy-controls-button-color: var(--colorNeutralForeground1);
+  --xy-controls-button-color-hover: var(--colorNeutralForeground1);
+  --xy-controls-button-border-color: var(--colorNeutralStroke1);
+  --xy-controls-box-shadow: var(--shadow4);
+
+  /* MiniMap (white in dark before the bridge) */
+  --xy-minimap-background-color: var(--colorNeutralBackground3);
+  --xy-minimap-mask-background-color: var(--colorBackgroundOverlay);
+  --xy-minimap-mask-stroke-color: var(--colorNeutralStroke1);
+  --xy-minimap-node-background-color: var(--colorNeutralForeground3);
+  --xy-minimap-node-stroke-color: var(--colorNeutralStroke1);
+
+  /* Edge labels (white in dark before the bridge) */
+  --xy-edge-label-background-color: var(--colorNeutralBackground3);
+  --xy-edge-label-color: var(--colorNeutralForeground1);
+
+  /* Edges + live connection line */
+  --xy-edge-stroke: var(--colorNeutralStroke1);
+  --xy-edge-stroke-selected: var(--colorBrandStroke1);
+  --xy-connectionline-stroke: var(--colorBrandStroke1);
+
+  /* Handles */
+  --xy-handle-background-color: var(--colorNeutralBackground1);
+  --xy-handle-border-color: var(--colorNeutralStroke1);
+
+  /* Selection box */
+  --xy-selection-background-color: var(--colorBrandBackground2);
+  --xy-selection-border: var(--colorBrandStroke1);
+
+  /* Attribution (hidden via proOptions today; mapped for completeness) */
+  --xy-attribution-background-color: var(--colorNeutralBackground1);
+}
