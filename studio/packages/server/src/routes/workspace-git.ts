@@ -15,6 +15,7 @@ import {
   type WorkspaceGit,
 } from '@autonomy-studio/shared';
 import {
+  appendWorkspaceEvent,
   createWorkspaceGit,
   deleteWorkspaceGit,
   getWorkspaceGit,
@@ -23,6 +24,7 @@ import {
 } from '../repo/index.js';
 import {
   applyWorkspace,
+  buildImportAppliedEvent,
   classifyWorkspace,
   parseWorkspaceFiles,
   serializeWorkspace,
@@ -173,13 +175,27 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         throw err;
       }
       const head = await provider.revParseRemoteBranch(checkout, body.collabBranch);
-      return createWorkspaceGit(db, {
-        ownerId,
-        repoUrl: body.repoUrl,
-        collabBranch: body.collabBranch,
-        observedCollabHead: head,
-        lastFetchAt: Date.now(),
-        lastFetchError: null,
+      // Connect + the `repo.connected` audit fact land in ONE transaction, so
+      // the workspace history cannot record a connect that did not persist (or
+      // miss one that did). `repoUrl` is credential-free by construction — the
+      // connect body schema refuses an embedded `user:password@` — so it is
+      // safe to store verbatim in the event.
+      return db.transaction(() => {
+        const created = createWorkspaceGit(db, {
+          ownerId,
+          repoUrl: body.repoUrl,
+          collabBranch: body.collabBranch,
+          observedCollabHead: head,
+          lastFetchAt: Date.now(),
+          lastFetchError: null,
+        });
+        appendWorkspaceEvent(db, ownerId, {
+          type: 'repo.connected',
+          repoUrl: body.repoUrl,
+          collabBranch: body.collabBranch,
+          by: request.principal.id,
+        });
+        return created;
       });
     });
 
@@ -370,7 +386,24 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // REFUSES the whole import fail-closed (an incomplete snapshot must not
       // archive a pipeline whose file merely failed to read) — never a 502.
       const incoming = parseWorkspaceFiles(files, unreadable);
-      return WorkspaceGitApplyResultSchema.parse(applyWorkspace(db, ownerId, incoming, head));
+      // Apply + the `import.applied` audit fact land in ONE transaction:
+      // `applyWorkspace`'s own tx nests as a SAVEPOINT inside this outer one, so
+      // the audit event (appended after it) commits or rolls back ATOMICALLY
+      // with the writes — never a committed import with a lost audit fact (the
+      // fail-safe direction). The event is emitted only for an EFFECTFUL import
+      // (see `buildImportAppliedEvent`); a refused/empty/no-op import records
+      // nothing.
+      return db.transaction(() => {
+        const applyResult = WorkspaceGitApplyResultSchema.parse(
+          applyWorkspace(db, ownerId, incoming, head),
+        );
+        const event = buildImportAppliedEvent(applyResult, {
+          branch: row.collabBranch,
+          by: request.principal.id,
+        });
+        if (event) appendWorkspaceEvent(db, ownerId, event);
+        return applyResult;
+      });
     });
 
     // Reconcile the scheduler AFTER the tx commits: an archive disabled its

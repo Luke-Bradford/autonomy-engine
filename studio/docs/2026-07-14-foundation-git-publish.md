@@ -143,7 +143,7 @@ reconcile are core. Corrections:
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); **G5c-1 (the transactional APPLY write-path for connections + pipelines + archive) SHIPPED 2026-07-23** (built-block below); TRIGGER apply is **G5c-2** (#670, next) |
-| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active |
+| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b** = git provenance on versions (reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import); **G6c** = the `active` pointer projection + CAS Publish (`pipeline.published`) + resolve-once bind-to-active |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
@@ -472,6 +472,79 @@ pipeline/connection apply, and the murkiest deferred semantics (mode-consistency
   the documented perpetual-`update` idempotency exception for a force-disabled
   unbound trigger (until G7's readiness reconcile). Connection/trigger
   orphan-delete (absent from branch) semantics still owed.
+
+### G6a built-block (2026-07-23) — the workspace-audit event log
+
+First G6 slice. G6 was sliced 3-way (large/risky for one unattended fire, like
+G5): **G6a = the audit log** (this slice); **G6b** = git provenance on versions;
+**G6c** = the `active` pointer projection + CAS Publish + resolve-once
+bind-to-active. G6a is the EVENT-SOURCING substrate the Challenge-hardened v2
+"Publish must be EVENT-SOURCED" bullet requires — the `active` pointer (G6c)
+becomes a projection of THIS log, so it lands first.
+
+- **`workspace_events` (0027) — owner-scoped, append-only.** Mirrors
+  `run_events`: `id`, monotonic per-owner `seq` (from 0), envelope `type`, JSON
+  `payload`, `created_at`. `UNIQUE(owner_id, seq)` is the real backstop for the
+  repo layer's read-max-then-insert numbering (better-sqlite3 single-writer);
+  two `RAISE(ABORT)` triggers (`_no_update`/`_no_direct_delete`) enforce
+  append-only in SQL, and the repo module exports no update/delete (defense in
+  depth, the `run_events` invariant). `owner_id` is `NOT NULL` (the partition
+  key, always stamped) — unlike the config tables' nullable-in-SQL `owner_id`,
+  because this is a fresh CREATE TABLE, not an ADD COLUMN.
+- **Closed union `WorkspaceEventSchema`** (`shared/schemas/workspace-event.ts`),
+  discriminated on `type`, three variants this slice: `repo.connected`
+  (`{repoUrl, collabBranch, by}`), `pipeline.archived` (reuses
+  `WorkspaceGitArchivedResultSchema`'s `{resourceId, name, disabledTriggerIds}`
+  + `by`), `import.applied` (`{head, branch, applied[], archived[], by}`, reusing
+  the apply-result sub-schemas). `pipeline.published` is added in G6c. **No `at`
+  field on any payload** — the envelope `created_at` IS the logical `at`, one
+  writer, no drift. `by` = the principal id, REQUIRED (every writer is an
+  authenticated route; #473 — never manufactured). **DELIBERATE divergence from
+  `run_events`:** the row `payload` is typed as the CLOSED union (not
+  `z.unknown()`) because this log CROSSES the API boundary typed
+  (`GET /api/workspace/audit`), so it validates on read as well as write and
+  earns a `schema-table-parity` CASES entry (like `run_diagnostics`/`workspace_git`,
+  not the `run_events` infra-exemption).
+- **`appendWorkspaceEvent(db, ownerId, payload)`** (`repo/workspace-events.ts`) —
+  the SINGLE validating writer: parses the payload through the union and stamps
+  the indexed `type` column FROM the parsed payload (the `appendEngineEvent`
+  idiom — `type` can never disagree with its payload). Called inside a caller's
+  `db.transaction`, its own tx composes as a SAVEPOINT, so the audit fact commits
+  or rolls back ATOMICALLY with the mutation it records (the fail-safe direction:
+  never a committed change with a lost audit fact).
+- **Three emit points, each ATOMIC with its mutation (one outer `db.transaction`,
+  the emit nesting as a SAVEPOINT):** the connect route (`repo.connected`, with
+  `createWorkspaceGit`); the MANUAL archive route `POST /api/pipelines/:id/archive`
+  (`pipeline.archived`, with `archivePipeline`), gated on `!existing.archived` so
+  an idempotent re-archive does NOT double-emit; the import route
+  (`import.applied`, with `applyWorkspace`). An import-driven archive is captured
+  in `import.applied.archived[]`, NOT also as `pipeline.archived` — the manual
+  route is the sole `pipeline.archived` writer, so the two never double-count.
+- **`import.applied` records EFFECT, not attempts** — `buildImportAppliedEvent`
+  (a PURE helper, `portability/import-audit.ts`, unit-tested) returns `null` for a
+  refused import, an empty-repo no-op (`head === null`), and an idempotent
+  all-`unchanged` re-import; non-null only when something was
+  created/updated/renamed/version-minted or a pipeline archived (`versionMinted`
+  is part of the test because a `restored` can mint while its `action` reads
+  `restored` — #672 orthogonality). Emitting on a no-op would drown the audit's
+  "what changed" value.
+- **`GET /api/workspace/audit`** (`routes/workspace-audit.ts`, mounted OUTSIDE
+  `/api/workspace/git`) — keyset-paginated, owner-scoped, **NOT git-gated** (the
+  log records `pipeline.archived` on a DB-only workspace, so it never 404s on a
+  missing `workspace_git` row — an owner with no history gets an empty page).
+  Ordered + keyset-paginated by `seq` (the authoritative APPEND order), NOT by
+  wall-clock `created_at` (two same-millisecond events would read back in random
+  `id` order, wrong for an audit history). Reuses the shared cursor codec
+  (`afterCursor`/`pageOrder`/`encodeCursor`) with `seq` in the `CursorKey`'s
+  numeric slot; only `toPage` isn't reused (it mints from a row's `.createdAt`),
+  so the one-extra-row split is inlined.
+- **Deferrals / accepted scope:** version git-provenance columns + the blob-sha
+  reader change → G6b; the `active` pointer + CAS Publish + `pipeline.published` +
+  resolve-once bind-to-active → G6c. `repo.disconnected` is deliberately NOT
+  emitted (the spec's named set is connect/archive/import/publish; a disconnect
+  deletes the `workspace_git` row but the audit rows survive, so the connect
+  event is still readable). No historical backfill of pre-G6a connect/archive
+  history — the same accepted loss the G2 built-block records.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

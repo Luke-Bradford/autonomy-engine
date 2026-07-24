@@ -8,6 +8,7 @@ import {
 } from '@autonomy-studio/shared';
 import {
   aggregatePipelineCost,
+  appendWorkspaceEvent,
   archivePipeline,
   createPipeline,
   createPipelineVersion,
@@ -107,7 +108,33 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       'pipeline',
       request.params.id,
     );
-    const result = archivePipeline(db, existing.id);
+    // Whether the pipeline was ALREADY archived before this call — the
+    // idempotency signal for the audit event below. `archivePipeline` is a no-op
+    // in effect when re-archiving, so it cannot tell us on its own.
+    const wasArchived = existing.archived;
+    // Archive + the audit event land in ONE transaction (archivePipeline's own
+    // tx nests as a SAVEPOINT): the `pipeline.archived` fact commits or rolls
+    // back ATOMICALLY with the archive — never a committed archive with a lost
+    // audit fact (the fail-safe direction, the run_events precedent).
+    const result = db.transaction(() => {
+      const r = archivePipeline(db, existing.id);
+      if (r === null) return null;
+      // #3 G6a — emit only on a REAL state change. Re-archiving an
+      // already-archived pipeline is an idempotent no-op (its dependent triggers
+      // were disabled the first time) and must not double-count in the audit log;
+      // an import-driven archive is captured in `import.applied.archived[]`, so
+      // this manual seam is the sole `pipeline.archived` writer.
+      if (!wasArchived) {
+        appendWorkspaceEvent(db, request.principal.ownerId, {
+          type: 'pipeline.archived',
+          resourceId: r.pipeline.resourceId,
+          name: r.pipeline.name,
+          disabledTriggerIds: r.disabledTriggerIds,
+          by: request.principal.id,
+        });
+      }
+      return r;
+    });
     // `existing` was owner-checked above, so a null here means it vanished
     // between the read and the archive (a concurrent delete) — surface as 404,
     // never a manufactured success.

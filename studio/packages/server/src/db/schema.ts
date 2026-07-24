@@ -717,3 +717,28 @@ export const workspaceGit = sqliteTable(
   },
   (table) => [uniqueIndex('workspace_git_owner_id_idx').on(table.ownerId)],
 );
+
+/**
+ * #3 G6a — the WORKSPACE-AUDIT log. Owner-scoped, append-only: the repository
+ * layer assigns a monotonic `seq` per owner and never updates/deletes a row
+ * (SQL triggers back that up). Envelope shape mirrors `run_events`; `payload`
+ * is the closed `WorkspaceEventSchema` union (JSON), `type` duplicates
+ * `payload.type` as an indexed column for kind-filtered projections (G6c). The
+ * `created_at` timestamp is the keyset-pagination key for `GET
+ * /api/workspace/audit`.
+ */
+export const workspaceEvents = sqliteTable(
+  'workspace_events',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id').notNull(),
+    seq: integer('seq').notNull(),
+    type: text('type').notNull(),
+    payload: text('payload', { mode: 'json' }).notNull().$type<unknown>(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('workspace_events_owner_id_seq_idx').on(table.ownerId, table.seq),
+    index('workspace_events_owner_id_idx').on(table.ownerId),
+  ],
+);

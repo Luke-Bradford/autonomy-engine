@@ -8,6 +8,7 @@ import {
   RunSchema,
   SecretSchema,
   TriggerSchema,
+  WorkspaceEventRowSchema,
   WorkspaceGitSchema,
 } from '@autonomy-studio/shared';
 import type { z } from 'zod';
@@ -19,6 +20,7 @@ import {
   runs,
   secrets,
   triggers,
+  workspaceEvents,
   workspaceGit,
 } from '../schema.js';
 
@@ -81,6 +83,13 @@ const CASES: { name: string; table: Parameters<typeof getTableColumns>[0]; schem
     // (`WorkspaceGitStatusSchema.state` is DERIVED, never persisted, so the
     // guard runs against the row schema, not the status.)
     { name: 'workspace_git', table: workspaceGit, schema: WorkspaceGitSchema },
+    // #3 G6a — the workspace-audit log. Like `run_events` it is an envelope
+    // (id/seq/type/payload/ts), but UNLIKE it, this log CROSSES the API boundary
+    // typed (`GET /api/workspace/audit` returns `WorkspaceEventRowSchema`), so —
+    // as with `run_diagnostics`/`workspace_git` — it earns the #473 guard rather
+    // than the infra exemption. `payload` is one JSON column (a union), matching
+    // the single `payload` field; every other field maps 1:1.
+    { name: 'workspace_events', table: workspaceEvents, schema: WorkspaceEventRowSchema },
   ];
 
 describe('drizzle table ⇔ Zod schema parity (#473)', () => {
