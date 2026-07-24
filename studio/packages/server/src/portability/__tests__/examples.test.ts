@@ -43,6 +43,10 @@ const OWNER = 'owner-examples';
 
 describe('shipped example pipelines (studio/examples)', () => {
   const files = exampleFiles();
+  // Parse each example exactly once — the envelope is immutable across every
+  // assertion below, so the aggregate guards and per-file tests all read from
+  // these rather than re-reading + re-parsing the same JSON per assertion.
+  const examples = files.map((file) => ({ file, ...readEnvelope(file) }));
 
   it('ships at least the three documented examples (guards a vacuous green)', () => {
     expect(files.length).toBeGreaterThanOrEqual(3);
@@ -54,29 +58,25 @@ describe('shipped example pipelines (studio/examples)', () => {
   // #473 (containers) and connection-rebind regression nets would silently stop
   // exercising anything — these assert the fleet keeps that coverage.
   it('at least one example declares a container (keeps the #473 round-trip exercised)', () => {
-    const anyContainer = files.some((file) =>
-      readEnvelope(file).env.data.versions.some((v) => (v.containers ?? []).length > 0),
+    const anyContainer = examples.some(({ env }) =>
+      env.data.versions.some((v) => (v.containers ?? []).length > 0),
     );
     expect(anyContainer).toBe(true);
   });
 
   it('at least one example strips a connection ref (keeps the rebind path exercised)', () => {
-    const anyStripped = files.some(
-      (file) => readEnvelope(file).env.data.strippedConnectionRefs.length > 0,
-    );
+    const anyStripped = examples.some(({ env }) => env.data.strippedConnectionRefs.length > 0);
     expect(anyStripped).toBe(true);
   });
 
-  for (const file of files) {
+  for (const { file, raw, env } of examples) {
     describe(file, () => {
       it('is a valid, current pipeline export envelope', () => {
-        const { env } = readEnvelope(file);
         expect(env.kind).toBe('pipeline');
         expect(env.data.versions.length).toBeGreaterThanOrEqual(1);
       });
 
       it('imports cleanly (strict write schema + validateDoc gate + persistence)', () => {
-        const { raw, env } = readEnvelope(file);
         const { db } = freshDb();
         const result = importEnvelope(db, OWNER, raw);
 
@@ -96,7 +96,6 @@ describe('shipped example pipelines (studio/examples)', () => {
       });
 
       it('preserves declared containers through import and an export round-trip (#473)', () => {
-        const { raw, env } = readEnvelope(file);
         const { db } = freshDb();
 
         const first = importEnvelope(db, OWNER, raw);
