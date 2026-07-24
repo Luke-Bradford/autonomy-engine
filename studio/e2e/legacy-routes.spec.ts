@@ -78,11 +78,17 @@ test.describe('U3r legacy route compatibility', () => {
      * Everything else must still be quiet, though — an uncaught exception here
      * would mean the redirect landed somewhere that then broke, which is
      * exactly the failure a green routing assertion could otherwise hide.
+     *
+     * The expected error is matched on its SHAPE, not on Chromium's exact
+     * sentence: that wording belongs to the browser, not to this app, so
+     * pinning it verbatim would let a Playwright bump fail the suite for no
+     * real reason. Requiring both "failed to load resource" and the 404 keeps
+     * it narrow — an app-level `console.error` still fails the assertion, and
+     * an uncaught exception (recorded as `pageerror:`) cannot match at all.
      */
     await page.waitForTimeout(150); // the same flush `expectQuiet` performs
-    const EXPECTED_404 =
-      'console.error: Failed to load resource: the server responded with a status of 404 (Not Found)';
-    expect(problems.filter((p) => p !== EXPECTED_404)).toEqual([]);
+    const EXPECTED_RUN_404 = /^console\.error: .*failed to load resource.*\b404\b/i;
+    expect(problems.filter((p) => !EXPECTED_RUN_404.test(p))).toEqual([]);
   });
 
   /**
