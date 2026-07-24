@@ -47,6 +47,9 @@ describe('0030 migration: connection secret-readiness on an upgrading (non-fresh
     insertConn.run('conn_ready', 'has-secret', 'anthropic_api', 'ref_1');
     insertConn.run('conn_needs', 'no-secret', 'openai_api', null);
     insertConn.run('conn_notreq', 'credential-less', 'http', null);
+    // A credential-less kind with a STRAY secret_ref — kind axis first ⟹ still
+    // not_required (mirrors deriveSecretStatus).
+    insertConn.run('conn_stray', 'credential-less-with-secret', 'http', 'ref_1');
     return sqlite;
   }
 
@@ -62,9 +65,10 @@ describe('0030 migration: connection secret-readiness on an upgrading (non-fresh
           secret_status: string;
         }
       ).secret_status;
-    expect(statusOf('conn_ready')).toBe('ready'); // secret_ref present
+    expect(statusOf('conn_ready')).toBe('ready'); // secret-requiring kind, secret present
     expect(statusOf('conn_needs')).toBe('needs_secret'); // secret-requiring kind, none
     expect(statusOf('conn_notreq')).toBe('not_required'); // credential-less kind
+    expect(statusOf('conn_stray')).toBe('not_required'); // credential-less kind, stray secret
   });
 
   it('backfills enabled to true (1) — a truthful default, never NULL', () => {
@@ -72,7 +76,7 @@ describe('0030 migration: connection secret-readiness on an upgrading (non-fresh
     runMigrations(sqlite);
 
     const rows = sqlite.prepare('SELECT enabled FROM connections').all() as { enabled: number }[];
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     for (const row of rows) expect(row.enabled).toBe(1);
   });
 

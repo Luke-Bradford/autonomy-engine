@@ -181,6 +181,20 @@ describe('connections repo', () => {
       expect(created.secretStatus).toBe('not_required');
     });
 
+    it('derives not_required for a credential-less kind even with a stray secretRef (kind axis first)', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'k-stray', ciphertext: 'blob' });
+      const created = createConnection(db, {
+        ...newConnection,
+        kind: 'http',
+        secretRef: secret.ref,
+        config: {},
+      });
+      // readiness is about the REQUIRED credential; http requires none, so a
+      // stray secret does not make it 'ready'.
+      expect(created.secretStatus).toBe('not_required');
+    });
+
     it('re-derives ready→needs_secret when a secret is removed on update', () => {
       const { db } = freshDb();
       const secret = createSecret(db, { ref: 'k2', ciphertext: 'blob' });

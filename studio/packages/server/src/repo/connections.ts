@@ -18,19 +18,26 @@ import type { Db } from './types.js';
 /**
  * #3 G8a — derive a connection's `secretStatus` (the dispatch readiness gate)
  * from its kind + `secretRef`, the SINGLE source both write paths use so create
- * and update can never disagree on what "ready" means:
- * - a non-null `secretRef` ⟹ `ready`. The `connections.secret_ref` FK onto
- *   `secrets.ref` is `onDelete: 'restrict'`, so a stored non-null ref ALWAYS
- *   resolves to a real row — no `getSecretByRef` probe needed (and `ready` means
- *   PRESENT, not decryptable; the executor's `SECRET_UNDECRYPTABLE` check is the
- *   separate, later guard for a rotated key / corrupt ciphertext).
- * - else the kind axis: a kind that requires a connection credential ⟹
- *   `needs_secret`; a credential-less kind ⟹ `not_required`.
+ * and update can never disagree on what "ready" means. `secretStatus` answers
+ * "is this connection's REQUIRED credential present?", so the KIND axis decides
+ * first:
+ * - a credential-less kind (`connectionKindRequiresSecret` false) ⟹
+ *   `not_required` — no connection secret is needed, so readiness is settled
+ *   regardless of whether a stray `secretRef` happens to be set (that ref, if
+ *   any, is still fetched + decrypted at dispatch; `secretStatus` is about the
+ *   REQUIRED credential, not any credential).
+ * - a secret-requiring kind ⟹ `ready` iff `secretRef` is present, else
+ *   `needs_secret`. The `connections.secret_ref` FK onto `secrets.ref` is
+ *   `onDelete: 'restrict'`, so a stored non-null ref ALWAYS resolves to a real
+ *   row — no `getSecretByRef` probe needed (and `ready` means PRESENT, not
+ *   decryptable; the executor's `SECRET_UNDECRYPTABLE` check is the separate,
+ *   later guard for a rotated key / corrupt ciphertext).
  * Pure — no DB read — so it is trivially testable and can never partially fail.
+ * Migration 0030's backfill CASE mirrors this exact ordering.
  */
 export function deriveSecretStatus(kind: ConnectionKind, secretRef: string | null): SecretStatus {
-  if (secretRef !== null) return 'ready';
-  return connectionKindRequiresSecret(kind) ? 'needs_secret' : 'not_required';
+  if (!connectionKindRequiresSecret(kind)) return 'not_required';
+  return secretRef !== null ? 'ready' : 'needs_secret';
 }
 
 export function createConnection(
