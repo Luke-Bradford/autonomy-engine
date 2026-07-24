@@ -8,8 +8,10 @@ import {
   DEFAULT_WAKEUP_RETENTION_MS,
   DEFAULT_WEBHOOK_RETENTION_MS,
   resolvePort,
+  resolveRetentionCount,
   resolveRetentionMs,
 } from '../index.js';
+import { RETENTION_BATCH, RETENTION_MAX_BATCHES_PER_SWEEP } from '../repo/retention.js';
 import { eq } from 'drizzle-orm';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import { openDb } from '../db/client.js';
@@ -67,6 +69,39 @@ describe('resolveRetentionMs (#464/#421)', () => {
     expect(resolveRetentionMs(undefined, webhook)).toBe(DEFAULT_WEBHOOK_RETENTION_MS);
     expect(DEFAULT_WEBHOOK_RETENTION_MS).toBe(30 * MS_PER_DAY);
     expect(() => resolveRetentionMs('nope', webhook)).toThrow(/Invalid WEBHOOK_RETENTION_DAYS/);
+  });
+});
+
+describe('resolveRetentionCount (#559)', () => {
+  const batch = { envName: 'RETENTION_BATCH_ROWS', defaultValue: RETENTION_BATCH };
+  it('defaults to the given defaultValue when unset, empty, or whitespace', () => {
+    expect(resolveRetentionCount(undefined, batch)).toBe(RETENTION_BATCH);
+    expect(resolveRetentionCount('', batch)).toBe(RETENTION_BATCH);
+    expect(resolveRetentionCount('   ', batch)).toBe(RETENTION_BATCH);
+  });
+  it('parses a positive integer', () => {
+    expect(resolveRetentionCount('250', batch)).toBe(250);
+    expect(resolveRetentionCount('1', batch)).toBe(1);
+  });
+  it('throws (never NaN, never a silent clamp) on 0, a negative, a fraction, or non-numeric', () => {
+    // Unlike resolveRetentionMs, 0 is INVALID for a count: disabling a sweep is
+    // retentionMs's job (0 = off), and a count below 1 is meaningless — a
+    // maxBatches of 0 prunes nothing, and a batch of 0 would only be silently
+    // clamped to 1 by drainByBatches. Reject rather than coerce.
+    expect(() => resolveRetentionCount('0', batch)).toThrow(/Invalid RETENTION_BATCH_ROWS/);
+    expect(() => resolveRetentionCount('-1', batch)).toThrow(/Invalid RETENTION_BATCH_ROWS/);
+    expect(() => resolveRetentionCount('1.5', batch)).toThrow(/Invalid RETENTION_BATCH_ROWS/);
+    expect(() => resolveRetentionCount('abc', batch)).toThrow(/Invalid RETENTION_BATCH_ROWS/);
+  });
+  it('carries the given envName (a max-batches typo blames the max-batches var)', () => {
+    const maxBatches = {
+      envName: 'RETENTION_SWEEP_MAX_BATCHES',
+      defaultValue: RETENTION_MAX_BATCHES_PER_SWEEP,
+    };
+    expect(resolveRetentionCount(undefined, maxBatches)).toBe(RETENTION_MAX_BATCHES_PER_SWEEP);
+    expect(() => resolveRetentionCount('nope', maxBatches)).toThrow(
+      /Invalid RETENTION_SWEEP_MAX_BATCHES/,
+    );
   });
 });
 
@@ -191,6 +226,92 @@ describe('#464 — retention boot sweep', () => {
       check = openDb(path);
       expect(getWakeup(check.db, row.id)).toBeNull(); // pruned by the interval, not boot
       check.sqlite.close();
+      await app.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('#559 — configurable retention batch / sweep-cap bounds', () => {
+  it('rejects a bad retentionBatch (0) before arming any timer', async () => {
+    await expect(
+      buildApp({
+        dbPath: join(tmpDir, 'retention-badbatch.sqlite'),
+        masterKeyFile: join(tmpDir, 'retention-badbatch.key'),
+        wakeupRetentionMs: 1_000,
+        retentionBatch: 0,
+      }),
+    ).rejects.toThrow(/retentionBatch/);
+  });
+
+  it('rejects a bad retentionMaxBatchesPerSweep (negative) before arming any timer', async () => {
+    await expect(
+      buildApp({
+        dbPath: join(tmpDir, 'retention-badmaxbatches.sqlite'),
+        masterKeyFile: join(tmpDir, 'retention-badmaxbatches.key'),
+        wakeupRetentionMs: 1_000,
+        retentionMaxBatchesPerSweep: -1,
+      }),
+    ).rejects.toThrow(/retentionMaxBatchesPerSweep/);
+  });
+
+  it('a configured maxBatches + batch BOUNDS the rows a recurring tick prunes', async () => {
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      const path = join(tmpDir, 'retention-bounded.sqlite');
+
+      // Three rows settled just before boot: within a 1s floor, so the BOOT sweep
+      // (a full drain) keeps all three — isolating the recurring INTERVAL, whose
+      // per-tick throughput is exactly what batch=1 + maxBatches=1 must bound.
+      const seed = openDb(path);
+      const ids: string[] = [];
+      for (const disc of ['a', 'b', 'c']) {
+        const row = armWakeup(seed.db, {
+          kind: 'node_retry',
+          ref: { runId: 'r' },
+          dueAt: 1,
+          discriminator: disc,
+        });
+        settleWakeup(seed.db, row.id, { status: 'fired', firedAt: t0 - 100 });
+        ids.push(row.id);
+      }
+      seed.sqlite.close();
+
+      const app = await buildApp({
+        dbPath: path,
+        masterKeyFile: join(tmpDir, 'retention-bounded.key'),
+        wakeupRetentionMs: 1_000, // 1s floor
+        retentionSweepMs: 500, // sweep twice a second
+        retentionBatch: 1, // one row per DELETE batch
+        retentionMaxBatchesPerSweep: 1, // ≤ 1 batch (= 1 row) pruned per recurring tick
+      });
+      await app.ready();
+
+      const remaining = (): number => {
+        const check = openDb(path);
+        const n = ids.filter((id) => getWakeup(check.db, id) !== null).length;
+        check.sqlite.close();
+        return n;
+      };
+
+      // Boot kept all three (all within the floor at t0).
+      expect(remaining()).toBe(3);
+
+      // Advance to t0+1000: the t0+500 tick still sees them within the floor
+      // (600ms < 1s) → prunes 0; the t0+1000 tick sees them past the floor but,
+      // BOUNDED by maxBatches=1/batch=1, prunes exactly ONE. Two remain — the
+      // bound is OBSERVED, not just eventual clearance (which would be a tautology
+      // since enough ticks clear everything regardless of the cap).
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(remaining()).toBe(2);
+
+      // Two further ticks (t0+1500, t0+2000) prune one each → a backlog drains
+      // ACROSS ticks, never in one unbounded sweep.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(remaining()).toBe(0);
+
       await app.close();
     } finally {
       vi.useRealTimers();

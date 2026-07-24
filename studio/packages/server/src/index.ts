@@ -8,7 +8,7 @@ import { resolveMasterKey } from './secrets/secrets.js';
 import { createSupervisor } from './workers/process-supervisor.js';
 import { drainSettledWakeups, getWakeupByKey } from './repo/scheduled-wakeups.js';
 import { drainWebhookDeliveries } from './repo/webhook-deliveries.js';
-import { RETENTION_MAX_BATCHES_PER_SWEEP } from './repo/retention.js';
+import { RETENTION_BATCH, RETENTION_MAX_BATCHES_PER_SWEEP } from './repo/retention.js';
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunDrives } from './run/drives.js';
@@ -102,6 +102,32 @@ export function resolveRetentionMs(
   return n * MS_PER_DAY;
 }
 
+/**
+ * #559 — resolve a retention COUNT env value (rows-per-batch, or max-batches-per
+ * -recurring-sweep) → a positive integer. Empty/undefined/whitespace = the given
+ * `defaultValue` (the exported `RETENTION_BATCH`/`RETENTION_MAX_BATCHES_PER_SWEEP`
+ * constants, which stay the single source of truth for the defaults).
+ *
+ * Validated exactly like `resolveRetentionMs`, with ONE deliberate difference: a
+ * count must be `>= 1`, so `0` is INVALID here. `0` is NOT an "off" switch for a
+ * count — disabling a sweep is `retentionMs`'s job (`0` = never prune). A count
+ * below 1 is simply meaningless: a `maxBatches` of 0 prunes nothing every tick
+ * (`drainByBatches` breaks before the first prune), and a `batch` of 0 would only
+ * be silently clamped back to 1 (`Math.max(1, …)`). Reject rather than coerce, so
+ * a typo surfaces at boot instead of degrading a sweep invisibly.
+ */
+export function resolveRetentionCount(
+  raw: string | undefined,
+  opts: { envName: string; defaultValue: number },
+): number {
+  if (raw === undefined || raw.trim() === '') return opts.defaultValue;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`Invalid ${opts.envName} "${raw}" — must be a positive integer (>= 1)`);
+  }
+  return n;
+}
+
 const PORT = resolvePort(process.env.PORT);
 const HOST = '127.0.0.1';
 
@@ -145,6 +171,10 @@ export interface BuildAppOptions {
   webhookRetentionMs?: number;
   /** #464/#421 — overrides the retention sweep interval (ms) for BOTH sweeps; defaults to `RETENTION_SWEEP_MS`. Tests set it small (or disable a sweep via its `*RetentionMs: 0`) to avoid a real hour-long timer. */
   retentionSweepMs?: number;
+  /** #559 — overrides `RETENTION_BATCH_ROWS`/`RETENTION_BATCH` (default 1000): rows per bounded DELETE batch, SHARED by both retention sweeps. Must be a positive integer. Call-time only, for test isolation + operator override. */
+  retentionBatch?: number;
+  /** #559 — overrides `RETENTION_SWEEP_MAX_BATCHES`/`RETENTION_MAX_BATCHES_PER_SWEEP` (default 50): cap on batches a RECURRING sweep tick prunes (the boot sweep is always a full drain), SHARED by both sweeps. Must be a positive integer. Call-time only, for test isolation + operator override. */
+  retentionMaxBatchesPerSweep?: number;
   /** #3 G2 — where managed git checkouts live (`<root>/<ownerId>/repo`). Overrides `process.env.WORKSPACE_GIT_ROOT` / the `data/git` default. Call-time only, for test isolation. Everything under it is DERIVED state (always our own clone) — safe to wipe; a fetch re-clones. */
   workspaceGitRoot?: string;
   /** #3 G2 — test seam: a `GitProvider` override (e.g. a real `CliGitProvider` pointed at a missing binary to exercise the 503 path). Defaults to a real CLI provider. */
@@ -509,6 +539,38 @@ export async function buildApp(opts?: BuildAppOptions) {
     'WEBHOOK_RETENTION_DAYS',
     DEFAULT_WEBHOOK_RETENTION_MS,
   );
+
+  // #559 — the two SHARED sweep bounds (rows-per-batch, max-batches-per-recurring
+  // -tick). Resolved + validated UNCONDITIONALLY here (like the windows above, and
+  // before any timer is armed) so a mistyped bound surfaces at boot rather than
+  // silently degrading a sweep's throughput. `resolveRetentionCount` validates the
+  // env path; this covers the `BuildAppOptions` override path the same way
+  // `resolveRetentionWindow` does — `label` names the offending option in the error.
+  const resolveRetentionCountOption = (
+    label: 'retentionBatch' | 'retentionMaxBatchesPerSweep',
+    override: number | undefined,
+    envName: string,
+    defaultValue: number,
+  ): number => {
+    const n = override ?? resolveRetentionCount(process.env[envName], { envName, defaultValue });
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error(`Invalid ${label} ${n} — must be a positive integer (>= 1)`);
+    }
+    return n;
+  };
+  const retentionBatch = resolveRetentionCountOption(
+    'retentionBatch',
+    opts?.retentionBatch,
+    'RETENTION_BATCH_ROWS',
+    RETENTION_BATCH,
+  );
+  const retentionMaxBatchesPerSweep = resolveRetentionCountOption(
+    'retentionMaxBatchesPerSweep',
+    opts?.retentionMaxBatchesPerSweep,
+    'RETENTION_SWEEP_MAX_BATCHES',
+    RETENTION_MAX_BATCHES_PER_SWEEP,
+  );
+
   // A degenerate `retentionSweepMs <= 0` would make `setInterval` fire
   // continuously — only matters once at least one sweep is enabled.
   if (
@@ -529,8 +591,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     if (retentionMs === 0) return undefined;
     // A DB fault here must never crash a headless server — the same structural
     // guard the alarm tick (and cron ticks) use. `maxBatches` bounds a RECURRING
-    // sweep's blocking (see `RETENTION_MAX_BATCHES_PER_SWEEP`); the BOOT sweep
-    // passes undefined = a one-time full drain before serving.
+    // sweep's blocking (see `RETENTION_MAX_BATCHES_PER_SWEEP`, tunable via #559's
+    // `retentionMaxBatchesPerSweep`); the BOOT sweep passes undefined = a one-time
+    // full drain before serving.
     const sweep = (maxBatches?: number): void => {
       try {
         const pruned = drain(Date.now() - retentionMs, maxBatches);
@@ -546,7 +609,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     // requests if a backlog builds during operation. `unref`'d so a pending
     // interval sweep never holds the process open at shutdown.
     sweep();
-    const timer = setInterval(() => sweep(RETENTION_MAX_BATCHES_PER_SWEEP), retentionSweepMs);
+    const timer = setInterval(() => sweep(retentionMaxBatchesPerSweep), retentionSweepMs);
     timer.unref();
     return timer;
   };
@@ -558,12 +621,13 @@ export async function buildApp(opts?: BuildAppOptions) {
   const wakeupRetentionTimer = startRetentionSweep(
     'wakeup',
     wakeupRetentionMs,
-    (before, maxBatches) => drainSettledWakeups(db, { before, maxBatches }),
+    (before, maxBatches) => drainSettledWakeups(db, { before, batch: retentionBatch, maxBatches }),
   );
   const webhookRetentionTimer = startRetentionSweep(
     'webhook',
     webhookRetentionMs,
-    (before, maxBatches) => drainWebhookDeliveries(db, { before, maxBatches }),
+    (before, maxBatches) =>
+      drainWebhookDeliveries(db, { before, batch: retentionBatch, maxBatches }),
   );
 
   // Auth seam + the one global error handler, registered before any route so

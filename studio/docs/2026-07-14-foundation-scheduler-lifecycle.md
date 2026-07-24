@@ -283,6 +283,10 @@ What the hardened blocks above said, and what actually shipped:
   the batching machinery (`repo/retention.ts`'s `drainByBatches`) but pruning by age across all
   outcomes (a `webhook_deliveries` row has no settled-resurrection invariant — see that repo's safety
   note). The two remain SEPARATE mechanisms over one shared batching primitive, not one merged sweep.
+  The shared batching bounds are operator-tunable (#559): `RETENTION_BATCH_ROWS` (default 1000, rows
+  per bounded DELETE) and `RETENTION_SWEEP_MAX_BATCHES` (default 50, cap on batches a RECURRING sweep
+  tick prunes — the boot sweep is always a full drain), both validated positive integers shared by
+  both sweeps; unset = the `repo/retention.ts` constant defaults.
 - **NOT wired into `buildApp`.** The clock is constructed by its first consumer (F2b), rather than
   this ticket shipping an inert boot path with an empty registry.
 
