@@ -171,6 +171,16 @@ the operator FIRST — never silently reinterpret. Each entry cites its origin.
     retained-but-flagged) is unchanged: the pair rides agent frontmatter, not
     adapter phase-switching. *(#320; operator session 2026-07-08.)*
 
+    **AMENDED 2026-07-24 (operator, #707): the coder runs OPUS 5, not a cheap
+    executor.** The cost tradeoff that put the coder on sonnet is withdrawn —
+    "shouldn't be building with fable, opus 5 is out and we should be using
+    that". `agent.model.primary` is `claude-opus-5`, fallback
+    `claude-sonnet-5`. The pair's SHAPE survives: the planner subagent is still
+    dispatched twice per non-trivial ticket and is still the gate — both halves
+    are now simply thinking-tier. The `ticket_effort` baseline this decision
+    originally wanted (~10 tickets on the cheap executor before judging the
+    swap) is moot: the operator made the call directly.
+
 34. **SD-28 is SUPERSEDED for target-repo packs: UI config edits are local**
     (operator decision 2026-07-08, config-workstreams spec). "Config changes
     should just be local, shouldn't need constant PRs. A user downloading

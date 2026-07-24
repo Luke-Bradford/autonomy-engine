@@ -25,13 +25,14 @@ engine:
 agent:
   type: claude               # claude | codex
   # effort: high             # optional: low | medium | high | xhigh | max (omit = CLI default)
-  # Planner/coder pair (#320): this model is the cheap EXECUTOR the coder
-  # session runs on; the thinking-tier planning + closing sense-check happen
-  # in the scaffolded `planner` subagent (.claude/agents/planner.md), which
-  # carries its own `model:` override. Edit that file to change planner tier.
+  # Planner/coder pair (#320, AMENDED 2026-07-24 #707): BOTH halves are
+  # thinking-tier -- the coder session runs this model, the planning + closing
+  # sense-check happen in the scaffolded `planner` subagent
+  # (.claude/agents/planner.md, its own `model:` override). Lower `primary` if
+  # you want the original cheap-executor shape; the pair works either way.
   model:
-    primary: claude-sonnet-5
-    fallback: claude-sonnet-4-6
+    primary: claude-opus-5
+    fallback: claude-sonnet-5
 
 merge_gate:
   strategy: manual           # manual | ci_only | bot_comment | gh_review

@@ -75,7 +75,14 @@ check "pack scaffolded" "0" "$([ -f "$tmp/plain/.autonomy/config.yaml" ] && echo
 check "board.owner written" "my-org" "$(cfg_get "$tmp/plain" board.owner)"
 check "title with spaces round-trips" "My Fancy Board" "$(cfg_get "$tmp/plain" board.project_title)"
 check "strategy written" "ci_only" "$(cfg_get "$tmp/plain" merge_gate.strategy)"
-check "Enter keeps current model" "claude-sonnet-5" "$(cfg_get "$tmp/plain" agent.model.primary)"
+# The contract is "an empty answer keeps whatever the TEMPLATE shipped", so the
+# expectation is read from the template rather than hardcoded -- a model-tier
+# bump (#707) must not be able to turn this into a red test.
+tpl_model="$(sed -n 's/^  *primary: *//p' \
+  "$ENGINE_HOME/templates/autonomy-pack/config.yaml" | head -1)"
+check "template default model is readable" "0" \
+  "$([ -n "$tpl_model" ] && echo 0 || echo 1)"
+check "Enter keeps current model" "$tpl_model" "$(cfg_get "$tmp/plain" agent.model.primary)"
 check "template comments preserved through writes" "0" "$(grep -q '# claude | codex' "$tmp/plain/.autonomy/config.yaml" && echo 0 || echo 1)"
 check "next steps include launchctl bootstrap line" "0" "$(grep -q 'launchctl bootstrap' "$tmp/out1" && echo 0 || echo 1)"
 check "next steps include dashboard run line" "0" "$(grep -q 'dashboard.py' "$tmp/out1" && echo 0 || echo 1)"
