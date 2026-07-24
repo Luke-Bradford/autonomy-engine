@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildGuidedManualPullRequest,
   ConnectWorkspaceGitBodySchema,
+  deriveDefaultWorkingBranch,
   deriveWorkspaceGitState,
+  parseGitHostRepo,
+  PullRequestResultSchema,
+  SetWorkingBranchBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitRepoUrlSchema,
   WorkspaceGitSchema,
@@ -105,6 +110,7 @@ const row = {
   ownerId: 'local',
   repoUrl: '/repos/widgets',
   collabBranch: 'main',
+  workingBranch: 'studio/local/work',
   observedCollabHead: 'a'.repeat(40),
   lastFetchAt: 1_700_000_000_000,
   lastFetchError: null,
@@ -148,5 +154,136 @@ describe('WorkspaceGitStatusSchema', () => {
   it('is the row plus the derived state', () => {
     const status = WorkspaceGitStatusSchema.parse({ ...row, state: 'ready' });
     expect(status.state).toBe('ready');
+  });
+
+  it('carries the persisted working branch', () => {
+    const status = WorkspaceGitStatusSchema.parse({ ...row, state: 'ready' });
+    expect(status.workingBranch).toBe('studio/local/work');
+  });
+});
+
+describe('deriveDefaultWorkingBranch', () => {
+  it('is the studio-owned convention for the owner', () => {
+    expect(deriveDefaultWorkingBranch('local')).toBe('studio/local/work');
+  });
+
+  it('a null owner renders "null" — matching the SQL COALESCE backfill', () => {
+    // JS `${null}` -> "null"; the 0031 migration COALESCEs owner_id to 'null'.
+    expect(deriveDefaultWorkingBranch(null)).toBe('studio/null/work');
+  });
+
+  it('the default passes the branch policy validator', () => {
+    expect(WorkspaceGitBranchSchema.safeParse(deriveDefaultWorkingBranch('local')).success).toBe(
+      true,
+    );
+  });
+});
+
+describe('SetWorkingBranchBodySchema', () => {
+  it('accepts a valid feature branch', () => {
+    expect(
+      SetWorkingBranchBodySchema.parse({ workingBranch: 'studio/luke/feature-x' }).workingBranch,
+    ).toBe('studio/luke/feature-x');
+  });
+
+  it('enforces the check-ref-format policy at the boundary', () => {
+    expect(SetWorkingBranchBodySchema.safeParse({ workingBranch: 'has space' }).success).toBe(
+      false,
+    );
+  });
+
+  it('is strict (unknown keys are a 400)', () => {
+    expect(SetWorkingBranchBodySchema.safeParse({ workingBranch: 'ok', extra: 1 }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe('parseGitHostRepo', () => {
+  it.each([
+    ['https://github.com/acme/widgets.git', 'github.com', 'acme', 'widgets'],
+    ['https://github.com/acme/widgets', 'github.com', 'acme', 'widgets'],
+    ['ssh://git@github.com/acme/widgets.git', 'github.com', 'acme', 'widgets'],
+    ['ssh://git@github.com:22/acme/widgets.git', 'github.com', 'acme', 'widgets'],
+    ['git@github.com:acme/widgets.git', 'github.com', 'acme', 'widgets'],
+    ['git@github.com:acme/widgets', 'github.com', 'acme', 'widgets'],
+    // A deeper (GitLab-style) group path degrades to its final group/repo pair.
+    ['https://gitlab.com/group/sub/widgets.git', 'gitlab.com', 'sub', 'widgets'],
+  ])('parses %s', (url, host, owner, repo) => {
+    expect(parseGitHostRepo(url)).toEqual({ host, owner, repo });
+  });
+
+  it.each([
+    // Local remotes have no web host.
+    'file:///Users/dev/repos/widgets',
+    '/Users/dev/repos/widgets',
+    // No owner/repo tail.
+    'https://github.com/widgets',
+    'https://github.com/',
+  ])('returns null for %s', (url) => {
+    expect(parseGitHostRepo(url)).toBeNull();
+  });
+});
+
+describe('buildGuidedManualPullRequest', () => {
+  it('builds a GitHub compare URL (base...head = collab...working) with expand=1', () => {
+    const result = buildGuidedManualPullRequest(
+      'https://github.com/acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(result.provider).toBe('github');
+    // The working branch slashes stay literal in the URL path.
+    expect(result.url).toBe(
+      'https://github.com/acme/widgets/compare/main...studio/local/work?expand=1',
+    );
+  });
+
+  it('recognises the scp-like GitHub form', () => {
+    expect(
+      buildGuidedManualPullRequest('git@github.com:acme/widgets.git', 'main', 'studio/local/work')
+        .provider,
+    ).toBe('github');
+  });
+
+  it('percent-encodes a URL-significant char in a branch while preserving "/"', () => {
+    const result = buildGuidedManualPullRequest(
+      'https://github.com/acme/widgets.git',
+      'main',
+      'studio/luke/fix#42',
+    );
+    expect(result.url).toBe(
+      'https://github.com/acme/widgets/compare/main...studio/luke/fix%2342?expand=1',
+    );
+  });
+
+  it('a local remote has no host → provider:unknown, url:null (guided by branch pair)', () => {
+    const result = buildGuidedManualPullRequest('/repos/widgets', 'main', 'studio/local/work');
+    expect(result).toEqual({ provider: 'unknown', url: null });
+  });
+
+  it('a non-GitHub host → provider:unknown, url:null (GitHub-first; other hosts later)', () => {
+    const result = buildGuidedManualPullRequest(
+      'https://gitlab.com/group/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(result).toEqual({ provider: 'unknown', url: null });
+  });
+
+  it('the guided-manual result parses through PullRequestResultSchema', () => {
+    const built = buildGuidedManualPullRequest(
+      'https://github.com/acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    const parsed = PullRequestResultSchema.parse({
+      mode: 'guided_manual',
+      ...built,
+      workingBranch: 'studio/local/work',
+      collabBranch: 'main',
+    });
+    expect(parsed.mode).toBe('guided_manual');
+    expect(parsed.provider).toBe('github');
   });
 });

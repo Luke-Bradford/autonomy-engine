@@ -25,6 +25,8 @@ export interface NewWorkspaceGit {
   ownerId: string;
   repoUrl: string;
   collabBranch: string;
+  /** #3 G9a — the initial working branch (connect seeds `deriveDefaultWorkingBranch`). */
+  workingBranch: string;
   observedCollabHead: string | null;
   lastFetchAt: number | null;
   lastFetchError: string | null;
@@ -48,9 +50,11 @@ export function getWorkspaceGit(db: Db, ownerId: string): WorkspaceGit | null {
 }
 
 /**
- * Updates ONLY the sync-tracking fields — `repoUrl`/`collabBranch` are fixed
- * at connect (re-pointing = disconnect + connect, never a mutation), so no
- * generic patch surface exists to drift through.
+ * Updates ONLY the sync-tracking fields. `repoUrl`/`collabBranch` are fixed at
+ * connect (re-pointing = disconnect + connect, never a mutation); the sole
+ * post-connect-mutable field is `working_branch` (#3 G9a), which has its OWN
+ * narrow setter (`updateWorkspaceGitWorkingBranch`) — so no generic patch
+ * surface exists for any field to drift through.
  */
 export function updateWorkspaceGitSync(
   db: Db,
@@ -64,6 +68,24 @@ export function updateWorkspaceGitSync(
   const existing = getWorkspaceGit(db, ownerId);
   if (!existing) return null;
   const updated = WorkspaceGitSchema.parse({ ...existing, ...sync, updatedAt: Date.now() });
+  db.update(workspaceGit).set(updated).where(eq(workspaceGit.ownerId, ownerId)).run();
+  return updated;
+}
+
+/**
+ * #3 G9a — set the working branch (feature-branch selection). The ONLY
+ * post-connect field mutation; the branch value is policy-validated at the route
+ * boundary (`SetWorkingBranchBodySchema`) before it reaches here. Returns the
+ * updated row, or `null` when no connection exists for the owner.
+ */
+export function updateWorkspaceGitWorkingBranch(
+  db: Db,
+  ownerId: string,
+  workingBranch: string,
+): WorkspaceGit | null {
+  const existing = getWorkspaceGit(db, ownerId);
+  if (!existing) return null;
+  const updated = WorkspaceGitSchema.parse({ ...existing, workingBranch, updatedAt: Date.now() });
   db.update(workspaceGit).set(updated).where(eq(workspaceGit.ownerId, ownerId)).run();
   return updated;
 }

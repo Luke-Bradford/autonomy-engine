@@ -1204,6 +1204,7 @@ describe('triggers routes — bind-to-active (#3 G6c-2)', () => {
       ownerId: 'local',
       repoUrl: 'https://example.com/repo.git',
       collabBranch: 'main',
+      workingBranch: 'studio/local/work',
       observedCollabHead: 'deadbeef',
       lastFetchAt: Date.now(),
       lastFetchError: null,
