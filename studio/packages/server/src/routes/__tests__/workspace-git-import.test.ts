@@ -112,6 +112,17 @@ describe('workspace-git import route', () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ path: 'pipelines/huge.json', code: 'unreadable' }),
     );
+
+    // #3 G10 — a REFUSED import applied nothing, so it must NOT advance the
+    // descendant-guard base (the fail-safe the migration/route comments lean on):
+    // `importedFromCommit` stays null, and the divergence report reads `unknown`.
+    const status = await app.inject({ method: 'GET', url: '/api/workspace/git' });
+    expect(status.json().git.importedFromCommit).toBeNull();
+    const divergence = await app.inject({
+      method: 'POST',
+      url: '/api/workspace/git/divergence',
+    });
+    expect(divergence.json().divergence.state).toBe('unknown');
   });
 
   it('round-trips: importing the branch the DB just committed is all unchanged', async () => {

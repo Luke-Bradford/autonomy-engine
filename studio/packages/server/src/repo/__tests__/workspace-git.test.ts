@@ -3,6 +3,7 @@ import {
   createWorkspaceGit,
   deleteWorkspaceGit,
   getWorkspaceGit,
+  updateWorkspaceGitImportedCommit,
   updateWorkspaceGitSync,
   updateWorkspaceGitWorkingBranch,
 } from '../workspace-git.js';
@@ -78,6 +79,32 @@ describe('workspace-git repo', () => {
   it('updateWorkspaceGitWorkingBranch on an unconnected owner returns null', () => {
     const { db } = freshDb();
     expect(updateWorkspaceGitWorkingBranch(db, 'local', 'studio/luke/x')).toBeNull();
+  });
+
+  it('#3 G10 — a fresh connection has a null import base (never manufactured)', () => {
+    const { db } = freshDb();
+    const created = createWorkspaceGit(db, input);
+    expect(created.importedFromCommit).toBeNull();
+  });
+
+  it('#3 G10 — updateWorkspaceGitImportedCommit sets only the base + updatedAt', () => {
+    const { db } = freshDb();
+    const created = createWorkspaceGit(db, input);
+    const sha = 'c'.repeat(40);
+    const updated = updateWorkspaceGitImportedCommit(db, 'local', sha);
+    expect(updated).not.toBeNull();
+    expect(updated!.importedFromCommit).toBe(sha);
+    // Every other field is preserved (the narrow single-field mutation).
+    expect(updated!.repoUrl).toBe(created.repoUrl);
+    expect(updated!.observedCollabHead).toBe(created.observedCollabHead);
+    expect(updated!.workingBranch).toBe(created.workingBranch);
+    expect(updated!.createdAt).toBe(created.createdAt);
+    expect(getWorkspaceGit(db, 'local')).toEqual(updated);
+  });
+
+  it('#3 G10 — updateWorkspaceGitImportedCommit on an unconnected owner returns null', () => {
+    const { db } = freshDb();
+    expect(updateWorkspaceGitImportedCommit(db, 'local', 'c'.repeat(40))).toBeNull();
   });
 
   it('delete removes the row for that owner only', () => {

@@ -1,0 +1,15 @@
+-- #3 G10 (Foundation Spec #3 git-publish, ticket row G10 — the PROACTIVE
+-- descendant guard, settled #662) — persist the collab commit the DB was last
+-- imported from, the base the divergence report compares the current collab
+-- head against. Distinct from `observed_collab_head` (the last FETCHED collab
+-- tip): this records where the last non-refused IMPORT read from.
+--
+-- Nullable, and DELIBERATELY NOT backfilled: there is no honest value for an
+-- already-connected workspace that has never imported (`observed_collab_head`
+-- is the fetch tip, NOT an import base — using it would fabricate an import that
+-- never happened). An absent import fact is stated NULL, never manufactured
+-- (#473 — the merge-gate "a `gh` failure is never CI-green" posture); the
+-- divergence report reads such a row as `unknown` until the first import stamps
+-- it. The read boundary (`WorkspaceGitSchema.importedFromCommit`) is
+-- required-NULLABLE, so a missing column value is a stated null, not a throw.
+ALTER TABLE workspace_git ADD COLUMN imported_from_commit TEXT;

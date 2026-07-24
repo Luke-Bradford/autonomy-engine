@@ -37,6 +37,10 @@ export function createWorkspaceGit(db: Db, input: NewWorkspaceGit): WorkspaceGit
   const row: WorkspaceGit = {
     id: newId('wsgit'),
     ...input,
+    // #3 G10 — a fresh connection has never imported: the descendant-guard base
+    // is stated null (not derived from the fetch head — that would fabricate an
+    // import that never happened), advanced only by the import route. #473.
+    importedFromCommit: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -86,6 +90,34 @@ export function updateWorkspaceGitWorkingBranch(
   const existing = getWorkspaceGit(db, ownerId);
   if (!existing) return null;
   const updated = WorkspaceGitSchema.parse({ ...existing, workingBranch, updatedAt: Date.now() });
+  db.update(workspaceGit).set(updated).where(eq(workspaceGit.ownerId, ownerId)).run();
+  return updated;
+}
+
+/**
+ * #3 G10 — record the collab commit the most recent non-refused import read
+ * from (the proactive descendant-guard base, #662). Called INSIDE the import
+ * route's transaction so the stamp is atomic with the apply — never a committed
+ * import with a stale/lost base. This narrow single-field setter carries every
+ * OTHER field forward from the read snapshot via the `{...existing}` spread
+ * (touching only the base + `updatedAt`); no-clobber against a concurrent
+ * fetch/commit is guaranteed by the per-owner `KeyedQueue` serializing all
+ * writes for an owner (the same posture as `updateWorkspaceGitSync`/
+ * `...WorkingBranch`), not by the spread itself. Returns the updated row, or
+ * `null` when no connection exists for the owner.
+ */
+export function updateWorkspaceGitImportedCommit(
+  db: Db,
+  ownerId: string,
+  importedFromCommit: string,
+): WorkspaceGit | null {
+  const existing = getWorkspaceGit(db, ownerId);
+  if (!existing) return null;
+  const updated = WorkspaceGitSchema.parse({
+    ...existing,
+    importedFromCommit,
+    updatedAt: Date.now(),
+  });
   db.update(workspaceGit).set(updated).where(eq(workspaceGit.ownerId, ownerId)).run();
   return updated;
 }

@@ -13,8 +13,8 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  *
  * Ops are added per consumer (the no-inert-surface rule): G2 —
  * version/clone/fetch/rev-parse; G3a — checkout/rm-cached/add/diff-cached/
- * commit/push (the Commit path). `merge-base --is-ancestor` still waits for
- * its consumer, the descendant guard (a later G3 slice).
+ * commit/push (the Commit path); G10 — `merge-base --is-ancestor`
+ * (`isAncestor`), the proactive descendant guard's history walk.
  *
  * AUTH MODEL (pinned, G2): the operator's own environment — SSH agent +
  * credential helper of the user running the server. Nothing interactive can
@@ -380,6 +380,40 @@ export class CliGitProvider {
   }
 
   /**
+   * #3 G10 — is `ancestor` an ancestor of (or equal to) `descendant`? The
+   * history walk the PROACTIVE descendant guard uses to split `behind` (the
+   * import base is an ancestor of the current collab head — a fast-forward)
+   * from `diverged` (it is not — collab was rewritten). `merge-base
+   * --is-ancestor A B` is a pure OBJECT-STORE read (never touches HEAD/the
+   * index the Commit path owns), so it is safe in the same per-owner
+   * `KeyedQueue` slot as a drift/status read.
+   *
+   * Exit-code discipline mirrors `revParseRemoteBranch`: exit 0 = A IS an
+   * ancestor (true); exit 1 WITH empty stderr = A is NOT an ancestor (a real,
+   * expected answer, false); anything else (exit 128 + stderr — a bad or
+   * MISSING commit, e.g. a base force-pushed away and pruned locally) is a
+   * genuine FAILURE and throws, never manufactured as a benign `false`/`current`
+   * (the #473 / merge-gate "a `gh` failure is never CI-green" fail-safe posture).
+   * Both args are server-RESOLVED shas (the persisted import base + the just-
+   * fetched collab head), never raw client input. Uses `exec` (not `execOk`) so
+   * exit 1 can be interpreted rather than thrown. Local op.
+   */
+  async isAncestor(dir: string, ancestor: string, descendant: string): Promise<boolean> {
+    const result = await this.exec(
+      'merge-base',
+      ['-C', dir, 'merge-base', '--is-ancestor', ancestor, descendant],
+      this.localTimeoutMs,
+      dir,
+    );
+    if (result.code === 0) return true;
+    if (result.code === 1 && result.stderr.trim() === '') return false;
+    throw new GitOperationError(
+      'merge-base',
+      this.redact(result.stderr.trim() || `exit ${result.code}`, dir),
+    );
+  }
+
+  /**
    * #3 G4 — every blob under `pathspecs` at `ref` as `{ path, blobSha }`, read
    * STRAIGHT FROM THE OBJECT STORE (`ls-tree -r`), so it never touches the
    * working tree / index the Commit path owns — a read at any ref is safe to run
@@ -523,8 +557,7 @@ export class CliGitProvider {
   }
 }
 
-/** The capability seam (widened per consumer; `merge-base --is-ancestor` lands
- * with the descendant guard, a later G3 slice). */
+/** The capability seam (widened per consumer). */
 export type GitProvider = Pick<
   CliGitProvider,
   | 'version'
@@ -539,4 +572,5 @@ export type GitProvider = Pick<
   | 'push'
   | 'lsTreeManaged'
   | 'showBlob'
+  | 'isAncestor'
 >;
