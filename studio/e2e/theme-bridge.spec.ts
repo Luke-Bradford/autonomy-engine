@@ -2,7 +2,13 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { customProps, readCssSource, ruleBody } from '../packages/web/src/testing/cssSource';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { CANVAS_TOKEN, FLUENT_ROOT, customProperty, fluentRootReady } from './support/theme';
+import {
+  BRIDGE_SELECTOR,
+  CANVAS_TOKEN,
+  FLUENT_ROOT,
+  customProperty,
+  fluentRootReady,
+} from './support/theme';
 
 /**
  * U0 (#705) — the `--xy-*` -> Fluent-token theme bridge, asserted in a real
@@ -43,7 +49,7 @@ const BRIDGE_CSS = join(
  * rule and pick up overrides declared somewhere else entirely).
  */
 function declaredInSource(): string[] {
-  const body = ruleBody(readCssSource(BRIDGE_CSS), FLUENT_ROOT);
+  const body = ruleBody(readCssSource(BRIDGE_CSS), BRIDGE_SELECTOR);
   return [...customProps(body).keys()].filter((name) => name.startsWith('--xy-')).sort();
 }
 
@@ -83,7 +89,7 @@ function declaredInBrowser(page: Page): Promise<string[]> {
       }
     }
     return [...names].sort();
-  }, FLUENT_ROOT);
+  }, BRIDGE_SELECTOR);
 }
 
 test.describe('U0 theme bridge', () => {
@@ -113,7 +119,9 @@ test.describe('U0 theme bridge', () => {
     const declared = await declaredInBrowser(page);
     // Guard the guard: an empty list would make the loop below assert nothing.
     // (The spec above proves the list is not merely non-empty but complete.)
-    expect(declared.length, `found no --xy-* declarations on ${FLUENT_ROOT}`).toBeGreaterThan(0);
+    expect(declared.length, `found no --xy-* declarations on ${BRIDGE_SELECTOR}`).toBeGreaterThan(
+      0,
+    );
 
     const resolved = await page.evaluate(
       ({ sel, names }) => {

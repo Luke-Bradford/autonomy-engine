@@ -6,8 +6,9 @@ import {
   type TriggerMode,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
+import { useNavigate } from 'react-router';
 import { ApiError } from '../api/client';
-import { navigate } from '../router';
+
 import { listPipelines, listPipelineVersions } from '../api/pipelines';
 import {
   createTrigger,
@@ -81,6 +82,7 @@ function formForEdit(t: TriggerPublic): FormState {
  * server refuses otherwise — mirrored here for a friendlier message).
  */
 export function TriggersPage() {
+  const navigate = useNavigate();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -235,7 +237,7 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <button type="button" onClick={() => navigate(`/runs/${watchRunId}`)}>
+              <button type="button" onClick={() => void navigate(`/monitor/runs/${watchRunId}`)}>
                 Watch live →
               </button>
             </>

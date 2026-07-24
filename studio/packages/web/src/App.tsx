@@ -1,81 +1,27 @@
-import { useRoute } from './router';
-import { ConnectionsPage } from './pages/ConnectionsPage';
-import { PipelinesPage } from './pages/PipelinesPage';
-import { TriggersPage } from './pages/TriggersPage';
-import { RunsPage } from './pages/runs/RunsPage';
-import { RunDetailPage } from './pages/runs/RunDetailPage';
-import { ThemeToggle } from './theme/ThemeToggle';
-
-interface NavItem {
-  path: string;
-  label: string;
-  ready: boolean;
-}
+import { createHashRouter, RouterProvider } from 'react-router';
+import { ROUTES } from './routes';
 
 /**
- * The nav mirrors the MVP-bar flow (Connections → Pipelines → Triggers → Runs).
- * All four are now built: Connections (P5a), Pipelines (P5c canvas), Triggers
- * (P5b), and Runs (P6 live monitor).
+ * HASH routing, kept from the pre-U2 hand-rolled router: every URL still
+ * requests `/index.html`, so the Fastify static route that serves the built SPA
+ * in the P7 single-container image needs no history-API fallback. Switching to
+ * a browser router would be a server change, and the spec pins `createHashRouter`.
+ *
+ * Created ONCE at module scope: a data router owns its history subscription and
+ * its navigation state, so building a fresh one per render would reset both on
+ * every commit.
  */
-const NAV: NavItem[] = [
-  { path: '/connections', label: 'Connections', ready: true },
-  { path: '/pipelines', label: 'Pipelines', ready: true },
-  { path: '/triggers', label: 'Triggers', ready: true },
-  { path: '/runs', label: 'Runs', ready: true },
-];
+const hashRouter = createHashRouter(ROUTES);
 
-const RUN_DETAIL_PREFIX = '/runs/';
-
-function routeContent(path: string) {
-  // Default to Connections (the built page) for '/' and any unknown route.
-  if (path === '/pipelines') return <PipelinesPage />;
-  if (path === '/triggers') return <TriggersPage />;
-  if (path === '/runs') return <RunsPage />;
-  if (path.startsWith(RUN_DETAIL_PREFIX)) {
-    const id = decodeURIComponent(path.slice(RUN_DETAIL_PREFIX.length));
-    // key={id} so navigating between runs remounts with fresh state.
-    return id ? <RunDetailPage key={id} runId={id} /> : <RunsPage />;
-  }
-  return <ConnectionsPage />;
+interface AppProps {
+  /**
+   * Injectable so tests mount the real `ROUTES` under `createMemoryRouter` at a
+   * chosen initial entry, instead of driving `window.location.hash` and racing
+   * jsdom's asynchronous `hashchange`.
+   */
+  router?: typeof hashRouter;
 }
 
-/** The nav section a path belongs to (so a run-detail path keeps Runs active). */
-function navSection(path: string): string {
-  if (path === '/') return '/connections';
-  if (path === '/runs' || path.startsWith(RUN_DETAIL_PREFIX)) return '/runs';
-  return path;
-}
-
-export default function App() {
-  const path = useRoute();
-  const activePath = navSection(path);
-
-  return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <h1 className="brand">autonomy&nbsp;studio</h1>
-        <nav aria-label="Primary">
-          <ul>
-            {NAV.map((item) => (
-              <li key={item.path}>
-                <a
-                  href={`#${item.path}`}
-                  aria-current={activePath === item.path ? 'page' : undefined}
-                  className={activePath === item.path ? 'active' : undefined}
-                >
-                  {item.label}
-                  {!item.ready && <span className="badge">soon</span>}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        {/* U2 relocates this into the hub rail. */}
-        <div className="sidebar-footer">
-          <ThemeToggle />
-        </div>
-      </aside>
-      <main className="content">{routeContent(path)}</main>
-    </div>
-  );
+export default function App({ router = hashRouter }: AppProps) {
+  return <RouterProvider router={router} />;
 }

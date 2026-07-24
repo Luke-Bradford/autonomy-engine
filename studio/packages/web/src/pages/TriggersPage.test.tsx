@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
+import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline, PipelineVersion, TriggerPublic } from '@autonomy-studio/shared';
 import { TriggersPage } from './TriggersPage';
@@ -103,13 +104,13 @@ afterEach(() => {
 
 describe('TriggersPage', () => {
   it('shows the empty state after loading', async () => {
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText(/No triggers yet/i)).toBeInTheDocument();
   });
 
   it('renders a trigger row with its binding label resolved from pipelines', async () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText('Nightly')).toBeInTheDocument();
     // Binding label is `${pipeline.name} v${version}`, not the opaque id.
     expect(await screen.findByText('My pipeline v3')).toBeInTheDocument();
@@ -119,14 +120,14 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ pipelineVersionId: null, enabled: false, mode: 'manual', schedule: null }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText('unbound')).toBeInTheDocument();
   });
 
   it('fires a trigger and reports the started run id', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
     await waitFor(() => expect(fireMock).toHaveBeenCalledWith('trg_1'));
     expect(await screen.findByText(/started \(run run_9\)/i)).toBeInTheDocument();
@@ -136,14 +137,14 @@ describe('TriggersPage', () => {
     const user = userEvent.setup();
     fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'a run is already active' });
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
   });
 
   it('creates a schedule trigger bound to a pipeline version', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const formEl = screen.getByRole('form', { name: /Trigger form/i });
@@ -165,7 +166,7 @@ describe('TriggersPage', () => {
 
   it('blocks saving an enabled but unbound trigger with a friendly message', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Oops');
@@ -186,7 +187,7 @@ describe('TriggersPage', () => {
     // `ConcurrencyWriteSchema` (parallel⇒max, single-slot⇒no-max) is honoured
     // by construction. This asserts that construction is correct.
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Fan out');
@@ -201,7 +202,7 @@ describe('TriggersPage', () => {
 
   it('emits a single-slot concurrency object with no `max`', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'One at a time');
@@ -226,7 +227,7 @@ describe('TriggersPage', () => {
         webhook: { idempotencyWindowSeconds: 300 },
       }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(
       await screen.findByRole('button', { name: /Provision webhook secret for Hook/i }),
     );
@@ -240,7 +241,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -256,7 +257,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // Switch away from webhook — the stored secret must be actively cleared.
@@ -278,7 +279,7 @@ describe('TriggersPage', () => {
       }),
     );
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     const fireBtn = await screen.findByRole('button', { name: /Fire Nightly now/i });
     await user.click(fireBtn);
     // Button reflects the in-flight state and is disabled.

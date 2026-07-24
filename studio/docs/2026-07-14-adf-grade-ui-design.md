@@ -217,6 +217,54 @@ Bounded punch-list the epic MUST specify:
   CSS (runtime `<head>` injection) → any CSP/SSR work targets `createDOMRenderer`/`nonce`, not a CSS file.
 - **Env note:** the workspace is **React 19** (not 18); Fluent v9's peer range satisfies it.
 
+## U2 — URL-state design (AS BUILT, 2026-07-24)
+
+The route tree lives in `packages/web/src/routes.tsx`; the rail's hub list is the SSOT in
+`packages/web/src/shell/hubs.ts`. `react-router@8` `createHashRouter`, kept HASH-based so the
+P7 single-container Fastify static route still needs no history-API fallback.
+
+| Route | Renders |
+|---|---|
+| `#/` | Home hub (placeholder until U15) |
+| `#/author` | index redirect (`replace`) → `#/author/pipelines` |
+| `#/author/pipelines` | Pipelines list |
+| `#/monitor` | index redirect (`replace`) → `#/monitor/runs` |
+| `#/monitor/runs` | Runs list |
+| `#/monitor/runs/:runId` | Run detail (live monitor) |
+| `#/manage` | index redirect (`replace`) → `#/manage/connections` |
+| `#/manage/connections` | Connections |
+| `#/manage/triggers` | Triggers |
+| `#/*` | catch-all → `#/` (**U3r** replaces this with real MVP-path redirects) |
+
+Decisions worth not re-deriving:
+
+- **Hub indexes redirect with `replace`, never push.** A pushed redirect makes Back land on the
+  bare hub path and bounce straight forward again — a history trap. Pinned by a unit test and an
+  e2e test; both fail if `replace` is dropped.
+- **The rail's active state has ONE source: `NavLink`'s `isActive`.** It already sets
+  `aria-current`, and its matching is exactly what the rail needs (`/` matches only itself, a
+  deep child keeps its hub lit, matching is on a segment boundary so `/authoring` cannot light
+  `/author`). A parallel path-matching helper was written, found inert by a mutation check, and
+  deleted — it could only ever become a second opinion that disagrees.
+- **Active state is signalled on three non-colour channels** (`aria-current`, the filled icon
+  variant, a left accent bar), per the spec's non-colour-status criterion.
+- **`useParams` decodes params; the route wrapper must NOT decode again.** `RunDetailRoute` also
+  renders the page with `key={runId}` so a run→run navigation REMOUNTS — React Router reuses a
+  component instance when only a param changes, and the page holds per-run stream state.
+- **The workspace element keeps the `content` class.** `index.css` hangs the page padding, the
+  900px reading cap, and `:has(.canvas-page)` (which removes that cap for the full-bleed canvas)
+  off it. Renaming it silently re-caps the canvas, and jsdom cannot see it.
+- **Fluent portals duplicate the provider class.** Any portalling surface (the rail's tooltips are
+  the first) creates a `[data-portal-node]` mount under `<body>` carrying `app-fluent-root`. That
+  is desirable — it is why portalled flyouts are themed and why the `--xy-*` bridge reaches them —
+  but a bare `.app-fluent-root` selector now matches two elements. e2e specs use
+  `FLUENT_ROOT` (`:not([data-portal-node])`) for the DOM and `BRIDGE_SELECTOR` for CSSOM rules.
+
+URL-state slots named in the Shell section but NOT yet in the hash, with their owning ticket:
+pipeline id (`#/author/pipelines/:pipelineId` — **U4**; opening the canvas is still local state
+inside `PipelinesPage`), version id (**U22**), selected node id (**U7**), monitor filter tab
+(**U10**).
+
 ## Non-goals (YAGNI)
 
 - No engine/reducer *semantics* changes (read-only read-models R1/R2 allowed).

@@ -24,9 +24,26 @@ export default defineConfig({
         // raw warning already and is tracked separately by #698 (route-level
         // code-splitting). Treat a Fluent-driven jump in the ENTRY chunk as the
         // regression to investigate — it means a barrel import escaped this rule.
+        //
+        // U2 measured — gzip: `fluent` 39.69 kB · `router` 30.59 kB · entry
+        // 167.13 kB · css 4.30 kB. Two things worth keeping straight:
+        //   - the `fluent` rise (+17.2 kB) is `Tooltip` and its Floating UI
+        //     positioning, NOT the eight named icon imports. The built chunk
+        //     carries two `viewBox`es in total, so `@fluentui/react-icons`'
+        //     barrel does tree-shake and the named-import rule is doing its job;
+        //   - the ENTRY is flat on U1 (167.43 -> 167.13) despite U2 adding a
+        //     route tree, a shell and a Home page, because react-router left it
+        //     for the `router` chunk below. That is the property to hold.
+        // Total shipped JS is up ~30 kB gzip, which IS what a router costs.
         manualChunks(id: string): string | undefined {
           if (/[\\/]node_modules[\\/](@fluentui|@griffel|@floating-ui)[\\/]/.test(id)) {
             return 'fluent';
+          }
+          // react-router is a stable vendor dependency on every route, so it
+          // belongs in a separately-cacheable chunk rather than in the entry
+          // that every app change invalidates. `cookie-es` is its only dep.
+          if (/[\\/]node_modules[\\/](react-router|cookie-es)[\\/]/.test(id)) {
+            return 'router';
           }
           return undefined;
         },

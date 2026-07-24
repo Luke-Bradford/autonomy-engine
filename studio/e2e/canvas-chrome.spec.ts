@@ -71,7 +71,9 @@ async function expectSurface(
 }
 
 async function openCanvas(page: Page, name: string): Promise<void> {
-  await page.goto('/#/pipelines');
+  // U2 moved the pipelines list under the Author hub; the MVP's flat
+  // `#/pipelines` is gone (U3r is the ticket that adds a redirect for it).
+  await page.goto('/#/author/pipelines');
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
   await fluentRootReady(page);
   await page.getByLabel('Name').fill(name);

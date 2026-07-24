@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Run } from '@autonomy-studio/shared';
+import { useNavigate } from 'react-router';
 import { listRuns } from '../../api/runs';
-import { navigate } from '../../router';
 import { formatWhen } from './format';
 
 /**
@@ -13,6 +13,7 @@ import { formatWhen } from './format';
  * demand.
  */
 export function RunsPage() {
+  const navigate = useNavigate();
   const [runs, setRuns] = useState<Run[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Bumped by "Refresh" to re-run the load effect (re-fetch on demand). The
@@ -89,7 +90,7 @@ export function RunsPage() {
                 <td>
                   <button
                     type="button"
-                    onClick={() => navigate(`/runs/${r.id}`)}
+                    onClick={() => void navigate(`/monitor/runs/${r.id}`)}
                     aria-label={`Watch run ${r.id}`}
                   >
                     Watch
