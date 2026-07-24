@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { LEGACY_REDIRECTS, ROUTES } from './routes';
 import { HUBS } from './shell/hubs';
-import { uiStore } from './stores/uiStore';
+import { PANE_DEFAULT_WIDTH, uiStore } from './stores/uiStore';
 
 // The pages behind these routes talk to the network / a WebSocket. Stub both so
 // the route tree (the only thing under test here) resolves without real I/O.
@@ -64,12 +65,41 @@ async function landedAt(initialPath: string): Promise<string> {
   return router.state.location.pathname;
 }
 
+/**
+ * The routed PAGE, excluding the shell chrome around it.
+ *
+ * Since U3 the command bar renders a breadcrumb, whose deepest crumb for a run
+ * detail route is the run id — the same text the page shows. An unscoped
+ * `findByText('run_42')` then matches two elements and THROWS, so every
+ * id-in-the-page assertion below is scoped to the workspace.
+ */
+function page() {
+  return within(screen.getByRole('main'));
+}
+
+/**
+ * A router's initial matches, WITHOUT rendering.
+ *
+ * Rendering is not neutral here: RTL's `render` wraps in `act()`, which flushes
+ * effects, so a `<Navigate>` redirect completes inside the call and
+ * `router.state.matches` afterwards describes the DESTINATION. Reading the
+ * router's own initial state is the only way to see which route a path actually
+ * matched.
+ */
+function initialMatches(initialPath: string) {
+  return createMemoryRouter(ROUTES, { initialEntries: [initialPath] }).state.matches;
+}
+
 beforeEach(() => {
   uiStore.getState().setThemeMode('dark');
 });
 afterEach(() => {
   vi.clearAllMocks();
   uiStore.getState().setThemeMode('dark');
+  // The shell reads the pane slice from the SINGLETON, so a case that resizes
+  // or collapses it would otherwise hand its state to the next one.
+  uiStore.getState().setPaneWidth(PANE_DEFAULT_WIDTH);
+  uiStore.getState().setPaneCollapsed(false);
 });
 
 describe('route tree', () => {
@@ -112,7 +142,7 @@ describe('route tree', () => {
 
   it('renders the run detail page at /monitor/runs/:runId', async () => {
     renderAt('/monitor/runs/run_42');
-    expect(await screen.findByText('run_42')).toBeInTheDocument();
+    expect(await page().findByText('run_42')).toBeInTheDocument();
   });
 
   /**
@@ -132,7 +162,7 @@ describe('route tree', () => {
    */
   it('decodes :runId exactly once', async () => {
     renderAt(`/monitor/runs/${encodeURIComponent('run%20x')}`);
-    expect(await screen.findByText('run%20x')).toBeInTheDocument();
+    expect(await page().findByText('run%20x')).toBeInTheDocument();
   });
 
   /**
@@ -157,7 +187,7 @@ describe('route tree', () => {
 
     await router.navigate('/monitor/runs/run_b');
 
-    expect(await screen.findByText('run_b')).toBeInTheDocument();
+    expect(await page().findByText('run_b')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('run_a exploded')).not.toBeInTheDocument());
   });
 
@@ -208,7 +238,7 @@ describe('route tree', () => {
   it('redirects a legacy run-detail path, keeping the run id', async () => {
     const { router } = renderAt('/runs/run_42');
     await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs/run_42'));
-    expect(await screen.findByText('run_42')).toBeInTheDocument();
+    expect(await page().findByText('run_42')).toBeInTheDocument();
   });
 
   /**
@@ -227,7 +257,7 @@ describe('route tree', () => {
     await waitFor(() =>
       expect(router.state.location.pathname).toBe(`/monitor/runs/${encodeURIComponent(id)}`),
     );
-    expect(await screen.findByText(id)).toBeInTheDocument();
+    expect(await page().findByText(id)).toBeInTheDocument();
   });
 
   /**
@@ -246,22 +276,50 @@ describe('route tree', () => {
 
   /**
    * `/runs/` must reach the runs list, and must do so by matching the STATIC
-   * `runs` route — this react-router version strips a trailing slash when
+   * legacy `runs` route — this react-router version strips a trailing slash when
    * matching, and a dynamic segment does not match empty.
    *
    * The matched route pattern is asserted, not just the landing path, because
    * `LegacyRunRedirect`'s empty-id guard also sends you to `/monitor/runs`:
    * both worlds produce the same destination, so a destination-only assertion
    * could not tell them apart and would pass whichever route matched.
+   *
+   * Read from `initialMatches` — i.e. BEFORE rendering. The first cut of this
+   * test rendered and then read `router.state.matches`, which was vacuous:
+   * `render` flushes the `<Navigate>` redirect inside `act()`, so it was
+   * describing the DESTINATION route, which was also called `runs`. It would
+   * have passed just as happily if `/runs/` had matched `:runId`. U3's route
+   * restructure — `:runId` moving under `runs`, leaving an index route with no
+   * `path` as the deepest destination match — is what exposed it.
    */
   it('matches a trailing-slash legacy path on the static route, not :runId', async () => {
-    const router = createMemoryRouter(ROUTES, { initialEntries: ['/runs/'] });
-    render(<RouterProvider router={router} />);
+    expect(initialMatches('/runs/').at(-1)?.route.path).toBe('runs');
+    // ...and a real legacy id still takes the dynamic route, which is the other
+    // half of the discrimination this test exists for.
+    expect(initialMatches('/runs/run_42').at(-1)?.route.path).toBe('runs/:runId');
 
-    const matched = router.state.matches.at(-1)?.route.path;
-    expect(matched).toBe('runs');
+    expect(await landedAt('/runs/')).toBe('/monitor/runs');
+  });
 
-    await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs'));
+  /**
+   * U3 nested `:runId` UNDER `runs` (it was a sibling) so the breadcrumb can
+   * read Monitor › Runs › run_42 with a linkable middle crumb. The URLs are
+   * meant to be byte-identical either way — this pins that they are, at the
+   * matching level rather than only through a rendered page.
+   */
+  it('keeps the monitor run URLs unchanged by the nesting', () => {
+    expect(initialMatches('/monitor/runs').map((m) => m.route.path)).toEqual([
+      '/',
+      'monitor',
+      'runs',
+      undefined,
+    ]);
+    expect(initialMatches('/monitor/runs/run_42').map((m) => m.route.path)).toEqual([
+      '/',
+      'monitor',
+      'runs',
+      ':runId',
+    ]);
   });
 
   /**
@@ -277,6 +335,145 @@ describe('route tree', () => {
       // Home resolves to itself; the others must reach their own subtree.
       const landed = router.state.location.pathname;
       expect(landed === hub.path || landed.startsWith(`${hub.path}/`)).toBe(true);
+    }
+  });
+});
+
+/**
+ * U3 — the shell chrome, wired to the REAL route tree.
+ *
+ * `routeHandle.test.ts` covers the pure logic against hand-built matches, which
+ * is a stub that agrees with itself. This half is the counterweight: the actual
+ * `ROUTES`, mounted, producing an actual pane and breadcrumb.
+ */
+describe('shell chrome over the real route tree', () => {
+  const trail = () => within(screen.getByRole('navigation', { name: 'Breadcrumb' }));
+
+  it.each([
+    ['/', ['Home']],
+    ['/author/pipelines', ['Author', 'Pipelines']],
+    ['/monitor/runs', ['Monitor', 'Runs']],
+    ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
+    ['/manage/connections', ['Manage', 'Connections']],
+    ['/manage/triggers', ['Manage', 'Triggers']],
+  ])('breadcrumbs %s as %j', async (path, expected) => {
+    renderAt(path);
+    await waitFor(() =>
+      expect(
+        trail()
+          .getAllByRole('listitem')
+          .map((li) => li.textContent),
+      ).toEqual(expected),
+    );
+  });
+
+  /**
+   * The pane's presence is hub-driven: Home declares no sections, so it must
+   * render no pane AT ALL rather than an empty box, and no toggle for it.
+   */
+  it('renders no pane and no pane toggle on Home', async () => {
+    renderAt('/');
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: /sections$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /navigation pane/i })).toBeNull();
+  });
+
+  it("renders the active hub's pane, with its sections", async () => {
+    renderAt('/manage/triggers');
+    const pane = await screen.findByRole('navigation', { name: 'Manage sections' });
+    expect(
+      within(pane)
+        .getAllByRole('link')
+        .map((a) => a.textContent),
+    ).toEqual(['Connections', 'Triggers']);
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-controls', pane.id);
+  });
+
+  /**
+   * The section labels live in `hubs.ts`; the breadcrumb labels live in
+   * `routes.tsx`. That duplication is deliberate (a literal crumb beats a
+   * three-branch inference rule from a pathname) — so it is pinned here.
+   * Renaming a section without its crumb fails this.
+   */
+  it('gives every hub section a breadcrumb with the SAME label', async () => {
+    for (const hub of HUBS) {
+      for (const section of hub.sections) {
+        renderAt(section.path);
+        await waitFor(() =>
+          expect(
+            trail()
+              .getAllByRole('listitem')
+              .map((li) => li.textContent),
+          ).toEqual([hub.label, section.label]),
+        );
+        screen.getByRole('navigation', { name: `${hub.label} sections` });
+        cleanup();
+      }
+    }
+  });
+
+  /**
+   * The grid's pane track.
+   *
+   * `--pane-width` is the single mechanism behind three behaviours — the pane's
+   * width, "no pane on Home", and collapse — and it is the one part of the
+   * layout jsdom CAN see, because it is an inline custom property rather than a
+   * computed track. (The track itself is measured in `e2e/shell-pane.spec.ts`;
+   * jsdom resolves no `grid-template-columns`.)
+   *
+   * A fixed track does NOT collapse on its own, so without the `0px` cases the
+   * workspace would sit inset behind 240px of nothing on Home and whenever the
+   * pane is put away — which looks like a broken layout, not a missing feature.
+   */
+  function paneTrack() {
+    return document
+      .querySelector<HTMLElement>('.app-shell')!
+      .style.getPropertyValue('--pane-width');
+  }
+
+  it('gives the pane track the stored width on a hub that has a pane', async () => {
+    uiStore.getState().setPaneWidth(300);
+    renderAt('/manage/connections');
+    expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
+    expect(paneTrack()).toBe('300px');
+  });
+
+  it('zeroes the pane track on a hub with no pane', async () => {
+    uiStore.getState().setPaneWidth(300);
+    renderAt('/');
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(paneTrack()).toBe('0px');
+  });
+
+  it('zeroes the pane track when the pane is collapsed, and restores it', async () => {
+    const user = userEvent.setup();
+    uiStore.getState().setPaneWidth(300);
+    renderAt('/manage/connections');
+    expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Hide navigation pane' }));
+    expect(paneTrack()).toBe('0px');
+    // The splitter goes with it: a resize handle for a pane that is not on
+    // screen is a focusable control with nothing to do.
+    expect(screen.queryByRole('separator')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Show navigation pane' }));
+    // Restored to the width it had, not to the default — the collapse remembers.
+    expect(paneTrack()).toBe('300px');
+    expect(screen.getByRole('separator')).toBeInTheDocument();
+  });
+
+  /**
+   * `sections[0]` is documented as the hub's landing page, and the route tree's
+   * index redirect is a separate literal. Two literals that must agree is
+   * exactly the drift the rail-vs-routes test above already guards for hubs —
+   * this is the same guard one level down. Without it the pane's first entry
+   * could quietly stop being the page the rail takes you to.
+   */
+  it('lands each hub on its own first section', async () => {
+    for (const hub of HUBS.filter((h) => h.sections.length > 0)) {
+      expect(await landedAt(hub.path)).toBe(hub.sections[0]!.path);
+      cleanup();
     }
   });
 });

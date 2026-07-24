@@ -32,6 +32,24 @@ import {
  */
 export type HubId = 'home' | 'author' | 'monitor' | 'manage';
 
+/**
+ * One entry in a hub's secondary pane (U3).
+ *
+ * This is the hub's own navigation, one level below the rail. It is also the
+ * SINGLE source of these labels: `routes.tsx` declares the matching crumb, and
+ * `routes.test.tsx` pins the two equal, so a renamed section cannot leave a
+ * stale breadcrumb behind.
+ *
+ * U4 replaces the Author hub's flat list with the Factory Resources tree; the
+ * pane is the container, this list is what it holds until then.
+ */
+export interface HubSection {
+  /** Link text in the pane, and the breadcrumb label for the same route. */
+  label: string;
+  /** Absolute path — must resolve to a real route (pinned in `routes.test.tsx`). */
+  path: string;
+}
+
 export interface Hub {
   /** Stable id — also the React key. */
   id: HubId;
@@ -39,6 +57,16 @@ export interface Hub {
   label: string;
   /** The hub's entry path. Its route redirects on to the default child. */
   path: string;
+  /**
+   * The hub's pane entries, in display order. `sections[0]` is the hub's
+   * landing page — the route tree's index redirect must agree with it, which
+   * `routes.test.tsx` asserts rather than leaving to two literals in two files.
+   *
+   * EMPTY means the hub has no secondary pane at all (Home). The shell renders
+   * no pane and gives its grid track no width, rather than insetting the
+   * workspace behind an empty box.
+   */
+  sections: readonly HubSection[];
   /** Rendered when this hub is NOT active. */
   Icon: FluentIcon;
   /**
@@ -51,11 +79,21 @@ export interface Hub {
 }
 
 export const HUBS: readonly Hub[] = [
-  { id: 'home', label: 'Home', path: '/', Icon: HomeRegular, IconActive: HomeFilled },
+  {
+    id: 'home',
+    label: 'Home',
+    path: '/',
+    // No pane: Home IS the overview, so a sibling list of one entry pointing at
+    // the page you are already on would be furniture. U15 builds the real Home.
+    sections: [],
+    Icon: HomeRegular,
+    IconActive: HomeFilled,
+  },
   {
     id: 'author',
     label: 'Author',
     path: '/author',
+    sections: [{ label: 'Pipelines', path: '/author/pipelines' }],
     Icon: FlowchartRegular,
     IconActive: FlowchartFilled,
   },
@@ -63,11 +101,30 @@ export const HUBS: readonly Hub[] = [
     id: 'monitor',
     label: 'Monitor',
     path: '/monitor',
+    sections: [{ label: 'Runs', path: '/monitor/runs' }],
     Icon: PulseRegular,
     IconActive: PulseFilled,
   },
-  { id: 'manage', label: 'Manage', path: '/manage', Icon: WrenchRegular, IconActive: WrenchFilled },
+  {
+    id: 'manage',
+    label: 'Manage',
+    path: '/manage',
+    // Triggers was UNREACHABLE by clicking between U2 and U3: the rail reaches
+    // Manage, Manage redirects to Connections, and no page linked on. The pane
+    // is where a hub's second section becomes navigable at all.
+    sections: [
+      { label: 'Connections', path: '/manage/connections' },
+      { label: 'Triggers', path: '/manage/triggers' },
+    ],
+    Icon: WrenchRegular,
+    IconActive: WrenchFilled,
+  },
 ];
+
+/** Lookup by id — the shell resolves a route handle's `hub` through this. */
+export function hubById(id: HubId | undefined): Hub | undefined {
+  return HUBS.find((hub) => hub.id === id);
+}
 
 /*
  * There is deliberately NO `hubIdForPath(pathname)` helper here. An earlier cut

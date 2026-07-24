@@ -60,19 +60,40 @@ body {
   color: var(--text);
 }
 
-/* No explicit `grid-template-rows` here: the spec asks for one on the ADF shell
-   (command-bar row + workspace row, where React Flow fills a grid cell), but
-   the command bar is U3's and does not exist yet. The MVP's React Flow parent
-   is already explicitly sized (`.canvas-wrap`, below), so there is nothing for
-   a row track to fix today. */
 .app-shell {
   display: grid;
-  /* The spec's shell diagram pins the hub rail at ~48px; the workspace takes
-     the rest. A fixed track (not `max-content`) so the rail's width cannot
+  /* The spec's shell diagram: hub rail, secondary pane, its splitter, then the
+     workspace. The rail is a FIXED 48px (not `max-content`) so its width cannot
      drift with its contents — the theme switch at its foot is wider than an
-     icon, and an intrinsic track would let it push the rail out. */
-  grid-template-columns: 48px 1fr;
-  min-height: 100vh;
+     icon, and an intrinsic track would let it push the rail out. The splitter's
+     `auto` track collapses to 0 by itself when no splitter is rendered; the
+     pane's does NOT, which is why `AppShell` writes `--pane-width: 0px` for a
+     hub with no pane (Home) or a collapsed one.
+
+     The fallback value is load-bearing, not tidiness: an UNDEFINED custom
+     property makes this declaration invalid at computed-value time, so the
+     whole template would drop to `none` and stack the four children into one
+     column. */
+  grid-template-columns: 48px var(--pane-width, 0px) auto 1fr;
+  /* `height`, not `min-height`: the command bar and the pane must stay put
+     while a long page scrolls, so the SHELL is viewport-sized and `.content`
+     is what scrolls. */
+  height: 100vh;
+}
+
+/* The workspace column: command bar over the routed page. This is the explicit
+   `grid-template-rows` the U0 spike asks for — React Flow needs an explicitly
+   sized parent, and a row track is what gives the canvas one.
+   `min-height: 0` because a `1fr` row's automatic minimum is `auto`: without it
+   the row refuses to shrink below its content and the CONTAINER overflows
+   instead of `.content` scrolling. */
+.workspace {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+  /* Likewise for the column: a grid item's automatic minimum is its content
+     width, so a wide table would push the workspace out rather than scroll. */
+  min-width: 0;
 }
 
 .hub-rail {
@@ -228,9 +249,175 @@ body {
   border-color: var(--accent);
 }
 
+/* --- Secondary pane + splitter + command bar (U3) ------------------------- */
+
+.secondary-pane {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 0.75rem 0;
+  /* The pane scrolls itself rather than growing the shell — the shell is
+     viewport-height so the rail, pane and command bar all stay put. */
+  overflow-y: auto;
+  min-width: 0;
+}
+
+.secondary-pane__title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.5rem;
+  padding: 0 0.9rem;
+  /* The pane can be dragged down to `PANE_MIN_WIDTH`; a long hub name must
+     clip rather than force the track wider than the user asked for. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondary-pane__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.secondary-pane__link {
+  position: relative;
+  display: block;
+  padding: 0.45rem 0.9rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.92rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondary-pane__link:hover {
+  background: var(--panel-2);
+}
+
+/* Same reasoning as the rail's ring: the pane clips its overflow, so a ring
+   drawn OUTSIDE the border box is sliced off at both edges. A negative offset
+   draws it inside, where the clip cannot reach it. */
+.secondary-pane__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.secondary-pane__link--active {
+  background: var(--panel-2);
+  color: var(--accent);
+  /* Weight is a SHAPE channel, so "you are here" survives greyscale and
+     forced-colours mode alongside the accent bar below — the spec's
+     non-colour-status criterion, as on the rail. */
+  font-weight: 600;
+}
+
+.secondary-pane__link--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+/* The drag handle. Its own grid track, so it cannot be clipped by the pane's
+   `overflow: hidden` the way an absolutely-positioned handle would be. */
+.pane-splitter {
+  width: 5px;
+  margin-left: -3px;
+  cursor: col-resize;
+  background: transparent;
+  /* Above the pane's own border so the whole hit area is grabbable. */
+  position: relative;
+  z-index: 1;
+  /* A touch drag must resize the pane, not scroll the page. */
+  touch-action: none;
+}
+
+.pane-splitter:hover,
+.pane-splitter:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+.command-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  min-height: 40px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.command-bar__pane-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  /* The Fluent icon is an SVG sized in `em`. */
+  font-size: 18px;
+  line-height: 0;
+}
+
+.command-bar__pane-toggle:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.command-bar__breadcrumb ol {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  font-size: 0.9rem;
+}
+
+/* The separator is a CSS `::before` rather than a character in the markup:
+   it is decoration, and a literal "›" between list items would be read out
+   by a screen reader on every crumb. */
+.command-bar__breadcrumb li + li::before {
+  content: '›';
+  color: var(--muted);
+  margin-right: 0.35rem;
+}
+
+.command-bar__breadcrumb a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.command-bar__breadcrumb a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.command-bar__breadcrumb [aria-current='page'] {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .content {
   padding: 1.5rem 2rem;
   max-width: 900px;
+  /* The shell is viewport-height, so this is the element that scrolls. Both
+     minimums are needed: without them the grid row/column refuses to shrink
+     below its content and the shell overflows instead. */
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 .page-header {
