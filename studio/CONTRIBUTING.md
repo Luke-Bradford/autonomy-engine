@@ -84,6 +84,23 @@ touches `studio/**`. Run them locally first; they must all be green:
 | `pnpm test`               | Runs the vitest suites across all packages.                    |
 | `pnpm lint`               | ESLint (flat config) **and** `prettier --check .`.             |
 | `pnpm build`              | Production build of `shared`, `server`, and `web`.             |
+| `pnpm test:e2e`           | Playwright specs against the built app in a real browser.      |
+
+`pnpm test:e2e` needs a browser installed once on the host:
+
+```bash
+pnpm exec playwright install chromium
+```
+
+It builds the workspace, boots the API serving the built web bundle on `:8199`
+(override with `E2E_SERVER_PORT`), and runs the specs in `e2e/`. Server state
+goes to a throwaway `data/e2e/`, never your real `data/app.sqlite`. When only
+the specs changed, `pnpm exec playwright test` reruns them without rebuilding.
+
+These specs exist for what the vitest suites structurally cannot see: they run
+in jsdom, which computes no styles, so a CSS custom property that fails to
+resolve — and therefore silently falls back to a wrong colour rather than
+throwing — is invisible to them. Assert computed values, not screenshots.
 
 If lint fails on formatting, apply Prettier and re-check:
 

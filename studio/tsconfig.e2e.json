@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    // The e2e specs are the only workspace-ROOT TypeScript. `pnpm -r run
+    // typecheck` walks packages only, so without this project they would ship
+    // untypechecked — and their `page.evaluate` callbacks are browser code
+    // (`document`, `getComputedStyle`, `CSSStyleRule`), which the base `lib`
+    // (ES2023 only) does not declare.
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}

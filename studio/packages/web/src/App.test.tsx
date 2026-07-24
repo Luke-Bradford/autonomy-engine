@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import App from './App';
+import { uiStore } from './stores/uiStore';
+import { AppThemeProvider } from './theme/AppThemeProvider';
 
 // The run pages talk to the network / a WebSocket; stub both so App's routing
 // (the only thing under test here) renders without real I/O.
@@ -30,12 +33,18 @@ vi.mock('./pages/runs/useRunStream', async (importActual) => ({
   useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
 }));
 
+// The theme toggle reads the app-wide singleton store, so reset its mode
+// between cases rather than leaking one test's theme into the next.
 beforeEach(() => {
   window.location.hash = '';
+  uiStore.getState().setThemeMode('dark');
 });
 afterEach(() => {
   vi.restoreAllMocks();
   window.location.hash = '';
+  uiStore.getState().setThemeMode('dark');
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.colorScheme = '';
 });
 
 describe('App routing', () => {
@@ -52,5 +61,46 @@ describe('App routing', () => {
     expect(await screen.findByText('run_42')).toBeInTheDocument();
     const runsNav = screen.getByRole('link', { name: 'Runs' });
     expect(runsNav).toHaveAttribute('aria-current', 'page');
+  });
+});
+
+describe('App theme toggle', () => {
+  it('renders a named, keyboard-operable control wired to the ui store', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const toggle = screen.getByRole('switch', { name: /dark mode/i });
+    expect(toggle).toBeChecked();
+
+    await user.click(toggle);
+    expect(uiStore.getState().themeMode).toBe('light');
+    expect(toggle).not.toBeChecked();
+
+    // Operable from the keyboard alone (Space on a focused switch).
+    toggle.focus();
+    await user.keyboard('[Space]');
+    expect(uiStore.getState().themeMode).toBe('dark');
+  });
+
+  /**
+   * The composed tree the app actually ships (`AppThemeProvider > App`), on the
+   * DEFAULT store both sides fall back to. This is what proves the toggle and
+   * the provider are driven by the SAME store — each takes an injectable
+   * `store` prop, so nothing else would catch a future change that injected one
+   * into the provider alone and left the toggle moving a store no one renders.
+   */
+  it('drives the document theme end-to-end from the rendered toggle', async () => {
+    const user = userEvent.setup();
+    render(
+      <AppThemeProvider>
+        <App />
+      </AppThemeProvider>,
+    );
+    expect(document.documentElement.dataset.theme).toBe('dark');
+
+    await user.click(screen.getByRole('switch', { name: /dark mode/i }));
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(document.documentElement.style.colorScheme).toBe('light');
   });
 });

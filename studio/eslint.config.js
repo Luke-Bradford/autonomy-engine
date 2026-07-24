@@ -7,7 +7,18 @@ import globals from 'globals';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/*.sqlite', '**/*.sqlite-*'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/*.sqlite',
+      '**/*.sqlite-*',
+      // Playwright run artifacts (#713). The HTML reporter emits `report.js`
+      // and bundled trace JS, which `eslint .` would otherwise enumerate and
+      // fail on. Kept in step with the same three entries in `.gitignore`.
+      '**/test-results/**',
+      '**/playwright-report/**',
+      '**/blob-report/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

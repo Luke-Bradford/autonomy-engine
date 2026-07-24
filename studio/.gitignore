@@ -12,3 +12,10 @@ data/
 .DS_Store
 .scaffold-report.md
 .spike-report.md
+# Playwright (#713) run artifacts — traces/screenshots for a failed spec, and
+# the HTML report. The throwaway server state the e2e run writes lives under
+# `data/`, already ignored above.
+test-results/
+playwright-report/
+blob-report/
+

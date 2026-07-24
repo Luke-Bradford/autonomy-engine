@@ -1,6 +1,6 @@
 import { webDarkTheme, webLightTheme, type Theme } from '@fluentui/react-components';
 
-/** The two shipped themes; a user-facing toggle + persistence arrives in U1. */
+/** The two shipped themes. `uiStore.themeMode` selects between them (U1). */
 export type ThemeMode = 'light' | 'dark';
 
 export const THEMES: Record<ThemeMode, Theme> = {
@@ -9,10 +9,12 @@ export const THEMES: Record<ThemeMode, Theme> = {
 };
 
 /**
- * U0 mounts the Fluent provider in DARK to preserve the shipped MVP's dark-only
- * look; the light/dark toggle + persisted preference (and the Settings surface)
- * are U1/U15. Keeping the mode a single exported constant means U1 swaps in a
- * store value without touching the provider wiring.
+ * The mode used when the user has expressed no preference — `uiStore` falls
+ * back to it when stored storage is absent, unreadable, or holds a value that
+ * is not a `ThemeMode`. It stays DARK deliberately: seeding from the OS's
+ * `prefers-color-scheme` instead would silently flip the shipped MVP's
+ * dark-only look to light for anyone on a light-mode machine. A Settings
+ * surface (U15) is where an explicit "follow system" option would belong.
  */
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark';
 
@@ -29,8 +31,9 @@ export const FLUENT_ROOT_CLASS = 'app-fluent-root';
 /**
  * Mirror the active Fluent mode onto the document root so the pre-Fluent
  * `index.css` variables and native form controls (scrollbars, date pickers)
- * match the Fluent theme. Deliberately side-effect-minimal — no state, no
- * listeners; the reactive toggle store is U1's job.
+ * match the Fluent theme. Deliberately side-effect-minimal and idempotent — no
+ * state, no listeners; reactivity lives in `AppThemeProvider`, which calls this
+ * whenever `uiStore.themeMode` changes.
  */
 export function syncColorScheme(mode: ThemeMode): void {
   const root = document.documentElement;
