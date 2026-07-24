@@ -118,4 +118,14 @@ describe('assertPlausibleTree', () => {
     const map: LicenseListMap = { MIT: [{ name: 'only', versions: ['1.0.0'] }] };
     expect(() => assertPlausibleTree(map, 50)).toThrow();
   });
+
+  it('throws on a shape-drifted non-array bucket (fail-closed, not NaN-passes)', () => {
+    // A drifted `pnpm licenses list --json` payload where a bucket is not an
+    // array must REFUSE, not silently pass via NaN arithmetic.
+    const drifted = {
+      MIT: Array.from({ length: 60 }, (_, i) => ({ name: `p${i}`, versions: ['1.0.0'] })),
+      Weird: { not: 'an array' },
+    } as unknown as LicenseListMap;
+    expect(() => assertPlausibleTree(drifted, 50)).toThrow(/non-array bucket/);
+  });
 });

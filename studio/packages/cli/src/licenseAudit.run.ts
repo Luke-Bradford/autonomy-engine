@@ -89,7 +89,9 @@ function main(): void {
   if (!ok) {
     console.error('\nDisallowed licenses found:');
     for (const v of violations) {
-      const names = v.packages.map((p) => `${p.name}@${p.versions?.join('/') ?? '?'}`).join(', ');
+      const names = v.packages
+        .map((p) => `${p.name ?? '<unknown>'}@${p.versions?.join('/') ?? '?'}`)
+        .join(', ');
       console.error(`  ${v.license}: ${names}`);
     }
     fail(

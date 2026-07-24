@@ -17,11 +17,13 @@
 /**
  * One package as reported by `pnpm licenses list --json`. pnpm groups every
  * installed version of a package under a single entry, so `versions` is an
- * array (e.g. `["1.2.0", "1.3.1"]`).
+ * array (e.g. `["1.2.0", "1.3.1"]`). Fields are typed as OPTIONAL because this
+ * shape describes UNVALIDATED external tool output — a payload drift must be
+ * tolerated by readers, not assumed away.
  */
 export interface LicensedPackage {
-  name: string;
-  versions: string[];
+  name?: string;
+  versions?: string[];
   [key: string]: unknown;
 }
 
@@ -166,7 +168,19 @@ export function auditLicenses(map: LicenseListMap, allowed: ReadonlySet<string>)
  * green.
  */
 export function assertPlausibleTree(map: LicenseListMap, minPackages: number): void {
-  const total = Object.values(map).reduce((n, pkgs) => n + pkgs.length, 0);
+  let total = 0;
+  for (const [license, pkgs] of Object.entries(map)) {
+    // Fail CLOSED on shape drift: a non-array bucket would make an arithmetic
+    // sum `NaN` (and `NaN < min` is false → the guard would silently pass). An
+    // unexpected shape must be a refusal, never a free pass.
+    if (!Array.isArray(pkgs)) {
+      throw new Error(
+        `license audit got a non-array bucket for "${license}" — unexpected ` +
+          '`pnpm licenses list --json` shape; refusing to pass an unverifiable tree.',
+      );
+    }
+    total += pkgs.length;
+  }
   if (total < minPackages) {
     throw new Error(
       `license audit examined only ${total} package(s) (floor ${minPackages}) — refusing to ` +
