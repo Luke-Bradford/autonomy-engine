@@ -44,6 +44,18 @@ import {
  * so a force-disabled unbound trigger stops previewing a phantom `update` forever
  * (the same resolved-space compare the apply does at `workspace-apply.ts`).
  *
+ * #3 G8b-3 — the compare is ALSO folded on connection READINESS: the caller may
+ * pass `readyVersionRids` (owned versions whose connections are all ready,
+ * `readyVersionResourceIds`); a bound trigger over a version NOT in that set folds
+ * `enabled`→false, matching the row the apply's forward gate force-disables — so
+ * the preview does not show a phantom `update` for a trigger the apply lands
+ * disabled. Omitting it (undefined) preserves the pre-G8b-3 binding-only compare.
+ * KNOWN residual: a version co-created ON this very branch is not in the readiness
+ * domain (it is unminted — its readiness is unknowable without simulating the
+ * write), so an EXISTING trigger REBOUND to such a version may still preview a
+ * phantom `update` (apply is authoritative + dispatch-gate-backstopped). A NEW
+ * trigger is unaffected — it classifies `create`, which ignores the content form.
+ *
  * Scope boundary (DELIBERATELY not here): only PIPELINES surface an archive
  * proposal (they are the only kind with an archive state, G5a). A connection or
  * trigger present in the DB but ABSENT from the branch is NOT surfaced — its
@@ -149,6 +161,7 @@ export function classifyWorkspace(
   db: ParsedWorkspace,
   incoming: ParsedWorkspace,
   ownedVersionRids: ReadonlySet<string>,
+  readyVersionRids?: ReadonlySet<string>,
 ): WorkspaceReconcilePlan {
   // #3 G7 — the resolution domain for an incoming trigger binding: every owned
   // version (`ownedVersionRids`) PLUS the version this very branch would mint,
@@ -165,6 +178,15 @@ export function classifyWorkspace(
   }
   const bindingResolves = (rid: string): boolean =>
     ownedVersionRids.has(rid) || incomingVersionRids.has(rid);
+  // #3 G8b-3 — readiness fold: without a readiness domain (undefined), a bound
+  // trigger is treated ready (pre-G8b-3 binding-only compare). A co-created
+  // version is never in `readyVersionRids` (unminted) → its readiness is unknown
+  // here; that only affects an existing trigger rebound onto it (documented
+  // residual), never a fresh `create`-disposition trigger.
+  const connectionsReady =
+    readyVersionRids === undefined
+      ? undefined
+      : (rid: string): boolean => readyVersionRids.has(rid);
 
   const dbPipelines = dbMap(
     db.pipelines,
@@ -213,8 +235,9 @@ export function classifyWorkspace(
         t.resourceId,
         triggerName(t),
         // #3 G7 — the incoming side is normalized to resolved space (the DB side,
-        // via `serializeTrigger`, is already resolved).
-        normalizedTriggerContentForm(t.data, bindingResolves),
+        // via `serializeTrigger`, is already resolved). #3 G8b-3 — plus the
+        // readiness fold (a bound-but-unready trigger folds `enabled`→false).
+        normalizedTriggerContentForm(t.data, bindingResolves, connectionsReady),
         dbTriggers,
       ),
     ),

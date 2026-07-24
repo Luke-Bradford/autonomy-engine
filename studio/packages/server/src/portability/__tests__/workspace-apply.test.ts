@@ -5,6 +5,7 @@ import {
   createConnection,
   createPipeline,
   createPipelineVersion,
+  createSecret,
   createTrigger,
   getConnectionByResourceId,
   getLatestPipelineVersion,
@@ -1031,5 +1032,239 @@ describe('applyWorkspace — #3 G6b git provenance on minted versions', () => {
     expect(pipelineFile.contents).not.toContain('sourceCommit');
     expect(pipelineFile.contents).not.toContain('sourceBlobSha');
     expect(pipelineFile.contents).not.toContain('commit-1');
+  });
+});
+
+/**
+ * #3 G8b-3 — the git-import connection-readiness gate. The import write-path
+ * (`applyWorkspace`) creates/updates connections + triggers OUTSIDE the HTTP
+ * routes, so it bypasses the G8b-1 enable-time gate (routes/triggers.ts) and the
+ * G8b-2 reverse gate (routes/connections.ts). This closes both holes:
+ *  - FORWARD: a branch trigger bound to a version whose connection is unready
+ *    (secret never in git → `needs_secret`) imports `enabled:false` (spec 120-123
+ *    "imports disabled"), not a route-style refusal — mirroring the unbound force.
+ *  - REVERSE: an import that leaves a connection unready disables its pre-existing
+ *    DB (non-branch) dependent enabled triggers, mirroring G8b-2.
+ */
+const llmNode = (id: string, connectionId: string): NewPipelineVersion['nodes'][number] => ({
+  id,
+  type: 'llm_call',
+  config: {},
+  connectionId,
+  position: { x: 0, y: 0 },
+});
+
+describe('applyWorkspace connection-readiness gate (#3 G8b-3)', () => {
+  it('FORWARD: an imported enabled trigger bound to a needs-secret connection lands disabled (binding preserved)', () => {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'AI',
+      kind: 'anthropic_api', // secret-requiring; import strips secretRef → needs_secret
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(src, triggerOn(v.id)); // enabled: true
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+
+    const tgtTrig = getTriggerByResourceId(tgt, 'local', trig.resourceId)!;
+    expect(tgtTrig.enabled).toBe(false);
+    // The binding is PRESERVED — the version is bound, merely unready (contrast the
+    // unbound force, which nulls the binding).
+    const tgtV = getLatestPipelineVersion(
+      tgt,
+      getPipelineByResourceId(tgt, 'local', pipe.resourceId)!.id,
+    )!;
+    expect(tgtTrig.pipelineVersionId).toBe(tgtV.id);
+  });
+
+  it('FORWARD idempotent: re-importing an unready-connection branch leaves the trigger unchanged + disabled (no churn)', () => {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'AI',
+      kind: 'anthropic_api',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(src, triggerOn(v.id));
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    const first = getTriggerByResourceId(tgt, 'local', trig.resourceId)!;
+
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    expect(again.applied.filter((a) => a.kind === 'trigger').map((a) => a.action)).toEqual([
+      'unchanged',
+    ]);
+    const second = getTriggerByResourceId(tgt, 'local', trig.resourceId)!;
+    expect(second.enabled).toBe(false);
+    expect(second.updatedAt).toBe(first.updatedAt); // no rewrite
+  });
+
+  it('FORWARD re-enable: once the secret is supplied locally, re-importing re-enables the trigger', () => {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'AI',
+      kind: 'anthropic_api',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(src, triggerOn(v.id));
+    const incoming = snapshot(src);
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    expect(getTriggerByResourceId(tgt, 'local', trig.resourceId)!.enabled).toBe(false);
+
+    // Supply the secret into the local store → the connection becomes ready.
+    createSecret(tgt, { ref: 'secref_supplied', ciphertext: 'cipher' });
+    const tgtConn = getConnectionByResourceId(tgt, 'local', conn.resourceId)!;
+    updateConnection(tgt, tgtConn.id, { secretRef: 'secref_supplied' });
+
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    expect(again.applied.filter((a) => a.kind === 'trigger').map((a) => a.action)).toEqual([
+      'updated',
+    ]);
+    expect(getTriggerByResourceId(tgt, 'local', trig.resourceId)!.enabled).toBe(true);
+  });
+
+  it('does NOT over-disable: an imported enabled trigger whose connection needs no secret stays enabled', () => {
+    const src = freshDb().db;
+    const conn = createConnection(src, {
+      ownerId: 'local',
+      name: 'Local LLM',
+      kind: 'ollama', // in llm_call connectionKinds, credential-less → not_required → ready
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(src, triggerOn(v.id));
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+    expect(getTriggerByResourceId(tgt, 'local', trig.resourceId)!.enabled).toBe(true);
+  });
+
+  it('REVERSE: an import that makes an existing connection unready disables a pre-existing DB-only dependent trigger', () => {
+    // tgt: a READY (ollama) connection + a version referencing it + a DB-only
+    // enabled trigger bound to that version — NONE of the trigger is on the branch.
+    const tgt = freshDb().db;
+    const conn = createConnection(tgt, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'ollama',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(tgt, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(tgt, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(tgt, triggerOn(v.id)); // enabled, bound, DB-only
+
+    // Branch = the same connection/pipeline/version by resourceId, but the
+    // connection is now a needs-secret kind (unready on import) and NO trigger.
+    const src = freshDb().db;
+    const srcConn = createConnection(
+      src,
+      { ownerId: 'local', name: 'C', kind: 'anthropic_api', config: {}, secretRef: null },
+      { resourceId: conn.resourceId },
+    );
+    const srcPipe = createPipeline(
+      src,
+      { ownerId: 'local', name: 'P' },
+      { resourceId: pipe.resourceId },
+    );
+    createPipelineVersion(
+      src,
+      { ...baseVersion(srcPipe.id), nodes: [llmNode('n1', srcConn.id)] },
+      { resourceId: v.resourceId },
+    );
+
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+
+    // The connection is now unready and its DB-only dependent trigger was disabled.
+    expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)!.secretStatus).toBe(
+      'needs_secret',
+    );
+    const after = getTrigger(tgt, trig.id)!;
+    expect(after.enabled).toBe(false);
+
+    // Reverse-gate idempotent: re-importing the (now-unchanged) branch touches
+    // nothing — the connection is already unready + the trigger already disabled.
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+    expect(again.applied.find((a) => a.kind === 'connection')!.action).toBe('unchanged');
+    expect(getTrigger(tgt, trig.id)!.updatedAt).toBe(after.updatedAt);
+  });
+
+  it('REVERSE no over-disable: a touched connection that STAYS ready leaves its dependent trigger enabled', () => {
+    const tgt = freshDb().db;
+    const conn = createConnection(tgt, {
+      ownerId: 'local',
+      name: 'C',
+      kind: 'ollama',
+      config: {},
+      secretRef: null,
+    });
+    const pipe = createPipeline(tgt, { ownerId: 'local', name: 'P' });
+    const v = createPipelineVersion(tgt, {
+      ...baseVersion(pipe.id),
+      nodes: [llmNode('n1', conn.id)],
+    });
+    const trig = createTrigger(tgt, triggerOn(v.id));
+
+    // Branch updates the connection (kind ollama → http, both credential-less →
+    // still READY) so it is TOUCHED (updated) but not unready.
+    const src = freshDb().db;
+    const srcConn = createConnection(
+      src,
+      {
+        ownerId: 'local',
+        name: 'C',
+        kind: 'http',
+        config: { baseUrl: 'https://x' },
+        secretRef: null,
+      },
+      { resourceId: conn.resourceId },
+    );
+    const srcPipe = createPipeline(
+      src,
+      { ownerId: 'local', name: 'P' },
+      { resourceId: pipe.resourceId },
+    );
+    createPipelineVersion(
+      src,
+      { ...baseVersion(srcPipe.id), nodes: [llmNode('n1', srcConn.id)] },
+      { resourceId: v.resourceId },
+    );
+
+    const result = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
+    expect(result.applied.find((a) => a.kind === 'connection')!.action).toBe('updated');
+    expect(getTrigger(tgt, trig.id)!.enabled).toBe(true);
   });
 });
