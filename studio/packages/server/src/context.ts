@@ -3,6 +3,7 @@ import type { Supervisor } from './workers/process-supervisor.js';
 import type { RunLauncher } from './run/launcher.js';
 import type { RunEventBus } from './run/event-bus.js';
 import type { ExternalWaitCompleter } from './run/external-wait-service.js';
+import type { ReseedService } from './run/reseed.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 
 /**
@@ -32,6 +33,12 @@ declare module 'fastify' {
      * driver boundary so the completion append + downstream drive run under the same
      * per-run lock as every other drive entry point. */
     externalWaitCompleter: ExternalWaitCompleter;
+    /** RS2 — starts a rerun-from-failed of a terminal FAILED run (the
+     * `POST /api/runs/:id/rerun-from-failed` route): computes the frontier, appends
+     * the reseed pair atomically, and drives R2. Per-app, sharing this instance's
+     * driver boundary so the reseed append + drive run under the same per-run lock
+     * as every other drive entry point. */
+    reseedService: ReseedService;
     /** This app instance's schedule RECONCILER (#5 S5): reconciles the durable
      * `schedule_tick` outbox rows against the DB's schedulable triggers (croner is
      * a next-fire CALCULATOR now, not a firing source — the alarm clock fires).

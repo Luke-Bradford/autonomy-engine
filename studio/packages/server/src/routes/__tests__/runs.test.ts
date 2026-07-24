@@ -127,6 +127,94 @@ describe('runs routes (read-only)', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it('POST /api/runs/:id/rerun-from-failed → 202 { runId } for an owned FAILED run', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId, // a ZERO-node version — reseed frontier is empty, R2 drives trivially
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    // A minimal valid failed log (parses through EngineEventSchema on load).
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.started',
+      payload: { type: 'run.started', runId: run.id, pipelineVersionId, params: {} },
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.finished',
+      payload: { type: 'run.finished', runId: run.id, outcome: 'failure', reason: 'boom' },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/runs/${run.id}/rerun-from-failed`,
+    });
+    expect(res.statusCode).toBe(202);
+    const { runId } = res.json();
+    expect(typeof runId).toBe('string');
+    expect(runId).not.toBe(run.id);
+  });
+
+  it('POST /api/runs/:id/rerun-from-failed → 409 for a SUCCESSFUL run (not eligible)', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.started',
+      payload: { type: 'run.started', runId: run.id, pipelineVersionId, params: {} },
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.finished',
+      payload: { type: 'run.finished', runId: run.id, outcome: 'success' },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/runs/${run.id}/rerun-from-failed`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflict');
+  });
+
+  it('POST /api/runs/:id/rerun-from-failed → 404 for a missing OR other-owner run (no oracle)', async () => {
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/api/runs/run_missing/rerun-from-failed',
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const other = createRun(app.db, {
+      ownerId: 'someone-else',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    appendRunEvent(app.db, {
+      runId: other.id,
+      type: 'run.started',
+      payload: { type: 'run.started', runId: other.id, pipelineVersionId, params: {} },
+    });
+    appendRunEvent(app.db, {
+      runId: other.id,
+      type: 'run.finished',
+      payload: { type: 'run.finished', runId: other.id, outcome: 'failure' },
+    });
+    const otherRes = await app.inject({
+      method: 'POST',
+      url: `/api/runs/${other.id}/rerun-from-failed`,
+    });
+    expect(otherRes.statusCode).toBe(404);
+  });
+
   it('there is no POST /api/runs route (runs are created by the engine/scheduler, not this API)', async () => {
     const res = await app.inject({
       method: 'POST',

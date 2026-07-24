@@ -111,6 +111,64 @@ export interface Engine {
    * build order — not an assumption this seam is entitled to make.
    */
   resume(state: RunState): ReduceResult;
+  /**
+   * RS2 — the rerun-from-failed FRONTIER: the strict successful PREFIX of a
+   * SOURCE run's projected state (`sourceState` = `projectRunState(R1's log)`)
+   * whose outputs a resumed run can reuse. PURE — no I/O, a function of the
+   * source state and this engine's (R1 = R2's) immutable graph.
+   *
+   * The manifest RS1's `run.reseeded` fold consumes verbatim: {@link ReseedFrontier}.
+   * See {@link ReseedFrontier} for the inclusion rule and the RS3/RS4/RS5 boundary.
+   */
+  reseedFrontier(sourceState: RunState): ReseedFrontier;
+}
+
+/**
+ * RS2 — the reseed manifest computed from a source run's projection: the exact
+ * three fields RS1's `run.reseeded` event carries (minus `sourceRunId`, which the
+ * producer stamps). See {@link Engine.reseedFrontier}.
+ *
+ * INCLUSION RULE (strict successful prefix, Open-Q1 settled — "copy only what the
+ * resume needs"): a top-level entity (node OR container) is INCLUDED iff
+ *   (a) it reached terminal `success` in the source run, AND
+ *   (b) every incoming edge that was SATISFIED in the source run (per the reducer's
+ *       own `edgeState`) comes from an entity that is itself included.
+ * The satisfied-edge test — not a naive "all direct predecessors" — is what keeps
+ * the algorithm correct at branch/failure joins: a not-taken branch edge or a dead
+ * failure edge is `impossible`/`unsatisfied-terminal`, so a downstream success node
+ * whose skipped sibling did not contribute is still copiable. It mirrors the reducer's
+ * readiness model exactly (shared `edgeState` + the `partitionReadiness` predecessor
+ * SSOT), so the frontier and the walk cannot drift. Failed / skipped / non-terminal
+ * entities, and any success entity a non-copiable satisfied predecessor gates, RE-RUN.
+ *
+ * SOUNDNESS: a copied entity's re-run inputs equal its source inputs, because its
+ * whole satisfied-edge ancestry is copied with identical outputs; a non-copied
+ * predecessor re-runs, and — its own inputs being copied-identical — reproduces its
+ * source outcome (a skipped branch re-skips, a failed node re-fails), so the copied
+ * entity's `${}` refs stay consistent. Params are NOT overridable on rerun-from-failed
+ * (the producer forbids it), so nothing upstream can shift a copied value.
+ *
+ * SCOPE BOUNDARY:
+ *  - Containers are copied whole when terminal-`success` (RS1's fold guards that);
+ *    RS3 owns the loop-round / foreach-instance copiability NUANCES on top of this
+ *    (a mid-flight container is already excluded here — not terminal-success).
+ *  - A BARE (non-container) back-edge loop's member nodes are conservatively
+ *    EXCLUDED (they re-run) — a copied loop member can freeze a `soft`/back-edge ref
+ *    at an obsolete iteration, and a copied run takes no bounce to `resetNodes` it.
+ *    The top-level analogue of the container-loop rule; RS3 may refine.
+ *  - A copied `call_pipeline` node is a plain success node here (never re-spawns its
+ *    child); RS4 adds `childLinks` provenance for RS6's render only.
+ *  - `secureOutput` exclusion (RS5) is a NO-OP today: the field ships with F4 and
+ *    does not exist yet, so no frontier node can carry a redacted output.
+ */
+export interface ReseedFrontier {
+  /** Top-level node ids copied as terminal-`success` (sorted, deterministic). */
+  frontier: string[];
+  /** Per-frontier-node stored outputs (`nodeId → {name → value}`), from the source
+   * run's projected `outputs` (`{}` for a node with none). */
+  copiedOutputs: Record<string, Record<string, unknown>>;
+  /** Fully-completed (terminal-`success`) containers copied as terminal units. */
+  copiedContainers: Record<string, ContainerRunState>;
 }
 
 const LIVE_NODE = new Set<NodeRunState['status']>(['ready', 'dispatched']);
@@ -4093,6 +4151,75 @@ export function createEngine(doc: EngineDoc): Engine {
     return state;
   }
 
+  /**
+   * RS2 — see {@link Engine.reseedFrontier} + {@link ReseedFrontier}. Reuses this
+   * engine's `topIncoming` (the `partitionReadiness` predecessor SSOT) and
+   * `edgeState` so the frontier and the reducer's readiness walk cannot drift.
+   */
+  function reseedFrontier(sourceState: RunState): ReseedFrontier {
+    // A node that belongs to any BARE back-edge loop body is conservatively
+    // EXCLUDED — a copied loop member can be UNSOUND (its `soft`/`default(${x})`
+    // ref may read a forward-descendant reachable only over the back-edge, i.e.
+    // OUTSIDE its satisfied-edge ancestry, so a copied value can freeze at an
+    // obsolete iteration; and R2 restarts with a fresh `bounces` budget). `settle`
+    // only self-corrects such a node via `resetNodes` ON A BOUNCE, which a copied
+    // run never takes. This is the top-level analogue of the container-loop rule
+    // (a container's loop state is copied atomically via `copiedContainers`; a bare
+    // loop has no such boundary) — so bare loops re-run whole. RS3 may refine to
+    // copy a fully-settled bare loop. `backBodyByKey` is the reducer's OWN reset-
+    // body SSOT; a container-target back-edge's body is the container's CHILDREN
+    // (never top-level), so adding those here is inert.
+    const backEdgeLoopNodes = new Set<string>();
+    for (const body of backBodyByKey.values()) for (const id of body) backEdgeLoopNodes.add(id);
+
+    const isSuccessNode = (id: string): boolean =>
+      sourceState.nodes[id]?.status === 'success' && !backEdgeLoopNodes.has(id);
+    const isSuccessContainer = (id: string): boolean =>
+      sourceState.containers[id]?.status === 'success';
+    const eligible = (id: string): boolean =>
+      containerById.has(id) ? isSuccessContainer(id) : isSuccessNode(id);
+
+    // Fixpoint over the top-level entities (`topEntities` = top nodes + containers).
+    // Monotone and finite: an entity, once included, stays; the forward top graph is
+    // a DAG, but even a pathological forward cycle is safe — it never bootstraps
+    // (each member needs the other included first), so it stays excluded (re-runs).
+    const included = new Set<string>();
+    for (;;) {
+      let changed = false;
+      for (const id of topEntities) {
+        if (included.has(id) || !eligible(id)) continue;
+        // (b): every SATISFIED incoming edge's source must already be included. A
+        // dead / not-taken edge (`impossible`/`unsatisfied-terminal`/`pending`) is
+        // ignored — that predecessor did not contribute to this entity in R1.
+        const incoming = topIncoming.get(id) ?? [];
+        const gated = incoming.some(
+          (e) => edgeState(e, sourceState) === 'satisfied' && !included.has(e.from),
+        );
+        if (!gated) {
+          included.add(id);
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+
+    // Shallow-copy the copied values, never alias `sourceState`'s top-level maps
+    // into the manifest — the event is a fresh object the fold (and its later
+    // replay) owns. This is a shallow de-alias only: nested `outputs` values still
+    // share references with `sourceState`, but `sourceState` is discarded the moment
+    // this returns, so nothing can mutate them afterwards. `EngineEventSchema.parse`
+    // on append also re-materializes the live fold's copy, so the payload the reducer
+    // consumes is structurally independent regardless.
+    const frontier = topLevelNodeIds.filter((id) => included.has(id)).sort(cmp);
+    const copiedOutputs: Record<string, Record<string, unknown>> = {};
+    for (const id of frontier) copiedOutputs[id] = { ...(sourceState.outputs[id] ?? {}) };
+    const copiedContainers: Record<string, ContainerRunState> = {};
+    for (const id of containerIds) {
+      if (included.has(id)) copiedContainers[id] = { ...sourceState.containers[id]! };
+    }
+    return { frontier, copiedOutputs, copiedContainers };
+  }
+
   return {
     seedState,
     reduce,
@@ -4100,6 +4227,7 @@ export function createEngine(doc: EngineDoc): Engine {
     // The SAME function `run.resumed` folds to — one derivation, two entry
     // points, so the boot path and the drive path cannot drift apart.
     resume: (state) => onResumed(state, []),
+    reseedFrontier,
   };
 }
 

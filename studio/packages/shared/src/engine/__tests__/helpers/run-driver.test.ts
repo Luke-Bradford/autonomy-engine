@@ -108,6 +108,7 @@ describe('driveRun — the shared run-driver mechanic', () => {
       }),
       projectRunState: () => seed,
       resume: () => ({ state: seed, commands: [], diagnostics: [] }),
+      reseedFrontier: () => ({ frontier: [], copiedOutputs: {}, copiedContainers: {} }),
     };
     const neverTerminates = (nodeId: string, attemptId: string, runId: string): EngineEvent => ({
       type: 'node.succeeded',

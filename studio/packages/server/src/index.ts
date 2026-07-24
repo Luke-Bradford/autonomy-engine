@@ -26,6 +26,7 @@ import { createLeaseService, LEASE_SWEEP_MS } from './scheduler/lease.js';
 import { createConnectorRegistry } from './connectors/registry.js';
 import { makeDocResolver } from './run/driver.js';
 import { createExternalWaitCompleter } from './run/external-wait-service.js';
+import { createReseedService } from './run/reseed.js';
 import { deriveExternalWaitToken } from './webhooks/external-wait-token.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
 import { registerAuthHook } from './auth/principal.js';
@@ -388,6 +389,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   // completion append + downstream drive run under the shared per-run lock), exactly
   // as `runLauncher` does.
   fastify.decorate('externalWaitCompleter', createExternalWaitCompleter(driverBoundary));
+
+  // RS2 — the rerun-from-failed producer: `POST /api/runs/:id/rerun-from-failed`.
+  // Same driver boundary as `runLauncher`/`externalWaitCompleter` so R2's reseed
+  // append + downstream drive run under the shared per-run lock.
+  fastify.decorate('reseedService', createReseedService(driverBoundary));
 
   // P4b/#5 S5: the schedule RECONCILER — reconciles the durable `schedule_tick`
   // outbox rows against the DB's schedulable triggers (croner is a CALCULATOR
