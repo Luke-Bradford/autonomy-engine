@@ -702,8 +702,10 @@ export async function buildApp(opts?: BuildAppOptions) {
   });
 
   // #409 P7 — serve the built web SPA from this same server (single-container
-  // self-host). Registered LAST so the specific API/health routes above always
-  // win over the static catch-all. Guarded on an actual `index.html`: with no
+  // self-host). The specific `/api/*` + `/health` routes always win over the
+  // static `/*` catch-all because Fastify (find-my-way) matches by route
+  // SPECIFICITY, not registration order — registering here, after the API
+  // routes, is just for readability. Guarded on an actual `index.html`: with no
   // `webRoot` (dev/test) or an incomplete build, we register nothing and keep
   // the plain JSON-404 behavior — never a 500 on every navigation.
   const webRoot = opts?.webRoot ?? process.env.WEB_ROOT;

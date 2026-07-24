@@ -64,9 +64,10 @@ export async function registerStaticWeb(fastify: FastifyInstance, webRoot: strin
 
   await fastify.register(fastifyStatic, {
     root: webRoot,
-    // Default catch-all `GET /*`, registered AFTER the specific API routes so it
-    // only intercepts otherwise-unmatched GETs; a missing file calls the
-    // not-found handler below.
+    // Default catch-all `GET /*`. It only intercepts GETs no specific route
+    // matched — find-my-way prefers the more specific `/api/*` + `/health` by
+    // route specificity, not registration order — and a request that hits the
+    // wildcard but finds no file calls the not-found handler below.
     wildcard: true,
   });
 
