@@ -246,6 +246,18 @@ describe('buildGuidedManualPullRequest', () => {
     ).toBe('github');
   });
 
+  it('recognises the www.github.com alias and emits the canonical github.com URL', () => {
+    const result = buildGuidedManualPullRequest(
+      'https://www.github.com/acme/widgets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(result.provider).toBe('github');
+    expect(result.url).toBe(
+      'https://github.com/acme/widgets/compare/main...studio/local/work?expand=1',
+    );
+  });
+
   it('percent-encodes a URL-significant char in owner/repo (repoUrl path charset is unrestricted)', () => {
     // WorkspaceGitRepoUrlSchema checks only scheme/credential shape, not the
     // path charset, so a `#` in owner/repo must not produce a malformed link.

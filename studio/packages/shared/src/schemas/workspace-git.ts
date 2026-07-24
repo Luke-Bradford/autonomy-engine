@@ -509,10 +509,14 @@ export function parseGitHostRepo(repoUrl: string): GitHostRepo | null {
 }
 
 /** Is this host GitHub? (GitHub is the only host G9a builds a compare URL for.)
+ * Accepts the `www.` alias — `https://www.github.com/…` is a legitimate remote
+ * (it redirects to the apex) and should still get a compare URL, which
+ * `buildGitHubCompareUrl` emits against the canonical `github.com` regardless.
  * Module-private — its only consumer is `buildGuidedManualPullRequest`; G9b can
  * export it if the host-API path needs a host discriminator. */
 function isGitHubHost(host: string): boolean {
-  return host.toLowerCase() === 'github.com';
+  const h = host.toLowerCase();
+  return h === 'github.com' || h === 'www.github.com';
 }
 
 /**
