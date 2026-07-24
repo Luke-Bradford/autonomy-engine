@@ -10,6 +10,8 @@ import {
 import { GitOperationError, GitPushRejectedError, GitUnavailableError } from './git/provider.js';
 import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { ArchivedPipelineError } from './run/launcher.js';
+import { DocUnresolvableError } from './run/driver.js';
+import { RerunNotEligibleError } from './run/reseed.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
@@ -203,6 +205,27 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // state; message client-safe (author-constructed, ids only).
     if (error instanceof PublishRefusedError) {
       request.log.warn({ err: error }, 'conflict: publish refused');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // RS2 — a rerun-from-failed was requested for a run that cannot be one (no
+    // log, not terminated, or terminated in success): a conflict with the source
+    // run's state, not a bad request shape. Message is client-safe (ids + a fixed
+    // reason). Order-independent of the `DocUnresolvableError` branch below (the two
+    // are unrelated classes, mutually-exclusive `instanceof`).
+    if (error instanceof RerunNotEligibleError) {
+      request.log.warn({ err: error }, 'conflict: run not rerun-from-failed eligible');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // RS2 — a rerun-from-failed (or any route resolving a run's doc) whose pinned
+    // immutable pipeline version no longer resolves (deleted/unparseable): a
+    // conflict with version state the request cannot fix, not an upstream outage.
+    // The message names ids only (see `DocUnresolvableError`), client-safe.
+    if (error instanceof DocUnresolvableError) {
+      request.log.warn({ err: error }, 'conflict: pipeline version unresolvable');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }

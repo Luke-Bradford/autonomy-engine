@@ -19,8 +19,10 @@ const ListRunsQuerystringSchema = z.object({
 });
 
 /**
- * READ-ONLY: runs are created by the engine/scheduler in later phases (P2-P4)
- * — there is deliberately no `POST /api/runs` here.
+ * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
+ * `POST /api/runs` create route. The one state-mutating action here is RS2's
+ * `POST /api/runs/:id/rerun-from-failed` (start a new run resuming a FAILED one);
+ * every other route is read-only.
  */
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
@@ -122,4 +124,39 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       })}`,
     }));
   });
+
+  /**
+   * RS2 — start a RERUN-FROM-FAILED of a terminal FAILED run: a new run R2 that
+   * copies R1's successful prefix (frontier) and resumes from the failure. Returns
+   * `202 { runId }` with R2's id; R2 drives in the background (like a manual fire).
+   *
+   * Owner-scoped THROUGH the source run (`requireOwned`) — authentication is not
+   * authorization: `request.principal` proves who asks, `requireOwned` proves they
+   * own the run being reran. Authz is checked HERE, at the boundary, before the
+   * producer runs. A non-existent OR not-owned run is the same `404` (no oracle).
+   *
+   * The producer's eligibility + version-resolution verdicts surface through the
+   * global error handler: `RerunNotEligibleError` (no log / not terminated / it
+   * succeeded) → 409, `DocUnresolvableError` (the pinned version is gone) → 409.
+   * R2 reuses R1's params + version EXACTLY (no override body — param override is a
+   * simple-rerun concern, not rerun-from-failed).
+   */
+  fastify.post<{ Params: { id: string } }>(
+    '/api/runs/:id/rerun-from-failed',
+    async (request, reply) => {
+      const run = requireOwned(
+        getRun(db, request.params.id),
+        request.principal,
+        'run',
+        request.params.id,
+      );
+      // `202` the moment R2 is durably created + its reseed pair committed; R2
+      // drives in the BACKGROUND (like a manual fire), so a long rerun never holds
+      // the request open. `drive` is intentionally not awaited (it owns its own
+      // faults; a crash before it runs recovers via the boot reconciler).
+      const { runId, drive } = await fastify.reseedService.rerunFromFailed(run.id);
+      void drive;
+      return reply.status(202).send({ runId });
+    },
+  );
 };

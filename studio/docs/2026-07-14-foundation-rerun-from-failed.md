@@ -96,7 +96,7 @@ same walk as a normal run.
 | # | Ticket |
 | --- | --- |
 | RS1 | `run.reseeded` event schema + reducer fold (mark frontier terminal, seed outputs/containers) — **SHIPPED 2026-07-24** (`rerunOf` defer-settle + `onReseeded` fold + guards; built-block below) |
-| RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link |
+| RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link + live producer — **SHIPPED 2026-07-24** (`Engine.reseedFrontier` satisfied-edge strict prefix + `createReseedService` atomic reseed-pair producer + `POST /api/runs/:id/rerun-from-failed`; built-block below) |
 | RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) |
 | RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier |
 | RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream |
@@ -154,3 +154,49 @@ no DB change.
   frontier `call_pipeline` node is copied-terminal and never re-spawns a child, so nothing needs it
   until RS6 renders provenance); `secureOutput` non-copiable exclusion (RS5); the `runs.rerunOf` row
   lineage + Monitor copied-vs-executed render (RS6).
+
+## RS2 built-block (2026-07-24) — frontier algorithm + `rerunOf` link + live producer
+
+RS2 makes the RS1 mechanism reachable: it COMPUTES the frontier from R1's log and DRIVES a new run R2
+that carries the reseed pair.
+
+- **`Engine.reseedFrontier(sourceState)` — the PURE frontier** (`engine/reduce.ts`, a method on
+  `createEngine` so it reuses the reducer's OWN `edgeState` + the `partitionReadiness` predecessor
+  SSOT — zero drift). INCLUSION RULE (strict successful prefix, Open-Q1): a top-level entity (node
+  OR container) is included iff (a) it reached terminal `success` in R1 AND (b) every incoming edge
+  that was **satisfied** in R1 comes from an included entity. The **satisfied-edge** test — not a
+  naive "all direct predecessors" — is load-bearing: a not-taken branch edge / dead failure edge is
+  `impossible`/`unsatisfied-terminal`, so a downstream success join whose SKIPPED sibling did not
+  contribute is still copiable (a naive rule would re-run the whole post-branch graph on every
+  rerun-from-failed). Returns `{frontier, copiedOutputs, copiedContainers}` — RS1's manifest minus
+  `sourceRunId`. Soundness: a copied entity's whole satisfied-edge ancestry is copied identically,
+  and a non-copied predecessor re-runs to its SAME outcome (a skipped branch re-skips, a failed node
+  re-fails) because ITS inputs are copied-identical — so a copied `${}` ref stays consistent.
+  Containers are copied whole when terminal-`success` (RS3 owns the loop-round / foreach-instance
+  copiability NUANCES on top; a mid-flight container is already excluded — not terminal-success).
+- **`createReseedService(deps).rerunFromFailed(sourceRunId)` — the LIVE producer**
+  (`server/src/run/reseed.ts`), mirroring `external-wait-service.ts`'s append-in-ONE-transaction +
+  drive-after-commit shape. It appends `run.triggerContext?` (R1's, replayed VERBATIM — swap runId —
+  the single SSOT for `${trigger.*}` reuse) + `run.started{rerunOf:R1}` + `run.reseeded{…}` in ONE
+  `db.transaction`, folding each (`appendAndFold`, `bus=undefined` in-tx) and syncing R2's row status
+  INSIDE the tx. The in-tx sync is load-bearing crash-safety: R2 is created `pending`, and the boot
+  reconciler scans `running` rows ONLY, so a committed reseed log on a `pending` row would be
+  permanently stranded — syncing to `running` in-tx closes RS1's crash window. After commit it
+  publishes the records to the bus, then `driveRun` re-projects and `resume` re-derives the dispatch
+  BEYOND the frontier (a settled `ready` node carries its `currentAttemptId`; copied frontier
+  successes carry none and are skipped — no double execution).
+- **Eligibility:** R1 must have a log AND have TERMINATED in a FAILURE (`failure` OR `interrupted`;
+  `success` is refused — a successful run has nothing to resume from, that is F11's job) — else
+  `RerunNotEligibleError` (→ 409). An unresolvable pinned version → `DocUnresolvableError` (→ 409).
+- **Provenance / SETTLED forks:** params reuse R1's EXACTLY (no override arg — override is F11-only);
+  R2 pins R1's `pipelineVersionId`; `triggerId`/`parentRunId` are `null` (a rerun is an explicit
+  operator action, not a trigger fire; `${trigger.*}` resolves via the replayed context event; rerun
+  lineage is the `run.started.rerunOf` link — the `runs.rerunOf` COLUMN is RS6).
+- **Route:** `POST /api/runs/:id/rerun-from-failed` → `202 {runId}` (`routes/runs.ts`), owner-scoped
+  via `requireOwned` BEFORE the producer (authz at the boundary; a missing OR not-owned run is the
+  same 404 — no oracle).
+- **CONSCIOUS NON-GOAL (RS2):** a rerun drives immediately and does NOT pass through the launcher's
+  concurrency admission — an explicit operator rerun is not gated by the trigger/pipeline caps that
+  bound AUTOMATED fires. Routing reruns through admission is a later refinement, not a defect.
+- **`secureOutput` (RS5) is a NO-OP today:** the field ships with F4 and does not exist yet, so no
+  frontier node can carry a redacted output — there is nothing to exclude or leak.
