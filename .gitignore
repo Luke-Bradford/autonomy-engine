@@ -16,3 +16,9 @@ __pycache__/
 /var/cron/
 /var/events/
 .claude/agents/planner.md
+
+# Page snapshots / traces the playwright MCP server writes into its launch CWD.
+# Unattended this is git-VISIBLE dirt: the supervisor's "tree clean on
+# origin/main" preflight stashes it and a recovery hook can sweep it onto the
+# working branch — same reason the /var/ artifacts above are ignored.
+/.playwright-mcp/
