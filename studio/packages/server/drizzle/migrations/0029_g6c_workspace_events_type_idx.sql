@@ -1,0 +1,17 @@
+-- #3 G6c-1 — index the `active` pointer projection.
+--
+-- The `active` pointer is a PROJECTION over `workspace_events`: the latest
+-- `pipeline.published` event for an owner + pipeline resourceId names the
+-- current active version (repo/workspace-events.ts#getActivePublishedVersion).
+-- G6a's schema doc already PROMISED `type` would be "an indexed column for
+-- kind-filtered projections (G6c)" — but only `(owner_id, seq)` and `(owner_id)`
+-- indexes shipped, so the projection would have scanned an owner's whole log.
+-- This makes the promise TRUE: a composite `(owner_id, type)` index turns the
+-- projection's `owner_id = ? AND type = 'pipeline.published'` filter into an
+-- index range scan (the JSON `payload.pipeline` equality is applied on the
+-- narrowed rows, ordered by `seq DESC LIMIT 1`).
+--
+-- The pre-existing standalone `(owner_id)` index is now a prefix-subset of this
+-- one, but it is left in place: dropping it is an unrelated cleanup, not a G6c
+-- concern, and it still serves the `run_events`-style owner-only reads.
+CREATE INDEX workspace_events_owner_id_type_idx ON workspace_events (owner_id, type);

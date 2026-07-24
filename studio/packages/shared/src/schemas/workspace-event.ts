@@ -77,14 +77,53 @@ export const ImportAppliedEventSchema = z.object({
 export type ImportAppliedEvent = z.infer<typeof ImportAppliedEventSchema>;
 
 /**
- * The closed workspace-audit event union, discriminated on `type`. G6c adds
- * `pipeline.published` here (and the `active`-pointer projection folds over
- * exactly this log).
+ * #3 G6c-1 — a pipeline version was PUBLISHED as the active/deployable one via
+ * the CAS route (`POST /api/pipelines/:id/publish`). The `active` pointer is a
+ * PROJECTION of this log: the latest `pipeline.published` for a pipeline names
+ * its current active version (`repo/workspace-events.ts#getActivePublishedVersion`).
+ * Publish is a GIT-MODE concept (a DB-only workspace binds-to-latest and has no
+ * active pointer) and only from a version whose git provenance is known.
+ *
+ * ID-SPACE (deliberate two-space choice): `pipeline` is the pipeline's stable
+ * `resourceId` (matches the sibling `pipeline.archived`/`import.applied`
+ * events, and is the natural projection GROUP key), while `from`/`to` are
+ * concrete DB pipeline-VERSION ids — exactly what a trigger/run binds and what
+ * CAS compares. This is safe because `workspace_events` is a DB-LOCAL log that
+ * is NEVER serialized to git (unlike a version doc, whose DB id is re-minted on
+ * a cross-machine import): a version row is immutable and never standalone-
+ * deleted, so a `to`/`from` version id can never dangle within its own DB. G6c-2
+ * bind-to-active resolves trigger → pipeline DB-id → `resourceId` (one
+ * `getPipeline` hop) to read this projection.
+ *
+ * `from` is the CAS expected-previous active (`null` on the first publish); the
+ * append is refused unless it matches the currently-projected active. `commit`/
+ * `blob` are the target version's git provenance (`source_commit`/
+ * `source_blob_sha`). The spec's "expected-previous active/commit" collapses to
+ * a version-id CAS here: each event carries a 1:1 `to`→`commit`, so comparing
+ * the version id is equivalent to comparing the commit. No `at` (the envelope
+ * `created_at` is the logical timestamp, like every sibling variant).
+ */
+export const PipelinePublishedEventSchema = z.object({
+  type: z.literal('pipeline.published'),
+  pipeline: z.string().min(1),
+  from: z.string().min(1).nullable(),
+  to: z.string().min(1),
+  commit: z.string().min(1),
+  blob: z.string().min(1),
+  by: BySchema,
+});
+export type PipelinePublishedEvent = z.infer<typeof PipelinePublishedEventSchema>;
+
+/**
+ * The closed workspace-audit event union, discriminated on `type`. G6c-1 adds
+ * `pipeline.published`; the `active`-pointer projection folds over exactly this
+ * log.
  */
 export const WorkspaceEventSchema = z.discriminatedUnion('type', [
   RepoConnectedEventSchema,
   PipelineArchivedEventSchema,
   ImportAppliedEventSchema,
+  PipelinePublishedEventSchema,
 ]);
 export type WorkspaceEvent = z.infer<typeof WorkspaceEventSchema>;
 

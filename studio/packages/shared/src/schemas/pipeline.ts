@@ -721,3 +721,52 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   outputs: z.array(OutputSchema).superRefine(refuseDuplicateNames('output', 'within the pipeline')),
 });
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
+
+/**
+ * #3 G6c-1 — the current active/deployable pointer for a pipeline, a PROJECTION
+ * of the `pipeline.published` workspace-audit log (never a stored mutable row).
+ * `versionId` is the concrete immutable DB version id a trigger/run would bind;
+ * `commit`/`blob` are its git provenance ("what is running, and from where?").
+ * `null` (in a response) means the pipeline has never been published.
+ */
+export const ActivePipelineVersionSchema = z.object({
+  versionId: z.string().min(1),
+  commit: z.string().min(1),
+  blob: z.string().min(1),
+});
+export type ActivePipelineVersion = z.infer<typeof ActivePipelineVersionSchema>;
+
+/**
+ * `POST /api/pipelines/:id/publish` body. `toVersionId` is the version to make
+ * active. `expectedActiveVersionId` is the CAS expected-previous active
+ * (`null` = "expected never-published"); it is REQUIRED and NOT defaulted — a
+ * missing expectation would be a fail-open CAS (the #473 shape: an absent fact
+ * must never be manufactured, here as "whatever is current"), so the client
+ * MUST state the active version it believes it is advancing from. A stale
+ * expectation is refused ("pull/import first").
+ */
+export const PublishPipelineBodySchema = z.object({
+  toVersionId: z.string().min(1),
+  expectedActiveVersionId: z.string().min(1).nullable(),
+});
+export type PublishPipelineBody = z.infer<typeof PublishPipelineBodySchema>;
+
+/**
+ * `POST /api/pipelines/:id/publish` response. `published` is `false` for an
+ * idempotent no-op (re-publishing the already-active version writes no event —
+ * the audit records EFFECT, not attempts, like `import.applied`); `active` is
+ * the pointer AFTER the call (always present on a 2xx — publish only succeeds
+ * with a concrete active version).
+ */
+export const PublishPipelineResultSchema = z.object({
+  published: z.boolean(),
+  active: ActivePipelineVersionSchema,
+});
+export type PublishPipelineResult = z.infer<typeof PublishPipelineResultSchema>;
+
+/** `GET /api/pipelines/:id/active` response — the projected pointer, or `null`
+ * if the pipeline has never been published. */
+export const ActivePipelineVersionResponseSchema = z.object({
+  active: ActivePipelineVersionSchema.nullable(),
+});
+export type ActivePipelineVersionResponse = z.infer<typeof ActivePipelineVersionResponseSchema>;

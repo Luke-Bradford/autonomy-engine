@@ -733,9 +733,10 @@ export const workspaceGit = sqliteTable(
  * layer assigns a monotonic `seq` per owner and never updates/deletes a row
  * (SQL triggers back that up). Envelope shape mirrors `run_events`; `payload`
  * is the closed `WorkspaceEventSchema` union (JSON), `type` duplicates
- * `payload.type` as an indexed column for kind-filtered projections (G6c). The
- * `created_at` timestamp is the keyset-pagination key for `GET
- * /api/workspace/audit`.
+ * `payload.type` as a column indexed via `(owner_id, type)` (migration 0029)
+ * for kind-filtered projections — G6c's `active` pointer folds the latest
+ * `pipeline.published` per pipeline. Reads are ordered/keyset-paginated by
+ * `seq` (the per-owner append authority), NOT the wall-clock `created_at`.
  */
 export const workspaceEvents = sqliteTable(
   'workspace_events',
@@ -750,5 +751,7 @@ export const workspaceEvents = sqliteTable(
   (table) => [
     uniqueIndex('workspace_events_owner_id_seq_idx').on(table.ownerId, table.seq),
     index('workspace_events_owner_id_idx').on(table.ownerId),
+    // #3 G6c-1 — the `active` pointer projection filters `(owner_id, type)`.
+    index('workspace_events_owner_id_type_idx').on(table.ownerId, table.type),
   ],
 );
