@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 4,
+  "catalogVersion": 18,
+  "kind": "pipeline",
+  "exportedAt": 0,
+  "data": {
+    "pipeline": {
+      "id": "pipe-stage-container",
+      "resourceId": null,
+      "ownerId": null,
+      "name": "Grouped filters (stage container)",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "versions": [
+      {
+        "id": "pv-stage-container",
+        "resourceId": null,
+        "pipelineId": "pipe-stage-container",
+        "version": 1,
+        "params": [
+          {
+            "name": "numbers",
+            "type": "json",
+            "required": false,
+            "default": [1, 2, 3, 4, 5, 6],
+            "description": "The list of numbers both grouped filters run over."
+          }
+        ],
+        "outputs": [],
+        "nodes": [
+          {
+            "id": "over-two",
+            "type": "filter",
+            "config": {
+              "items": "${params.numbers}",
+              "predicate": "${greater(item, 2)}"
+            },
+            "connectionId": null,
+            "position": { "x": 0, "y": 0 }
+          },
+          {
+            "id": "over-four",
+            "type": "filter",
+            "config": {
+              "items": "${params.numbers}",
+              "predicate": "${greater(item, 4)}"
+            },
+            "connectionId": null,
+            "position": { "x": 240, "y": 0 }
+          }
+        ],
+        "edges": [],
+        "containers": [
+          {
+            "id": "grouped-filters",
+            "kind": "stage",
+            "children": ["over-two", "over-four"]
+          }
+        ],
+        "catalogVersion": 18,
+        "createdAt": 0
+      }
+    ],
+    "strippedConnectionRefs": []
+  }
+}

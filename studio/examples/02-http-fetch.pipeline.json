@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 4,
+  "catalogVersion": 18,
+  "kind": "pipeline",
+  "exportedAt": 0,
+  "data": {
+    "pipeline": {
+      "id": "pipe-http-fetch",
+      "resourceId": null,
+      "ownerId": null,
+      "name": "Fetch a URL over HTTP",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "versions": [
+      {
+        "id": "pv-http-fetch",
+        "resourceId": null,
+        "pipelineId": "pipe-http-fetch",
+        "version": 1,
+        "params": [
+          {
+            "name": "url",
+            "type": "string",
+            "required": true,
+            "description": "The URL to fetch. Passed in at run start."
+          }
+        ],
+        "outputs": [],
+        "nodes": [
+          {
+            "id": "fetch",
+            "type": "http_request",
+            "config": {
+              "url": "${params.url}",
+              "method": "GET"
+            },
+            "connectionId": null,
+            "position": { "x": 0, "y": 0 }
+          }
+        ],
+        "edges": [],
+        "containers": [],
+        "catalogVersion": 18,
+        "createdAt": 0
+      }
+    ],
+    "strippedConnectionRefs": ["fetch"]
+  }
+}
