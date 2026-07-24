@@ -21,9 +21,18 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * ever hang an op: `buildGitEnv` pins `GIT_TERMINAL_PROMPT=0` (no terminal
  * prompt), `GIT_ASKPASS=echo` (an askpass that returns empty — auth FAILS
  * fast instead of prompting), and `ssh -oBatchMode=yes` (unless the operator
- * set their own `GIT_SSH_COMMAND`). Stored PATs are G10's; when they land,
- * `secretsToRedact` is the seam their values flow through so no error/stderr
- * ever quotes one.
+ * set their own `GIT_SSH_COMMAND`).
+ *
+ * G10 (transport auth): an OPERATOR-ENV GitHub token (the same `GH_TOKEN`/
+ * `GITHUB_TOKEN` G9b resolves for the REST PR-open) can now ALSO authenticate
+ * HTTPS transport — closing the gap where G9b opens a PR via REST but the
+ * `git push` that must precede it has no credential on a headless host with no
+ * credential helper. It is injected via `githubTokenTransportAuth` →
+ * `applyHttpAuthEnv` as a github.com-scoped `http.extraHeader` in the NETWORK
+ * ops' child ENV (never the argv; url-scoped so a non-github remote is
+ * unaffected). Its value flows through `secretsToRedact` so no error/stderr ever
+ * quotes it. A DB-STORED PAT (with its own encryption/UI/per-remote decisions)
+ * and non-github hosts + multi-remote remain later G10 slices.
  */
 
 /** Timeouts per op class: remote ops get minutes, local plumbing gets seconds. */
@@ -52,6 +61,83 @@ export function buildGitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   env.GIT_ASKPASS = 'echo';
   if (env.GIT_SSH_COMMAND === undefined) env.GIT_SSH_COMMAND = 'ssh -oBatchMode=yes';
   return env;
+}
+
+/**
+ * #3 G10 — a URL-scoped HTTP auth header for git transport. `header` is applied
+ * as git's `http.<urlPrefix>.extraHeader`, so git sends it ONLY on HTTP(S)
+ * requests whose URL matches `urlPrefix` (verified empirically:
+ * `config --get-urlmatch` returns it for a matching host and nothing for any
+ * other). That URL scoping is what makes it safe to attach to EVERY network op
+ * regardless of the actual remote — a non-matching remote (SSH, a different
+ * host, a local path) simply never receives it.
+ */
+export interface GitHttpAuth {
+  /** The git-config URL prefix the header is scoped to (e.g. `https://github.com/`). */
+  urlPrefix: string;
+  /** The full header line, e.g. `AUTHORIZATION: basic <base64>`. */
+  header: string;
+}
+
+/**
+ * #3 G10 — overlay a `GitHttpAuth` onto a git child env as a count-based
+ * `GIT_CONFIG_*` entry. This is deliberately NOT `-c http.<url>.extraHeader=…`
+ * on the ARGV: the argv of a running process is readable by other local
+ * processes (`ps`), so a base64'd token there would be a defense-in-depth leak
+ * that the `secretsToRedact` seam (which only scrubs error TEXT) cannot cover.
+ * The `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` env form
+ * (git ≥ 2.31) injects the same config with the value in the child ENV instead.
+ *
+ * It APPENDS at the next free index rather than clobbering any `GIT_CONFIG_COUNT`
+ * the operator's own environment already carries (their injected config must
+ * survive). A malformed/absent pre-existing count degrades to index 0 — never a
+ * `NaN` key that git would reject.
+ */
+export function applyHttpAuthEnv(
+  base: NodeJS.ProcessEnv,
+  httpAuth: GitHttpAuth,
+): NodeJS.ProcessEnv {
+  const parsed = Number.parseInt(base.GIT_CONFIG_COUNT ?? '', 10);
+  const n = Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+  return {
+    ...base,
+    GIT_CONFIG_COUNT: String(n + 1),
+    [`GIT_CONFIG_KEY_${n}`]: `http.${httpAuth.urlPrefix}.extraHeader`,
+    [`GIT_CONFIG_VALUE_${n}`]: httpAuth.header,
+  };
+}
+
+/**
+ * #3 G10 — build the transport auth for a GitHub HTTPS remote from an operator's
+ * token (`GH_TOKEN`/`GITHUB_TOKEN`, the SAME env token G9b resolves for the REST
+ * PR-open). The header is `AUTHORIZATION: basic base64("x-access-token:<token>")`
+ * — the canonical git-over-HTTPS token form (GitHub accepts basic auth with any
+ * username and the token as the password; `x-access-token` is the conventional
+ * username, matching `actions/checkout`). NOTE the deliberate asymmetry with the
+ * REST client (`github-host.ts`, which uses `Authorization: Bearer <token>`):
+ * git TRANSPORT wants Basic, the REST API wants Bearer — do not "unify" them.
+ * Scoped to `https://github.com/` (the only host this env token belongs to, per
+ * G9b); a non-github remote never matches and is unaffected. The value is never
+ * stored, never logged, and both the raw token and its base64 credential go into
+ * the `secretsToRedact` seam so no error/stderr can ever quote either.
+ */
+export function githubTokenTransportAuth(token: string): {
+  httpAuth: GitHttpAuth;
+  secrets: readonly string[];
+} {
+  // Fail loudly on an empty token rather than manufacture a bogus
+  // `x-access-token:`-with-no-password header (an auth attempt guaranteed to
+  // 401) and seed `secretsToRedact` with a useless empty needle. The live call
+  // site already guards this (`githubToken !== null`, itself `… || null` of a
+  // trimmed value), so this only protects a future reuse of the exported seam.
+  if (token.length === 0) {
+    throw new Error('githubTokenTransportAuth requires a non-empty token');
+  }
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  return {
+    httpAuth: { urlPrefix: 'https://github.com/', header: `AUTHORIZATION: basic ${basic}` },
+    secrets: [token, basic],
+  };
 }
 
 /**
@@ -118,6 +204,14 @@ export interface CliGitProviderOptions {
   gitBinary?: string;
   /** Values to scrub from stderr/error text — EMPTY in G2 (no stored git credentials exist); the G10 PAT hook. */
   secretsToRedact?: readonly string[];
+  /**
+   * #3 G10 — URL-scoped HTTP transport auth (an operator-env GitHub token, via
+   * `githubTokenTransportAuth`). When set, it is overlaid onto the child env of
+   * the NETWORK ops only (clone/fetch/push) via `GIT_CONFIG_*` — never the argv,
+   * never the local plumbing ops. Absent = the G2 auth model (SSH agent +
+   * credential helper) alone.
+   */
+  httpAuth?: GitHttpAuth;
   /** Local-op timeout override — exercised by the hung-command test. Remote-op timeouts are the module constants (no consumer overrides them; no inert options). */
   localTimeoutMs?: number;
 }
@@ -132,13 +226,23 @@ export class CliGitProvider {
   private readonly gitBinary: string;
   private readonly secretsToRedact: readonly string[];
   private readonly localTimeoutMs: number;
+  /** The base child env — all LOCAL/plumbing ops run with exactly this. */
   private readonly env: NodeJS.ProcessEnv;
+  /**
+   * The child env for the NETWORK ops (clone/fetch/push): `env` plus the
+   * `httpAuth` overlay when one is configured, else `env` unchanged. Keeping it
+   * off the local-op env means the transport token is never even present in the
+   * child that runs a `merge-base`/`rev-parse`/`commit`.
+   */
+  private readonly networkEnv: NodeJS.ProcessEnv;
 
   constructor(options: CliGitProviderOptions = {}) {
     this.gitBinary = options.gitBinary ?? 'git';
     this.secretsToRedact = options.secretsToRedact ?? [];
     this.localTimeoutMs = options.localTimeoutMs ?? DEFAULT_LOCAL_TIMEOUT_MS;
     this.env = buildGitEnv(process.env);
+    this.networkEnv =
+      options.httpAuth !== undefined ? applyHttpAuthEnv(this.env, options.httpAuth) : this.env;
   }
 
   /** Probe that git exists and runs; throws `GitUnavailableError` when it doesn't. */
@@ -162,6 +266,7 @@ export class CliGitProvider {
       ['clone', '--origin', 'origin', '--', src, dir],
       DEFAULT_CLONE_TIMEOUT_MS,
       dir,
+      this.networkEnv,
     );
   }
 
@@ -177,6 +282,7 @@ export class CliGitProvider {
       ['-C', dir, 'fetch', '--prune', 'origin'],
       DEFAULT_FETCH_TIMEOUT_MS,
       dir,
+      this.networkEnv,
     );
   }
 
@@ -368,6 +474,7 @@ export class CliGitProvider {
       ['-C', dir, 'push', 'origin', branch],
       DEFAULT_PUSH_TIMEOUT_MS,
       dir,
+      this.networkEnv,
     );
     if (result.code === 0) return;
     if (/non-fast-forward|fetch first/i.test(result.stderr)) {
@@ -502,8 +609,9 @@ export class CliGitProvider {
     args: string[],
     timeoutMs: number,
     dir?: string,
+    env: NodeJS.ProcessEnv = this.env,
   ): Promise<ExecResult> {
-    const result = await this.exec(op, args, timeoutMs, dir);
+    const result = await this.exec(op, args, timeoutMs, dir, env);
     if (result.code !== 0) {
       throw new GitOperationError(
         op,
@@ -516,9 +624,17 @@ export class CliGitProvider {
   /**
    * Runs git, resolving with the exit code (callers interpret non-zero);
    * rejects only for "git itself couldn't run": spawn ENOENT →
-   * `GitUnavailableError`, killed at the timeout → `GitOperationError`.
+   * `GitUnavailableError`, killed at the timeout → `GitOperationError`. `env`
+   * defaults to the base env; the network ops pass `this.networkEnv` so the
+   * transport auth overlay reaches only them.
    */
-  private exec(op: string, args: string[], timeoutMs: number, dir?: string): Promise<ExecResult> {
+  private exec(
+    op: string,
+    args: string[],
+    timeoutMs: number,
+    dir?: string,
+    env: NodeJS.ProcessEnv = this.env,
+  ): Promise<ExecResult> {
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         this.gitBinary,
@@ -526,7 +642,7 @@ export class CliGitProvider {
         {
           timeout: timeoutMs,
           maxBuffer: MAX_OUTPUT_BYTES,
-          env: this.env,
+          env,
           windowsHide: true,
         },
         (error, stdout, stderr) => {

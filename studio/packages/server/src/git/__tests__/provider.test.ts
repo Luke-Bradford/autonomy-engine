@@ -6,8 +6,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MASTER_KEY_ENV_VARS } from '../../secrets/secrets.js';
 import {
+  applyHttpAuthEnv,
   buildGitEnv,
   CliGitProvider,
+  githubTokenTransportAuth,
   GitOperationError,
   GitPushRejectedError,
   GitUnavailableError,
@@ -405,5 +407,192 @@ describe('CliGitProvider — G4 read primitives', () => {
     const provider = new CliGitProvider();
     const { checkout, headSha } = withCommittedFiles();
     await expect(provider.showBlob(checkout, headSha, 'pipelines/a.json')).resolves.toBe('{"a":1}');
+  });
+});
+
+describe('applyHttpAuthEnv', () => {
+  const auth = { urlPrefix: 'https://github.com/', header: 'AUTHORIZATION: basic B64VALUE' };
+
+  it('injects a url-matched extraHeader as a fresh GIT_CONFIG_* entry (index 0)', () => {
+    const env = applyHttpAuthEnv({ PATH: '/usr/bin' }, auth);
+    expect(env.GIT_CONFIG_COUNT).toBe('1');
+    expect(env.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraHeader');
+    expect(env.GIT_CONFIG_VALUE_0).toBe('AUTHORIZATION: basic B64VALUE');
+    // The token is carried in the ENV, never on the process command line.
+    expect(env.PATH).toBe('/usr/bin');
+  });
+
+  it('APPENDS to a pre-existing GIT_CONFIG_COUNT rather than clobbering the operator’s own config', () => {
+    const env = applyHttpAuthEnv(
+      { GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'a.b', GIT_CONFIG_KEY_1: 'c.d' },
+      auth,
+    );
+    expect(env.GIT_CONFIG_COUNT).toBe('3');
+    // The operator's existing entries are untouched…
+    expect(env.GIT_CONFIG_KEY_0).toBe('a.b');
+    expect(env.GIT_CONFIG_KEY_1).toBe('c.d');
+    // …and ours lands at the next free index.
+    expect(env.GIT_CONFIG_KEY_2).toBe('http.https://github.com/.extraHeader');
+    expect(env.GIT_CONFIG_VALUE_2).toBe('AUTHORIZATION: basic B64VALUE');
+  });
+
+  it('falls back to index 0 on a malformed pre-existing count (never a NaN key)', () => {
+    const env = applyHttpAuthEnv({ GIT_CONFIG_COUNT: 'garbage' }, auth);
+    expect(env.GIT_CONFIG_COUNT).toBe('1');
+    expect(env.GIT_CONFIG_KEY_0).toBe('http.https://github.com/.extraHeader');
+  });
+});
+
+describe('githubTokenTransportAuth', () => {
+  it('builds an x-access-token Basic header scoped to github.com, with token+base64 both in the redaction set', () => {
+    const token = 'ghp_secretTOKEN';
+    const b64 = Buffer.from(`x-access-token:${token}`).toString('base64');
+    const { httpAuth, secrets } = githubTokenTransportAuth(token);
+    expect(httpAuth.urlPrefix).toBe('https://github.com/');
+    expect(httpAuth.header).toBe(`AUTHORIZATION: basic ${b64}`);
+    // Both the raw token AND its base64 credential are scrubbed (belt-and-braces:
+    // the raw token can never resurface either).
+    expect(secrets).toContain(token);
+    expect(secrets).toContain(b64);
+  });
+
+  it('throws on an empty token (the exported seam never manufactures a bogus header)', () => {
+    expect(() => githubTokenTransportAuth('')).toThrow(/non-empty token/);
+  });
+
+  it('the injected env actually resolves the extraHeader for a github.com URL — and NOT for another host', () => {
+    // The POSITIVE direction of the scoping claim (the negative — inert on a
+    // non-github remote — is covered by the real clone/fetch/push test below):
+    // prove real git resolves our exact `http.<url>.extraHeader` key for a
+    // github.com URL under the injected env, locking the key format against a
+    // git-version behaviour change. `--get-urlmatch` reads the GIT_CONFIG_* env
+    // even outside a repo.
+    const { httpAuth } = githubTokenTransportAuth('ghp_x');
+    const env = { ...process.env, ...applyHttpAuthEnv({}, httpAuth) };
+    const matched = execFileSync(
+      'git',
+      ['config', '--get-urlmatch', 'http.extraHeader', 'https://github.com/o/r'],
+      { env, encoding: 'utf8' },
+    ).trim();
+    expect(matched).toBe(httpAuth.header);
+    // A non-github URL matches nothing → git exits 1 (no output).
+    let nonMatchStatus: number | undefined;
+    try {
+      execFileSync(
+        'git',
+        ['config', '--get-urlmatch', 'http.extraHeader', 'https://gitlab.com/o/r'],
+        { env, encoding: 'utf8' },
+      );
+    } catch (e) {
+      nonMatchStatus = (e as { status?: number }).status;
+    }
+    expect(nonMatchStatus).toBe(1);
+  });
+});
+
+describe('CliGitProvider — G10 operator-env token transport auth', () => {
+  /**
+   * A fake git that appends its argv + the GIT_CONFIG_* env it received to a log,
+   * then exits 0. Lets a test prove the token is injected via ENV (never argv, so
+   * never on the process command line) and only on the ops it should be.
+   */
+  function recordingShim(dir: string): { bin: string; log: string } {
+    const log = join(dir, 'invocations.log');
+    const bin = join(dir, 'recording-git.sh');
+    writeFileSync(
+      bin,
+      [
+        '#!/bin/sh',
+        `LOG="${log}"`,
+        '{',
+        '  echo "ARGV: $*"',
+        '  echo "COUNT=${GIT_CONFIG_COUNT-}"',
+        '  echo "KEY0=${GIT_CONFIG_KEY_0-}"',
+        '  echo "VALUE0=${GIT_CONFIG_VALUE_0-}"',
+        '} >> "$LOG"',
+        'exit 0',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(bin, 0o755);
+    return { bin, log };
+  }
+
+  function readLog(log: string): string {
+    return existsSync(log) ? execFileSync('cat', [log], { encoding: 'utf8' }) : '';
+  }
+
+  it('a network op (fetch) injects the auth via GIT_CONFIG_* env — NEVER on the argv', async () => {
+    const dir = tmp();
+    const { bin, log } = recordingShim(dir);
+    const { httpAuth, secrets } = githubTokenTransportAuth('ghp_x');
+    const b64 = httpAuth.header.replace('AUTHORIZATION: basic ', '');
+    const provider = new CliGitProvider({ gitBinary: bin, httpAuth, secretsToRedact: secrets });
+    await provider.fetch('/tmp/anything');
+    const out = readLog(log);
+    expect(out).toContain('COUNT=1');
+    expect(out).toContain('KEY0=http.https://github.com/.extraHeader');
+    expect(out).toContain(`VALUE0=AUTHORIZATION: basic ${b64}`);
+    // The credential is in the env line, and the argv line must NOT carry it.
+    const argvLine = out.split('\n').find((l) => l.startsWith('ARGV:')) ?? '';
+    expect(argvLine).not.toContain(b64);
+    expect(argvLine).not.toContain('extraHeader');
+  });
+
+  it('a local op (revParseRemoteBranch) carries NO auth config env', async () => {
+    const dir = tmp();
+    const { bin, log } = recordingShim(dir);
+    const { httpAuth, secrets } = githubTokenTransportAuth('ghp_x');
+    const provider = new CliGitProvider({ gitBinary: bin, httpAuth, secretsToRedact: secrets });
+    // The shim exits 0 with empty stdout → revParse returns '' (a resolved head).
+    await provider.revParseRemoteBranch('/tmp/anything', 'main');
+    const out = readLog(log);
+    expect(out).toContain('COUNT=');
+    expect(out).not.toContain('COUNT=1');
+    expect(out).not.toContain('extraHeader');
+  });
+
+  it('no httpAuth → no auth config env even on a network op', async () => {
+    const dir = tmp();
+    const { bin, log } = recordingShim(dir);
+    const provider = new CliGitProvider({ gitBinary: bin });
+    await provider.fetch('/tmp/anything');
+    const out = readLog(log);
+    expect(out).not.toContain('COUNT=1');
+    expect(out).not.toContain('extraHeader');
+  });
+
+  it('with httpAuth set, real clone/fetch/push to a NON-github remote still SUCCEED (url-match keeps the header inert)', async () => {
+    const { dir, remote, work } = seededRemote();
+    const checkout = join(dir, 'checkout');
+    const { httpAuth, secrets } = githubTokenTransportAuth('ghp_x');
+    const provider = new CliGitProvider({ httpAuth, secretsToRedact: secrets });
+
+    // clone (network) — a path remote never matches https://github.com/, so the
+    // header is never sent and the op is unaffected.
+    await provider.clone(remote, checkout);
+    // fetch (network)
+    pushNewCommit(work, 'second.md');
+    await provider.fetch(checkout);
+    // push (network) — a fast-forward create on a new branch.
+    await provider.checkoutWorkingBranch(checkout, 'feature', 'origin/main');
+    writeFileSync(join(checkout, 'ours.txt'), 'ours\n');
+    await provider.add(checkout, ['ours.txt']);
+    await provider.commit(checkout, 'ours', { name: 'local', email: 'local@studio.local' });
+    await expect(provider.push(checkout, 'feature')).resolves.toBeUndefined();
+  });
+
+  it('the base64 credential is redacted out of a leaked error', async () => {
+    const dir = tmp();
+    const { httpAuth, secrets } = githubTokenTransportAuth('ghp_x');
+    const b64 = httpAuth.header.replace('AUTHORIZATION: basic ', '');
+    const shim = join(dir, 'leaky-git.sh');
+    writeFileSync(shim, `#!/bin/sh\necho "fatal: bad credential ${b64}" >&2\nexit 128\n`);
+    chmodSync(shim, 0o755);
+    const provider = new CliGitProvider({ gitBinary: shim, httpAuth, secretsToRedact: secrets });
+    const err = await provider.fetch('/tmp/anything').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitOperationError);
+    expect((err as Error).message).not.toContain(b64);
+    expect((err as Error).message).toContain('***');
   });
 });
