@@ -61,11 +61,8 @@ export function HubRail({ store }: HubRailProps) {
               >
                 {({ isActive }) => {
                   const Glyph = isActive ? hub.IconActive : hub.Icon;
-                  {
-                    /* The glyph is decorative: the link already carries the
-                       name, and a titled SVG would make a screen reader say it
-                       twice. */
-                  }
+                  // The glyph is decorative: the link already carries the name,
+                  // and a titled SVG would make a screen reader say it twice.
                   return <Glyph aria-hidden="true" />;
                 }}
               </NavLink>
