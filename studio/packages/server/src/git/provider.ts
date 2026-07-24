@@ -84,6 +84,14 @@ export class GitOperationError extends Error {
   }
 }
 
+/** #3 G6b — one `ls-tree -r` entry: a managed file's repo-relative path and the
+ * git blob SHA of its content at the read ref. The blob sha stamps the imported
+ * version's `source_blob_sha` provenance. */
+export interface ManagedTreeEntry {
+  path: string;
+  blobSha: string;
+}
+
 export interface CliGitProviderOptions {
   /** Binary to invoke (default `git`, resolved via PATH). A test seam (shim scripts) — not exposed to clients. */
   gitBinary?: string;
@@ -327,25 +335,45 @@ export class CliGitProvider {
   }
 
   /**
-   * #3 G4 — the repo-relative paths of every blob under `pathspecs` at `ref`,
-   * read STRAIGHT FROM THE OBJECT STORE (`ls-tree -r`), so it never touches the
+   * #3 G4 — every blob under `pathspecs` at `ref` as `{ path, blobSha }`, read
+   * STRAIGHT FROM THE OBJECT STORE (`ls-tree -r`), so it never touches the
    * working tree / index the Commit path owns — a read at any ref is safe to run
    * inside the same `KeyedQueue` slot without disturbing HEAD. `-z` NUL-delimits
-   * the names (git would otherwise quote/escape a name with special bytes; the
-   * caller splits on `\0`), `--name-only` drops the mode/type/sha columns, `--`
+   * the records (git would otherwise quote/escape a name with special bytes), `--`
    * separates the pathspecs. `ref` is a resolved sha (the caller passes the
-   * observed collab head), so the read is a single immutable snapshot. A
-   * pathspec absent from the tree simply contributes no entries (no error).
-   * Local op.
+   * observed collab head), so the read is a single immutable snapshot. A pathspec
+   * absent from the tree simply contributes no entries (no error). Local op.
+   *
+   * #3 G6b — the blob sha is now surfaced (the `--name-only` filter is dropped)
+   * so the workspace-git import can stamp each minted version's git provenance
+   * (`pipeline_versions.source_blob_sha`) WITHOUT a second `cat-file` per path.
+   * Each `-r -z` record is `<mode> <type> <sha>\t<path>` (verified against real
+   * git): the sha is the third space-delimited token before the TAB, the path is
+   * everything after it. `-r` recurses, so entries are only blobs (or submodule
+   * `commit`s); callers filter to the `.json` blobs they manage.
    */
-  async lsTreeManaged(dir: string, ref: string, pathspecs: readonly string[]): Promise<string[]> {
+  async lsTreeManaged(
+    dir: string,
+    ref: string,
+    pathspecs: readonly string[],
+  ): Promise<ManagedTreeEntry[]> {
     const { stdout } = await this.execOk(
       'ls-tree',
-      ['-C', dir, 'ls-tree', '-r', '-z', '--name-only', ref, '--', ...pathspecs],
+      ['-C', dir, 'ls-tree', '-r', '-z', ref, '--', ...pathspecs],
       this.localTimeoutMs,
       dir,
     );
-    return stdout.split('\0').filter((path) => path.length > 0);
+    return stdout
+      .split('\0')
+      .filter((record) => record.length > 0)
+      .map((record) => {
+        const tab = record.indexOf('\t');
+        // `<mode> <type> <sha>` before the TAB, the repo-relative path after it.
+        const meta = record.slice(0, tab);
+        const path = record.slice(tab + 1);
+        const blobSha = meta.split(' ')[2] ?? '';
+        return { path, blobSha };
+      });
   }
 
   /**

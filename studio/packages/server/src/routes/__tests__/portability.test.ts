@@ -38,6 +38,18 @@ describe('portability routes (export + import)', () => {
       const version = versionRes.json();
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { archived: _archived, ...pipelineWithoutArchived } = pipeline;
+      // #3 G6b — git provenance is LOCAL derived state, stripped on export like
+      // `archived`. A version authored via the API has it all `null`; the export
+      // omits it, so the expected envelope version is the DB row MINUS provenance.
+      const {
+        /* eslint-disable @typescript-eslint/no-unused-vars */
+        sourceCommit: _sc,
+        sourceBranch: _sb,
+        sourceFilePath: _sfp,
+        sourceBlobSha: _sbs,
+        /* eslint-enable @typescript-eslint/no-unused-vars */
+        ...versionWithoutProvenance
+      } = version;
 
       const exportRes = await app.inject({
         method: 'GET',
@@ -55,7 +67,7 @@ describe('portability routes (export + import)', () => {
           // represents archive as file absence). The export strips it, so the
           // envelope's pipeline is the DB row MINUS `archived`.
           pipeline: pipelineWithoutArchived,
-          versions: [{ ...version }],
+          versions: [versionWithoutProvenance],
           strippedConnectionRefs: [],
         },
       });

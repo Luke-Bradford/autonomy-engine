@@ -34,6 +34,16 @@ const exportResourceId = z.string().min(1).nullable();
 export const PipelineVersionExportSchema = PipelineVersionSchema.omit({
   nodes: true,
   resourceId: true,
+  // #3 G6b — git provenance is LOCAL derived state (which commit/blob/branch/path
+  // a version was imported FROM on THIS machine), never authoring content.
+  // Serializing it would (1) leak one machine's checkout details cross-machine and
+  // (2) make a file's committed bytes depend on its own git blob sha — a
+  // self-referential churn loop. `z.object` strips it on export and ignores it on
+  // any future import — no SCHEMA_VERSION bump (same posture as `archived`).
+  sourceCommit: true,
+  sourceBranch: true,
+  sourceFilePath: true,
+  sourceBlobSha: true,
 }).extend({
   nodes: z.array(NodeExportSchema),
   resourceId: exportResourceId,

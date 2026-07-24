@@ -173,6 +173,16 @@ export const pipelineVersions = sqliteTable(
     containers: text('containers', { mode: 'json' }).notNull().$type<Container[]>(),
     catalogVersion: integer('catalog_version').notNull(),
     createdAt: integer('created_at').notNull(),
+    // #3 G6b — git provenance: WHERE this immutable version was imported from
+    // (the substrate G6c's CAS Publish reads + "what is running?"). Nullable-in-
+    // SQL; the Zod read schema is backward-tolerant (`.default(null)`, like
+    // `containers`) because a version doc is re-parsed from pre-G6b blobs — NULL
+    // is the honest "no git provenance" value, masking no lost fact (not a #473
+    // fail-open). Stamped once at mint (0028), immutable thereafter.
+    sourceCommit: text('source_commit'),
+    sourceBranch: text('source_branch'),
+    sourceFilePath: text('source_file_path'),
+    sourceBlobSha: text('source_blob_sha'),
   },
   (table) => [
     uniqueIndex('pipeline_versions_pipeline_id_version_idx').on(table.pipelineId, table.version),

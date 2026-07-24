@@ -10,9 +10,16 @@ import { GitOperationError, GitUnavailableError } from '../provider.js';
  * to `unreadable` instead of rejecting the whole read.
  */
 
+/** #3 G6b — a deterministic stand-in for a path's git blob sha. */
+const stubBlobSha = (path: string) => `blob-${path}`;
+
+/** `ls-tree` now yields `{ path, blobSha }` per entry (#3 G6b). */
+const stubTreeEntries = (tree: Record<string, string>) =>
+  Object.keys(tree).map((path) => ({ path, blobSha: stubBlobSha(path) }));
+
 function stubProvider(tree: Record<string, string>) {
   return {
-    lsTreeManaged: async () => Object.keys(tree),
+    lsTreeManaged: async () => stubTreeEntries(tree),
     showBlob: async (_dir: string, _ref: string, path: string) => tree[path]!,
   };
 }
@@ -21,7 +28,7 @@ function stubProvider(tree: Record<string, string>) {
  * contents otherwise — models one over-cap / failing blob among readable ones. */
 function stubProviderFailing(tree: Record<string, string>, failPath: string, err: Error) {
   return {
-    lsTreeManaged: async () => Object.keys(tree),
+    lsTreeManaged: async () => stubTreeEntries(tree),
     showBlob: async (_dir: string, _ref: string, path: string) => {
       if (path === failPath) throw err;
       return tree[path]!;
@@ -45,8 +52,12 @@ describe('readWorkspaceFilesAtRef', () => {
 
     expect(result).toEqual({
       files: [
-        { path: 'pipelines/a.json', contents: '{"a":1}' },
-        { path: 'connections/b.json', contents: '{"b":2}' },
+        { path: 'pipelines/a.json', contents: '{"a":1}', blobSha: stubBlobSha('pipelines/a.json') },
+        {
+          path: 'connections/b.json',
+          contents: '{"b":2}',
+          blobSha: stubBlobSha('connections/b.json'),
+        },
       ],
       unreadable: [],
     });
@@ -69,7 +80,13 @@ describe('readWorkspaceFilesAtRef', () => {
     const result = await readWorkspaceFilesAtRef(provider, '/checkout', 'deadbeef', ['pipelines']);
 
     expect(result).toEqual({
-      files: [{ path: 'pipelines/ok.json', contents: '{"a":1}' }],
+      files: [
+        {
+          path: 'pipelines/ok.json',
+          contents: '{"a":1}',
+          blobSha: stubBlobSha('pipelines/ok.json'),
+        },
+      ],
       unreadable: ['pipelines/huge.json'],
     });
   });

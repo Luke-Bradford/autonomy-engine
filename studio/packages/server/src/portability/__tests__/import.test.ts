@@ -419,8 +419,21 @@ describe('importEnvelope: pipeline', () => {
     // value fails HERE, forcing this test to be extended, not silently skipped.
     // `resourceId` (#3 G1) is deliberately NOT preserved by PORTABLE import —
     // portable semantics mint a fresh identity (that IS the copy contract; the
-    // workspace-git import #3 G4/G5 is the mode that preserves it).
-    const NOT_PRESERVED = ['id', 'resourceId', 'version', 'createdAt', 'pipelineId'];
+    // workspace-git import #3 G4/G5 is the mode that preserves it). The #3 G6b
+    // git-provenance fields are LOCAL derived state, stripped on export
+    // (`PipelineVersionExportSchema`) and never round-tripped — so they are not
+    // preserved by any import path.
+    const NOT_PRESERVED = [
+      'id',
+      'resourceId',
+      'version',
+      'createdAt',
+      'pipelineId',
+      'sourceCommit',
+      'sourceBranch',
+      'sourceFilePath',
+      'sourceBlobSha',
+    ];
     const preserved = Object.keys(PipelineVersionSchema.shape).filter(
       (key) => !NOT_PRESERVED.includes(key),
     );

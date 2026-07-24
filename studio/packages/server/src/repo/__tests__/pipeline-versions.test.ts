@@ -590,7 +590,20 @@ describe('pipeline-versions repo', () => {
     // fails HERE, forcing this test to be extended rather than silently
     // under-covering — the same class-guard shape as `schema-table-parity`.
     // `resourceId` (#3 G1) is server-minted like `id` — the write schema omits it.
-    const SERVER_ASSIGNED = ['id', 'resourceId', 'version', 'createdAt'];
+    // The #3 G6b provenance fields are likewise NOT authored via the write shape:
+    // they are stamped from `CreateResourceOptions` only on the workspace-git
+    // import mint, so a DB-authored version leaves them `null`. Their persistence
+    // is covered by the workspace-apply provenance test, not this round-trip.
+    const SERVER_ASSIGNED = [
+      'id',
+      'resourceId',
+      'version',
+      'createdAt',
+      'sourceCommit',
+      'sourceBranch',
+      'sourceFilePath',
+      'sourceBlobSha',
+    ];
     const persistable = Object.keys(PipelineVersionSchema.shape).filter(
       (key) => !SERVER_ASSIGNED.includes(key),
     );

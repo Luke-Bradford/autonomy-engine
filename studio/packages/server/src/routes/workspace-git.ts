@@ -395,7 +395,9 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // nothing.
       return db.transaction(() => {
         const applyResult = WorkspaceGitApplyResultSchema.parse(
-          applyWorkspace(db, ownerId, incoming, head),
+          // #3 G6b — `row.collabBranch` rides in so every minted version records
+          // its git provenance (source commit `head` + branch + file path/blob).
+          applyWorkspace(db, ownerId, incoming, head, row.collabBranch),
         );
         const event = buildImportAppliedEvent(applyResult, {
           branch: row.collabBranch,

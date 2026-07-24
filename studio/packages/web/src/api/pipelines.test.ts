@@ -30,6 +30,12 @@ const version = {
   containers: [],
   catalogVersion: 1,
   createdAt: 1,
+  // #3 G6b — git provenance, `null` on a non-git version; the client parses
+  // responses through `PipelineVersionSchema`, which fills these defaults.
+  sourceCommit: null,
+  sourceBranch: null,
+  sourceFilePath: null,
+  sourceBlobSha: null,
 };
 
 function stubFetch(status: number, jsonBody: unknown) {

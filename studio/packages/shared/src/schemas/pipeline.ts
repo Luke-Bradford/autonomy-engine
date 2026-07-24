@@ -661,6 +661,31 @@ export const PipelineVersionSchema = z.object({
   containers: z.array(ContainerSchema).default([]),
   catalogVersion: z.number().int(),
   createdAt: z.number().int(),
+  /**
+   * #3 G6b — git provenance: the source commit / collaboration branch /
+   * repo-relative file path / git blob SHA this immutable version was imported
+   * from (`workspace-git` reconcile mint, G5c). `null` on any NON-git mint (the
+   * `POST /api/pipelines/:id/versions` route, portable import) and on every
+   * pre-G6b row. G6c's CAS Publish reads `sourceCommit`/`sourceBlobSha`; all four
+   * answer "what is running, and where from?".
+   *
+   * `.default(null)` is BACKWARD-TOLERANT on READ, matching `containers` above
+   * (not the required `concurrency` pattern): an immutable version doc is
+   * re-parsed from stored/exported blobs that PREDATE G6b and legitimately carry
+   * no provenance key, so a required key would BRICK reading them. This is NOT a
+   * #473 fail-open — `null` is the honest, truthful value for "no git provenance"
+   * (absence and `null` mean exactly the same thing here), so the default masks
+   * no lost fact, unlike `containers: []` which once hid dropped data. Stamped at
+   * mint from `CreateResourceOptions`; the WRITE shape omits it entirely
+   * (`NewPipelineVersionSchema`). Never serialized to a git file (see
+   * `PipelineVersionExportSchema`) and excluded from the version content form
+   * (see `VERSION_VOLATILE`) so a re-pull from a different commit is not misread
+   * as a content change.
+   */
+  sourceCommit: z.string().min(1).nullable().default(null),
+  sourceBranch: z.string().min(1).nullable().default(null),
+  sourceFilePath: z.string().min(1).nullable().default(null),
+  sourceBlobSha: z.string().min(1).nullable().default(null),
 });
 export type PipelineVersion = z.infer<typeof PipelineVersionSchema>;
 
@@ -676,6 +701,13 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
   resourceId: true,
   version: true,
   createdAt: true,
+  // #3 G6b — git provenance is server-stamped at mint from the workspace-git
+  // import context (`CreateResourceOptions`), never client-authored; the write
+  // shape omits it exactly like `resourceId`.
+  sourceCommit: true,
+  sourceBranch: true,
+  sourceFilePath: true,
+  sourceBlobSha: true,
 }).extend({
   catalogVersion: z.number().int().default(CATALOG_VERSION),
   // The WRITE path is strict (#1 F13a) — `PipelineVersionSchema` above stays

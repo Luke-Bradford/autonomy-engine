@@ -62,6 +62,9 @@ function parsedPipeline(
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return {
     path: `pipelines/${slug}.json`,
+    // Classifier tests don't exercise git provenance (that is workspace-apply's
+    // mint path); a `null` blob sha is the honest non-git value here.
+    blobSha: null,
     resourceId,
     versionResourceIds: [],
     data: pipelineData(name, node0),
