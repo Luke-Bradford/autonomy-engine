@@ -147,7 +147,7 @@ reconcile are core. Corrections:
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual — **G9a (persisted `working_branch` + feature-branch selection + GUIDED-MANUAL compare URL) SHIPPED 2026-07-24**; **G9b (GitHub REST auto-open + PR-observe via an operator-env token) SHIPPED 2026-07-24** (built-block below). G9 core shipped; conflict/divergence + stored-PAT/multi-remote polish is G10 |
-| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**; **slice 3 (the PROACTIVE descendant guard — advisory `POST /api/workspace/git/divergence`, base = the imported-from commit #662) SHIPPED 2026-07-24**; **slice 4 (operator-env token wired into git HTTPS transport auth — github.com-scoped `http.extraHeader`, redacted; closes the G9b push-auth gap) SHIPPED 2026-07-24** (built-block below). REMAINING: a DB-STORED PAT (encryption/UI/per-remote decisions), non-github hosts, multi-remote |
+| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**; **slice 3 (the PROACTIVE descendant guard — advisory `POST /api/workspace/git/divergence`, base = the imported-from commit #662) SHIPPED 2026-07-24**; **slice 4 (operator-env token wired into git HTTPS transport auth — github.com-scoped `http.extraHeader`, redacted; closes the G9b push-auth gap) SHIPPED 2026-07-24**; **slice 5 (a DB-STORED, encrypted-at-rest per-workspace token — `PUT`/`DELETE /api/workspace/git/token`, encrypted via `secrets.ts` under the boot master key, resolved per-request stored▸env, feeds BOTH transport AND REST PR-open) SHIPPED 2026-07-24** (built-block below). REMAINING: non-github hosts, multi-remote, and the token-entry UI (deferred to the UI epic) |
 
 ### G1 built-block (2026-07-23)
 
@@ -793,12 +793,57 @@ never landed. The SAME token now authenticates HTTPS transport too.
   merge-base, commit, …) run on the base env, never even seeing the token.
 - **Redaction:** both the raw token AND its base64 credential go into
   `secretsToRedact` (the seam G2 reserved), so no stderr/error can quote either.
-- **Storage: operator-env, NOT DB (deferred).** This reuses G9b's env-token model.
-  A DB-STORED PAT — with its own encryption/UI/per-remote-selection decisions — and
-  non-github hosts + multi-remote remain later G10 slices. Wired at the route:
+- **Storage: operator-env in slice 4; DB-STORED in slice 5 (below).** Slice 4
+  reuses G9b's env-token model, wired at the route:
   `transportAuth = githubToken ? githubTokenTransportAuth(githubToken) : null` →
   the default `CliGitProvider({ httpAuth, secretsToRedact })`; a test-injected
-  `provider` seam is unaffected.
+  `provider` seam is unaffected. Slice 5 adds the persisted per-workspace token.
+
+### G10 built-block (2026-07-24) — slice 5: a DB-STORED, encrypted-at-rest per-workspace token
+
+Slice 4 authenticated git transport from the operator-ENV token, but that token
+must live in the server's process env — inconvenient/leaky for a headless
+deploy. Slice 5 lets an operator persist a per-workspace token instead, so a
+restart need not re-set the env. It reuses the existing machinery end-to-end
+rather than inventing anything: `secrets.ts` encryption, `githubTokenTransportAuth`,
+the `GitHostClient.token` param, the `KeyedQueue`.
+
+- **Storage = one encrypted column on `workspace_git` (0033), NOT the
+  name-addressable secret store.** Single-remote-per-owner in v1, so ONE token
+  per row collapses the "per-remote selection" fork to per-workspace. A column
+  (not a `secretRef` into the `secrets` table) means a disconnect
+  (`DELETE /api/workspace/git`) drops the ciphertext WITH the row — no orphaned
+  credential to sweep. Encrypted at rest via `secrets/secrets.ts::encrypt`
+  (XChaCha20-Poly1305 under the boot master key — the SAME crypto connection
+  secrets use); NEVER plaintext.
+- **The ciphertext never reaches a client.** `git_token_encrypted` is
+  DELIBERATELY kept OUT of `WorkspaceGitSchema` (the client-facing row shape):
+  reads re-parse through that non-`.strict()` schema, which STRIPS the unknown
+  column, so it can't escape into a response body, a log, or the repo
+  serialization/export. A dedicated server-only reader (`getWorkspaceGitToken`)
+  is the SOLE reader of the column; the client observes only a derived
+  `hasStoredToken` boolean on the status (explicit, never defaulted — #473).
+- **Precedence = stored ▸ env, in ONE resolver.** `resolveEffectiveToken(ownerId)`
+  returns the decrypted stored token if present, else the env token — the SINGLE
+  source of precedence shared by git transport (`resolveProvider`, now built
+  per-owner) AND the REST PR-open path, so the two can never disagree (a stored
+  token that authenticated `git push` but left PR-open on the env token would
+  drop to guided-manual — an incoherent asymmetry this avoids). Most-specific
+  scope wins; reversible later for multi-principal.
+- **Fail-safe on decrypt.** A stored token that won't decrypt HARD-FAILS (→ 500,
+  `SecretDecryptionError` carries no key/plaintext), NEVER silently falling back
+  to the env token — manufacturing a different credential is exactly the
+  fail-open the #473 / merge-gate posture forbids.
+- **Boundary validation** (`WorkspaceGitTokenSchema`): non-empty (trimmed),
+  length-capped, and control-chars REFUSED — the last specifically blocks a
+  CR/LF header injection on the REST `Authorization: Bearer <token>` path (the
+  transport path base64-wraps it, so it's inert there, but the REST path is not).
+- **Concurrency:** the provider is resolved INSIDE each network handler's
+  per-owner `KeyedQueue` slot, and the token set/clear routes are queued too, so
+  a concurrent set/clear can't race a network op's token read.
+- **Still github.com-scoped** (inherited from `githubTokenTransportAuth`): a
+  stored token is inert on a non-github remote (url-match), same as the env
+  token. Non-github hosts + multi-remote + a token-entry UI remain later work.
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

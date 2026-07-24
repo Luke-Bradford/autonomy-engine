@@ -741,6 +741,16 @@ export const workspaceGit = sqliteTable(
     // proactive descendant-guard base, #662). Nullable; NO backfill (an absent
     // import fact is stated null, never manufactured — #473).
     importedFromCommit: text('imported_from_commit'),
+    // #3 G10 — the per-workspace stored git token, ENCRYPTED AT REST (an
+    // XChaCha20-Poly1305 blob from `secrets/secrets.ts::encrypt` under the boot
+    // master key; NEVER plaintext). Added via 0033 ADD COLUMN, nullable, NOT
+    // backfilled (absent = no stored token, stated null — #473). DELIBERATELY
+    // absent from `WorkspaceGitSchema`: reads re-parse through that (non-strict)
+    // schema, which STRIPS this column, so the ciphertext never reaches a client
+    // response / log / the repo serialization. Only the server-only
+    // `getWorkspaceGitToken` reader touches it; the client sees a derived
+    // `hasStoredToken` boolean.
+    gitTokenEncrypted: text('git_token_encrypted'),
     lastFetchAt: integer('last_fetch_at'),
     lastFetchError: text('last_fetch_error'),
     createdAt: integer('created_at').notNull(),

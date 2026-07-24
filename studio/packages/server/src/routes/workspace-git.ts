@@ -10,6 +10,7 @@ import {
   PullRequestResultSchema,
   resolvePullRequestTarget,
   SetWorkingBranchBodySchema,
+  SetWorkspaceGitTokenBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
   WorkspaceGitApplyResultSchema,
@@ -27,10 +28,13 @@ import {
   createWorkspaceGit,
   deleteWorkspaceGit,
   getWorkspaceGit,
+  getWorkspaceGitToken,
   listVersionResourceIds,
+  setWorkspaceGitToken,
   updateWorkspaceGitImportedCommit,
   updateWorkspaceGitSync,
   updateWorkspaceGitWorkingBranch,
+  workspaceGitTokenPresent,
   WorkspaceGitAlreadyConnectedError,
 } from '../repo/index.js';
 import {
@@ -51,6 +55,7 @@ import {
   type GitProvider,
 } from '../git/provider.js';
 import { GitHubHostClient, type GitHostClient } from '../git/github-host.js';
+import { decrypt, encrypt } from '../secrets/secrets.js';
 import { KeyedQueue } from '../git/queue.js';
 import { readyVersionResourceIds } from '../run/connection-readiness.js';
 import { NotFoundError } from '../errors.js';
@@ -103,8 +108,15 @@ export interface WorkspaceGitRoutesOptions {
   hostClient?: GitHostClient;
 }
 
-function statusOf(row: WorkspaceGit) {
-  return WorkspaceGitStatusSchema.parse({ ...row, state: deriveWorkspaceGitState(row) });
+function statusOf(db: Db, row: WorkspaceGit) {
+  return WorkspaceGitStatusSchema.parse({
+    ...row,
+    state: deriveWorkspaceGitState(row),
+    // #3 G10 — the only client-facing signal about the stored token: whether one
+    // exists, NEVER the ciphertext. Guard the null-owner case (a null `ownerId`
+    // never matches the token query) so it reports `false`, not a throw.
+    hasStoredToken: row.ownerId !== null && workspaceGitTokenPresent(db, row.ownerId),
+  });
 }
 
 /**
@@ -170,30 +182,61 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
   fastify,
   opts,
 ) => {
-  const { db } = fastify;
+  const { db, masterKey } = fastify;
   const { workspaceGitRoot } = opts;
   const hostClient = opts.hostClient ?? new GitHubHostClient();
   // #3 G9b — normalize the operator-env token ONCE: a whitespace-only value (or
   // an empty/unset `GH_TOKEN`) counts as absent, so it falls back to guided-manual
   // rather than attempting an auth that would 401. `null` = no token.
   const githubToken = (opts.githubToken ?? '').trim() || null;
-  // #3 G10 — the SAME operator-env token also authenticates git HTTPS transport
-  // (clone/fetch/push) for a github.com remote, closing the gap where G9b opens a
-  // PR via REST but the preceding `git push` has no credential on a headless host
-  // with no credential helper. github.com-scoped + redacted; a non-github remote
-  // is unaffected. No token → the G2 auth model (SSH agent / credential helper).
-  const transportAuth = githubToken !== null ? githubTokenTransportAuth(githubToken) : null;
-  const provider =
-    opts.provider ??
-    new CliGitProvider({
-      httpAuth: transportAuth?.httpAuth,
-      secretsToRedact: transportAuth?.secrets ?? [],
-    });
   const queue = new KeyedQueue();
+
+  /**
+   * #3 G10 — resolve the EFFECTIVE git token for an owner, the SINGLE source of
+   * precedence shared by git transport auth (`resolveProvider`) AND the REST
+   * PR-open path — so the two can never disagree on which credential a workspace
+   * uses (a stored token that authenticated `git push` but left PR-open on the
+   * env token would fall to guided-manual, an incoherent asymmetry).
+   *
+   * PRECEDENCE: a per-workspace STORED token (decrypted under the boot master
+   * key) WINS over the process-global operator-env token — most-specific scope
+   * wins; the env token is the fallback. `null` = neither, so no auth (the G2
+   * SSH-agent / credential-helper model).
+   *
+   * A decrypt failure HARD-FAILS (propagates `SecretDecryptionError` → 500),
+   * NEVER silently falling back to the env token: a stored credential that can't
+   * be read is a real misconfiguration, and manufacturing a different (env)
+   * credential in its place is exactly the fail-open the #473 / merge-gate
+   * posture forbids. `SecretDecryptionError` carries no plaintext/key material.
+   */
+  async function resolveEffectiveToken(ownerId: string): Promise<string | null> {
+    const stored = getWorkspaceGitToken(db, ownerId);
+    if (stored !== null) return decrypt(stored, masterKey);
+    return githubToken;
+  }
+
+  /**
+   * #3 G10 — build the per-owner `GitProvider` for a NETWORK op. The injected
+   * test seam (`opts.provider`) short-circuits token resolution entirely (its
+   * auth is the test's concern). Otherwise the effective token (stored ▸ env)
+   * becomes a github.com-scoped HTTPS transport header (env-not-argv, redacted
+   * via `secretsToRedact`); inert on a non-github remote (url-match) and on the
+   * LOCAL plumbing ops that never see it. Resolved INSIDE each per-owner queue
+   * slot so a concurrent token set/clear (also queued) can't race it.
+   */
+  async function resolveProvider(ownerId: string): Promise<GitProvider> {
+    if (opts.provider) return opts.provider;
+    const token = await resolveEffectiveToken(ownerId);
+    const auth = token !== null ? githubTokenTransportAuth(token) : null;
+    return new CliGitProvider({
+      httpAuth: auth?.httpAuth,
+      secretsToRedact: auth?.secrets ?? [],
+    });
+  }
 
   fastify.get('/api/workspace/git', async (request) => {
     const row = getWorkspaceGit(db, request.principal.ownerId);
-    return { git: row ? statusOf(row) : null };
+    return { git: row ? statusOf(db, row) : null };
   });
 
   fastify.post('/api/workspace/git', async (request, reply) => {
@@ -205,6 +248,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // (the DB unique index remains the last-line authority regardless).
       if (getWorkspaceGit(db, ownerId)) throw new WorkspaceGitAlreadyConnectedError();
 
+      // #3 G10 — resolve the per-owner provider inside the queue slot (no stored
+      // token can exist yet at connect — no row — so this is the env token / no
+      // auth; kept here for uniformity with the other network handlers).
+      const provider = await resolveProvider(ownerId);
       // Probe git FIRST — a clear 503 beats a confusing clone failure.
       await provider.version();
 
@@ -252,7 +299,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       });
     });
 
-    reply.status(201).send({ git: statusOf(row) });
+    reply.status(201).send({ git: statusOf(db, row) });
   });
 
   fastify.post('/api/workspace/git/fetch', async (request) => {
@@ -261,10 +308,11 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const updated = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const provider = await resolveProvider(ownerId);
       return ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
     });
 
-    return { git: statusOf(updated) };
+    return { git: statusOf(db, updated) };
   });
 
   fastify.post('/api/workspace/git/commit', async (request) => {
@@ -280,6 +328,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // argv / `refs/…/<branch>` interpolation — the row schema stores it as a
       // structural string, so the input-policy check happens here at the boundary.
       const workingBranch = WorkspaceGitBranchSchema.parse(row.workingBranch);
+      const provider = await resolveProvider(ownerId);
 
       // Fetch first (shared with the fetch route) so the base refs below are
       // current; a fetch failure records + rethrows before any commit work.
@@ -377,6 +426,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
       const workingBranch = WorkspaceGitBranchSchema.parse(row.workingBranch);
+      const provider = await resolveProvider(ownerId);
 
       // Fetch first (records the same tracking the fetch route does) so the base
       // refs are current; a fetch failure records + rethrows before any drift work.
@@ -450,6 +500,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const divergence = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const provider = await resolveProvider(ownerId);
 
       // Fetch first (records the same tracking the fetch route does) so the
       // collab head is current; a fetch failure records + rethrows before any
@@ -496,13 +547,65 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       return row;
     });
 
-    return { git: statusOf(updated) };
+    return { git: statusOf(db, updated) };
+  });
+
+  /**
+   * #3 G10 — STORE (or replace) the per-workspace git token. The token is
+   * ENCRYPTED AT REST under the boot master key (`secrets/secrets.ts`, the SAME
+   * crypto connection secrets use) and is NEVER returned to the client: the
+   * response is the normal status shape, whose `hasStoredToken:true` is the only
+   * acknowledgement. Once stored it takes PRECEDENCE over the operator-env token
+   * for both git transport and REST PR-open (see `resolveEffectiveToken`).
+   *
+   * Security model: the token is set only by the authenticated principal (route
+   * auth), validated at the boundary (`WorkspaceGitTokenSchema` — non-empty,
+   * length-capped, no control chars, the last blocking a CR/LF header-injection
+   * on the REST path). It is stored on the owner's `workspace_git` row, so a
+   * disconnect (`DELETE /api/workspace/git`) drops it with the row — no orphaned
+   * ciphertext (why a column, not the name-addressable secret store). Requires a
+   * connected workspace (404 otherwise). Runs in the per-owner queue so it
+   * serializes against a concurrent network op resolving the provider.
+   */
+  fastify.put('/api/workspace/git/token', async (request) => {
+    const body = SetWorkspaceGitTokenBodySchema.parse(request.body);
+    const ownerId = request.principal.ownerId;
+
+    const updated = await queue.run(ownerId, async () => {
+      if (!getWorkspaceGit(db, ownerId)) {
+        throw new NotFoundError('workspace git connection', ownerId);
+      }
+      const ciphertext = await encrypt(body.token, masterKey);
+      const row = setWorkspaceGitToken(db, ownerId, ciphertext);
+      // Non-null: the existence check above ran in the SAME queue slot, so no
+      // concurrent disconnect could have removed the row between the two.
+      return row!;
+    });
+
+    return { git: statusOf(db, updated) };
+  });
+
+  /**
+   * #3 G10 — CLEAR the stored git token (revert to the operator-env token, or no
+   * auth). Idempotent: clearing when none is stored is a no-op that still returns
+   * the status. 404 when no workspace is connected.
+   */
+  fastify.delete('/api/workspace/git/token', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const updated = await queue.run(ownerId, async () => {
+      const row = setWorkspaceGitToken(db, ownerId, null);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      return row;
+    });
+
+    return { git: statusOf(db, updated) };
   });
 
   /**
    * #3 G9 — open a pull request (working → collab).
    *
-   * G9b: when the remote is a GitHub host AND an operator-env token is present,
+   * G9b: when the remote is a GitHub host AND an effective token is present,
    * studio auto-opens (or observes an already-open) PR via the GitHub REST API
    * and returns `mode:'opened'` with the PR's `url`/`number`. Otherwise it falls
    * back to G9a's GUIDED-MANUAL result: a GitHub compare `url` for a GitHub
@@ -516,10 +619,13 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
    * concurrent working-branch change simply targets the next PR. 404s when no
    * repo is connected, matching the fetch/commit routes.
    *
-   * Security model: the token is operator-env (never client-supplied, never
-   * stored, never logged — see `git/github-host.ts`); `owner`/`repo` come from the
-   * connect-allowlisted `repoUrl` (parsed once in `resolvePullRequestTarget`) and
-   * are URL-encoded into the host request; all host-API failures surface as
+   * Security model: the effective token is the per-workspace STORED token
+   * (#3 G10 — encrypted at rest, decrypted in-process here) if set, else the
+   * operator-env token (`resolveEffectiveToken`, stored ▸ env). Whichever it is,
+   * it is used only in-process, never returned to the client, and redacted on
+   * every host-API error path (`git/github-host.ts`). `owner`/`repo` come from
+   * the connect-allowlisted `repoUrl` (parsed once in `resolvePullRequestTarget`)
+   * and are URL-encoded into the host request; all host-API failures surface as
    * token-redacted 502/409 errors.
    */
   fastify.post('/api/workspace/git/pull-request', async (request) => {
@@ -528,16 +634,22 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     if (!row) throw new NotFoundError('workspace git connection', ownerId);
 
     const target = resolvePullRequestTarget(row.repoUrl, row.collabBranch, row.workingBranch);
+    // #3 G10 — the SAME effective token (stored ▸ env) that authenticates git
+    // transport also opens the PR, via the shared resolver — so a stored-token-
+    // only operator auto-opens rather than silently dropping to guided-manual.
+    // Out-of-queue (this handler is deliberately unqueued, a point-in-time
+    // snapshot); a decrypt failure hard-fails here too (never a silent fallback).
+    const effectiveToken = await resolveEffectiveToken(ownerId);
 
     // Auto-open via the host API only for a GitHub remote WITH a token.
-    if (target.provider === 'github' && target.githubRepo !== null && githubToken !== null) {
+    if (target.provider === 'github' && target.githubRepo !== null && effectiveToken !== null) {
       const opened = await hostClient.openPullRequest({
         repo: target.githubRepo,
         base: row.collabBranch,
         head: row.workingBranch,
         title: `Studio changes: ${row.workingBranch}`,
         body: `Opened by Autonomy Studio from working branch \`${row.workingBranch}\` into \`${row.collabBranch}\`.`,
-        token: githubToken,
+        token: effectiveToken,
       });
       const pullRequest = PullRequestResultSchema.parse({
         mode: 'opened',
@@ -568,6 +680,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const preview = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const provider = await resolveProvider(ownerId);
 
       // Fetch first (shared with the fetch/commit routes) so the preview reflects
       // the current collaboration branch; the returned row carries the RESOLVED
@@ -645,6 +758,7 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     const result = await queue.run(ownerId, async () => {
       const row = getWorkspaceGit(db, ownerId);
       if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const provider = await resolveProvider(ownerId);
 
       const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
       const head = updated.observedCollabHead;

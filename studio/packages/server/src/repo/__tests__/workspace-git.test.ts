@@ -3,9 +3,12 @@ import {
   createWorkspaceGit,
   deleteWorkspaceGit,
   getWorkspaceGit,
+  getWorkspaceGitToken,
+  setWorkspaceGitToken,
   updateWorkspaceGitImportedCommit,
   updateWorkspaceGitSync,
   updateWorkspaceGitWorkingBranch,
+  workspaceGitTokenPresent,
 } from '../workspace-git.js';
 import { freshDb } from './helpers.js';
 
@@ -115,5 +118,75 @@ describe('workspace-git repo', () => {
     expect(getWorkspaceGit(db, 'local')).toBeNull();
     expect(getWorkspaceGit(db, 'other')).not.toBeNull();
     expect(deleteWorkspaceGit(db, 'local')).toBe(false);
+  });
+
+  describe('#3 G10 — stored git token', () => {
+    it('a fresh row has no stored token', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      expect(getWorkspaceGitToken(db, 'local')).toBeNull();
+      expect(workspaceGitTokenPresent(db, 'local')).toBe(false);
+    });
+
+    it('set → get round-trips the ENCRYPTED blob (server-only reader)', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      const updated = setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB');
+      expect(updated).not.toBeNull();
+      expect(getWorkspaceGitToken(db, 'local')).toBe('ENCRYPTED_BLOB');
+      expect(workspaceGitTokenPresent(db, 'local')).toBe(true);
+    });
+
+    it('the ciphertext NEVER leaks into the client-facing row (stripped by WorkspaceGitSchema)', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB');
+      const row = getWorkspaceGit(db, 'local');
+      expect(row).not.toBeNull();
+      expect(row).not.toHaveProperty('gitTokenEncrypted');
+    });
+
+    it('setWorkspaceGitToken(null) CLEARS the token', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB');
+      setWorkspaceGitToken(db, 'local', null);
+      expect(getWorkspaceGitToken(db, 'local')).toBeNull();
+      expect(workspaceGitTokenPresent(db, 'local')).toBe(false);
+    });
+
+    it('setWorkspaceGitToken on an unconnected owner returns null (no row to write)', () => {
+      const { db } = freshDb();
+      expect(setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB')).toBeNull();
+    });
+
+    it('a tracking-field update does NOT clobber the stored token (Drizzle .set touches only provided keys)', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB');
+      updateWorkspaceGitSync(db, 'local', {
+        observedCollabHead: 'b'.repeat(40),
+        lastFetchAt: 1_700_000_002_000,
+        lastFetchError: null,
+      });
+      expect(getWorkspaceGitToken(db, 'local')).toBe('ENCRYPTED_BLOB');
+    });
+
+    it('a working-branch update does NOT clobber the stored token', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      setWorkspaceGitToken(db, 'local', 'ENCRYPTED_BLOB');
+      updateWorkspaceGitWorkingBranch(db, 'local', 'studio/local/feature');
+      expect(getWorkspaceGitToken(db, 'local')).toBe('ENCRYPTED_BLOB');
+    });
+
+    it('a token set/clear is owner-scoped', () => {
+      const { db } = freshDb();
+      createWorkspaceGit(db, input);
+      createWorkspaceGit(db, { ...input, ownerId: 'other' });
+      setWorkspaceGitToken(db, 'local', 'LOCAL_BLOB');
+      expect(getWorkspaceGitToken(db, 'local')).toBe('LOCAL_BLOB');
+      expect(getWorkspaceGitToken(db, 'other')).toBeNull();
+    });
   });
 });

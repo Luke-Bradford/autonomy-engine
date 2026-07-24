@@ -126,3 +126,53 @@ export function deleteWorkspaceGit(db: Db, ownerId: string): boolean {
   const result = db.delete(workspaceGit).where(eq(workspaceGit.ownerId, ownerId)).run();
   return result.changes > 0;
 }
+
+/**
+ * #3 G10 — read the owner's STORED git token as the raw ENCRYPTED blob (an
+ * XChaCha20-Poly1305 ciphertext from `secrets/secrets.ts::encrypt`), or `null`
+ * when none is stored. Server-only, and DELIBERATELY not routed through
+ * `getWorkspaceGit`/`WorkspaceGitSchema` (which strip the column): this is the
+ * SOLE reader of `git_token_encrypted`, selecting ONLY that column so the
+ * ciphertext has exactly one escape point, decrypted in-process at dispatch.
+ * The caller (`resolveEffectiveToken`) decrypts under `fastify.masterKey`.
+ */
+export function getWorkspaceGitToken(db: Db, ownerId: string): string | null {
+  const row = db
+    .select({ token: workspaceGit.gitTokenEncrypted })
+    .from(workspaceGit)
+    .where(eq(workspaceGit.ownerId, ownerId))
+    .get();
+  return row?.token ?? null;
+}
+
+/** #3 G10 — whether the owner has a stored git token, WITHOUT reading the
+ * ciphertext (the client-facing `hasStoredToken` signal). A column-presence
+ * check only. */
+export function workspaceGitTokenPresent(db: Db, ownerId: string): boolean {
+  return getWorkspaceGitToken(db, ownerId) !== null;
+}
+
+/**
+ * #3 G10 — set (encrypted blob) or CLEAR (`null`) the owner's stored git token.
+ * Writes the `git_token_encrypted` column DIRECTLY (never through
+ * `WorkspaceGitSchema`, which cannot carry it), touching only that column plus
+ * `updatedAt` — so a token set/clear never disturbs any tracking field, and,
+ * conversely, `updateWorkspaceGitSync`/`...WorkingBranch` (which `.set` a parsed,
+ * token-free row) never disturb the token column (Drizzle `.set` updates only
+ * the provided keys). Returns the refreshed (token-free) row, or `null` when no
+ * connection exists for the owner. Callers serialize via the per-owner
+ * `KeyedQueue` (the same posture as the other row writers).
+ */
+export function setWorkspaceGitToken(
+  db: Db,
+  ownerId: string,
+  encryptedBlob: string | null,
+): WorkspaceGit | null {
+  const existing = getWorkspaceGit(db, ownerId);
+  if (!existing) return null;
+  db.update(workspaceGit)
+    .set({ gitTokenEncrypted: encryptedBlob, updatedAt: Date.now() })
+    .where(eq(workspaceGit.ownerId, ownerId))
+    .run();
+  return getWorkspaceGit(db, ownerId);
+}

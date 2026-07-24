@@ -1,0 +1,20 @@
+-- #3 G10 (Foundation Spec #3 git-publish, ticket row G10 — the DB-STORED PAT
+-- slice) — persist a per-workspace git token so a headless deploy need not carry
+-- the operator token in its process env (the G9b/slice-4 model). ONE token per
+-- workspace_git row (single-remote-per-owner in v1), resolved per-request as a
+-- layered fallback with the operator-env token (the stored token wins).
+--
+-- ENCRYPTED AT REST: this column holds an XChaCha20-Poly1305 blob produced by
+-- `secrets/secrets.ts::encrypt` under the boot master key — NEVER a plaintext
+-- token. It is deliberately kept OUT of `WorkspaceGitSchema` (the client-facing
+-- row shape): reads re-parse through that schema, which (being non-`.strict()`)
+-- STRIPS this unknown column, so the ciphertext can never escape into a response
+-- body, a log, or the repo serialization. Only a dedicated server-only reader
+-- (`getWorkspaceGitToken`) touches it, and the client observes only a derived
+-- boolean (`hasStoredToken`).
+--
+-- Nullable, and DELIBERATELY NOT backfilled: an already-connected workspace has
+-- no stored token, and NULL states that honestly — an absent credential is never
+-- manufactured (#473, the merge-gate "a `gh` failure is never CI-green" posture).
+-- NULL = "no stored token → fall back to the operator-env token, else no auth".
+ALTER TABLE workspace_git ADD COLUMN git_token_encrypted TEXT;
