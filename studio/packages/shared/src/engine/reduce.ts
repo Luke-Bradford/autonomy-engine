@@ -4203,11 +4203,13 @@ export function createEngine(doc: EngineDoc): Engine {
       if (!changed) break;
     }
 
-    // Shallow-copy the copied values, never alias `sourceState` into the manifest —
-    // the event is a fresh object the fold (and its later replay) owns. A defensive
-    // de-alias: `EngineEventSchema.parse` on append already re-materializes the live
-    // fold's copy, but keeping the source references out of the payload removes the
-    // footgun outright.
+    // Shallow-copy the copied values, never alias `sourceState`'s top-level maps
+    // into the manifest — the event is a fresh object the fold (and its later
+    // replay) owns. This is a shallow de-alias only: nested `outputs` values still
+    // share references with `sourceState`, but `sourceState` is discarded the moment
+    // this returns, so nothing can mutate them afterwards. `EngineEventSchema.parse`
+    // on append also re-materializes the live fold's copy, so the payload the reducer
+    // consumes is structurally independent regardless.
     const frontier = topLevelNodeIds.filter((id) => included.has(id)).sort(cmp);
     const copiedOutputs: Record<string, Record<string, unknown>> = {};
     for (const id of frontier) copiedOutputs[id] = { ...(sourceState.outputs[id] ?? {}) };
