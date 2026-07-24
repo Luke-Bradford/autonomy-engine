@@ -13,6 +13,7 @@ import {
   WorkspaceGitBranchSchema,
   WorkspaceGitCommitResultSchema,
   WorkspaceGitApplyResultSchema,
+  WorkspaceGitDriftSchema,
   WorkspaceGitImportPreviewSchema,
   deriveWorkspaceGitState,
   WorkspaceGitStatusSchema,
@@ -32,6 +33,7 @@ import {
   applyWorkspace,
   buildImportAppliedEvent,
   classifyWorkspace,
+  computeDrift,
   parseWorkspaceFiles,
   serializeWorkspace,
 } from '../portability/index.js';
@@ -319,6 +321,81 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
     });
 
     return { commit: result };
+  });
+
+  /**
+   * #3 G10 — the ADVISORY DRIFT report: which resources have UNCOMMITTED changes
+   * vs the studio working branch (the read-only, commit-direction dual of
+   * import-preview). Drift is advisory (settled #662): the real serialization
+   * point is push non-fast-forward / PR-merge, so this never blocks anything —
+   * it answers "what would my next Commit change".
+   *
+   * BASE selection MIRRORS the Commit route exactly (working-branch tip if it
+   * exists, else the collaboration-branch tip, else `null` — nothing committed
+   * yet, so every DB resource is `added`), so drift is measured against precisely
+   * what the next Commit would base on. Fetch-first (shared `ensureCheckoutFetched`)
+   * so the base refs are current; the read runs entirely from the git OBJECT
+   * store (`lsTreeManaged` + `showBlob` inside `readWorkspaceFilesAtRef`), never
+   * touching the HEAD/index the Commit path owns, so it is safe in the same
+   * per-owner `KeyedQueue` slot.
+   *
+   * Equality is the canonical CONTENT FORM (`computeDrift` → `content-form.ts`),
+   * NOT byte/blob equality: a re-mint that only bumps a volatile field (a new
+   * immutable version id/number, a `node.position` drag) is NOT drift. A git
+   * failure surfaces as the existing `git_error` 502 (fail-safe — never a silent
+   * `clean`); a corrupt DB reference makes `serializeWorkspace` throw
+   * `WorkspaceSerializeError` → 500 (internal), also never `clean`. A committed
+   * file that would not parse becomes a VISIBLE `diagnostic` (never dropped,
+   * never manufactured as a match — #473/#664 shape).
+   */
+  fastify.post('/api/workspace/git/drift', async (request) => {
+    const ownerId = request.principal.ownerId;
+
+    const drift = await queue.run(ownerId, async () => {
+      const row = getWorkspaceGit(db, ownerId);
+      if (!row) throw new NotFoundError('workspace git connection', ownerId);
+      const workingBranch = WorkspaceGitBranchSchema.parse(row.workingBranch);
+
+      // Fetch first (records the same tracking the fetch route does) so the base
+      // refs are current; a fetch failure records + rethrows before any drift work.
+      const updated = await ensureCheckoutFetched(db, provider, workspaceGitRoot, ownerId, row);
+      const checkout = checkoutDirFor(workspaceGitRoot, ownerId);
+
+      // Base = what the next Commit would base on: the working-branch tip if it
+      // exists (a resolved sha), else the just-fetched collaboration head, else
+      // null (empty repo — nothing committed yet).
+      const workingHead = await provider.revParseRemoteBranch(checkout, workingBranch);
+      const base = workingHead ?? updated.observedCollabHead;
+
+      // The DB working copy through the SAME serialize+parse path import-preview
+      // uses, so both sides get identical volatile treatment (#666 archived
+      // omission included). serializeWorkspace throws on a corrupt DB ref rather
+      // than papering it over — that 500s, never reads as `clean`.
+      const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
+
+      // The committed snapshot at the base (empty when nothing is committed yet).
+      // An unreadable committed blob (#664) becomes a per-file `diagnostic`, not
+      // a 502 and not a silent `clean`.
+      const committedFiles =
+        base === null
+          ? { files: [], unreadable: [] }
+          : await readWorkspaceFilesAtRef(provider, checkout, base, MANAGED_DIRS);
+      const committed = parseWorkspaceFiles(committedFiles.files, committedFiles.unreadable);
+
+      // A committed file that would not parse yields no `change` (its content is
+      // uncomparable), but the next Commit's managed-dir reconcile WOULD drop it
+      // — so a diagnostic is itself uncommitted drift. Fold it into the flag
+      // (fail-safe: an uncomparable committed file is never a silent `clean`).
+      const changes = computeDrift(dbSnapshot, committed);
+      return WorkspaceGitDriftSchema.parse({
+        base,
+        hasUncommittedChanges: changes.length > 0 || committed.diagnostics.length > 0,
+        changes,
+        diagnostics: committed.diagnostics,
+      });
+    });
+
+    return { drift };
   });
 
   /**
