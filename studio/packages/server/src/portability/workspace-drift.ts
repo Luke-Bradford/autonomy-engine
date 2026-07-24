@@ -65,9 +65,17 @@ function driftForKind(
 ): WorkspaceGitDriftResource[] {
   const committedByRid = new Map<string, DriftItem>();
   for (const item of committedItems) {
-    if (item.resourceId !== null) committedByRid.set(item.resourceId, item);
+    // First-wins: a well-formed committed snapshot carries each `resourceId`
+    // once (the server writes one file per resource). If a corrupted/hand-edited
+    // managed dir ever carries two under one id, only one can match the single
+    // DB row; the rest are NOT dropped — they fall through to the `removed` loop
+    // below (matched is tracked by object identity, not by id), surfacing the
+    // drift rather than silently under-reporting it (#473 fail-safe shape).
+    if (item.resourceId !== null && !committedByRid.has(item.resourceId)) {
+      committedByRid.set(item.resourceId, item);
+    }
   }
-  const matchedRids = new Set<string>();
+  const matched = new Set<DriftItem>();
   const out: WorkspaceGitDriftResource[] = [];
 
   for (const db of dbItems) {
@@ -76,7 +84,7 @@ function driftForKind(
       out.push({ path: db.path, kind, resourceId: db.resourceId, name: db.name, change: 'added' });
       continue;
     }
-    matchedRids.add(db.resourceId!);
+    matched.add(committed);
     if (db.contentForm !== committed.contentForm) {
       out.push({
         path: db.path,
@@ -98,7 +106,7 @@ function driftForKind(
   }
 
   for (const committed of committedItems) {
-    if (committed.resourceId !== null && matchedRids.has(committed.resourceId)) continue;
+    if (matched.has(committed)) continue;
     out.push({
       path: committed.path,
       kind,

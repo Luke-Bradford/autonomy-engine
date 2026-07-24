@@ -248,6 +248,29 @@ describe('computeDrift', () => {
     ]);
   });
 
+  it('surfaces a duplicate-resourceId committed file as removed (never silently dropped)', () => {
+    // A corrupted/hand-edited managed dir carrying two files under one
+    // resourceId: only one can match the single DB row (first-wins), but the
+    // duplicate must still surface as `removed` — fail-safe over-report, not a
+    // silent under-report (the last-write-wins map bug this guards against).
+    const db = ws({ connections: [parsedConnection('res_c', 'API', 'https://x')] });
+    const committed = ws({
+      connections: [
+        parsedConnection('res_c', 'API', 'https://x'), // matches DB (clean) → omitted
+        { ...parsedConnection('res_c', 'API', 'https://x'), path: 'connections/dup.json' },
+      ],
+    });
+    expect(computeDrift(db, committed)).toEqual([
+      {
+        path: 'connections/dup.json',
+        kind: 'connection',
+        resourceId: 'res_c',
+        name: 'API',
+        change: 'removed',
+      },
+    ]);
+  });
+
   it('reports drift across kinds in pipeline→connection→trigger order', () => {
     const db = ws({
       pipelines: [parsedPipeline('res_p', 'Kept')],
