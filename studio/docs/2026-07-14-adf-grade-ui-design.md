@@ -260,10 +260,38 @@ Decisions worth not re-deriving:
   but a bare `.app-fluent-root` selector now matches two elements. e2e specs use
   `FLUENT_ROOT` (`:not([data-portal-node])`) for the DOM and `BRIDGE_SELECTOR` for CSSOM rules.
 
+- **Known, accepted:** re-clicking the hub you are already inside leaves a duplicate adjacent
+  history entry, so Back appears to do nothing once. `Link` only auto-replaces when the target
+  equals the current path — from `#/monitor/runs`, the rail targets `/monitor`, which PUSHES, and
+  the index redirect then REPLACEs it back to `#/monitor/runs`. Fixing it means giving the rail a
+  second path matcher to decide `replace`, which is exactly the duplicate source of truth deleted
+  above; not worth it for one dead Back press. Revisit if U3's breadcrumb needs the matcher anyway.
+- **Run ids are `encodeURIComponent`d into the path** at the two call sites that build one
+  (`RunsPage`, `TriggersPage`). Today's ids are `run_` + a nanoid, whose alphabet is URL-safe, so
+  this is a no-op — it exists so the encode/decode pair is symmetric if the alphabet ever widens.
+  Note react-router uses `%2F` as an internal sentinel, so a literal `/` inside an id would still
+  not round-trip; ids must stay path-safe.
+- **Navigation idiom.** In-app links that a user might want to open in a new tab or copy use
+  `<Link>`. `useNavigate()` on a `<button>` is only for navigating as the *result* of an action
+  (the Runs grid's Watch button, "Watch live" after firing a trigger) — those were migrated 1:1
+  from the deleted `router.ts` and are deliberately left alone here; **U10** owns turning the runs
+  grid's row action into a real link.
+
 URL-state slots named in the Shell section but NOT yet in the hash, with their owning ticket:
 pipeline id (`#/author/pipelines/:pipelineId` — **U4**; opening the canvas is still local state
 inside `PipelinesPage`), version id (**U22**), selected node id (**U7**), monitor filter tab
 (**U10**).
+
+Deliberately NOT in U2, from its own ticket row and the Shell description:
+
+- **The rail's settings entry** (`#/settings`) — the Shell section lists the rail as
+  "theme + settings", but the Settings surface is **U15**. U2 ships the theme control only.
+- **`uiStore` is untouched.** The U2 row names it, but U1 already added the theme slice and the
+  pane width/collapse state it would otherwise hold belongs to **U3**. No second consumer exists
+  yet, so the store stays a singleton with prop injection rather than moving behind a context.
+- **Legacy MVP-path redirects** — **U3r**. Between this merge and U3r, an old bookmark hits the
+  catch-all and lands on Home; the sharp case is `#/runs/:id`, which loses the run id rather than
+  resolving to that run. **U3r should therefore land before U3.**
 
 ## Non-goals (YAGNI)
 

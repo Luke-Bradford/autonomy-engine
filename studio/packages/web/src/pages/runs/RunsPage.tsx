@@ -90,7 +90,7 @@ export function RunsPage() {
                 <td>
                   <button
                     type="button"
-                    onClick={() => void navigate(`/monitor/runs/${r.id}`)}
+                    onClick={() => void navigate(`/monitor/runs/${encodeURIComponent(r.id)}`)}
                     aria-label={`Watch run ${r.id}`}
                   >
                     Watch

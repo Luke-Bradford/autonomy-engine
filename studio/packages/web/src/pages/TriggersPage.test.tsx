@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline, PipelineVersion, TriggerPublic } from '@autonomy-studio/shared';
 import { TriggersPage } from './TriggersPage';
 import * as triggersApi from '../api/triggers';
 import * as pipelinesApi from '../api/pipelines';
+import * as runsApi from '../api/runs';
+import { ROUTES } from '../routes';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
@@ -24,6 +27,18 @@ vi.mock('../api/triggers', async (importActual) => {
 vi.mock('../api/pipelines', () => ({
   listPipelines: vi.fn(),
   listPipelineVersions: vi.fn(),
+}));
+// The navigation case below lands on the run detail page, which fetches the run
+// and opens a WebSocket; stub both so only the routing is under test.
+vi.mock('../api/runs', async (importActual) => ({
+  ...(await importActual<typeof import('../api/runs')>()),
+  getRun: vi.fn(),
+  getRunEvents: vi.fn().mockResolvedValue([]),
+  listRuns: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('./runs/useRunStream', async (importActual) => ({
+  ...(await importActual<typeof import('./runs/useRunStream')>()),
+  useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
 }));
 
 const listTriggersMock = vi.mocked(triggersApi.listTriggers);
@@ -290,5 +305,28 @@ describe('TriggersPage', () => {
 
     resolveFire({ outcome: 'started', runId: 'run_9' });
     await waitFor(() => expect(fireBtn).not.toBeDisabled());
+  });
+
+  /**
+   * The one deep link U2 rewrote on this page (`/runs/:id` ->
+   * `/monitor/runs/:id`), asserted against the app's REAL `ROUTES` so a moved
+   * route fails here rather than silently sending "Watch live" nowhere. The
+   * page previously had no coverage of this button at all, which made it the
+   * only rewritten path in the ticket with nothing watching it.
+   */
+  it('"Watch live" after a fire lands on that run under the Monitor hub', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    fireMock.mockResolvedValue({ outcome: 'started', runId: 'run_9' });
+    vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_9' } as never);
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/manage/triggers'] });
+    render(<RouterProvider router={router} />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
+    await user.click(await screen.findByRole('button', { name: /Watch live/i }));
+
+    expect(router.state.location.pathname).toBe('/monitor/runs/run_9');
+    expect(await screen.findByRole('heading', { name: /run_9/ })).toBeInTheDocument();
   });
 });

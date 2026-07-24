@@ -28,16 +28,23 @@ interface ThemeToggleProps {
  * label it previously carried. The name is preserved in full on two channels
  * instead: `aria-label` (so the accessible name is still exactly "Dark mode" —
  * what the unit and e2e specs query by role and name) and a Fluent `Tooltip`
- * for sighted pointer and keyboard users. `relationship="description"`, NOT
- * `"label"`: a labelling tooltip would set `aria-labelledby` and fight the
- * `aria-label` for the accessible name.
+ * for sighted pointer and keyboard users, matching the rail's hub buttons.
+ *
+ * `relationship="label"`, verified against `useTooltipBase.js:214-219` in the
+ * pinned Fluent version rather than assumed: for STRING content it sets
+ * `aria-label` (only non-string content falls back to `aria-labelledby`), and
+ * `applyTriggerPropsToChildren` spreads the child's own props LAST, so the
+ * `Switch`'s explicit `aria-label` wins either way — the two cannot fight.
+ * `"description"` would be wrong here: it sets `aria-describedby` to text
+ * identical to the accessible name, so a screen reader announces "Dark mode,
+ * switch, off … Dark mode".
  */
 export function ThemeToggle({ store = uiStore }: ThemeToggleProps) {
   const mode = useStore(store, (s) => s.themeMode);
   const setThemeMode = useStore(store, (s) => s.setThemeMode);
 
   return (
-    <Tooltip content="Dark mode" relationship="description" positioning="after">
+    <Tooltip content="Dark mode" relationship="label" positioning="after">
       <Switch
         aria-label="Dark mode"
         checked={mode === 'dark'}

@@ -48,13 +48,22 @@ describe('App', () => {
     expect(rail().getByRole('link', { name: 'Monitor' })).toBeInTheDocument();
   });
 
+  /**
+   * The rail lives on a LAYOUT route, so a hub change must re-render the outlet
+   * and leave the rail's DOM node alone. Asserted by node IDENTITY: "a rail is
+   * present afterwards" would hold just as well if `AppShell` were not a layout
+   * route and every page rendered its own `HubRail` — which is the design this
+   * is here to rule out.
+   */
   it('keeps the rail mounted across a hub change', async () => {
     const user = userEvent.setup();
     renderApp('/');
 
+    const railBefore = screen.getByRole('navigation', { name: 'Primary' });
     await user.click(rail().getByRole('link', { name: 'Manage' }));
 
     expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBe(railBefore);
     expect(rail().getByRole('link', { name: 'Manage' })).toHaveAttribute('aria-current', 'page');
   });
 });

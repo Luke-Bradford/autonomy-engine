@@ -13,6 +13,15 @@ import { ROUTES } from './routes';
  */
 const hashRouter = createHashRouter(ROUTES);
 
+// A data router subscribes to `popstate`/`pagehide` the moment it is created,
+// and `RouterProvider` never disposes it. In production that is exactly right —
+// one router for the page's lifetime — but a Vite HMR re-evaluation of this
+// module builds a second one while the first stays subscribed, so a dev session
+// accumulates routers that all react to the same Back button.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => hashRouter.dispose());
+}
+
 interface AppProps {
   /**
    * Injectable so tests mount the real `ROUTES` under `createMemoryRouter` at a

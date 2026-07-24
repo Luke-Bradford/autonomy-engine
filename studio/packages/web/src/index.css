@@ -101,7 +101,23 @@ body {
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--muted);
+  margin: 0;
   padding-bottom: 0.5rem;
+}
+
+/* Present to assistive tech, absent from the layout. The clip-rect form rather
+   than `display:none`/`visibility:hidden`, both of which remove the element
+   from the accessibility tree — which would defeat the point. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .hub-rail__list {
@@ -109,6 +125,10 @@ body {
   margin: 0;
   padding: 0;
   width: 100%;
+  /* The rail itself clips (so a focus ring cannot bleed over the workspace),
+     which would silently cut off rail items on a short viewport. Scroll the
+     LIST instead — U15 adds a fifth item. */
+  overflow-y: auto;
 }
 
 .hub-rail__link {
@@ -127,6 +147,17 @@ body {
 .hub-rail__link:hover {
   background: var(--panel-2);
   color: var(--text);
+}
+
+/* The spec's a11y criteria require a VISIBLE focus ring. The links span the
+   rail's full width and `.hub-rail` clips its overflow, so the UA's default
+   outline — drawn OUTSIDE the border box — would be sliced off on both edges.
+   A negative `outline-offset` draws the ring inside the box, where it survives
+   the clip. `:focus-visible`, not `:focus`, so a mouse click does not leave a
+   ring behind. */
+.hub-rail__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .hub-rail__link--active {
@@ -168,7 +199,9 @@ body {
 /* The Home hub's signposts. There is no global anchor rule in this file — the
    MVP pages navigate with buttons — so without this the links render in the
    browser's default blue/purple, which is the one palette in the app that does
-   NOT follow the theme. */
+   NOT follow the theme.
+   U15 builds the real Home hub (overview, recent runs, shortcuts) and replaces
+   both this block and `HomePage.tsx`. */
 .hub-cards {
   list-style: none;
   margin: 1rem 0 0;

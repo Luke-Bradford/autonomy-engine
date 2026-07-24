@@ -237,7 +237,10 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <button type="button" onClick={() => void navigate(`/monitor/runs/${watchRunId}`)}>
+              <button
+                type="button"
+                onClick={() => void navigate(`/monitor/runs/${encodeURIComponent(watchRunId)}`)}
+              >
                 Watch live →
               </button>
             </>

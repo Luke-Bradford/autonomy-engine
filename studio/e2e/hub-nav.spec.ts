@@ -44,7 +44,12 @@ test.describe('U2 hub rail', () => {
     for (const hub of HUBS) {
       await railLink(page, hub.label).click();
       await expect(page.getByRole('heading', { name: hub.heading })).toBeVisible();
-      expect(hash(page), `${hub.label} did not land on ${hub.path}`).toBe(hub.path);
+      // `expect.poll`, not a bare read: `page.url()` is updated from an
+      // out-of-band navigation event, and for the three redirecting hubs the
+      // address bar changes TWICE. A bare read races the second write.
+      await expect
+        .poll(() => hash(page), { message: `${hub.label} did not land on ${hub.path}` })
+        .toBe(hub.path);
 
       // Active on the hub it navigated to, and on that one only — a rail that
       // marked everything (or nothing) would still pass the heading check.
@@ -104,6 +109,37 @@ test.describe('U2 hub rail', () => {
     await expect.poll(() => hash(page)).toBe('#/');
     await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
     await expectQuiet(page, problems);
+  });
+
+  /**
+   * The spec's accessibility criteria require a VISIBLE focus ring, and the
+   * rail is the one place it is easy to lose: the links fill the rail's width
+   * and `.hub-rail` clips its overflow, so a ring drawn outside the border box
+   * is sliced off on both edges. Only a real browser computes this — jsdom
+   * reports no outline at all.
+   */
+  test('a keyboard-focused rail link has a visible focus ring', async ({ page }) => {
+    await page.goto('/');
+    await fluentRootReady(page);
+
+    const monitor = railLink(page, 'Monitor');
+    await monitor.focus();
+
+    const ring = await monitor.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset };
+    });
+
+    // Deliberately NOT `outlineStyle !== 'none'` — a mutation check showed that
+    // assertion passing with the rule deleted, because Chromium's own default
+    // is `outline: auto` at offset 0. That default is exactly the ring the
+    // rail's `overflow: hidden` clips, so "some outline exists" proves nothing
+    // here. Pin the rule we actually wrote instead.
+    expect(ring.style).toBe('solid');
+    expect(parseFloat(ring.width)).toBeGreaterThan(0);
+    // STRICTLY negative: drawn inside the border box, where the clip cannot
+    // reach it. The UA default sits at 0 and would be sliced off.
+    expect(parseFloat(ring.offset)).toBeLessThan(0);
   });
 
   /**
@@ -181,6 +217,16 @@ test.describe('U2 hub rail', () => {
   test('portalled Fluent surfaces mount to body with the theme intact', async ({ page }) => {
     await page.goto('/');
     await fluentRootReady(page);
+
+    // The HOVER is load-bearing, and the first cut of this test lacked it.
+    // Fluent only force-mounts a tooltip's portal when it must anchor an
+    // `aria-describedby`/`aria-labelledby` id (`useTooltipBase.js:214-228`); a
+    // `relationship="label"` tooltip with STRING content — which is every
+    // tooltip in the rail — renders nothing until it opens. Without the hover
+    // this asserted on whichever portal happened to exist, and deleting all
+    // four hub tooltips left it green.
+    await railLink(page, 'Monitor').hover();
+    await expect(page.getByRole('tooltip', { name: 'Monitor' })).toBeVisible();
 
     const portal = page.locator(FLUENT_PORTAL_ROOT);
     await expect(portal).toBeAttached();

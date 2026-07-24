@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
+import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
 import type { Run } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
@@ -60,26 +61,23 @@ describe('RunsPage', () => {
   });
 
   /**
-   * Asserted through a REAL router rather than a spy on the old module-level
-   * `navigate`: the destination is proved by the route that actually matched,
-   * so a wrong path — including the pre-U2 `/runs/:id` shape, which no longer
-   * exists — fails here instead of passing against a mock that agrees with
-   * itself.
+   * Mounted on the app's REAL `ROUTES`, not a stub tree written here. A stub
+   * would only prove this page agrees with itself: rename the actual route to
+   * `/monitor/run/:runId` and a hand-written `/monitor/runs/:runId` stub still
+   * matches, still renders, still passes. Against `ROUTES`, a moved route
+   * fails — which is the whole risk this ticket carries, since every path in
+   * the app was rewritten.
    */
   it('Watch navigates to the run detail route', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc' })]);
-    const router = createMemoryRouter(
-      [
-        { path: '/monitor/runs', element: <RunsPage /> },
-        { path: '/monitor/runs/:runId', element: <div>detail for run_abc</div> },
-      ],
-      { initialEntries: ['/monitor/runs'] },
-    );
+    vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
     render(<RouterProvider router={router} />);
 
     await userEvent.click(await screen.findByLabelText('Watch run run_abc'));
 
-    expect(await screen.findByText('detail for run_abc')).toBeInTheDocument();
+    // The run detail page renders the id in its heading.
+    expect(await screen.findByRole('heading', { name: /run_abc/ })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
   });
 

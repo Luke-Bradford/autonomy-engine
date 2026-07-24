@@ -24,9 +24,17 @@ import {
  * it is `HomeRegular`, not `Home24Regular`; size comes from the rendered font
  * size, not the identifier.
  */
+/**
+ * The hub ids, as a union rather than a bare `string`: `HomePage` filters on
+ * one of them, and a typo in a magic string would silently render the wrong
+ * list (project standard — no magic strings for identifiers that have a typed
+ * counterpart).
+ */
+export type HubId = 'home' | 'author' | 'monitor' | 'manage';
+
 export interface Hub {
-  /** Stable id — also the test hook and the React key. */
-  id: string;
+  /** Stable id — also the React key. */
+  id: HubId;
   /** Accessible name for the icon-only rail button, and its tooltip text. */
   label: string;
   /** The hub's entry path. Its route redirects on to the default child. */

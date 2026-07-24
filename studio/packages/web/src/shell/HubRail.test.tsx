@@ -1,21 +1,17 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
 import { HubRail } from './HubRail';
 import { HUBS } from './hubs';
 import { createUiStore } from '../stores/uiStore';
+import { renderWithRouter } from '../testing/renderWithRouter';
 
 afterEach(() => {
   document.documentElement.style.colorScheme = '';
 });
 
 function renderRail(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <HubRail store={createUiStore(undefined)} />
-    </MemoryRouter>,
-  );
+  return renderWithRouter(<HubRail store={createUiStore(undefined)} />, path);
 }
 
 /** The hub labels the rail currently marks as active, in rail order. */
@@ -83,11 +79,7 @@ describe('HubRail', () => {
   it('carries the theme toggle, wired to the store it was given', async () => {
     const user = userEvent.setup();
     const store = createUiStore(undefined);
-    render(
-      <MemoryRouter initialEntries={['/']}>
-        <HubRail store={store} />
-      </MemoryRouter>,
-    );
+    renderWithRouter(<HubRail store={store} />, '/');
 
     const toggle = screen.getByRole('switch', { name: 'Dark mode' });
     expect(toggle).toBeChecked();
