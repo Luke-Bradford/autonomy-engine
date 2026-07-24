@@ -8,7 +8,7 @@ describe('fluentTheme', () => {
     expect(THEMES.dark).toBe(webDarkTheme);
   });
 
-  it('defaults to dark, so no stored preference cannot flip the shipped look', () => {
+  it('defaults to dark, so an absent stored preference keeps the shipped look', () => {
     expect(DEFAULT_THEME_MODE).toBe('dark');
     expect(THEMES[DEFAULT_THEME_MODE]).toBe(webDarkTheme);
   });

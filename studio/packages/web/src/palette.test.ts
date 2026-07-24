@@ -40,10 +40,12 @@ describe('MVP palette light/dark parity', () => {
   });
 
   /**
-   * `:root[data-theme='light']` has specificity (0,1,1) and beats the base
-   * `:root` (0,1,0) wherever it sits in the file. Dropping the `:root` prefix
-   * (a bare `[data-theme='light']`, specificity (0,1,0)) would tie with the base
-   * rule and then depend on source order — a silent way to lose light mode.
+   * `:root[data-theme='light']` has specificity (0,2,0) — a pseudo-class plus
+   * an attribute selector, both class-column, with no element selector — and so
+   * beats the base `:root` (0,1,0) wherever it sits in the file. Dropping the
+   * `:root` prefix (a bare `[data-theme='light']`, specificity (0,1,0)) would
+   * tie with the base rule and then depend on source order — a silent way to
+   * lose light mode.
    */
   it('keys light mode on a selector that outranks the base rule', () => {
     expect(css).toContain(`${LIGHT_SELECTOR} {`);
