@@ -24,7 +24,12 @@ engine:
 
 agent:
   type: claude               # claude | codex
-  # effort: high             # optional: low | medium | high | xhigh | max (omit = CLI default)
+  effort: high               # low | medium | high | xhigh | max. SET, not commented: the
+                             # adapter passes --effort only when non-empty (bin/agents/
+                             # claude.sh), so omitting it silently takes the CLI DEFAULT --
+                             # and `primary` below is a thinking-tier model, which should
+                             # not be run at an effort nobody chose. Lower it if you want a
+                             # cheaper pack; per-role `effort:` still overrides this.
   # Planner/coder pair (#320, AMENDED 2026-07-24 #707): BOTH halves are
   # thinking-tier -- the coder session runs this model, the planning + closing
   # sense-check happen in the scaffolded `planner` subagent
