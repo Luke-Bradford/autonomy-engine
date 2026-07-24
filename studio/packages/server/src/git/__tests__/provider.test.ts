@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import {
   buildGitEnv,
   CliGitProvider,
   GitOperationError,
+  GitPushRejectedError,
   GitUnavailableError,
 } from '../provider.js';
 import { fixtureGit, pushNewCommit, seedRemote } from './fixtures.js';
@@ -230,6 +231,58 @@ describe('CliGitProvider — G3a commit primitives', () => {
     // other two match nothing and must not error (--ignore-unmatch).
     await provider.rmCached(checkout, ['pipelines', 'connections', 'triggers']);
     expect(await provider.hasStagedChanges(checkout)).toBe(true); // the deletion is staged
+  });
+});
+
+describe('CliGitProvider — G10 non-fast-forward push conflict', () => {
+  /** Clone a fresh seeded remote and lay a local commit on a `feature` branch
+   * (off `origin/main`), returning the pieces the push tests share. */
+  async function localFeatureCommit() {
+    const { dir, remote, work } = seededRemote();
+    const checkout = join(dir, 'checkout');
+    const provider = new CliGitProvider();
+    await provider.clone(remote, checkout);
+    await provider.checkoutWorkingBranch(checkout, 'feature', 'origin/main');
+    writeFileSync(join(checkout, 'ours.txt'), 'ours\n');
+    await provider.add(checkout, ['ours.txt']);
+    await provider.commit(checkout, 'ours', { name: 'local', email: 'local@studio.local' });
+    return { provider, dir, remote, work, checkout };
+  }
+
+  it('push() rejects a non-fast-forward as GitPushRejectedError (a divergence, not a 502 op failure)', async () => {
+    const { provider, work, checkout } = await localFeatureCommit();
+
+    // Another clone advances the SAME branch on the remote with an unrelated
+    // commit, so our commit can only land as a non-fast-forward.
+    fixtureGit(work, ['checkout', '-b', 'feature']);
+    pushNewCommit(work, 'theirs.txt', 'feature');
+
+    const err = await provider.push(checkout, 'feature').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitPushRejectedError);
+    // A SIBLING of GitOperationError, so the error handler maps it to a 409
+    // conflict and NEVER falls into the 502 git_error branch.
+    expect(err).not.toBeInstanceOf(GitOperationError);
+    // Fixed, client-safe message: actionable, never the raw stderr or the
+    // server-internal checkout path.
+    const message = (err as Error).message;
+    expect(message).toMatch(/re-commit/i);
+    expect(message).not.toContain(checkout);
+  });
+
+  it('push() succeeds when the branch fast-forwards (creates the remote branch)', async () => {
+    const { provider, checkout } = await localFeatureCommit();
+    // `feature` does not exist on the remote yet → a create, i.e. a fast-forward.
+    await expect(provider.push(checkout, 'feature')).resolves.toBeUndefined();
+  });
+
+  it('a push failure that is NOT a rejection stays a GitOperationError (the classifier does not over-match)', async () => {
+    const { provider, remote, checkout } = await localFeatureCommit();
+    // Remove the remote so the push fails for a TRANSPORT reason (not a
+    // divergence): the classifier must leave this as the 502 op-failure class.
+    rmSync(remote, { recursive: true, force: true });
+    const err = await provider.push(checkout, 'feature').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(GitOperationError);
+    expect(err).not.toBeInstanceOf(GitPushRejectedError);
   });
 });
 

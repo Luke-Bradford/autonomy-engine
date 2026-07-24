@@ -7,7 +7,7 @@ import {
   PipelineHasRunsError,
   WorkspaceGitAlreadyConnectedError,
 } from './repo/index.js';
-import { GitOperationError, GitUnavailableError } from './git/provider.js';
+import { GitOperationError, GitPushRejectedError, GitUnavailableError } from './git/provider.js';
 import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { ISSUE_LIST_CAP } from './limits.js';
@@ -220,6 +220,19 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       reply
         .status(503)
         .send({ error: 'git_unavailable', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G10 — a `git push` was rejected as a non-fast-forward: the working
+    // branch moved on the remote, a request-STATE conflict (fetch/import and
+    // re-commit), not an upstream outage — so 409 `conflict`, distinct from the
+    // 502 `git_error` below (the transport-level dual of `GitHostRequestError`'s
+    // 422→409). A deliberate SIBLING of `GitOperationError`, but its branch runs
+    // FIRST anyway (defensive against a future refactor to a subclass). The
+    // message is fixed and client-safe by construction (quotes no stderr/path).
+    if (error instanceof GitPushRejectedError) {
+      request.log.warn({ err: error }, 'git push rejected (non-fast-forward)');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
 
