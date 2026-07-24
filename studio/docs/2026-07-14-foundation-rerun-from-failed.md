@@ -131,11 +131,16 @@ no DB change.
   un-progressed (any non-`pending` node/container OR any recorded output ⇒ a duplicate reseed or a
   reseed on an ordinary run ⇒ no-op + diagnostic, never a silent rewrite — the `onRunTriggerContext`
   posture); marks each `frontier` node `{status:'success', attempts:0, retries:0}` (no live attempt —
-  copied, not executed) and writes `copiedOutputs[nodeId]` into `state.outputs`; seeds
-  `copiedContainers`; then **settles ONCE** so the walk dispatches beyond the frontier. A copied
+  copied, not executed) and writes `copiedOutputs[nodeId]` into `state.outputs`; seeds each
+  `copiedContainers` entry — which MUST be a completed TERMINAL unit (`TERMINAL_CONTAINER`); a
+  non-terminal (`pending`/`active`) copy is REFUSED (diagnostic, not applied) because a live
+  container's settle walk reads absent instance-key node states and would throw out of the never-throw
+  reducer — AND MIRRORS its `outputs` into `state.outputs[containerId]` (the sole source `buildCtx`
+  reads for `${nodes.<container>.output.*}`, symmetric to `exitContainer`); then **settles ONCE** so
+  the walk dispatches beyond the frontier. A copied
   `success` node is in `TERMINAL_NODE`, so edge routing / `allTopLevelTerminal` / `runOutcomeFailure`
-  treat it identically to an executed success. Unknown frontier node / container id → diagnostic +
-  skip (the pure fold stays total).
+  treat it identically to an executed success. Unknown frontier node / container id, or a non-terminal
+  container → diagnostic + skip (the pure fold stays total).
 - **Trust boundary:** `copiedOutputs` are written RAW (not re-`validateOutputs`/`storeOutputs`-d). The
   RS2 sourcing contract: they come from R1's projected `state.outputs`, already `storeOutputs`-
   normalized (undeclared keys filtered, optional→present-null), and R2 pins the SAME immutable

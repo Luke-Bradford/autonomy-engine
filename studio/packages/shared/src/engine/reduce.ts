@@ -14,7 +14,7 @@ import type {
   TerminalNodeStatus,
   WaitingReason,
 } from './types.js';
-import { SubstituteError, TERMINAL_NODE, terminalStatusOf } from './types.js';
+import { SubstituteError, TERMINAL_CONTAINER, TERMINAL_NODE, terminalStatusOf } from './types.js';
 import {
   FAIL_ACTIVITY_TYPE,
   FILTER_ACTIVITY_TYPE,
@@ -2925,7 +2925,25 @@ export function createEngine(doc: EngineDoc): Engine {
         diagnostics.push(`impossible run.reseeded: unknown container '${containerId}'`);
         continue;
       }
+      // A copied container MUST be a completed TERMINAL unit (RS3 only copies
+      // those; a mid-flight container re-runs whole). Guard totality here rather
+      // than trust the manifest shape: applying a non-terminal (`pending`/
+      // `active`) copy would leave a live container whose `settle` walk reads
+      // absent instance-key node states and throws OUT of the pure reducer (the
+      // never-throw invariant this file holds). Skip + report, like the id guard.
+      if (!TERMINAL_CONTAINER.has(copied.status)) {
+        diagnostics.push(
+          `impossible run.reseeded: non-terminal container '${containerId}' (status: ${copied.status})`,
+        );
+        continue;
+      }
       containers[containerId] = copied;
+      // Mirror the container's outputs into `state.outputs` — the SOLE source
+      // `buildCtx` reads for `${nodes.<container>.output.*}`, exactly as
+      // `exitContainer` does on a live completion. Without this a downstream
+      // re-running node referencing a copied container's output fails
+      // `dispatch prep` and the run dies `invalid_event`.
+      outputs[containerId] = copied.outputs;
     }
 
     // Settle ONCE from the copied successes — dispatch proceeds beyond the frontier.

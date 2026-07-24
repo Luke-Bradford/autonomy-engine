@@ -121,7 +121,7 @@ describe('RS1 — run.reseeded fold', () => {
     expect(dispatchIds(lastCommands)).toEqual(['c']);
   });
 
-  it('seeds copiedContainers as a terminal unit', () => {
+  it('seeds copiedContainers as a terminal unit and routes its outer edge', () => {
     const eng = engine(
       [node('inner'), node('after')],
       [edge('loop', 'after', 'success')],
@@ -132,8 +132,24 @@ describe('RS1 — run.reseeded fold', () => {
       round: 1,
       outputs: { got: 'it' },
     };
-    const { state } = fold(eng, [startedRerun(), reseeded({ copiedContainers: { loop: copied } })]);
+    const { state, lastCommands } = fold(eng, [
+      startedRerun(),
+      reseeded({ copiedContainers: { loop: copied } }),
+    ]);
     expect(state.containers.loop).toEqual(copied);
+    // The container's outputs are mirrored into state.outputs — the sole source
+    // for `${nodes.loop.output.*}` on a downstream re-running node.
+    expect(state.outputs.loop).toEqual({ got: 'it' });
+    // A copied-terminal container routes `loop --success--> after`: `after`
+    // dispatches, its body child does NOT re-run.
+    expect(dispatchIds(lastCommands)).toEqual(['after']);
+  });
+
+  it('a known frontier node with NO copiedOutputs entry stores {} (empty-outputs fallback)', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const { state } = fold(eng, [startedRerun(), reseeded({ frontier: ['a'], copiedOutputs: {} })]);
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.outputs.a).toEqual({});
   });
 
   it('an EMPTY frontier applies nothing and dispatches from the start (valid reseed)', () => {
@@ -184,6 +200,44 @@ describe('RS1 — impossible-log guards', () => {
     expect(state.nodes.a!.status).toBe('success');
     expect(state.nodes.ghost).toBeUndefined();
     expect(allDiagnostics.join(' ')).toMatch(/unknown frontier node/);
+  });
+
+  it('an UNKNOWN container id is skipped with a diagnostic; known nodes still copy', () => {
+    const eng = engine([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    const ghostContainer: RunState['containers'][string] = {
+      status: 'success',
+      round: 0,
+      outputs: {},
+    };
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({
+        frontier: ['a'],
+        copiedOutputs: { a: { out: 1 } },
+        copiedContainers: { ghost: ghostContainer },
+      }),
+    ]);
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.containers.ghost).toBeUndefined();
+    expect(allDiagnostics.join(' ')).toMatch(/unknown container/);
+  });
+
+  it('a NON-TERMINAL copiedContainers entry is refused (skip + diagnostic, no throw)', () => {
+    const eng = engine(
+      [node('inner'), node('after')],
+      [edge('loop', 'after', 'success')],
+      [{ id: 'loop', kind: 'foreach', children: ['inner'], items: '[1]' } as Container],
+    );
+    const active: RunState['containers'][string] = { status: 'active', round: 0, outputs: {} };
+    const { state, allDiagnostics } = fold(eng, [
+      startedRerun(),
+      reseeded({ copiedContainers: { loop: active } }),
+    ]);
+    // The container is left at its seeded 'pending' (the active copy is skipped),
+    // and the pure reducer did not throw.
+    expect(state.containers.loop!.status).toBe('pending');
+    expect(state.outputs.loop).toBeUndefined();
+    expect(allDiagnostics.join(' ')).toMatch(/non-terminal container/);
   });
 });
 

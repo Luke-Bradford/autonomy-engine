@@ -312,6 +312,20 @@ export const ContainerRunStatusSchema = z.enum([
 ]);
 export type ContainerRunStatus = z.infer<typeof ContainerRunStatusSchema>;
 
+/** The terminal container statuses — a container that has STOPPED (mirrors
+ * `TerminalNodeStatusSchema`). `pending`/`active` are non-terminal (still live). */
+export const TerminalContainerStatusSchema = z.enum(['success', 'failure', 'skipped']);
+
+/**
+ * Runtime membership test for a terminal container status — derived from the
+ * schema's own options (like `TERMINAL_NODE`) so the set and type can't drift.
+ * Used by RS1's `run.reseeded` fold to REFUSE a non-terminal copied container
+ * (which would leave a live container the settle walk cannot resolve).
+ */
+export const TERMINAL_CONTAINER: ReadonlySet<ContainerRunStatus> = new Set<ContainerRunStatus>(
+  TerminalContainerStatusSchema.options satisfies readonly ContainerRunStatus[],
+);
+
 export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),
