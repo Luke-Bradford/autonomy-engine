@@ -7,11 +7,12 @@ import {
   type WorkspaceGitPreviewResource,
 } from '@autonomy-studio/shared';
 import { normalizedTriggerContentForm } from './trigger-content.js';
-import type {
-  ParsedConnection,
-  ParsedPipeline,
-  ParsedTrigger,
-  ParsedWorkspace,
+import {
+  latestVersion,
+  type ParsedConnection,
+  type ParsedPipeline,
+  type ParsedTrigger,
+  type ParsedWorkspace,
 } from './workspace-parse.js';
 
 /**
@@ -153,18 +154,14 @@ export function classifyWorkspace(
   // version (`ownedVersionRids`) PLUS the version this very branch would mint,
   // so a trigger co-created with its pipeline resolves without a mint having run.
   // EXACT parity with the apply's `versionById`: the apply materialises only the
-  // LATEST version per pipeline file (`latestVersion`), so a hand-crafted
-  // multi-version file's non-latest version is NOT resolvable (the apply would
-  // force-disable a trigger bound to it) — take only the last version's id, not
-  // every version, else the preview would be too lenient for that non-canonical
-  // input.
+  // LATEST version per pipeline file, so a hand-crafted multi-version file's
+  // non-latest version is NOT resolvable (the apply would force-disable a trigger
+  // bound to it). Reuse the SHARED `latestVersion` the apply mints from — not an
+  // inline copy — so the two selections can never drift.
   const incomingVersionRids = new Set<string>();
   for (const pipeline of incoming.pipelines) {
-    const versions = pipeline.data.versions;
-    const latest = versions.length > 0 ? versions[versions.length - 1] : undefined;
-    if (latest !== undefined && latest.resourceId !== null) {
-      incomingVersionRids.add(latest.resourceId);
-    }
+    const rid = latestVersion(pipeline)?.resourceId;
+    if (rid != null) incomingVersionRids.add(rid);
   }
   const bindingResolves = (rid: string): boolean =>
     ownedVersionRids.has(rid) || incomingVersionRids.has(rid);

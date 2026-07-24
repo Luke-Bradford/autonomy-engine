@@ -42,11 +42,7 @@ import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/tr
 import type { Db } from '../repo/types.js';
 import { enabledForBinding, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
-import {
-  parseWorkspaceFiles,
-  type ParsedPipeline,
-  type ParsedWorkspace,
-} from './workspace-parse.js';
+import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
 import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './workspace-serialize.js';
 
 /**
@@ -139,15 +135,6 @@ export class WorkspaceApplyError extends Error {
     super(message);
     this.name = 'WorkspaceApplyError';
   }
-}
-
-/** The last (latest) version in a pipeline file. `serializeWorkspace` emits
- * exactly one (latest) version per pipeline (git history IS the version trail),
- * so this is that version; a hand-authored multi-version file applies its LAST
- * only — mirroring the serialize contract (the older versions live in git). */
-function latestVersion(pipeline: ParsedPipeline): PipelineVersionExport | undefined {
-  const versions = pipeline.data.versions;
-  return versions.length > 0 ? versions[versions.length - 1] : undefined;
 }
 
 /** The literal (non-`${}`) `call.pipelineVersionId` resourceIds a version's
