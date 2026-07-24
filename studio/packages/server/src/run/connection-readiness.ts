@@ -1,6 +1,7 @@
 import { catalog, interpolationMode } from '@autonomy-studio/shared';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
-import { getPipelineVersion } from '../repo/pipeline-versions.js';
+import { getPipelineVersion, listPipelineVersions } from '../repo/pipeline-versions.js';
+import { listPipelines } from '../repo/pipelines.js';
 import { listTriggers, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
 
@@ -75,6 +76,33 @@ export function unreadyConnectionsForVersion(
     if (reason !== null) unready.push({ connectionId, reason });
   }
   return unready;
+}
+
+/**
+ * #3 G8b-3 — the set of the owner's version RESOURCE IDs whose connections are
+ * all READY, for the git-import PREVIEW's resolved-space trigger compare
+ * (`classifyWorkspace`). The classifier is PURE (takes no `db`), so the route
+ * precomputes this readiness domain exactly as it precomputes `ownedVersionRids`
+ * (`listVersionResourceIds`), and the classifier folds a bound trigger's
+ * `enabled`→false when its version is NOT in this set — matching what the apply's
+ * FORWARD gate persists (`applyWorkspace`), so preview and apply agree on the row
+ * an import would land (the G7 preview↔apply parity, extended to readiness).
+ *
+ * Readiness is per-VERSION (all of a version's connection refs ready), reusing the
+ * SAME `unreadyConnectionsForVersion` the enable / import / dispatch gates use, so
+ * the four can never disagree. Every owned version is included (a trigger may pin
+ * an older or an archived pipeline's version), keyed by stable `resourceId`.
+ */
+export function readyVersionResourceIds(db: Db, ownerId: string): Set<string> {
+  const ready = new Set<string>();
+  for (const pipeline of listPipelines(db, ownerId)) {
+    for (const version of listPipelineVersions(db, pipeline.id)) {
+      if (unreadyConnectionsForVersion(db, ownerId, version.id).length === 0) {
+        ready.add(version.resourceId);
+      }
+    }
+  }
+  return ready;
 }
 
 /**

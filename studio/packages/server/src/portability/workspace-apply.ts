@@ -20,11 +20,17 @@ import {
 } from '@autonomy-studio/shared';
 import { archivePipeline } from '../repo/archive.js';
 import {
+  connectionNotReadyReason,
   createConnection,
+  getConnection,
   getConnectionByResourceId,
   listConnections,
   updateConnection,
 } from '../repo/connections.js';
+import {
+  regateTriggersForConnection,
+  unreadyConnectionsForVersion,
+} from '../run/connection-readiness.js';
 import {
   createPipeline,
   getPipelineByResourceId,
@@ -40,7 +46,7 @@ import {
 } from '../repo/pipeline-versions.js';
 import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
-import { enabledForBinding, normalizedTriggerContentForm } from './trigger-content.js';
+import { enabledForReadiness, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
 import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
 import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './workspace-serialize.js';
@@ -96,14 +102,28 @@ import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './works
  * an unresolvable binding folds to (null, disabled), matching the persisted row),
  * so it re-classifies `unchanged`, not a perpetual `update`.
  *
- * Remaining DOCUMENTED non-idempotencies (each re-classifies `update` on the next
- * import until a later slice lands — honest, not a silent write): a
- * mode-inconsistency the apply force-corrected (branch keeps the field, DB nulled
- * it) until the branch is hand-fixed; a webhook trigger CREATED cross-workspace
- * (source secret → serialized `{}`, target create → null) until G8 secret
- * provisioning — tracked in #674 for the `triggerContentForm` webhook-presence
- * exclusion the content-form note anticipates. The `deferred` result array now
- * has NO producers (every recognised resource is applied); it is retained in the
+ * #3 G8b-3 — the connection-READINESS gate on the import path (the routes-external
+ * twin of the G8b-1 enable gate + the G8b-2 reverse gate). Secrets never travel in
+ * git, so an imported secret-requiring connection lands `needs_secret` (unready):
+ * - FORWARD: a branch trigger bound to a version whose connections are unready is
+ *   force-disabled (`enabled:false`), spec 120-123 "imports disabled" — NOT a
+ *   route-style refusal. Idempotent: the content compare folds the incoming
+ *   `enabled`→false on readiness (`connectionsReadyForBinding`), the SAME fact the
+ *   write folds, so a still-unready re-import re-classifies `unchanged`; once the
+ *   secret is supplied locally, it re-classifies `updated` and re-enables.
+ * - REVERSE: after the trigger loop, any connection this import left unready
+ *   disables its pre-existing DB (non-branch) dependent enabled triggers via
+ *   `regateTriggersForConnection` (the branch's own were already forward-disabled).
+ * The DISPATCH gate (G8a) backstops both. The PREVIEW folds identically via
+ * `readyVersionResourceIds` (parity), with one documented residual there (an
+ * existing trigger rebound to a co-created-this-branch version — apply-authoritative).
+ *
+ * Remaining DOCUMENTED non-idempotency (re-classifies `update` on the next import
+ * until the branch is hand-fixed — honest, not a silent write): a mode-inconsistency
+ * the apply force-corrected (branch keeps the field, DB nulled it). (The webhook
+ * cross-workspace CREATE churn is RESOLVED — #674, G8b-1 — by `triggerContentForm`
+ * collapsing an empty webhook `{}` to null.) The `deferred` result array now has
+ * NO producers (every recognised resource is applied); it is retained in the
  * contract for forward-compatibility.
  *
  * Inverse ref-remap (the precise inverse of `serializeWorkspace`'s `remapNode`):
@@ -307,12 +327,17 @@ function dbTriggerContentForm(trigger: Trigger, maps: OwnerRefMaps): string {
  * (null on create — no secret to reconstruct; preserved-or-cleared on update).
  * Mode-consistency (`event`/`window` off-mode → null) mirrors `import.ts`; the
  * `windowBindingErrors` refusal is the caller's (it aborts the apply).
+ *
+ * `connectionsReady` (#3 G8b-3) is the caller-computed readiness of the bound
+ * version's connections (irrelevant when unbound — `enabledForReadiness`
+ * short-circuits on `hasBinding=false`).
  */
 function buildTriggerWriteInput(
   data: TriggerExportData,
   ownerId: string,
   binding: string | null,
   webhook: Trigger['webhook'],
+  connectionsReady: boolean,
 ): NewTrigger {
   return {
     ownerId,
@@ -329,13 +354,15 @@ function buildTriggerWriteInput(
     window: data.mode === 'tumbling' ? data.window : null,
     concurrency: data.concurrency,
     runWindows: data.runWindows,
-    // Belt-and-braces: a NULL binding (authored-null OR an unresolved id) can
-    // never be enabled — an unbound trigger must not fire (the P4 scheduler's
-    // null-check is the primary guard). A resolved binding preserves the authored
-    // `enabled`. `enabledForBinding` is the SINGLE definition of this rule, shared
-    // with `normalizedTriggerContentForm` so the persisted row and the reconcile
-    // content compare can never disagree on an unbound trigger's enabled state.
-    enabled: enabledForBinding(binding !== null, data.enabled),
+    // Belt-and-braces: a trigger can be enabled ONLY if bound AND its connections
+    // are ready. A NULL binding (authored-null OR an unresolved id) can never be
+    // enabled — an unbound trigger must not fire (the P4 scheduler's null-check is
+    // the primary guard); a bound-but-unready one imports disabled (#3 G8b-3, spec
+    // 120-123 — secrets never travel in git, so a secret-requiring connection
+    // lands `needs_secret`). `enabledForReadiness` is the SINGLE definition of
+    // this rule, shared with `normalizedTriggerContentForm` so the persisted row
+    // and the reconcile content compare can never disagree.
+    enabled: enabledForReadiness(binding !== null, connectionsReady, data.enabled),
   };
 }
 
@@ -441,6 +468,12 @@ export function applyWorkspace(
       connById.set(c.resourceId, c.id);
       connRidByDbId.set(c.id, c.resourceId);
     }
+    // #3 G8b-3 — the DB ids of connections this import CREATED or UPDATED, for the
+    // reverse-gate sweep after the trigger loop: any that ended unready disables
+    // its pre-existing DB (non-branch) dependent enabled triggers (mirroring the
+    // G8b-2 connection-route reverse gate). An `unchanged`/`renamed` connection is
+    // not collected — its readiness cannot have changed, so it can strand nothing.
+    const touchedConnectionIds = new Set<string>();
 
     for (const inc of incoming.connections) {
       const data = inc.data;
@@ -461,6 +494,7 @@ export function applyWorkspace(
           inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
         );
         connById.set(created.resourceId, created.id);
+        touchedConnectionIds.add(created.id);
         applied.push({
           path: inc.path,
           kind: 'connection',
@@ -477,6 +511,7 @@ export function applyWorkspace(
       let action: WorkspaceGitAppliedAction = 'unchanged';
       if (contentChanged) {
         updateConnection(db, existing.id, patch);
+        touchedConnectionIds.add(existing.id);
         action = 'updated';
       } else if (nameChanged) {
         updateConnection(db, existing.id, { name: data.name });
@@ -654,6 +689,13 @@ export function applyWorkspace(
       versionResourceId: versionRidByDbId,
       connectionResourceId: connRidByDbId,
     };
+    // #3 G8b-3 — readiness of a resolved binding's connections (the git-import
+    // FORWARD twin of the enable-time gate). `unreadyConnectionsForVersion`
+    // mirrors the executor DISPATCH gate, so import / enable / dispatch can never
+    // disagree on what "ready" means. An unbound trigger is vacuously not-ready
+    // (the `enabledForReadiness` fold short-circuits on it anyway).
+    const connectionsReadyForBinding = (binding: string | null): boolean =>
+      binding !== null && unreadyConnectionsForVersion(db, ownerId, binding).length === 0;
     for (const inc of incoming.triggers) {
       const data = inc.data;
       // Existence by DB `resourceId` (getTriggerByResourceId), NOT the classifier
@@ -669,35 +711,58 @@ export function applyWorkspace(
       if (existing === null) {
         assertTriggerWindowBindingsConsistent(data, label);
         const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+        // #3 G8b-3 — a fresh trigger bound to a version whose connections are
+        // unready imports disabled (secrets never travel in git → a
+        // secret-requiring connection lands `needs_secret`); the dispatch gate
+        // backstops. `buildTriggerWriteInput` folds this via `enabledForReadiness`.
+        const connectionsReady = connectionsReadyForBinding(binding);
         // webhook: the branch carries only the PUBLIC config (no `secretRef`,
         // which `NewTriggerSchema` requires), so a fresh webhook trigger starts
         // with no secret — the operator provisions it via the normal route (G8).
         const created = createTrigger(
           db,
-          buildTriggerWriteInput(data, ownerId, binding, null),
+          buildTriggerWriteInput(data, ownerId, binding, null, connectionsReady),
           inc.resourceId !== null ? { resourceId: inc.resourceId } : undefined,
         );
         action = 'created';
         resourceId = created.resourceId;
       } else {
+        const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
+        // #3 G8b-3 — readiness of the trigger's OWN bound version, computed once
+        // and reused by BOTH the content compare (below) and the write (so the two
+        // can never disagree, keeping a readiness-force-disabled trigger idempotent
+        // — no perpetual `update` churn while the connection stays unready).
+        const connectionsReady = connectionsReadyForBinding(binding);
         // #3 G7 — compare in RESOLVED space: a branch trigger whose binding does
         // not resolve to an owned version normalizes to (null, disabled) — exactly
         // what this apply would persist — so a force-disabled unbound trigger stops
         // re-classifying `update` forever. The DB side is already resolved
         // (`serializeTrigger` renders a stored null binding as null). A genuine
         // enable/disable on a BOUND trigger still differs, so it still propagates.
+        // #3 G8b-3 — the readiness predicate folds `enabled`→false for a
+        // bound-but-unready trigger too; the form only ever probes the trigger's
+        // own binding rid, so `() => connectionsReady` (that binding's readiness)
+        // is the exact fact needed.
         const contentChanged =
-          normalizedTriggerContentForm(data, (rid) => versionById.has(rid)) !==
-          dbTriggerContentForm(existing, dbRefMaps);
+          normalizedTriggerContentForm(
+            data,
+            (rid) => versionById.has(rid),
+            () => connectionsReady,
+          ) !== dbTriggerContentForm(existing, dbRefMaps);
         action = triggerAction(contentChanged, data.name !== existing.name);
         if (action === 'updated') {
           assertTriggerWindowBindingsConsistent(data, label);
-          const binding = resolveTriggerBinding(data.pipelineVersionId, versionById);
           // webhook: PRESERVE the existing local secret while the trigger stays a
           // webhook (never drop it — the branch can't carry it back); clear a
           // now-stale config on a mode change away from webhook.
           const webhook = data.mode === 'webhook' ? existing.webhook : null;
-          const writeInput = buildTriggerWriteInput(data, ownerId, binding, webhook);
+          const writeInput = buildTriggerWriteInput(
+            data,
+            ownerId,
+            binding,
+            webhook,
+            connectionsReady,
+          );
           // `updateTrigger` re-parses through the LENIENT `TriggerSchema`, so it
           // does NOT run the concurrency (`parallel ⇒ max`) or param-binding
           // (`${trigger.*}`-only) WRITE rules the CREATE path gets via
@@ -718,6 +783,25 @@ export function applyWorkspace(
         action,
         versionMinted: false, // triggers have no versions
       });
+    }
+
+    // #3 G8b-3 — the REVERSE gate: an import that left a connection UNREADY (a
+    // fresh secret-requiring connection, or an existing one whose kind changed to
+    // one) must also disable its pre-existing DB dependent enabled triggers. The
+    // branch's own triggers were already force-disabled by the forward gate above;
+    // this catches a DB-ONLY trigger (never on the branch, so never visited by the
+    // trigger loop) bound to a version referencing the connection, which would
+    // otherwise keep a stale `enabled:true` the dispatch gate silently refuses.
+    // Mirrors the G8b-2 connection-route reverse gate; `regateTriggersForConnection`
+    // is ENABLED-ONLY + idempotent (its own tx nests as a SAVEPOINT), so re-running
+    // over the already-disabled branch triggers is a no-op. No result-shape channel
+    // is needed — the import route's unconditional post-commit `scheduler.sync()`
+    // drops every disabled trigger's pending wakeup.
+    for (const connId of touchedConnectionIds) {
+      const conn = getConnection(db, connId);
+      if (conn !== null && connectionNotReadyReason(conn) !== null) {
+        regateTriggersForConnection(db, connId);
+      }
     }
 
     // No resource kind is DEFERRED any more (every recognised resource is applied

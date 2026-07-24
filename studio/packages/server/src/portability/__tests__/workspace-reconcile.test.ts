@@ -307,6 +307,36 @@ describe('classifyWorkspace', () => {
     });
   });
 
+  it('#3 G8b-3: folds a bound-but-unready trigger enabled→false so the preview matches the force-disabled DB row', () => {
+    const V = 'res_pv_owned';
+    // The DB side is the row the apply's forward gate force-disabled: bound to V,
+    // enabled:false. The branch still authors enabled:true, bound to V.
+    const dbTrig = parsedTrigger('res_t', 'T', false);
+    dbTrig.data.pipelineVersionId = V;
+    const incTrig = parsedTrigger('res_t', 'T', true);
+    incTrig.data.pipelineVersionId = V;
+    const db = ws({ triggers: [dbTrig] });
+    const incoming = ws({ triggers: [incTrig] });
+    const owned = new Set([V]);
+
+    // No readiness domain (undefined): bound is treated ready → incoming keeps
+    // enabled:true → differs from the disabled DB row → phantom `update` (the gap
+    // G8b-3 closes when readiness is supplied).
+    expect(dispositionOf(classifyWorkspace(db, incoming, owned), 'res_t')!.disposition).toBe(
+      'update',
+    );
+    // V UNREADY (not in readyVersionRids): incoming folds enabled→false → matches
+    // the force-disabled DB row → `unchanged` (preview↔apply parity).
+    expect(
+      dispositionOf(classifyWorkspace(db, incoming, owned, new Set()), 'res_t')!.disposition,
+    ).toBe('unchanged');
+    // V READY: incoming keeps the authored enabled:true → differs → `update` (the
+    // legitimate re-enable once the secret is supplied), not phantom churn.
+    expect(
+      dispositionOf(classifyWorkspace(db, incoming, owned, new Set([V])), 'res_t')!.disposition,
+    ).toBe('update');
+  });
+
   it('ignores a null-resourceId row on the DB side (defensive — serialize never emits one)', () => {
     // A DB-side pipeline with a null resourceId is a can't-happen shape
     // (serializeWorkspace always mints real ids); the classifier must not let it

@@ -39,6 +39,7 @@ import {
   type GitProvider,
 } from '../git/provider.js';
 import { KeyedQueue } from '../git/queue.js';
+import { readyVersionResourceIds } from '../run/connection-readiness.js';
 import { NotFoundError } from '../errors.js';
 import type { Db } from '../repo/types.js';
 
@@ -331,8 +332,16 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
       // #3 G7 — the trigger-binding resolution domain (all owned versions incl.
       // archived; not derivable from the latest-only serialized snapshot), so the
-      // preview normalizes a dangling binding identically to the apply.
-      const plan = classifyWorkspace(dbSnapshot, incoming, listVersionResourceIds(db, ownerId));
+      // preview normalizes a dangling binding identically to the apply. #3 G8b-3 —
+      // plus the readiness domain (owned versions whose connections are all ready),
+      // so the preview folds a bound-but-unready trigger's `enabled`→false exactly
+      // as the apply's forward gate would, keeping preview↔apply parity.
+      const plan = classifyWorkspace(
+        dbSnapshot,
+        incoming,
+        listVersionResourceIds(db, ownerId),
+        readyVersionResourceIds(db, ownerId),
+      );
 
       return WorkspaceGitImportPreviewSchema.parse({
         head,
