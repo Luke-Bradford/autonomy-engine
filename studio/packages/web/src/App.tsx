@@ -4,6 +4,7 @@ import { PipelinesPage } from './pages/PipelinesPage';
 import { TriggersPage } from './pages/TriggersPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { RunDetailPage } from './pages/runs/RunDetailPage';
+import { ThemeToggle } from './theme/ThemeToggle';
 
 interface NavItem {
   path: string;
@@ -69,6 +70,10 @@ export default function App() {
             ))}
           </ul>
         </nav>
+        {/* U2 relocates this into the hub rail. */}
+        <div className="sidebar-footer">
+          <ThemeToggle />
+        </div>
       </aside>
       <main className="content">{routeContent(path)}</main>
     </div>

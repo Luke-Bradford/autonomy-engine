@@ -1,3 +1,14 @@
+/*
+ * The MVP shell's palette. It predates Fluent and is NOT Fluent-ized yet (that
+ * is U4+), so it cannot read Fluent's `--colorXxx` design tokens: Fluent scopes
+ * those to the FluentProvider ROOT ELEMENT, and `:root`/`body` are ANCESTORS of
+ * it — custom properties inherit downwards only. Hence its own two-block
+ * palette, switched by the `data-theme` attribute `syncColorScheme` writes from
+ * `uiStore.themeMode` (U1). Every colour in this file must be a var declared
+ * here, in BOTH blocks — `palette.test.ts` enforces that, because a stray
+ * literal or a missing light override is invisible until someone eyeballs light
+ * mode.
+ */
 :root {
   --bg: #0f1115;
   --panel: #171a21;
@@ -7,6 +18,7 @@
   --muted: #9aa3b2;
   --accent: #6ea8fe;
   --error: #ff6b6b;
+  --success: #58d68d;
   font-family:
     system-ui,
     -apple-system,
@@ -14,6 +26,25 @@
     Roboto,
     sans-serif;
   color-scheme: dark;
+}
+
+/*
+ * `:root[data-theme='light']` (specificity 0,1,1) outranks the base `:root`
+ * (0,1,0) regardless of source order — a bare `[data-theme='light']` would tie
+ * and silently depend on ordering. Foreground hues are darkened well past their
+ * dark-mode counterparts to hold contrast on a light surface.
+ */
+:root[data-theme='light'] {
+  --bg: #f3f4f7;
+  --panel: #ffffff;
+  --panel-2: #e9ebf0;
+  --border: #d0d4dd;
+  --text: #1b1d23;
+  --muted: #5b6270;
+  --accent: #2a5db0;
+  --error: #c02828;
+  --success: #1a7f4b;
+  color-scheme: light;
 }
 
 * {
@@ -36,6 +67,16 @@ body {
   background: var(--panel);
   border-right: 1px solid var(--border);
   padding: 1rem 0.75rem;
+  /* Column layout so the footer can settle at the bottom of the full-height
+     grid track rather than floating under the nav. */
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 0.75rem 0.6rem 0.25rem;
+  border-top: 1px solid var(--border);
 }
 
 .brand {
@@ -343,8 +384,8 @@ td button + button {
 
 .run-status-success,
 .node-status-success {
-  color: #58d68d;
-  border-color: #58d68d;
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .run-status-failure,
@@ -364,8 +405,8 @@ td button + button {
 
 /* The blinking "● live" indicator, so a running stream is unmistakable. */
 .stream-phase-live {
-  color: #58d68d;
-  border-color: #58d68d;
+  color: var(--success);
+  border-color: var(--success);
   animation: live-pulse 1.4s ease-in-out infinite;
 }
 
