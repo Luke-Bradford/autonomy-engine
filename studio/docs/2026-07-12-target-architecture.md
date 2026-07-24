@@ -48,7 +48,7 @@ TypeScript end-to-end, **Node runtime for dev AND ship** (no Node/Bun split).
 | Secrets     | **`libsodium-wrappers`** (WASM, no native addon), XChaCha20-Poly1305                                       | encrypted-file PRIMARY; keychain opportunistic via shell-out                          |
 | AI SDKs     | official `@anthropic-ai/sdk`, `openai`, Ollama client                                                      | connectors                                                                            |
 | Live        | WebSocket, topic-subscribed (per-run), debounced ~100ms, DB-replayable                                     | monitoring feed                                                                       |
-| Dist        | **Docker (primary)**; Bun single-binary spike later                                                        |                                                                                       |
+| Dist        | **Docker (primary)**; Bun single-binary spike later                                                        | spike evaluated: `2026-07-24-bun-single-binary-spike.md` (deferred, Docker stays primary) |
 
 Monorepo (**pnpm workspaces only**): `packages/shared` (Zod schemas + types),
 `packages/server` (Fastify + engine + Drizzle + scheduler + workers),
