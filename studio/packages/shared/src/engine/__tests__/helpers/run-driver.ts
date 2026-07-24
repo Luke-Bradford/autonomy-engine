@@ -35,7 +35,7 @@
  * NEVER wraps `reduce` in try/catch: malformed-doc relies on a #487 throw
  * propagating.
  */
-import type { EngineCommand, EngineEvent, RunState } from '../../types.js';
+import type { ContainerRunState, EngineCommand, EngineEvent, RunState } from '../../types.js';
 import type { Engine } from '../../reduce.js';
 
 /** The default run/version identifiers every engine test uses. */
@@ -57,6 +57,21 @@ export interface DriveOptions {
   params?: Record<string, unknown>;
   /** Injected per-node outcome — the ONE thing that varies between callers. */
   resolve: OutcomeResolver;
+  /**
+   * RS3 — drive a rerun-from-failed R2. When present, the driver folds
+   * `run.started{rerunOf}` (which DEFERS start-time dispatch) then the
+   * `run.reseeded` manifest BEFORE draining, so the copied frontier is marked
+   * terminal-`success` before any node dispatches — exactly the two-event head
+   * RS2's live producer (`server/src/run/reseed.ts`) appends atomically. The
+   * drain loop is unchanged: settle then dispatches only BEYOND the frontier.
+   * Absent → an ordinary `run.started` + settle (every existing caller).
+   */
+  reseed?: {
+    sourceRunId: string;
+    frontier: string[];
+    copiedOutputs: Record<string, Record<string, unknown>>;
+    copiedContainers: Record<string, ContainerRunState>;
+  };
 }
 
 export interface DriveResult {
@@ -118,7 +133,28 @@ export function driveRun(eng: Engine, opts: DriveOptions): DriveResult {
     pending.push(...r.commands);
   };
 
-  apply({ type: 'run.started', runId, pipelineVersionId, params });
+  if (opts.reseed) {
+    // The rerun-from-failed head: `rerunOf` defers dispatch so `run.reseeded` can
+    // mark the copied frontier terminal-success before the settle walk runs. Both
+    // fold before the drain loop starts (RS2's producer appends them atomically).
+    apply({
+      type: 'run.started',
+      runId,
+      pipelineVersionId,
+      params,
+      rerunOf: opts.reseed.sourceRunId,
+    });
+    apply({
+      type: 'run.reseeded',
+      runId,
+      sourceRunId: opts.reseed.sourceRunId,
+      frontier: opts.reseed.frontier,
+      copiedOutputs: opts.reseed.copiedOutputs,
+      copiedContainers: opts.reseed.copiedContainers,
+    });
+  } else {
+    apply({ type: 'run.started', runId, pipelineVersionId, params });
+  }
   let guard = 0;
   while (pending.length) {
     if (guard++ > 2000) throw new Error('driver did not converge');

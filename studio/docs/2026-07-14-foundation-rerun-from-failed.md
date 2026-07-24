@@ -97,7 +97,7 @@ same walk as a normal run.
 | --- | --- |
 | RS1 | `run.reseeded` event schema + reducer fold (mark frontier terminal, seed outputs/containers) — **SHIPPED 2026-07-24** (`rerunOf` defer-settle + `onReseeded` fold + guards; built-block below) |
 | RS2 | Frontier algorithm (pure over R1's log) + `rerunOf` link + live producer — **SHIPPED 2026-07-24** (`Engine.reseedFrontier` satisfied-edge strict prefix + `createReseedService` atomic reseed-pair producer + `POST /api/runs/:id/rerun-from-failed`; built-block below) |
-| RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) |
+| RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) — **SHIPPED 2026-07-24** (rule delivered by RS1+RS2; RS3 = the end-to-end copy-vs-re-run SOUNDNESS proof across container kinds + a `driveRun` reseed seam; built-block below) |
 | RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier |
 | RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream |
 | RS6 | Monitor copied-vs-executed render + rerun-history grouping (T13) |
@@ -200,3 +200,49 @@ that carries the reseed pair.
   bound AUTOMATED fires. Routing reruns through admission is a later refinement, not a defect.
 - **`secureOutput` (RS5) is a NO-OP today:** the field ships with F4 and does not exist yet, so no
   frontier node can carry a redacted output — there is nothing to exclude or leak.
+
+## RS3 built-block (2026-07-24) — container/loop reseed rules (completed=copy, mid-flight=re-run)
+
+**The RULE was delivered by RS1+RS2; RS3 has no production-logic change.** `reseedFrontier`
+(`engine/reduce.ts`) includes a container in the copied set iff it reached terminal `success`
+(`isSuccessContainer`); a mid-flight (`active`) / `failure` container is excluded → re-runs whole.
+RS1's `onReseeded` fold seeds a `copiedContainers` entry only if it is a `TERMINAL_CONTAINER`
+(refuses a non-terminal copy with a diagnostic) and mirrors its `outputs` into
+`state.outputs[containerId]`. So "completed = copy whole, mid-flight/failed = re-run whole" is
+already enforced by shipped code. RS2 explicitly handed RS3 the "loop-round / foreach-instance
+copiability NUANCES" — which resolve NOT to new code but to a **soundness property to prove**.
+
+- **The soundness property:** a completed container is copied WHOLE via `copiedContainers`
+  (`{...containerState}` — its `round`/`items`/`results`/`nextItem`/`doomed` carried), but its
+  internal body / instance-key node states are NOT seeded into R2's `state.nodes`. This is sound
+  because nothing reads them once the container is copied-terminal: every settle read of a
+  container's child node state is guarded by a container-status check a copied-`success` container
+  fails BEFORE the read (`stepContainers`, `stepForeachParallel`, the settle top-entity + active-
+  child loops); `fireBackEdges` is undefined-safe (an absent body child yields `bodyTerminal=false`,
+  never a throw); and a live parallel foreach already DELETES its instance-key child nodes on item
+  completion, so a copied terminal foreach legitimately carrying none is behaviourally identical to
+  a live-completed one. External downstream nodes can only read `${nodes.<container>.output.*}`
+  (`validateDoc` forbids a cross-boundary edge to a container CHILD), served by the mirrored
+  `state.outputs[containerId]`.
+- **The RS3 deliverable = the end-to-end characterization net.** `engine/__tests__/reseed-rs3.test.ts`
+  DRIVES a real R1 container run to quiescence (unlike `reseed-frontier.test.ts`, which fabricates
+  R1 state), computes the manifest `reseedFrontier` produces, then drives R2 from it, for every
+  DRIVABLE container kind — **stage**, **foreach sequential**, **foreach PARALLEL** (`batchCount>=2`,
+  proving the deleted-instance-node copies soundly), **loop** (exitWhen/round machinery) — asserting:
+  the container is copied `success`, its body is NEVER re-dispatched (its child stays seeded
+  `pending`), the downstream RE-RUNS, R2 converges with NO diagnostic/throw, and R2 self-derives from
+  its own `run.started{rerunOf}` + `run.reseeded` log alone (CP1). Plus a **failed-container** case
+  proving the container re-enters and re-runs its whole body in R2, and a `driveRun` **reseed seam**
+  (`opts.reseed` folds the atomic two-event head the live producer appends) pinned directly in
+  `helpers/run-driver.test.ts`.
+- **BARE-loop refinement DEFERRED (not built).** `reseedFrontier` conservatively EXCLUDES every
+  top-level node in a bare back-edge loop body (re-runs it whole). Copying a fully-settled bare loop
+  would be a marginal optimisation at real correctness risk — a copied loop member's
+  `soft`/`default(${x})` back-edge ref can freeze at an obsolete iteration, and `fireBackEdges` only
+  self-corrects via `resetNodes` ON a satisfied back-edge traversal a copied-`success` member never
+  takes (R2 restarts with a fresh `bounces` budget). The conservative exclusion is CORRECT, just
+  sub-optimal; the refinement stays deferred as an explicit optional.
+- **NESTED containers are not representable** (a container child MUST be a node, and all containers
+  are top-level entities), so there is no nested-container copiability case to test.
+- **No R1/RS2 semantics changed:** the diff is tests + the additive `driveRun` reseed seam + this
+  doc. The never-throw pure reducer and the RS1 crash-safety atomicity invariant are untouched.
