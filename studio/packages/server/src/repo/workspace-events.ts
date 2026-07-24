@@ -1,8 +1,10 @@
-import { and, eq, max } from 'drizzle-orm';
+import { and, desc, eq, max, sql } from 'drizzle-orm';
 import {
+  PipelinePublishedEventSchema,
   WorkspaceEventRowSchema,
   WorkspaceEventSchema,
   type Paginated,
+  type PipelinePublishedEvent,
   type WorkspaceEvent,
   type WorkspaceEventRow,
 } from '@autonomy-studio/shared';
@@ -103,4 +105,49 @@ export function listWorkspaceEventsPage(
     nextCursor:
       hasMore && boundary ? encodeCursor({ createdAt: boundary.seq, id: boundary.id }) : null,
   };
+}
+
+/**
+ * #3 G6c-1 — the `active` pointer for a pipeline, PROJECTED from this log: the
+ * LATEST `pipeline.published` event for the given owner + pipeline `resourceId`
+ * names the currently-active immutable version (`payload.to`), with its git
+ * provenance (`commit`/`blob`). Returns `null` when the pipeline has never been
+ * published — the honest "no active pointer" for a DB-only workspace or an
+ * as-yet-unpublished pipeline (never manufactured, the #473 rule).
+ *
+ * "Latest" is by the authoritative per-owner append order (`seq DESC`), NOT the
+ * wall-clock `created_at` (two same-millisecond publishes must not read back in
+ * random `id` order — the same audit-order argument as `listWorkspaceEventsPage`).
+ * Filters on the indexed `type` column (`(owner_id, type)`, migration 0029) and
+ * the JSON `payload.pipeline` (the `run-events.ts` `json_extract` idiom) — never
+ * scanning the whole owner log. Owner-scoped: authentication ≠ authorization.
+ *
+ * Call from within a caller's `db.transaction(...)` when the result must be
+ * consistent with a subsequent append — the CAS Publish path relies on the read
+ * + the append observing one SQLite snapshot. Under better-sqlite3's single
+ * (synchronous) connection that holds without threading a distinct `tx` handle
+ * through — passing the outer `db` inside the transaction callback reads within
+ * the same transaction (the archive route's `appendWorkspaceEvent(db, …)`
+ * precedent).
+ */
+export function getActivePublishedVersion(
+  db: Db,
+  ownerId: string,
+  pipelineResourceId: string,
+): PipelinePublishedEvent | null {
+  const row = db
+    .select({ payload: workspaceEvents.payload })
+    .from(workspaceEvents)
+    .where(
+      and(
+        eq(workspaceEvents.ownerId, ownerId),
+        eq(workspaceEvents.type, 'pipeline.published'),
+        eq(sql`json_extract(${workspaceEvents.payload}, '$.pipeline')`, pipelineResourceId),
+      ),
+    )
+    .orderBy(desc(workspaceEvents.seq))
+    .limit(1)
+    .get();
+
+  return row ? PipelinePublishedEventSchema.parse(row.payload) : null;
 }

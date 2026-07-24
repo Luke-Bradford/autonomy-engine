@@ -41,6 +41,22 @@ export class BadRequestError extends Error {
   }
 }
 
+/**
+ * #3 G6c-1 — a CAS Publish refused by a business rule (HTTP 409): no repo
+ * connected (publish is git-mode only), the target version has no git
+ * provenance, the pipeline is archived, or the CAS expected-previous active is
+ * stale ("pull/import first"). One message-carrying class (like `BadRequestError`)
+ * rather than four near-identical 409 classes; the message is author-constructed
+ * and client-safe (names ids only, never echoes request input). A version that
+ * does not exist / is not this pipeline's is a `NotFoundError` (404), not this.
+ */
+export class PublishRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PublishRefusedError';
+  }
+}
+
 /** Narrow, non-message-only check (mirrors `repo/pipelines.ts`'s
  * `isForeignKeyRestrictError`): a `code` starting with `SQLITE_CONSTRAINT`
  * is better-sqlite3's family of extended result codes for every constraint
@@ -178,6 +194,15 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       reply
         .status(400)
         .send({ error: 'bad_request', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #3 G6c-1 — a CAS Publish refused by a business rule (no repo / no
+    // provenance / archived / stale CAS). A conflict with workspace or version
+    // state; message client-safe (author-constructed, ids only).
+    if (error instanceof PublishRefusedError) {
+      request.log.warn({ err: error }, 'conflict: publish refused');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
       return;
     }
 

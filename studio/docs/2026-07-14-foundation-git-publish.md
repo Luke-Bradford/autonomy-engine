@@ -143,7 +143,7 @@ reconcile are core. Corrections:
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); **G5c-1 (the transactional APPLY write-path for connections + pipelines + archive) SHIPPED 2026-07-23** (built-block below); TRIGGER apply is **G5c-2** (#670, next) |
-| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b** = git provenance on versions (reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import); **G6c** = the `active` pointer projection + CAS Publish (`pipeline.published`) + resolve-once bind-to-active |
+| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b (git provenance on versions — reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import) SHIPPED** (built-block below); **G6c** further sliced: **G6c-1 (the `active` pointer projection + CAS Publish `pipeline.published` + route) SHIPPED** (built-block below); **G6c-2** = resolve-once bind-to-active (the trigger-creation convenience that reads this projection — git-mode → active, DB-only → latest) |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
@@ -545,6 +545,79 @@ becomes a projection of THIS log, so it lands first.
   deletes the `workspace_git` row but the audit rows survive, so the connect
   event is still readable). No historical backfill of pre-G6a connect/archive
   history — the same accepted loss the G2 built-block records.
+
+### G6b built-block (2026-07-24) — git provenance on immutable versions
+
+Second G6 slice: the substrate G6c-1's CAS Publish reads ("publish only from a
+DB version whose source commit/blob is known") and the answer to "what is
+running, and from where?" (spec line 134).
+
+- **Four NULLABLE columns on `pipeline_versions` (migration 0028):**
+  `source_commit`, `source_branch`, `source_file_path`, `source_blob_sha`.
+  Stamped ONCE at mint from `CreateResourceOptions` by the workspace-git reconcile
+  (`applyWorkspace`), `null` on every NON-git mint (the `POST /api/pipelines/:id/
+  versions` route, portable import) and on every pre-G6b row. **NULL is the
+  HONEST value, not a fail-open** (#473): absent and `null` mean exactly the same
+  thing — "not imported from git" — so no lost fact is masked (unlike a
+  manufactured sentinel would). `ADD COLUMN` is native in SQLite and does NOT
+  disturb the `0002` immutability triggers (they are `BEFORE UPDATE/DELETE ON`,
+  not column-scoped), so provenance is write-once at INSERT and immutable after.
+- **Reader**: `GitProvider.lsTreeManaged` (`ls-tree -r -z`) surfaces `{path,
+  blobSha}` per managed file; `applyWorkspace` reads the blob at `ref:path` and
+  stamps all four together. A git-minted version always has all four (the reader
+  lists every file from `ls-tree`, which always carries a blob sha); a non-git
+  mint has none — a partial state cannot arise. Excluded from the export envelope
+  + the version content-form (`VERSION_VOLATILE`), so a re-pull from a different
+  commit is not misread as a content change. Read-tolerant `.default(null)` on the
+  schema mirrors `containers` (a stored/exported blob predating G6b legitimately
+  carries no provenance key).
+
+### G6c-1 built-block (2026-07-24) — the `active` pointer projection + CAS Publish
+
+Third G6 slice, further split: **G6c-1 = the publish machinery** (this slice);
+**G6c-2 = resolve-once bind-to-active** (the trigger-creation convenience that
+READS this projection — deferred so it lands on a stable `getActivePublishedVersion`).
+
+- **The `active` pointer is a PROJECTION, never a stored mutable row** (v2
+  "Publish must be EVENT-SOURCED"). A new closed-union variant
+  `pipeline.published{pipeline, from, to, commit, blob, by}` is appended to the
+  `workspace_events` audit log; `getActivePublishedVersion(db, ownerId,
+  resourceId)` folds the LATEST such event (by `seq DESC`, the append authority)
+  into the current active version. Migration 0029 adds the `(owner_id, type)`
+  index the G6a schema comment already promised, so the projection is an index
+  range scan, not a log scan.
+- **ID-SPACE (deliberate two-space choice):** `pipeline` is the pipeline's stable
+  `resourceId` (matches the sibling `pipeline.archived`/`import.applied` events —
+  the projection GROUP key), while `from`/`to` are concrete DB pipeline-VERSION
+  ids (exactly what a trigger/run binds and what CAS compares). Safe because
+  `workspace_events` is a DB-LOCAL log NEVER serialized to git: a version row is
+  immutable and never standalone-deleted, so a `to`/`from` id cannot dangle within
+  its own DB. G6c-2 will resolve trigger → pipeline DB-id → `resourceId` (one
+  `getPipeline` hop) to read the projection.
+- **CAS Publish** (`POST /api/pipelines/:id/publish`, body `{toVersionId,
+  expectedActiveVersionId}`): `expectedActiveVersionId` is the compare-and-set
+  expected-previous active (`null` = "expected never-published"), **REQUIRED, not
+  defaulted** — a missing expectation would be a fail-open CAS (#473 shape). Guards
+  (all client-safe, ids only): **git-mode** — `getWorkspaceGit` non-null, else 409
+  (publish is git-only; a DB-only workspace binds-to-latest, G6c-2); **not
+  archived** — else 409; **version owned by THIS pipeline** — else 404 (not-found
+  and not-this-pipeline collapse, the authz-leak rule); **git provenance known** —
+  `source_commit`/`source_blob_sha` non-null, else 409. The CAS read
+  (`getActivePublishedVersion`) + the append run in ONE `db.transaction` (the append
+  nests as a SAVEPOINT), so they observe one SQLite snapshot — better-sqlite3's
+  single-writer model means no concurrent publish interleaves. A stale CAS → 409
+  ("pull/import first"); the spec's "expected-previous active/commit" collapses to
+  a version-id CAS (each event carries a 1:1 `to`→`commit`).
+- **Idempotent no-op** — re-publishing the already-active version writes NO event
+  (`published:false`), the "audit records EFFECT, not attempts" rule from
+  `import.applied`. **`GET /api/pipelines/:id/active`** exposes the projection
+  (`{active:{versionId,commit,blob}|null}`), deliberately NOT git-gated — a DB-only
+  workspace answers `null`, never 404 (the audit-route stance).
+- **One 409 error class** `PublishRefusedError` (message-carrying, like
+  `BadRequestError`) rather than four near-identical classes; a missing/wrong
+  version stays `NotFoundError` (404). **Deferred to G6c-2:** resolve-once
+  bind-to-active (trigger creation reads the projection: git-mode → active,
+  DB-only → latest version).
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

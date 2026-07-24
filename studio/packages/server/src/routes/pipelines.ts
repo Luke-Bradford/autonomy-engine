@@ -1,10 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
+  ActivePipelineVersionResponseSchema,
   NewPipelineSchema,
   NewPipelineVersionSchema,
+  PublishPipelineBodySchema,
+  PublishPipelineResultSchema,
   canonicalStringify,
   rollupFromAggregates,
+  type ActivePipelineVersion,
 } from '@autonomy-studio/shared';
 import {
   aggregatePipelineCost,
@@ -13,12 +17,15 @@ import {
   createPipeline,
   createPipelineVersion,
   deletePipeline,
+  getActivePublishedVersion,
   getPipeline,
+  getPipelineVersion,
+  getWorkspaceGit,
   listPipelineVersions,
   listPipelinesPage,
   updatePipeline,
 } from '../repo/index.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, PublishRefusedError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportPipeline } from '../portability/index.js';
 
@@ -141,6 +148,110 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
     if (!result) throw new NotFoundError('pipeline', existing.id);
     fastify.scheduler.sync();
     return result.pipeline;
+  });
+
+  /**
+   * #3 G6c-1 — CAS Publish: promote an immutable version to the pipeline's
+   * `active`/deployable pointer. The pointer is a PROJECTION of the
+   * `pipeline.published` workspace-audit log (never a stored mutable row), so
+   * this appends an event; `getActivePublishedVersion` folds the latest.
+   *
+   * Publish is a GIT-MODE concept (a DB-only workspace has no active pointer —
+   * it binds-to-latest, that is G6c-2) and only from a version whose git
+   * provenance is known (`source_commit`/`source_blob_sha`, G6b). The
+   * compare-and-set (`expectedActiveVersionId` must equal the currently-projected
+   * active) refuses a stale publish — "pull/import first". The CAS read + the
+   * append run in ONE `db.transaction` (the append nests as a SAVEPOINT), so
+   * they observe one SQLite snapshot: with better-sqlite3's single-writer model
+   * no concurrent publish can interleave between the read and the append.
+   *
+   * `requireOwned` enforces authorization (authentication ≠ authorization); a
+   * version of another pipeline / owner surfaces as a 404, never a publish.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/publish', async (request) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const { toVersionId, expectedActiveVersionId } = PublishPipelineBodySchema.parse(request.body);
+    const ownerId = request.principal.ownerId;
+
+    if (getWorkspaceGit(db, ownerId) === null) {
+      throw new PublishRefusedError(
+        `pipeline "${pipeline.id}" cannot be published: no git repo is connected to this workspace`,
+      );
+    }
+    if (pipeline.archived) {
+      throw new PublishRefusedError(
+        `pipeline "${pipeline.id}" is archived and cannot be published`,
+      );
+    }
+
+    const version = getPipelineVersion(db, toVersionId);
+    // Not-found AND not-this-pipeline both collapse to 404 (never distinguish
+    // "no such version" from "not this pipeline's" — the authz-leak rule).
+    if (version === null || version.pipelineId !== pipeline.id) {
+      throw new NotFoundError('pipeline version', toVersionId);
+    }
+    // CAS publishes only from a version whose git source commit/blob is KNOWN
+    // (G6b). A NON-git-minted version (authored via the versions route, portable
+    // import) has null provenance and is not a deployable git artifact.
+    if (version.sourceCommit === null || version.sourceBlobSha === null) {
+      throw new PublishRefusedError(
+        `pipeline version "${toVersionId}" has no git provenance and cannot be published`,
+      );
+    }
+    const commit = version.sourceCommit;
+    const blob = version.sourceBlobSha;
+
+    const result = db.transaction(() => {
+      const current = getActivePublishedVersion(db, ownerId, pipeline.resourceId)?.to ?? null;
+      if (current !== expectedActiveVersionId) {
+        throw new PublishRefusedError(
+          `stale publish for pipeline "${pipeline.id}": the active version has moved — pull/import first`,
+        );
+      }
+      // Re-publishing the already-active version changes nothing: emit NO event
+      // (the audit records EFFECT, not attempts — the `import.applied` rule).
+      if (toVersionId === current) {
+        return { published: false, active: { versionId: current, commit, blob } };
+      }
+      appendWorkspaceEvent(db, ownerId, {
+        type: 'pipeline.published',
+        pipeline: pipeline.resourceId,
+        from: expectedActiveVersionId,
+        to: toVersionId,
+        commit,
+        blob,
+        by: request.principal.id,
+      });
+      return { published: true, active: { versionId: toVersionId, commit, blob } };
+    });
+    // Parse at the API boundary (the workspace-git commit-route convention):
+    // enforces the declared response contract and strips any stray field.
+    return PublishPipelineResultSchema.parse(result);
+  });
+
+  /**
+   * #3 G6c-1 — the current `active` pointer for a pipeline, projected from the
+   * audit log. Deliberately NOT git-gated: a DB-only workspace (no active
+   * pointer, never published) answers `{ active: null }` rather than 404, the
+   * same "records-history-even-DB-only" stance as `GET /api/workspace/audit`.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/active', async (request) => {
+    const pipeline = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    const published = getActivePublishedVersion(db, request.principal.ownerId, pipeline.resourceId);
+    const active: ActivePipelineVersion | null = published
+      ? { versionId: published.to, commit: published.commit, blob: published.blob }
+      : null;
+    return ActivePipelineVersionResponseSchema.parse({ active });
   });
 
   fastify.post<{ Params: { id: string } }>(

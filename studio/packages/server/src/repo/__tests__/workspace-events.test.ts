@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { WorkspaceEvent } from '@autonomy-studio/shared';
 import { workspaceEvents } from '../../db/schema.js';
-import { appendWorkspaceEvent, listWorkspaceEventsPage } from '../workspace-events.js';
+import {
+  appendWorkspaceEvent,
+  getActivePublishedVersion,
+  listWorkspaceEventsPage,
+} from '../workspace-events.js';
 import * as workspaceEventsRepo from '../workspace-events.js';
 import { decodeCursor } from '../pagination.js';
 import { freshDb } from './helpers.js';
@@ -39,6 +43,21 @@ const importApplied: WorkspaceEvent = {
   archived: [],
   by: 'user_1',
 };
+
+function published(
+  overrides: Partial<Extract<WorkspaceEvent, { type: 'pipeline.published' }>> = {},
+): WorkspaceEvent {
+  return {
+    type: 'pipeline.published',
+    pipeline: 'res_pipe',
+    from: null,
+    to: 'pv_1',
+    commit: 'commit_sha_1',
+    blob: 'blob_sha_1',
+    by: 'user_1',
+    ...overrides,
+  };
+}
 
 function firstPage(db: ReturnType<typeof freshDb>['db'], ownerId: string, limit = 50) {
   return listWorkspaceEventsPage(db, ownerId, { limit });
@@ -179,5 +198,55 @@ describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
     const seen = [...page1.items, ...page2.items].map((e) => e.id);
     expect(new Set(seen)).toEqual(new Set(ids));
     expect(seen).toHaveLength(3);
+  });
+});
+
+describe('getActivePublishedVersion (#3 G6c-1 — the active pointer projection)', () => {
+  it('appends and reads back a pipeline.published event, typed', () => {
+    const { db } = freshDb();
+    const row = appendWorkspaceEvent(db, OWNER, published());
+    expect(row.type).toBe('pipeline.published');
+    expect(row.payload).toEqual(published());
+  });
+
+  it('returns null when the pipeline has never been published', () => {
+    const { db } = freshDb();
+    // Other event kinds for the same owner must not be mistaken for a publish.
+    appendWorkspaceEvent(db, OWNER, repoConnected);
+    appendWorkspaceEvent(db, OWNER, pipelineArchived);
+    expect(getActivePublishedVersion(db, OWNER, 'res_pipe')).toBeNull();
+  });
+
+  it('projects the LATEST publish (by append seq), not the newest wall-clock', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, published({ from: null, to: 'pv_1' }));
+    appendWorkspaceEvent(db, OWNER, published({ from: 'pv_1', to: 'pv_2' }));
+    appendWorkspaceEvent(
+      db,
+      OWNER,
+      published({ from: 'pv_2', to: 'pv_3', commit: 'c3', blob: 'b3' }),
+    );
+    const active = getActivePublishedVersion(db, OWNER, 'res_pipe');
+    expect(active).not.toBeNull();
+    expect(active?.to).toBe('pv_3');
+    expect(active?.commit).toBe('c3');
+    expect(active?.blob).toBe('b3');
+  });
+
+  it('is scoped per pipeline resourceId — two pipelines never cross', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, published({ pipeline: 'res_a', to: 'pv_a' }));
+    appendWorkspaceEvent(db, OWNER, published({ pipeline: 'res_b', to: 'pv_b' }));
+    expect(getActivePublishedVersion(db, OWNER, 'res_a')?.to).toBe('pv_a');
+    expect(getActivePublishedVersion(db, OWNER, 'res_b')?.to).toBe('pv_b');
+    expect(getActivePublishedVersion(db, OWNER, 'res_missing')).toBeNull();
+  });
+
+  it('is owner-scoped — one owner never sees another owner active pointer', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OTHER, published({ pipeline: 'res_pipe', to: 'pv_other' }));
+    // OWNER has no publish for res_pipe, even though OTHER does.
+    expect(getActivePublishedVersion(db, OWNER, 'res_pipe')).toBeNull();
+    expect(getActivePublishedVersion(db, OTHER, 'res_pipe')?.to).toBe('pv_other');
   });
 });
