@@ -206,8 +206,51 @@ export function deriveWorkspaceGitState(fields: {
 /** The GET/POST response shape: the row plus the derived state. */
 export const WorkspaceGitStatusSchema = WorkspaceGitSchema.extend({
   state: WorkspaceGitStateSchema,
+  /**
+   * #3 G10 — whether a per-workspace git token is stored (encrypted at rest).
+   * The ONLY client-facing signal about the stored token: the ciphertext itself
+   * is kept out of `WorkspaceGitSchema` (stripped on read) and NEVER returned.
+   * An EXPLICIT boolean, never defaulted — the presence of a credential is a
+   * fact stated honestly, not manufactured (#473). Computed server-side from the
+   * `git_token_encrypted` column's non-nullness.
+   */
+  hasStoredToken: z.boolean(),
 });
 export type WorkspaceGitStatus = z.infer<typeof WorkspaceGitStatusSchema>;
+
+const MAX_GIT_TOKEN_LEN = 500;
+
+/**
+ * #3 G10 — a stored git token (a GitHub PAT / installation token). `.trim()`
+ * first so a whitespace-padded value normalizes and a whitespace-only value
+ * fails `.min(1)` (an all-blank token is never a real credential). Control
+ * chars — CR/LF especially — are refused OUTRIGHT: the token is passed RAW into
+ * an `Authorization: Bearer <token>` HTTP header on the REST PR-open path
+ * (`git/github-host.ts`), where a CR/LF is a header-injection / `Headers`-throw
+ * hazard (the transport path base64-wraps it, so it is inert there, but the
+ * REST path is not — validate at the boundary for the stricter consumer). Capped
+ * so a pathological body can't be stored/encrypted. Input policy lives HERE at
+ * the boundary, mirroring the repoUrl/branch/commit-message validators above.
+ */
+export const WorkspaceGitTokenSchema = z
+  .string()
+  .trim()
+  .min(1, 'token must not be empty')
+  .max(MAX_GIT_TOKEN_LEN)
+  // eslint-disable-next-line no-control-regex
+  .refine((value) => !/[\x00-\x1f\x7f]/.test(value), 'token must not contain control characters');
+
+/**
+ * #3 G10 — the `PUT /api/workspace/git/token` body: just the token. `.strict()`
+ * — an unknown key is a 400, so a client can't smuggle an unexpected field past
+ * the boundary onto a credential-setting route.
+ */
+export const SetWorkspaceGitTokenBodySchema = z
+  .object({
+    token: WorkspaceGitTokenSchema,
+  })
+  .strict();
+export type SetWorkspaceGitTokenBody = z.infer<typeof SetWorkspaceGitTokenBodySchema>;
 
 const MAX_COMMIT_MESSAGE_LEN = 2000;
 

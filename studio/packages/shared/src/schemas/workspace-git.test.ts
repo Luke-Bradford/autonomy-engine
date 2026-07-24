@@ -9,11 +9,13 @@ import {
   PullRequestResultSchema,
   resolvePullRequestTarget,
   SetWorkingBranchBodySchema,
+  SetWorkspaceGitTokenBodySchema,
   WorkspaceGitBranchSchema,
   WorkspaceGitDivergenceSchema,
   WorkspaceGitRepoUrlSchema,
   WorkspaceGitSchema,
   WorkspaceGitStatusSchema,
+  WorkspaceGitTokenSchema,
 } from './workspace-git.js';
 
 describe('WorkspaceGitRepoUrlSchema', () => {
@@ -138,6 +140,16 @@ describe('WorkspaceGitSchema', () => {
     delete missing.importedFromCommit;
     expect(WorkspaceGitSchema.safeParse(missing).success).toBe(false);
   });
+
+  it('STRIPS an encrypted git token — the ciphertext never enters the client-facing row (#3 G10)', () => {
+    // The `git_token_encrypted` DB column must never escape into a `WorkspaceGit`
+    // (hence never a response/log/export). The row schema is non-`.strict()`, so
+    // Zod strips the unknown key rather than throwing OR carrying it through.
+    const withToken = { ...row, gitTokenEncrypted: 'ENCRYPTED_BLOB' };
+    const parsed = WorkspaceGitSchema.parse(withToken);
+    expect(parsed).not.toHaveProperty('gitTokenEncrypted');
+    expect(parsed).toEqual(row);
+  });
 });
 
 describe('precheckDivergence (#3 G10 — the git-independent classification)', () => {
@@ -216,13 +228,72 @@ describe('deriveWorkspaceGitState', () => {
 
 describe('WorkspaceGitStatusSchema', () => {
   it('is the row plus the derived state', () => {
-    const status = WorkspaceGitStatusSchema.parse({ ...row, state: 'ready' });
+    const status = WorkspaceGitStatusSchema.parse({
+      ...row,
+      state: 'ready',
+      hasStoredToken: false,
+    });
     expect(status.state).toBe('ready');
   });
 
   it('carries the persisted working branch', () => {
-    const status = WorkspaceGitStatusSchema.parse({ ...row, state: 'ready' });
+    const status = WorkspaceGitStatusSchema.parse({
+      ...row,
+      state: 'ready',
+      hasStoredToken: false,
+    });
     expect(status.workingBranch).toBe('studio/local/work');
+  });
+
+  it('requires hasStoredToken to be present — never manufactured (#473)', () => {
+    // An absent credential fact is stated, not defaulted to `false`.
+    expect(WorkspaceGitStatusSchema.safeParse({ ...row, state: 'ready' }).success).toBe(false);
+  });
+
+  it('carries hasStoredToken through', () => {
+    const status = WorkspaceGitStatusSchema.parse({ ...row, state: 'ready', hasStoredToken: true });
+    expect(status.hasStoredToken).toBe(true);
+  });
+});
+
+describe('WorkspaceGitTokenSchema (#3 G10)', () => {
+  it('accepts a normal token', () => {
+    expect(WorkspaceGitTokenSchema.safeParse('ghp_abcDEF0123456789').success).toBe(true);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(WorkspaceGitTokenSchema.parse('  ghp_token  ')).toBe('ghp_token');
+  });
+
+  it('rejects an empty / whitespace-only token', () => {
+    expect(WorkspaceGitTokenSchema.safeParse('').success).toBe(false);
+    expect(WorkspaceGitTokenSchema.safeParse('   ').success).toBe(false);
+  });
+
+  it('rejects a token carrying a CR/LF or NUL (header-injection defence for the REST path)', () => {
+    expect(WorkspaceGitTokenSchema.safeParse('ghp_a\r\nX-Injected: 1').success).toBe(false);
+    expect(WorkspaceGitTokenSchema.safeParse('ghp_a\nb').success).toBe(false);
+    expect(WorkspaceGitTokenSchema.safeParse('ghp_a\x00b').success).toBe(false);
+  });
+
+  it('caps the length', () => {
+    expect(WorkspaceGitTokenSchema.safeParse('g'.repeat(501)).success).toBe(false);
+  });
+});
+
+describe('SetWorkspaceGitTokenBodySchema (#3 G10)', () => {
+  it('accepts a valid token body', () => {
+    expect(SetWorkspaceGitTokenBodySchema.safeParse({ token: 'ghp_abc123' }).success).toBe(true);
+  });
+
+  it('is strict — an unknown key is refused', () => {
+    expect(
+      SetWorkspaceGitTokenBodySchema.safeParse({ token: 'ghp_abc123', extra: 1 }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a missing token', () => {
+    expect(SetWorkspaceGitTokenBodySchema.safeParse({}).success).toBe(false);
   });
 });
 

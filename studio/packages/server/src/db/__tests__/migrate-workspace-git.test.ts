@@ -20,6 +20,7 @@ describe('0025 migration: workspace_git', () => {
     expect([...byName.keys()].sort()).toEqual([
       'collab_branch',
       'created_at',
+      'git_token_encrypted',
       'id',
       'imported_from_commit',
       'last_fetch_at',
@@ -45,6 +46,11 @@ describe('0025 migration: workspace_git', () => {
     // not backfilled — null = "no import base recorded" (an absent fact stated
     // honestly, #473); NOT NULL is enforced at the read boundary.
     expect(byName.get('imported_from_commit')!.notnull).toBe(0);
+    // `git_token_encrypted` (#3 G10, added by 0033) is nullable and DELIBERATELY
+    // not backfilled — null = "no stored token" (an absent credential stated
+    // honestly, #473). It holds an ENCRYPTED blob, never plaintext, and is
+    // stripped from every client-facing read (kept out of `WorkspaceGitSchema`).
+    expect(byName.get('git_token_encrypted')!.notnull).toBe(0);
   });
 
   it('enforces ONE row per owner at the DB (unique index, not just the route pre-check)', () => {
