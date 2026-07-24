@@ -30,7 +30,7 @@ import {
  */
 const MIN_EXPECTED_PACKAGES = 50;
 
-/** studio/ workspace root — two levels up from packages/cli/src. */
+/** studio/ workspace root — three levels up from packages/cli/src (src → cli → packages → studio). */
 const WORKSPACE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 function fail(message: string): never {
