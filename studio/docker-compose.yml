@@ -1,0 +1,27 @@
+# P7 (#409) — one-command self-host of the full Autonomy Studio app (web + API)
+# in a single container.
+#
+#   docker compose up --build
+#
+# Then open http://localhost:8080. Data (the SQLite DB + the secret-encryption
+# master key) persists in the named `studio-data` volume across restarts.
+#
+# SECURITY: the app authenticates nothing yet (a single fixed local principal),
+# and the container binds 0.0.0.0 so the published port is reachable. Only expose
+# it on a trusted network or behind your own authenticating reverse proxy. To
+# keep it local-only, change the port mapping to `127.0.0.1:8080:8080`.
+services:
+  studio:
+    build: .
+    ports:
+      - '8080:8080'
+    volumes:
+      - studio-data:/app/data
+    restart: unless-stopped
+    # Optional: pin your own master key instead of the auto-generated one under
+    # the volume. If set, back it up — losing it makes stored secrets unreadable.
+    # environment:
+    #   AUTONOMY_MASTER_KEY_FILE: /run/secrets/master.key
+
+volumes:
+  studio-data:
