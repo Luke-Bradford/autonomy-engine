@@ -39,6 +39,7 @@ const run = {
   heartbeatAt: null,
   queuedAt: null,
   triggerContext: null,
+  rerunOf: null,
   startedAt: 1700000000000,
   finishedAt: null,
 };
@@ -46,6 +47,15 @@ const run = {
 describe('RunSchema', () => {
   it('round-trips a valid pending run', () => {
     expect(RunSchema.parse(run)).toEqual(run);
+  });
+
+  it('round-trips a rerun-from-failed run (rerunOf set)', () => {
+    const rerun = { ...run, rerunOf: 'run_source' };
+    expect(RunSchema.parse(rerun)).toEqual(rerun);
+  });
+
+  it('rejects an empty-string rerunOf (must be a real source-run id or null)', () => {
+    expect(() => RunSchema.parse({ ...run, rerunOf: '' })).toThrow();
   });
 
   it('round-trips a finished run with a trigger and lease/heartbeat set', () => {
@@ -107,6 +117,10 @@ describe('RunLifecyclePatchSchema', () => {
     expect(() => RunLifecyclePatchSchema.parse({ parentRunId: 'run_1' })).toThrow();
   });
 
+  it('rejects a patch touching rerunOf (RS6 lineage is immutable)', () => {
+    expect(() => RunLifecyclePatchSchema.parse({ rerunOf: 'run_source' })).toThrow();
+  });
+
   it('rejects any other unrecognized key', () => {
     expect(() => RunLifecyclePatchSchema.parse({ notAField: true })).toThrow();
   });
@@ -136,6 +150,30 @@ describe('NewRunSchema', () => {
     void finishedAt;
     const parsed = NewRunSchema.parse({ ...insert, status: 'waiting' });
     expect(parsed.status).toBe('waiting');
+  });
+
+  it('defaults rerunOf to null when omitted (an original, non-rerun run)', () => {
+    const { id, status, leaseUntil, heartbeatAt, rerunOf, startedAt, finishedAt, ...insert } = run;
+    void id;
+    void status;
+    void leaseUntil;
+    void heartbeatAt;
+    void rerunOf;
+    void startedAt;
+    void finishedAt;
+    const parsed = NewRunSchema.parse(insert);
+    expect(parsed.rerunOf).toBeNull();
+  });
+
+  it('accepts an explicit rerunOf (the rerun-from-failed producer sets it)', () => {
+    const { id, leaseUntil, heartbeatAt, startedAt, finishedAt, ...insert } = run;
+    void id;
+    void leaseUntil;
+    void heartbeatAt;
+    void startedAt;
+    void finishedAt;
+    const parsed = NewRunSchema.parse({ ...insert, rerunOf: 'run_source' });
+    expect(parsed.rerunOf).toBe('run_source');
   });
 });
 

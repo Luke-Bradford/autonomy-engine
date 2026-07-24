@@ -61,6 +61,25 @@ export const RunSchema = z.object({
    * at enqueue, read once at admission, never patched.
    */
   triggerContext: TriggerContextSchema.nullable(),
+  /**
+   * RS6 — the durable ROW projection of `run.started.rerunOf`: the SOURCE run's
+   * id when THIS run is a rerun-from-failed of it, `null` for an original run.
+   * The reseed producer sets it in the SAME transaction that appends
+   * `run.started{rerunOf}` + `run.reseeded` (RS2), so the row lineage and the
+   * event-log lineage can never disagree. Immutable like `parentRunId`/`params`
+   * (absent from `RunLifecyclePatchSchema` — cannot be patched), so provenance
+   * is not rewritable. DISTINCT from `parentRunId` (call_pipeline child→parent);
+   * this is source-run→rerun. Backs the rerun-history grouping query
+   * (`ListRunsFilter.rerunOf`) so "reruns of R1" is answered by an indexed
+   * column, not by folding every run's log. The Monitor's copied-vs-executed
+   * RENDER and the Original/Rerun/Rerun-from-failed run-type label are a later
+   * (UI) slice that consumes this column; only the projection lands here.
+   *
+   * NOTE the deliberate optional→nullable translation: the EVENT field is
+   * `.optional()` (absent = a normal run), this PROJECTION is `.nullable()`
+   * (`null` = a normal run) — the same RS1 convention as the reducer fold.
+   */
+  rerunOf: z.string().min(1).nullable(),
   startedAt: z.number().int(),
   finishedAt: z.number().int().nullable(),
 });
@@ -78,6 +97,7 @@ export const NewRunSchema = RunSchema.omit({
   heartbeatAt: true,
   queuedAt: true,
   triggerContext: true,
+  rerunOf: true,
   startedAt: true,
   finishedAt: true,
 }).extend({
@@ -88,6 +108,9 @@ export const NewRunSchema = RunSchema.omit({
   // fire-time `triggerContext`).
   queuedAt: z.number().int().nullable().default(null),
   triggerContext: TriggerContextSchema.nullable().default(null),
+  // RS6 — defaults `null`, so every existing `createRun` caller keeps compiling
+  // and passing nothing; only the rerun-from-failed producer sets it (RS2).
+  rerunOf: z.string().min(1).nullable().default(null),
 });
 // z.input, not z.infer/z.output — see the note on NewConnection in
 // connection.ts for why every insert type in this package uses it (here it

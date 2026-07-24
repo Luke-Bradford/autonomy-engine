@@ -13,6 +13,7 @@ const sampleRun = {
   heartbeatAt: null,
   queuedAt: null,
   triggerContext: null,
+  rerunOf: null,
   startedAt: 100,
   finishedAt: null,
 };

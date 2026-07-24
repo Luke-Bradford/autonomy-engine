@@ -45,6 +45,7 @@ function run(overrides: Partial<Run> = {}): Run {
     heartbeatAt: null,
     queuedAt: null,
     triggerContext: null,
+    rerunOf: null,
     startedAt: 1_700_000_000_000,
     finishedAt: null,
     ...overrides,

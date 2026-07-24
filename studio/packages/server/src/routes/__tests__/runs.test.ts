@@ -47,6 +47,57 @@ describe('runs routes (read-only)', () => {
     const getRes = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json()).toEqual(run);
+    // RS6 — an original run surfaces `rerunOf: null` on the read API.
+    expect(getRes.json().rerunOf).toBeNull();
+  });
+
+  it("GET /api/runs?rerunOf=<id> filters to a source run's reruns (RS6 grouping)", async () => {
+    const source = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    const rerun = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+      rerunOf: source.id,
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/runs?rerunOf=${source.id}` });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().map((r: { id: string }) => r.id);
+    expect(ids).toEqual([rerun.id]);
+    expect(res.json()[0].rerunOf).toBe(source.id);
+  });
+
+  it("GET /api/runs?rerunOf= is owner-scoped — never lists another owner's reruns (authz != authn)", async () => {
+    // Authentication is not authorization: the `rerunOf` grouping filter is ANDed
+    // with the principal's ownerId, so a caller cannot enumerate another owner's
+    // rerun lineage even by supplying their source-run id.
+    const source = createRun(app.db, {
+      ownerId: 'someone-else',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    createRun(app.db, {
+      ownerId: 'someone-else',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+      rerunOf: source.id,
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/runs?rerunOf=${source.id}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]); // principal is `local`, not `someone-else`
   });
 
   it('GET /api/runs/:id/events returns the append-only event log in order', async () => {

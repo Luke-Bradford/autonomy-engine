@@ -287,6 +287,15 @@ export const runs = sqliteTable(
     // immediately-started run). See `RunSchema` for the full contract.
     queuedAt: integer('queued_at'),
     triggerContext: text('trigger_context', { mode: 'json' }).$type<TriggerContext>(),
+    // RS6 — durable lineage projection of `run.started.rerunOf`: the SOURCE run
+    // when this run is a rerun-from-failed of it (`null` for an original run).
+    // Self-referencing FK (rerun -> source), `set null` on source delete so a
+    // retention sweep of the source run leaves the rerun a valid orphan-lineage
+    // row rather than blocking (RESTRICT) or cascading it away — mirrors
+    // `parentRunId` exactly. See `RunSchema.rerunOf`.
+    rerunOf: text('rerun_of').references((): AnySQLiteColumn => runs.id, {
+      onDelete: 'set null',
+    }),
     startedAt: integer('started_at').notNull(),
     finishedAt: integer('finished_at'),
   },
@@ -299,6 +308,8 @@ export const runs = sqliteTable(
     index('runs_owner_id_idx').on(table.ownerId),
     index('runs_started_at_idx').on(table.startedAt),
     index('runs_parent_run_id_idx').on(table.parentRunId),
+    // RS6 — the rerun-history grouping scan ("reruns of R1").
+    index('runs_rerun_of_idx').on(table.rerunOf),
   ],
 );
 
