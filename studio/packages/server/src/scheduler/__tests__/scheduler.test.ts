@@ -11,7 +11,12 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createTrigger, deleteTrigger, updateTrigger } from '../../repo/triggers.js';
+import { createTrigger, deleteTrigger, listTriggers, updateTrigger } from '../../repo/triggers.js';
+import {
+  applyWorkspace,
+  parseWorkspaceFiles,
+  serializeWorkspace,
+} from '../../portability/index.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import { armWakeup, listPendingWakeups } from '../../repo/scheduled-wakeups.js';
 import type { Db } from '../../repo/types.js';
@@ -122,6 +127,28 @@ describe('Scheduler — sync() reconciles the durable schedule_tick set', () => 
     makeScheduler(db).sync();
 
     expect(tickSummary(db)).toEqual([{ triggerId: wanted.id, dueAt: NEXT_MINUTE }]);
+  });
+
+  it('#3 G7: a trigger the workspace-git reconcile disabled for an absent binding is never armed', () => {
+    // End-to-end scheduler invariant: importing a schedule trigger bound to a
+    // version ABSENT from this workspace reconciles it to (null, disabled) — the
+    // "absent → disabled" charter — and the scheduler then arms NO wakeup for it
+    // (enabled:false ⇒ `isSchedulable` false ⇒ `sync()` seeds nothing). "Unbound
+    // never fires", reached through the reconcile.
+    const { db: src } = freshDb();
+    const pv = seedVersion(src);
+    seedTrigger(src, { pipelineVersionId: pv, schedule: '* * * * *' });
+    const incoming = parseWorkspaceFiles(serializeWorkspace(src, 'local'));
+    incoming.triggers[0]!.data.pipelineVersionId = 'res_absent'; // dangles in a fresh workspace
+
+    const { db: tgt } = freshDb();
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
+    const trig = listTriggers(tgt, { ownerId: 'local' })[0]!;
+    expect(trig.pipelineVersionId).toBeNull();
+    expect(trig.enabled).toBe(false);
+
+    makeScheduler(tgt).sync();
+    expect(pendingTicks(tgt)).toEqual([]);
   });
 
   it('is idempotent — a second sync does not double-seed', () => {

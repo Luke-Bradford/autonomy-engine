@@ -16,7 +16,7 @@ import {
 import { pipelineVersions } from '../db/schema.js';
 import { ISSUE_LIST_CAP } from '../limits.js';
 import { newId } from './ids.js';
-import { getPipeline, type CreateResourceOptions } from './pipelines.js';
+import { getPipeline, listPipelines, type CreateResourceOptions } from './pipelines.js';
 import type { Db } from './types.js';
 
 /**
@@ -277,6 +277,25 @@ export function listPipelineVersions(db: Db, pipelineId: string): PipelineVersio
     .orderBy(asc(pipelineVersions.version))
     .all();
   return rows.map((row) => PipelineVersionSchema.parse(row));
+}
+
+/**
+ * #3 G7 — every version `resourceId` owned by `ownerId`, across ALL pipelines
+ * (INCLUDING archived) and ALL versions (not just latest). This is the EXACT
+ * domain `applyWorkspace` resolves a trigger binding against (its `versionById`
+ * is built from the same `listPipelines(db, ownerId)` × `listPipelineVersions`
+ * traversal — `listPipelines` has no archived filter). The reconcile PREVIEW
+ * passes this set to `classifyWorkspace` so a branch trigger's binding is
+ * normalized to resolved space identically on the preview and apply paths; it
+ * cannot be derived from the serialized DB snapshot, which carries only the
+ * LATEST version per pipeline and omits archived pipelines entirely.
+ */
+export function listVersionResourceIds(db: Db, ownerId: string): Set<string> {
+  const ids = new Set<string>();
+  for (const pipeline of listPipelines(db, ownerId)) {
+    for (const version of listPipelineVersions(db, pipeline.id)) ids.add(version.resourceId);
+  }
+  return ids;
 }
 
 /**

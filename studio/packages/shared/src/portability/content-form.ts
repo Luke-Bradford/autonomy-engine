@@ -42,18 +42,23 @@ import type { ConnectionExportData, PipelineExportData, TriggerExportData } from
  * (`schemaVersion`, `catalogVersion`, `exportedAt`) never enter — the form is
  * computed over `data`, not the whole envelope.
  *
- * OPEN DECISION for G7/G8 (deliberately KEPT as content here, tracked in a
- * follow-up ticket): a trigger's `enabled` is authored intent on the export
- * wire, so today (no readiness gate yet) treating a committed enable/disable as
- * a content change is correct — the only current auto-disabler is
- * `archivePipeline`, whose triggers are OMITTED from serialize entirely, never
- * diverged. But once the G7/G8 readiness gate can LOCALLY force `enabled:false`
- * (missing binding/secret), a machine that lacks the secret would churn its
- * trigger as an `update` while the connection carrying the SAME missing secret
- * is churn-immune (`requiresSecret` is excluded above). The G7/G8 author must
- * decide then whether `enabled` is authoring content (keep) or local-readiness
- * state (exclude, like `requiresSecret`) — this shared primitive is the single
- * place that decision lands.
+ * `enabled` STAYS content here (#3 G7, #668 RESOLVED): a trigger's `enabled` is
+ * authored intent on the export wire, so a committed enable/disable on a BOUND
+ * trigger propagates on pull and reads as an `update`. The G7/G8 readiness gate
+ * can LOCALLY force `enabled:false` for an absent binding, which would otherwise
+ * churn a force-disabled unbound trigger as a perpetual `update` — but that is
+ * NOT fixed by excluding `enabled` (the churn's real driver is the dangling
+ * BINDING field, not `enabled`). It is fixed one layer up, in the SERVER reconcile
+ * (`server/src/portability/trigger-content.ts` `normalizedTriggerContentForm`):
+ * an incoming trigger whose binding does not resolve is normalized to
+ * (null, disabled) — resolved space — BEFORE this raw form is computed, so it
+ * matches what the apply persists. This raw form stays a pure branch-vs-branch
+ * comparator; the resolution domain is a server concept, so it lives server-side.
+ *
+ * STILL OPEN for G8 (#674): a webhook trigger's secret-PRESENCE (`webhook: {}` on
+ * a workspace that has the secret vs `null` on one that does not) is the
+ * `requiresSecret` shape and churns a cross-workspace-created webhook trigger —
+ * that exclusion lands with the G8 secret-readiness gate, not here.
  */
 
 /** Deep clone via a JSON round-trip. Export `data` is always JSON-safe (it was
