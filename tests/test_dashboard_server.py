@@ -120,7 +120,7 @@ class TestPageTemplating(unittest.TestCase):
         roster = accounts.subscription_models("claude_subscription")
         injected = ("const MODEL_CHOICES=" + json.dumps(roster) + ";").encode()
         self.assertIn(injected, html)
-        self.assertIn(b'"claude-opus-4-8"', html)
+        self.assertIn(b'"claude-opus-5"', html)
 
     def test_config_page_templates_without_error(self):
         # /config leaves no build-time placeholder behind and still serves.
@@ -147,7 +147,7 @@ class TestPageTemplating(unittest.TestCase):
         roster = accounts.subscription_models("claude_subscription")
         injected = ("const MODEL_CHOICES=" + json.dumps(roster) + ";").encode()
         self.assertIn(injected, html)
-        self.assertIn(b'"claude-opus-4-8"', html)
+        self.assertIn(b'"claude-opus-5"', html)
 
     def test_config_model_field_is_select_with_custom_escape(self):
         # #273: the config page's model fields must be REAL <select> pickers,

@@ -39,9 +39,13 @@ _API_ENV = {"anthropic_api": "ANTHROPIC_API_KEY", "openai_api": "OPENAI_API_KEY"
 # a deliberate EMPTY SEAM -- no codex model roster is verifiable in-repo, so
 # discovery degrades to the config UI's free-text field rather than shipping
 # invented ids (fill this list only once the ids are confirmed against the real
-# codex CLI).
+# codex CLI). The claude roster carries ONE CURRENT id per tier (fable/opus/
+# sonnet/haiku) -- superseded ids are replaced, not accumulated, because the
+# dashboard renders it as a real <select> (#273) where a stale entry is a
+# silently-pickable old model. Bump on a tier release, verified against the CLI
+# (`claude -p … --model <id> --output-format json` -> modelUsage key).
 _SUBSCRIPTION_MODELS = {
-    "claude_subscription": ["claude-fable-5", "claude-opus-4-8",
+    "claude_subscription": ["claude-fable-5", "claude-opus-5",
                             "claude-sonnet-5", "claude-haiku-4-5"],
     "codex_subscription": [],
 }

@@ -132,7 +132,7 @@ def account_usage(projects_dir=None, now=None):
 # --- session stream-json ----------------------------------------------------
 
 def _normalize_model(model):
-    """'claude-opus-4-8[1m]' -> 'claude-opus-4-8' (drop context-window suffix)."""
+    """'claude-opus-5[1m]' -> 'claude-opus-5' (drop context-window suffix)."""
     if not model:
         return ""
     return model.split("[", 1)[0]
