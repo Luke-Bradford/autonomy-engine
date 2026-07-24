@@ -29,9 +29,10 @@
 }
 
 /*
- * `:root[data-theme='light']` (specificity 0,1,1) outranks the base `:root`
- * (0,1,0) regardless of source order — a bare `[data-theme='light']` would tie
- * and silently depend on ordering. Foreground hues are darkened well past their
+ * `:root[data-theme='light']` (specificity 0,2,0 — a pseudo-class and an
+ * attribute selector, both class-column) outranks the base `:root` (0,1,0)
+ * regardless of source order — a bare `[data-theme='light']` is also (0,1,0),
+ * so it would tie and silently depend on ordering. Foreground hues are darkened well past their
  * dark-mode counterparts to hold contrast on a light surface.
  */
 :root[data-theme='light'] {
