@@ -65,9 +65,12 @@
   --xy-handle-background-color: var(--colorNeutralBackground1);
   --xy-handle-border-color: var(--colorNeutralStroke1);
 
-  /* Selection box */
+  /* Selection box. `--xy-selection-border` is a full `border` SHORTHAND (RF
+     default `1px dotted rgba(...)`), so it must carry width + style, not a bare
+     colour — a colour-only value resets `border-style` to `none` and the
+     selection rectangle's outline vanishes. */
   --xy-selection-background-color: var(--colorBrandBackground2);
-  --xy-selection-border: var(--colorBrandStroke1);
+  --xy-selection-border: 1px dotted var(--colorBrandStroke1);
 
   /* Attribution (hidden via proOptions today; mapped for completeness) */
   --xy-attribution-background-color: var(--colorNeutralBackground1);

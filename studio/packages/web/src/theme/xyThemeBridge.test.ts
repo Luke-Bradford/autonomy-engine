@@ -27,6 +27,15 @@ const rfRequire = createRequire(import.meta.url);
 const rfCss = readFileSync(rfRequire.resolve('@xyflow/react/dist/style.css'), 'utf8');
 const RF_OVERRIDE_SLOTS = new Set([...rfCss.matchAll(/var\((--xy-[a-z-]+)\s*,/g)].map((m) => m[1]));
 
+// The `--xy-*` slots RF consumes as a FULL `border` shorthand, i.e.
+// `border: var(--xy-…, …)` (not `border: 1px solid var(--xy-…-color, …)`, where
+// the var is only the colour). A shorthand slot MUST carry width + style, not a
+// bare colour token — a colour-only value resets `border-style` to `none` and
+// the border disappears. Derived from RF's stylesheet so it tracks the version.
+const RF_BORDER_SHORTHAND_SLOTS = new Set(
+  [...rfCss.matchAll(/border:\s*var\((--xy-[a-z-]+)\s*,/g)].map((m) => m[1]),
+);
+
 // The white-in-dark surfaces the U0 spike explicitly called out (Controls,
 // MiniMap, edge-label), plus the canvas background. If any of these regresses
 // to an unmapped/hardcoded value, dark-mode chrome breaks again.
@@ -73,6 +82,20 @@ describe('xyThemeBridge.css', () => {
         `${name} is not an override slot React Flow reads — the override is dead`,
       ).toBe(true);
     }
+  });
+
+  it('gives border-shorthand slots a full value (width + style), not a bare color', () => {
+    // Guards the value-SHAPE regression the slot-existence check can't: a slot
+    // RF reads as `border: var(--xy-…)` needs `1px dotted <token>`, not just
+    // `<token>` (which would blank border-style → the outline vanishes).
+    for (const [, name, value] of css.matchAll(/(--xy-[a-z-]+)\s*:\s*([^;]+);/g)) {
+      if (!RF_BORDER_SHORTHAND_SLOTS.has(name)) continue;
+      expect(value, `${name} is a border shorthand and needs a style keyword`).toMatch(
+        /\b(solid|dotted|dashed|double|groove|ridge|inset|outset)\b/,
+      );
+    }
+    // Sanity: the guard actually has a slot to check (else it is vacuous).
+    expect(RF_BORDER_SHORTHAND_SLOTS.size).toBeGreaterThan(0);
   });
 
   it('never hardcodes a color in an --xy-* override (must derive from tokens)', () => {
