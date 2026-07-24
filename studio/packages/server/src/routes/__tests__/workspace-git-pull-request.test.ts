@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createWorkspaceGit } from '../../repo/index.js';
 import {
   GitHostApiError,
@@ -189,5 +189,48 @@ describe('workspace-git pull-request route — auto-open (G9b)', () => {
     const app = await makeApp({ githubToken: 'ghp_token' });
     const res = await openPr(app);
     expect(res.statusCode).toBe(404);
+  });
+
+  // The buildApp override contract: an EXPLICIT `githubToken` (incl. `null`) wins
+  // over an ambient `GH_TOKEN`/`GITHUB_TOKEN`; only an ABSENT override reads env.
+  // `??` would conflate an explicit `null` with `undefined` and leak the env
+  // token. `process.env` is restored so a concurrent test file can't inherit it.
+  describe('override-vs-env resolution', () => {
+    const KEY = 'GH_TOKEN';
+    let saved: string | undefined;
+    beforeEach(() => {
+      saved = process.env[KEY];
+      process.env[KEY] = 'ambient-env-token';
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env[KEY];
+      else process.env[KEY] = saved;
+    });
+
+    it('an explicit githubToken:null is honored over an ambient env token → guided-manual', async () => {
+      const hostClient = new FakeHostClient({ kind: 'opened', number: 1, htmlUrl: 'x' });
+      const app = await makeApp({ githubToken: null, hostClient });
+      seedGitHub(app);
+
+      const res = await openPr(app);
+      expect(res.json().pullRequest.mode).toBe('guided_manual');
+      expect(hostClient.calls).toHaveLength(0);
+    });
+
+    it('an ABSENT override reads the ambient env token → auto-opens', async () => {
+      const hostClient = new FakeHostClient({
+        kind: 'opened',
+        number: 9,
+        htmlUrl: 'https://github.com/acme/widgets/pull/9',
+      });
+      // `githubToken: undefined` = no override → buildApp reads `process.env`.
+      const app = await makeApp({ githubToken: undefined, hostClient });
+      seedGitHub(app);
+
+      const res = await openPr(app);
+      expect(res.json().pullRequest.mode).toBe('opened');
+      expect(hostClient.calls).toHaveLength(1);
+      expect(hostClient.calls[0]!.token).toBe('ambient-env-token');
+    });
   });
 });

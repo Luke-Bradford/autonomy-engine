@@ -588,8 +588,15 @@ export async function buildApp(opts?: BuildAppOptions) {
     provider: opts?.workspaceGitProvider,
     // #3 G9b — operator-env token for auto-opening GitHub PRs (else guided-manual).
     // `gh`-CLI precedence: GH_TOKEN over GITHUB_TOKEN. Normalized (trim/empty → no
-    // token) inside the route.
-    githubToken: opts?.githubToken ?? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? null,
+    // token) inside the route. An EXPLICIT override (including `null`) is honored
+    // over the env — `??` would treat a caller's `githubToken: null` (force
+    // no-token, e.g. a test isolating from an ambient env token) the same as
+    // `undefined` and silently fall through to `process.env`, so the override
+    // presence is checked with `!== undefined`.
+    githubToken:
+      opts?.githubToken !== undefined
+        ? opts.githubToken
+        : (process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? null),
     hostClient: opts?.workspaceGitHostClient,
   });
   await fastify.register(workspaceAuditRoutes);
