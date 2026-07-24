@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION, type NewTrigger } from '@autonomy-studio/shared';
 import {
@@ -6,6 +6,7 @@ import {
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  createWorkspaceGit,
 } from '../../repo/index.js';
 import { getRun } from '../../repo/runs.js';
 import { listPendingWakeups } from '../../repo/scheduled-wakeups.js';
@@ -1048,5 +1049,196 @@ describe('triggers routes', () => {
         expect(res.json().mode).toBe('manual');
       });
     });
+  });
+});
+
+/**
+ * #3 G6c-2 — resolve-once "bind to active" on trigger CREATION. A trigger always
+ * stores a CONCRETE `pipelineVersionId` (#1 immutability; "unbound never fires"),
+ * so "bind to active" is a creation-time convenience that resolves ONCE and
+ * stores the resolved id — never a live-follow binding. Resolution: git-mode
+ * (a repo connected) → the `active` published version (the G6c-1 projection);
+ * DB-only (the default, git-optional) → the LATEST immutable version. PATCH is
+ * unchanged (concrete-only). Non-goals here: fire-time `follow_active`, G7
+ * readiness-reconcile, any archived-pipeline create-time guard (fire-time
+ * `ArchivedPipelineError` owns that, as it does for a concrete bind).
+ */
+describe('triggers routes — bind-to-active (#3 G6c-2)', () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    app = await buildTestApp();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  /** Put the owner in git mode (a connected repo) — see pipelines-publish.test. */
+  function connectRepo() {
+    return createWorkspaceGit(app.db, {
+      ownerId: 'local',
+      repoUrl: 'https://example.com/repo.git',
+      collabBranch: 'main',
+      observedCollabHead: 'deadbeef',
+      lastFetchAt: Date.now(),
+      lastFetchError: null,
+    });
+  }
+
+  function plainVersion(pipelineId: string) {
+    return createPipelineVersion(app.db, {
+      pipelineId,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+  }
+
+  /** A version WITH git provenance — the only kind CAS Publish accepts. */
+  function gitVersion(pipelineId: string, commit: string, blob: string) {
+    return createPipelineVersion(
+      app.db,
+      {
+        pipelineId,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      },
+      {
+        sourceCommit: commit,
+        sourceBranch: 'main',
+        sourceFilePath: 'pipelines/p.json',
+        sourceBlobSha: blob,
+      },
+    );
+  }
+
+  /** A trigger create body with NO binding field (neither concrete nor bind). */
+  function bodyWithoutBinding(overrides: Record<string, unknown> = {}) {
+    return {
+      name: 'Nightly',
+      params: {},
+      mode: 'schedule' as const,
+      schedule: '0 2 * * *',
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' as const },
+      runWindows: null,
+      enabled: true,
+      ...overrides,
+    };
+  }
+
+  /** A create body that binds-to-active instead of a concrete version. */
+  function bindBody(pipelineId: string, overrides: Record<string, unknown> = {}) {
+    return { ...bodyWithoutBinding(overrides), bindToActive: { pipelineId } };
+  }
+
+  const create = (payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: '/api/triggers', payload });
+
+  const publish = (pipelineId: string, body: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: `/api/pipelines/${pipelineId}/publish`, payload: body });
+
+  it('DB-only: resolves to the LATEST version and stores it concretely', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const v1 = plainVersion(pipeline.id);
+
+    const res = await create(bindBody(pipeline.id));
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pipelineVersionId).toBe(v1.id);
+  });
+
+  it('DB-only: resolve-once — a new trigger binds the newer latest; the earlier trigger keeps its pin', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const v1 = plainVersion(pipeline.id);
+
+    const first = (await create(bindBody(pipeline.id))).json();
+    expect(first.pipelineVersionId).toBe(v1.id);
+
+    const v2 = plainVersion(pipeline.id);
+    const second = (await create(bindBody(pipeline.id, { name: 'Later' }))).json();
+    expect(second.pipelineVersionId).toBe(v2.id);
+
+    // Resolve-once: the earlier trigger's immutable pin is untouched.
+    const stillFirst = await app.inject({ method: 'GET', url: `/api/triggers/${first.id}` });
+    expect(stillFirst.json().pipelineVersionId).toBe(v1.id);
+  });
+
+  it('git-mode: resolves to the ACTIVE published version, NOT the latest', async () => {
+    connectRepo();
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const v1 = gitVersion(pipeline.id, 'commit1', 'blob1');
+    // Publish v1 → active pointer = v1.
+    const pub = await publish(pipeline.id, { toVersionId: v1.id, expectedActiveVersionId: null });
+    expect(pub.statusCode).toBe(200);
+    // Mint a NEWER version — latest is now v2, but active is still v1.
+    const v2 = gitVersion(pipeline.id, 'commit2', 'blob2');
+
+    const res = await create(bindBody(pipeline.id));
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pipelineVersionId).toBe(v1.id);
+    expect(res.json().pipelineVersionId).not.toBe(v2.id);
+  });
+
+  it('git-mode with NO active published version: refuses (400)', async () => {
+    connectRepo();
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    gitVersion(pipeline.id, 'commit1', 'blob1'); // exists but never published
+
+    const res = await create(bindBody(pipeline.id));
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('DB-only with a versionless pipeline: refuses (400)', async () => {
+    // `createPipeline` mints NO initial version — a pipeline can exist with zero
+    // versions, so "bind to latest" has nothing to resolve. Fail closed (400),
+    // never silently birth an unbound trigger.
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+
+    const res = await create(bindBody(pipeline.id));
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects supplying BOTH bindToActive and pipelineVersionId (400)', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const v1 = plainVersion(pipeline.id);
+
+    const res = await create({ ...bindBody(pipeline.id), pipelineVersionId: v1.id });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects supplying NEITHER bindToActive nor pipelineVersionId (400)', async () => {
+    const res = await create(bodyWithoutBinding());
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('still accepts an explicit pipelineVersionId:null unbound create (presence, not truthiness)', async () => {
+    const res = await create(bodyWithoutBinding({ pipelineVersionId: null, enabled: false }));
+    expect(res.statusCode).toBe(201);
+    expect(res.json().pipelineVersionId).toBeNull();
+  });
+
+  it('a missing / foreign-owned pipeline surfaces as 404, never a bind', async () => {
+    const missing = await create(bindBody('pipe_does_not_exist'));
+    expect(missing.statusCode).toBe(404);
+
+    const foreign = createPipeline(app.db, { ownerId: 'someone-else', name: 'Theirs' });
+    plainVersion(foreign.id);
+    const res = await create(bindBody(foreign.id));
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('a resolved concrete binding lets the trigger be created enabled', async () => {
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    plainVersion(pipeline.id);
+
+    const res = await create(bindBody(pipeline.id, { enabled: true }));
+    expect(res.statusCode).toBe(201);
+    expect(res.json().enabled).toBe(true);
   });
 });

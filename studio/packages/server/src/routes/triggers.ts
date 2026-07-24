@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
 import {
   FireRequestSchema,
   NewTriggerSchema,
@@ -18,10 +19,13 @@ import {
   createSecret,
   createTrigger,
   deleteTrigger,
+  getActivePublishedVersion,
+  getLatestPipelineVersion,
   getPipeline,
   getPipelineVersion,
   getSecretByRef,
   getTrigger,
+  getWorkspaceGit,
   listTriggers,
   updateSecretCiphertext,
   updateTrigger,
@@ -37,6 +41,86 @@ import type { Db } from '../repo/types.js';
 
 /** `ownerId` is stamped from `request.principal`, never client-supplied. */
 const TriggerWriteBodySchema = NewTriggerSchema.omit({ ownerId: true });
+
+/**
+ * #3 G6c-2 — the CREATE body only. A trigger always persists a CONCRETE
+ * `pipelineVersionId` (#1 immutability; "unbound never fires"), so "bind to
+ * active" is a creation-time CONVENIENCE that resolves ONCE server-side and
+ * stores the resolved id — never a live-follow binding, never a stored "active"
+ * indirection. The client supplies EXACTLY ONE of:
+ *   - `pipelineVersionId` (a concrete id, or `null` for a deliberately unbound
+ *     trigger — the pre-G6c-2 path, unchanged), or
+ *   - `bindToActive: { pipelineId }` — resolve-once (git-mode → the `active`
+ *     published version; DB-only → the latest immutable version).
+ * The XOR keys on PRESENCE, not truthiness: `pipelineVersionId: null` is a
+ * legitimate explicit "unbound" and counts as supplied (the same null-vs-absent
+ * distinction `NewTriggerSchema` documents on its `.default(null)` fields). This
+ * is a SEPARATE schema from `TriggerWriteBodySchema` on purpose: PATCH
+ * (`.partial()` of the latter) stays concrete-only — bind-to-active is a
+ * creation act, and leaking `bindToActive`/optional-`pipelineVersionId` into the
+ * PATCH shape would let a patch silently re-resolve a pinned binding.
+ */
+const TriggerCreateBodySchema = TriggerWriteBodySchema.extend({
+  pipelineVersionId: TriggerWriteBodySchema.shape.pipelineVersionId.optional(),
+  bindToActive: z.object({ pipelineId: z.string().min(1) }).optional(),
+}).superRefine((body, ctx) => {
+  const hasConcrete = body.pipelineVersionId !== undefined;
+  const hasBind = body.bindToActive !== undefined;
+  if (hasConcrete && hasBind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'supply EITHER pipelineVersionId (a concrete binding, or null for unbound) OR ' +
+        'bindToActive (resolve-once) — not both',
+    });
+  }
+  if (!hasConcrete && !hasBind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'a trigger create must supply pipelineVersionId (a concrete binding, or ' +
+        'null for unbound) or bindToActive (resolve-once)',
+    });
+  }
+});
+
+/**
+ * #3 G6c-2 — resolve a `bindToActive: { pipelineId }` request to a concrete
+ * `pipelineVersionId`, ONCE, at creation time. Owner-scoped (authentication ≠
+ * authorization): a missing or foreign pipeline collapses to 404 via
+ * `requireOwned`, never distinguishing "no such pipeline" from "not yours".
+ *
+ * Mode split (the settled DB-only fallback): a **git-mode** workspace (a repo
+ * connected) resolves to the `active` PUBLISHED version — the G6c-1 projection
+ * folded from the `pipeline.published` audit log; a **DB-only** workspace (the
+ * git-optional default) has no `active` pointer and resolves to the LATEST
+ * immutable version. A git-mode workspace with nothing published yet has no
+ * active to bind — REFUSE (400) rather than silently birth an unbound trigger
+ * or fall back to latest (which would defeat the publish gate); the same
+ * "no binding" posture as `assertBindableIfEnabled`. The read is deliberately
+ * OUTSIDE any transaction: resolve-once needs no compare-and-set (unlike CAS
+ * Publish), it just snapshots whatever is active/latest now.
+ */
+function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): string {
+  const pipeline = requireOwned(getPipeline(db, pipelineId), principal, 'pipeline', pipelineId);
+  if (getWorkspaceGit(db, principal.ownerId) !== null) {
+    const active = getActivePublishedVersion(db, principal.ownerId, pipeline.resourceId);
+    if (active === null) {
+      throw new BadRequestError(
+        `cannot bind trigger to active: pipeline "${pipelineId}" has no active published ` +
+          `version — publish a version first, or bind a concrete pipelineVersionId`,
+      );
+    }
+    return active.to;
+  }
+  const latest = getLatestPipelineVersion(db, pipeline.id);
+  if (latest === null) {
+    throw new BadRequestError(
+      `cannot bind trigger to latest: pipeline "${pipelineId}" has no versions`,
+    );
+  }
+  return latest.id;
+}
 
 function toPublic(trigger: Trigger) {
   return TriggerPublicSchema.parse(trigger);
@@ -216,14 +300,24 @@ export const triggersRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
   fastify.post('/api/triggers', async (request, reply) => {
-    const body = TriggerWriteBodySchema.parse(request.body);
-    assertBindableIfEnabled(body.enabled, body.pipelineVersionId);
+    const { bindToActive, ...body } = TriggerCreateBodySchema.parse(request.body);
+    // #3 G6c-2 — resolve-once: `bindToActive` resolves to a concrete id (git →
+    // active, DB-only → latest); otherwise the client supplied one directly
+    // (a string, or null for unbound). The XOR is enforced by the schema.
+    const pipelineVersionId = bindToActive
+      ? resolveBindToActive(db, request.principal, bindToActive.pipelineId)
+      : (body.pipelineVersionId ?? null);
+    assertBindableIfEnabled(body.enabled, pipelineVersionId);
     assertRecurrenceConsistent(body.mode, body.recurrence ?? null, body.schedule !== null);
     assertEventConsistent(body.mode, body.event ?? null, body.enabled);
     assertWindowConsistent(body.mode, body.window ?? null, body.enabled, body.concurrency.policy);
     assertWindowBindingsConsistent(body.mode, body.params);
-    requireOwnedPipelineVersion(db, body.pipelineVersionId, request.principal);
-    const created = createTrigger(db, { ...body, ownerId: request.principal.ownerId });
+    requireOwnedPipelineVersion(db, pipelineVersionId, request.principal);
+    const created = createTrigger(db, {
+      ...body,
+      pipelineVersionId,
+      ownerId: request.principal.ownerId,
+    });
     // Reconcile the durable `schedule_tick` rows so a newly-enabled schedule
     // trigger is seeded immediately (a no-op for a non-schedule trigger).
     fastify.scheduler.sync();
