@@ -145,9 +145,10 @@ export function getWorkspaceGitToken(db: Db, ownerId: string): string | null {
   return row?.token ?? null;
 }
 
-/** #3 G10 — whether the owner has a stored git token, WITHOUT reading the
- * ciphertext (the client-facing `hasStoredToken` signal). A column-presence
- * check only. */
+/** #3 G10 — whether the owner has a stored git token (the client-facing
+ * `hasStoredToken` signal). A column-PRESENCE check: it reuses the sole reader
+ * `getWorkspaceGitToken` to fetch the ciphertext blob, but only tests it for
+ * null — the ciphertext is never DECRYPTED and is discarded immediately. */
 export function workspaceGitTokenPresent(db: Db, ownerId: string): boolean {
   return getWorkspaceGitToken(db, ownerId) !== null;
 }
