@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 4,
+  "catalogVersion": 18,
+  "kind": "pipeline",
+  "exportedAt": 0,
+  "data": {
+    "pipeline": {
+      "id": "pipe-filter-numbers",
+      "resourceId": null,
+      "ownerId": null,
+      "name": "Filter numbers",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "versions": [
+      {
+        "id": "pv-filter-numbers",
+        "resourceId": null,
+        "pipelineId": "pipe-filter-numbers",
+        "version": 1,
+        "params": [
+          {
+            "name": "numbers",
+            "type": "json",
+            "required": false,
+            "default": [1, 2, 3, 4, 5],
+            "description": "The list of numbers to filter. Overridable at run start."
+          }
+        ],
+        "outputs": [],
+        "nodes": [
+          {
+            "id": "pick",
+            "type": "filter",
+            "config": {
+              "items": "${params.numbers}",
+              "predicate": "${greater(item, 2)}"
+            },
+            "connectionId": null,
+            "position": { "x": 0, "y": 0 }
+          }
+        ],
+        "edges": [],
+        "containers": [],
+        "catalogVersion": 18,
+        "createdAt": 0
+      }
+    ],
+    "strippedConnectionRefs": []
+  }
+}

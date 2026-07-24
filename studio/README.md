@@ -116,6 +116,13 @@ Other workspace scripts:
 | `pnpm format`             | Apply Prettier formatting.                                     |
 | `pnpm run audit:licenses` | Fail-closed audit that every dependency license is permissive. |
 
+## Example pipelines
+
+Ready-to-import example pipelines live in [`examples/`](examples/) — import one
+via `POST /api/import` to get a fresh install off the ground. Start with
+`01-filter-numbers.pipeline.json`, which needs no connection to run. See
+[`examples/README.md`](examples/README.md) for the full set and how to import.
+
 ## Layout
 
 ```text
@@ -125,6 +132,7 @@ packages/
   web/       React + React Flow authoring UI (Vite)
   cli/       command-line tooling (e.g. the license audit)
 docs/       target architecture, foundation specs, backlog
+examples/   ready-to-import example pipelines (see examples/README.md)
 ```
 
 ## License
