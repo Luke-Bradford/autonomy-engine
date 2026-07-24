@@ -1,73 +1,77 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createMemoryRouter } from 'react-router';
 import App from './App';
+import { ROUTES } from './routes';
 import { uiStore } from './stores/uiStore';
 import { AppThemeProvider } from './theme/AppThemeProvider';
 
-// The run pages talk to the network / a WebSocket; stub both so App's routing
-// (the only thing under test here) renders without real I/O.
-vi.mock('./api/runs', async (importActual) => ({
-  ...(await importActual<typeof import('./api/runs')>()),
-  listRuns: vi.fn().mockResolvedValue([]),
-  getRunEvents: vi.fn().mockResolvedValue([]),
-  getRun: vi.fn().mockResolvedValue({
-    id: 'run_42',
-    ownerId: 'local',
-    pipelineVersionId: 'pv_1',
-    triggerId: null,
-    parentRunId: null,
-    params: {},
-    status: 'running',
-    leaseUntil: null,
-    heartbeatAt: null,
-    queuedAt: null,
-    triggerContext: null,
-    rerunOf: null,
-    startedAt: 1,
-    finishedAt: null,
-  }),
-}));
-vi.mock('./pages/runs/useRunStream', async (importActual) => ({
-  ...(await importActual<typeof import('./pages/runs/useRunStream')>()),
-  useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
+// Routing itself is covered by `routes.test.tsx`; what is under test HERE is
+// the composition — that `App` hosts the real route tree, and that the shell it
+// renders shares one store with the theme provider wrapping it. The network
+// stubs exist only so the landed page mounts without real I/O.
+vi.mock('./api/connections', async (importActual) => ({
+  ...(await importActual<typeof import('./api/connections')>()),
+  listConnections: vi.fn().mockResolvedValue([]),
 }));
 
-// The theme toggle reads the app-wide singleton store, so reset its mode
-// between cases rather than leaking one test's theme into the next.
+/**
+ * The rail's links, scoped away from the page body. The Home page signposts the
+ * same hubs, so an unscoped `getByRole('link', {name: 'Manage'})` is ambiguous
+ * there — and silently would have been asserting the wrong element.
+ */
+function rail() {
+  return within(screen.getByRole('navigation', { name: 'Primary' }));
+}
+
+/** `App` defaults to the hash router; tests drive the same ROUTES in memory. */
+function renderApp(initialPath = '/') {
+  return render(<App router={createMemoryRouter(ROUTES, { initialEntries: [initialPath] })} />);
+}
+
 beforeEach(() => {
-  window.location.hash = '';
   uiStore.getState().setThemeMode('dark');
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  window.location.hash = '';
   uiStore.getState().setThemeMode('dark');
   delete document.documentElement.dataset.theme;
   document.documentElement.style.colorScheme = '';
 });
 
-describe('App routing', () => {
-  it('renders the Runs list at #/runs', async () => {
-    window.location.hash = '#/runs';
-    render(<App />);
-    expect(await screen.findByRole('heading', { name: 'Runs' })).toBeInTheDocument();
+describe('App', () => {
+  it('mounts the shell — hub rail plus the routed page', async () => {
+    renderApp('/');
+    expect(await screen.findByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument();
+    expect(rail().getByRole('link', { name: 'Monitor' })).toBeInTheDocument();
   });
 
-  it('renders the run detail view at #/runs/:id and keeps Runs nav active', async () => {
-    window.location.hash = '#/runs/run_42';
-    render(<App />);
-    // The detail heading carries the run id.
-    expect(await screen.findByText('run_42')).toBeInTheDocument();
-    const runsNav = screen.getByRole('link', { name: 'Runs' });
-    expect(runsNav).toHaveAttribute('aria-current', 'page');
+  /**
+   * The rail lives on a LAYOUT route, so a hub change must re-render the outlet
+   * and leave the rail's DOM node alone. Asserted by node IDENTITY: "a rail is
+   * present afterwards" would hold just as well if `AppShell` were not a layout
+   * route and every page rendered its own `HubRail` — which is the design this
+   * is here to rule out.
+   */
+  it('keeps the rail mounted across a hub change', async () => {
+    const user = userEvent.setup();
+    renderApp('/');
+
+    const railBefore = screen.getByRole('navigation', { name: 'Primary' });
+    await user.click(rail().getByRole('link', { name: 'Manage' }));
+
+    expect(await screen.findByRole('heading', { name: 'Connections' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBe(railBefore);
+    expect(rail().getByRole('link', { name: 'Manage' })).toHaveAttribute('aria-current', 'page');
   });
 });
 
 describe('App theme toggle', () => {
   it('renders a named, keyboard-operable control wired to the ui store', async () => {
     const user = userEvent.setup();
-    render(<App />);
+    renderApp();
 
     const toggle = screen.getByRole('switch', { name: /dark mode/i });
     expect(toggle).toBeChecked();
@@ -84,16 +88,17 @@ describe('App theme toggle', () => {
 
   /**
    * The composed tree the app actually ships (`AppThemeProvider > App`), on the
-   * DEFAULT store both sides fall back to. This is what proves the toggle and
-   * the provider are driven by the SAME store — each takes an injectable
-   * `store` prop, so nothing else would catch a future change that injected one
-   * into the provider alone and left the toggle moving a store no one renders.
+   * DEFAULT store both sides fall back to. This is what proves the rail's
+   * toggle and the provider are driven by the SAME store — each takes an
+   * injectable `store`, so nothing else would catch a future change that
+   * injected one into the provider alone and left the toggle moving a store no
+   * one renders.
    */
   it('drives the document theme end-to-end from the rendered toggle', async () => {
     const user = userEvent.setup();
     render(
       <AppThemeProvider>
-        <App />
+        <App router={createMemoryRouter(ROUTES, { initialEntries: ['/'] })} />
       </AppThemeProvider>,
     );
     expect(document.documentElement.dataset.theme).toBe('dark');

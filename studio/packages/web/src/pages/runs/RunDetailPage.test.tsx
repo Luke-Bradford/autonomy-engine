@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
+import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, Run, RunEvent } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
 import * as runsApi from '../../api/runs';
@@ -64,14 +65,14 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('RunDetailPage', () => {
   it('renders run metadata from the REST fetch', async () => {
-    render(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('trg_1')).toBeInTheDocument();
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
 
   it('shows empty node/event states with no events', async () => {
-    render(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText(/No node activity yet/i)).toBeInTheDocument();
     expect(screen.getByText(/No events yet/i)).toBeInTheDocument();
   });
@@ -99,7 +100,7 @@ describe('RunDetailPage', () => {
         ],
       }),
     );
-    render(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />);
 
     // Node table shows the node lit green.
     const nodeCell = await screen.findByText('greet');
@@ -120,7 +121,7 @@ describe('RunDetailPage', () => {
       envelope({ type: 'node.output', runId: 'run_1', nodeId: 'a', name: `chunk${i}`, value: i }),
     );
     useRunStreamMock.mockReturnValue(stream({ events: many }));
-    render(<RunDetailPage runId="run_1" />);
+    renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText(/most recent 500 of 501 events/i)).toBeInTheDocument();
     // The oldest event's row is dropped; the newest is kept (glosses are unique).
     expect(screen.queryByText('node=a name=chunk0')).not.toBeInTheDocument();
@@ -131,7 +132,7 @@ describe('RunDetailPage', () => {
     useRunStreamMock.mockReturnValue(
       stream({ phase: 'error', error: 'run not found or not accessible' }),
     );
-    render(<RunDetailPage runId="run_x" />);
+    renderWithRouter(<RunDetailPage runId="run_x" />);
     expect(await screen.findByText(/not found or not accessible/i)).toBeInTheDocument();
   });
 });

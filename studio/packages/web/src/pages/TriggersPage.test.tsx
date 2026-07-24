@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline, PipelineVersion, TriggerPublic } from '@autonomy-studio/shared';
 import { TriggersPage } from './TriggersPage';
 import * as triggersApi from '../api/triggers';
 import * as pipelinesApi from '../api/pipelines';
+import * as runsApi from '../api/runs';
+import { ROUTES } from '../routes';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
 // client-side validation is exercised exactly as it ships.
@@ -23,6 +27,18 @@ vi.mock('../api/triggers', async (importActual) => {
 vi.mock('../api/pipelines', () => ({
   listPipelines: vi.fn(),
   listPipelineVersions: vi.fn(),
+}));
+// The navigation case below lands on the run detail page, which fetches the run
+// and opens a WebSocket; stub both so only the routing is under test.
+vi.mock('../api/runs', async (importActual) => ({
+  ...(await importActual<typeof import('../api/runs')>()),
+  getRun: vi.fn(),
+  getRunEvents: vi.fn().mockResolvedValue([]),
+  listRuns: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('./runs/useRunStream', async (importActual) => ({
+  ...(await importActual<typeof import('./runs/useRunStream')>()),
+  useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
 }));
 
 const listTriggersMock = vi.mocked(triggersApi.listTriggers);
@@ -103,13 +119,13 @@ afterEach(() => {
 
 describe('TriggersPage', () => {
   it('shows the empty state after loading', async () => {
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText(/No triggers yet/i)).toBeInTheDocument();
   });
 
   it('renders a trigger row with its binding label resolved from pipelines', async () => {
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText('Nightly')).toBeInTheDocument();
     // Binding label is `${pipeline.name} v${version}`, not the opaque id.
     expect(await screen.findByText('My pipeline v3')).toBeInTheDocument();
@@ -119,14 +135,14 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ pipelineVersionId: null, enabled: false, mode: 'manual', schedule: null }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     expect(await screen.findByText('unbound')).toBeInTheDocument();
   });
 
   it('fires a trigger and reports the started run id', async () => {
     const user = userEvent.setup();
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
     await waitFor(() => expect(fireMock).toHaveBeenCalledWith('trg_1'));
     expect(await screen.findByText(/started \(run run_9\)/i)).toBeInTheDocument();
@@ -136,14 +152,14 @@ describe('TriggersPage', () => {
     const user = userEvent.setup();
     fireMock.mockResolvedValue({ outcome: 'skipped', reason: 'a run is already active' });
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
   });
 
   it('creates a schedule trigger bound to a pipeline version', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
 
     const formEl = screen.getByRole('form', { name: /Trigger form/i });
@@ -165,7 +181,7 @@ describe('TriggersPage', () => {
 
   it('blocks saving an enabled but unbound trigger with a friendly message', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Oops');
@@ -186,7 +202,7 @@ describe('TriggersPage', () => {
     // `ConcurrencyWriteSchema` (parallel⇒max, single-slot⇒no-max) is honoured
     // by construction. This asserts that construction is correct.
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'Fan out');
@@ -201,7 +217,7 @@ describe('TriggersPage', () => {
 
   it('emits a single-slot concurrency object with no `max`', async () => {
     const user = userEvent.setup();
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.type(form.getByLabelText('Name'), 'One at a time');
@@ -226,7 +242,7 @@ describe('TriggersPage', () => {
         webhook: { idempotencyWindowSeconds: 300 },
       }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(
       await screen.findByRole('button', { name: /Provision webhook secret for Hook/i }),
     );
@@ -240,7 +256,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     await user.click(form.getByRole('button', { name: /Save changes/i }));
@@ -256,7 +272,7 @@ describe('TriggersPage', () => {
     listTriggersMock.mockResolvedValue([
       trigger({ name: 'Hook', mode: 'webhook', schedule: null, webhook: { foo: 1 } }),
     ]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
     // Switch away from webhook — the stored secret must be actively cleared.
@@ -278,7 +294,7 @@ describe('TriggersPage', () => {
       }),
     );
     listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
-    render(<TriggersPage />);
+    renderWithRouter(<TriggersPage />);
     const fireBtn = await screen.findByRole('button', { name: /Fire Nightly now/i });
     await user.click(fireBtn);
     // Button reflects the in-flight state and is disabled.
@@ -289,5 +305,28 @@ describe('TriggersPage', () => {
 
     resolveFire({ outcome: 'started', runId: 'run_9' });
     await waitFor(() => expect(fireBtn).not.toBeDisabled());
+  });
+
+  /**
+   * The one deep link U2 rewrote on this page (`/runs/:id` ->
+   * `/monitor/runs/:id`), asserted against the app's REAL `ROUTES` so a moved
+   * route fails here rather than silently sending "Watch live" nowhere. The
+   * page previously had no coverage of this button at all, which made it the
+   * only rewritten path in the ticket with nothing watching it.
+   */
+  it('"Watch live" after a fire lands on that run under the Monitor hub', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    fireMock.mockResolvedValue({ outcome: 'started', runId: 'run_9' });
+    vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_9' } as never);
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/manage/triggers'] });
+    render(<RouterProvider router={router} />);
+
+    await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
+    await user.click(await screen.findByRole('button', { name: /Watch live/i }));
+
+    expect(router.state.location.pathname).toBe('/monitor/runs/run_9');
+    expect(await screen.findByRole('heading', { name: /run_9/ })).toBeInTheDocument();
   });
 });

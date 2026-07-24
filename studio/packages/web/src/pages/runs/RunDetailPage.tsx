@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Run, RunLifecycleStatus } from '@autonomy-studio/shared';
+import { useNavigate } from 'react-router';
 import { getRun } from '../../api/runs';
-import { navigate } from '../../router';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
@@ -38,12 +38,13 @@ function phaseLabel(phase: StreamPhase): string {
  *   - a raw event feed shows every append in order.
  */
 export function RunDetailPage({ runId }: { runId: string }) {
+  const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // App renders this with `key={runId}`, so a different run remounts the
-  // component fresh (state back to null) rather than us resetting state
-  // synchronously in the effect body — the effect only performs the fetch.
+  // `RunDetailRoute` renders this with `key={runId}`, so a different run
+  // remounts the component fresh (state back to null) rather than us resetting
+  // state synchronously in the effect body — the effect only performs the fetch.
   useEffect(() => {
     const ac = new AbortController();
     getRun(runId, ac.signal)
@@ -75,7 +76,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <h2 id="run-heading">
           Run <code>{runId}</code>
         </h2>
-        <button type="button" onClick={() => navigate('/runs')}>
+        <button type="button" onClick={() => void navigate('/monitor/runs')}>
           ← All runs
         </button>
       </div>

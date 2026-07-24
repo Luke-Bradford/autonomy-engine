@@ -16,8 +16,28 @@ import { expect, type Page } from '@playwright/test';
  * rather than silently rename themselves and keep passing. (Importing app
  * source would also drag `@fluentui/react-components` into the Playwright
  * runner across a tsconfig boundary, for a 17-character string.)
+ *
+ * `:not([data-portal-node])` is load-bearing, and cost a U2 debugging round.
+ * The moment ANY Fluent surface that portals — a `Tooltip`, `Popover`, `Menu` —
+ * is mounted, Fluent creates a mount node under `<body>` and COPIES the
+ * provider's className onto it, so `.app-fluent-root` alone matches two
+ * elements and Playwright's strict mode fails every theme spec at once. That
+ * copy is desirable (it is why a portalled flyout is themed, and why the
+ * `--xy-*` bridge keyed on this class reaches surfaces rendered over the
+ * canvas) — so the fix is to name the APP's root here, not to stop Fluent
+ * cloning the class.
+ *
+ * Note the two constants are NOT interchangeable. `BRIDGE_SELECTOR` is the
+ * selector `xyThemeBridge.css` is keyed on and is matched against rule
+ * `selectorText` in the CSSOM; `FLUENT_ROOT` picks a specific ELEMENT out of the
+ * DOM. Using the DOM one to match a stylesheet rule finds nothing, and reports
+ * it as "the bridge did not load" — which is a very convincing wrong answer.
  */
-export const FLUENT_ROOT = '.app-fluent-root';
+export const BRIDGE_SELECTOR = '.app-fluent-root';
+export const FLUENT_ROOT = `${BRIDGE_SELECTOR}:not([data-portal-node])`;
+
+/** Fluent's portalled clone of the provider root — where flyouts mount. */
+export const FLUENT_PORTAL_ROOT = `${BRIDGE_SELECTOR}[data-portal-node]`;
 
 /** The Fluent token the bridge maps the canvas SURFACE to. */
 export const CANVAS_TOKEN = '--colorNeutralBackground1';

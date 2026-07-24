@@ -14,9 +14,11 @@
   "dependencies": {
     "@autonomy-studio/shared": "workspace:*",
     "@fluentui/react-components": "^9.74.4",
+    "@fluentui/react-icons": "2.0.334",
     "@xyflow/react": "12.11.2",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "react-router": "8.3.0",
     "zod": "4.4.3",
     "zustand": "5.0.14"
   },

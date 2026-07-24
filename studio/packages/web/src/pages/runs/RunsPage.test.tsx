@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+import { renderWithRouter } from '../../testing/renderWithRouter';
+import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
 import type { Run } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
 import * as runsApi from '../../api/runs';
-import * as router from '../../router';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
 // convention of stubbing every network fn of the module, so no real call ever
@@ -47,29 +49,41 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('RunsPage', () => {
   it('shows the empty state after loading', async () => {
-    render(<RunsPage />);
+    renderWithRouter(<RunsPage />);
     expect(await screen.findByText(/No runs yet/i)).toBeInTheDocument();
   });
 
   it('renders a run row with its status', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
-    render(<RunsPage />);
+    renderWithRouter(<RunsPage />);
     expect(await screen.findByText('run_abc')).toBeInTheDocument();
     expect(screen.getByText('success')).toBeInTheDocument();
   });
 
+  /**
+   * Mounted on the app's REAL `ROUTES`, not a stub tree written here. A stub
+   * would only prove this page agrees with itself: rename the actual route to
+   * `/monitor/run/:runId` and a hand-written `/monitor/runs/:runId` stub still
+   * matches, still renders, still passes. Against `ROUTES`, a moved route
+   * fails — which is the whole risk this ticket carries, since every path in
+   * the app was rewritten.
+   */
   it('Watch navigates to the run detail route', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc' })]);
-    const navSpy = vi.spyOn(router, 'navigate').mockImplementation(() => {});
-    render(<RunsPage />);
-    const btn = await screen.findByLabelText('Watch run run_abc');
-    await userEvent.click(btn);
-    expect(navSpy).toHaveBeenCalledWith('/runs/run_abc');
+    vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+    render(<RouterProvider router={router} />);
+
+    await userEvent.click(await screen.findByLabelText('Watch run run_abc'));
+
+    // The run detail page renders the id in its heading.
+    expect(await screen.findByRole('heading', { name: /run_abc/ })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
   });
 
   it('surfaces a load error', async () => {
     listMock.mockRejectedValue(new Error('nope'));
-    render(<RunsPage />);
+    renderWithRouter(<RunsPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('nope');
   });
 });
