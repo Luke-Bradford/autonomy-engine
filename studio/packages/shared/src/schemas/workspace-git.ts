@@ -565,38 +565,75 @@ export const PullRequestModeSchema = z.enum(['opened', 'guided_manual']);
 export type PullRequestMode = z.infer<typeof PullRequestModeSchema>;
 
 /**
- * #3 G9 — the `POST /api/workspace/git/pull-request` result. G9a always returns
- * `mode:'guided_manual'`: for a GitHub remote, `provider:'github'` + a compare
- * `url` the user clicks to open the PR; for a local/non-GitHub remote,
- * `provider:'unknown'` + `url:null` (open the PR by hand from the branch pair).
- * The `mode`/`provider` enums already carry the G9b values (`opened`/host APIs)
- * so upgrading to an auto-opened PR is not a contract change. `workingBranch` /
- * `collabBranch` are echoed so a guided-manual client knows the branch pair.
+ * #3 G9 — the `POST /api/workspace/git/pull-request` result.
+ * - `mode:'guided_manual'` (G9a): for a GitHub remote, `provider:'github'` + a
+ *   compare `url` the user clicks to open the PR (`number:null`); for a
+ *   local/non-GitHub remote, `provider:'unknown'` + `url:null` + `number:null`
+ *   (open the PR by hand from the branch pair).
+ * - `mode:'opened'` (G9b): studio opened (or observed an existing) PR via the
+ *   GitHub REST API using an operator-env token; `provider:'github'`, `url` is
+ *   the PR's `html_url`, `number` is its PR number.
+ * `number` is REQUIRED-nullable (#473: an absent PR number is stated `null`, never
+ * a manufactured default). `workingBranch`/`collabBranch` are echoed so a
+ * guided-manual client knows the branch pair.
  */
 export const PullRequestResultSchema = z.object({
   mode: PullRequestModeSchema,
   provider: GitHostProviderSchema,
   url: z.string().min(1).nullable(),
+  /** The opened/observed PR number (`opened` only); `null` for `guided_manual`. */
+  number: z.number().int().positive().nullable(),
   workingBranch: z.string().min(1),
   collabBranch: z.string().min(1),
 });
 export type PullRequestResult = z.infer<typeof PullRequestResultSchema>;
 
 /**
+ * #3 G9 — classify a repo's PR surface: is it a GitHub remote we can auto-open a
+ * PR against (G9b), and what is the guided-manual compare URL (G9a) either way?
+ * The SINGLE source of github-detection + compare-url building (CLAUDE.md: one
+ * source of truth) — both the guided-manual builder below and the route's
+ * auto-open decision read it, so the two can never drift on "is this GitHub".
+ *
+ * - `provider:'github'`, `githubRepo` non-null, `compareUrl` a compare link:
+ *   a GitHub remote. The route auto-opens via the host API when an operator-env
+ *   token is present (G9b), else serves `compareUrl` as guided-manual.
+ * - `provider:'unknown'`, `githubRepo:null`, `compareUrl:null`: a local
+ *   (`file://`/absolute-path) or non-GitHub host — no PR surface studio drives;
+ *   the user opens the PR by hand from the branch pair.
+ *
+ * `githubRepo` is exposed (not just the URL) so the server can build the host-API
+ * request WITHOUT re-parsing the URL — the parse happens once, here.
+ */
+export function resolvePullRequestTarget(
+  repoUrl: string,
+  collabBranch: string,
+  workingBranch: string,
+): { provider: GitHostProvider; githubRepo: GitHostRepo | null; compareUrl: string | null } {
+  const parsed = parseGitHostRepo(repoUrl);
+  if (parsed && isGitHubHost(parsed.host)) {
+    return {
+      provider: 'github',
+      githubRepo: parsed,
+      compareUrl: buildGitHubCompareUrl(parsed, collabBranch, workingBranch),
+    };
+  }
+  return { provider: 'unknown', githubRepo: null, compareUrl: null };
+}
+
+/**
  * Build the GUIDED-MANUAL pull-request payload (G9a) from a repo's coordinates
  * and its branch pair: a GitHub compare URL when the remote is GitHub, else
- * `{ provider:'unknown', url:null }`. The one place the route composes
- * `parseGitHostRepo` + `buildGitHubCompareUrl`, so the github-detection and
- * url-building can't drift. G9b will add the `opened` path alongside this.
+ * `{ provider:'unknown', url:null }`. Delegates to `resolvePullRequestTarget` so
+ * the github-detection + url-building live in ONE place. The G9b route composes
+ * `resolvePullRequestTarget` directly (it also needs `githubRepo` for the host
+ * API); this thin wrapper is retained for the guided-only callers/tests.
  */
 export function buildGuidedManualPullRequest(
   repoUrl: string,
   collabBranch: string,
   workingBranch: string,
 ): { provider: GitHostProvider; url: string | null } {
-  const parsed = parseGitHostRepo(repoUrl);
-  if (parsed && isGitHubHost(parsed.host)) {
-    return { provider: 'github', url: buildGitHubCompareUrl(parsed, collabBranch, workingBranch) };
-  }
-  return { provider: 'unknown', url: null };
+  const { provider, compareUrl } = resolvePullRequestTarget(repoUrl, collabBranch, workingBranch);
+  return { provider, url: compareUrl };
 }

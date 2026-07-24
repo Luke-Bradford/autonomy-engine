@@ -43,6 +43,7 @@ import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import type { GitProvider } from './git/provider.js';
+import type { GitHostClient } from './git/github-host.js';
 import './context.js';
 
 export function resolvePort(raw: string | undefined): number {
@@ -147,6 +148,10 @@ export interface BuildAppOptions {
   workspaceGitRoot?: string;
   /** #3 G2 — test seam: a `GitProvider` override (e.g. a real `CliGitProvider` pointed at a missing binary to exercise the 503 path). Defaults to a real CLI provider. */
   workspaceGitProvider?: GitProvider;
+  /** #3 G9b — the operator-env GitHub token for auto-opening PRs. Overrides `process.env.GH_TOKEN`/`GITHUB_TOKEN`. Call-time only, for test isolation (`process.env` is shared across concurrent test files). `null`/absent = no token → guided-manual PRs. */
+  githubToken?: string | null;
+  /** #3 G9b — test seam: a `GitHostClient` override (a fake fetch-backed client). Defaults to a real `GitHubHostClient` (Node global `fetch`). */
+  workspaceGitHostClient?: GitHostClient;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -581,6 +586,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   await fastify.register(workspaceGitRoutes, {
     workspaceGitRoot: opts?.workspaceGitRoot ?? process.env.WORKSPACE_GIT_ROOT ?? 'data/git',
     provider: opts?.workspaceGitProvider,
+    // #3 G9b — operator-env token for auto-opening GitHub PRs (else guided-manual).
+    // `gh`-CLI precedence: GH_TOKEN over GITHUB_TOKEN. Normalized (trim/empty → no
+    // token) inside the route.
+    githubToken: opts?.githubToken ?? process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? null,
+    hostClient: opts?.workspaceGitHostClient,
   });
   await fastify.register(workspaceAuditRoutes);
 
