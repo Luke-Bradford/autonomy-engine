@@ -312,6 +312,20 @@ export const ContainerRunStatusSchema = z.enum([
 ]);
 export type ContainerRunStatus = z.infer<typeof ContainerRunStatusSchema>;
 
+/** The terminal container statuses — a container that has STOPPED (mirrors
+ * `TerminalNodeStatusSchema`). `pending`/`active` are non-terminal (still live). */
+export const TerminalContainerStatusSchema = z.enum(['success', 'failure', 'skipped']);
+
+/**
+ * Runtime membership test for a terminal container status — derived from the
+ * schema's own options (like `TERMINAL_NODE`) so the set and type can't drift.
+ * Used by RS1's `run.reseeded` fold to REFUSE a non-terminal copied container
+ * (which would leave a live container the settle walk cannot resolve).
+ */
+export const TERMINAL_CONTAINER: ReadonlySet<ContainerRunStatus> = new Set<ContainerRunStatus>(
+  TerminalContainerStatusSchema.options satisfies readonly ContainerRunStatus[],
+);
+
 export const ContainerRunStateSchema = z.object({
   status: ContainerRunStatusSchema,
   round: z.number().int().nonnegative(),
@@ -644,6 +658,22 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     startedAt: z.string().optional(),
     /** Already-resolved run params (post `resolveRunParams`, secrets stripped). */
     params: z.record(z.string(), z.unknown()),
+    /**
+     * RS1 — rerun-from-failed lineage: the source run `R1` this run resumes.
+     * Its PRESENCE also DEFERS the start-time dispatch (`onRunStarted` returns
+     * no commands), so the immediately-following `run.reseeded` can mark the
+     * copied frontier terminal-success BEFORE any node is dispatched — otherwise
+     * the settle here would dispatch the very nodes the reseed copies (double
+     * execution). OPTIONAL for durable back-compat: an ordinary (non-rerun) run
+     * carries none and starts + settles normally.
+     *
+     * CRASH-SAFETY: a `run.started{rerunOf}` deferred half-state is `running`,
+     * NOT the `pending` half the reconciler resyncs harmlessly, so RS2's
+     * producer MUST append `run.started{rerunOf}` + `run.reseeded` (and any
+     * `run.triggerContext`) in ONE transaction — no crash window may expose the
+     * deferred-`running`-without-reseed state (it would re-dispatch on resume).
+     */
+    rerunOf: z.string().optional(),
   }),
   // #5 S12 — the durable fire-time TRIGGER context. Appended by the driver
   // BEFORE `run.started` (it folds into the `pending` seed, so a root node's
@@ -663,6 +693,41 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     triggerId: z.string(),
     scheduledTime: z.string().optional(),
     body: z.unknown().optional(),
+  }),
+  // RS1 — the rerun-from-failed RESEED manifest. Appended immediately AFTER
+  // `run.started{rerunOf}` (which deferred dispatch), it marks the `frontier`
+  // nodes terminal-`success` with their `copiedOutputs`, seeds `copiedContainers`
+  // as terminal units, then the fold settles ONCE so dispatch proceeds from the
+  // ready set BEYOND the frontier — the same walk as a normal run. Failed /
+  // downstream / non-frontier nodes re-run. The event is the DURABLE carrier of
+  // the copy (CP1: a run's state = fold(its own log)), so replay/boot-reconcile
+  // reproduces the reseeded state without re-reading R1.
+  //
+  // SCOPE (RS1 = mechanism only): the `frontier` list is computed by RS2 and
+  // MUST reference only TOP-LEVEL node ids — container internals are copied via
+  // `copiedContainers` (a mid-flight container re-runs whole; RS3). `copiedOutputs`
+  // MUST be sourced from R1's projected `state.outputs` (already `storeOutputs`-
+  // normalized: undeclared keys filtered, optional→present-null), so this fold
+  // trusts them raw — an internal engine event, Zod-shape-validated on replay,
+  // pinning the same immutable `pipelineVersionId` (hence the same output
+  // contract) as R1. `${trigger.*}` reuse is handled by REPLAYING R1's
+  // `run.triggerContext` before `run.started` (single SSOT), not a field here.
+  // `childLinks` (RS4 call_pipeline provenance) is a later backward-compatible
+  // optional-field addition.
+  z.object({
+    type: z.literal('run.reseeded'),
+    runId: z.string(),
+    /** The source run `R1` this reseed copies from (provenance). */
+    sourceRunId: z.string(),
+    /** Top-level node ids copied as terminal-`success` (the successful prefix). */
+    frontier: z.array(z.string()),
+    /** Per-frontier-node stored outputs (`nodeId → {name → value}`). Subsumes the
+     * spec's `copiedVariables` — the engine's only run-level writable channel is
+     * per-node `outputs`; there is no separate variables store. */
+    copiedOutputs: z.record(z.string(), z.record(z.string(), z.unknown())),
+    /** Fully-completed containers copied as terminal units (`containerId → state`);
+     * RS3 decides which containers are copiable, this fold applies them. */
+    copiedContainers: z.record(z.string(), ContainerRunStateSchema),
   }),
   z.object({
     type: z.literal('node.dispatched'),
