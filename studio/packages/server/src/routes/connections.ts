@@ -7,6 +7,7 @@ import {
   type Connection,
 } from '@autonomy-studio/shared';
 import {
+  connectionNotReadyReason,
   createConnection,
   createSecret,
   deleteConnection,
@@ -18,6 +19,7 @@ import {
   updateSecretCiphertext,
 } from '../repo/index.js';
 import { newId } from '../repo/ids.js';
+import { regateTriggersForConnection } from '../run/connection-readiness.js';
 import { encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
@@ -123,9 +125,29 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
       }
     }
 
-    const updated = updateConnection(db, existing.id, { ...rest, secretRef });
-    if (!updated) throw new NotFoundError('connection', existing.id);
-    return toPublic(updated);
+    // #3 G8b-2 — the reverse-gate. If this PATCH leaves the connection UNREADY
+    // (the only reachable ready→unready PATCH transition is a `kind` change to a
+    // secret-requiring kind with no secret: `not_required`→`needs_secret` — a
+    // secret cannot be cleared here and `enabled` is server-pinned), disable
+    // every dependent enabled trigger so its `enabled` flag can't outlive the
+    // connection's readiness (the dispatch gate would refuse each fire, leaving
+    // an "enabled" trigger that silently never runs). The update + the dependent
+    // disables land in ONE transaction (the service's own tx nests as a
+    // SAVEPOINT), mirroring `archivePipeline`'s atomicity — never a committed
+    // unready connection with a still-enabled dependent. A supply (needs_secret→
+    // ready) leaves the connection ready, so no dependent is touched.
+    const result = db.transaction(() => {
+      const u = updateConnection(db, existing.id, { ...rest, secretRef });
+      if (!u) return null;
+      const disabled =
+        connectionNotReadyReason(u) !== null ? regateTriggersForConnection(db, u.id) : [];
+      return { connection: u, disabled };
+    });
+    if (!result) throw new NotFoundError('connection', existing.id);
+    // Post-commit, and only when a dependent actually flipped — drop the
+    // now-disabled triggers' pending wakeups (the alarm clock owns its own db).
+    if (result.disabled.length > 0) fastify.scheduler.sync();
+    return toPublic(result.connection);
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/connections/:id', async (request, reply) => {
@@ -143,11 +165,24 @@ export const connectionsRoutes: FastifyPluginAsync = async (fastify) => {
     // "delete the secret too" choice (vs. leaving it orphaned): a
     // connection's secret is exclusively its own in this MVP (nothing else
     // ever points at the same `ref`), so nothing else can be left dangling.
-    deleteConnection(db, existing.id);
-    if (existing.secretRef) {
-      const secretRow = getSecretByRef(db, existing.secretRef);
-      if (secretRow) deleteSecret(db, secretRow.id);
-    }
+    // #3 G8b-2 — delete + reverse-gate + secret cleanup in ONE transaction. The
+    // delete must precede the reverse-gate scan: once the connection row is gone,
+    // a dependent trigger's version folds it to `missing` (an unready reason), so
+    // `regateTriggersForConnection` disables every dependent enabled trigger —
+    // keeping the `enabled` flag honest for a trigger bound to a now-vanished
+    // connection (there is no triggers→connections FK; this service is the only
+    // mechanism). The secret delete stays last (the connection was the sole
+    // `secret_ref` holder; ON DELETE RESTRICT requires the reference gone first).
+    const disabled = db.transaction(() => {
+      deleteConnection(db, existing.id);
+      const flipped = regateTriggersForConnection(db, existing.id);
+      if (existing.secretRef) {
+        const secretRow = getSecretByRef(db, existing.secretRef);
+        if (secretRow) deleteSecret(db, secretRow.id);
+      }
+      return flipped;
+    });
+    if (disabled.length > 0) fastify.scheduler.sync();
     reply.status(204).send();
   });
 

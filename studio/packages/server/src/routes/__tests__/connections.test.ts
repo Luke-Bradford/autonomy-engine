@@ -1,7 +1,52 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { createConnection, getConnection, getSecretByRef, listSecrets } from '../../repo/index.js';
+import { CATALOG_VERSION, type NewTrigger, type Node } from '@autonomy-studio/shared';
+import {
+  createConnection,
+  createPipeline,
+  createPipelineVersion,
+  createTrigger,
+  getConnection,
+  getSecretByRef,
+  getTrigger,
+  listSecrets,
+} from '../../repo/index.js';
+import type { Db } from '../../repo/types.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+
+/** Bind an ENABLED schedule trigger to a version that references `connId` on an
+ * `llm_call` node — the dependency the reverse-gate must find and disable. */
+function bindEnabledTrigger(db: Db, ownerId: string, connId: string): string {
+  const pipeline = createPipeline(db, { ownerId, name: 'P' });
+  const node: Node = {
+    id: 'n1',
+    type: 'llm_call',
+    config: {},
+    connectionId: connId,
+    position: { x: 0, y: 0 },
+  };
+  const version = createPipelineVersion(db, {
+    pipelineId: pipeline.id,
+    params: [],
+    outputs: [],
+    nodes: [node],
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  });
+  const input: NewTrigger = {
+    ownerId,
+    name: 'T',
+    pipelineVersionId: version.id,
+    params: {},
+    mode: 'schedule',
+    schedule: '0 2 * * *',
+    webhook: null,
+    concurrency: { policy: 'skip_if_running' },
+    runWindows: null,
+    enabled: true,
+  };
+  return createTrigger(db, input).id;
+}
 
 describe('connections routes', () => {
   let app: FastifyInstance;
@@ -199,5 +244,68 @@ describe('connections routes', () => {
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe('not_found');
+  });
+
+  describe('#3 G8b-2 reverse-gate — a post-hoc unready connection disables dependent triggers', () => {
+    it('PATCH kind→needs_secret disables a dependent enabled trigger', async () => {
+      // A credential-less `ollama` connection is READY (`not_required`).
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Local', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const triggerId = bindEnabledTrigger(app.db, 'local', created.id);
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(true);
+
+      // Change the kind to a secret-requiring one with NO secret → needs_secret.
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/connections/${created.id}`,
+        payload: { kind: 'anthropic_api' },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(patchRes.json().secretStatus).toBe('needs_secret');
+      // The reverse-gate flipped the dependent trigger off.
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(false);
+    });
+
+    it('a PATCH that keeps the connection READY (a rename) leaves dependents enabled', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Local', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const triggerId = bindEnabledTrigger(app.db, 'local', created.id);
+
+      const patchRes = await app.inject({
+        method: 'PATCH',
+        url: `/api/connections/${created.id}`,
+        payload: { name: 'Renamed' },
+      });
+      expect(patchRes.statusCode).toBe(200);
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(true);
+    });
+
+    it('DELETE disables a dependent enabled trigger (it folds to missing)', async () => {
+      const created = (
+        await app.inject({
+          method: 'POST',
+          url: '/api/connections',
+          payload: { name: 'Local', kind: 'ollama', config: {} },
+        })
+      ).json();
+      const triggerId = bindEnabledTrigger(app.db, 'local', created.id);
+
+      const deleteRes = await app.inject({
+        method: 'DELETE',
+        url: `/api/connections/${created.id}`,
+      });
+      expect(deleteRes.statusCode).toBe(204);
+      expect(getTrigger(app.db, triggerId)!.enabled).toBe(false);
+    });
   });
 });
