@@ -358,6 +358,68 @@ export const WorkspaceGitImportPreviewSchema = z.object({
 export type WorkspaceGitImportPreview = z.infer<typeof WorkspaceGitImportPreviewSchema>;
 
 /**
+ * #3 G10 — a resource's DRIFT vs the studio working branch, the COMMIT-direction
+ * dual of the pull-direction `WorkspaceGitDisposition`. Matched by stable
+ * `resourceId` (identity; the PATH is cosmetic, G1); equality is the canonical
+ * CONTENT FORM (`content-form.ts`) exactly as the reconcile classifier uses,
+ * NOT byte/blob equality — so a re-mint that only bumps volatile fields (version
+ * id/number, `node.position`) is NOT drift (settled #662: "uncommitted iff
+ * canonicalHash(latest version, G1 volatile-exclusions) ≠ the blob last
+ * committed/imported for that resourceId"). `clean` resources are omitted from
+ * the report, so only these four ever appear:
+ * - `added`: in the DB working copy, ABSENT from the working branch (a new
+ *   resource the next Commit would create).
+ * - `removed`: on the working branch, ABSENT from the DB (a deleted/archived
+ *   resource the next Commit would drop; also a pre-G1 committed file with no
+ *   `resourceId`, which can never match an identity-bearing DB resource).
+ * - `modified`: matched, but the canonical content form DIFFERS.
+ * - `renamed`: matched, content form IDENTICAL, only the display name (hence the
+ *   cosmetic file path) differs. A resource that is BOTH renamed and content-
+ *   edited is `modified` (content supersedes, mirroring the reconcile's
+ *   `disposition()` precedence).
+ */
+export const WorkspaceGitDriftChangeSchema = z.enum(['added', 'removed', 'modified', 'renamed']);
+export type WorkspaceGitDriftChange = z.infer<typeof WorkspaceGitDriftChangeSchema>;
+
+/**
+ * #3 G10 — one drifted resource in the drift report (path, kind, stable id,
+ * display name, its `change` vs the working branch). `resourceId` is `null` only
+ * for a pre-G1 committed file with no stable identity (always a `removed`).
+ * `path` is the DB working-copy path for `added`/`modified`/`renamed` (the
+ * current/target path) and the committed path for `removed`.
+ */
+export const WorkspaceGitDriftResourceSchema = z.object({
+  path: z.string().min(1),
+  kind: ExportKindSchema,
+  resourceId: z.string().min(1).nullable(),
+  name: z.string(),
+  change: WorkspaceGitDriftChangeSchema,
+});
+export type WorkspaceGitDriftResource = z.infer<typeof WorkspaceGitDriftResourceSchema>;
+
+/**
+ * #3 G10 — the `POST /api/workspace/git/drift` result: an ADVISORY, read-only
+ * "do I have uncommitted changes, and which resources" report. `base` is the
+ * resolved commit the DB was compared against — the working-branch tip if it
+ * exists, else the collaboration-branch tip, else `null` (nothing committed yet,
+ * so every DB resource is `added`) — mirroring the Commit route's base
+ * selection, so drift answers "what my next Commit would change". Drift is
+ * advisory (spec #662): the real serialization point is push non-fast-forward /
+ * PR-merge. `diagnostics` carries a committed file that would NOT parse
+ * (VISIBLE, never a silent `clean`, #473/#664 shape) — its content could not be
+ * compared, so it is excluded from `changes` rather than manufactured as a match,
+ * but it DOES set `hasUncommittedChanges` (the next Commit's managed-dir
+ * reconcile would drop it, so an uncomparable committed file is pending drift).
+ */
+export const WorkspaceGitDriftSchema = z.object({
+  base: z.string().min(1).nullable(),
+  hasUncommittedChanges: z.boolean(),
+  changes: z.array(WorkspaceGitDriftResourceSchema),
+  diagnostics: z.array(WorkspaceParseDiagnosticSchema),
+});
+export type WorkspaceGitDrift = z.infer<typeof WorkspaceGitDriftSchema>;
+
+/**
  * #3 G5c — what the transactional apply DID to one branch resource:
  * - `created`: no DB resource had this `resourceId` → a fresh row (+ version) was
  *   inserted, PRESERVING the file's `resourceId`.
