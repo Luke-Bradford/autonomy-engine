@@ -1,6 +1,7 @@
 import { catalog, interpolationMode } from '@autonomy-studio/shared';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
+import { listTriggers, updateTrigger } from '../repo/triggers.js';
 import type { Db } from '../repo/types.js';
 
 /**
@@ -46,7 +47,7 @@ export interface UnreadyConnection {
 
 export function unreadyConnectionsForVersion(
   db: Db,
-  ownerId: string,
+  ownerId: string | null,
   versionId: string,
 ): UnreadyConnection[] {
   const version = getPipelineVersion(db, versionId);
@@ -74,4 +75,62 @@ export function unreadyConnectionsForVersion(
     if (reason !== null) unready.push({ connectionId, reason });
   }
   return unready;
+}
+
+/**
+ * #3 G8b-2 — the connection→dependent-triggers REVERSE-gate (git-publish spec
+ * ~742-745: "Add the connection→dependent-triggers reverse index for post-hoc
+ * secret changes"). The forward gates (G8b-1 ENABLE, G8a DISPATCH) stop an
+ * unready connection from being enabled or from firing a secretless run; this is
+ * the reverse: when a connection transitions ready→unready AFTER its dependent
+ * triggers were enabled — a `kind` change to a secret-requiring kind without a
+ * secret (`not_required`→`needs_secret`), or a DELETE (dependents fold to
+ * `missing`) — the dependents' `enabled` flag would otherwise stay a stale
+ * `true`, so the operator sees an "enabled" trigger that silently never fires
+ * (the dispatch gate refuses each fire). Disabling them keeps the flag honest.
+ *
+ * MIRRORS `archivePipeline` (repo/archive.ts), the pipeline→trigger analogue:
+ * atomic (one transaction), ENABLED-ONLY (an already-disabled dependent is left
+ * exactly as-is — no `updatedAt` churn, never re-enabled), idempotent (a second
+ * call after the connection is ready-again / already gone disables nothing new),
+ * and it returns the ids it flipped enabled→disabled. As with archive, the
+ * scheduler resync is the CALLER's job AFTER the tx commits (the route calls
+ * `fastify.scheduler.sync()` to drop the now-disabled triggers' pending wakeups
+ * — the alarm clock owns its own db, a caller tx cannot thread through it).
+ *
+ * The dependency link lives INSIDE the bound version's JSON (`node.connectionId`),
+ * not a column, so — unlike `listTriggersByPipeline`'s SQL join on the
+ * `pipeline_version_id` column — there is no cheap reverse-join: every enabled
+ * trigger's bound version is scanned. Reuse is deliberate: readiness is decided
+ * by the SAME `unreadyConnectionsForVersion` the ENABLE gate uses (and which
+ * mirrors the DISPATCH gate), so the reverse gate can never disagree with either
+ * about what "unready" means, and inherits its skips for free — a `${}`-dynamic
+ * or connection-less-node reference is dispatch's domain, not disabled here.
+ *
+ * Owner-scope: each trigger's readiness is scanned in that trigger's OWN owner
+ * scope (`unreadyConnectionsForVersion(tx, trigger.ownerId, …)`, nullable owner
+ * mirroring `resolveConnection`). So an OWNED connection reaches its owner's
+ * dependents, plus any (import-smuggled) foreign trigger whose version references
+ * the id — that folds to `missing`, which is an unready reason and so still
+ * matches, and disabling it is correct (that owner genuinely cannot resolve the
+ * private connection; the G8b-1 enable gate would refuse to enable it in the
+ * first place, so this only bites a trigger enabled by a path that bypassed it).
+ * A SHARED (null-owner) connection reaches every owner's dependents — matching
+ * who each connection is actually resolvable for. A `null`-version (unbound)
+ * trigger never fires, so it is never a dependent.
+ */
+export function regateTriggersForConnection(db: Db, connectionId: string): string[] {
+  return db.transaction((tx) => {
+    const disabled: string[] = [];
+    for (const trigger of listTriggers(tx)) {
+      if (!trigger.enabled) continue;
+      if (trigger.pipelineVersionId === null) continue;
+      const unready = unreadyConnectionsForVersion(tx, trigger.ownerId, trigger.pipelineVersionId);
+      if (unready.some((u) => u.connectionId === connectionId)) {
+        updateTrigger(tx, trigger.id, { enabled: false });
+        disabled.push(trigger.id);
+      }
+    }
+    return disabled;
+  });
 }

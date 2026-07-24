@@ -1,12 +1,16 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { CATALOG_VERSION, type Node } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, type NewTrigger, type Node } from '@autonomy-studio/shared';
 import { connections } from '../../db/schema.js';
-import { createConnection } from '../../repo/connections.js';
+import { createConnection, deleteConnection } from '../../repo/connections.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion } from '../../repo/pipeline-versions.js';
+import { createTrigger, getTrigger, updateTrigger } from '../../repo/triggers.js';
 import type { Db } from '../../repo/types.js';
-import { unreadyConnectionsForVersion } from '../connection-readiness.js';
+import {
+  regateTriggersForConnection,
+  unreadyConnectionsForVersion,
+} from '../connection-readiness.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 
 /** An `llm_call` node (its catalog `connectionKinds` includes `ollama` +
@@ -143,5 +147,153 @@ describe('unreadyConnectionsForVersion (#3 G8b enable-time gate)', () => {
   it('returns [] for an absent version id (never the guard for an unbound trigger)', () => {
     const { db } = freshDb();
     expect(unreadyConnectionsForVersion(db, 'local', 'pv_nope')).toEqual([]);
+  });
+
+  it('accepts a NULL owner (a null-owner trigger scope), mirroring resolveConnection', () => {
+    const { db } = freshDb();
+    // A shared (null-owner) connection resolves for a null-owner scope; an OWNED
+    // connection folds to `missing` for that scope (the resolveConnection fold).
+    const shared = createConnection(db, {
+      ownerId: null,
+      name: 'Shared',
+      kind: 'anthropic_api',
+      config: {},
+      secretRef: null,
+    }).id;
+    const owned = needsSecretConnection(db, 'someone');
+    const vShared = versionWithNodes(db, 'local', [llmNode('n1', shared)]);
+    const vOwned = versionWithNodes(db, 'local', [llmNode('n1', owned)]);
+    expect(unreadyConnectionsForVersion(db, null, vShared)).toEqual([
+      { connectionId: shared, reason: 'needs_secret' },
+    ]);
+    expect(unreadyConnectionsForVersion(db, null, vOwned)).toEqual([
+      { connectionId: owned, reason: 'missing' },
+    ]);
+  });
+});
+
+/** Bind a trigger to a version, referencing `connId` on an `llm_call` node. */
+function triggerOn(
+  db: Db,
+  ownerId: string | null,
+  versionId: string | null,
+  enabled = true,
+): string {
+  const input: NewTrigger = {
+    ownerId,
+    name: 'T',
+    pipelineVersionId: versionId,
+    params: {},
+    mode: 'schedule',
+    schedule: '0 2 * * *',
+    webhook: null,
+    concurrency: { policy: 'skip_if_running' },
+    runWindows: null,
+    enabled,
+  };
+  return createTrigger(db, input).id;
+}
+
+function versionRef(db: Db, ownerId: string, connId: string): string {
+  return versionWithNodes(db, ownerId, [llmNode('n1', connId)]);
+}
+
+describe('regateTriggersForConnection (#3 G8b-2 reverse-gate)', () => {
+  it('disables an enabled trigger bound to a version referencing a now-unready connection', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    expect(regateTriggersForConnection(db, connId)).toEqual([tId]);
+    expect(getTrigger(db, tId)!.enabled).toBe(false);
+  });
+
+  it('is a NO-OP when the connection is still READY (dependents stay enabled)', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+    expect(getTrigger(db, tId)!.enabled).toBe(true);
+  });
+
+  it('leaves a trigger whose version does NOT reference the connection untouched', () => {
+    const { db } = freshDb();
+    const changed = needsSecretConnection(db);
+    const other = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', other));
+    expect(regateTriggersForConnection(db, changed)).toEqual([]);
+    expect(getTrigger(db, tId)!.enabled).toBe(true);
+  });
+
+  it('never re-reports or re-writes an ALREADY-disabled dependent (no updatedAt churn)', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const off = updateTrigger(db, triggerOn(db, 'local', versionRef(db, 'local', connId)), {
+      enabled: false,
+    })!;
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+    expect(getTrigger(db, off.id)!.updatedAt).toBe(off.updatedAt);
+  });
+
+  it('skips an UNBOUND (null-version) trigger — it can never fire, never a dependent', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const tId = triggerOn(db, 'local', null);
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+    expect(getTrigger(db, tId)!.enabled).toBe(true);
+  });
+
+  it('is idempotent (a second call disables nothing new)', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    expect(regateTriggersForConnection(db, connId)).toEqual([tId]);
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+  });
+
+  it('SKIPS a ${}-dynamic connectionId (dispatch-gate domain — parity with the enable gate)', () => {
+    const { db } = freshDb();
+    const connId = needsSecretConnection(db);
+    const vId = versionWithNodes(db, 'local', [llmNode('n1', '${params.conn}')]);
+    const tId = triggerOn(db, 'local', vId);
+    expect(regateTriggersForConnection(db, connId)).toEqual([]);
+    expect(getTrigger(db, tId)!.enabled).toBe(true);
+  });
+
+  it('a SHARED (null-owner) unready connection disables dependents across MULTIPLE owners', () => {
+    const { db } = freshDb();
+    const shared = createConnection(db, {
+      ownerId: null,
+      name: 'Shared',
+      kind: 'anthropic_api',
+      config: {},
+      secretRef: null,
+    }).id;
+    const tA = triggerOn(db, 'ownerA', versionRef(db, 'ownerA', shared));
+    const tB = triggerOn(db, 'ownerB', versionRef(db, 'ownerB', shared));
+    expect(regateTriggersForConnection(db, shared).sort()).toEqual([tA, tB].sort());
+    expect(getTrigger(db, tA)!.enabled).toBe(false);
+    expect(getTrigger(db, tB)!.enabled).toBe(false);
+  });
+
+  it('after a connection is DELETED, dependents fold to `missing` and are disabled', () => {
+    const { db } = freshDb();
+    const connId = readyConnection(db);
+    const tId = triggerOn(db, 'local', versionRef(db, 'local', connId));
+    deleteConnection(db, connId);
+    expect(regateTriggersForConnection(db, connId)).toEqual([tId]);
+    expect(getTrigger(db, tId)!.enabled).toBe(false);
+  });
+
+  it('an OWNED unready connection also disables an (import-smuggled) FOREIGN trigger — it folds to `missing`, still an unready reason, and is correct to disable', () => {
+    const { db } = freshDb();
+    // A connection owned by `ownerA`, needs_secret. `ownerB` has a trigger whose
+    // version literally references it (a state the enable gate would refuse, but
+    // an import path could smuggle in). From B's scope the connection folds to
+    // `missing`, which matches — B genuinely cannot resolve A's private
+    // connection, so disabling is correct.
+    const owned = needsSecretConnection(db, 'ownerA');
+    const foreign = triggerOn(db, 'ownerB', versionRef(db, 'ownerB', owned));
+    expect(regateTriggersForConnection(db, owned)).toEqual([foreign]);
+    expect(getTrigger(db, foreign)!.enabled).toBe(false);
   });
 });
