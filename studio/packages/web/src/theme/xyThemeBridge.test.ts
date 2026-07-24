@@ -107,7 +107,13 @@ describe('xyThemeBridge.css', () => {
     for (const decl of decls) {
       expect(decl, `${decl} must reference a token`).toMatch(/var\(--/);
       expect(decl, `${decl} must not hardcode a hex color`).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-      expect(decl, `${decl} must not hardcode an rgb/rgba color`).not.toMatch(/rgba?\(/);
+      // Reject every literal colour form, not just hex — a function colour
+      // (rgb/rgba/hsl/hsla) or a named colour would decouple the chrome from the
+      // Fluent theme just as a hex would.
+      expect(decl, `${decl} must not hardcode a function color`).not.toMatch(/\b(rgba?|hsla?)\(/);
+      expect(decl, `${decl} must not hardcode a named color`).not.toMatch(
+        /\b(white|black|red|green|blue|yellow|orange|purple|pink|gray|grey|silver|gold|brown|cyan|magenta)\b/i,
+      );
     }
   });
 });
