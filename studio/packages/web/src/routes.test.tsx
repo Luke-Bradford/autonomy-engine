@@ -245,13 +245,23 @@ describe('route tree', () => {
   });
 
   /**
-   * A trailing slash must not fall through to the run-detail route with an
-   * empty id. Asserted against this react-router version's actual behaviour
-   * (it strips the trailing slash when matching, so `/runs/` matches the static
-   * `runs` route; a dynamic segment does not match empty).
+   * `/runs/` must reach the runs list, and must do so by matching the STATIC
+   * `runs` route — this react-router version strips a trailing slash when
+   * matching, and a dynamic segment does not match empty.
+   *
+   * The matched route pattern is asserted, not just the landing path, because
+   * `LegacyRunRedirect`'s empty-id guard also sends you to `/monitor/runs`:
+   * both worlds produce the same destination, so a destination-only assertion
+   * could not tell them apart and would pass whichever route matched.
    */
-  it('sends a trailing-slash legacy path to the list, not an empty run', async () => {
-    expect(await landedAt('/runs/')).toBe('/monitor/runs');
+  it('matches a trailing-slash legacy path on the static route, not :runId', async () => {
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/runs/'] });
+    render(<RouterProvider router={router} />);
+
+    const matched = router.state.matches.at(-1)?.route.path;
+    expect(matched).toBe('runs');
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/monitor/runs'));
   });
 
   /**

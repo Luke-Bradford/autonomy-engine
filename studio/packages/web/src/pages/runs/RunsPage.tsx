@@ -3,6 +3,7 @@ import type { Run } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { listRuns } from '../../api/runs';
 import { formatWhen } from './format';
+import { runDetailPath } from './runPath';
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created by the
@@ -90,7 +91,7 @@ export function RunsPage() {
                 <td>
                   <button
                     type="button"
-                    onClick={() => void navigate(`/monitor/runs/${encodeURIComponent(r.id)}`)}
+                    onClick={() => void navigate(runDetailPath(r.id))}
                     aria-label={`Watch run ${r.id}`}
                   >
                     Watch

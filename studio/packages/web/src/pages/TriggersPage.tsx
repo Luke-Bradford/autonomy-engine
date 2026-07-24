@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router';
 import { ApiError } from '../api/client';
 
 import { listPipelines, listPipelineVersions } from '../api/pipelines';
+import { runDetailPath } from './runs/runPath';
 import {
   createTrigger,
   deleteTrigger,
@@ -237,10 +238,7 @@ export function TriggersPage() {
           {watchRunId && (
             <>
               {' '}
-              <button
-                type="button"
-                onClick={() => void navigate(`/monitor/runs/${encodeURIComponent(watchRunId)}`)}
-              >
+              <button type="button" onClick={() => void navigate(runDetailPath(watchRunId))}>
                 Watch live →
               </button>
             </>

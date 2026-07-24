@@ -261,8 +261,9 @@ static hops; `#/runs/:runId` needs a component because it carries state.
   to a concrete path wherever it sits. The tests, not the ordering, are the guarantee.
 - **Query strings are not preserved.** The pre-U2 router treated the whole hash as the path, so
   `#/runs?x=1` never matched `/runs` in the MVP either; nothing regresses.
-- The whole compatibility layer is one contiguous block in `routes.tsx` so it can be **deleted** in
-  one edit once the window for old bookmarks has closed.
+- The compatibility layer is exactly three things — the `LEGACY_REDIRECTS` table, the routes built
+  from it at the bottom of `ROUTES`, and the `LegacyRunRedirect` component — so **retiring** it once
+  the window for old bookmarks has closed is a small, findable job.
 
 Decisions worth not re-deriving:
 
@@ -294,9 +295,11 @@ Decisions worth not re-deriving:
   the index redirect then REPLACEs it back to `#/monitor/runs`. Fixing it means giving the rail a
   second path matcher to decide `replace`, which is exactly the duplicate source of truth deleted
   above; not worth it for one dead Back press. Revisit if U3's breadcrumb needs the matcher anyway.
-- **Run ids are `encodeURIComponent`d into the path** at the two call sites that build one
-  (`RunsPage`, `TriggersPage`). Today's ids are `run_` + a nanoid, whose alphabet is URL-safe, so
-  this is a no-op — it exists so the encode/decode pair is symmetric if the alphabet ever widens.
+- **Run ids are `encodeURIComponent`d into the path.** Today's ids are `run_` + a nanoid, whose
+  alphabet is URL-safe, so this is a no-op — it exists so the encode/decode pair is symmetric if the
+  alphabet ever widens. U3r made this a shared `runDetailPath()` helper: it added a third builder
+  (`LegacyRunRedirect`) alongside `RunsPage` and `TriggersPage`, and three copies of an invariant
+  that only bites on ids nobody mints yet is exactly the kind that drifts unnoticed.
   Note react-router uses `%2F` as an internal sentinel, so a literal `/` inside an id would still
   not round-trip; ids must stay path-safe.
 - **Navigation idiom.** In-app links that a user might want to open in a new tab or copy use

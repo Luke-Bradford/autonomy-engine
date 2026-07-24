@@ -38,7 +38,13 @@ test.describe('U3r legacy route compatibility', () => {
       await fluentRootReady(page);
 
       await expect(page.getByRole('heading', { name: heading })).toBeVisible();
-      expect(hash(page)).toBe(landed);
+      // `expect.poll`, not a bare read — the same reason `hub-nav.spec.ts`
+      // gives: `page.url()` is updated from an out-of-band navigation event,
+      // and a legacy path rewrites the address bar TWICE (once for the entry
+      // itself, once for the redirect). A bare read races the second write.
+      await expect
+        .poll(() => hash(page), { message: `${legacy} did not land on ${landed}` })
+        .toBe(landed);
 
       await expectQuiet(page, problems);
     });
@@ -53,12 +59,30 @@ test.describe('U3r legacy route compatibility', () => {
     await page.goto('/#/runs/run_legacy_42');
     await fluentRootReady(page);
 
-    expect(hash(page)).toBe('#/monitor/runs/run_legacy_42');
+    await expect
+      .poll(() => hash(page), { message: 'legacy run path did not carry its id across' })
+      .toBe('#/monitor/runs/run_legacy_42');
     // The page renders the id it was routed with, so this proves the id
     // survived the hop rather than merely that some run page opened.
     await expect(page.getByText('run_legacy_42').first()).toBeVisible();
 
-    await expectQuiet(page, problems);
+    /*
+     * `expectQuiet` cannot be used here, and the reason is the point of the
+     * test: an id from an OLD bookmark need not still exist, and this one does
+     * not — the e2e database is wiped before the suite. `RunDetailPage` fetches
+     * it, the server correctly answers 404, and Chromium reports the failed
+     * request as a `console.error`. That error is the truthful outcome, not a
+     * defect, so asserting silence would make this test unsatisfiable (it was,
+     * until the pre-PR review caught it).
+     *
+     * Everything else must still be quiet, though — an uncaught exception here
+     * would mean the redirect landed somewhere that then broke, which is
+     * exactly the failure a green routing assertion could otherwise hide.
+     */
+    await page.waitForTimeout(150); // the same flush `expectQuiet` performs
+    const EXPECTED_404 =
+      'console.error: Failed to load resource: the server responded with a status of 404 (Not Found)';
+    expect(problems.filter((p) => p !== EXPECTED_404)).toEqual([]);
   });
 
   /**
@@ -74,11 +98,11 @@ test.describe('U3r legacy route compatibility', () => {
 
     await page.goto('/#/connections');
     await expect(page.getByRole('heading', { name: 'Connections' })).toBeVisible();
-    expect(hash(page)).toBe('#/manage/connections');
+    await expect.poll(() => hash(page)).toBe('#/manage/connections');
 
     await page.goBack();
     await expect(page.getByRole('heading', { name: 'Home' })).toBeVisible();
-    expect(hash(page)).toBe('#/');
+    await expect.poll(() => hash(page)).toBe('#/');
   });
 
   /**
