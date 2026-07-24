@@ -27,6 +27,7 @@ import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
 import { createExecutor } from '../executor.js';
 import { createConnectorRegistry, type ConnectorRegistry } from '../../connectors/registry.js';
+import { connections } from '../../db/schema.js';
 import { and, eq } from 'drizzle-orm';
 import { runEvents } from '../../db/schema.js';
 import {
@@ -879,6 +880,72 @@ describe('createExecutor — loud pre-flight failures (no bogus node.dispatched)
     expect(failed).toMatchObject({ kind: 'permanent', code: 'secret_undecryptable' });
     // The message must never leak crypto detail (see resolveConnection).
     expect((failed as { error: string }).error).not.toContain('sk-encrypted');
+  });
+
+  // #3 G8a — the SECRET-READINESS dispatch GATE: a node whose connection is
+  // operator-disabled or missing its required secret is refused BEFORE any
+  // secret decrypt or adapter call (the gate is at fire time, not enable time).
+  it('refuses to dispatch a node bound to a needs_secret connection (permanent, no dispatch)', async () => {
+    const db = freshDb().db;
+    // anthropic_api with NO secret ⟹ deriveSecretStatus → needs_secret.
+    const connId = await seedConnection(db, 'anthropic_api', {}, null);
+    const pvId = seedVersion(db, [
+      {
+        id: 'n1',
+        type: 'llm_call',
+        config: { prompt: 'hi' },
+        connectionId: connId,
+        position: { x: 1, y: 0 },
+      },
+    ]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('needs_secret'),
+      kind: 'permanent',
+      code: 'connection_not_ready',
+    });
+  });
+
+  it('refuses to dispatch a node bound to a disabled connection (permanent, no dispatch)', async () => {
+    const db = freshDb().db;
+    // http is `not_required`, so it would otherwise pass readiness — flip the
+    // operator `enabled` flag off directly (G8a has no toggle write path yet)
+    // to exercise the enable axis of the gate in isolation.
+    const connId = await seedConnection(db, 'http', {}, null);
+    db.update(connections).set({ enabled: false }).where(eq(connections.id, connId)).run();
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x' })]);
+    const run = seedRun(db, pvId);
+
+    const state = await startRun(deps(db), run);
+    expect(state.status).toBe('failure');
+    expect(eventTypes(db, run.id)).not.toContain('node.dispatched');
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      error: expect.stringContaining('disabled'),
+      kind: 'permanent',
+      code: 'connection_not_ready',
+    });
+  });
+
+  it('a not_required (credential-less) connection PASSES the readiness gate and dispatches', async () => {
+    const db = freshDb().db;
+    // http with no secret ⟹ not_required, enabled ⟹ the gate lets it through
+    // to dispatch (proving the gate refuses only needs_secret / disabled).
+    const connId = await seedConnection(db, 'http', {}, null);
+    // An explicit empty output contract so a `succeeded{outputs:{}}` from the
+    // fake adapter validates (mirrors the activity.metered test).
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x', outputs: [] })]);
+    const run = seedRun(db, pvId);
+
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'succeeded', outputs: {} } satisfies ActivityEvent;
+    });
+    const state = await startRun(deps(db, { adapters }), run);
+    expect(state.status).toBe('success');
+    expect(eventTypes(db, run.id)).toContain('node.dispatched');
   });
 });
 

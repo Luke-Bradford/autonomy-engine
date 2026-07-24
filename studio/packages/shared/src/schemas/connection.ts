@@ -27,6 +27,41 @@ export type ConnectionKind = z.infer<typeof ConnectionKindSchema>;
  */
 export const AGENT_CLI_CONNECTION_KIND: ConnectionKind = 'agent_cli';
 
+/**
+ * #3 G8a — the connection kinds that REQUIRE a connection-level `secretRef`
+ * credential to dispatch. The single source of truth for `deriveSecretStatus`
+ * (server) and any UI readiness affordance — never a bare `kind === 'anthropic_api'`
+ * string re-spelled at a call site. Only the hosted-API LLM kinds need a
+ * connection secret: `ollama` (local) and `agent_cli` (subscription CLI) run
+ * credential-less, `fs` is explicitly credential-less (`config.roots` allowlist),
+ * and `http` carries auth as a config-sink `{$secret}` marker (item 7 / S4), NOT
+ * a connection `secretRef`. A future kind that needs a connection credential adds
+ * itself HERE; the 0030 migration's one-time SQL backfill snapshots this set.
+ */
+export const SECRET_REQUIRING_CONNECTION_KINDS: ReadonlySet<ConnectionKind> =
+  new Set<ConnectionKind>(['anthropic_api', 'openai_api']);
+
+/** Whether `kind` requires a connection-level `secretRef` to dispatch (the G8a
+ * readiness derivation's kind axis). */
+export function connectionKindRequiresSecret(kind: ConnectionKind): boolean {
+  return SECRET_REQUIRING_CONNECTION_KINDS.has(kind);
+}
+
+/**
+ * #3 G8a — a connection's SECRET-READINESS state, a real runtime dispatch GATE
+ * (git-publish spec 120-131, 742-745). Server-derived + server-maintained
+ * (never client-writable), stored so export/UI/dispatch read ONE fact:
+ * - `not_required` — the kind needs no connection secret and none is set.
+ * - `ready` — the required secret is present (`secretRef` resolves).
+ * - `needs_secret` — a secret is required (kind requires one, or a `secretRef`
+ *   was declared) but is absent. A node bound to such a connection is refused at
+ *   DISPATCH (`CONNECTION_NOT_READY`) — the gate is at fire time, not just
+ *   enable time, so a secret removed after a trigger was enabled cannot fire a
+ *   secretless run.
+ */
+export const SecretStatusSchema = z.enum(['not_required', 'ready', 'needs_secret']);
+export type SecretStatus = z.infer<typeof SecretStatusSchema>;
+
 export const ConnectionSchema = z.object({
   id: z.string().min(1),
   /**
@@ -62,6 +97,18 @@ export const ConnectionSchema = z.object({
    */
   parameters: z.array(z.string().min(1)).default([]),
   secretRef: z.string().min(1).nullable(),
+  /**
+   * #3 G8a — secret-readiness (see `SecretStatusSchema`) + operator enable flag.
+   * BOTH server-maintained and REQUIRED with NO `.default()`: an absent stored
+   * value must fail loudly at this read boundary, never be manufactured as a
+   * benign default (the #473 lesson — the same fail-closed shape as `resourceId`
+   * and the merge-gate's "a `gh` failure is never CI-green"). Derived on every
+   * connection write (`deriveSecretStatus`); the 0030 migration backfills every
+   * existing row. `enabled` defaults truthfully to `true` for pre-G8 rows at the
+   * DB layer (they were all usable), never here.
+   */
+  secretStatus: SecretStatusSchema,
+  enabled: z.boolean(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -72,6 +119,12 @@ export const NewConnectionSchema = ConnectionSchema.omit({
   id: true,
   // Server-minted, like `id` — no write path (create OR patch) may supply it.
   resourceId: true,
+  // #3 G8a — server-derived (`deriveSecretStatus`) / server-set (`enabled`),
+  // never client-writable: readiness is a runtime fact, not authoring input.
+  // Create sets `enabled: true` + derives `secretStatus`; a toggle/supply flow
+  // is G8b.
+  secretStatus: true,
+  enabled: true,
   createdAt: true,
   updatedAt: true,
 });

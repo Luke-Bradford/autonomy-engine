@@ -14,6 +14,8 @@ const sample = {
   kind: 'anthropic_api' as const,
   config: { model: 'claude-opus-4-8' },
   parameters: [],
+  secretStatus: 'ready' as const,
+  enabled: true,
   createdAt: 1,
   updatedAt: 1,
 };

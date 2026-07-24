@@ -4,6 +4,8 @@ import {
   ConnectionPublicSchema,
   ConnectionSchema,
   NewConnectionSchema,
+  SECRET_REQUIRING_CONNECTION_KINDS,
+  connectionKindRequiresSecret,
 } from './connection.js';
 
 const validConnection = {
@@ -15,6 +17,8 @@ const validConnection = {
   config: { model: 'claude-sonnet' },
   parameters: [],
   secretRef: 'secret_1',
+  secretStatus: 'ready',
+  enabled: true,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
 };
@@ -81,9 +85,12 @@ describe('ConnectionSchema', () => {
 
 describe('NewConnectionSchema', () => {
   it('accepts a payload without server-set fields', () => {
-    const { id, resourceId, createdAt, updatedAt, ...insert } = validConnection;
+    const { id, resourceId, secretStatus, enabled, createdAt, updatedAt, ...insert } =
+      validConnection;
     void id;
     void resourceId;
+    void secretStatus;
+    void enabled;
     void createdAt;
     void updatedAt;
     expect(NewConnectionSchema.parse(insert)).toEqual(insert);
@@ -100,11 +107,72 @@ describe('NewConnectionSchema', () => {
     const parsed = NewConnectionSchema.parse(withId);
     expect(parsed).not.toHaveProperty('id');
   });
+
+  // #3 G8a — readiness is server-derived, never client-writable.
+  it('strips a client-supplied secretStatus / enabled (server-set)', () => {
+    const { id, resourceId, createdAt, updatedAt, ...insert } = validConnection;
+    void id;
+    void resourceId;
+    void createdAt;
+    void updatedAt;
+    const parsed = NewConnectionSchema.parse({
+      ...insert,
+      secretStatus: 'not_required',
+      enabled: false,
+    });
+    expect(parsed).not.toHaveProperty('secretStatus');
+    expect(parsed).not.toHaveProperty('enabled');
+  });
 });
 
 describe('ConnectionPublicSchema', () => {
   it('never carries secretRef', () => {
     const parsed = ConnectionPublicSchema.parse(validConnection);
     expect(parsed).not.toHaveProperty('secretRef');
+  });
+
+  // #3 G8a — readiness IS public (the UI shows it), unlike secretRef.
+  it('carries secretStatus and enabled', () => {
+    const parsed = ConnectionPublicSchema.parse(validConnection);
+    expect(parsed.secretStatus).toBe('ready');
+    expect(parsed.enabled).toBe(true);
+  });
+});
+
+describe('secret-requiring kinds (G8a SSOT)', () => {
+  it('requires a secret for the hosted-API LLM kinds only', () => {
+    expect(connectionKindRequiresSecret('anthropic_api')).toBe(true);
+    expect(connectionKindRequiresSecret('openai_api')).toBe(true);
+  });
+
+  it('does NOT require a connection secret for credential-less kinds', () => {
+    expect(connectionKindRequiresSecret('ollama')).toBe(false);
+    expect(connectionKindRequiresSecret('agent_cli')).toBe(false);
+    expect(connectionKindRequiresSecret('http')).toBe(false);
+    expect(connectionKindRequiresSecret('fs')).toBe(false);
+  });
+
+  it('the SSOT set matches the helper for every connection kind', () => {
+    for (const kind of ConnectionKindSchema.options) {
+      expect(SECRET_REQUIRING_CONNECTION_KINDS.has(kind)).toBe(connectionKindRequiresSecret(kind));
+    }
+  });
+});
+
+describe('ConnectionSchema readiness fields (G8a)', () => {
+  it('rejects a missing secretStatus (no fail-open default — #473)', () => {
+    const { secretStatus, ...rest } = validConnection;
+    void secretStatus;
+    expect(() => ConnectionSchema.parse(rest)).toThrow();
+  });
+
+  it('rejects a missing enabled (no fail-open default — #473)', () => {
+    const { enabled, ...rest } = validConnection;
+    void enabled;
+    expect(() => ConnectionSchema.parse(rest)).toThrow();
+  });
+
+  it('rejects an unknown secretStatus value', () => {
+    expect(() => ConnectionSchema.parse({ ...validConnection, secretStatus: 'pending' })).toThrow();
   });
 });

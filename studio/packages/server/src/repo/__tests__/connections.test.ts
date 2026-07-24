@@ -152,4 +152,65 @@ describe('connections repo', () => {
       expect(getConnectionByResourceId(db, 'me', 'res_missing')).toBeNull();
     });
   });
+
+  // #3 G8a — secret-readiness (`secretStatus`) + `enabled` are server-derived
+  // on every write; the dispatch gate reads them (see executor.test.ts).
+  describe('secret readiness (G8a)', () => {
+    it('creates enabled with derived secretStatus: needs_secret for a secret-requiring kind with no secret', () => {
+      const { db } = freshDb();
+      const created = createConnection(db, newConnection); // anthropic_api, secretRef null
+      expect(created.enabled).toBe(true);
+      expect(created.secretStatus).toBe('needs_secret');
+    });
+
+    it('derives ready when a secret is supplied at create', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'k1', ciphertext: 'blob' });
+      const created = createConnection(db, { ...newConnection, secretRef: secret.ref });
+      expect(created.secretStatus).toBe('ready');
+    });
+
+    it('derives not_required for a credential-less kind', () => {
+      const { db } = freshDb();
+      const created = createConnection(db, {
+        ...newConnection,
+        kind: 'ollama',
+        secretRef: null,
+        config: {},
+      });
+      expect(created.secretStatus).toBe('not_required');
+    });
+
+    it('re-derives ready→needs_secret when a secret is removed on update', () => {
+      const { db } = freshDb();
+      const secret = createSecret(db, { ref: 'k2', ciphertext: 'blob' });
+      const created = createConnection(db, { ...newConnection, secretRef: secret.ref });
+      expect(created.secretStatus).toBe('ready');
+      const updated = updateConnection(db, created.id, { secretRef: null });
+      expect(updated!.secretStatus).toBe('needs_secret');
+    });
+
+    it('re-derives needs_secret→ready when a secret is supplied on update', () => {
+      const { db } = freshDb();
+      const created = createConnection(db, newConnection);
+      expect(created.secretStatus).toBe('needs_secret');
+      const secret = createSecret(db, { ref: 'k3', ciphertext: 'blob' });
+      const updated = updateConnection(db, created.id, { secretRef: secret.ref });
+      expect(updated!.secretStatus).toBe('ready');
+    });
+
+    it('re-derives needs_secret→not_required when the kind changes to credential-less', () => {
+      const { db } = freshDb();
+      const created = createConnection(db, newConnection); // anthropic_api → needs_secret
+      const updated = updateConnection(db, created.id, { kind: 'ollama' });
+      expect(updated!.secretStatus).toBe('not_required');
+    });
+
+    it('preserves enabled across an unrelated update (no toggle path in G8a)', () => {
+      const { db } = freshDb();
+      const created = createConnection(db, newConnection);
+      const updated = updateConnection(db, created.id, { name: 'Renamed' });
+      expect(updated!.enabled).toBe(true);
+    });
+  });
 });
