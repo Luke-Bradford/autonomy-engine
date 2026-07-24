@@ -9,7 +9,6 @@ import { DEFAULT_THEME_MODE, type ThemeMode } from '../theme/fluentTheme';
 export interface UiState {
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
-  toggleThemeMode: () => void;
 }
 
 export type UiStore = StoreApi<UiState>;
@@ -30,7 +29,7 @@ export interface PreferenceStorage {
  * degrades to "no stored preference" — a lost preference is a nicety, taking
  * the shell down over one is not.
  */
-function ambientStorage(): PreferenceStorage | undefined {
+export function ambientStorage(): PreferenceStorage | undefined {
   try {
     // Reading the property itself can throw, so this is inside the try.
     const storage: unknown = globalThis.localStorage;
@@ -76,15 +75,11 @@ function writeStoredTheme(storage: PreferenceStorage | undefined, mode: ThemeMod
  * the `uiStore` singleton below: one shell, one set of preferences.
  */
 export function createUiStore(storage: PreferenceStorage | undefined = ambientStorage()): UiStore {
-  return createStore<UiState>((set, get) => ({
+  return createStore<UiState>((set) => ({
     themeMode: readStoredTheme(storage),
     setThemeMode: (mode) => {
       writeStoredTheme(storage, mode);
       set({ themeMode: mode });
-    },
-    toggleThemeMode: () => {
-      const { themeMode, setThemeMode } = get();
-      setThemeMode(themeMode === 'dark' ? 'light' : 'dark');
     },
   }));
 }

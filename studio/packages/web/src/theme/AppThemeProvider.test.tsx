@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { createUiStore } from '../stores/uiStore';
 import { FLUENT_ROOT_CLASS } from './fluentTheme';
@@ -23,19 +23,38 @@ function fluentTokenCss(): string {
     .join('\n');
 }
 
+// The provider writes to the shared `document.documentElement` and has no
+// unmount cleanup (the app is a single root, and clearing the attribute on
+// unmount would be wrong for it), so reset the attribute between cases rather
+// than letting one case's mode decide the next case's starting state.
+afterEach(() => {
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.colorScheme = '';
+});
+
 describe('AppThemeProvider', () => {
-  it('mounts the Fluent provider with the class the --xy-* bridge is keyed on', () => {
+  it('keeps the --xy-* bridge class on the token-bearing provider root', () => {
     const store = createUiStore();
     const { container } = render(
       <AppThemeProvider store={store}>
         <span>content</span>
       </AppThemeProvider>,
     );
-    expect(container.querySelector(`.${FLUENT_ROOT_CLASS}`)).not.toBeNull();
+    const root = container.querySelector(`.${FLUENT_ROOT_CLASS}`);
+    expect(root).not.toBeNull();
+    // Co-location is the load-bearing half (see providerBridge.test.tsx): the
+    // bridge's `var(--colorXxx)` reads only resolve if our class sits on the
+    // SAME element as Fluent's token class. Re-asserted here so the APP's
+    // provider, not just a bare FluentProvider, is pinned to that contract.
+    expect(root?.className).toMatch(/fui-FluentProvider/);
     expect(screen.getByText('content')).toBeInTheDocument();
   });
 
-  it('mirrors the store mode onto the document root before paint', () => {
+  // Named for what it proves: jsdom paints nothing, so no unit test can
+  // distinguish `useLayoutEffect` from `useEffect` here (RTL's `act` flushes
+  // both before the assertion). The before-paint rationale is a browser-verify
+  // observation; this pins that a stored preference reaches the DOM at all.
+  it('mirrors a stored preference onto the document root on mount', () => {
     const store = createUiStore();
     store.getState().setThemeMode('light');
     render(

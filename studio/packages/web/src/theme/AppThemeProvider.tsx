@@ -6,7 +6,8 @@ import { FLUENT_ROOT_CLASS, THEMES, syncColorScheme } from './fluentTheme';
 
 interface AppThemeProviderProps {
   children: ReactNode;
-  /** Injectable for tests; the app uses the singleton. */
+  /** Injectable for tests; the app uses the singleton. Must be the same store
+   *  `ThemeToggle` reads — see the note on its `store` prop. */
   store?: UiStore;
 }
 
@@ -22,9 +23,12 @@ interface AppThemeProviderProps {
  *    `color-scheme`, which is what the pre-Fluent MVP palette (`index.css`) and
  *    the browser's native controls key on.
  *
- * `useLayoutEffect` (not `useEffect`) so the attribute lands BEFORE the browser
- * paints the tree — with a stored `light` preference, a post-paint sync would
- * show a frame of the dark palette on every load.
+ * `useLayoutEffect` (not `useEffect`) so a mode CHANGE lands before the browser
+ * paints the new tree rather than a frame after it. It is not enough for the
+ * FIRST paint — the render-blocking stylesheet is applied long before this
+ * bundle runs — so `main.tsx` also mirrors the mode at module scope. jsdom
+ * paints nothing, so the layout-vs-passive distinction is not unit-testable;
+ * it is a browser-verify observation.
  */
 export function AppThemeProvider({ children, store = uiStore }: AppThemeProviderProps) {
   const mode = useStore(store, (s) => s.themeMode);

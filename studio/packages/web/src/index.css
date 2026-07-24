@@ -43,7 +43,9 @@
   --muted: #5b6270;
   --accent: #2a5db0;
   --error: #c02828;
-  --success: #1a7f4b;
+  /* #15703f, not a lighter green: on `--bg` the status pills are 0.72rem, i.e.
+     small text, so WCAG AA wants 4.5:1 — a lighter green lands on the margin. */
+  --success: #15703f;
   color-scheme: light;
 }
 
@@ -57,6 +59,11 @@ body {
   color: var(--text);
 }
 
+/* No explicit `grid-template-rows` here: the spec asks for one on the ADF shell
+   (command-bar row + workspace row, where React Flow fills a grid cell), but
+   that shell is U2/U3's rail+pane+command-bar and does not exist yet. The MVP's
+   React Flow parent is already explicitly sized (`.canvas-wrap`, below), so
+   there is nothing for a row track to fix today. */
 .app-shell {
   display: grid;
   grid-template-columns: 220px 1fr;
@@ -67,10 +74,15 @@ body {
   background: var(--panel);
   border-right: 1px solid var(--border);
   padding: 1rem 0.75rem;
-  /* Column layout so the footer can settle at the bottom of the full-height
-     grid track rather than floating under the nav. */
+  /* Column layout so the footer can settle at the bottom. The grid track is as
+     tall as the DOCUMENT, so without pinning the sidebar to the viewport a
+     `margin-top: auto` footer parks itself below the fold of any long page
+     (a hundred-row Runs table) and the theme toggle becomes unreachable. */
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 
 .sidebar-footer {
@@ -413,6 +425,15 @@ td button + button {
 @keyframes live-pulse {
   50% {
     opacity: 0.45;
+  }
+}
+
+/* An indefinitely-repeating pulse is precisely what this preference exists to
+   stop. The indicator stays legible without it — `● live` is a text label, not
+   a colour/motion-only signal. */
+@media (prefers-reduced-motion: reduce) {
+  .stream-phase-live {
+    animation: none;
   }
 }
 

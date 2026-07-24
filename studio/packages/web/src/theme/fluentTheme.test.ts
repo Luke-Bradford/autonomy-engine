@@ -8,7 +8,7 @@ describe('fluentTheme', () => {
     expect(THEMES.dark).toBe(webDarkTheme);
   });
 
-  it('defaults to dark to preserve the shipped MVP look (toggle is U1)', () => {
+  it('defaults to dark, so no stored preference cannot flip the shipped look', () => {
     expect(DEFAULT_THEME_MODE).toBe('dark');
     expect(THEMES[DEFAULT_THEME_MODE]).toBe(webDarkTheme);
   });

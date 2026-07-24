@@ -2,19 +2,17 @@ import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { COLOR_LITERAL, readCssSource } from '../testing/cssSource';
 
 // The bridge is a pure CSS artifact — Vitest returns '' for a `.css` import
 // (and even `?raw` is empty under its CSS handling), and jsdom computes no
-// cascade anyway — so we assert against the SOURCE TEXT read from disk. This is
+// cascade anyway — so we assert against the SOURCE TEXT read from disk (block
+// comments stripped, so `#fff` in prose never trips the colour guard). This is
 // the real regression guard against the "canvas chrome stays white in dark
 // mode" bug returning: every RF chrome var the spike named must be remapped to
 // a Fluent design token (`var(--color…)`), and no override may reintroduce a
 // hardcoded light hex. `import.meta.dirname` = this file's dir (src/theme).
-const bridgeCss = readFileSync(join(import.meta.dirname, 'xyThemeBridge.css'), 'utf8');
-
-// Strip block comments so `#fff` etc. mentioned in prose never trip the
-// no-hardcoded-color assertion.
-const css = bridgeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+const css = readCssSource(join(import.meta.dirname, 'xyThemeBridge.css'));
 
 // The `--xy-*` names React Flow ACTUALLY consumes as override slots: the first
 // argument of every `var(--xy-…, <fallback>)` read in RF's own stylesheet.
@@ -106,14 +104,11 @@ describe('xyThemeBridge.css', () => {
     expect(decls.length).toBeGreaterThanOrEqual(REQUIRED_XY_VARS.length);
     for (const decl of decls) {
       expect(decl, `${decl} must reference a token`).toMatch(/var\(--/);
-      expect(decl, `${decl} must not hardcode a hex color`).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-      // Reject every literal colour form, not just hex — a function colour
-      // (rgb/rgba/hsl/hsla) or a named colour would decouple the chrome from the
-      // Fluent theme just as a hex would.
-      expect(decl, `${decl} must not hardcode a function color`).not.toMatch(/\b(rgba?|hsla?)\(/);
-      expect(decl, `${decl} must not hardcode a named color`).not.toMatch(
-        /\b(white|black|red|green|blue|yellow|orange|purple|pink|gray|grey|silver|gold|brown|cyan|magenta)\b/i,
-      );
+      // Reject EVERY literal colour form, not just hex — a function colour
+      // (rgb/hsl/oklch/color-mix) or a named colour would decouple the chrome
+      // from the Fluent theme just as a hex would. Shared with the MVP palette
+      // guard (`palette.test.ts`) so the two cannot drift apart again.
+      expect(decl, `${decl} must not hardcode a color`).not.toMatch(COLOR_LITERAL);
     }
   });
 });

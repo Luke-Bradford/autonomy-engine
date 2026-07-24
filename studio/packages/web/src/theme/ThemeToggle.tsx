@@ -3,7 +3,14 @@ import { useStore } from 'zustand';
 import { uiStore, type UiStore } from '../stores/uiStore';
 
 interface ThemeToggleProps {
-  /** Injectable for tests; the app uses the singleton. */
+  /**
+   * Injectable for tests; the app uses the singleton. MUST be the same store
+   * `AppThemeProvider` renders from — injecting into one and not the other
+   * leaves this switch mutating a store nothing is subscribed to. Once a second
+   * caller needs its own store (U2), put it behind a context rather than two
+   * independent defaults; the composed-tree case in `App.test.tsx` is what
+   * guards the pairing today.
+   */
   store?: UiStore;
 }
 

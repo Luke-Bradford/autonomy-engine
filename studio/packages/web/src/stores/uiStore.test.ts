@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_THEME_MODE } from '../theme/fluentTheme';
-import { THEME_STORAGE_KEY, createUiStore, type PreferenceStorage } from './uiStore';
+import {
+  THEME_STORAGE_KEY,
+  ambientStorage,
+  createUiStore,
+  type PreferenceStorage,
+} from './uiStore';
 
 /**
  * The storage is INJECTED rather than read from the ambient `localStorage`:
@@ -50,15 +55,6 @@ describe('uiStore theme mode', () => {
     expect(storage.data.get(THEME_STORAGE_KEY)).toBe('light');
   });
 
-  it('toggles between the two modes', () => {
-    const store = createUiStore(fakeStorage());
-    const first = store.getState().themeMode;
-    store.getState().toggleThemeMode();
-    expect(store.getState().themeMode).toBe(first === 'dark' ? 'light' : 'dark');
-    store.getState().toggleThemeMode();
-    expect(store.getState().themeMode).toBe(first);
-  });
-
   // Safari private browsing throws on Web Storage access. Losing the stored
   // preference is acceptable; taking the shell down over it is not.
   it('survives a storage that throws on read', () => {
@@ -82,5 +78,61 @@ describe('uiStore theme mode', () => {
     expect(() => store.getState().setThemeMode('light')).not.toThrow();
     // The in-memory mode is still authoritative for the session.
     expect(store.getState().themeMode).toBe('light');
+  });
+});
+
+/**
+ * `ambientStorage()` runs at module-eval time via the `uiStore` singleton, so
+ * it is the one place in this file where an unguarded throw white-screens the
+ * whole app during `main.tsx`'s import graph. Its guards must be exercised
+ * directly: every case above injects a storage, so none of them would notice
+ * this function losing its try/catch.
+ */
+describe('ambientStorage', () => {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+
+  afterEach(() => {
+    if (original) {
+      Object.defineProperty(globalThis, 'localStorage', original);
+    } else {
+      Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+  });
+
+  it('yields undefined when the property getter itself throws', () => {
+    // Safari private browsing / a blocked-cookies policy: the ACCESS throws,
+    // before any method is called.
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new Error('SecurityError');
+      },
+    });
+    expect(() => ambientStorage()).not.toThrow();
+    expect(ambientStorage()).toBeUndefined();
+  });
+
+  it('yields undefined for a stub that has no getItem', () => {
+    // What this jsdom+Node environment actually provides: an object shaped
+    // nothing like Storage. Handing it back would throw on first use.
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {},
+    });
+    expect(ambientStorage()).toBeUndefined();
+  });
+
+  it('yields undefined when there is no localStorage at all', () => {
+    Reflect.deleteProperty(globalThis, 'localStorage');
+    expect(ambientStorage()).toBeUndefined();
+  });
+
+  it('passes through a usable Storage implementation', () => {
+    const real = { getItem: vi.fn(() => null), setItem: vi.fn() };
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: real });
+    expect(ambientStorage()).toBe(real);
+    // ...and the store then reads through it rather than ignoring it.
+    createUiStore();
+    expect(real.getItem).toHaveBeenCalledWith(THEME_STORAGE_KEY);
   });
 });

@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
  * The MVP shell (`index.css`) predates Fluent and paints from its OWN custom
@@ -11,39 +11,18 @@ import { describe, expect, it } from 'vitest';
  * palette carries its own `[data-theme='light']` override block, driven by the
  * attribute `syncColorScheme` sets.
  *
- * The failure this guards is silent and easy: add a palette var (or a raw hex)
- * and forget the light override — light mode then keeps a dark patch that only
- * an eyeball catches. Asserted against the SOURCE TEXT because Vitest returns
- * '' for a `.css` import and jsdom computes no cascade.
+ * The failure this guards is silent and easy: add a palette var (or a raw
+ * colour) and forget the light override — light mode then keeps a dark patch
+ * that only an eyeball catches. Asserted against the SOURCE TEXT because Vitest
+ * returns '' for a `.css` import and jsdom computes no cascade.
  */
-const css = readFileSync(join(import.meta.dirname, 'index.css'), 'utf8').replace(
-  /\/\*[\s\S]*?\*\//g,
-  '',
-);
+const css = readCssSource(join(import.meta.dirname, 'index.css'));
 
 const BASE_SELECTOR = ':root';
 const LIGHT_SELECTOR = ":root[data-theme='light']";
 
-/** The declaration body of the rule with exactly this selector. */
-function ruleBody(selector: string): string {
-  const at = css.indexOf(`${selector} {`);
-  expect(at, `no \`${selector} {\` rule in index.css`).toBeGreaterThanOrEqual(0);
-  const open = css.indexOf('{', at);
-  const close = css.indexOf('}', open);
-  return css.slice(open + 1, close);
-}
-
-function customProps(body: string): Map<string, string> {
-  const found = new Map<string, string>();
-  for (const match of body.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) {
-    const [, name = '', value = ''] = match;
-    found.set(name, value.trim());
-  }
-  return found;
-}
-
-const base = customProps(ruleBody(BASE_SELECTOR));
-const light = customProps(ruleBody(LIGHT_SELECTOR));
+const base = customProps(ruleBody(css, BASE_SELECTOR));
+const light = customProps(ruleBody(css, LIGHT_SELECTOR));
 
 describe('MVP palette light/dark parity', () => {
   it('declares a dark base palette', () => {
@@ -73,16 +52,26 @@ describe('MVP palette light/dark parity', () => {
   /**
    * Status colours were once inline literals (`#58d68d`) outside the palette,
    * so they stayed dark-mode green in light mode. Every colour literal must now
-   * live in one of the two palette blocks.
+   * live in one of the two palette blocks — checked with the SAME matcher the
+   * `--xy-*` bridge guard uses, so the two cannot drift (a weaker copy of this
+   * check let a `crimson` through in review).
    */
   it('keeps colour literals inside the palette blocks', () => {
     const outside = [BASE_SELECTOR, LIGHT_SELECTOR].reduce(
-      (rest, selector) => rest.replace(ruleBody(selector), ''),
+      (rest, selector) => rest.replace(ruleBody(css, selector), ''),
       css,
     );
-    const literals = [...outside.matchAll(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g)].map(
-      (m) => m[0],
-    );
-    expect(literals).toEqual([]);
+    expect(findColorLiterals(outside)).toEqual([]);
+    // Sanity: the matcher is not vacuous — the palette blocks are full of them.
+    expect(findColorLiterals(ruleBody(css, BASE_SELECTOR)).length).toBe(base.size);
+  });
+
+  /**
+   * The `● live` stream indicator animates indefinitely. The shell's a11y
+   * criteria include reduced motion, and an infinite pulse is exactly the kind
+   * of animation `prefers-reduced-motion` exists to stop.
+   */
+  it('honours prefers-reduced-motion for the infinite live-pulse animation', () => {
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   });
 });
