@@ -331,17 +331,21 @@ The shell is now the spec diagram's four zones. `AppShell` is the ONLY consumer 
 without a data router.
 
 ```text
-grid-template-columns: 48px var(--pane-width, 0px) auto 1fr
-                       rail   pane                 split workspace
-                                                         └ grid-template-rows: auto 1fr
-                                                           (command bar / .content)
+.app-shell  grid-template-columns: 48px  auto  auto   1fr
+                                    rail  pane  split  workspace
+                                          │            └ .workspace grid-template-rows: auto 1fr
+                                          │              (command bar / .content, the scroller)
+                                          └ .secondary-pane { width: var(--pane-width, 240px) }
 ```
+
+Note where the width is: on the **pane element**, not in the track template. Every child
+names its own `grid-column`.
 
 | Piece | Where | Notes |
 |---|---|---|
 | Pane width + collapse | `uiStore` (`autonomy-studio.pane`) | one JSON record, clamped 180–480, default 240 |
 | Which hub am I in | route `handle: { hub }` → `activeHubId()` | drives the pane's contents |
-| Breadcrumb | route `handle: { crumb }` → `crumbsFrom()` | hub crumb labels come from `HUBS` |
+| Breadcrumb | route `handle: { crumb }` → `crumbsFrom()` | hub AND section crumb labels come from `HUBS` |
 | Pane sections | `HUBS[].sections` | SSOT for the pane's links AND the section crumb labels |
 
 Decisions worth not re-deriving:
@@ -356,16 +360,24 @@ Decisions worth not re-deriving:
   by a test asserting the matched route patterns, not just the rendered page.
 - **Shell children are pinned to explicit `grid-column`s.** Load-bearing, and found by
   browser verification: a collapsed pane is `hidden` (`display: none`) and its splitter
-  is unmounted, so grid AUTO-PLACEMENT slid the workspace two tracks left into the now-0px
-  pane column and crushed the whole app into a zero-width sliver. `grid-template-columns`
-  read correctly the whole time — which is why the e2e measures element BOXES.
-- **`--pane-width` has a CSS fallback and is written inline for all three states.** An
-  undefined custom property makes `grid-template-columns` invalid at computed-value time,
-  dropping the template to `none`. A fixed track does not self-collapse, so "no pane"
-  (Home) and "collapsed" both have to write `0px` explicitly.
+  is unmounted, so grid AUTO-PLACEMENT slid the workspace two tracks left into a 0px
+  column and crushed the whole app into a zero-width sliver. `grid-template-columns`
+  read correctly the whole time — which is why the e2e measures element BOXES, and why
+  no child is left to be placed by DOM order and sibling count.
+- **The pane's width is on the ELEMENT; the track is `auto`.** So an absent pane (Home
+  declares no sections) and a collapsed one — `hidden`, i.e. not a grid item — both
+  reclaim their column for nothing, because an `auto` track with no item in it resolves
+  to 0. `AppShell` therefore writes `--pane-width` unconditionally.
+  The first cut put `var(--pane-width)` in the track template instead. That is a FIXED
+  track, which does not self-collapse, so both states had to be mirrored back as an
+  inline `0px` — and an undefined custom property would have made the whole
+  `grid-template-columns` declaration invalid at computed-value time and dropped it to
+  `none`. Sizing the element deletes both hazards; the CSS fallback (`240px`) now only
+  has to yield a sane pane rather than rescue the entire shell.
 - **The pane is mounted-but-`hidden` when collapsed**, not unmounted: the toggle's
   `aria-controls` must name an element in the document, and `hidden` also removes it from
-  the accessibility tree. The zeroed track is what reclaims the space.
+  the accessibility tree. `display: none` taking it out of the grid is what frees the
+  column.
 - **ONE collapse toggle, in the command bar** — a deviation from the diagram's `«collapse`
   at the pane's foot. A control inside the pane vanishes with it, forcing a second expand
   control elsewhere: two controls and two code paths for one boolean. It is absent
