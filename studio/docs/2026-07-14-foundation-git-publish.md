@@ -143,7 +143,7 @@ reconcile are core. Corrections:
 | G3 | Export/commit to working branch + **branch-HEAD descendant guard** + author/message — **G3a (serialize + Commit + push) SHIPPED 2026-07-23** (built-block below); descendant guard is a later slice (base = the imported-from commit, needs G4) |
 | G4 | Workspace-git import PARSER/upgrader (per-file, no writes) — **SHIPPED 2026-07-23** |
 | G5 | Transactional reconcile: create/update/**rename**/**delete-archive** — **G5b (the CLASSIFIER + canonical content-form + #666) SHIPPED 2026-07-23** (built-block below); **G5c-1 (the transactional APPLY write-path for connections + pipelines + archive) SHIPPED 2026-07-23** (built-block below); TRIGGER apply is **G5c-2** (#670, next) |
-| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b (git provenance on versions — reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import) SHIPPED** (built-block below); **G6c** further sliced: **G6c-1 (the `active` pointer projection + CAS Publish `pipeline.published` + route) SHIPPED** (built-block below); **G6c-2** = resolve-once bind-to-active (the trigger-creation convenience that reads this projection — git-mode → active, DB-only → latest) |
+| G6 | `active` pointer (provenance) + **CAS Publish** + resolve-once bind-to-active — SLICED 3-way (large, like G5): **G6a (the workspace-audit event log) SHIPPED** (built-block below); **G6b (git provenance on versions — reader blob-sha + `pipeline_versions` provenance cols + stamp-on-import) SHIPPED** (built-block below); **G6c** further sliced: **G6c-1 (the `active` pointer projection + CAS Publish `pipeline.published` + route) SHIPPED** (built-block below); **G6c-2 (resolve-once bind-to-active — the trigger-creation convenience that reads this projection: git-mode → active, DB-only → latest) SHIPPED** (built-block below). G6 fully sliced + shipped |
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual |
@@ -618,6 +618,48 @@ READS this projection — deferred so it lands on a stable `getActivePublishedVe
   version stays `NotFoundError` (404). **Deferred to G6c-2:** resolve-once
   bind-to-active (trigger creation reads the projection: git-mode → active,
   DB-only → latest version).
+
+### G6c-2 built-block (2026-07-24) — resolve-once bind-to-active on trigger create
+
+The final G6 slice — the trigger-creation CONVENIENCE that reads the G6c-1
+`active` projection. Closes G6 (the whole 3-way slice is now shipped).
+
+- **`active` is NEVER a stored trigger binding** (Codex-hardened CORE): a trigger
+  always persists a CONCRETE `pipelineVersionId` (#1 immutability + "unbound never
+  fires"). "Bind to active" is a creation-time convenience that resolves ONCE
+  server-side and stores the resolved id — NOT a live-follow indirection (fire-time
+  `bindingMode: follow_active` stays a future, non-default concept, out of scope).
+- **Create-only API, separate schema.** `POST /api/triggers` gains a create-only
+  `TriggerCreateBodySchema` (`routes/triggers.ts`) accepting EXACTLY ONE of a
+  concrete `pipelineVersionId` (a string, or `null` for a deliberately unbound
+  trigger — the pre-G6c-2 path, unchanged) XOR `bindToActive: { pipelineId }`. The
+  XOR is a `superRefine` keyed on PRESENCE (`!== undefined`), so an explicit
+  `pipelineVersionId: null` still counts as "supplied unbound" (the null-vs-absent
+  three-state). It is a SEPARATE schema from `TriggerWriteBodySchema` on purpose:
+  PATCH (`.partial()` of the latter) stays concrete-only — leaking bind-to-active
+  into PATCH would let a patch silently re-resolve a pinned binding.
+- **Resolution (`resolveBindToActive`, route-local, owner-scoped).** `getPipeline`
+  → `requireOwned` (missing/foreign pipeline → 404, the authz-leak rule).
+  **git-mode** (`getWorkspaceGit` non-null) → the G6c-1 `getActivePublishedVersion`
+  projection's concrete `.to`; **DB-only** (the git-optional default, no `active`
+  pointer) → `getLatestPipelineVersion(pipeline.id).id`. Read OUTSIDE any
+  transaction — resolve-once needs no compare-and-set (unlike CAS Publish); it
+  snapshots whatever is active/latest NOW into an immutable pin, so a later
+  version-mint never retro-rebinds an existing trigger.
+- **Fail-closed, not fall-open.** A git-mode workspace with nothing published yet,
+  or a versionless pipeline, has nothing to resolve → **400 `BadRequestError`**
+  ("publish a version first / no versions"), never a silent unbound trigger and
+  never a git-mode fall-back to latest (which would defeat the publish gate). 400
+  (not the publish route's 409) mirrors the sibling `assertBindableIfEnabled`
+  create-body validation ("enabled but no binding" = 400) — this is a create-body
+  validation, not a publish action.
+- **Non-goals (deferred, unchanged):** fire-time `follow_active`; G7 readiness
+  reconcile; any archived-pipeline create-time guard (a bind to a
+  published-then-archived pipeline still resolves its last active / latest — the
+  fire-time `ArchivedPipelineError` dispatch guard owns that, identically to a
+  concrete bind, so no new guard here); web-client mirroring (`bindToActive` is a
+  server-route-local request-only field, deliberately NOT in shared
+  `NewTriggerSchema` — no UI consumer until the post-P7 Git UI section).
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 
