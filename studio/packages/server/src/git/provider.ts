@@ -371,7 +371,14 @@ export class CliGitProvider {
         // `<mode> <type> <sha>` before the TAB, the repo-relative path after it.
         const meta = record.slice(0, tab);
         const path = record.slice(tab + 1);
-        const blobSha = meta.split(' ')[2] ?? '';
+        const blobSha = meta.split(' ')[2];
+        // The `-r -z` format is stable, but FAIL LOUDLY rather than manufacture an
+        // empty sha: an empty `source_blob_sha` would violate the schema's
+        // `.min(1)` and brick the version on every subsequent read (a latent
+        // fail-closed). A malformed listing is systemic, so reject the whole read.
+        if (tab < 0 || blobSha === undefined || blobSha.length === 0) {
+          throw new GitOperationError('ls-tree', 'unexpected ls-tree record format');
+        }
         return { path, blobSha };
       });
   }

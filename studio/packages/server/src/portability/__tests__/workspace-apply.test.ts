@@ -893,6 +893,22 @@ describe('applyWorkspace — #3 G6b git provenance on minted versions', () => {
     expect(minted.sourceBlobSha).toBe(blobShaFor(filePath));
   });
 
+  it('tolerates a null branch — stamps sourceBranch:null without error (defensive: prod always passes collabBranch)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'NullBranch' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', gitSnapshot(src), 'commit-abc', null);
+    expect(result.refused).toBe(false);
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const minted = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(minted.sourceBranch).toBeNull();
+    // The other three are still stamped from the (non-null) import context.
+    expect(minted.sourceCommit).toBe('commit-abc');
+    expect(minted.sourceBlobSha).toBe(blobShaFor(minted.sourceFilePath!));
+  });
+
   it('leaves provenance null on a NON-git mint (the create route funnels through createPipelineVersion with no opts)', () => {
     const db = freshDb().db;
     const pipe = createPipeline(db, { ownerId: 'local', name: 'DbAuthored' });
