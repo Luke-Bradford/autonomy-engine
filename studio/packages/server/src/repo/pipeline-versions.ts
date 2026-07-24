@@ -233,6 +233,15 @@ export function createPipelineVersion(
       ...lowered,
       version: nextVersion,
       createdAt: Date.now(),
+      // #3 G6b — git provenance, stamped ONCE at mint from the workspace-git
+      // import context (`CreateResourceOptions`). `null` on every non-git create
+      // path (this route, portable import, tests) — the honest "no source commit"
+      // value, never a manufactured default (#473). Immutable hereafter (the
+      // `no_update` trigger covers these columns like every other version field).
+      sourceCommit: opts?.sourceCommit ?? null,
+      sourceBranch: opts?.sourceBranch ?? null,
+      sourceFilePath: opts?.sourceFilePath ?? null,
+      sourceBlobSha: opts?.sourceBlobSha ?? null,
     };
     tx.insert(pipelineVersions).values(row).run();
     return PipelineVersionSchema.parse(row);

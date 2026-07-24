@@ -31,6 +31,21 @@ function snapshot(db: ReturnType<typeof freshDb>['db'], ownerId = 'local'): Pars
   return parseWorkspaceFiles(serializeWorkspace(db, ownerId));
 }
 
+/** #3 G6b — a deterministic git blob sha for a file path (the git reader would
+ * supply the real one; the DB-snapshot path leaves it `null`). */
+const blobShaFor = (path: string) => `blob-${path}`;
+
+/** #3 G6b — a branch snapshot as the git reader would deliver it: every pipeline
+ * file carries the git blob sha of its content, so an apply mint can stamp
+ * provenance. Mirrors `readWorkspaceFilesAtRef` populating `WorkspaceFile.blobSha`. */
+function gitSnapshot(db: ReturnType<typeof freshDb>['db'], ownerId = 'local'): ParsedWorkspace {
+  const ws = snapshot(db, ownerId);
+  return {
+    ...ws,
+    pipelines: ws.pipelines.map((p) => ({ ...p, blobSha: blobShaFor(p.path) })),
+  };
+}
+
 function baseVersion(pipelineId: string): NewPipelineVersion {
   return {
     pipelineId,
@@ -77,7 +92,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
 
     expect(result.refused).toBe(false);
     expect(result.head).toBe('sha1');
@@ -106,11 +121,11 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
     expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
 
-    const again = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(again.applied.every((a) => a.action === 'unchanged')).toBe(true);
     expect(listPipelines(tgt, 'local')).toHaveLength(1);
     expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
@@ -127,7 +142,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // state after we roll the DB back to v1 — simplest: apply a snapshot taken
     // AFTER a second version into a fresh target that only has v1.
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(db), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
     expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
 
@@ -135,7 +150,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       ...baseVersion(pipe.id),
       outputs: [{ name: 'v2', type: 'string' }],
     });
-    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2');
+    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
     expect(result.applied.find((a) => a.kind === 'pipeline')?.action).toBe('updated');
     const versions = listPipelineVersions(tgt, tgtPipe.id);
     expect(versions).toHaveLength(2);
@@ -147,11 +162,11 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const pipe = createPipeline(db, { ownerId: 'local', name: 'Old' });
     createPipelineVersion(db, baseVersion(pipe.id));
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(db), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
 
     updatePipeline(db, pipe.id, { name: 'New Name' });
-    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2');
+    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
 
     expect(result.applied.find((a) => a.kind === 'pipeline')?.action).toBe('renamed');
     expect(getPipeline(tgt, tgtPipe.id)!.name).toBe('New Name');
@@ -163,11 +178,11 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
     createPipelineVersion(db, baseVersion(pipe.id));
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(db), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
 
     updatePipeline(db, pipe.id, { concurrency: 3 });
-    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2');
+    const result = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
 
     expect(result.applied.find((a) => a.kind === 'pipeline')?.action).toBe('updated');
     expect(getPipeline(tgt, tgtPipe.id)!.concurrency).toBe(3);
@@ -183,7 +198,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     archivePipeline(db, pipe.id);
     expect(getPipeline(db, pipe.id)!.archived).toBe(true);
 
-    const result = applyWorkspace(db, 'local', incoming, 'sha1');
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
 
     const restored = result.applied.find((a) => a.kind === 'pipeline');
     expect(restored?.action).toBe('restored');
@@ -211,7 +226,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // the restore path must not silently drop the edit (the review's BLOCKING gap).
     incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
 
-    expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: the pipeline stays archived, nothing half-restored.
     expect(getPipeline(db, pipe.id)!.archived).toBe(true);
   });
@@ -226,7 +243,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     });
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
     archivePipeline(tgt, tgtPipe.id);
     expect(getPipeline(tgt, tgtPipe.id)!.archived).toBe(true);
@@ -237,7 +254,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       ...baseVersion(pipe.id),
       outputs: [{ name: 'v2', type: 'string' }],
     });
-    const result = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    const result = applyWorkspace(tgt, 'local', snapshot(src), 'sha2', 'main');
 
     const applied = result.applied.find((a) => a.kind === 'pipeline');
     expect(applied?.action).toBe('restored');
@@ -262,7 +279,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     createPipelineVersion(src, baseVersion(pipe.id));
 
     const tgt = freshDb().db;
-    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     // created pipeline mints its first version; created connection never mints.
     expect(created.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
       action: 'created',
@@ -276,7 +293,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // A pure rename patches the row, mints nothing → versionMinted:false.
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
     updatePipeline(src, pipe.id, { name: 'P renamed' });
-    const renamed = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    const renamed = applyWorkspace(tgt, 'local', snapshot(src), 'sha2', 'main');
     expect(renamed.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
       action: 'renamed',
       versionMinted: false,
@@ -288,14 +305,14 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       ...baseVersion(pipe.id),
       outputs: [{ name: 'x', type: 'string' }],
     });
-    const updated = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    const updated = applyWorkspace(tgt, 'local', snapshot(src), 'sha3', 'main');
     expect(updated.applied.find((a) => a.kind === 'pipeline')).toMatchObject({
       action: 'updated',
       versionMinted: true,
     });
 
     // Re-applying the same branch → unchanged + versionMinted:false.
-    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha3', 'main');
     expect(again.applied.every((a) => a.versionMinted === false)).toBe(true);
     expect(again.applied.every((a) => a.action === 'unchanged')).toBe(true);
   });
@@ -306,7 +323,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const version = createPipelineVersion(db, baseVersion(gone.id));
     const trig = createTrigger(db, triggerOn(version.id));
 
-    const result = applyWorkspace(db, 'local', parseWorkspaceFiles([]), 'sha1');
+    const result = applyWorkspace(db, 'local', parseWorkspaceFiles([]), 'sha1', 'main');
 
     expect(result.archived).toHaveLength(1);
     expect(result.archived[0]!.resourceId).toBe(gone.resourceId);
@@ -327,12 +344,12 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       secretRef: null,
     });
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(db), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(db), 'sha1', 'main');
     const tgtConn = getConnectionByResourceId(tgt, 'local', conn.resourceId)!;
 
     // A content edit (config) → 'updated', config carried over.
     updateConnection(db, conn.id, { config: { baseUrl: 'https://b' } });
-    const r1 = applyWorkspace(tgt, 'local', snapshot(db), 'sha2');
+    const r1 = applyWorkspace(tgt, 'local', snapshot(db), 'sha2', 'main');
     expect(r1.applied.find((a) => a.kind === 'connection')?.action).toBe('updated');
     expect(getConnectionByResourceId(tgt, 'local', conn.resourceId)!.config).toEqual({
       baseUrl: 'https://b',
@@ -340,7 +357,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
 
     // A pure rename → 'renamed', name changed, config untouched.
     updateConnection(db, conn.id, { name: 'Renamed' });
-    const r2 = applyWorkspace(tgt, 'local', snapshot(db), 'sha3');
+    const r2 = applyWorkspace(tgt, 'local', snapshot(db), 'sha3', 'main');
     expect(r2.applied.find((a) => a.kind === 'connection')?.action).toBe('renamed');
     const after = getConnectionByResourceId(tgt, 'local', conn.resourceId)!;
     expect(after.name).toBe('Renamed');
@@ -372,7 +389,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = parseWorkspaceFiles(files);
 
     const tgt = freshDb().db;
-    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: the parent row written before the bad ref is rolled back.
     expect(listPipelines(tgt, 'local')).toHaveLength(0);
   });
@@ -390,7 +409,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // skip the edit — it fails closed.
     incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
 
-    expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
   });
 
   it('REFUSES a NEW pipeline whose version reuses an existing version id (create-path fail-open)', () => {
@@ -407,7 +428,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
     incoming.pipelines[0]!.data.versions[0]!.resourceId = aV.resourceId;
 
-    expect(() => applyWorkspace(db, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: B was never created (and A untouched).
     expect(listPipelines(db, 'local').map((p) => p.name)).toEqual(['A']);
   });
@@ -425,7 +448,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     aFile.data.versions[0]!.resourceId = bV.resourceId;
 
     const tgt = freshDb().db;
-    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: neither pipeline was created.
     expect(listPipelines(tgt, 'local')).toHaveLength(0);
   });
@@ -437,7 +462,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     ]);
     expect(incoming.diagnostics.length).toBeGreaterThan(0);
 
-    const result = applyWorkspace(db, 'local', incoming, 'sha1');
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
     expect(result.refused).toBe(true);
     expect(result.applied).toHaveLength(0);
     expect(result.diagnostics.length).toBeGreaterThan(0);
@@ -452,7 +477,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
 
     // Triggers are no longer deferred — they land in `applied`, deferred is empty.
     expect(result.deferred).toHaveLength(0);
@@ -482,10 +507,10 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(1);
 
-    const again = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const again = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
     expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(1);
   });
@@ -496,12 +521,12 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const version = createPipelineVersion(src, baseVersion(pipe.id));
     const srcTrig = createTrigger(src, triggerOn(version.id));
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     const tgtTrig0 = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
 
     // A content edit (schedule) → 'updated', schedule carried over, binding kept.
     updateTrigger(src, srcTrig.id, { schedule: '0 5 * * *' });
-    const r1 = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    const r1 = applyWorkspace(tgt, 'local', snapshot(src), 'sha2', 'main');
     expect(r1.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
     const afterEdit = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
     expect(afterEdit.schedule).toBe('0 5 * * *');
@@ -509,7 +534,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
 
     // A pure rename → 'renamed', name changed, schedule untouched.
     updateTrigger(src, srcTrig.id, { name: 'Renamed Trigger' });
-    const r2 = applyWorkspace(tgt, 'local', snapshot(src), 'sha3');
+    const r2 = applyWorkspace(tgt, 'local', snapshot(src), 'sha3', 'main');
     expect(r2.applied.find((a) => a.kind === 'trigger')?.action).toBe('renamed');
     const afterRename = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
     expect(afterRename.name).toBe('Renamed Trigger');
@@ -526,7 +551,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     incoming.triggers[0]!.data.pipelineVersionId = 'res_nonexistent';
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(result.refused).toBe(false);
     const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
     // Unbound (null) — NOT an aborted apply (that is the node-ref hard-abort).
@@ -547,7 +572,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     incoming.triggers[0]!.data.enabled = true;
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
     expect(tgtTrig.pipelineVersionId).toBeNull();
     expect(tgtTrig.enabled).toBe(false);
@@ -566,7 +591,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     incoming.triggers[0]!.data.enabled = true;
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(result.refused).toBe(false); // reconciled, not refused
     const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
     expect(tgtTrig.pipelineVersionId).toBeNull();
@@ -583,7 +608,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db; // pipeline AND trigger are both fresh creates here
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(result.refused).toBe(false);
     const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
     const tgtVersion = getLatestPipelineVersion(tgt, tgtPipe.id)!;
@@ -603,7 +628,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: the pipeline the loop created BEFORE the trigger is rolled back.
     expect(listPipelines(tgt, 'local')).toHaveLength(0);
     expect(listTriggers(tgt, { ownerId: 'local' })).toHaveLength(0);
@@ -620,14 +647,14 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       event: { name: 'order.created' },
     });
     const tgt = freshDb().db;
-    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const created = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     expect(created.applied.find((a) => a.kind === 'trigger')?.action).toBe('created');
     const tgtTrig = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
     expect(tgtTrig.mode).toBe('event');
     expect(tgtTrig.event).toEqual({ name: 'order.created' });
 
     // Re-applying the same branch → unchanged (idempotent for event triggers too).
-    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
   });
 
@@ -655,12 +682,12 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     });
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(src), 'sha1'); // cross-workspace CREATE
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main'); // cross-workspace CREATE
     // The target trigger has no secret (never imported).
     const t = listTriggers(tgt, { ownerId: 'local' })[0]!;
     expect(t.webhook).toBeNull();
     // Re-import the SAME branch → not `unchanged` but `updated` (the known churn).
-    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    const again = applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     expect(again.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
   });
 
@@ -679,7 +706,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = snapshot(src);
 
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', incoming, 'sha1');
+    applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     const tgtTrig = listTriggers(tgt, { ownerId: 'local' })[0]!;
     expect(tgtTrig.event).toBeNull();
     expect(tgtTrig.window).toBeNull();
@@ -704,7 +731,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
 
     // Same-workspace round-trip: the existing row already holds the secret, so
     // the serialized public `{}` equals both sides → unchanged, secret intact.
-    const result = applyWorkspace(db, 'local', snapshot(db), 'sha1');
+    const result = applyWorkspace(db, 'local', snapshot(db), 'sha1', 'main');
     expect(result.applied.find((a) => a.kind === 'trigger')?.action).toBe('unchanged');
     expect(getTrigger(db, trig.id)!.webhook).toEqual({ secretRef: 'secret_stays_local' });
   });
@@ -726,14 +753,14 @@ describe('applyWorkspace (#3 G5c-1)', () => {
       enabled: true,
     });
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
     // Provision a DIFFERENT local secret on the target (the collaborator's own).
     const tgtTrig = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
     updateTrigger(tgt, tgtTrig.id, { webhook: { secretRef: 'tgt_local_secret' } });
 
     // A content edit on the source (rename is not enough — change concurrency).
     updateTrigger(src, srcTrig.id, { concurrency: { policy: 'skip_if_running' } });
-    const r = applyWorkspace(tgt, 'local', snapshot(src), 'sha2');
+    const r = applyWorkspace(tgt, 'local', snapshot(src), 'sha2', 'main');
     expect(r.applied.find((a) => a.kind === 'trigger')?.action).toBe('updated');
     const after = getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!;
     // The content edit applied...
@@ -748,7 +775,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const version = createPipelineVersion(src, baseVersion(pipe.id));
     const srcTrig = createTrigger(src, triggerOn(version.id));
     const tgt = freshDb().db;
-    applyWorkspace(tgt, 'local', snapshot(src), 'sha1');
+    applyWorkspace(tgt, 'local', snapshot(src), 'sha1', 'main');
 
     // A hand-edited branch update carrying a write-invalid concurrency (parallel
     // with no `max`). The lenient `updateTrigger` would persist it silently; the
@@ -758,7 +785,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (incoming.triggers[0]!.data.concurrency as any) = { policy: 'parallel' };
 
-    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha2')).toThrow();
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha2', 'main')).toThrow();
     // Atomic: the target trigger keeps its original (valid) concurrency.
     expect(getTriggerByResourceId(tgt, 'local', srcTrig.resourceId)!.concurrency.policy).toBe(
       'skip_if_running',
@@ -788,7 +815,9 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const incoming = parseWorkspaceFiles(files);
 
     const tgt = freshDb().db;
-    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1')).toThrow(WorkspaceApplyError);
+    expect(() => applyWorkspace(tgt, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
     // Atomic: the pipeline the loop created BEFORE hitting the bad ref is rolled back.
     expect(listPipelines(tgt, 'local')).toHaveLength(0);
     expect(listConnections(tgt, 'local')).toHaveLength(0);
@@ -829,7 +858,7 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(incoming.pipelines[0]!.resourceId).toBe(parent.resourceId);
 
     const tgt = freshDb().db;
-    const result = applyWorkspace(tgt, 'local', incoming, 'sha1');
+    const result = applyWorkspace(tgt, 'local', incoming, 'sha1', 'main');
     expect(result.refused).toBe(false);
 
     const tgtParent = getPipelineByResourceId(tgt, 'local', parent.resourceId)!;
@@ -838,5 +867,120 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     const tgtParentV = getLatestPipelineVersion(tgt, tgtParent.id)!;
     // The parent's call node is remapped to the TARGET child version's DB id.
     expect(tgtParentV.nodes[0]!.call!.pipelineVersionId).toBe(tgtChildV.id);
+  });
+});
+
+describe('applyWorkspace — #3 G6b git provenance on minted versions', () => {
+  it('stamps source commit / branch / file path / blob sha on a minted version', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'Prov' });
+    createPipelineVersion(src, {
+      ...baseVersion(pipe.id),
+      params: [{ name: 'p', type: 'string', required: false }],
+    });
+    const incoming = gitSnapshot(src);
+    const filePath = incoming.pipelines[0]!.path;
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', incoming, 'commit-abc', 'feature/x');
+    expect(result.refused).toBe(false);
+
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const minted = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(minted.sourceCommit).toBe('commit-abc');
+    expect(minted.sourceBranch).toBe('feature/x');
+    expect(minted.sourceFilePath).toBe(filePath);
+    expect(minted.sourceBlobSha).toBe(blobShaFor(filePath));
+  });
+
+  it('tolerates a null branch — stamps sourceBranch:null without error (defensive: prod always passes collabBranch)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'NullBranch' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+
+    const tgt = freshDb().db;
+    const result = applyWorkspace(tgt, 'local', gitSnapshot(src), 'commit-abc', null);
+    expect(result.refused).toBe(false);
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    const minted = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(minted.sourceBranch).toBeNull();
+    // The other three are still stamped from the (non-null) import context.
+    expect(minted.sourceCommit).toBe('commit-abc');
+    expect(minted.sourceBlobSha).toBe(blobShaFor(minted.sourceFilePath!));
+  });
+
+  it('leaves provenance null on a NON-git mint (the create route funnels through createPipelineVersion with no opts)', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'DbAuthored' });
+    const v = createPipelineVersion(db, baseVersion(pipe.id));
+    expect(v.sourceCommit).toBeNull();
+    expect(v.sourceBranch).toBeNull();
+    expect(v.sourceFilePath).toBeNull();
+    expect(v.sourceBlobSha).toBeNull();
+    // The re-read (not the create response) confirms the columns persisted null.
+    const reread = getLatestPipelineVersion(db, pipe.id)!;
+    expect(reread.sourceCommit).toBeNull();
+    expect(reread.sourceBlobSha).toBeNull();
+  });
+
+  it('CHURN GUARD — a re-import of identical content at a NEW commit/blob mints nothing and never re-stamps the immutable first provenance', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'Stable' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+    const first = gitSnapshot(src);
+    const filePath = first.pipelines[0]!.path;
+
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', first, 'commit-1', 'main');
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
+    const v1 = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(v1.sourceCommit).toBe('commit-1');
+    expect(v1.sourceBlobSha).toBe(blobShaFor(filePath));
+
+    // SAME authoring content, but the branch moved: a new commit AND a new blob
+    // sha for the (byte-identical) file. Provenance is machine-local derived
+    // state, excluded from the content form (VERSION_VOLATILE) + never serialized
+    // (PipelineVersionExportSchema) — so this MUST be a no-op: no new version, and
+    // the immutable v1 keeps its ORIGINAL provenance (the no-update trigger would
+    // abort a re-stamp anyway).
+    const second: ParsedWorkspace = {
+      ...first,
+      pipelines: first.pipelines.map((p) => ({ ...p, blobSha: `blob2-${p.path}` })),
+    };
+    const result = applyWorkspace(tgt, 'local', second, 'commit-2', 'main');
+    expect(result.applied).toEqual([
+      expect.objectContaining({
+        resourceId: tgtPipe.resourceId,
+        action: 'unchanged',
+        versionMinted: false,
+      }),
+    ]);
+    expect(listPipelineVersions(tgt, tgtPipe.id)).toHaveLength(1);
+    const still = getLatestPipelineVersion(tgt, tgtPipe.id)!;
+    expect(still.id).toBe(v1.id);
+    expect(still.sourceCommit).toBe('commit-1');
+    expect(still.sourceBlobSha).toBe(blobShaFor(filePath));
+  });
+
+  it('does NOT serialize provenance into the committed workspace files (re-serialize is byte-stable)', () => {
+    const src = freshDb().db;
+    const pipe = createPipeline(src, { ownerId: 'local', name: 'NoLeak' });
+    createPipelineVersion(src, baseVersion(pipe.id));
+
+    // Import a version so it carries real provenance in the DB...
+    const tgt = freshDb().db;
+    applyWorkspace(tgt, 'local', gitSnapshot(src), 'commit-1', 'main');
+    const tgtPipe = getPipelineByResourceId(tgt, 'local', pipe.resourceId)!;
+    expect(getLatestPipelineVersion(tgt, tgtPipe.id)!.sourceCommit).toBe('commit-1');
+
+    // ...then serialize the target: the file bytes must not mention provenance
+    // (it would leak the local commit + make the file's own blob sha
+    // self-referential — the churn loop the exclusion prevents).
+    const files = serializeWorkspace(tgt, 'local');
+    const pipelineFile = files.find((f) => f.path.startsWith('pipelines/'))!;
+    expect(pipelineFile.contents).not.toContain('sourceCommit');
+    expect(pipelineFile.contents).not.toContain('sourceBlobSha');
+    expect(pipelineFile.contents).not.toContain('commit-1');
   });
 });

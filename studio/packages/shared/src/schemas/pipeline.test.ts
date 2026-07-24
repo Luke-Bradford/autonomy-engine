@@ -410,6 +410,14 @@ const pipelineVersion = {
   containers: [],
   catalogVersion: CATALOG_VERSION,
   createdAt: 1700000000000,
+  // #3 G6b — git provenance is `null` on a DB-authored version. The backward-
+  // tolerant `.default(null)` (like `containers`) still parses a pre-G6b doc that
+  // omits these keys; the `defaults ... when the key is absent` tests below prove
+  // that path, so the exact-round-trip fixture carries the explicit `null`s.
+  sourceCommit: null,
+  sourceBranch: null,
+  sourceFilePath: null,
+  sourceBlobSha: null,
 };
 
 describe('PipelineVersionSchema', () => {
@@ -435,6 +443,23 @@ describe('PipelineVersionSchema', () => {
     void containers;
     const parsed = PipelineVersionSchema.parse(withoutContainers);
     expect(parsed.containers).toEqual([]);
+  });
+
+  it('#3 G6b — defaults git provenance to null when the keys are absent (a pre-G6b doc still READS)', () => {
+    const { sourceCommit, sourceBranch, sourceFilePath, sourceBlobSha, ...preG6b } =
+      pipelineVersion;
+    void sourceCommit;
+    void sourceBranch;
+    void sourceFilePath;
+    void sourceBlobSha;
+    const parsed = PipelineVersionSchema.parse(preG6b);
+    // Absent → null is the honest "no git provenance" value (not a masked fact,
+    // so not a #473 fail-open); an immutable version doc is re-parsed from blobs
+    // that predate the column and must never brick.
+    expect(parsed.sourceCommit).toBeNull();
+    expect(parsed.sourceBranch).toBeNull();
+    expect(parsed.sourceFilePath).toBeNull();
+    expect(parsed.sourceBlobSha).toBeNull();
   });
 
   // F13a — the READ path stays tolerant ON PURPOSE. This schema parses every

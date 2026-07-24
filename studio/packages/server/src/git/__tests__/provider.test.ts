@@ -259,12 +259,31 @@ describe('CliGitProvider — G4 read primitives', () => {
     const provider = new CliGitProvider();
     const { checkout, headSha } = withCommittedFiles();
 
-    const paths = await provider.lsTreeManaged(checkout, headSha, ['pipelines', 'connections']);
-    expect(paths.sort()).toEqual(
+    const entries = await provider.lsTreeManaged(checkout, headSha, ['pipelines', 'connections']);
+    expect(entries.map((e) => e.path).sort()).toEqual(
       ['connections/b.json', 'pipelines/a.json', 'pipelines/keep.gitkeep'].sort(),
     );
     // The root README is never under a managed dir.
-    expect(paths).not.toContain('README.md');
+    expect(entries.map((e) => e.path)).not.toContain('README.md');
+  });
+
+  it('#3 G6b — lsTreeManaged surfaces each entry git blob sha (matches rev-parse)', async () => {
+    const provider = new CliGitProvider();
+    const { checkout, headSha } = withCommittedFiles();
+
+    const entries = await provider.lsTreeManaged(checkout, headSha, ['pipelines']);
+    const byPath = new Map(entries.map((e) => [e.path, e.blobSha]));
+    // The sha is git's real blob object id for the file at this ref — the exact
+    // value the import stamps as a version's `source_blob_sha`.
+    const expected = execFileSync(
+      'git',
+      ['-C', checkout, 'rev-parse', `${headSha}:pipelines/a.json`],
+      {
+        encoding: 'utf8',
+      },
+    ).trim();
+    expect(byPath.get('pipelines/a.json')).toBe(expected);
+    expect(expected).toMatch(/^[0-9a-f]{40,64}$/);
   });
 
   it('lsTreeManaged returns no entries for a dir absent from the tree (not an error)', async () => {

@@ -51,6 +51,11 @@ import type { WorkspaceFile } from './workspace-serialize.js';
  * re-parse. `null` resourceId = a pre-G1 file → G5 treats as create-new. */
 export interface ParsedPipeline {
   path: string;
+  /** #3 G6b — the git blob SHA of this pipeline's file at the read ref, or `null`
+   * when it did not come from git (the DB-snapshot baseline). A minted version
+   * stamps it as `source_blob_sha` provenance. Only pipelines carry it —
+   * connections/triggers are not versioned. */
+  blobSha: string | null;
   resourceId: string | null;
   versionResourceIds: (string | null)[];
   data: PipelineExportData;
@@ -162,6 +167,8 @@ export function parseWorkspaceFiles(
       case 'pipeline':
         pipelines.push({
           path: file.path,
+          // #3 G6b — `undefined` (DB-snapshot, never git) collapses to `null`.
+          blobSha: file.blobSha ?? null,
           resourceId,
           versionResourceIds: envelope.data.versions.map((version) => version.resourceId),
           data: envelope.data,

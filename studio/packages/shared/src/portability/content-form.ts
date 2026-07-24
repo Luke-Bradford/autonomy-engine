@@ -90,6 +90,16 @@ const VERSION_VOLATILE = [
   'version',
   'catalogVersion',
   'createdAt',
+  // #3 G6b — git provenance (source commit/branch/path/blob) is machine-local
+  // derived state, not authoring content. The branch (export) side never carries
+  // it (`PipelineVersionExportSchema` strips it), but the DB side (`dbVersionForm`
+  // spreads a stored `PipelineVersion`) DOES, so it must be scrubbed here too —
+  // otherwise every existing version's DB content form would differ from its
+  // branch form and every re-pull would misfire a spurious duplicate-version mint.
+  'sourceCommit',
+  'sourceBranch',
+  'sourceFilePath',
+  'sourceBlobSha',
 ] as const;
 
 /**

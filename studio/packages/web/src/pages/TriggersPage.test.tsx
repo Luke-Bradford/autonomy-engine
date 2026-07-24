@@ -80,6 +80,10 @@ const version: PipelineVersion = {
   containers: [],
   catalogVersion: 1,
   createdAt: 1,
+  sourceCommit: null,
+  sourceBranch: null,
+  sourceFilePath: null,
+  sourceBlobSha: null,
 };
 
 beforeEach(() => {

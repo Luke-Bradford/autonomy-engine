@@ -42,29 +42,37 @@ export async function readWorkspaceFilesAtRef(
   ref: string,
   dirs: readonly string[],
 ): Promise<WorkspaceFilesAtRef> {
-  const paths = (await provider.lsTreeManaged(checkout, ref, dirs)).filter((path) =>
-    path.endsWith('.json'),
+  const entries = (await provider.lsTreeManaged(checkout, ref, dirs)).filter((entry) =>
+    entry.path.endsWith('.json'),
   );
   // Object-store reads are read-only and concurrency-safe; `Promise.all` over
-  // `map` preserves `paths` order. Each read resolves to its contents or `null`
-  // (unreadable); a systemic/unexpected error rejects the whole read.
+  // `map` preserves `entries` order. Each read resolves to its contents or `null`
+  // (unreadable); a systemic/unexpected error rejects the whole read. The entry's
+  // git blob sha (#3 G6b) rides along so a minted version records its provenance.
   const results = await Promise.all(
-    paths.map(async (path): Promise<{ path: string; contents: string | null }> => {
-      try {
-        return { path, contents: await provider.showBlob(checkout, ref, path) };
-      } catch (err) {
-        if (err instanceof GitUnavailableError) throw err; // systemic — abort the read
-        if (err instanceof GitOperationError) return { path, contents: null }; // this file only
-        throw err; // unexpected — never swallow
-      }
-    }),
+    entries.map(
+      async (entry): Promise<{ path: string; blobSha: string; contents: string | null }> => {
+        try {
+          return {
+            path: entry.path,
+            blobSha: entry.blobSha,
+            contents: await provider.showBlob(checkout, ref, entry.path),
+          };
+        } catch (err) {
+          if (err instanceof GitUnavailableError) throw err; // systemic — abort the read
+          if (err instanceof GitOperationError)
+            return { path: entry.path, blobSha: entry.blobSha, contents: null }; // this file only
+          throw err; // unexpected — never swallow
+        }
+      },
+    ),
   );
 
   const files: WorkspaceFile[] = [];
   const unreadable: string[] = [];
   for (const result of results) {
     if (result.contents === null) unreadable.push(result.path);
-    else files.push({ path: result.path, contents: result.contents });
+    else files.push({ path: result.path, contents: result.contents, blobSha: result.blobSha });
   }
   return { files, unreadable };
 }

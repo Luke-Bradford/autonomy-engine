@@ -209,6 +209,11 @@ interface Minter {
   versionRid: string | null;
   version: PipelineVersionExport;
   callRefs: string[];
+  // #3 G6b — the source file's path + git blob sha, captured at classify time so
+  // the deferred mint (`mintOrder` loop) can stamp the version's provenance.
+  // `blobSha` is `null` only on the DB-snapshot path, which never mints.
+  sourceFilePath: string;
+  sourceBlobSha: string | null;
 }
 
 /**
@@ -373,6 +378,11 @@ export function applyWorkspace(
   ownerId: string,
   incoming: ParsedWorkspace,
   head: string | null,
+  // #3 G6b — the collaboration branch the import came from; stamped (with `head`
+  // and each file's path/blob-sha) as git provenance on every version this apply
+  // MINTS, so "what is running, and where from?" is answerable and G6c's CAS
+  // Publish can promote only a version whose source commit/blob is known.
+  branch: string | null,
 ): WorkspaceGitApplyResult {
   // Fail-closed on a corrupt branch: refuse the whole import (nothing written).
   if (incoming.diagnostics.length > 0) {
@@ -599,7 +609,14 @@ export function applyWorkspace(
         versionMinted: willMint,
       });
       if (willMint && version !== undefined) {
-        minters.push({ pipelineId, versionRid, version, callRefs: literalCallRefs(version) });
+        minters.push({
+          pipelineId,
+          versionRid,
+          version,
+          callRefs: literalCallRefs(version),
+          sourceFilePath: inc.path,
+          sourceBlobSha: inc.blobSha,
+        });
       }
     }
 
@@ -614,7 +631,17 @@ export function applyWorkspace(
           pipelineId: m.pipelineId,
           nodes: m.version.nodes.map((n) => remapNodeToDb(n, connById, versionById)),
         },
-        m.versionRid !== null ? { resourceId: m.versionRid } : undefined,
+        {
+          // Preserve the file's version resourceId (G5c) when present; else the
+          // repo mints a fresh one.
+          ...(m.versionRid !== null ? { resourceId: m.versionRid } : {}),
+          // #3 G6b — stamp git provenance on the mint: source commit (`head`) +
+          // branch, plus THIS file's path + blob sha (captured on the minter).
+          sourceCommit: head,
+          sourceBranch: branch,
+          sourceFilePath: m.sourceFilePath,
+          sourceBlobSha: m.sourceBlobSha,
+        },
       );
       if (m.versionRid !== null) versionById.set(m.versionRid, created.id);
     }

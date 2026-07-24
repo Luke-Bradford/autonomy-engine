@@ -72,10 +72,18 @@ export class WorkspaceSerializeError extends Error {
   }
 }
 
-/** One serialized file: its repo-relative path and its canonical JSON bytes. */
+/** One serialized file: its repo-relative path and its canonical JSON bytes.
+ *
+ * `blobSha` (#3 G6b) is the git blob SHA of this file at the read ref — present
+ * ONLY when the file came from the git reader (`readWorkspaceFilesAtRef`), so the
+ * import can stamp a minted version's `source_blob_sha` provenance. It is absent
+ * on the DB-snapshot path (`serializeWorkspace`, which never touches git); that
+ * snapshot is only ever the reconcile BASELINE and never mints, so absent is
+ * fine — no consumer of the snapshot reads `blobSha`. */
 export interface WorkspaceFile {
   path: string;
   contents: string;
+  blobSha?: string;
 }
 
 export interface OwnerRefMaps {

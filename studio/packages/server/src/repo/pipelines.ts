@@ -20,6 +20,18 @@ import type { Db } from './types.js';
  */
 export interface CreateResourceOptions {
   resourceId?: string;
+  /**
+   * #3 G6b — git provenance for a version minted by the workspace-git reconcile
+   * apply: the source commit / collaboration branch / repo-relative file path /
+   * git blob SHA. Set together (all four) ONLY on a git-import mint; omitted on
+   * every other create path, which leaves the columns `null` (a DB-authored
+   * version genuinely has no source commit). Ignored by `createPipeline` (only
+   * versions are versioned); consumed by `createPipelineVersion`.
+   */
+  sourceCommit?: string | null;
+  sourceBranch?: string | null;
+  sourceFilePath?: string | null;
+  sourceBlobSha?: string | null;
 }
 
 export function createPipeline(db: Db, input: NewPipeline, opts?: CreateResourceOptions): Pipeline {
