@@ -246,6 +246,19 @@ describe('buildGuidedManualPullRequest', () => {
     ).toBe('github');
   });
 
+  it('percent-encodes a URL-significant char in owner/repo (repoUrl path charset is unrestricted)', () => {
+    // WorkspaceGitRepoUrlSchema checks only scheme/credential shape, not the
+    // path charset, so a `#` in owner/repo must not produce a malformed link.
+    const result = buildGuidedManualPullRequest(
+      'https://github.com/ac#me/wid#gets.git',
+      'main',
+      'studio/local/work',
+    );
+    expect(result.url).toBe(
+      'https://github.com/ac%23me/wid%23gets/compare/main...studio/local/work?expand=1',
+    );
+  });
+
   it('percent-encodes a URL-significant char in a branch while preserving "/"', () => {
     const result = buildGuidedManualPullRequest(
       'https://github.com/acme/widgets.git',

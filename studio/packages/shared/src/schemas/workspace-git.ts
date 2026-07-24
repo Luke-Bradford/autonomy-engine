@@ -530,13 +530,21 @@ function encodeBranchForUrl(branch: string): string {
  * `https://github.com/<owner>/<repo>/compare/<collab>...<working>?expand=1`
  * (`base...head` = merge head into base; `expand=1` pre-opens the create form).
  * Module-private — composed only by `buildGuidedManualPullRequest`.
+ *
+ * `owner`/`repo` are `encodeURIComponent`-encoded just like the branch segments:
+ * `WorkspaceGitRepoUrlSchema` restricts only scheme/credential shape, NOT the
+ * path charset, so a stored repoUrl path segment containing `#`/`?`/space (e.g.
+ * a directly-seeded row) would otherwise produce a malformed or silently
+ * truncated link. Both are single segments (no `/`), so a flat encode is right.
  */
 function buildGitHubCompareUrl(
   repo: GitHostRepo,
   collabBranch: string,
   workingBranch: string,
 ): string {
-  return `https://github.com/${repo.owner}/${repo.repo}/compare/${encodeBranchForUrl(
+  const owner = encodeURIComponent(repo.owner);
+  const name = encodeURIComponent(repo.repo);
+  return `https://github.com/${owner}/${name}/compare/${encodeBranchForUrl(
     collabBranch,
   )}...${encodeBranchForUrl(workingBranch)}?expand=1`;
 }
