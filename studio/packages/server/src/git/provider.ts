@@ -84,6 +84,27 @@ export class GitOperationError extends Error {
   }
 }
 
+/**
+ * #3 G10 — a `git push` was REJECTED as a non-fast-forward: the working branch
+ * moved on the remote (a concurrent push, a collaborator's direct edit) so the
+ * never-`--force` push cannot land. This is a request-STATE conflict — the
+ * caller must fetch/import the latest and re-commit — NOT an upstream outage,
+ * so it is a DELIBERATE SIBLING of `GitOperationError` (not a subclass): the
+ * error handler maps it to 409 `conflict`, distinct from the 502 `git_error` a
+ * transport/auth failure gets, with no `instanceof`-ordering fragility between
+ * the two branches (this is the transport-level dual of `GitHostRequestError`,
+ * GitHub's 422-refusal → 409). The message is fixed and client-safe BY
+ * CONSTRUCTION — it quotes no stderr, no checkout path, no branch value.
+ */
+export class GitPushRejectedError extends Error {
+  constructor() {
+    super(
+      'git push was rejected: the working branch moved on the remote since it was last fetched — fetch/import the latest changes and re-commit',
+    );
+    this.name = 'GitPushRejectedError';
+  }
+}
+
 /** #3 G6b — one `ls-tree -r` entry: a managed file's repo-relative path and the
  * git blob SHA of its content at the read ref. The blob sha stamps the imported
  * version's `source_blob_sha` provenance. */
@@ -324,14 +345,38 @@ export class CliGitProvider {
   }
 
   /**
-   * #3 G3a — push `branch` to origin. NEVER `--force`: a non-fast-forward is a
-   * REAL rejection (the working branch moved underneath — another session, a
-   * manual push) and is surfaced as a `GitOperationError` (502). That rejection
-   * IS the advisory drift gate until the descendant guard lands (spec #3: "the
-   * real serialization point is the push non-fast-forward"). Remote op.
+   * #3 G3a/G10 — push `branch` to origin. NEVER `--force`: a non-fast-forward is
+   * a REAL rejection (the working branch moved underneath — another session, a
+   * collaborator's direct edit). That rejection IS the advisory drift gate until
+   * the proactive descendant guard lands (spec #3: "the real serialization point
+   * is the push non-fast-forward"). Remote op.
+   *
+   * #3 G10 — the rejection is CLASSIFIED (not the opaque 502 it once was): git's
+   * transport status strings `(non-fast-forward)` / `(fetch first)` (emitted with
+   * or without a prior fetch respectively — verified empirically) are NOT
+   * gettext-localized, unlike the `hint:`/`error:` lines, so matching them is
+   * locale-robust. A match → `GitPushRejectedError` (→ 409 `conflict`, "fetch and
+   * re-commit"); any OTHER non-zero exit (transport/auth outage, a
+   * `[remote rejected]` server-hook/policy refusal — neither carries a marker)
+   * stays a `GitOperationError` (→ 502 `git_error`). Uses `exec` rather than
+   * `execOk` precisely so the non-zero result can be inspected; timeout/output-cap
+   * behaviour is unchanged (`execOk` is only `exec` + throw-on-nonzero).
    */
   async push(dir: string, branch: string): Promise<void> {
-    await this.execOk('push', ['-C', dir, 'push', 'origin', branch], DEFAULT_PUSH_TIMEOUT_MS, dir);
+    const result = await this.exec(
+      'push',
+      ['-C', dir, 'push', 'origin', branch],
+      DEFAULT_PUSH_TIMEOUT_MS,
+      dir,
+    );
+    if (result.code === 0) return;
+    if (/non-fast-forward|fetch first/i.test(result.stderr)) {
+      throw new GitPushRejectedError();
+    }
+    throw new GitOperationError(
+      'push',
+      this.redact(result.stderr.trim() || `exit ${result.code}`, dir),
+    );
   }
 
   /**

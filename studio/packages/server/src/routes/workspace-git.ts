@@ -311,6 +311,8 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         email: `${principalId}@studio.local`,
       });
       // Never `--force`: a non-fast-forward rejection is the advisory drift gate.
+      // #3 G10 — `push` classifies that rejection as `GitPushRejectedError` → 409
+      // `conflict` ("fetch/import and re-commit"), not the opaque 502 it once was.
       await provider.push(checkout, workingBranch);
       return WorkspaceGitCommitResultSchema.parse({
         committed: true,

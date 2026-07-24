@@ -147,7 +147,7 @@ reconcile are core. Corrections:
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual — **G9a (persisted `working_branch` + feature-branch selection + GUIDED-MANUAL compare URL) SHIPPED 2026-07-24**; **G9b (GitHub REST auto-open + PR-observe via an operator-env token) SHIPPED 2026-07-24** (built-block below). G9 core shipped; conflict/divergence + stored-PAT/multi-remote polish is G10 |
-| G10 | Conflict/divergence UX; multi-remote/auth polish |
+| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**. REMAINING: the PROACTIVE descendant guard (base = the commit the DB was imported from, #662 — needs a persisted imported-from-commit column; advisory, distinct from slice 2's reactive push-side classification), stored-PAT auth via `CliGitProvider.secretsToRedact` (the G10 auth seam), multi-remote |
 
 ### G1 built-block (2026-07-23)
 

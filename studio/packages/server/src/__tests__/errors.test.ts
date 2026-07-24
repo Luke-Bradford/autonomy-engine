@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { NotFoundError, registerErrorHandler } from '../errors.js';
 import { InvalidPipelineDocError, PipelineHasRunsError } from '../repo/index.js';
+import { GitPushRejectedError } from '../git/provider.js';
 
 function buildMinimalApp() {
   const app = Fastify({ logger: false });
@@ -15,6 +16,9 @@ function buildMinimalApp() {
   });
   app.get('/conflict', async () => {
     throw new PipelineHasRunsError('pipe_1');
+  });
+  app.get('/git-conflict', async () => {
+    throw new GitPushRejectedError();
   });
   app.get('/bad', async () => {
     return z.object({ x: z.string() }).parse({});
@@ -66,6 +70,17 @@ describe('registerErrorHandler', () => {
     const res = await app.inject({ method: 'GET', url: '/conflict' });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('conflict');
+    await app.close();
+  });
+
+  it('#3 G10 — maps GitPushRejectedError to 409 conflict (a non-fast-forward push is a divergence, not a 502 git_error)', async () => {
+    const app = buildMinimalApp();
+    await app.ready();
+    const res = await app.inject({ method: 'GET', url: '/git-conflict' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflict');
+    // The actionable, client-safe remedy reaches the client.
+    expect(res.json().message).toMatch(/re-commit/i);
     await app.close();
   });
 
