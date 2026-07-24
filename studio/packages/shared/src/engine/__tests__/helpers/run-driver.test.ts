@@ -85,6 +85,33 @@ describe('driveRun — the shared run-driver mechanic', () => {
     expect(seen).toEqual(['custom-run']);
   });
 
+  it('reseed seam: folds run.started{rerunOf} + run.reseeded, then dispatches BEYOND the frontier', () => {
+    // RS3 harness seam — `opts.reseed` drives a rerun-from-failed R2: the copied
+    // frontier node `a` is marked terminal-success by the fold (never dispatched),
+    // so the driver only ever dispatches the re-run downstream `b`.
+    const eng = createEngine({ nodes: [node('a'), node('b')], edges: [edge('a', 'b')] });
+    const { log, order, finish, diagnostics, state } = driveRun(eng, {
+      runId: 'R2',
+      resolve: simpleResolve({}),
+      reseed: {
+        sourceRunId: 'R1',
+        frontier: ['a'],
+        copiedOutputs: { a: { x: 1 } },
+        copiedContainers: {},
+      },
+    });
+
+    expect(log.map((e) => e.type).slice(0, 2)).toEqual(['run.started', 'run.reseeded']);
+    expect((log[0] as Extract<EngineEvent, { type: 'run.started' }>).rerunOf).toBe('R1');
+    expect(order).toEqual(['b']); // `a` is copied, only `b` re-runs
+    expect(state.nodes.a!.status).toBe('success');
+    expect(state.outputs.a).toEqual({ x: 1 });
+    expect(finish?.outcome).toBe('success');
+    expect(diagnostics).toEqual([]);
+    // Self-derives from its own log alone (CP1).
+    expect(eng.projectRunState(log)).toEqual(state);
+  });
+
   it('a healthy many-node run stays well under the guard threshold', () => {
     const nodes = Array.from({ length: 50 }, (_, i) => node(`n${i}`));
     const eng = createEngine({ nodes, edges: [] });
