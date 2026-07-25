@@ -30,16 +30,41 @@ import json
 import re
 import sys
 
-# git subcommand forms that can silently delete uncommitted work.
-DESTRUCTIVE = (
-    (r"checkout\s+--(\s|$)", "git checkout -- <path>"),
-    (r"restore(\s|$)", "git restore"),
-    (r"stash(\s|$)", "git stash"),
-    (r"reset\s+--hard", "git reset --hard"),
-    (r"clean\s+-[a-zA-Z]*f", "git clean -f"),
-)
+OVERRIDE = "ALLOW_DESTRUCTIVE_GIT"
 # Read-only stash forms are explicitly fine.
-STASH_READONLY = re.compile(r"^stash\s+(list|show)(\s|$)")
+STASH_READONLY = ("list", "show")
+
+
+def destructive_form(sub, args):
+    """The human label if `git <sub> <args>` can delete uncommitted work, else None.
+
+    Decided over the ARGUMENT LIST, not by matching the first token: review found
+    that `git reset --mixed --hard HEAD` and `git clean --dry-run -f` slipped past a
+    first-token regex. A destructive flag counts wherever it appears.
+    """
+    if sub == "restore":
+        return "git restore"
+    if sub == "stash":
+        # `git stash`, `git stash push|save`, but NOT list/show
+        if args and args[0] in STASH_READONLY:
+            return None
+        return "git stash"
+    if sub == "checkout":
+        if "--" in args:
+            return "git checkout -- <path>"
+        # -f/--force overwrites local modifications on the way to another ref
+        if any(a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a)
+               for a in args):
+            return "git checkout --force"
+        return None
+    if sub == "reset":
+        return "git reset --hard" if "--hard" in args else None
+    if sub == "clean":
+        for a in args:
+            if a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a):
+                return "git clean -f"
+        return None
+    return None
 
 GUIDANCE = """BLOCKED: `%s` can destroy uncommitted work in a shared working tree.
 This has already cost this project two rework cycles (a fire wiped its own review
@@ -72,34 +97,43 @@ def strip_noncode(cmd):
 
 
 def commands_in(cmd):
-    """The command-position segments of a shell line, split on real separators."""
+    """Yield (segment, overridden) for each command-position segment of a shell line.
+
+    `overridden` is True only when THIS segment carries the ALLOW_DESTRUCTIVE_GIT=1
+    env prefix. Review found the override was previously tested against the whole raw
+    string, so the text appearing anywhere -- in a quoted string, a heredoc, a
+    neighbouring command -- disabled the guard for a real destructive call elsewhere
+    in the same line. The override is a property of one command, not of the line.
+    """
     for seg in re.split(r"(?:\|\||&&|[;\n|&()])", cmd):
         seg = seg.strip()
         if not seg:
             continue
-        # drop leading env assignments (FOO=bar git ...) and `sudo`/`time`
+        overridden = False
         while True:
-            m = re.match(r"^(?:[A-Za-z_][A-Za-z0-9_]*=\S*|sudo|time|env)\s+", seg)
+            m = re.match(r"^(?:([A-Za-z_][A-Za-z0-9_]*)=(\S*)|sudo|time|env)\s+", seg)
             if not m:
                 break
+            if m.group(1) == OVERRIDE and m.group(2) == "1":
+                overridden = True
             seg = seg[m.end():]
-        yield seg
+        yield seg, overridden
 
 
 def verdict(cmd):
     """(blocked, human_label). Pure: unit-testable without the harness."""
-    if "ALLOW_DESTRUCTIVE_GIT=1" in cmd:
-        return False, None
-    for seg in commands_in(strip_noncode(cmd)):
+    for seg, overridden in commands_in(strip_noncode(cmd)):
+        if overridden:
+            continue
         m = re.match(r"^git\s+(.*)$", seg, re.S)
         if not m:
             continue
-        rest = m.group(1).strip()
-        if STASH_READONLY.match(rest):
+        parts = m.group(1).split()
+        if not parts:
             continue
-        for pat, label in DESTRUCTIVE:
-            if re.match(pat, rest):
-                return True, label
+        label = destructive_form(parts[0], parts[1:])
+        if label:
+            return True, label
     return False, None
 
 

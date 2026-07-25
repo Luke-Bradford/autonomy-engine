@@ -83,6 +83,37 @@ class TestBlocks(unittest.TestCase):
     def test_explicit_override(self):
         self.assertAllowed("ALLOW_DESTRUCTIVE_GIT=1 git restore f.bak")
 
+    def test_override_is_per_command_not_per_line(self):
+        # review WARNING: the override was matched against the whole raw string, so
+        # the text appearing ANYWHERE disabled the guard for a real destructive call
+        # elsewhere in the same line.
+        self.assertBlocked('echo "ALLOW_DESTRUCTIVE_GIT=1" && git restore .')
+        self.assertBlocked("ALLOW_DESTRUCTIVE_GIT=1 git restore ok.bak; git reset --hard")
+        self.assertBlocked('cat <<EOF\nALLOW_DESTRUCTIVE_GIT=1\nEOF\ngit stash')
+        # only the value 1 counts, and only as an env prefix on THAT command
+        self.assertBlocked("ALLOW_DESTRUCTIVE_GIT=0 git restore .")
+
+    def test_destructive_flag_anywhere_in_the_args(self):
+        # review WARNING: first-token-only matching let reordered flags bypass
+        for cmd in ("git reset --mixed --hard HEAD",
+                    "git reset -q --hard origin/main",
+                    "git clean --dry-run -f",
+                    "git clean -d -f",
+                    "git clean -d --force",
+                    "git checkout --force main",
+                    "git checkout -f main",
+                    "git checkout -q -f other-branch"):
+            self.assertBlocked(cmd)
+
+    def test_nondestructive_neighbours_of_those_flags(self):
+        for cmd in ("git reset --soft HEAD~1",
+                    "git reset --mixed HEAD",
+                    "git clean -n",
+                    "git clean --dry-run",
+                    "git checkout -b feat/x",
+                    "git checkout --track origin/x"):
+            self.assertAllowed(cmd)
+
     def test_label_names_the_offending_form(self):
         self.assertEqual(guard.verdict("git stash")[1], "git stash")
         self.assertEqual(guard.verdict("git clean -fd")[1], "git clean -f")
