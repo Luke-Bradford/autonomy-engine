@@ -2,8 +2,28 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
     "types": ["node"]
   },
-  "include": ["src"]
+  // #726 — this is the TYPECHECK project (`tsc -p tsconfig.json --noEmit`), and
+  // it deliberately covers the package's config files as well as `src`.
+  // `vitest.config.ts` was previously outside every project, so a mistyped
+  // option in it (`testTimeOut`, or a since-renamed vitest key) would be
+  // SILENTLY IGNORED — vitest does not error on unknown keys — leaving the
+  // config present, the typecheck green, and the ~1-in-6 full-suite flake that
+  // file exists to kill quietly back. That is the same failure shape #723 was
+  // filed about, reached through the guard rather than through the harness.
+  //
+  // `rootDir` now lives in `tsconfig.build.json` rather than here: it constrains
+  // the EMIT layout (`dist/index.js`, not `dist/src/index.js`), so it belongs
+  // with the project that emits. Adding a file outside `src` to a project that
+  // sets `rootDir: "src"` is a hard TS6059, which is why this could not be a
+  // one-word edit. A child's `include` REPLACES the parent's rather than merging
+  // it, so the build project re-states `["src"]` and its output is unchanged.
+  //
+  // Preferred over a separate `tsconfig.vitest.json` (the `tsconfig.e2e.json`
+  // pattern) because it mirrors `packages/web/tsconfig.json`, which already
+  // covers its own config files this way, and costs no extra `tsc` invocation.
+  // The e2e project earns its separate existence by needing different `lib` and
+  // `module` settings for browser code; this file needs neither.
+  "include": ["src", "vitest.config.ts"]
 }

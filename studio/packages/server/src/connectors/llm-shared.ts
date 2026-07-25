@@ -336,6 +336,40 @@ export function structuredValidationFailure(
 }
 
 /**
+ * #727 — the single failure event for a call whose AUTHORED config names a
+ * parameter the resolved model has REMOVED (Anthropic answers 400 on those).
+ * Emitted as a PREFLIGHT, before any request is issued.
+ *
+ * `permanent`, and deliberately the SAME class the provider 400 would have
+ * produced via `classifyHttpStatus` — this changes the diagnosis, not the
+ * outcome. A retry of the identical request cannot succeed (the model will
+ * never grow the knob back), so it must never be `transient`.
+ *
+ * The message names the model, the offending author-facing field(s) and the
+ * remedy, because the failure it replaces was an opaque provider body that made
+ * the author guess which of their fields was at fault. `kind` names the
+ * provider, matching `noCompletionFailure` / `structuredValidationFailure` /
+ * `<kind> HTTP <status>`.
+ */
+export function unsupportedParamFailure(
+  kind: LlmConnectionKind,
+  model: string,
+  params: readonly string[],
+): Extract<ActivityEvent, { type: 'failed' }> {
+  const list = params.join(', ');
+  const plural = params.length > 1 ? 's' : '';
+  return {
+    type: 'failed',
+    kind: 'permanent',
+    error:
+      `${kind} model ${model} does not support the ${list} parameter${plural} ` +
+      `(removed on this model — the provider rejects the request). ` +
+      `Remove ${params.length > 1 ? 'them' : 'it'} from the activity config, ` +
+      `or select a model that still accepts ${params.length > 1 ? 'them' : 'it'}.`,
+  };
+}
+
+/**
  * #2 L4c — how many INTERNAL repair sub-calls a structured `llm_call` makes after
  * a 2xx response that parsed but produced no schema-valid structured output. `1`
  * = up to ONE repair (≤2 total provider calls per attempt).
