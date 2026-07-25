@@ -153,6 +153,25 @@ export async function connectNodes(
 }
 
 /**
+ * Draw the SAME edge `from → to`, but BACKWARDS: pointer down on the target's
+ * `in` port and up on the source's `out` port.
+ *
+ * A supported gesture — React Flow makes every handle both a valid connection
+ * start and end — and one no spec exercised until U6b, which is how the refusal
+ * panel came to compute its reason for the reversed edge. Half of all real
+ * connection gestures go through this path, so a rule that is only ever tested
+ * forwards is only half tested.
+ */
+export async function connectNodesBackwards(page: Page, from: number, to: number): Promise<void> {
+  const target = await portCentre(page, to, 'target');
+  const source = await portCentre(page, from, 'source');
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.down();
+  await page.mouse.move(source.x, source.y, { steps: 10 });
+  await page.mouse.up();
+}
+
+/**
  * Select the one edge by clicking the MIDPOINT of its rendered path.
  *
  * Not `edgeGroup(page).click()`: that targets the `<g>`'s bounding-box centre,

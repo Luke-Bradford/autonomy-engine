@@ -2675,10 +2675,18 @@ function forwardCycleErrors(
  *    found a cycle they did not just draw. The pre-existing cycle is already on
  *    screen as a validation badge and still blocks the save.
  *
- * Cost is two Kahn sweeps, O(V+E) each. That is deliberate: the caller runs this
- * per pointer-move during a drag, so it must stay linear — and the cheap
+ * PUBLISHED API: `engine/index.ts` re-exports this module with `export *`, so
+ * this is part of `@autonomy-studio/shared`'s surface, not an internal helper.
+ *
+ * Cost, stated precisely because the first draft of this comment oversold it:
+ * TWO Kahn sweeps per call, O(V+E) each, and the BASE sweep is repeated on every
+ * call even though its answer is invariant for a whole drag gesture. The caller
+ * runs this per pointer-move, so the linearity is what matters and the cheap
  * rejections (self-loop, unknown endpoint, duplicate edge) are expected to be
- * checked FIRST, so this only runs for a candidate that is otherwise legal.
+ * checked FIRST, leaving this to run only for an otherwise-legal candidate. If a
+ * graph ever grows big enough for the repeat to show, the fix is to hoist the
+ * base result into the caller's per-graph precompute — deliberately not done
+ * while it would only add an API seam for an unmeasured cost.
  *
  * `back: true` edges are exempt BY CONSTRUCTION rather than by a flag here: they
  * are not in the forward graph at all, so a caller authoring one must simply not

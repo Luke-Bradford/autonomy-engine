@@ -261,6 +261,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
      * The forward-DAG rule is new here. It was previously left entirely to the
      * save gate, so a cycle-closing edge could be drawn, seen, and only then
      * refused by a validation badge.
+     *
+     * One other semantic widened with the move: an endpoint is now a node id OR a
+     * CONTAINER id, where this used to accept node ids only. Containers are legal
+     * edge endpoints in the doc model, so refusing them was the narrower rule; no
+     * current caller passes one (React Flow's ports are on nodes).
      */
     connect(from, to, condition) {
       const graph = {

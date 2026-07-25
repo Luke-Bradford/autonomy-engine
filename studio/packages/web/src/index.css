@@ -1118,8 +1118,17 @@ td button + button {
 
 /* The refused-connection message. Sits in an RF `Panel`, so it is already
    positioned; this only styles the surface. `max-width` keeps a long reason
-   (which names both endpoints) from spanning a wide canvas. */
+   (which names both endpoints) from spanning a wide canvas.
+ *
+ * `pointer-events: none` is load-bearing, not polish. RF's `Panel` carries the
+ * `react-flow__panel` class, and U5's drop guard treats ANY
+ * `.react-flow__panel` as canvas chrome that must not accept a toolbox drop —
+ * so while a refusal is up, the strip across the bottom of the canvas would
+ * silently swallow a dropped activity. That is a second "the gesture quietly did
+ * nothing" surface inside the feature built to remove the first. Made
+ * transparent to hit-testing instead, with the dismiss button opted back in. */
 .canvas-refusal {
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 0.6rem;
@@ -1134,6 +1143,8 @@ td button + button {
 }
 
 .canvas-refusal button {
+  /* Opted back into hit-testing — see the `pointer-events: none` above. */
+  pointer-events: auto;
   flex: none;
   padding: 0 0.3rem;
   border: none;

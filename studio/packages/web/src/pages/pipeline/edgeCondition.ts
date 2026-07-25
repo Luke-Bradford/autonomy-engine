@@ -75,9 +75,12 @@ export const EDGE_VARIANTS: readonly Edge['on'][] = [...EdgeOnSchema.options, 'b
  * the same hue as the stroke it caps.
  *
  * A STRING marker id (rather than React Flow's `{ type: MarkerType.ArrowClosed }`
- * object form) is what makes this possible: `getMarkerId` returns a string marker
- * verbatim, so the edge references a marker the canvas defines itself
- * (`EdgeMarkers`) instead of one React Flow generates.
+ * object form) is what makes this possible. Precisely: `getMarkerId` returns a
+ * string marker's ID verbatim — RF still wraps it as `url('#<id>')` on the path —
+ * and it generates a `<marker>` def only for the OBJECT form. So a string id
+ * points at a marker the canvas must define itself (`EdgeMarkers`), and
+ * `connect-validation.spec.ts` asserts the rendered `marker-end` attribute
+ * because that wrapping is RF's behaviour, not ours to unit-test.
  *
  * The reason is NOT that RF's object form cannot carry a custom property. It was
  * written here as "a `fill="var(--success)"` presentation attribute does not

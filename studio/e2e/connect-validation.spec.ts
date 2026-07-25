@@ -4,12 +4,27 @@ import {
   addActivity,
   canvasNodes,
   connectNodes,
+  connectNodesBackwards,
   dragNodeBy,
   edgeGroup,
   fitAndSettle,
+  selectEdge,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { computedStyleOf, resolvedPaletteColor } from './support/theme';
+import { computedStyleOf, documentTheme, resolvedPaletteColor } from './support/theme';
+
+/**
+ * The condition → palette-var mapping, as `index.css` declares it and
+ * `palette.test.ts` guards it structurally. Repeated here because this file
+ * asserts the RESOLVED value, which only a browser can produce.
+ */
+const VARIANT_HUES = [
+  ['success', '--success'],
+  ['failure', '--error'],
+  ['completion', '--accent'],
+  ['skipped', '--muted'],
+  ['branch', '--branch'],
+] as const;
 
 /**
  * U6b — connect-time validation and arrowheads, in a real browser.
@@ -149,6 +164,90 @@ test.describe('U6b connect-time validation', () => {
     await expect(page.locator(REFUSAL)).toContainText(
       "'HTTP Request' → 'Write File' already has a 'success' edge",
     );
+
+    /* The panel states the reason as it is NOW, so removing the obstacle removes
+       the message — no dismiss needed. It also cannot go stale and name an
+       activity that has since been deleted, which is why the component keeps the
+       attempted ENDS rather than a frozen string. */
+    await selectEdge(page);
+    await page.keyboard.press('Backspace');
+    await expect(edgeGroup(page)).toHaveCount(0);
+    await expect(page.locator(REFUSAL)).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The same refusal, from a BACKWARDS drag — the gesture that broke it.
+   *
+   * React Flow hands `onConnectEnd` the raw (pointer-down, pointer-up) pair, not
+   * the source→target connection it normalised to decide validity. Read raw, the
+   * reason is computed for the OPPOSITE edge: this duplicate was explained as a
+   * cycle, and a backwards cycle-closer produced no message at all (the reversed
+   * candidate is legal, so the panel simply did not render) — a silent refusal
+   * inside the feature built to remove silent refusals. Found by review, not by
+   * the forward specs above, every one of which passed throughout.
+   */
+  test('a BACKWARDS drag gets the reason for the edge it would actually make', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'u6b-backwards');
+    await seedTwoNodes(page);
+    await connectNodes(page, 0, 1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    // Drawing the SAME edge backwards: down on Write File's `in`, up on HTTP
+    // Request's `out`. That is the duplicate `HTTP Request → Write File`.
+    await connectNodesBackwards(page, 0, 1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+    const refusal = page.locator(REFUSAL);
+    await expect(refusal).toContainText(
+      "'HTTP Request' → 'Write File' already has a 'success' edge",
+    );
+    await expect(refusal).not.toContainText('close a loop');
+
+    // And the reverse case: a backwards cycle-closer must SAY something.
+    await refusal.getByRole('button', { name: 'Dismiss' }).click();
+    await connectNodesBackwards(page, 1, 0);
+    await expect(edgeGroup(page)).toHaveCount(1);
+    await expect(refusal).toContainText("'Write File' → 'HTTP Request' would close a loop");
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * EVERY arrowhead hue, in BOTH themes.
+   *
+   * The narrow version of this — one marker, one theme — was the automated part
+   * of a claim the as-built section made about all five in both, with the rest
+   * resting on a single manual reading. A light-mode arrowhead is exactly the
+   * kind of thing that silently keeps its dark value, which is the failure the
+   * whole theme bridge exists to prevent.
+   */
+  test('every edge variant arrowhead paints its palette hue, in both themes', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'u6b-markers');
+    await seedTwoNodes(page);
+    await connectNodes(page, 0, 1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    for (const theme of ['dark', 'light'] as const) {
+      if (theme === 'light') await page.getByRole('switch', { name: 'Dark mode' }).click();
+      await expect
+        .poll(() => documentTheme(page), { message: `theme never became ${theme}` })
+        .toBe(theme);
+      for (const [variant, cssVar] of VARIANT_HUES) {
+        const expected = await resolvedPaletteColor(page, cssVar);
+        expect(expected, `${cssVar} resolved to nothing`).toMatch(/^rgb/);
+        expect(
+          await computedStyleOf(page, `#edge-arrow-${variant} path`, 'fill'),
+          `#edge-arrow-${variant} in ${theme}`,
+        ).toBe(expected);
+      }
+      // The one arrowhead an edge is actually USING matches that edge's stroke.
+      expect(await computedStyleOf(page, '#edge-arrow-success path', 'fill')).toBe(
+        await computedStyleOf(page, '.react-flow__edge-path', 'stroke'),
+      );
+    }
 
     await expectQuiet(page, problems);
   });

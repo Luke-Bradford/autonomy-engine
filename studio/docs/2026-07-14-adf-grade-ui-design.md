@@ -991,9 +991,31 @@ Decisions worth not re-deriving:
   -success-> b` and `a -failure-> b` are both legal; the canvas cannot DRAW the second yet (a drawn
   edge is always `success`), and **U19** — one source port per outcome — is what makes it drawable.
   Refusing the pair outright would have handed U19 a false rule to unpick.
+- **A connection gesture can START AT EITHER END, and the refusal must be judged on the oriented
+  edge.** The one REAL defect the pre-PR review found, and the worst-shaped one available: React
+  Flow normalises source/target internally before deciding validity (`isValidHandle`,
+  `isTarget = fromType === 'target'`) but hands `onConnectEnd` the RAW gesture — pointer-down node
+  and pointer-up node. Read raw, a duplicate drawn backwards was explained as a *cycle*, and a
+  cycle-closer drawn backwards produced **no message at all** (the reversed candidate is legal, so
+  the panel did not render) — a silent refusal inside the feature built to delete silent refusals.
+  Every forward spec was green throughout, because the drag helper only ever dragged
+  source→target. `orientDrawnEnds` + `connectNodesBackwards` close both halves.
+- **The panel keeps the attempted ENDS, not the message string**, and re-derives. A frozen message
+  goes stale the moment the graph moves: delete one of the two activities it names and an assertive
+  live region sits there naming something that is gone. Re-deriving also makes it self-clearing —
+  delete the conflicting edge and the duplicate refusal stops being true, so it disappears without a
+  dismiss. (The lint rule against `setState` in an effect is what forced this; the effect-clearing
+  version it rejected was strictly worse.)
+- **The panel is `pointer-events: none`** (dismiss button opted back in). RF's `Panel` carries
+  `react-flow__panel`, which U5's drop guard treats as chrome that must not accept a toolbox drop —
+  so while a refusal was up, the strip across the canvas silently swallowed dropped activities.
+  A second silent-gesture surface inside the same feature.
 - **`isValidConnection` runs per pointer-move**, so the endpoint set, the edge-key set and the
-  id→node map are `useMemo`'d per graph and only the linear cycle sweep runs per candidate (and
-  only for one the cheap rules already passed).
+  id→node map are `useMemo`'d per graph, and the cycle check only runs for a candidate the cheap
+  rules already passed. Stated precisely, because the first draft of that comment oversold it: the
+  cycle check is TWO linear Kahn sweeps per call and the base sweep is repeated even though its
+  answer is invariant for a whole drag. Hoisting it into the precompute is available if a graph ever
+  grows enough to notice; not done for an unmeasured cost.
 - **The refusal is `role="alert"`, deliberately not a second `role="status"`.** `PipelineCanvas`
   already runs a polite live region for the persistent validation badges; two polite regions
   updating together double-announce. This one answers a gesture the operator just made. Plain
@@ -1015,11 +1037,16 @@ Decisions worth not re-deriving:
 - **`connect(from, to, condition)` now takes a whole `EdgeCondition`**, not an `EdgeOn`. The looser
   signature could author `on: 'branch'` with no label — half an edge, which `EdgeSchema` rejects.
 
-**Browser-verified** (built bundle, both themes, zero console errors/warnings): all five arrowhead
-markers resolve to their palette hue in dark AND light (`rgb(88, 214, 141)` / `rgb(21, 112, 63)`
-for success, matching the edge stroke exactly); the mid-gesture port paints `--success` when valid
-and `--error` when not; the refusal panel re-themes and survives a selection change plus ~2.5s of
-ticks; dismiss clears it.
+**Verified in a browser, and — after review — mostly by the SUITE rather than by one reading.**
+`connect-validation.spec.ts` now asserts all five arrowhead hues in BOTH themes against the
+resolved palette value (dark `rgb(88, 214, 141)` / light `rgb(21, 112, 63)` for success, equal to
+the edge stroke), the mid-gesture port painting `--success` when valid and `--error` when not, the
+rendered `marker-end` attribute (RF's `url('#…')` wrapping is RF's behaviour, not ours to
+unit-test), and the backwards gesture. The first cut of this paragraph claimed the five-hue,
+two-theme reading while the automated part covered one hue in one theme — the FIT lens caught that,
+and the fix was to make the claim enforceable rather than to soften it. Manual-only, from the live
+pass: the refusal panel re-themes, survives a selection change plus ~2.5s of ticks, and dismiss
+clears it; zero console errors or warnings across the session.
 
 NOT in U6b, with owners: one source port per OUTCOME + retiring the condition dropdown (**U19**);
 back-edge authoring, which is the remedy the cycle refusal names (**U6e**); the container-BOUNDARY

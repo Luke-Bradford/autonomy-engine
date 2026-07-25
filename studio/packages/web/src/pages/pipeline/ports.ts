@@ -39,3 +39,35 @@ export const SOURCE_PORT_ID = 'out';
  * store authored `failure`, a refused duplicate would become an authored one.
  */
 export const DRAWN_EDGE_CONDITION: EdgeCondition = { on: 'success' };
+
+/**
+ * The SOURCE→TARGET ends of a connection gesture, whichever end it was started
+ * from.
+ *
+ * A drag can begin on EITHER port: React Flow gives every handle both
+ * `isConnectableStart` and `isConnectableEnd` by default, so grabbing a node's
+ * `in` port and pulling it back to an upstream node's `out` port is a supported
+ * way to draw the same edge. React Flow itself normalises this before it decides
+ * validity — `isValidHandle` computes
+ * `source: isTarget ? handleNodeId : fromNodeId` with
+ * `isTarget = fromType === 'target'` (`@xyflow/system` 0.0.79, index.js:2563 and
+ * 2591) — but `onConnectEnd` is handed the RAW gesture: `fromNode` is where the
+ * pointer went DOWN and `toNode` is what it was over on release.
+ *
+ * Reading those two as (source, target) is wrong for exactly half of all
+ * gestures, and it fails in the worst available way. On a graph `a → b`, drawing
+ * the duplicate `a → b` backwards (from b's `in` to a's `out`) is refused for
+ * being a duplicate, while the un-normalised reason is computed for `b → a` and
+ * explains a CYCLE instead. Worse, drawing a cycle-closer backwards is refused
+ * and the un-normalised candidate is LEGAL, so the panel renders nothing at all —
+ * the silent refusal this whole ticket exists to remove.
+ */
+export function orientDrawnEnds(
+  fromNodeId: string,
+  toNodeId: string,
+  fromHandleType: 'source' | 'target' | undefined,
+): { from: string; to: string } {
+  return fromHandleType === 'target'
+    ? { from: toNodeId, to: fromNodeId }
+    : { from: fromNodeId, to: toNodeId };
+}
