@@ -267,6 +267,77 @@ describe('FactoryResources — row actions', () => {
     await waitFor(() => expect(duplicateMock).toHaveBeenCalledWith(ALPHA, 'Alpha (copy)'));
   });
 
+  /**
+   * The actions are not mutually exclusive — the row `⋯` menus stay live while a
+   * draft is mid-submit — so two mutations can overlap. While the in-flight flag
+   * was a BOOLEAN, whichever finished first cleared it and lied about the other
+   * still running: the duplicate's submit button came back to life under a
+   * request that had not returned, and a second click minted a second copy.
+   */
+  it('keeps the draft submit disabled while ITS request is still in flight, not the fastest one', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    // The duplicate hangs; the delete raced against it resolves immediately.
+    let finishDuplicate!: (p: Pipeline) => void;
+    duplicateMock.mockImplementationOnce(
+      () => new Promise<Pipeline>((resolve) => (finishDuplicate = resolve)),
+    );
+
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Duplicate' }));
+    const submit = screen.getByRole('button', { name: 'Duplicate' });
+    await user.click(submit);
+    await waitFor(() => expect(submit).toBeDisabled());
+
+    // Now delete an unrelated row — its menu was never gated on the flag.
+    await openRowMenu(user, 'Beta');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_2'));
+
+    // The delete has come and gone; the duplicate has NOT. One `duplicatePipeline`
+    // call is the whole point — a re-enabled button here means two copies.
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+    expect(duplicateMock).toHaveBeenCalledTimes(1);
+
+    finishDuplicate(pipeline({ id: 'pl_3', name: 'Alpha (copy)' }));
+    await waitFor(() => expect(duplicateMock).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * `+` opens a CREATE draft, which replaces whatever draft is open — so while a
+   * rename/duplicate is mid-submit it would discard the name the user is waiting
+   * on, with the request still in flight.
+   */
+  it('cannot discard a mid-submit draft with the + button', async () => {
+    const user = userEvent.setup();
+    let finishRename!: (p: Pipeline) => void;
+    renameMock.mockImplementationOnce(
+      () => new Promise<Pipeline>((resolve) => (finishRename = resolve)),
+    );
+
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    await user.click(screen.getByRole('button', { name: 'Rename' }));
+
+    const add = screen.getByRole('button', { name: 'New pipeline' });
+    await waitFor(() => expect(add).toBeDisabled());
+    // The typed name is still there, not replaced by an empty create row.
+    expect(screen.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Alpha');
+
+    finishRename(pipeline({ name: 'Alpha' }));
+    // ...and it frees up again the moment the request settles, because it is
+    // also the target a delete hands focus back to.
+    await waitFor(() => expect(add).toBeEnabled());
+  });
+
   it('deletes only after a confirmation', async () => {
     const user = userEvent.setup();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);

@@ -105,7 +105,17 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
    * it — a cascading render for a value the UI never shows.
    */
   const returnFocusTo = useRef<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  /**
+   * How many mutations are in flight — a COUNT, not a boolean.
+   *
+   * The actions are not mutually exclusive: the row `⋯` menus stay live while a
+   * draft is mid-submit, so a delete can be started on top of a duplicate. As a
+   * boolean, whichever finished FIRST cleared the flag and lied about the other
+   * still running — which re-enabled the draft's submit button under a request
+   * that had not come back yet, so a second click minted a second copy.
+   */
+  const [pending, setPending] = useState(0);
+  const busy = pending > 0;
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -183,10 +193,14 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
    * same time, over the same data — from disagreeing. A FAILED mutation keeps
    * the draft row open with the typed name intact: re-typing a name to retry is
    * a punishment for the server's mistake.
+   *
+   * `pending` is stepped rather than set, so overlapping mutations each account
+   * for themselves: the LAST one to finish is what drops the count to zero, not
+   * the first.
    */
   const run = useCallback(
     async (action: () => Promise<unknown>, describe: (err: unknown) => string) => {
-      setBusy(true);
+      setPending((n) => n + 1);
       setActionError(null);
       try {
         await action();
@@ -196,7 +210,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
         setActionError(describe(err));
         return false;
       } finally {
-        setBusy(false);
+        setPending((n) => n - 1);
       }
     },
     [refresh],
@@ -286,6 +300,19 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
             type="button"
             className="factory-resources__icon-button"
             aria-label="New pipeline"
+            /* Opening a create draft REPLACES whatever draft is open, so while a
+               rename/duplicate is mid-submit this would throw away the name the
+               user is waiting on — with the request still in flight.
+
+               Gated on a draft actually being in flight, not on `busy` alone,
+               and that is load-bearing rather than fussy: this button is also
+               the focus-restoration target a delete hands back to, and a
+               DISABLED element cannot take focus. The effect below only ever
+               restores while `activeDraft === null` — precisely when this
+               condition leaves the button enabled — so the two cannot collide.
+               `disabled={busy}` would strand focus on `<body>` whenever two
+               deletes overlapped. */
+            disabled={busy && activeDraft !== null}
             onClick={() => {
               setExpanded(true);
               openDraft({ kind: 'create', name: '' }, NEW_PIPELINE_BUTTON_ID);
