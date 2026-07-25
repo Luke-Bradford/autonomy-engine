@@ -41,8 +41,16 @@ export interface ResolvedPrice extends ModelUnitPrice {
  * this string (old runs keep replaying their own recorded cost). The date form
  * is a human-readable monotonic label, not a magic string — it is the single
  * source consumed by `resolvePrice`.
+ *
+ * #708 ADDING A ROW ALSO BUMPS IT. Strictly, adding a previously-absent model
+ * changes no existing price, and nothing retro-changes either way (runs on an
+ * unpriced model stamped no version at all). Bumped regardless, because the
+ * alternative is worse: two tables with DIFFERENT contents would share one
+ * version label, so `builtin-2026-07-18` would no longer identify a single
+ * table — which is the one property the pin exists to provide. The rule to
+ * carry forward is "any change to the CONTENTS bumps it", not just to a value.
  */
-export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-18';
+export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-25';
 
 /**
  * Built-in prices (USD per 1M tokens), keyed by ConnectionKind then EXACT
@@ -55,7 +63,8 @@ export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-18';
  * per-connection override.
  *
  * Seeded ONLY with authoritatively-sourced Anthropic list prices (claude-api
- * skill, cached 2026-06-24). `openai_api` and `ollama` are deliberately ABSENT:
+ * skill model table, cached 2026-06-24; the `claude-opus-5` row added
+ * 2026-07-25 from the same source). `openai_api` and `ollama` are deliberately ABSENT:
  * no authoritative unit prices were on hand, and the repo's "verify before
  * asserting" rule forbids guessing them — an unpriced provider is the honest
  * fail-closed default, addable now via the per-connection override and later via
@@ -65,6 +74,10 @@ export const BUILTIN_PRICE_TABLE_VERSION = 'builtin-2026-07-18';
  */
 export const BUILTIN_PRICES: Partial<Record<ConnectionKind, Record<string, ModelUnitPrice>>> = {
   anthropic_api: {
+    // #708 — the connector's DEFAULT_MODEL. An absent row here meant every
+    // default-model call resolved to `null` and stamped NO `costEstimate`, so
+    // the loss of cost telemetry was silent rather than an error.
+    'claude-opus-5': { inUnitPrice: 5, outUnitPrice: 25 },
     'claude-opus-4-8': { inUnitPrice: 5, outUnitPrice: 25 },
     'claude-opus-4-7': { inUnitPrice: 5, outUnitPrice: 25 },
     'claude-opus-4-6': { inUnitPrice: 5, outUnitPrice: 25 },

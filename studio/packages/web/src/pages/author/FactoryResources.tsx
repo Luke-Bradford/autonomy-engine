@@ -344,7 +344,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
           <button
             id={NEW_PIPELINE_BUTTON_ID}
             type="button"
-            className="factory-resources__icon-button"
+            className="icon-button factory-resources__icon-button"
             aria-label="New pipeline"
             /* Opening a create draft REPLACES whatever draft is open, so while a
                rename/duplicate is mid-submit this would throw away the name the
@@ -372,7 +372,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
       <div className="factory-resources__group">
         <button
           type="button"
-          className="factory-resources__disclosure"
+          className="icon-button factory-resources__disclosure"
           aria-expanded={expanded}
           aria-controls={PIPELINES_LIST_ID}
           aria-label={`${expanded ? 'Collapse' : 'Expand'} ${listLabel}`}
@@ -443,7 +443,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
                   <button
                     id={rowMenuId(p.id)}
                     type="button"
-                    className="factory-resources__icon-button"
+                    className="icon-button factory-resources__icon-button"
                     aria-label={`More actions for ${p.name}`}
                   >
                     <MoreHorizontalRegular aria-hidden="true" />

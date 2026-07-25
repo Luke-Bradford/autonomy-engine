@@ -44,10 +44,33 @@ const STRUCTURED_TOOL_NAME = 'structured_output';
 
 const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
-/** The Messages API REQUIRES max_tokens; used when the node sets none. */
-const DEFAULT_MAX_TOKENS = 1024;
+/**
+ * The Messages API REQUIRES max_tokens; used when the node sets none.
+ *
+ * #708 — raised from 1024 when `DEFAULT_MODEL` moved to Opus 5, and the two
+ * MUST move together. `max_tokens` is a hard cap on TOTAL output — thinking
+ * tokens and response text combined — and Opus 5 thinks BY DEFAULT (omitting
+ * `thinking` runs adaptive, at the API's default `high` effort, where "Claude
+ * almost always thinks"). Opus 4.8 did the opposite: omitting `thinking` meant
+ * no thinking, so 1024 was 1024 tokens of answer.
+ *
+ * Left at 1024, the flip would have failed SILENTLY and destructively: thinking
+ * consumes the budget, the response comes back truncated or text-free with
+ * `stop_reason: "max_tokens"`, `extractText` sees no text block and returns
+ * null, and the node terminalizes `empty_completion_set` as a PERMANENT
+ * failure — on a pipeline that worked the day before, with nothing in the
+ * error naming the real cause.
+ *
+ * 16000 is the documented default for non-streaming requests (it keeps a
+ * response inside the SDK/HTTP timeout envelope, and this connector is
+ * non-streaming with a 120s ceiling). Note this raises a CAP, not a spend:
+ * tokens are billed as generated, so a short answer still costs a short
+ * answer. The real cost increase is the thinking itself, which is the model
+ * default now and is not something `max_tokens` can opt out of.
+ */
+const DEFAULT_MAX_TOKENS = 16000;
 /** The default model when neither the node nor the connection specifies one. */
-const DEFAULT_MODEL = 'claude-opus-4-8';
+const DEFAULT_MODEL = 'claude-opus-5';
 
 const anthropicConnectionConfigSchema = llmConnectionConfigSchema.extend({
   /** The `anthropic-version` header value. Defaults to `2023-06-01`. */
@@ -241,11 +264,21 @@ export const anthropicAdapter: ConnectorAdapter = {
       // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
       // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
       // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
-      // `claude-opus-4-8`. Both keys are emitted together: `output_config.effort` sets
-      // the depth, `thinking:{adaptive}` turns reasoning ON (omitting it leaves Opus
-      // 4.8 non-thinking, making effort inert). CAVEAT: thinking tokens count against
-      // `max_tokens` (default 1024). Only fires when the author opted in, so a node
-      // with no `reasoningEffort` is byte-identical to a pre-L3 request.
+      // `claude-opus-5`. Both keys are emitted together: `output_config.effort` sets
+      // the depth, `thinking:{adaptive}` turns reasoning ON.
+      //
+      // #708 — that second clause used to read "omitting it leaves Opus 4.8
+      // non-thinking, making effort inert", which was true of Opus 4.8 and is
+      // NOT true of the current default. On Opus 5 an omitted `thinking` runs
+      // ADAPTIVE anyway, so emitting `{type:'adaptive'}` is equivalent to the
+      // model default rather than the thing that switches reasoning on. It is
+      // still emitted deliberately: it remains load-bearing for Opus 4.8/4.7 and
+      // Sonnet 5, which a node or connection may still select by name.
+      //
+      // CAVEAT: thinking tokens count against `max_tokens` — see the
+      // DEFAULT_MAX_TOKENS note, which is now load-bearing rather than advisory.
+      // Only fires when the author opted in, so a node with no `reasoningEffort`
+      // is byte-identical to a pre-L3 request.
       if (reasoningEffort !== undefined && opts.allowThinking) {
         body.thinking = { type: 'adaptive' };
         body.output_config = { effort: reasoningEffort };
@@ -266,20 +299,32 @@ export const anthropicAdapter: ConnectorAdapter = {
     // is the robust, model-agnostic Anthropic structured mechanism (the newer
     // `output_config.format` is model-gated), and it makes a `tool_use`-only
     // response the COMPLETION rather than a no-completion (superseding the text-mode
-    // note in `extractText`). A forced `tool_choice` precludes the adaptive-thinking
-    // reasoning surface on the Messages API, so structured mode intentionally does
-    // NOT emit `thinking`/`output_config` even when `reasoningEffort` is set (the
-    // two are mutually exclusive here; reasoning stays available in text mode and on
-    // the other providers). L4c wraps the call in a bounded internal repair loop:
+    // note in `extractText`). Structured mode does NOT emit `thinking`/`output_config`
+    // even when `reasoningEffort` is set, so reasoning stays available in text mode
+    // and on the other providers.
+    //
+    // #708 — the ORIGINAL justification for that suppression was "a forced
+    // `tool_choice` precludes the adaptive-thinking surface". That is FALSE and
+    // is corrected here rather than propagated: forcing tool use errors only
+    // under MANUAL extended thinking (`thinking:{type:'enabled'}`), and
+    // "adaptive thinking supports forced tool use". So there is no 400 to avoid.
+    // The suppression is also now INERT on the Opus 5 default: omitting
+    // `thinking` no longer suppresses reasoning, it just accepts the model's
+    // adaptive default, which is why DEFAULT_MAX_TOKENS had to be raised for
+    // this path too. Left in place deliberately — deleting it changes the
+    // reasoning posture of every structured/`required` node, which is a
+    // behaviour change that belongs in its own ticket, not a bug sweep. See #724.
+    // L4c wraps the call in a bounded internal repair loop:
     // `runStructuredWithRepair` rebuilds the body from the (possibly repair-extended)
     // turns each call, meters every billed call, re-prompts on an invalid/absent
     // forced-tool result, and terminalizes `permanent` only once repairs run out —
     // all inside ONE attempt.
     if (structuredOutput !== undefined) {
-      // A forced `tool_choice` precludes the adaptive-thinking reasoning
-      // surface, so structured mode never emits `thinking`/`output_config`
-      // (`allowThinking:false`); only `messages` changes across repair calls,
-      // so the static scaffold is rebuilt with the passed turns.
+      // Structured mode never emits `thinking`/`output_config`
+      // (`allowThinking:false`) — see the #708 note above for why the original
+      // "forced tool_choice precludes thinking" rationale was wrong and why the
+      // flag is nonetheless kept for now. Only `messages` changes across repair
+      // calls, so the static scaffold is rebuilt with the passed turns.
       const structuredWire = {
         tools: [
           {
@@ -336,12 +381,18 @@ export const anthropicAdapter: ConnectorAdapter = {
     const tools = input.data.tools;
     const authorChoice = input.data.toolChoice ?? 'auto';
     if (tools !== undefined && authorChoice !== 'none') {
-      // A FORCED tool_choice (`required` → `{type:'any'}`) precludes the
+      // A `required` flow suppresses `thinking`/`output_config` for the WHOLE
+      // attempt (one rule per node; enabling it only on the downgraded
+      // continuation would split one node's reasoning posture across calls). An
+      // `auto` flow keeps reasoning as text mode does.
+      //
+      // #708 — this used to say a forced `tool_choice` "precludes the
       // adaptive-thinking surface, exactly as the structured path's forced
-      // `{type:'tool'}` does — so a `required` flow suppresses `thinking`/
-      // `output_config` for the WHOLE attempt (one rule per node; enabling it
-      // only on the downgraded continuation would split one node's reasoning
-      // posture across calls). An `auto` flow keeps reasoning as text mode does.
+      // `{type:'tool'}` does". Both halves of that were wrong: forcing tool use
+      // errors only under MANUAL extended thinking, and adaptive thinking
+      // supports it. As on the structured path the flag is now also inert on
+      // the Opus 5 default. Kept rather than removed for the same reason — see
+      // #724.
       const suppressThinking = authorChoice === 'required';
       const localTools = tools.map((t) => ({
         name: t.name,

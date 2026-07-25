@@ -20,10 +20,26 @@ export default defineConfig({
         // · css 4.27 kB. U1 added ~+5.0 kB gzip total, of which +4.64 kB is one
         // Fluent `Switch` and it landed in `fluent`, NOT the entry (+0.20) —
         // which is what this split is for, and the property to hold as U4-U29
-        // pull in more Fluent surface. The entry chunk is over Rollup's 500 kB
-        // raw warning already and is tracked separately by #698 (route-level
-        // code-splitting). Treat a Fluent-driven jump in the ENTRY chunk as the
-        // regression to investigate — it means a barrel import escaped this rule.
+        // pull in more Fluent surface. (The entry chunk was over Rollup's 500 kB
+        // raw warning at the time; #698 below fixed that.) Treat a Fluent-driven
+        // jump in the ENTRY chunk as the regression to investigate — it means a
+        // barrel import escaped this rule.
+        //
+        // #698 measured (route-level code-splitting, bug sweep) — gzip:
+        // `fluent` 71.03 kB · `router` 30.64 kB · entry 109.45 kB · index css
+        // 2.87 kB · NEW `PipelineCanvasRoute` 60.01 kB + its own css 2.56 kB.
+        // The entry chunk fell 169.39 -> 109.45 kB gzip (559 -> 373 kB raw), a
+        // 35% cut, and Rollup's >500 kB raw warning is gone. The whole of that
+        // came from ONE route: `@xyflow/react` is imported only by the pipeline
+        // canvas, so until now every visitor downloaded React Flow to look at a
+        // list of runs. Vite split the canvas's CSS out on the same boundary
+        // without being asked; total CSS is a shade larger (5.43 vs 5.17 kB
+        // gzip) but first paint only pays 2.87 kB of it.
+        //
+        // Only the canvas route is lazy. The other pages are ordinary React +
+        // Fluent and would each buy back single-digit kB for a Suspense
+        // boundary apiece — measure before adding more, rather than lazying
+        // every route reflexively.
         //
         // U2 measured — gzip: `fluent` 39.69 kB · `router` 30.59 kB · entry
         // 167.13 kB · css 4.30 kB. Two things worth keeping straight:

@@ -66,7 +66,7 @@ describe('computeRunCost', () => {
         inputTokens: 100,
         inUnitPrice: 5,
         outUnitPrice: 25,
-        priceTableVersion: 'builtin-2026-07-18',
+        priceTableVersion: 'builtin-2026-07-25',
       }),
     ]);
     expect(cost.responseCount).toBe(1);

@@ -134,7 +134,7 @@ describe('run-events repo', () => {
         base['inUnitPrice'] = 5;
         base['outUnitPrice'] = 25;
         base['costEstimate'] = fields.cost;
-        base['priceTableVersion'] = 'builtin-2026-07-18';
+        base['priceTableVersion'] = 'builtin-2026-07-25';
       }
       return base;
     }

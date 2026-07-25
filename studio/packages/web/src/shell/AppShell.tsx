@@ -1,4 +1,4 @@
-import { useCallback, useRef, type CSSProperties } from 'react';
+import { Suspense, useCallback, useRef, type CSSProperties } from 'react';
 import { Outlet, useMatches } from 'react-router';
 import { useStore } from 'zustand';
 import { HubRail } from './HubRail';
@@ -97,8 +97,19 @@ export function AppShell() {
               : undefined
           }
         />
+        {/* #698 — the code-splitting boundary sits INSIDE `<main>`, not around
+            the shell. Two reasons. Rendered: the rail, command bar and pane stay
+            painted while a lazy route's chunk loads, so only the workspace
+            swaps — a shell that blanks entirely would be a worse experience
+            than the eager import it replaced. Structural: `routes.test.tsx`
+            reads `<main>` SYNCHRONOUSLY via `getByRole('main')`, so hoisting
+            the boundary above `AppShell` would suspend the chrome those tests
+            query. The fallback is deliberately empty — a spinner here would
+            flash on a local-first app whose chunks load in milliseconds. */}
         <main className="content">
-          <Outlet />
+          <Suspense fallback={null}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

@@ -15,15 +15,19 @@ const dbBase = join(tmpRoot, 'db');
 mkdirSync(dbBase, { recursive: true });
 
 const INDEX_HTML =
-  '<!doctype html><html><body><div id="root"></div><script src="/assets/app.js"></script></body></html>';
+  '<!doctype html><html><head><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head><body><div id="root"></div><script src="/assets/app.js"></script></body></html>';
 const APP_JS = 'console.log("autonomy studio web");';
+const FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>';
 
-/** A populated web build: index.html + an assets/ bundle. */
+/** A populated web build: index.html + an assets/ bundle + the #717 favicon. */
 function seedWebRoot(name: string): string {
   const dir = join(tmpRoot, name);
   mkdirSync(join(dir, 'assets'), { recursive: true });
   writeFileSync(join(dir, 'index.html'), INDEX_HTML);
   writeFileSync(join(dir, 'assets', 'app.js'), APP_JS);
+  // `vite build` copies `packages/web/public/*` to the dist ROOT, so the
+  // favicon sits beside index.html rather than under assets/.
+  writeFileSync(join(dir, 'favicon.svg'), FAVICON_SVG);
   return dir;
 }
 
@@ -48,6 +52,28 @@ describe('static web SPA serving (P7)', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/html/);
     expect(res.body).toContain('<div id="root">');
+  });
+
+  // #717 — a browser requests the favicon on every navigation whether or not
+  // the page asks for one; with nothing to serve, the answer was a 404 logged
+  // as a console ERROR on every load of a self-hosted install. The e2e console
+  // guard cannot cover this (Playwright's context issues no implicit favicon
+  // request), so the single-origin serving path is asserted here instead.
+  //
+  // Both halves matter and fail independently: the FILE must be served from the
+  // web root, and index.html must POINT at it — a correct file with a typo'd
+  // href still 404s, because the SPA fallback deliberately does not rewrite
+  // non-HTML misses to the shell.
+  it('serves the favicon from the web root with an svg content-type (#717)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/favicon.svg' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toMatch(/image\/svg\+xml/);
+  });
+
+  it('declares the favicon in index.html so no browser falls back to /favicon.ico (#717)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/', headers: { accept: 'text/html' } });
+    expect(res.body).toContain('rel="icon"');
+    expect(res.body).toContain('/favicon.svg');
   });
 
   it('serves a hashed asset from /assets with its own content-type', async () => {

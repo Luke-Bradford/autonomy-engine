@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- #717 — without this, a browser falls back to requesting /favicon.ico,
+         which the server answers 404, putting a permanent error in the console
+         of every self-hosted install. That is the noise that teaches an
+         operator to ignore console errors that DO matter. Note the e2e console
+         guard cannot catch a regression here: Playwright's context does not
+         issue the implicit favicon request a real browsing session does. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>autonomy-studio</title>
   </head>
   <body>
