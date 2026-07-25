@@ -409,31 +409,63 @@ body {
   border-radius: 4px;
 }
 
-.factory-resources__icon-button {
+/* #721 — the ONE flat icon-button treatment.
+   Three of these had been written out independently (the U3 command-bar pane
+   toggle, the U4 Factory Resources row actions, and the Factory Resources group
+   chevron), and the rail, command bar and pane are all on screen at once, so
+   the mismatch was directly comparable. This carries everything they genuinely
+   share: the reset off the global `button` rule, the hover fill, and the focus
+   ring. Call sites keep ONLY what differs — box size, icon size, and rest
+   colour.
+
+   MUST BE DECLARED BEFORE its call sites. Every rule here is a single class
+   (specificity 0,1,0) and so are `.command-bar__pane-toggle` etc., so on a tie
+   SOURCE ORDER decides: moved below them, `padding: 0` would silently win and
+   collapse the toggle.
+
+   The ring is drawn INSIDE the border box (`outline-offset: -2px`) because both
+   the pane and the command bar clip their overflow, so a ring at a positive
+   offset is sliced off at both edges.
+
+   NOTE `button:hover:not(:disabled) { border-color: var(--accent) }` further
+   down is specificity (0,2,1) and therefore OUTRANKS `.icon-button:hover`
+   (0,2,0). It is invisible today only because `border: none` leaves no border
+   to colour — reintroduce any border width here and that global rule will
+   start painting an accent edge on hover. */
+.icon-button {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 26px;
-  height: 26px;
   padding: 0;
-  font-size: 16px;
-  color: var(--text);
   background: none;
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  /* The Fluent icons are SVGs sized in `em`; without this the line box adds
+     stray vertical space inside a fixed-size button. */
+  line-height: 0;
 }
 
-.factory-resources__icon-button:hover {
+.icon-button:hover {
   background: var(--panel-2);
+  color: var(--text);
 }
 
-/* Drawn INSIDE the border box, like the pane links: the pane clips its
-   overflow, so a ring at a positive offset is sliced off at both edges. */
-.factory-resources__icon-button:focus-visible {
+.icon-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+.factory-resources__icon-button {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+  /* Full-strength rather than `--muted` at rest, unlike the other two: these
+     are revealed by row hover/focus (opacity 0 -> 1 below), so by the time one
+     is visible the row is already the user's focus and a muted glyph reads as
+     disabled. */
+  color: var(--text);
 }
 
 .factory-resources__group {
@@ -449,25 +481,17 @@ body {
   font-weight: 600;
 }
 
+/* #721 — folded onto `.icon-button` with the other two. It gains a hover fill
+   and a 4px radius it did not have; that is the point of unifying rather than
+   leaving a third near-miss to be copied into a fourth. It also picks up the
+   shared `line-height: 0` — no rendered effect on a fixed-size flex-centred box
+   like this one, but noted so the inheritance is not a surprise later. */
 .factory-resources__disclosure {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
   width: 20px;
   height: 24px;
   margin-left: 0.5rem;
-  padding: 0;
   font-size: 12px;
   color: var(--muted);
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-
-.factory-resources__disclosure:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 
 .factory-resources__list {
@@ -557,22 +581,22 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* #721 — folded onto `.icon-button`. THREE deliberate changes came with it, all
+   browser-verified rather than assumed:
+     1. the box loses a TRANSPARENT 1px border (invisible, but it still occupied
+        layout space, so the button is now 2px narrower and shorter — measured
+        28x28 -> 26x26);
+     2. the radius drops from the global `button` rule's 6px to the shared 4px;
+     3. it inherits `flex: 0 0 auto`, which it did not have — so it can no longer
+        SHRINK inside the flex command bar. That is the wanted behaviour for a
+        fixed-size icon target (it previously had `flex-shrink: 1`), but it is a
+        real change, not a no-op.
+   `padding` is respecified here because `.icon-button` zeroes it — this button
+   sizes by padding, not by a fixed box like the Factory ones. */
 .command-bar__pane-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   padding: 0.25rem;
-  background: transparent;
-  border-color: transparent;
-  color: var(--muted);
-  /* The Fluent icon is an SVG sized in `em`. */
   font-size: 18px;
-  line-height: 0;
-}
-
-.command-bar__pane-toggle:hover {
-  background: var(--panel-2);
-  color: var(--text);
+  color: var(--muted);
 }
 
 .command-bar__breadcrumb ol {

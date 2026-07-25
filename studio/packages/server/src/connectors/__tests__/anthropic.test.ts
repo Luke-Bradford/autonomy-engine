@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolvePrice } from '@autonomy-studio/shared';
 import { anthropicAdapter } from '../anthropic.js';
+import { DEFAULT_LLM_TIMEOUT_MS } from '../llm-shared.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import { sha256Hex } from '../../util/hash.js';
 
@@ -168,7 +170,7 @@ describe('anthropicAdapter.runActivity', () => {
     expect(headers['anthropic-version']).toBe('2023-06-01');
   });
 
-  it('defaults the model to claude-opus-4-8 and max_tokens, honoring input overrides', async () => {
+  it('defaults the model to claude-opus-5 and max_tokens, honoring input overrides', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(
       anthropicAdapter.runActivity(
@@ -177,15 +179,60 @@ describe('anthropicAdapter.runActivity', () => {
       ),
     );
     const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
-    expect(body.model).toBe('claude-opus-4-8');
+    expect(body.model).toBe('claude-opus-5');
     expect(body.max_tokens).toBe(50);
     expect(body.system).toBe('be terse');
     expect(body.messages).toEqual([{ role: 'user', content: 'p' }]);
   });
 
+  // #708 — the default `max_tokens`, pinned because it is COUPLED in BOTH
+  // directions and a change either way has a silent failure mode.
+  //
+  // Too LOW and thinking eats the budget: `max_tokens` caps thinking + response
+  // text together, the Opus 5 default thinks unless told not to, and a truncated
+  // or text-free response is what `extractText` turns into a PERMANENT
+  // `empty_completion_set` failure.
+  //
+  // Too HIGH and it outruns this connector's own 120s non-streaming timeout
+  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path emits NO `activity.metered` event
+  // even though the provider generated and billed the tokens, and classifies
+  // `transient`, so the engine retries and buys another unmetered generation.
+  // That is the very telemetry hole this ticket closed, via a different door.
+  //
+  // So this is an upper AND lower bound, not a preference. Anyone moving it
+  // should read the `DEFAULT_MAX_TOKENS` block and #725 first.
+  it('defaults max_tokens to a budget that fits the non-streaming timeout', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(anthropicAdapter.runActivity(ctx({ input: { prompt: 'p' } }), 'sk'));
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.max_tokens).toBe(4096);
+    // The bound that matters: at a pessimistic ~40 tok/s this must still finish
+    // inside DEFAULT_LLM_TIMEOUT_MS, or the silent-billing path above opens.
+    expect((body.max_tokens / 40) * 1000).toBeLessThan(DEFAULT_LLM_TIMEOUT_MS);
+  });
+
+  // #708 — the REGRESSION GUARD for this ticket's actual defect: the connector
+  // default and the built-in price table drifted apart, so every default-model
+  // call resolved to a null price and stamped no `costEstimate`. That failure
+  // was SILENT — no error, no log, just missing cost telemetry.
+  //
+  // Asserted through the metered event's `usage.model` rather than by exporting
+  // DEFAULT_MODEL, because `usage.model` is literally the value the executor
+  // hands to `resolvePrice` — so this exercises the real pricing path instead
+  // of agreeing with a constant. Deliberately NOT generalised to "every
+  // provider's default is priced": `openai_api` and `ollama` are unpriced BY
+  // DESIGN, so a provider-agnostic version would fail on purpose-built gaps.
+  it('prices its own default model (the default and the price table must not drift)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(anthropicAdapter.runActivity(ctx({ input: { prompt: 'p' } }), 'sk'));
+    const model = metered(events)?.usage.model;
+    expect(model).toBeDefined();
+    expect(resolvePrice('anthropic_api', model!, null)).not.toBeNull();
+  });
+
   // #2 L3 — reasoningEffort engages the modern Anthropic reasoning surface:
   // adaptive thinking + output_config.effort (NOT the deprecated budget_tokens,
-  // which 400s on every current model incl. the claude-opus-4-8 default).
+  // which 400s on every current model incl. the claude-opus-5 default).
   it('maps reasoningEffort to adaptive thinking + output_config.effort', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(
@@ -417,7 +464,7 @@ describe('anthropicAdapter usage capture (L2)', () => {
       type: 'metered',
       usage: {
         provider: 'anthropic_api',
-        model: 'claude-opus-4-8',
+        model: 'claude-opus-5',
         inputTokens: 5,
         outputTokens: 7,
         meteringStatus: 'metered',
@@ -433,7 +480,7 @@ describe('anthropicAdapter usage capture (L2)', () => {
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
     expect(metered(events)?.usage).toEqual({
       provider: 'anthropic_api',
-      model: 'claude-opus-4-8',
+      model: 'claude-opus-5',
       meteringStatus: 'unknown',
     });
     // The terminal event still lands — an unmetered response is NOT a failure.
@@ -453,7 +500,7 @@ describe('anthropicAdapter usage capture (L2)', () => {
     // the pair is incomplete so meteringStatus is unknown.
     expect(metered(events)?.usage).toEqual({
       provider: 'anthropic_api',
-      model: 'claude-opus-4-8',
+      model: 'claude-opus-5',
       inputTokens: 9,
       meteringStatus: 'unknown',
     });
@@ -648,7 +695,7 @@ describe('anthropicAdapter — #2 L9a prompt/completion capture', () => {
 
     const { capture } = captured(events);
     expect(capture.provider).toBe('anthropic_api');
-    expect(capture.model).toBe('claude-opus-4-8');
+    expect(capture.model).toBe('claude-opus-5');
     expect(typeof capture.latencyMs).toBe('number');
     expect(capture.latencyMs).toBeGreaterThanOrEqual(0);
     expect(capture.request).toEqual({

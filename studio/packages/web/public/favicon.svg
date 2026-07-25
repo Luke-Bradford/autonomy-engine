@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="autonomy-studio">
+  <title>autonomy-studio</title>
+  <!-- #717 — the app icon. SVG rather than .ico so it stays a reviewable text
+       file in the diff (no binary blob) and scales to every tab/bookmark size
+       from one source. Colours are the dark-theme `--panel`/`--accent` token
+       VALUES rather than `var(--accent)`: a favicon is fetched as a standalone
+       document, so it inherits none of the app's custom properties, and a
+       `var()` here would silently resolve to nothing. `prefers-color-scheme`
+       inside the SVG covers the light-theme case instead. -->
+  <style>
+    .bg { fill: #171a21; }
+    .fg { fill: none; stroke: #6ea8fe; stroke-width: 2.5; stroke-linecap: round; }
+    .dot { fill: #6ea8fe; }
+    @media (prefers-color-scheme: light) {
+      .bg { fill: #ffffff; }
+      .fg { stroke: #2a5db0; }
+      .dot { fill: #2a5db0; }
+    }
+  </style>
+  <rect class="bg" width="32" height="32" rx="7" />
+  <!-- A pipeline: two source nodes converging into one downstream node — the
+       shape the product is about. -->
+  <path class="fg" d="M9 10h5a4 4 0 0 1 4 4v4a4 4 0 0 0 4 4h1" />
+  <path class="fg" d="M9 22h5a4 4 0 0 0 4-4" />
+  <circle class="dot" cx="8" cy="10" r="2.6" />
+  <circle class="dot" cx="8" cy="22" r="2.6" />
+  <circle class="dot" cx="24" cy="22" r="2.6" />
+</svg>

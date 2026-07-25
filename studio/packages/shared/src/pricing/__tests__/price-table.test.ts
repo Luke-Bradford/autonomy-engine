@@ -14,6 +14,14 @@ describe('#2 L5 — resolvePrice', () => {
     // The key is the EXACT resolved model-ID string the adapter stamps
     // (`activity.metered.model`), NOT the friendly tier name — a mismatch would
     // silently unprice every response.
+    // #708 — `claude-opus-5` is the anthropic connector's DEFAULT_MODEL. It was
+    // absent from the table, so the default path priced to `null` and stamped
+    // no `costEstimate` at all: silent loss of cost telemetry, not an error.
+    expect(resolvePrice('anthropic_api', 'claude-opus-5', null)).toEqual({
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+      priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
+    });
     expect(resolvePrice('anthropic_api', 'claude-opus-4-8', null)).toEqual({
       inUnitPrice: 5,
       outUnitPrice: 25,

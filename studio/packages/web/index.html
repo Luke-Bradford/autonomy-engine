@@ -3,6 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- #717 — without this, a browser falls back to requesting /favicon.ico,
+         which the server answers 404, putting a permanent error in the console
+         of every self-hosted install. That is the noise that teaches an
+         operator to ignore console errors that DO matter. Note the e2e console
+         guard cannot catch a regression here: Playwright's context does not
+         issue the implicit favicon request a real browsing session does.
+
+         DELIBERATELY SVG-ONLY, so this does not close the 404 on every browser:
+         one without SVG-favicon support (Safari 15 and older) still falls back to
+         /favicon.ico and still logs it. Accepted rather than shipping a binary
+         .ico blob into a reviewable diff for a self-hosted developer tool whose
+         supported browsers all handle SVG. If that calculus changes, add a second
+         icon link pointing at an .ico with sizes="any" beside this one.
+
+         NB kept free of the literal markup an icon link is written with: the
+         server test greps this file's served body for that markup, so spelling it
+         out in prose here would satisfy the assertion on its own and the test
+         would stop discriminating. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>autonomy-studio</title>
   </head>
   <body>

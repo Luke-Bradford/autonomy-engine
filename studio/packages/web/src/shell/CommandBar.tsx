@@ -53,7 +53,7 @@ export function CommandBar({ crumbs, pane }: CommandBarProps) {
         <Tooltip content={label} relationship="label" positioning="below">
           <button
             type="button"
-            className="command-bar__pane-toggle"
+            className="icon-button command-bar__pane-toggle"
             aria-label={label}
             aria-expanded={!pane.collapsed}
             aria-controls={PANE_ELEMENT_ID}

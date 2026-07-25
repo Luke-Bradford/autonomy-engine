@@ -18,5 +18,12 @@ export default defineConfig({
     // targets to their originals.
     clearMocks: true,
     restoreMocks: true,
+    // #723 — raised from vitest's 5,000 ms default so it stays comfortably
+    // ABOVE Testing Library's `asyncUtilTimeout` (set to 5,000 ms in
+    // `vitest.setup.ts`). The two must not be equal: whichever fires first
+    // writes the error message, and an RTL timeout names the query that never
+    // settled while a bare vitest timeout only names the test. Ordering them
+    // this way keeps the diagnosis in the failure text.
+    testTimeout: 20_000,
   },
 });

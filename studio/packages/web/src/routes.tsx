@@ -5,7 +5,9 @@ import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
-import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute';
+// #698 — loaded on demand (React Flow is reachable only from this route); the
+// `<Suspense>` boundary is in `AppShell`, inside `<main>`.
+import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute.lazy';
 import { TriggersPage } from './pages/TriggersPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';

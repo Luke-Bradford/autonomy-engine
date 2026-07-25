@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeRunCost, rollupFromAggregates, rollupPipelineCost } from '../run-cost.js';
+import { BUILTIN_PRICE_TABLE_VERSION } from '../price-table.js';
 
 /**
  * L6 — the run-cost projection SUMS `activity.metered` events deterministically.
@@ -66,7 +67,9 @@ describe('computeRunCost', () => {
         inputTokens: 100,
         inUnitPrice: 5,
         outUnitPrice: 25,
-        priceTableVersion: 'builtin-2026-07-18',
+        // Inert here — `computeRunCost` never reads it. Imported rather than
+        // pinned so a table bump needs no edit in this file.
+        priceTableVersion: BUILTIN_PRICE_TABLE_VERSION,
       }),
     ]);
     expect(cost.responseCount).toBe(1);
