@@ -18,8 +18,8 @@ import {
   structuredEcho,
   structuredOutputInstruction,
   toolWireParameters,
+  unsupportedParamRefusal,
 } from './llm-shared.js';
-import { unsupportedParamFailure } from './llm-shared.js';
 import type { LlmToolChoice, LlmTurn, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
 import {
   DEFAULT_OPENAI_BASE_URL,
@@ -167,15 +167,16 @@ export const openaiAdapter: ConnectorAdapter = {
     // `testConnection` needs no equivalent: it is a GET to `/models` with no
     // sampling body at all.
     if (isOpenAiFirstParty(baseUrl)) {
-      const unsupported = unsupportedOpenAiParams(model, {
-        hasTemperature: sampling.temperature !== undefined,
-        hasTopP: sampling.topP !== undefined,
-      });
-      // The destructure is what proves non-emptiness to the compiler, which is
-      // the precondition `unsupportedParamFailure`'s tuple type encodes.
-      const [firstUnsupported, ...restUnsupported] = unsupported;
-      if (firstUnsupported !== undefined) {
-        yield unsupportedParamFailure('openai_api', model, [firstUnsupported, ...restUnsupported]);
+      const refusal = unsupportedParamRefusal(
+        'openai_api',
+        model,
+        unsupportedOpenAiParams(model, {
+          hasTemperature: sampling.temperature !== undefined,
+          hasTopP: sampling.topP !== undefined,
+        }),
+      );
+      if (refusal !== null) {
+        yield refusal;
         return;
       }
     }

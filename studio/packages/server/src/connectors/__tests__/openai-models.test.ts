@@ -90,13 +90,6 @@ describe('unsupportedOpenAiParams (#730)', () => {
       'o4-mini',
     ]);
   });
-
-  it('holds no `*-chat*` id — the non-reasoning member of the family', () => {
-    // The one omission a future author is most likely to "fix", because the
-    // source's own `gpt-5.1-chat` row sits in its reasoning table. Stated as its
-    // own case so deleting it is a deliberate act.
-    expect([...MODELS_REJECTING_SAMPLING_PARAMS].filter((m) => m.includes('chat'))).toEqual([]);
-  });
 });
 
 describe('isOpenAiFirstParty (#730)', () => {

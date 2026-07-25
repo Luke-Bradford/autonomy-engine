@@ -89,17 +89,18 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * array (via `useNodesState`) so it can attach and keep each node's measured
  * dimensions across renders — deriving brand-new node objects every render
  * would drop `measured` and make connected edges flicker on every drag tick.
- * The two are reconciled: store changes (add/delete/config/connection) flow INTO
- * the view array preserving each surviving node's live position, measured size
- * and RF-owned selected flag; view changes (drag/remove/select) flow BACK into
- * the store. Edges, which carry no measured state, are derived straight from the
- * store — including their `selected`, since there is no view array to own it.
+ * The two are reconciled: store changes (add/delete/config/connection/select)
+ * flow INTO the view array preserving each surviving node's live position and
+ * measured size; view changes (drag/remove/select) flow BACK into the store.
+ * Edges, which carry no measured state, are derived straight from the store.
  * `onlyRenderVisibleElements` keeps a large graph responsive.
  *
- * SELECTION is therefore ASYMMETRIC on purpose (#737): React Flow owns node
- * selection and the store owns edge selection, and both report into the store's
- * single `Selection` through the `select` changes below. See `applySelectChange`
- * for why the change handlers — not `onSelectionChange` — are the seam.
+ * SELECTION is a round trip (#737), and the store is the authority at both ends:
+ * React Flow reports a selection as a `select` CHANGE, which the handlers below
+ * fold into the store; the store then re-derives `selected` for every node and
+ * edge. See `applySelectChange` for why the change handlers — not
+ * `onSelectionChange` — are the seam, and the `selected:` line in the reconcile
+ * effect for why the view must not be allowed to disagree.
  *
  * The regression check the epic asks for is `e2e/canvas-drag-reconciliation.spec.ts`
  * (U6a). Do NOT try to replace it with a unit test: "an unrelated store change
@@ -139,20 +140,6 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       return nodes.map((n) => {
         const existing = byId.get(n.id);
         return {
-          // #737 — `selected` rides along in this spread, deliberately. The view
-          // array is where `onNodesChangeRaw` records RF's own node selection,
-          // and carrying it forward (rather than re-deriving it from the store's
-          // single `Selection`) is what keeps a shift-marquee alive: the store
-          // models ONE selection, so re-deriving would collapse every multi-node
-          // selection to a single node the instant anything re-rendered, taking
-          // multi-node DRAG with it. The store learns about node selection the
-          // other way round — from the `select` changes below.
-          //
-          // KNOWN LIMIT, the selection twin of the position one below: a DOMAIN
-          // selection write cannot reach the screen. Nothing does one today
-          // (`loadVersion` replaces every node, and delete removes the element),
-          // but "select the node I just added" (U5 follow-up) or undo-of-a-
-          // selection (U17) would need the same escape hatch.
           ...existing,
           id: n.id,
           type: 'activity',
@@ -163,10 +150,33 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             title: getActivity(n.type)?.title ?? n.type,
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,
+          // #737 — RE-DERIVED from the store every time, NOT carried forward in
+          // the spread above. The store is the single authority on what is
+          // selected, in both directions: the `select` changes below write into
+          // it, and this line writes back out.
+          //
+          // Carrying `selected` forward instead (so React Flow could own node
+          // selection and keep a shift-marquee alive) was tried and is WRONG,
+          // because the two can then disagree — and React Flow's recovery path
+          // is a dead end. `handleNodeClick` early-returns when the node it was
+          // given is ALREADY `selected`, emitting no change at all. So any state
+          // where the view says selected and the store says not — after a save,
+          // where `loadVersion` writes `selected: null` while the view entry
+          // survives by id — leaves a node that paints its selection ring,
+          // reports nothing to the property panel, and CANNOT be re-selected by
+          // clicking it or by Enter. (Backspace would still delete it.) The
+          // operator's only way out is to click empty canvas first.
+          //
+          // The cost of re-deriving, stated plainly: a shift-marquee or
+          // ctrl-click collapses to a single selection, so multi-node drag is
+          // not available. That is the store's model — one `Selection` — and
+          // real multi-select is U21's, which widens it. Consistency beats a
+          // capability that leaves the canvas stuck.
+          selected: selected?.kind === 'node' && selected.id === n.id,
         };
       });
     });
-  }, [nodes, setFlowNodes]);
+  }, [nodes, selected, setFlowNodes]);
 
   /**
    * Typed edges (U6a). The variant CLASS goes on React Flow's edge `<g>`, where

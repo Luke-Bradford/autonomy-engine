@@ -98,15 +98,45 @@ test.describe('#737 keyboard selection', () => {
     await expectQuiet(page, problems);
   });
 
-  test('a click still selects — the pointer path is not regressed', async ({ page }) => {
-    // The click handlers this fix removed (`onNodeClick`/`onEdgeClick`/
-    // `onPaneClick`) were redundant, not load-bearing: React Flow routes a click
-    // through the same `select` changes. That is a claim worth a test, because
-    // getting it wrong breaks the MOUSE path — the one that already worked.
-    await openCanvas(page, 'e2e kbd mouse');
-    await seedSelectedEdge(page); // ends with the edge selected BY CLICK
-    await expect(firesOn(page)).toBeVisible();
-    await deselect(page); // pane click clears it
-    await expect(firesOn(page)).toHaveCount(0);
+  /**
+   * The regression the FIRST design of this fix would have shipped, kept as the
+   * guard that it cannot come back.
+   *
+   * Save calls `loadVersion(created)`, which writes `selected: null` while the
+   * canvas keeps the same node ids. An earlier draft let React Flow own node
+   * selection (carrying `selected` forward through the view array by id) so a
+   * shift-marquee could survive. The two then disagreed after every save — and
+   * React Flow's recovery path is a dead end, because `handleNodeClick`
+   * early-returns on a node it already considers selected and emits no change at
+   * all. The node kept its ring, the panel said nothing was selected, and
+   * clicking it did nothing.
+   *
+   * So this asserts the whole loop, not just the panel: cleared everywhere, and
+   * still selectable afterwards.
+   */
+  test('a save clears the selection everywhere, and the node stays selectable', async ({
+    page,
+  }) => {
+    await openCanvas(page, 'e2e kbd save');
+    await page
+      .getByRole('complementary', { name: 'Activities' })
+      .getByRole('button', { name: 'HTTP Request', exact: true })
+      .click();
+    await expect(canvasNodes(page)).toHaveCount(1);
+
+    const panel = page.getByRole('complementary', { name: 'Properties' });
+    await tabToFocus(page, 'react-flow__node');
+    await page.keyboard.press('Enter');
+    await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
+    await expect(canvasNodes(page).first()).toHaveClass(/\bselected\b/);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(panel.getByText('Select a node or an edge to edit it.')).toBeVisible();
+    // The half a panel-only assertion would miss: React Flow must agree.
+    await expect(canvasNodes(page).first()).not.toHaveClass(/\bselected\b/);
+
+    // And the node is not stranded — a plain click brings the editor back.
+    await canvasNodes(page).first().click();
+    await expect(panel.getByRole('button', { name: 'Delete node' })).toBeVisible();
   });
 });

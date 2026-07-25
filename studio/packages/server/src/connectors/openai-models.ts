@@ -17,9 +17,22 @@ import type { UnsupportedParam } from './llm-shared.js';
  * Membership below is that page's two enumerated reasoning-model feature tables
  * (o-series and GPT-5 series). Corroborated by the 400 text operators actually
  * report: "Unsupported parameter: 'temperature' is not supported with this
- * model". Only `temperature`/`top_p` are gated here because they are the only
- * two of those eight this connector emits from author config — see the
- * `max_tokens` note at the bottom.
+ * model".
+ *
+ * SCOPE, and it is NOT the whole quoted list: this connector emits THREE of
+ * those eight from author config — `temperature`, `top_p`, and `max_tokens`
+ * (`openai.ts`'s body builder). Only the first two are gated here. `max_tokens`
+ * is deliberately left alone and tracked as #739, because its remedy is
+ * different in kind: the source says reasoning models "will only work with the
+ * `max_completion_tokens` parameter when using the Chat Completions API", so the
+ * fix is to RENAME the field on the wire, not to refuse the call. A rename has a
+ * failure mode a refusal does not — `max_completion_tokens` is newer than many
+ * OpenAI-compatible gateways — and deciding that belongs in its own change
+ * rather than riding along here. Until #739 lands, an author who sets BOTH
+ * `temperature` and `maxTokens` on a reasoning model gets this preflight's
+ * message naming `temperature`, fixes that, and then still meets the provider's
+ * own 400 for `max_tokens`. Stated so the partial diagnosis is a known
+ * limitation rather than a surprise.
  *
  * FAIL DIRECTION — the same rule as `anthropic-models.ts`, arrived at the same
  * way: list ONLY models KNOWN to reject, so absence means "not known to reject"
@@ -41,6 +54,12 @@ import type { UnsupportedParam } from './llm-shared.js';
  * Matching is EXACT-STRING, like `BUILTIN_PRICES`. A dated or `-latest` variant
  * therefore falls through to permitted and the provider stays the authority —
  * the pre-existing behaviour, merely no longer the only behaviour.
+ *
+ * `ollama` was checked in the same pass (#730 asked for a confirmation rather
+ * than an assumption) and needs no equivalent: it targets Ollama's NATIVE
+ * `/api/chat` with an `options` bag, not an OpenAI-shaped body, and its
+ * sampling keys are accepted across the local models it serves. There is no
+ * per-model forced-choice surface there to gate.
  */
 
 /**

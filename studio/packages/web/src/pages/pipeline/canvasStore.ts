@@ -225,9 +225,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
         );
         const selected =
-          s.selected &&
-          ((s.selected.kind === 'node' && s.selected.id === id) ||
-            (s.selected.kind === 'edge' && removedEdgeIds.has(s.selected.id)))
+          sameSelection(s.selected, { kind: 'node', id }) ||
+          (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id))
             ? null
             : s.selected;
         return {
@@ -253,7 +252,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       if (!get().edges.some((e) => e.id === id)) return;
       set((s) => ({
         edges: s.edges.filter((e) => e.id !== id),
-        selected: s.selected?.kind === 'edge' && s.selected.id === id ? null : s.selected,
+        selected: sameSelection(s.selected, { kind: 'edge', id }) ? null : s.selected,
         dirty: true,
       }));
     },
