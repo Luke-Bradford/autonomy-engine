@@ -47,6 +47,9 @@ LlmCallConfig = {
   // Model + sampling
   model?: string,                 // resolves node < connection < default (as today)
   temperature?, maxTokens?, topP?, stop?: string[], seed?: number,
+  //   ^ #727: `temperature`/`topP` are REFUSED AT DISPATCH (permanent, before any
+  //     request) on Anthropic models that removed the sampling knobs. The SCHEMA
+  //     accepts them universally; the MODEL may not.
   // Reasoning / "thinking"
   reasoningEffort?: 'low'|'medium'|'high'|'max',   // provider-mapped (extended thinking / effort)
   // Output
@@ -74,8 +77,11 @@ LlmCallConfig = {
   `repairIndex`). The node still terminalizes once. Usage/cost include BOTH calls.
 - **Schema pinning:** the immutable `PipelineVersion` stores the exact `outputSchema` + generated
   `outputs`; old runs replay against their own contract. An edit makes a new version.
-- **Reasoning** — `reasoningEffort` maps per provider (Claude extended-thinking budget, o-series
-  effort, etc.); ollama/others: best-effort or ignored with a note.
+- **Reasoning** — `reasoningEffort` maps per provider (o-series effort, etc.); ollama/others:
+  best-effort or ignored with a note. **AS BUILT (#724/#727):** the Anthropic mapping is the MODERN
+  surface — `thinking:{type:'adaptive'}` + `output_config.effort`, emitted together — NOT the legacy
+  extended-thinking `budget_tokens` budget this line originally named, which the connector never
+  emits on any model. Models predating that surface are refused at dispatch rather than 400d.
 
 ## Outputs, usage & cost (first-class)
 
@@ -184,10 +190,16 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 > response are answered; a second tool-use response fails `permanent`), one
 > terminal, per-response metering, one first-exchange L9a capture (continuation
 > turns are #605's plumbing). `toolChoice: auto|required|none` — `required`
-> downgrades to `auto` on the continuation (else it could never yield text) and
-> suppresses Anthropic adaptive thinking (the forced-choice clash, structured-path
-> precedent); `none` sends no tools at all; Ollama has no forced-choice surface so
-> `required` is best-effort there. Tool-level defects (unknown name, invalid args,
+> downgrades to `auto` on the continuation (else it could never yield text);
+> `none` sends no tools at all; Ollama has no forced-choice surface so
+> `required` is best-effort there. **AS BUILT (#724):** `required` also used to SUPPRESS Anthropic
+> adaptive thinking on a "forced-choice clash" whose premise was FALSE — a forced `tool_choice`
+> errors only under MANUAL extended thinking (`thinking:{type:'enabled'}`), which this connector
+> never emits, and adaptive thinking supports forced tool use. That suppression, and the structured
+> path's identical one it cited as precedent, are DELETED; `reasoningEffort` is honoured on every
+> path. Consequence: `max_tokens` caps thinking and output together, so on the structured path
+> thinking now competes with the forced `tool_use` block for one budget.
+> Tool-level defects (unknown name, invalid args,
 > eval error, over-cap result) return **error tool_results the model can recover
 > from**, never node failures. `tools`+`structured` is refused in v1 (structured
 > rides a forced provider tool); `agent_cli` rejects tools at dispatch (no tool

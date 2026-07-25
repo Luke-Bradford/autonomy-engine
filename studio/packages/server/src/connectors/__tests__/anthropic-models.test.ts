@@ -4,6 +4,7 @@ import {
   MODELS_REJECTING_SAMPLING_PARAMS,
   unsupportedAnthropicParams,
 } from '../anthropic-models.js';
+import { unsupportedParamFailure } from '../llm-shared.js';
 
 const NONE = { hasTemperature: false, hasTopP: false, hasReasoningEffort: false };
 
@@ -14,17 +15,28 @@ describe('unsupportedAnthropicParams (#727)', () => {
     expect(unsupportedAnthropicParams('claude-opus-5', NONE)).toEqual([]);
   });
 
-  it.each([...MODELS_REJECTING_SAMPLING_PARAMS])('names both sampling params on %s', (model) => {
-    expect(
-      unsupportedAnthropicParams(model, { ...NONE, hasTemperature: true, hasTopP: true }),
-    ).toEqual(['temperature', 'topP']);
-  });
+  // Models are named LITERALLY here rather than driven from the sets. Iterating
+  // the sets under test would move input and expectation in lockstep, so the
+  // cases could never fail on data drift — only on a change to the function
+  // body, which the cases below already cover. The exhaustive membership pin at
+  // the bottom of this file is the guard against drift.
+  it.each(['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-fable-5'])(
+    'names both sampling params on %s',
+    (model) => {
+      expect(
+        unsupportedAnthropicParams(model, { ...NONE, hasTemperature: true, hasTopP: true }),
+      ).toEqual(['temperature', 'topP']);
+    },
+  );
 
-  it.each([...MODELS_REJECTING_ADAPTIVE_THINKING])('names reasoningEffort on %s', (model) => {
-    expect(unsupportedAnthropicParams(model, { ...NONE, hasReasoningEffort: true })).toEqual([
-      'reasoningEffort',
-    ]);
-  });
+  it.each(['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'])(
+    'names reasoningEffort on %s',
+    (model) => {
+      expect(unsupportedAnthropicParams(model, { ...NONE, hasReasoningEffort: true })).toEqual([
+        'reasoningEffort',
+      ]);
+    },
+  );
 
   it('reports only the params the author ACTUALLY set', () => {
     expect(unsupportedAnthropicParams('claude-opus-5', { ...NONE, hasTopP: true })).toEqual([
@@ -41,6 +53,16 @@ describe('unsupportedAnthropicParams (#727)', () => {
     ).toEqual([]);
   });
 
+  it('gates reasoningEffort on claude-opus-4-5, which accepts effort but predates adaptive', () => {
+    // The one model where the two facts come apart. Membership is decided by the
+    // `thinking` key (emitted alongside `effort`), not by effort support — and it
+    // subsumes the per-value 400 on `reasoningEffort:'max'` that a boolean set
+    // could not otherwise express.
+    expect(
+      unsupportedAnthropicParams('claude-opus-4-5', { ...NONE, hasReasoningEffort: true }),
+    ).toEqual(['reasoningEffort']);
+  });
+
   it('does not gate sampling on a model that only lacks the thinking surface', () => {
     expect(
       unsupportedAnthropicParams('claude-haiku-4-5', { ...NONE, hasTemperature: true }),
@@ -52,7 +74,6 @@ describe('unsupportedAnthropicParams (#727)', () => {
     ['a dated variant of a rejecting model', 'claude-opus-5-20260101'],
     ['a bracketed variant', 'claude-opus-4-8[1m]'],
     ['a model verified to still ACCEPT them', 'claude-opus-4-6'],
-    ['the deliberately-unasserted model', 'claude-opus-4-5'],
     ['the empty string', ''],
   ])('permits everything on %s (an absent fact is never a refusal)', (_label, model) => {
     // Matching is exact-string, and absence means "not KNOWN to reject" — the
@@ -94,7 +115,33 @@ describe('unsupportedAnthropicParams (#727)', () => {
     ]);
     expect([...MODELS_REJECTING_ADAPTIVE_THINKING].sort()).toEqual([
       'claude-haiku-4-5',
+      'claude-opus-4-5',
       'claude-sonnet-4-5',
     ]);
+  });
+});
+
+describe('unsupportedParamFailure message (#727)', () => {
+  it('joins two params with a conjunction and pluralizes throughout', () => {
+    // The two-param branch is otherwise only reached via `toContain` assertions
+    // in the adapter tests, which would pass on a garbled list. `params.length`
+    // is bounded at 2 by the two disjoint sets, so this covers the whole space
+    // alongside the single-param case below.
+    const ev = unsupportedParamFailure('anthropic_api', 'claude-opus-5', ['temperature', 'topP']);
+    expect(ev.kind).toBe('permanent');
+    expect(ev.error).toBe(
+      'anthropic_api model claude-opus-5 does not support the temperature and topP parameters ' +
+        '(removed on this model); remove them from the activity config or ' +
+        'select a model that still accepts them.',
+    );
+  });
+
+  it('uses singular wording for one param', () => {
+    const ev = unsupportedParamFailure('anthropic_api', 'claude-haiku-4-5', ['reasoningEffort']);
+    expect(ev.error).toBe(
+      'anthropic_api model claude-haiku-4-5 does not support the reasoningEffort parameter ' +
+        '(removed on this model); remove it from the activity config or ' +
+        'select a model that still accepts it.',
+    );
   });
 });

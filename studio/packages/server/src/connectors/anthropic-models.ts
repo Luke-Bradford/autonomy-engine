@@ -65,13 +65,32 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * this connector never emits). The connector emits those two keys TOGETHER and
  * only when `reasoningEffort` is set, so one set covers both.
  *
- * `claude-opus-4-5` is deliberately in NEITHER set: it supports `effort` (at
- * `low`/`medium`/`high` only), but its adaptive-thinking support was not
- * verifiable from an authoritative source, and asserting a rejection we cannot
- * source is exactly the manufactured fact the module note forbids. A test pins
- * that it stays permitted so the omission reads as a decision, not an oversight.
+ * `claude-opus-4-5` IS a member, which is worth spelling out because it is the
+ * one model where the two facts come apart: it accepts `output_config.effort`
+ * (at `low`/`medium`/`high`), so it is tempting to read it as supported. But
+ * `effort` is not what decides membership — the connector emits `effort` and
+ * `thinking:{type:'adaptive'}` TOGETHER, and 4.5 predates the adaptive surface,
+ * so the pair is rejected on the `thinking` key regardless of the effort value.
+ *
+ * That membership also closes a second hole rather than merely a stylistic one.
+ * `reasoningEffortSchema` admits `max`, which 4.5 rejects even though it accepts
+ * `low`/`medium`/`high` — a per-(model, VALUE) fact that a boolean set cannot
+ * express. With 4.5 refused wholesale that dimension is empty: every remaining
+ * model the connector can reach either accepts all four schema values or is
+ * refused outright, so the set shape stays sufficient. Re-check that claim
+ * before removing any model from this set.
+ *
+ * KNOWN GAP, stated rather than left to be rediscovered: other API-active legacy
+ * ids an operator may still name by hand — `claude-opus-4-1`, `claude-opus-4-0`,
+ * `claude-sonnet-4-0`, `claude-3-haiku-20240307` — predate both the adaptive
+ * surface and `output_config.effort` and very probably belong here too. The
+ * available source shows the CONFIG FORM for that generation without stating a
+ * rejection outright, which is weaker than membership warrants, so they are
+ * tracked in #729 rather than guessed at. The cost of omitting them is bounded
+ * and is the PRE-EXISTING behaviour: a provider 400, classified `permanent`.
  */
 export const MODELS_REJECTING_ADAPTIVE_THINKING: ReadonlySet<string> = new Set([
+  'claude-opus-4-5',
   'claude-sonnet-4-5',
   'claude-haiku-4-5',
 ]);

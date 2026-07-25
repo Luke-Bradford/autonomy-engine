@@ -619,6 +619,12 @@ export const llmCallConfigSchema = z
     // Only the UNIVERSAL lower bound (0) is enforced here; the upper bound is
     // provider-specific (Anthropic 0–1, OpenAI/Ollama 0–2) so the adapters own
     // it. Catches a negative temperature at save-time, not at the provider call.
+    // #727 — save-time bounds are NOT the whole story on Anthropic: several
+    // current models REMOVED the sampling knobs entirely, so there is no valid
+    // value at all and the adapter refuses the call at DISPATCH (before the
+    // request), not at the provider. This schema is deliberately still
+    // model-agnostic — it cannot see the model, which may come from the
+    // connection or the adapter default. See `connectors/anthropic-models.ts`.
     temperature: z.number().min(0).optional(),
     // L1 sampling — mapped per-provider by the adapters (names differ).
     // `topP` is nucleus sampling: a probability, universally [0, 1].

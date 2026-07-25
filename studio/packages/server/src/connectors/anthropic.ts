@@ -91,6 +91,19 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * billed. Raising the budget further needs streaming or a token-scaled timeout,
  * not a bigger constant — tracked in #725.
  *
+ * #724 — THIS BUDGET NOW BINDS ON ALL THREE PATHS, not just text. Deleting
+ * `allowThinking` means a node that sets `reasoningEffort` puts thinking in
+ * competition with the STRUCTURED path's forced `tool_use` block and with the
+ * `toolChoice:'required'` flow, where it previously could not. The structured
+ * case is the sharpest: an exhausted budget yields no complete `tool_use` block,
+ * `findStructuredToolInput` reports it absent, L4c spends a REPAIR call under
+ * the identical budget, and only then terminalizes `permanent` — two billed
+ * calls for one budget problem. That is why the no-tool-block reason now carries
+ * the response's `stop_reason` (see the structured `doCall`): the diagnosis has
+ * to name the budget, because the symptom looks like a disobedient model. The
+ * `required` tools path shares the exposure but degrades better (a bad call
+ * becomes an error `tool_result` and the flow downgrades to `auto`).
+ *
  * Note this is a CAP, not a spend: tokens are billed as generated, so a short
  * answer still costs a short answer. The real cost increase is the thinking
  * itself, which is the model default now and is not something `max_tokens` can
@@ -333,10 +346,12 @@ export const anthropicAdapter: ConnectorAdapter = {
       // current default. On Opus 5 an omitted `thinking` runs ADAPTIVE anyway, so
       // emitting `{type:'adaptive'}` is equivalent to the model default rather
       // than the thing that switches reasoning on. It stays emitted because it is
-      // still load-bearing on **Opus 4.8/4.7 and Sonnet 4.6**, which a node or
-      // connection may select by name and which do NOT think when `thinking` is
-      // omitted. (Sonnet 5 is NOT in that list — like Opus 5 it runs adaptive on
-      // omission, so the emit is a no-op there.)
+      // still load-bearing on **Opus 4.8/4.7, Opus 4.6 and Sonnet 4.6**, which a
+      // node or connection may select by name and which do NOT think when
+      // `thinking` is omitted. (Sonnet 5 is NOT in that list — like Opus 5 it
+      // runs adaptive on omission, so the emit is a no-op there. Opus 4.6 was
+      // absent from this list until #724 — it needs the explicit
+      // `{type:'adaptive'}` exactly as 4.8/4.7 do.)
       //
       // CAVEAT: thinking tokens count against `max_tokens` — see the
       // DEFAULT_MAX_TOKENS note, which is now load-bearing rather than advisory.
@@ -421,13 +436,26 @@ export const anthropicAdapter: ConnectorAdapter = {
         // A missing forced-tool block is now REPAIRABLE (fold into an invalid
         // result) rather than an immediate terminal — a model that answered with
         // text instead of the tool may correct on a re-prompt.
+        //
+        // #724 — the `stop_reason` is CARRIED INTO the reason string, and it is
+        // the reasoning change that makes it load-bearing. `max_tokens` caps
+        // thinking and the `tool_use` block TOGETHER, so a node that sets
+        // `reasoningEffort` now has thinking competing for the same budget here.
+        // When it exhausts, the block comes back absent or truncated and this
+        // branch fires — twice (the repair re-issues under the same budget) —
+        // then terminalizes `permanent`. Without the stop reason both the repair
+        // critique and the durable error read "carried no structured_output
+        // tool_use block", which blames the MODEL when the cause is the BUDGET.
         if (!tool.found) {
+          const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
           return {
             type: 'validated',
             usage,
             result: {
               ok: false,
-              reason: `response carried no ${STRUCTURED_TOOL_NAME} tool_use block`,
+              reason:
+                `response carried no ${STRUCTURED_TOOL_NAME} tool_use block ` +
+                `(stop_reason: ${stopReason})`,
             },
             echo: structuredEcho(undefined),
           };

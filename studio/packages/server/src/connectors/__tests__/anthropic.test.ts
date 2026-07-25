@@ -674,6 +674,55 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(secondBody.tool_choice).toEqual({ type: 'tool', name: 'structured_output' });
   });
 
+  it('#724 — the REPAIR call carries the reasoning surface and the same budget', async () => {
+    // The repair is the call that re-issues under an ALREADY-EXHAUSTED budget
+    // when thinking starves the forced tool_use block, so its wire shape is the
+    // one that matters for the max_tokens interaction #724 introduces. Round 0
+    // is covered above; this pins the second call.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'question' })))
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'bug' })));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    expect(repairBody.thinking).toEqual({ type: 'adaptive' });
+    expect(repairBody.output_config).toEqual({ effort: 'high' });
+    // Same budget as round 0 — the repair gets no extra headroom, which is why
+    // an exhausted budget costs TWO billed calls before terminalizing.
+    expect(repairBody.max_tokens).toBe(4096);
+  });
+
+  it('#724 — a truncated forced-tool response names the stop_reason in its failure', async () => {
+    // Budget starvation and a disobedient model produce the SAME symptom (no
+    // structured_output block). Without the stop reason the durable error blames
+    // the model; `max_tokens` names the real cause.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 4, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).toHaveBeenCalledTimes(2); // original + one repair, both billed
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('max_tokens');
+    // and the repair CRITIQUE carries it too, so the model is told what happened
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = repairBody.messages as { role: string; content: string }[];
+    expect(msgs[msgs.length - 1]!.content).toContain('max_tokens');
+  });
+
   it('#2 L4c — does NOT repair a transport failure; only ONE call, no metered', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'overloaded'));
     const events = await drain(
@@ -1028,7 +1077,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     ['temperature', 'claude-sonnet-5', { temperature: 0.2 }],
     ['temperature', 'claude-opus-4-8', { temperature: 0.2 }],
   ])('refuses %s on %s before issuing any request', async (param, model, over) => {
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', model, ...over } }), 'sk'),
     );
@@ -1036,7 +1085,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     expect(events.map((e) => e.type)).toEqual(['failed']);
     expect(failed(events).kind).toBe('permanent');
     expect(failed(events).error).toContain(model);
-    expect(failed(events).error).toContain(param === 'topP' ? 'topP' : 'temperature');
+    expect(failed(events).error).toContain(param);
   });
 
   it('refuses a sampling param on the DEFAULT model when the node names none', async () => {
@@ -1044,7 +1093,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     // only `temperature` must refuse. This is why the gate is a DISPATCH-time
     // check and not an author-time Zod refinement: the resolved model can come
     // from the connection or the built-in default, neither visible to the node.
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', temperature: 0.2 } }), 'sk'),
     );
@@ -1053,7 +1102,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
   });
 
   it('refuses a sampling param when the CONNECTION supplies the rejecting model', async () => {
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(
         ctx({
@@ -1073,7 +1122,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     // sampling) cannot be honoured on a model with no sampling knobs, and
     // "the default" is not well-defined for `topP`. Pinned so the choice is
     // deliberate rather than incidental.
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(
         ctx({ input: { prompt: 'hi', model: 'claude-opus-5', temperature: 1 } }),
@@ -1114,7 +1163,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     // A THIRD defect, pre-existing and independent of #724: the TEXT path has
     // always emitted `thinking`+`output_config` whenever `reasoningEffort` is
     // set, so this already 400d on main.
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(
         ctx({ input: { prompt: 'hi', model: 'claude-haiku-4-5', reasoningEffort: 'high' } }),
@@ -1126,22 +1175,47 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     expect(failed(events).error).toContain('reasoningEffort');
   });
 
-  it('does NOT refuse reasoningEffort on a model deliberately left unasserted', async () => {
-    // `claude-opus-4-5` supports effort (low/medium/high) but its adaptive
-    // support was not verifiable, so it is in NEITHER set. Pinned so a future
-    // author cannot quietly add it without re-deciding.
+  it('refuses reasoningEffort on claude-opus-4-5 even though it accepts effort', async () => {
+    // The one model where the two facts come apart: 4.5 accepts
+    // `output_config.effort` (low/medium/high) but predates the adaptive
+    // surface, and the connector emits both keys TOGETHER — so the pair is
+    // rejected on the `thinking` key whatever the effort value.
+    //
+    // Pinned deliberately, because an earlier draft of this sweep exempted 4.5
+    // and asserted `thinking:{type:'adaptive'}` as its correct wire body — which
+    // enshrined the very 400 this preflight exists to prevent, invisibly,
+    // because `fetch` is mocked.
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
-    await drain(
+    const events = await drain(
       anthropicAdapter.runActivity(
         ctx({ input: { prompt: 'hi', model: 'claude-opus-4-5', reasoningEffort: 'high' } }),
         'sk',
       ),
     );
-    expect(sentBody(spy).thinking).toEqual({ type: 'adaptive' });
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('reasoningEffort');
+  });
+
+  it("refuses reasoningEffort 'max' on claude-opus-4-5 (the per-value 400, subsumed)", async () => {
+    // `reasoningEffortSchema` admits `max`, which 4.5 rejects even though it
+    // accepts the other three levels — a per-(model, VALUE) fact a boolean set
+    // cannot express. Refusing 4.5 wholesale subsumes it; this pins that the
+    // value dimension really is covered, so removing 4.5 from the set later
+    // cannot silently reopen the hole.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-4-5', reasoningEffort: 'max' } }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
   });
 
   it('fires on the STRUCTURED path too, not just text', async () => {
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(
         ctx({
@@ -1161,7 +1235,7 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
   });
 
   it('fires on the TOOLS path too', async () => {
-    const spy = vi.spyOn(globalThis, 'fetch');
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     const events = await drain(
       anthropicAdapter.runActivity(
         ctx({

@@ -345,27 +345,40 @@ export function structuredValidationFailure(
  * outcome. A retry of the identical request cannot succeed (the model will
  * never grow the knob back), so it must never be `transient`.
  *
- * The message names the model, the offending author-facing field(s) and the
- * remedy, because the failure it replaces was an opaque provider body that made
- * the author guess which of their fields was at fault. `kind` names the
- * provider, matching `noCompletionFailure` / `structuredValidationFailure` /
- * `<kind> HTTP <status>`.
+ * GRAMMAR — this builder DELIBERATELY breaks the house shape, and the exception
+ * is the point. Its siblings state a bare `<kind> <symptom>` fact
+ * (`<kind> returned a 2xx response with no completion (<reason>)`), because
+ * there the symptom IS the diagnosis and the operator has nothing to change.
+ * Here the whole reason the preflight exists is that the provider's own 400 left
+ * the author guessing WHICH of their fields was at fault, so the message names
+ * the model, the offending author-facing field(s) and the fix. Dropping the
+ * remedy to match the siblings would restore the diagnostic gap this replaces.
+ * The `<kind> ` prefix and the `permanent` kind still match, so the taxonomy is
+ * unchanged; only the prose is longer.
+ *
+ * `params` is a `string[]` rather than a typed sub-reason (the siblings take a
+ * `NoCompletionReason`) because the values are author-facing CONFIG FIELD names,
+ * which vary per provider and are already validated by the caller's schema — an
+ * enum here would duplicate the config surface without adding a check.
  */
 export function unsupportedParamFailure(
   kind: LlmConnectionKind,
   model: string,
   params: readonly string[],
 ): Extract<ActivityEvent, { type: 'failed' }> {
-  const list = params.join(', ');
+  // "a and b", not "a, b" — the message is read by an operator, and the list is
+  // bounded at 2 by the two disjoint capability sets.
+  const list =
+    params.length > 1 ? `${params.slice(0, -1).join(', ')} and ${params.at(-1)}` : params[0];
   const plural = params.length > 1 ? 's' : '';
+  const them = params.length > 1 ? 'them' : 'it';
   return {
     type: 'failed',
     kind: 'permanent',
     error:
       `${kind} model ${model} does not support the ${list} parameter${plural} ` +
-      `(removed on this model — the provider rejects the request). ` +
-      `Remove ${params.length > 1 ? 'them' : 'it'} from the activity config, ` +
-      `or select a model that still accepts ${params.length > 1 ? 'them' : 'it'}.`,
+      `(removed on this model); remove ${them} from the activity config or ` +
+      `select a model that still accepts ${them}.`,
   };
 }
 
