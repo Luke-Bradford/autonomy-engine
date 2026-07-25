@@ -1,10 +1,11 @@
-import { memo, useEffect, type DragEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { useStore } from 'zustand';
 import {
   Background,
   Controls,
   Handle,
   MiniMap,
+  Panel,
   Position,
   ReactFlow,
   useNodesState,
@@ -12,6 +13,7 @@ import {
   type Connection,
   type Edge as FlowEdge,
   type EdgeChange,
+  type FinalConnectionState,
   type Node as FlowNode,
   type NodeChange,
   type NodeProps,
@@ -20,7 +22,10 @@ import '@xyflow/react/dist/style.css';
 import { getActivity } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
-import { edgeAriaLabel, edgeLabel, edgeVariantClass } from './edgeCondition';
+import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
+import { EdgeMarkers } from './EdgeMarkers';
+import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
+import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
 interface ActivityData extends Record<string, unknown> {
@@ -30,21 +35,24 @@ interface ActivityData extends Record<string, unknown> {
 
 /**
  * The custom activity node. Memoised — React Flow re-renders the node layer on
- * every viewport change, so a memo keeps a stable node cheap. One target handle
- * (incoming edges) and one source handle (outgoing) match the engine's single
- * in/out node model; edge branch (`on`) is chosen after connecting, in the
- * property panel.
+ * every viewport change, so a memo keeps a stable node cheap.
+ *
+ * One target port (incoming edges) and one source port (outgoing) match the
+ * engine's single in/out node model; which outcome an edge routes is chosen
+ * afterwards, in the property panel. Both handles are now IDENTIFIED (U6b) —
+ * `ports.ts` says why, and why U19 is where the source side becomes one port per
+ * outcome.
  */
 const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
   const d = data as ActivityData;
   return (
     <div className={`flow-node${selected ? ' selected' : ''}`}>
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <strong>{d.title}</strong>
       <span className="flow-node-sub">
         {d.hasConnection ? 'connection bound' : 'no connection'}
       </span>
-      <Handle type="source" position={Position.Right} />
+      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
     </div>
   );
 });
@@ -125,8 +133,25 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const selected = useStore(store, (s) => s.selected);
+  // The LOADED version, selected whole rather than as `s.loaded?.containers ?? []`:
+  // that selector would allocate a fresh array on every store read, and zustand
+  // compares selector results with `Object.is` — a new reference every time is a
+  // re-render loop, not a memo.
+  const loaded = useStore(store, (s) => s.loaded);
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
+  /**
+   * The ENDS of the last refused connection attempt — not its message.
+   *
+   * Storing the message would freeze it, and a frozen refusal goes stale as soon
+   * as the graph moves under it: delete one of the two activities it names and an
+   * assertive `role="alert"` sits there naming something that no longer exists,
+   * ready to be re-announced on any incidental re-render. Keeping the ENDS and
+   * re-deriving below means the panel always states the reason as it is NOW, and
+   * disappears by itself when the obstacle is removed (delete the conflicting
+   * edge and the duplicate refusal is simply no longer true).
+   */
+  const [attempted, setAttempted] = useState<{ from: string; to: string } | null>(null);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
   const { screenToFlowPosition } = useReactFlow();
@@ -186,16 +211,26 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * rule and silently kill the selection highlight; a competing class rule on
    * the path ties that rule on specificity (0,3,0) and would be decided by
    * stylesheet import order. Setting the custom property one level up keeps RF's
-   * selected rule winning on its own terms. (Arrowheads are NOT covered: RF
-   * renders its marker defs once, outside every edge `<g>`, and the canvas
-   * configures no `markerEnd` — U6b/U19 will need one marker id per condition.)
+   * selected rule winning on its own terms. (Arrowheads are NOT reached by that
+   * variable — RF renders marker defs once, outside every edge `<g>` — so U6b
+   * gives them their own defs and their own CSS rules: `EdgeMarkers`.)
    */
   const flowEdges: FlowEdge[] = edges.map((e) => ({
     id: e.id,
     source: e.from,
     target: e.to,
+    // The ports are named explicitly rather than left to React Flow's
+    // "first handle of this type" fallback: the fallback is what silently
+    // mis-attaches every edge the moment a node has TWO source handles (U19).
+    sourceHandle: SOURCE_PORT_ID,
+    targetHandle: TARGET_PORT_ID,
     label: edgeLabel(e),
     className: edgeVariantClass(e),
+    // U6b — the arrowhead, so direction is on screen rather than inferred from
+    // which side the endpoints happen to sit on. A STRING marker id references
+    // one of `EdgeMarkers`' own defs (RF's object form would need a literal
+    // colour, and these hues are custom properties).
+    markerEnd: edgeArrowMarkerId(e),
     // RF renders an edge as role="img"/"group"; under either, the SVG <text>
     // label is NOT exposed, so without this the outcome is colour-only.
     ariaLabel: edgeAriaLabel(e),
@@ -252,10 +287,92 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     }
   }
 
+  /**
+   * U6b — the connect-time rules, hoisted per GRAPH.
+   *
+   * `isValidConnection` runs on every pointer-move while a connection is being
+   * dragged, so the endpoint and edge-key sets are built once here rather than
+   * per move. The cycle sweep inside `connectRejection` stays linear and only
+   * runs for a candidate the cheap rules already passed.
+   */
+  const connectPre = useMemo(
+    () => precomputeConnect({ nodes, edges, containers: loaded?.containers ?? [] }),
+    [nodes, edges, loaded],
+  );
+
+  /** The candidate a DRAWN connection proposes — one definition, two callers. */
+  const drawnCandidate = useCallback(
+    (from: string, to: string) => ({ from, to, condition: DRAWN_EDGE_CONDITION }),
+    [],
+  );
+
+  /**
+   * The refusal to render: the CURRENT reason the last attempted connection
+   * cannot be made, or `null` if there is none any more.
+   *
+   * A vanished endpoint drops the message rather than re-explaining it as
+   * `unknown-endpoint` — that reason exists for a caller that is not the canvas,
+   * and its text is the only one that has no activity to name, so it would print
+   * the raw id the rest of this feature works to keep off screen.
+   */
+  const refusal: ConnectRejection | null = useMemo(() => {
+    if (attempted === null) return null;
+    if (!connectPre.endpoints.has(attempted.from) || !connectPre.endpoints.has(attempted.to)) {
+      return null;
+    }
+    return connectRejection(connectPre, drawnCandidate(attempted.from, attempted.to));
+  }, [attempted, connectPre, drawnCandidate]);
+
+  /**
+   * Whether React Flow should allow this connection at all.
+   *
+   * Returning false makes RF refuse the DROP (`onConnect` never fires) and mark
+   * the hovered handle invalid mid-gesture, which is the whole point: the store
+   * has always refused these, but silently and only after the fact.
+   */
+  const isValidConnection = useCallback(
+    (c: Connection | FlowEdge) =>
+      connectRejection(connectPre, drawnCandidate(c.source, c.target)) === null,
+    [connectPre, drawnCandidate],
+  );
+
   function onConnect(conn: Connection) {
-    // A freshly-drawn edge defaults to the `success` branch; the operator
-    // re-picks the branch by selecting the edge in the property panel.
-    if (conn.source && conn.target) store.getState().connect(conn.source, conn.target, 'success');
+    setAttempted(null);
+    // A freshly-drawn edge carries `DRAWN_EDGE_CONDITION` — the SAME condition
+    // `isValidConnection` judged, so what was allowed is what gets authored. The
+    // operator re-picks the condition by selecting the edge in the property panel.
+    if (conn.source && conn.target)
+      store.getState().connect(conn.source, conn.target, DRAWN_EDGE_CONDITION);
+  }
+
+  /**
+   * SAY WHY a connection was refused.
+   *
+   * `isValidConnection` can only answer yes/no, so on its own it turns a refused
+   * drag into a gesture that quietly does nothing — the same defect class U6a
+   * fixed in the condition picker (a control that refuses invisibly). RF calls
+   * `onConnectEnd` on every pointer-up, valid or not, with the handle it landed
+   * on, so this is where the reason can be recovered and shown.
+   *
+   * `isValid === false` means "over a handle, and refused" — `null` is "not over
+   * a handle at all" (a drop on empty canvas, which is a cancel, not a refusal).
+   * A rejection this predicate cannot name is left silent on purpose: RF also
+   * refuses structurally impossible drops (source→source), where the reason is
+   * the gesture rather than a rule about the graph.
+   *
+   * The ends MUST be oriented before they are judged. RF hands this callback the
+   * RAW gesture — where the pointer went down, and what it was over on release —
+   * not the source→target connection it normalised internally to decide validity.
+   * See `orientDrawnEnds` for what reading them raw does to the message, which is
+   * worse than a wrong string: for a backwards cycle-closer it produces no
+   * message at all.
+   */
+  function onConnectEnd(_event: MouseEvent | TouchEvent, state: FinalConnectionState) {
+    if (state.isValid !== false) return;
+    const origin = state.fromNode?.id;
+    const release = state.toNode?.id;
+    if (origin === undefined || release === undefined) return;
+    setAttempted(orientDrawnEnds(origin, release, state.fromHandle?.type));
   }
 
   /**
@@ -302,22 +419,46 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }
 
   return (
-    <ReactFlow
-      nodes={flowNodes}
-      edges={flowEdges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onlyRenderVisibleElements
-      fitView
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background />
-      <MiniMap pannable zoomable />
-      <Controls />
-    </ReactFlow>
+    <>
+      <EdgeMarkers />
+      <ReactFlow
+        nodes={flowNodes}
+        edges={flowEdges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onConnectStart={() => setAttempted(null)}
+        onConnectEnd={onConnectEnd}
+        isValidConnection={isValidConnection}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onlyRenderVisibleElements
+        fitView
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background />
+        <MiniMap pannable zoomable />
+        <Controls />
+        {refusal !== null && (
+          /* Canvas-LOCAL, via RF's own `Panel`, per the epic's z-index/portal
+             policy (only global menus portal to body).
+
+             `role="alert"` rather than a second `role="status"`: `PipelineCanvas`
+             already runs a polite live region for the persistent validation
+             badges, and two polite regions updating together double-announce.
+             This one is the direct answer to a gesture the operator just made,
+             which is what assertive is for. It is plain markup rather than a
+             Fluent `MessageBar` to keep the lazy canvas chunk light — the shell's
+             own badge list is the same idiom. */
+          <Panel position="bottom-center" className="canvas-refusal">
+            <span role="alert">{refusal.message}</span>
+            <button type="button" onClick={() => setAttempted(null)} aria-label="Dismiss">
+              ✕
+            </button>
+          </Panel>
+        )}
+      </ReactFlow>
+    </>
   );
 }

@@ -137,6 +137,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U5 | Activities toolbox (searchable, categorized) + drag-drop | Author |
 | U6a | Typed-edge styling/labels + branch picker | Author |
 | U6b | Typed ports / multi-handle + connection validation | Author |
+| | **AS BUILT (2026-07-25):** port IDENTITY + connect-time validation + per-condition arrowheads. The multi-handle SET is **U19**'s (per-outcome source ports, which that row already owns) — doing it here would have built the same thing twice. | |
 | U6c | Container group rendering | Author |
 | U6d | Container create/edit/drag-membership | Author |
 | U6e | Back-edge rendering/editing + bounce config | Author |
@@ -830,7 +831,9 @@ Decisions worth not re-deriving:
   repainting every edge brand-blue. It does NOT colour arrowheads — `MarkerDefinitions` renders
   once as a sibling of the edge layer, not inside each edge `<g>`, so a variable set on the edge
   cannot reach it, and the canvas configures no `markerEnd` anyway. Whoever adds arrowheads
-  (**U6b**/**U19**) needs one marker id per condition.
+  (**U6b**/**U19**) needs one marker id per condition. **DONE in U6b** — one `<marker>` per
+  condition, defined by the canvas and hued by CSS from the same palette var; see the U6b
+  as-built section for why the object form was not used (its stated impossibility is false).
 - **A SELECTED edge keeps its variant hue; WIDTH carries selection (1.5 → 3).** Found in the
   browser, not by review: the picker lives in the property panel, which only opens for a
   selected edge, so RF's default behaviour masked the colour for exactly as long as it could be
@@ -947,6 +950,116 @@ regression, but U6a is where it became visible. Filed as **#737**; the fix is to
 `onSelectionChange` — which sees the keyboard path too — into the store, and it needs its own
 tests because `FlowCanvas` currently DRIVES RF's `selected` prop from the store, so store→view→store
 has to be idempotent and RF multi-select (**U21**) has to degrade to the store's single `Selection`.
+
+## U6b — typed ports + connect-time validation + arrowheads (AS BUILT, 2026-07-25)
+
+Any two nodes could be wired in any direction. Three candidates the store already refused did
+so SILENTLY (the gesture just ended with no edge), and the fourth — an edge closing a forward
+cycle — was authored happily and only refused later by a validation badge. Now React Flow
+refuses the gesture itself, mid-drag, and the canvas says why.
+
+| Piece | Lives in |
+|---|---|
+| DAG rule, connect-time (SSOT) | `shared` `engine/params.ts` — `closesForwardCycle`, exported |
+| The four rules + their wording | `pages/pipeline/connectRules.ts` |
+| Port identity + what a drawn edge means | `pages/pipeline/ports.ts` |
+| Arrowhead marker defs | `pages/pipeline/EdgeMarkers.tsx` + `index.css` `#edge-arrow-*` |
+| Wiring (`isValidConnection`, `onConnectEnd`) | `pages/pipeline/FlowCanvas.tsx` |
+| Browser coverage | `e2e/connect-validation.spec.ts`, `e2e/support/canvasGraph.ts` |
+
+Decisions worth not re-deriving:
+
+- **`closesForwardCycle` is a DELTA over `forwardCycleErrors`, the save gate's own rule** — not a
+  reachability query. The plan review caught the alternative as a real defect: `forwardReach`
+  (right there in the same file) additionally adds CONTAINMENT edges for the back-edge ancestry
+  rule, while the DAG rule's graph is built purely from `doc.edges`. A predicate over it would
+  refuse `b → C` where `C` contains `b` — legal, savable, and refused for a reason the canvas does
+  not render. Being a DELTA is the second half: an already-cyclic doc must not make every
+  subsequent edge guilty, or one legacy version refuses every connection until the operator finds
+  a cycle they did not draw.
+- **A back-edge is exempt by CONSTRUCTION**, not by a special case: it is not in the forward graph.
+  The refusal text names the back-edge + `maxBounces` remedy in the engine's own words, so it does
+  not read as "this tool cannot express a loop" while **U6e** is still unbuilt. When U6e lands,
+  this refusal is the natural place to OFFER a back-edge instead of just describing one.
+- **Refusal messages name the ACTIVITY, never the node id.** Found in the browser: ids come from
+  `newLocalId`, so the first draft read *"'n_7c44a16f-…' → 'n_9c4bb103-…' would close a
+  forward cycle"* with every unit spec green — the fixtures used ids a human would pick (`'a'`),
+  which makes `toContain("'a'")` pass either way. The specs now use id-SHAPED fixtures and assert
+  the ids do NOT appear. Two same-typed nodes share a label, which is accepted: the text is
+  transient feedback about the two ports just dragged, and `Node` has no per-node name.
+- **The `duplicate` rule is per-CONDITION, so it must not become "one edge per pair".** `a
+  -success-> b` and `a -failure-> b` are both legal; the canvas cannot DRAW the second yet (a drawn
+  edge is always `success`), and **U19** — one source port per outcome — is what makes it drawable.
+  Refusing the pair outright would have handed U19 a false rule to unpick.
+- **A connection gesture can START AT EITHER END, and the refusal must be judged on the oriented
+  edge.** The one REAL defect the pre-PR review found, and the worst-shaped one available: React
+  Flow normalises source/target internally before deciding validity (`isValidHandle`,
+  `isTarget = fromType === 'target'`) but hands `onConnectEnd` the RAW gesture — pointer-down node
+  and pointer-up node. Read raw, a duplicate drawn backwards was explained as a *cycle*, and a
+  cycle-closer drawn backwards produced **no message at all** (the reversed candidate is legal, so
+  the panel did not render) — a silent refusal inside the feature built to delete silent refusals.
+  Every forward spec was green throughout, because the drag helper only ever dragged
+  source→target. `orientDrawnEnds` + `connectNodesBackwards` close both halves.
+- **The panel keeps the attempted ENDS, not the message string**, and re-derives. A frozen message
+  goes stale the moment the graph moves: delete one of the two activities it names and an assertive
+  live region sits there naming something that is gone. Re-deriving also makes it self-clearing —
+  delete the conflicting edge and the duplicate refusal stops being true, so it disappears without a
+  dismiss. (The lint rule against `setState` in an effect is what forced this; the effect-clearing
+  version it rejected was strictly worse.)
+- **The panel is `pointer-events: none`** (dismiss button opted back in). RF's `Panel` carries
+  `react-flow__panel`, which U5's drop guard treats as chrome that must not accept a toolbox drop —
+  so while a refusal was up, the strip across the canvas silently swallowed dropped activities.
+  A second silent-gesture surface inside the same feature.
+- **`isValidConnection` runs per pointer-move**, so the endpoint set, the edge-key set and the
+  id→node map are `useMemo`'d per graph, and the cycle check only runs for a candidate the cheap
+  rules already passed. Stated precisely, because the first draft of that comment oversold it: the
+  cycle check is TWO linear Kahn sweeps per call and the base sweep is repeated even though its
+  answer is invariant for a whole drag. Hoisting it into the precompute is available if a graph ever
+  grows enough to notice; not done for an unmeasured cost.
+- **The refusal is `role="alert"`, deliberately not a second `role="status"`.** `PipelineCanvas`
+  already runs a polite live region for the persistent validation badges; two polite regions
+  updating together double-announce. This one answers a gesture the operator just made. Plain
+  markup rather than a Fluent `MessageBar`, to keep the lazy canvas chunk light.
+- **Arrowheads work via a STRING marker id** referencing the canvas's own `<marker>` defs
+  (`getMarkerId` returns a string verbatim; RF only generates defs for the OBJECT form). The
+  tempting reason — "RF's object form can't take a custom property, `fill="var(--x)"` doesn't
+  resolve" — was MEASURED AND IS FALSE: in Chromium the attribute form computes
+  `rgb(88, 214, 141)` like the CSS form. The real reason is that the object form needs the
+  condition→hue mapping as a literal string in the edge derivation, beside the `.edge-variant-*`
+  rules that already express it in the stylesheet that owns the palette and its light overrides.
+  `fill: context-stroke` would have removed the duplication entirely and was rejected on
+  verifiability: `getComputedStyle(...).fill` returns the literal `context-stroke`, so the browser
+  gate could never confirm the arrow paints the hue. `palette.test.ts` pins the two lists equal.
+- **Handles are IDENTIFIED (`in`/`out`) and edges name them.** RF's "first handle of this type"
+  fallback silently mis-attaches the moment a node has two source handles, so this is the seam U19
+  widens. Ports stay a VIEW concept — the engine has no ports, and `stableEdgeKey` (which indexes
+  bounce counters across saves) is keyed on the condition.
+- **`connect(from, to, condition)` now takes a whole `EdgeCondition`**, not an `EdgeOn`. The looser
+  signature could author `on: 'branch'` with no label — half an edge, which `EdgeSchema` rejects.
+
+**Verified in a browser, and — after review — mostly by the SUITE rather than by one reading.**
+`connect-validation.spec.ts` now asserts all five arrowhead hues in BOTH themes against the
+resolved palette value (dark `rgb(88, 214, 141)` / light `rgb(21, 112, 63)` for success, equal to
+the edge stroke), the mid-gesture port painting `--success` when valid and `--error` when not, the
+rendered `marker-end` attribute (RF's `url('#…')` wrapping is RF's behaviour, not ours to
+unit-test), and the backwards gesture. The first cut of this paragraph claimed the five-hue,
+two-theme reading while the automated part covered one hue in one theme — the FIT lens caught that,
+and the fix was to make the claim enforceable rather than to soften it. Manual-only, from the live
+pass: the refusal panel re-themes, survives a selection change plus ~2.5s of ticks, and dismiss
+clears it; zero console errors or warnings across the session.
+
+NOT in U6b, with owners: one source port per OUTCOME + retiring the condition dropdown (**U19**);
+back-edge authoring, which is the remedy the cycle refusal names (**U6e**); the container-BOUNDARY
+connect rule — real, and refused by the save gate, but container membership is not rendered yet, so
+a refusal's cause would be invisible (**U6c**/**U6d**); undo of a connection (**U17**).
+
+**A trap for the next canvas spec**, now encoded in `connect-validation.spec.ts`: at the default
+1280px viewport the canvas pane is 397px and `fitView` clamps at `maxZoom: 2`, so two 120px nodes
+cannot both fit. Laying them out for an edge pushes the first node's TARGET port and the second's
+SOURCE port outside the pane (they land under the toolbox, still in the DOM). A left-to-right
+source→target drag works anyway — which is why U6a never noticed — but a REVERSE drag puts the
+pointer down on the toolbox and starts nothing, failing as "no refusal was shown". The spec widens
+the viewport.
 
 ## Non-goals (YAGNI)
 

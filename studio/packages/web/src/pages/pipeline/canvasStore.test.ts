@@ -159,19 +159,47 @@ describe('canvasStore', () => {
   it('connect adds one edge and dedupes an identical (from,to,on)', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().connect('n_b', 'n_a', 'failure');
+    // FORWARD of the loaded n_a -> n_b edge, on a different condition. The old
+    // version of this spec connected n_b -> n_a, which closes a forward cycle —
+    // refused as of U6b, so it would have tested the cycle rule by accident and
+    // stopped covering the dedupe it is named for.
+    s.getState().connect('n_a', 'n_b', { on: 'failure' });
     expect(s.getState().edges).toHaveLength(2);
-    s.getState().connect('n_b', 'n_a', 'failure'); // duplicate
+    s.getState().connect('n_a', 'n_b', { on: 'failure' }); // duplicate
     expect(s.getState().edges).toHaveLength(2);
   });
 
   it('connect refuses a self-loop or an endpoint that is not a node', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().connect('n_a', 'n_a', 'success'); // self
-    s.getState().connect('n_a', 'ghost', 'success'); // missing endpoint
-    s.getState().connect('ghost', 'n_a', 'success');
+    s.getState().connect('n_a', 'n_a', { on: 'success' }); // self
+    s.getState().connect('n_a', 'ghost', { on: 'success' }); // missing endpoint
+    s.getState().connect('ghost', 'n_a', { on: 'success' });
     expect(s.getState().edges).toHaveLength(1); // only the loaded edge
+  });
+
+  /**
+   * U6b — the forward-DAG rule now refuses the DRAW, not just the save.
+   *
+   * The store is the backstop for the canvas's `isValidConnection`; both call
+   * `connectRejection`, so this spec and the connection gesture cannot diverge.
+   */
+  it('connect refuses an edge that would close a forward cycle', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version()); // n_a -> n_b
+    s.getState().connect('n_b', 'n_a', { on: 'success' });
+    expect(s.getState().edges).toHaveLength(1);
+    expect(s.getState().dirty).toBe(false); // a refusal is not an edit
+  });
+
+  it('connect still allows a forward edge that only LOOKS like a loop (a -> b -> c, a -> c)', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().addNode('http_request', { x: 200, y: 200 });
+    const third = s.getState().nodes.at(-1)!.id;
+    s.getState().connect('n_b', third, { on: 'success' });
+    s.getState().connect('n_a', third, { on: 'success' });
+    expect(s.getState().edges).toHaveLength(3);
   });
 
   it('deleteNode removes the node, its incident edges, and clears a stale selection', () => {
