@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { EdgeOnSchema } from '@autonomy-studio/shared';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -75,5 +76,47 @@ describe('MVP palette light/dark parity', () => {
    */
   it('honours prefers-reduced-motion for the infinite live-pulse animation', () => {
     expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  });
+});
+
+/**
+ * U6a — the condition → hue mapping for canvas edges.
+ *
+ * Asserted against the CSS SOURCE because nothing else can see it: the unit
+ * tests assert class NAMES, and the e2e asserts the five hues are distinct,
+ * opaque and readable. All of that stays green if `--success` and `--error` are
+ * swapped — the canvas would paint failures green and nobody would fail. This
+ * is also the check behind the claim that the canvas and the Monitor overlay
+ * (U11) read one palette: both sides name the same vars, here and in the
+ * `.run-status-*` / `.node-status-*` rules below them.
+ */
+describe('U6a edge variant hues', () => {
+  const EXPECTED: ReadonlyArray<readonly [string, string]> = [
+    ['success', '--success'],
+    ['failure', '--error'],
+    ['completion', '--accent'],
+    ['skipped', '--muted'],
+    ['branch', '--branch'],
+  ];
+
+  it.each(EXPECTED)('paints edge-variant-%s with var(%s)', (condition, cssVar) => {
+    const body = ruleBody(css, `.react-flow__edge.edge-variant-${condition}`);
+    expect(customProps(body).get('--edge-color')).toBe(`var(${cssVar})`);
+  });
+
+  /**
+   * `OPERATIONAL_CONDITIONS` is `EdgeOnSchema.options`, so a FIFTH engine
+   * outcome becomes authorable the moment the engine lands it. That is a
+   * deliberate reversal of the `AUTHORABLE_EDGE_ON` pin, and this is the
+   * safety net it needs: without a matching rule the new condition would paint
+   * an unstyled edge (falling through to the Fluent neutral), which is a
+   * rendered change nobody browser-verified. Adding an outcome now fails here
+   * instead.
+   */
+  it('has a variant rule for every operational outcome the picker offers', () => {
+    for (const on of EdgeOnSchema.options) {
+      const body = ruleBody(css, `.react-flow__edge.edge-variant-${on}`);
+      expect(body, `no .edge-variant-${on} rule — the picker offers it`).not.toBe('');
+    }
   });
 });

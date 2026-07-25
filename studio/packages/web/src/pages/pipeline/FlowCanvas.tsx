@@ -20,6 +20,7 @@ import '@xyflow/react/dist/style.css';
 import { getActivity } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
+import { edgeAriaLabel, edgeLabel, edgeVariantClass } from './edgeCondition';
 import type { CanvasState } from './canvasStore';
 
 interface ActivityData extends Record<string, unknown> {
@@ -94,15 +95,24 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * which carry no measured state, are derived straight from the store.
  * `onlyRenderVisibleElements` keeps a large graph responsive.
  *
- * NOTE for whoever pins this as a regression test (the epic asks for one before
- * U6a): the obvious unit test — "an unrelated store change does not remount an
- * existing node" — does NOT discriminate. React keys node elements by id, so DOM
- * identity survives even if the carry-forward below is deleted outright
- * (confirmed by mutation: the test stays green). The property only diverges
- * while a drag is IN FLIGHT, when the view position leads the domain position
- * and `measured` is already populated — neither of which jsdom can produce, and
- * neither of which survives a settled drag. A real check has to drive an actual
- * pointer drag in a browser and observe mid-gesture.
+ * The regression check the epic asks for is `e2e/canvas-drag-reconciliation.spec.ts`
+ * (U6a). Do NOT try to replace it with a unit test: "an unrelated store change
+ * does not remount an existing node" does NOT discriminate, because React keys
+ * node elements by id, so DOM identity survives even if the carry-forward below
+ * is deleted outright (U5 confirmed that by mutation and deleted the test). The
+ * property only diverges while a drag is IN FLIGHT, when the view position
+ * leads the domain position and `measured` is already populated — neither of
+ * which jsdom can produce, and neither of which survives a settled drag. Both
+ * halves of the carry-forward were mutation-checked against that spec.
+ *
+ * KNOWN LIMIT, for U17/U9/U22: `position` here is carried forward
+ * UNCONDITIONALLY, so once a node is in the view array a DOMAIN position write
+ * never reaches the screen. That is exactly right mid-drag and wrong for
+ * undo-of-a-move (U17), auto-layout (U9) and restore-version (U22), which are
+ * all domain position writes. Whoever builds those needs a "domain wins"
+ * escape hatch (a move generation/epoch, or clearing the view entry on a
+ * programmatic move) — not a relaxation of this line, which the spec above
+ * pins.
  */
 export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const nodes = useStore(store, (s) => s.nodes);
@@ -139,11 +149,27 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     });
   }, [nodes, selected, setFlowNodes]);
 
+  /**
+   * Typed edges (U6a). The variant CLASS goes on React Flow's edge `<g>`, where
+   * it sets `--xy-edge-stroke` — NOT an inline `style.stroke`, and not a rule on
+   * `.react-flow__edge-path` directly. RF puts `edge.style` inline on the path,
+   * which would outrank its own `.react-flow__edge.selected .react-flow__edge-path`
+   * rule and silently kill the selection highlight; a competing class rule on
+   * the path ties that rule on specificity (0,3,0) and would be decided by
+   * stylesheet import order. Setting the custom property one level up keeps RF's
+   * selected rule winning on its own terms. (Arrowheads are NOT covered: RF
+   * renders its marker defs once, outside every edge `<g>`, and the canvas
+   * configures no `markerEnd` — U6b/U19 will need one marker id per condition.)
+   */
   const flowEdges: FlowEdge[] = edges.map((e) => ({
     id: e.id,
     source: e.from,
     target: e.to,
-    label: e.on,
+    label: edgeLabel(e),
+    className: edgeVariantClass(e),
+    // RF renders an edge as role="img"/"group"; under either, the SVG <text>
+    // label is NOT exposed, so without this the outcome is colour-only.
+    ariaLabel: edgeAriaLabel(e),
     selected: selected?.kind === 'edge' && selected.id === e.id,
   }));
 

@@ -6,11 +6,11 @@ import {
   type EdgeOn,
   type Edge,
   type Node,
-  type OperationalEdge,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
+import { authoringEdgeKey, retypeCollides, type EdgeCondition } from './edgeCondition';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -19,20 +19,29 @@ export interface Selection {
 }
 
 /**
- * Retype an edge to an operational outcome. An operational edge routes by `on`
- * alone, so the business `branch` label is dropped — `{...e, on}` would strand
- * it on an edge that no longer routes by it. Narrowing on the `on` discriminant
- * first is what makes `branch` destructurable without a cast; the rest-spread
- * (rather than an explicit field list) carries `back`/`maxBounces` and any
- * future `edgeBase` field through untouched.
+ * Retype an edge to a new condition, operational or business.
  *
- * Reachable only for an imported branch edge — the canvas can't author one.
+ * Both directions rewrite the `branch` key rather than merging it: an
+ * operational edge routes by `on` alone, so a leftover `branch` would strand a
+ * key the edge no longer routes by (and fail `EdgeSchema` — the union has no
+ * operational member carrying one); a branch edge REQUIRES the key. Narrowing
+ * on the `on` discriminant first is what makes `branch` destructurable without
+ * a cast; the rest-spread (rather than an explicit field list) carries
+ * `back`/`maxBounces` and any future `edgeBase` field through untouched.
  */
-function toOperationalEdge(e: Edge, on: EdgeOn): OperationalEdge {
-  if (e.on !== 'branch') return { ...e, on };
-  const { branch, ...rest } = e;
-  void branch; // discard: lint has no ignoreRestSiblings/varsIgnorePattern here
-  return { ...rest, on };
+function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
+  let base: Omit<Edge, 'on' | 'branch'>;
+  if (e.on === 'branch') {
+    const { branch, on, ...rest } = e;
+    void branch; // discard: lint has no ignoreRestSiblings/varsIgnorePattern here
+    void on;
+    base = rest;
+  } else {
+    const { on, ...rest } = e;
+    void on;
+    base = rest;
+  }
+  return { ...base, ...condition };
 }
 
 export interface CanvasState {
@@ -75,7 +84,11 @@ export interface CanvasState {
   deleteNode(id: string): void;
   connect(from: string, to: string, on: EdgeOn): void;
   deleteEdge(id: string): void;
-  updateEdgeOn(id: string, on: EdgeOn): void;
+  /**
+   * Retype an edge to a new condition. Refuses (no-op) a retype that would make
+   * the edge a DUPLICATE of another — see `retypeCollides`.
+   */
+  updateEdgeCondition(id: string, condition: EdgeCondition): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   select(sel: Selection | null): void;
@@ -199,8 +212,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       if (from === to) return; // no self-loops
       const ids = new Set(get().nodes.map((n) => n.id));
       if (!ids.has(from) || !ids.has(to)) return; // both endpoints must be nodes
-      if (get().edges.some((e) => e.from === from && e.to === to && e.on === on)) return; // dedupe
       const edge: Edge = { id: newLocalId('e'), from, to, on };
+      const key = authoringEdgeKey(edge);
+      if (get().edges.some((e) => authoringEdgeKey(e) === key)) return; // dedupe
       set((s) => ({ edges: [...s.edges, edge], dirty: true }));
     },
 
@@ -213,10 +227,35 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       }));
     },
 
-    updateEdgeOn(id, on) {
-      if (!get().edges.some((e) => e.id === id)) return;
+    /**
+     * Retype an edge, refusing a retype that would DUPLICATE another edge.
+     *
+     * `connect`'s dedupe is not enough on its own: retyping walks straight
+     * around it (connect A→B `success`, retype it to `skipped`, connect A→B
+     * `success` again, retype THAT to `skipped` → two byte-identical edges).
+     * Nothing downstream catches it — `validatePipelineDoc` has no duplicate-
+     * EDGE rule, its id-uniqueness check covers nodes and containers only — and
+     * the consequences are real: the two share one edge identity, so as
+     * back-edges they halve `maxBounces` and resolve each other's reset body,
+     * and on the canvas they stack as overlapping SVG paths neither of which
+     * can be clicked apart. U6a multiplies the reachable surface by every
+     * branch label a source declares, so the guard belongs here, not only in
+     * `connect`.
+     *
+     * A REFUSAL is right rather than a silent merge: the operator still has the
+     * edge they selected, and deleting one of two identical edges is a thing
+     * they can see and do. It is also not the operator's first warning —
+     * `EdgePanel` disables a condition another edge already holds, using the
+     * SAME `retypeCollides` predicate, so a refusal here is the backstop for a
+     * caller that is not the picker, not the UX.
+     */
+    updateEdgeCondition(id, condition) {
+      const current = get().edges.find((e) => e.id === id);
+      if (current === undefined) return;
+      const retyped = retypeEdge(current, condition);
+      if (retypeCollides(get().edges, current, retyped)) return;
       set((s) => ({
-        edges: s.edges.map((e) => (e.id === id ? toOperationalEdge(e, on) : e)),
+        edges: s.edges.map((e) => (e.id === id ? retyped : e)),
         dirty: true,
       }));
     },

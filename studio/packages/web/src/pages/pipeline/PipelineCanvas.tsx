@@ -5,26 +5,25 @@ import {
   getActivity,
   isStructuralCallActivity,
   type ConnectionPublic,
-  type EdgeOn,
+  type Edge,
+  type Node,
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
 import { createCanvasStore } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import {
+  branchOptionsFor,
+  conditionOf,
+  decodeConditionValue,
+  edgeLabel,
+  encodeCondition,
+  OPERATIONAL_CONDITIONS,
+  takenConditions,
+  type EdgeCondition,
+} from './edgeCondition';
 import { FlowCanvas } from './FlowCanvas';
-
-/**
- * The edge conditions this dropdown offers. Deliberately NOT
- * `EdgeOnSchema.options`: the engine also routes `skipped` now (#1 F1) and the
- * schema carries business `branch` edges, but surfacing either here is a
- * RENDERED change that has to clear the browser-verify gate, and it belongs to
- * the tickets that own edge authoring — U6a (typed-edge styling + branch
- * picker) and U19 (outcome-by-source-handle, which retires this dropdown
- * outright). Pinning the list keeps an engine-semantics ticket invisible to the
- * canvas; U6a/U19 widen it deliberately, with a browser check.
- */
-const AUTHORABLE_EDGE_ON: readonly EdgeOn[] = ['success', 'failure', 'completion'];
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -188,27 +187,7 @@ function PropertyPanel({
   if (selected.kind === 'edge') {
     const edge = edges.find((e) => e.id === selected.id);
     if (!edge) return <EmptyPanel />;
-    return (
-      <aside className="property-panel" aria-label="Properties">
-        <h3>Edge</h3>
-        <label>
-          Fires on
-          <select
-            value={edge.on}
-            onChange={(e) => store.getState().updateEdgeOn(edge.id, e.target.value as EdgeOn)}
-          >
-            {AUTHORABLE_EDGE_ON.map((on) => (
-              <option key={on} value={on}>
-                {on}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" onClick={() => store.getState().deleteEdge(edge.id)}>
-          Delete edge
-        </button>
-      </aside>
-    );
+    return <EdgePanel store={store} edge={edge} nodes={nodes} edges={edges} />;
   }
 
   const node = nodes.find((n) => n.id === selected.id);
@@ -231,6 +210,123 @@ function EmptyPanel() {
     <aside className="property-panel" aria-label="Properties">
       <h3>Properties</h3>
     </aside>
+  );
+}
+
+/**
+ * Editor for one edge's CONDITION (U6a) — the picker that replaced the pinned
+ * three-value dropdown.
+ *
+ * It offers the four operational outcomes (`skipped` included: the engine has
+ * routed it since #1 F1 and nothing ever refused it — only the canvas pin
+ * stopped it being authorable) plus one option per business branch the edge's
+ * SOURCE node declares. The branch list is `declaredBranchesOf`, the same SSOT
+ * `validatePipelineDoc` reads, so every option offered is one a save accepts.
+ *
+ * Exported so the option rules can be tested without mounting the page and its
+ * whole API surface — the same reason `NodePanel` is exported.
+ */
+export function EdgePanel({
+  store,
+  edge,
+  nodes,
+  edges,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  edge: Edge;
+  nodes: Node[];
+  edges: Edge[];
+}) {
+  const current = conditionOf(edge);
+  const currentValue = encodeCondition(current);
+  const branches = branchOptionsFor(nodes.find((n) => n.id === edge.from));
+
+  const offered = [
+    ...OPERATIONAL_CONDITIONS.map((on) => encodeCondition({ on })),
+    ...(branches ?? []).map((branch) => encodeCondition({ on: 'branch', branch })),
+  ];
+
+  /**
+   * Conditions ALREADY taken by another edge between the same two nodes.
+   *
+   * `updateEdgeCondition` refuses such a retype (it would mint a duplicate),
+   * and a refusal the operator cannot see is a control that silently does
+   * nothing: they pick `failure`, React re-renders from the unchanged store,
+   * and the select snaps back with no explanation. Showing the option DISABLED
+   * says the same "no" before the click, and says why.
+   */
+  const taken = takenConditions(edges, edge);
+
+  /**
+   * A `<select>` whose `value` matches no `<option>` renders the FIRST option
+   * instead — a silent lie about what is persisted. Reachable without leaving
+   * the canvas: `declaredBranchesOf` reads a `switch`'s `config.cases` LIVE, so
+   * editing that config in the node panel can un-declare a branch an existing
+   * edge still uses. (Also reachable via an API/git-imported doc.) The value is
+   * shown as a DISABLED option so the panel states the truth and refuses to
+   * re-select it; `validateCanvas` is already badging the doc as unsavable.
+   */
+  const orphaned = !offered.includes(currentValue);
+
+  return (
+    <aside className="property-panel" aria-label="Properties">
+      <h3>Edge</h3>
+      <label>
+        Fires on
+        <select
+          value={currentValue}
+          onChange={(e) => {
+            const next = decodeConditionValue(e.target.value);
+            if (next) store.getState().updateEdgeCondition(edge.id, next);
+          }}
+        >
+          {orphaned && (
+            <option value={currentValue} disabled>
+              {edgeLabel(edge)} — not offered by this source
+            </option>
+          )}
+          <optgroup label="Outcome">
+            {OPERATIONAL_CONDITIONS.map((on) => (
+              <ConditionOption key={on} condition={{ on }} label={on} taken={taken} />
+            ))}
+          </optgroup>
+          {branches !== null && (
+            <optgroup label="Branch">
+              {branches.map((branch) => (
+                <ConditionOption
+                  key={branch}
+                  condition={{ on: 'branch', branch }}
+                  label={branch}
+                  taken={taken}
+                />
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </label>
+      <button type="button" onClick={() => store.getState().deleteEdge(edge.id)}>
+        Delete edge
+      </button>
+    </aside>
+  );
+}
+
+/** One condition option, disabled (with the reason) when another edge holds it. */
+function ConditionOption({
+  condition,
+  label,
+  taken,
+}: {
+  condition: EdgeCondition;
+  label: string;
+  taken: ReadonlySet<string>;
+}) {
+  const value = encodeCondition(condition);
+  const isTaken = taken.has(value);
+  return (
+    <option value={value} disabled={isTaken}>
+      {isTaken ? `${label} — already used by another edge` : label}
+    </option>
   );
 }
 

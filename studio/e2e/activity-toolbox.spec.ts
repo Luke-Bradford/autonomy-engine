@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
+import { canvasNodes, toolbox } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 
 /**
@@ -18,19 +19,9 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
  * produce a spec that passes by doing nothing.
  */
 
-/** The toolbox, addressed the way a user perceives it. */
-function toolbox(page: Page): Locator {
-  return page.getByRole('complementary', { name: 'Activities' });
-}
-
 /** The canvas pane — React Flow's own background surface, not its chrome. */
 function canvasPane(page: Page): Locator {
   return page.locator('.react-flow__pane');
-}
-
-/** Every rendered activity node on the canvas. */
-function canvasNodes(page: Page): Locator {
-  return page.locator('.react-flow__node');
 }
 
 test.describe('U5 activities toolbox', () => {
