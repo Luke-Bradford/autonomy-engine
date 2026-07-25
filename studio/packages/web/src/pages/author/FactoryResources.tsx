@@ -98,13 +98,35 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   const [expanded, setExpanded] = useState(true);
   const [draft, setDraft] = useState<Draft | null>(null);
   /**
-   * Id of the control to hand focus back to when the draft row closes.
+   * Id of the control to hand focus back to when the DRAFT row closes.
    *
    * A ref, not state: nothing RENDERS from it, and reading it in the effect
    * below would otherwise force a `setState` inside that effect purely to clear
    * it — a cascading render for a value the UI never shows.
+   *
+   * Written only by `openDraft`, consumed only by the effect below. Drafts are
+   * singular — there is at most one open — so this slot has no concurrency to
+   * survive, which is exactly why the DELETE flow below does not share it.
    */
-  const returnFocusTo = useRef<string | null>(null);
+  const draftReturnFocus = useRef<string | null>(null);
+  /**
+   * Id of the row whose delete is in flight, if any.
+   *
+   * The row id rather than a focus target or a flag, and that is the whole
+   * design: it makes the request SELF-INVALIDATING. The effect consumes it only
+   * once that row is genuinely absent from the list, so a delete that failed
+   * cannot be consumed by some later unrelated refresh — the row is still there.
+   *
+   * Deliberately NOT the save-and-restore-the-previous-value shape this started
+   * out as. One slot holding two flows' state, unwound by whichever handler
+   * happened to finish, produced three separate ordering bugs in review: a
+   * failed delete leaving the slot armed for an unrelated mutation to trip; a
+   * successful delete clobbering an open draft's target; and two concurrent
+   * deletes where the first one's failure unwound to a value that predated the
+   * second one's arming, stranding focus entirely. Two slots, one writer each,
+   * and no unwinding retires that whole class rather than the next interleaving.
+   */
+  const deletingRow = useRef<string | null>(null);
   /**
    * How many mutations are in flight — a COUNT, not a boolean.
    *
@@ -168,11 +190,30 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
      a DELETE closes no draft, so the list changing is the only signal that the
      row is gone. */
   useEffect(() => {
+    /* A draft owns focus for as long as it is open — it is where the user is
+       looking, and its row still exists to hand focus back to. */
     if (activeDraft !== null) return;
-    const target = returnFocusTo.current;
-    if (target === null) return;
-    returnFocusTo.current = null;
-    document.getElementById(target)?.focus();
+
+    const target = draftReturnFocus.current;
+    if (target !== null) {
+      draftReturnFocus.current = null;
+      /* A draft closing SUPERSEDES a completed delete: the delete's target is
+         the `+` button, the draft's is the row it came from, and the latter is
+         where the user's attention actually is. Dropping the delete's request
+         rather than leaving it pending is what stops it firing later, on some
+         unrelated refresh, once its row is long gone. */
+      deletingRow.current = null;
+      document.getElementById(target)?.focus();
+      return;
+    }
+
+    const deleted = deletingRow.current;
+    /* Consumed only once the row is REALLY gone. A delete that failed leaves its
+       row in the list, so this never fires for it — no unwinding needed, and no
+       stale request for a later unrelated refresh to trip over. */
+    if (deleted === null || pipelines.some((p) => p.id === deleted)) return;
+    deletingRow.current = null;
+    document.getElementById(NEW_PIPELINE_BUTTON_ID)?.focus();
   }, [activeDraft, pipelines]);
 
   const closeDraft = useCallback(() => {
@@ -182,7 +223,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
   const openDraft = useCallback((next: Draft, focusBackTo: string) => {
     setDraft(next);
-    returnFocusTo.current = focusBackTo;
+    draftReturnFocus.current = focusBackTo;
     setActionError(null);
   }, []);
 
@@ -240,28 +281,21 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          by the refresh, so focus needs somewhere to land. Fluent restores focus
          to its trigger on close, which by then is gone.
 
-         One slot, two independent restoration flows, so a delete claims it only
-         when it is genuinely free to claim:
-
-         - a DRAFT open on another row already owns the slot, and the effect
-           below will not restore for this delete regardless — it stands down
-           while `activeDraft !== null`. Arming here could therefore never help,
-           and would permanently overwrite the draft's target, sending focus to
-           `+` instead of back to the row the draft came from when it closes;
-         - a delete that FAILS must leave the slot exactly as it found it. It
-           removed no row, so there is nothing to hand focus back FROM, and
-           nothing will ever consume the request either — the failure path skips
-           the refresh the effect watches. Left armed it stays armed until the
-           SHARED list next changes for an unrelated reason (the pipelines page,
-           mounted beside this pane, creating or deleting) and steals focus then. */
-      const focusBefore = returnFocusTo.current;
-      if (activeDraft === null) returnFocusTo.current = NEW_PIPELINE_BUTTON_ID;
+         Recorded BEFORE the await, not after: `run` refreshes the list as part
+         of succeeding, so by the time it returns, the change the effect watches
+         has already been committed. */
+      deletingRow.current = p.id;
       const ok = await run(
         () => deletePipeline(p.id),
         (err) => describeDeleteFailure(p.name, err),
       );
       if (!ok) {
-        returnFocusTo.current = focusBefore;
+        /* Compare-and-clear, never a blind reset: with two deletes in flight the
+           second one's id is in the slot, and clearing it outright would strand
+           the focus IT is waiting on. Leaving a stale id would be harmless
+           anyway — the effect ignores a row that is still listed — but dropping
+           our own keeps the slot honest. */
+        if (deletingRow.current === p.id) deletingRow.current = null;
         return;
       }
       /* Leaving the canvas mounted on a pipeline that no longer exists would
@@ -278,7 +312,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          lands on "Pipeline not found". */
       if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
     },
-    [activeDraft, editing, hub.path, navigate, run, section],
+    [editing, hub.path, navigate, run, section],
   );
 
   const listLabel = section?.label ?? hub.label;

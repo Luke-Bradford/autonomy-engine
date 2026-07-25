@@ -481,6 +481,57 @@ describe('FactoryResources — row actions', () => {
   });
 
   /**
+   * Two deletes in flight at once, the FIRST one failing. Under the old
+   * save-and-restore slot, delete A captured the pre-arm value, delete B then
+   * armed on top, and A's failure unwound to a value that predated B — silently
+   * dropping the request B was still waiting on, so B's success restored nothing
+   * and focus stayed on `<body>`: the exact failure the mechanism exists to
+   * prevent. The slot is now the row id, cleared only by whoever still owns it.
+   */
+  it('restores focus for a delete that SUCCEEDS alongside one that failed first', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    /* BOTH held open, so they are genuinely concurrent: Alpha must fail while
+       Beta is still in flight. Letting Beta settle first would complete its
+       restoration before Alpha's failure ran, and the interleaving under test
+       would never occur. */
+    let failAlpha!: (err: unknown) => void;
+    let finishBeta!: () => void;
+    deleteMock
+      .mockImplementationOnce(() => new Promise<void>((_res, rej) => (failAlpha = rej)))
+      .mockImplementationOnce(() => new Promise<void>((res) => (finishBeta = () => res())));
+    listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([ALPHA]);
+
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
+
+    await openRowMenu(user, 'Beta');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_2'));
+
+    // Alpha fails FIRST, with Beta's request still outstanding.
+    await act(async () => {
+      failAlpha(new ApiError(409, 'nope'));
+      await Promise.resolve();
+    });
+    await screen.findByRole('alert');
+
+    // Beta then succeeds — its restoration must not have been dropped.
+    await act(async () => {
+      finishBeta();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Beta' })).toBeNull());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New pipeline' })).toHaveFocus());
+  });
+
+  /**
    * One slot, two independent restoration flows. A SUCCESSFUL delete of an
    * unrelated row used to overwrite an open draft's return target with the `+`
    * button — so cancelling the draft afterwards landed focus on `+` rather than
