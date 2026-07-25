@@ -788,7 +788,7 @@ td button + button {
   margin-top: 1rem;
 }
 
-.palette,
+.activity-toolbox,
 .property-panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -797,12 +797,107 @@ td button + button {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+  /* The toolbox sits in a FIXED 180px track. A grid item's automatic minimum
+     size is its content's intrinsic minimum, and a text input's is its `size`
+     attribute (~20 characters) — so without this the filter below pushes the
+     column wider than its track and the whole canvas grid overflows
+     horizontally. U4 hit exactly this in the secondary pane. */
+  min-width: 0;
 }
 
-.palette h3,
+.activity-toolbox h3,
 .property-panel h3 {
   margin: 0;
   font-size: 0.95rem;
+}
+
+/* --- Activities toolbox (U5) --------------------------------------------- */
+
+.activity-toolbox {
+  /* Long catalogs scroll inside the column rather than stretching the grid row
+     past the canvas. */
+  max-height: 620px;
+  overflow-y: auto;
+}
+
+.activity-toolbox__filter {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  /* See the `min-width: 0` note above — the input needs it in its own right, as
+     a flex item, not only via its container. */
+  min-width: 0;
+}
+
+.activity-toolbox__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+/* The disclosure inherits `.icon-button` (#721's one flat icon-button
+   treatment) and only adds what a LABELLED one needs: a text row rather than a
+   centred glyph. */
+.activity-toolbox__disclosure {
+  justify-content: flex-start;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.2rem 0.15rem;
+  /* `.icon-button` zeroes this for a glyph-only button; the label needs it back. */
+  line-height: 1.2;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.activity-toolbox__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/* Load-bearing, and it was a REAL bug for one commit: `display: flex` above
+   outranks the UA stylesheet's `[hidden] { display: none }` — ANY author
+   `display` declaration does — so a collapsed group stayed fully visible and
+   fully in the accessibility tree. jsdom exposed nothing: Testing Library reads
+   the `hidden` ATTRIBUTE, so the unit test for collapse passed against a group
+   that a real browser still painted. `activity-toolbox.spec.ts` is what caught
+   it and is the regression net.
+
+   The same trap is waiting for any future `hidden`-toggled element given a
+   `display` — U4's `.factory-resources__list` is safe only because it sets
+   none. */
+.activity-toolbox__list[hidden] {
+  display: none;
+}
+
+.activity-toolbox__item {
+  width: 100%;
+  text-align: left;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  /* The affordance for the drag half of the interaction. `grab` (not `move`):
+     nothing leaves the toolbox — the drop COPIES the activity onto the canvas. */
+  cursor: grab;
+}
+
+.activity-toolbox__item:active {
+  cursor: grabbing;
+}
+
+.activity-toolbox__empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 .property-panel label {

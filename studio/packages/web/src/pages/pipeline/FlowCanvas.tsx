@@ -1,4 +1,4 @@
-import { memo, useEffect } from 'react';
+import { memo, useEffect, type DragEvent } from 'react';
 import { useStore } from 'zustand';
 import {
   Background,
@@ -8,6 +8,7 @@ import {
   Position,
   ReactFlow,
   useNodesState,
+  useReactFlow,
   type Connection,
   type Edge as FlowEdge,
   type EdgeChange,
@@ -18,6 +19,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { getActivity } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
+import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import type { CanvasState } from './canvasStore';
 
 interface ActivityData extends Record<string, unknown> {
@@ -51,6 +53,27 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
 const nodeTypes = { activity: ActivityNode };
 
 /**
+ * Canvas CHROME that must not accept a toolbox drop (U5).
+ *
+ * React Flow spreads unknown props — including `onDrop`/`onDragOver` — onto its
+ * OUTER wrapper, and `<MiniMap>`, `<Controls>` and the attribution all render
+ * inside that wrapper via its `Panel` primitive (they share the
+ * `react-flow__panel` class). Without this guard, releasing a drag over the
+ * minimap would author a node at whatever flow position happens to sit under
+ * that screen corner — a placement the operator never pointed at.
+ *
+ * The same predicate gates `dragover`, so a drag held over the chrome shows the
+ * browser's own "no drop" cursor rather than inviting a drop it will discard.
+ */
+const CANVAS_CHROME_SELECTOR = '.react-flow__panel';
+
+/** Is this drag event over the canvas surface (as opposed to its chrome)? */
+function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
+  const target = event.target;
+  return !(target instanceof Element) || target.closest(CANVAS_CHROME_SELECTOR) === null;
+}
+
+/**
  * Renders the working graph with React Flow. The zustand store is the DOMAIN
  * source of truth (Node/Edge schema shapes); React Flow owns the VIEW node
  * array (via `useNodesState`) so it can attach and keep each node's measured
@@ -68,6 +91,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const selected = useStore(store, (s) => s.selected);
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
+  // Converts a pointer position to flow coordinates under the live zoom/pan.
+  // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
+  const { screenToFlowPosition } = useReactFlow();
 
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
@@ -132,6 +158,38 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     if (conn.source && conn.target) store.getState().connect(conn.source, conn.target, 'success');
   }
 
+  /**
+   * Accept a toolbox drag over the canvas surface.
+   *
+   * `preventDefault()` is what makes an element a drop target, so it is called
+   * ONLY for our own drags: without the gate the canvas would swallow every file
+   * / link / text drag the operator happens to release over it, silently doing
+   * nothing instead of letting the browser do its default thing.
+   *
+   * The gate reads `dataTransfer.types`, never the payload — during `dragover`
+   * the drag-data store is in protected mode and `getData()` returns `''`. See
+   * `activityDnd.ts`.
+   */
+  function onDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!hasActivityDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>) {
+    if (!isOverCanvasSurface(event)) return;
+    const type = readActivityDragType(event.dataTransfer);
+    if (type === null) return;
+    event.preventDefault();
+    /* The node's TOP-LEFT lands under the pointer. Deliberately not offset to
+       centre it: the drag image is a toolbox BUTTON, whose size bears no
+       relation to the node's, so subtracting the grab offset inside it would be
+       false precision. `screenToFlowPosition` accounts for the live zoom + pan,
+       so the placement is correct under any viewport transform. */
+    const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    store.getState().addNode(type, position);
+  }
+
   return (
     <ReactFlow
       nodes={flowNodes}
@@ -140,6 +198,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       onNodeClick={(_, node) => store.getState().select({ kind: 'node', id: node.id })}
       onEdgeClick={(_, edge) => store.getState().select({ kind: 'edge', id: edge.id })}
       onPaneClick={() => store.getState().select(null)}
