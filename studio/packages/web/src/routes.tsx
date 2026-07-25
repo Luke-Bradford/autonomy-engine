@@ -1,5 +1,7 @@
 import { Navigate, type RouteObject } from 'react-router';
 import { AppShell } from './shell/AppShell';
+import { sectionLabel } from './shell/hubs';
+import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
@@ -39,10 +41,39 @@ export const LEGACY_REDIRECTS: readonly { from: `/${string}`; to: string }[] = [
 ];
 
 /**
+ * U3 — the shell chrome's metadata, carried on the routes themselves.
+ *
+ * `handle` is react-router's extension point, and `useMatches()` reads it back;
+ * `AppShell` is the only consumer. Two kinds of entry:
+ *
+ * - `{ hub }` marks a hub root. It selects the secondary pane's contents and
+ *   contributes a breadcrumb whose LABEL comes from `HUBS` — so a renamed hub
+ *   changes the rail tooltip, the pane heading and the crumb together.
+ * - `{ crumb }` is a leaf's own breadcrumb label, or a function of the params
+ *   for a route whose label IS part of the URL.
+ *
+ * `satisfies` on every declaration, not a bare object literal: react-router
+ * types `RouteObject.handle` as `any`, so `{ hub: 'moniter' }` would otherwise
+ * compile, render a shell with no pane, and look merely empty.
+ *
+ * Section crumbs read their label from `HUBS` via `sectionLabel()` rather than
+ * repeating the string here: the shell already resolves HUB labels out of that
+ * same list, so doing it one level down keeps every hub and section name in
+ * exactly one place. `sectionLabel` throws at module-eval time for a path no
+ * hub declares, which makes a pane-unreachable section a boot failure.
+ */
+const HUB_HANDLE = {
+  author: { hub: 'author' } satisfies ShellRouteHandle,
+  monitor: { hub: 'monitor' } satisfies ShellRouteHandle,
+  manage: { hub: 'manage' } satisfies ShellRouteHandle,
+  home: { hub: 'home' } satisfies ShellRouteHandle,
+};
+
+/**
  * The hash-router route tree (U2).
  *
- * Shape: one layout route (`AppShell`, which draws the hub rail and hosts the
- * `<Outlet/>`) with a section per hub. Each hub's own path redirects to its
+ * Shape: one layout route (`AppShell`, which draws the shell chrome and hosts
+ * the `<Outlet/>`) with a section per hub. Each hub's own path redirects to its
  * default child, so `#/monitor` is a valid, shareable URL rather than a blank
  * hub. `replace` on those redirects keeps the Back button useful — otherwise
  * going back from `/monitor/runs` would land on `/monitor` and immediately
@@ -61,31 +92,65 @@ export const ROUTES: RouteObject[] = [
     path: '/',
     element: <AppShell />,
     children: [
-      { index: true, element: <HomePage /> },
+      { index: true, element: <HomePage />, handle: HUB_HANDLE.home },
 
       {
         path: 'author',
+        handle: HUB_HANDLE.author,
         children: [
           { index: true, element: <Navigate to="/author/pipelines" replace /> },
-          { path: 'pipelines', element: <PipelinesPage /> },
+          {
+            path: 'pipelines',
+            element: <PipelinesPage />,
+            handle: { crumb: sectionLabel('/author/pipelines') } satisfies ShellRouteHandle,
+          },
         ],
       },
 
       {
         path: 'monitor',
+        handle: HUB_HANDLE.monitor,
         children: [
           { index: true, element: <Navigate to="/monitor/runs" replace /> },
-          { path: 'runs', element: <RunsPage /> },
-          { path: 'runs/:runId', element: <RunDetailRoute /> },
+          /* `:runId` is a CHILD of `runs`, not its sibling, so the breadcrumb
+             reads Monitor › Runs › run_42 and the middle crumb has a real
+             pathname to link back to. The URLs are byte-identical either way.
+             `runs` itself has no `element`, so react-router renders its
+             `<Outlet/>` — the same defaulting the hub routes already rely on. */
+          {
+            path: 'runs',
+            handle: { crumb: sectionLabel('/monitor/runs') } satisfies ShellRouteHandle,
+            children: [
+              { index: true, element: <RunsPage /> },
+              {
+                path: ':runId',
+                element: <RunDetailRoute />,
+                /* The label IS the URL segment. `useParams` has already decoded
+                   it, so this is the id as the page shows it. */
+                handle: {
+                  crumb: (params) => params.runId ?? '',
+                } satisfies ShellRouteHandle,
+              },
+            ],
+          },
         ],
       },
 
       {
         path: 'manage',
+        handle: HUB_HANDLE.manage,
         children: [
           { index: true, element: <Navigate to="/manage/connections" replace /> },
-          { path: 'connections', element: <ConnectionsPage /> },
-          { path: 'triggers', element: <TriggersPage /> },
+          {
+            path: 'connections',
+            element: <ConnectionsPage />,
+            handle: { crumb: sectionLabel('/manage/connections') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'triggers',
+            element: <TriggersPage />,
+            handle: { crumb: sectionLabel('/manage/triggers') } satisfies ShellRouteHandle,
+          },
         ],
       },
 

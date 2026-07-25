@@ -324,6 +324,130 @@ Deliberately NOT in U2, from its own ticket row and the Shell description:
   landed immediately after U2 and before U3: until it did, an old bookmark hit the catch-all and
   landed on Home, and `#/runs/:id` lost the run id rather than resolving to that run.
 
+## U3 — secondary pane + command bar (AS BUILT, 2026-07-25)
+
+The shell is now the spec diagram's four zones. `AppShell` is the ONLY consumer of
+`useMatches()`; every other part takes what it needs as props, so each is unit-testable
+without a data router.
+
+```text
+.app-shell  grid-template-columns: 48px  auto  auto   1fr
+                                    rail  pane  split  workspace
+                                          │            └ .workspace grid-template-rows: auto 1fr
+                                          │              (command bar / .content, the scroller)
+                                          └ .secondary-pane { width: var(--pane-width, 240px) }
+```
+
+Note where the width is: on the **pane element**, not in the track template. Every child
+names its own `grid-column`.
+
+| Piece | Where | Notes |
+|---|---|---|
+| Pane width + collapse | `uiStore` (`autonomy-studio.pane`) | one JSON record, clamped 180–480, default 240 |
+| Which hub am I in | route `handle: { hub }` → `activeHubId()` | drives the pane's contents |
+| Breadcrumb | route `handle: { crumb }` → `crumbsFrom()` | hub AND section crumb labels come from `HUBS` |
+| Pane sections | `HUBS[].sections` | SSOT for the pane's links AND the section crumb labels |
+
+Decisions worth not re-deriving:
+
+- **Route `handle` + `useMatches()` is the SSOT, and it is NOT the matcher U2 deleted.**
+  This closes the "revisit if U3's breadcrumb needs the matcher anyway" question the U2
+  section parks. The deleted helper was a *re-derivation* of `NavLink`'s answer; asking
+  the router for its own match list is the same single source, read directly. It is also
+  the idiom react-router documents for breadcrumbs.
+- **`:runId` moved from a SIBLING of `runs` to a CHILD of it**, so the trail reads
+  Monitor › Runs › run_42 with a linkable middle crumb. URLs are byte-identical; pinned
+  by a test asserting the matched route patterns, not just the rendered page.
+- **Shell children are pinned to explicit `grid-column`s.** Load-bearing, and found by
+  browser verification: a collapsed pane is `hidden` (`display: none`) and its splitter
+  is unmounted, so grid AUTO-PLACEMENT slid the workspace two tracks left into a 0px
+  column and crushed the whole app into a zero-width sliver. `grid-template-columns`
+  read correctly the whole time — which is why the e2e measures element BOXES, and why
+  no child is left to be placed by DOM order and sibling count.
+- **The pane's width is on the ELEMENT; the track is `auto`.** So an absent pane (Home
+  declares no sections) and a collapsed one — `hidden`, i.e. not a grid item — both
+  reclaim their column for nothing, because an `auto` track with no item in it resolves
+  to 0. `AppShell` therefore writes `--pane-width` unconditionally.
+  The first cut put `var(--pane-width)` in the track template instead. That is a FIXED
+  track, which does not self-collapse, so both states had to be mirrored back as an
+  inline `0px` — and an undefined custom property would have made the whole
+  `grid-template-columns` declaration invalid at computed-value time and dropped it to
+  `none`. Sizing the element deletes both hazards; the CSS fallback (`240px`) now only
+  has to yield a sane pane rather than rescue the entire shell.
+- **The pane is mounted-but-`hidden` when collapsed**, not unmounted: the toggle's
+  `aria-controls` must name an element in the document, and `hidden` also removes it from
+  the accessibility tree. `display: none` taking it out of the grid is what frees the
+  column.
+- **ONE collapse toggle, in the command bar** — a deviation from the diagram's `«collapse`
+  at the pane's foot. A control inside the pane vanishes with it, forcing a second expand
+  control elsewhere: two controls and two code paths for one boolean. It is absent
+  entirely on a hub with no pane, because a disclosure button controlling nothing is worse
+  than no button.
+- **No pane on Home.** Home declares no sections, so no pane renders. This is NOT a rule
+  that a one-entry pane is not worth drawing — Author and Monitor ship exactly that today,
+  because the container has to exist for U4's resources tree and U10's filters to land in,
+  and Manage genuinely has two entries. Home is different in kind: it IS the overview, so
+  its pane could only ever point at the page you are already on.
+- **The drag deliberately bypasses React.** `pointermove` fires at refresh rate; routing
+  each through the store would re-render the shell ~60×/s and persist to `localStorage`
+  per frame. The splitter previews by writing `--pane-width` straight onto the shell
+  element and commits once on `pointerup`.
+  A re-render mid-drag does NOT snap the pane back — browser-verified: React writes an
+  inline style key only when the PROP value changes, so a re-render with an unchanged
+  `paneWidth` leaves an out-of-band write alone. The real hazard is the inverse, and it
+  is worse: **a preview that is never followed by a commit is never reconciled by any
+  later render**, so the pane would keep a width neither the store nor `localStorage`
+  has, indefinitely. What rules it out is that `endDrag` always runs — pointer capture
+  guarantees a `pointerup` or a `pointercancel`, and both commit (each pinned by a unit
+  test). If that ever stops holding, the fix is to make the commit path idempotent by
+  writing the property from a layout effect, not to chase re-renders.
+  Keyboard steps take the opposite path — straight to the store, never the preview, or
+  the next render would revert them.
+- **Hand-rolled `<nav><ol>` breadcrumb, not Fluent's `Breadcrumb`** (which IS installed).
+  The honest reasons are bundle (U0's +64 kB budget) and plumbing — Fluent slots take an
+  intrinsic `as`, not a component, so react-router has to be wired in per crumb via
+  `useHref` + `useLinkClickHandler`, which is more code than the `<ol>`. Capability was
+  never the blocker.
+- **`@fluentui/react-nav` was rejected for the pane** (also installed): selection is a
+  `selectedValue`/`defaultSelectedValue` prop — controlled or uncontrolled, either way a
+  VALUE-based second opinion about where the user is, sitting beside the router's.
+  `NavLink`'s `isActive` stays the only source. Worth not relitigating in U4.
+- **The crumb separator is `content: '›' / ''`.** Moving it into a `::before` is NOT
+  enough — browser-verified, Chromium exposes generated content to the accessibility tree
+  and the crumb announced as "› Pipelines". The empty alt text after the slash is what
+  marks it decorative; re-reading the a11y tree then gave "Pipelines". Note the
+  degradation is VISUAL, not aural: CSS drops a declaration it cannot parse, so a browser
+  without alt-text support renders `content: normal` and generates no separator at all.
+- **The shell is `height: 100vh` and `.content` is the scroller.** Previously the DOCUMENT
+  scrolled, which would carry the command bar off the top of the screen. `.workspace` needs
+  an explicit `min-height: 0`/`min-width: 0` pair — a grid item's automatic minimum is
+  `auto`, so without them the track refuses to shrink and the container overflows instead
+  of the child scrolling. `.content` and `.secondary-pane` do NOT: setting `overflow` is
+  itself enough to zero that automatic minimum. Both claims mutation-checked — deleting
+  `.workspace`'s fails the e2e, deleting the others changes nothing.
+  Consequence worth knowing for **U7/U8a**: `.content` now CLIPS, so an
+  absolutely-positioned in-page overlay (properties panel, expression flyout) must portal
+  to body — which the U0 spike's portal policy already requires.
+- **Section labels are duplicated** between `hubs.ts` and the route `handle`s, on purpose —
+  a literal crumb beats a three-branch inference from a pathname. `routes.test.tsx` pins
+  them equal, and separately pins `sections[0].path` against each hub's index redirect.
+- **Fixed en route: `/manage/triggers` was unreachable by clicking.** Between U2 and U3
+  the rail reached Manage, Manage redirected to Connections, and nothing linked on.
+- **Fixed en route: U3r's trailing-slash test was vacuous.** It read
+  `router.state.matches` AFTER `render()`, which flushes the `<Navigate>` redirect inside
+  `act()`, so it described the DESTINATION route — also called `runs`. It would have
+  passed if `/runs/` had matched `:runId`. Now read from the router's initial state.
+
+- **Pane width and collapse are GLOBAL, not per-hub.** One `autonomy-studio.pane` record,
+  so collapsing in Manage keeps the pane collapsed in Author. The Shell section's "its own
+  secondary pane" reads as though it could be per-hub; global matches ADF and is what a
+  user putting the pane away almost certainly means. Pinned by an e2e that changes hub.
+
+NOT in U3, with owners: the command bar's **actions region** (Validate / Save→version /
+zoom-fit-layout) is **U9** — an empty container now would be dead code plus a seam chosen
+before its first consumer; real per-hub pane content is **U4** (Factory Resources tree) and
+**U10**; `#/settings` is **U15**.
+
 ## Non-goals (YAGNI)
 
 - No engine/reducer *semantics* changes (read-only read-models R1/R2 allowed).
