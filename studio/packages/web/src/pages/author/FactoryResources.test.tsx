@@ -481,6 +481,36 @@ describe('FactoryResources — row actions', () => {
   });
 
   /**
+   * One slot, two independent restoration flows. A SUCCESSFUL delete of an
+   * unrelated row used to overwrite an open draft's return target with the `+`
+   * button — so cancelling the draft afterwards landed focus on `+` rather than
+   * on the row it came from. The delete gains nothing by arming here (the effect
+   * stands down while a draft is open), so it simply does not claim the slot.
+   */
+  it('does not hijack an open draft’s focus target when an unrelated delete SUCCEEDS', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([ALPHA]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    // A rename is in progress on Alpha — its `⋯` button is the return target.
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    await screen.findByRole('textbox', { name: 'Pipeline name' });
+
+    // Beta is deleted out from under it, successfully.
+    await openRowMenu(user, 'Beta');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Beta' })).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'More actions for Alpha' })).toHaveFocus(),
+    );
+  });
+
+  /**
    * The other half of "transactional": unwinding a failed delete to `null`
    * outright would clear a target that is not the delete's to clear. A draft
    * open on ANOTHER pipeline parks its own return target in the same slot, and

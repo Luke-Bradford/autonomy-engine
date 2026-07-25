@@ -240,24 +240,27 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          by the refresh, so focus needs somewhere to land. Fluent restores focus
          to its trigger on close, which by then is gone.
 
-         Armed TRANSACTIONALLY: a delete that fails must leave this exactly as it
-         found it. Unwinding to `null` unconditionally would be wrong — a draft
-         row open on ANOTHER pipeline has its own target parked here, and the
-         effect below deliberately leaves it alone until that draft closes, so
-         clearing it would strand focus on `<body>` when it did. */
+         One slot, two independent restoration flows, so a delete claims it only
+         when it is genuinely free to claim:
+
+         - a DRAFT open on another row already owns the slot, and the effect
+           below will not restore for this delete regardless — it stands down
+           while `activeDraft !== null`. Arming here could therefore never help,
+           and would permanently overwrite the draft's target, sending focus to
+           `+` instead of back to the row the draft came from when it closes;
+         - a delete that FAILS must leave the slot exactly as it found it. It
+           removed no row, so there is nothing to hand focus back FROM, and
+           nothing will ever consume the request either — the failure path skips
+           the refresh the effect watches. Left armed it stays armed until the
+           SHARED list next changes for an unrelated reason (the pipelines page,
+           mounted beside this pane, creating or deleting) and steals focus then. */
       const focusBefore = returnFocusTo.current;
-      returnFocusTo.current = NEW_PIPELINE_BUTTON_ID;
+      if (activeDraft === null) returnFocusTo.current = NEW_PIPELINE_BUTTON_ID;
       const ok = await run(
         () => deletePipeline(p.id),
         (err) => describeDeleteFailure(p.name, err),
       );
       if (!ok) {
-        /* A failed delete removed no row, so there is nothing to hand focus back
-           FROM — and nothing will ever consume the request either, since the
-           failure path skips the refresh the effect watches. Left armed it stays
-           armed, until the SHARED list next changes for an unrelated reason (the
-           pipelines page, mounted beside this pane, creating or deleting) and
-           steals focus then. */
         returnFocusTo.current = focusBefore;
         return;
       }
@@ -275,7 +278,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          lands on "Pipeline not found". */
       if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
     },
-    [editing, hub.path, navigate, run, section],
+    [activeDraft, editing, hub.path, navigate, run, section],
   );
 
   const listLabel = section?.label ?? hub.label;
