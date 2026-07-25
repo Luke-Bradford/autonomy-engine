@@ -81,7 +81,12 @@ LlmCallConfig = {
   best-effort or ignored with a note. **AS BUILT (#724/#727):** the Anthropic mapping is the MODERN
   surface — `thinking:{type:'adaptive'}` + `output_config.effort`, emitted together — NOT the legacy
   extended-thinking `budget_tokens` budget this line originally named, which the connector never
-  emits on any model. Models predating that surface are refused at dispatch rather than 400d.
+  emits on any model. Models **known** to predate that surface are refused at dispatch rather than
+  400d — the gate is a listed set, not a version comparison, so legacy ids it does not yet list still
+  reach the provider and 400 as before (deliberate; `#729`). Note this line's "ignored with a note"
+  is the OTHER providers' policy: Anthropic REFUSES rather than ignoring, because silently dropping
+  an authored `reasoningEffort` is the defect #724 removed. That refusal is a behaviour change on the
+  structured and `toolChoice:'required'` paths, which previously suppressed the keys and succeeded.
 
 ## Outputs, usage & cost (first-class)
 

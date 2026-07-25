@@ -25,22 +25,27 @@ describe('unsupportedAnthropicParams (#727)', () => {
     (model) => {
       expect(
         unsupportedAnthropicParams(model, { ...NONE, hasTemperature: true, hasTopP: true }),
-      ).toEqual(['temperature', 'topP']);
+      ).toEqual([
+        { name: 'temperature', cause: 'removed' },
+        { name: 'topP', cause: 'removed' },
+      ]);
     },
   );
 
   it.each(['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'])(
     'names reasoningEffort on %s',
     (model) => {
+      // `unavailable`, NOT `removed`: the adaptive surface was ADDED at 4.6, so
+      // these models predate it and the remedy is a NEWER model.
       expect(unsupportedAnthropicParams(model, { ...NONE, hasReasoningEffort: true })).toEqual([
-        'reasoningEffort',
+        { name: 'reasoningEffort', cause: 'unavailable' },
       ]);
     },
   );
 
   it('reports only the params the author ACTUALLY set', () => {
     expect(unsupportedAnthropicParams('claude-opus-5', { ...NONE, hasTopP: true })).toEqual([
-      'topP',
+      { name: 'topP', cause: 'removed' },
     ]);
   });
 
@@ -60,7 +65,7 @@ describe('unsupportedAnthropicParams (#727)', () => {
     // could not otherwise express.
     expect(
       unsupportedAnthropicParams('claude-opus-4-5', { ...NONE, hasReasoningEffort: true }),
-    ).toEqual(['reasoningEffort']);
+    ).toEqual([{ name: 'reasoningEffort', cause: 'unavailable' }]);
   });
 
   it('does not gate sampling on a model that only lacks the thinking surface', () => {
@@ -124,10 +129,11 @@ describe('unsupportedAnthropicParams (#727)', () => {
 describe('unsupportedParamFailure message (#727)', () => {
   it('joins two params with a conjunction and pluralizes throughout', () => {
     // The two-param branch is otherwise only reached via `toContain` assertions
-    // in the adapter tests, which would pass on a garbled list. `params.length`
-    // is bounded at 2 by the two disjoint sets, so this covers the whole space
-    // alongside the single-param case below.
-    const ev = unsupportedParamFailure('anthropic_api', 'claude-opus-5', ['temperature', 'topP']);
+    // in the adapter tests, which would pass on a garbled list.
+    const ev = unsupportedParamFailure('anthropic_api', 'claude-opus-5', [
+      { name: 'temperature', cause: 'removed' },
+      { name: 'topP', cause: 'removed' },
+    ]);
     expect(ev.kind).toBe('permanent');
     expect(ev.error).toBe(
       'anthropic_api model claude-opus-5 does not support the temperature and topP parameters ' +
@@ -136,12 +142,42 @@ describe('unsupportedParamFailure message (#727)', () => {
     );
   });
 
-  it('uses singular wording for one param', () => {
-    const ev = unsupportedParamFailure('anthropic_api', 'claude-haiku-4-5', ['reasoningEffort']);
+  it('points FORWARD in time for an unavailable param, not backward', () => {
+    // The defect this shape exists to prevent. A single message string served
+    // both causes, so a `reasoningEffort` refusal read "removed on this model
+    // ... select a model that still accepts it" — both halves false, and the
+    // remedy aimed the author AWAY from the 4.6+ models that support it. The
+    // adaptive surface was ADDED at 4.6; `claude-haiku-4-5` predates it.
+    const ev = unsupportedParamFailure('anthropic_api', 'claude-haiku-4-5', [
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
     expect(ev.error).toBe(
       'anthropic_api model claude-haiku-4-5 does not support the reasoningEffort parameter ' +
+        '(not available on this model, which predates it); remove it from the ' +
+        'activity config or select a newer model that supports it.',
+    );
+    // The old wording must not survive anywhere in the string.
+    expect(ev.error).not.toContain('removed on this model');
+    expect(ev.error).not.toContain('still accepts');
+  });
+
+  it('emits one clause per CAUSE when a model is in both sets', () => {
+    // Not reachable through `unsupportedAnthropicParams` today — the two sets
+    // are disjoint, pinned above. Tested directly because the builder is
+    // exported and generic, and because a legacy id landing under #729 could
+    // reject both surfaces. Asserts the two remedies stay separate rather than
+    // one cause silently mislabelling the other's fields.
+    const ev = unsupportedParamFailure('anthropic_api', 'some-legacy-model', [
+      { name: 'temperature', cause: 'removed' },
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+    expect(ev.error).toBe(
+      'anthropic_api model some-legacy-model does not support the temperature parameter ' +
         '(removed on this model); remove it from the activity config or ' +
-        'select a model that still accepts it.',
+        'select a model that still accepts it. ' +
+        'anthropic_api model some-legacy-model does not support the reasoningEffort parameter ' +
+        '(not available on this model, which predates it); remove it from the ' +
+        'activity config or select a newer model that supports it.',
     );
   });
 });

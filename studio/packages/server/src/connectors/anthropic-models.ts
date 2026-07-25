@@ -1,3 +1,5 @@
+import type { UnsupportedParam } from './llm-shared.js';
+
 /**
  * #727 / #724 — per-model REQUEST-SURFACE facts for `anthropic_api`.
  *
@@ -45,9 +47,14 @@
  * returns 400. (`top_k` and `seed` are never emitted by this connector; the
  * fact is stated for completeness.)
  *
- * Sources differ on whether the 400 fires on ANY value or only a NON-DEFAULT
- * one. `unsupportedAnthropicParams` gates on PRESENCE, which is the stricter
- * reading — see the note there.
+ * On `claude-sonnet-5` the source is explicit that the 400 fires only on a
+ * NON-DEFAULT value — omitting the field, or passing its default, is accepted.
+ * `unsupportedAnthropicParams` still gates on PRESENCE, so a `temperature: 1` on
+ * Sonnet 5 is refused locally though the provider would serve it. That is a
+ * deliberate over-refusal, not an unexamined one: see the rationale on that
+ * function, which turns on authored INTENT rather than on wire acceptance. Stated
+ * per-model rather than as a vague "sources differ" because the evidence is not
+ * actually in conflict — it is specific.
  */
 export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
   'claude-fable-5',
@@ -86,8 +93,20 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * surface and `output_config.effort` and very probably belong here too. The
  * available source shows the CONFIG FORM for that generation without stating a
  * rejection outright, which is weaker than membership warrants, so they are
- * tracked in #729 rather than guessed at. The cost of omitting them is bounded
- * and is the PRE-EXISTING behaviour: a provider 400, classified `permanent`.
+ * tracked in #729 rather than guessed at. `claude-mythos-preview` is the same
+ * shape of gap on the SAMPLING set above (documented Fable-family surface, so it
+ * very probably rejects the knobs) and rides the same ticket.
+ *
+ * WHY 4.5 IS IN AND THEY ARE OUT, since both rest partly on inference and the
+ * asymmetry is otherwise a double standard: the two errors are not symmetric.
+ * Omitting a model that does reject costs a provider 400 classified `permanent`
+ * — the PRE-EXISTING behaviour, bounded, and the direction this module's
+ * fail-open essay prefers. Including a model that does NOT reject costs a
+ * MANUFACTURED local refusal of a call that works, which is the harm that essay
+ * exists to avoid. So the bar for ADDING is higher than the bar for LEAVING OUT,
+ * and 4.5 clears it on a second, independent ground the legacy ids lack: it
+ * demonstrably rejects `reasoningEffort:'max'`, so it belongs in the set on the
+ * per-value fact alone, whatever its adaptive support turns out to be.
  */
 export const MODELS_REJECTING_ADAPTIVE_THINKING: ReadonlySet<string> = new Set([
   'claude-opus-4-5',
@@ -128,14 +147,24 @@ export interface AnthropicRequestedParams {
 export function unsupportedAnthropicParams(
   model: string,
   requested: AnthropicRequestedParams,
-): readonly string[] {
-  const unsupported: string[] = [];
+): readonly UnsupportedParam[] {
+  const unsupported: UnsupportedParam[] = [];
+  // Sampling knobs EXISTED and were taken away → `removed`.
   if (MODELS_REJECTING_SAMPLING_PARAMS.has(model)) {
-    if (requested.hasTemperature) unsupported.push('temperature');
-    if (requested.hasTopP) unsupported.push('topP');
+    if (requested.hasTemperature) unsupported.push({ name: 'temperature', cause: 'removed' });
+    if (requested.hasTopP) unsupported.push({ name: 'topP', cause: 'removed' });
   }
+  // The adaptive surface was ADDED at 4.6; these models predate it →
+  // `unavailable`. Deliberately NOT `removed`: nothing was taken away, and the
+  // remedy points the opposite way (a NEWER model, not an older one).
+  //
+  // The two sets are disjoint today (pinned by test), so in practice one call
+  // yields one cause. Nothing here depends on that: a model added to BOTH sets
+  // — which a legacy id landing under #729 could be — yields both causes and
+  // the message builder groups them. Stated because the previous single-cause
+  // shape made the disjointness load-bearing without saying so.
   if (MODELS_REJECTING_ADAPTIVE_THINKING.has(model) && requested.hasReasoningEffort) {
-    unsupported.push('reasoningEffort');
+    unsupported.push({ name: 'reasoningEffort', cause: 'unavailable' });
   }
   return unsupported;
 }

@@ -723,6 +723,36 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(msgs[msgs.length - 1]!.content).toContain('max_tokens');
   });
 
+  it('#724 — a TRUNCATED (present but short) tool_use block also names the stop_reason', async () => {
+    // The sharper truncation shape, and the one an earlier pass missed: the block
+    // IS present, so `findStructuredToolInput` finds it and validation — not the
+    // no-block branch — produces the reason. Un-annotated, the durable error read
+    // "category: expected string, received undefined", which blames the model for
+    // a schema defect when the cause was the budget.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [{ type: 'tool_use', name: 'structured_output', input: {} }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 4, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).toHaveBeenCalledTimes(2); // original + one repair, both billed
+    expect(failed(events).kind).toBe('permanent');
+    // Both the schema complaint AND the budget cause, so the reader can tell them apart.
+    expect(failed(events).error).toContain('max_tokens');
+    expect(failed(events).error).toContain('category');
+    // and the repair critique carries it too
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = repairBody.messages as { role: string; content: string }[];
+    expect(msgs[msgs.length - 1]!.content).toContain('max_tokens');
+  });
+
   it('#2 L4c — does NOT repair a transport failure; only ONE call, no metered', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(500, 'overloaded'));
     const events = await drain(
@@ -1212,6 +1242,75 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     );
     expect(spy).not.toHaveBeenCalled();
     expect(failed(events).kind).toBe('permanent');
+  });
+
+  it('REGRESSION, accepted: a structured node that worked on main is now refused', async () => {
+    // The one case where this branch is NOT "same outcome, better diagnosis".
+    //
+    // On main the structured path passed `allowThinking:false`, so a node naming
+    // a no-adaptive-surface model AND setting `reasoningEffort` emitted NEITHER
+    // reasoning key — a valid body the provider answered 200. #724 deletes that
+    // suppression, so the pair is now emitted, the model is in
+    // MODELS_REJECTING_ADAPTIVE_THINKING, and the preflight refuses outright.
+    // `permanent` is retry-ineligible, so there is no self-recovery.
+    //
+    // Kept as a REFUSAL rather than silently dropping the keys, for the reason
+    // `unsupportedAnthropicParams` gives about `temperature`: proceeding would
+    // grant the letter of the authored request while dropping its point. What
+    // main actually did was ignore the author's `reasoningEffort` without
+    // saying so — the silent defect #724 exists to remove — so the loud failure
+    // is the intended direction, not collateral damage. Pinned so the break is
+    // a visible decision rather than a production discovery.
+    //
+    // Affects `claude-opus-4-5` / `claude-sonnet-4-5` / `claude-haiku-4-5` on
+    // the STRUCTURED and `toolChoice:'required'` paths only. The text path and
+    // the `auto` tools path already 400d on main.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'classify',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { c: { type: 'string' } } },
+            model: 'claude-haiku-4-5',
+            reasoningEffort: 'high',
+          },
+        }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('reasoningEffort');
+  });
+
+  it('the same structured node WITHOUT reasoningEffort still succeeds', async () => {
+    // The other half of the regression pin: proves the refusal above is caused
+    // by `reasoningEffort` alone and that the model itself is still reachable
+    // on the structured path. This body is byte-identical to what main sent for
+    // the node above, because main dropped both reasoning keys — so this is the
+    // behaviour that was lost, captured next to the loss.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, toolResponse({ c: 'ok' })));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'classify',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { c: { type: 'string' } } },
+            model: 'claude-haiku-4-5',
+          },
+        }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
   });
 
   it('fires on the STRUCTURED path too, not just text', async () => {

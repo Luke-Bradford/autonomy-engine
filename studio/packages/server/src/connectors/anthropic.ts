@@ -96,13 +96,13 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * competition with the STRUCTURED path's forced `tool_use` block and with the
  * `toolChoice:'required'` flow, where it previously could not. The structured
  * case is the sharpest: an exhausted budget yields no complete `tool_use` block,
- * `findStructuredToolInput` reports it absent, L4c spends a REPAIR call under
- * the identical budget, and only then terminalizes `permanent` — two billed
- * calls for one budget problem. That is why the no-tool-block reason now carries
- * the response's `stop_reason` (see the structured `doCall`): the diagnosis has
- * to name the budget, because the symptom looks like a disobedient model. The
- * `required` tools path shares the exposure but degrades better (a bad call
- * becomes an error `tool_result` and the flow downgrades to `auto`).
+ * L4c spends a REPAIR call under the identical budget, and only then
+ * terminalizes `permanent` — two billed calls for one budget problem. That is
+ * why BOTH invalid shapes now carry the response's `stop_reason` (see the
+ * structured `doCall`): the diagnosis has to name the budget, because either
+ * symptom otherwise looks like a disobedient model. The `required` tools path
+ * shares the exposure but degrades better (a bad call becomes an error
+ * `tool_result` and the flow downgrades to `auto`).
  *
  * Note this is a CAP, not a spend: tokens are billed as generated, so a short
  * answer still costs a short answer. The real cost increase is the thinking
@@ -296,8 +296,11 @@ export const anthropicAdapter: ConnectorAdapter = {
       hasTopP: sampling.topP !== undefined,
       hasReasoningEffort: reasoningEffort !== undefined,
     });
-    if (unsupported.length > 0) {
-      yield unsupportedParamFailure('anthropic_api', model, unsupported);
+    // The destructure is what proves non-emptiness to the compiler, which is the
+    // precondition `unsupportedParamFailure`'s tuple type encodes.
+    const [firstUnsupported, ...restUnsupported] = unsupported;
+    if (firstUnsupported !== undefined) {
+      yield unsupportedParamFailure('anthropic_api', model, [firstUnsupported, ...restUnsupported]);
       return;
     }
 
@@ -395,6 +398,14 @@ export const anthropicAdapter: ConnectorAdapter = {
     // omitted `thinking` anyway. Net effect of the deletion: `reasoningEffort` is
     // HONOURED here instead of being silently ignored.
     //
+    // The premise holds on the FIRST-PARTY Messages API, which is the qualifier
+    // that matters: on Amazon Bedrock, Claude Sonnet 5 with a forced `tool_choice`
+    // does require `thinking:{type:'disabled'}`. Reachable only via a proxied
+    // `baseUrl`, and the exact-string capability sets could not cover it anyway
+    // (Bedrock ids carry an `anthropic.` prefix), so the preflight is not the
+    // remedy — a Bedrock-aware connection kind would be. Noted so the premise
+    // reads as scoped rather than universal.
+    //
     // Safe against the API's thinking-REPLAY rule (thinking blocks must come back
     // intact alongside a replayed `tool_use`, and a rebuilt message 400s): this
     // path never replays a `tool_use` block at all — `buildRepairTurns` echoes the
@@ -437,17 +448,32 @@ export const anthropicAdapter: ConnectorAdapter = {
         // result) rather than an immediate terminal — a model that answered with
         // text instead of the tool may correct on a re-prompt.
         //
-        // #724 — the `stop_reason` is CARRIED INTO the reason string, and it is
-        // the reasoning change that makes it load-bearing. `max_tokens` caps
-        // thinking and the `tool_use` block TOGETHER, so a node that sets
-        // `reasoningEffort` now has thinking competing for the same budget here.
-        // When it exhausts, the block comes back absent or truncated and this
-        // branch fires — twice (the repair re-issues under the same budget) —
-        // then terminalizes `permanent`. Without the stop reason both the repair
-        // critique and the durable error read "carried no structured_output
-        // tool_use block", which blames the MODEL when the cause is the BUDGET.
+        // #724 — the `stop_reason` is CARRIED INTO the reason string on BOTH
+        // invalid shapes, and it is the reasoning change that makes it
+        // load-bearing. `max_tokens` caps thinking and the `tool_use` block
+        // TOGETHER, so a node that sets `reasoningEffort` now has thinking
+        // competing for the same budget here. When it exhausts, the block comes
+        // back either ABSENT (no `tool_use` at all) or TRUNCATED (a `tool_use`
+        // whose `input` is short of the schema) — and the two take different
+        // code paths, which is why annotating only the first was not enough:
+        //
+        //   absent    → `!tool.found` below → "carried no ... tool_use block"
+        //   truncated → `validateStructuredOutput` → "category: expected string,
+        //               received undefined"
+        //
+        // The truncated shape is the SHARPER of the two, because its message
+        // reads like a schema defect and blames the model outright. Both now
+        // carry the stop reason, so `max_tokens` names the real cause in the
+        // repair critique and in the durable error. Either shape costs two
+        // billed calls (the repair re-issues under the same budget) before
+        // terminalizing `permanent`.
+        //
+        // Annotated unconditionally rather than only on `max_tokens`: an
+        // `end_turn` is equally diagnostic (the model finished and simply got the
+        // schema wrong), and a value-dependent annotation would make the absence
+        // of the note ambiguous between "not truncated" and "not annotated".
+        const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
         if (!tool.found) {
-          const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
           return {
             type: 'validated',
             usage,
@@ -460,10 +486,13 @@ export const anthropicAdapter: ConnectorAdapter = {
             echo: structuredEcho(undefined),
           };
         }
+        const validated = validateStructuredOutput(structuredOutput, tool.input);
         return {
           type: 'validated',
           usage,
-          result: validateStructuredOutput(structuredOutput, tool.input),
+          result: validated.ok
+            ? validated
+            : { ok: false, reason: `${validated.reason} (stop_reason: ${stopReason})` },
           echo: structuredEcho(tool.input),
         };
       });
