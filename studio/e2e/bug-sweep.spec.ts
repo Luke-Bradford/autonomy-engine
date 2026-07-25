@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { computedStyleOf, contrastRatio, fluentRootReady, isOpaque } from './support/theme';
+import { openCanvas } from './support/canvas';
+import { openRowMenu } from './support/authorPane';
 
 /**
  * Regression net for the browser-observable half of the first bug sweep:
@@ -141,36 +143,49 @@ test.describe('#698 route-level code-splitting', () => {
  * only true in the real shell.
  */
 
-/** The pipelines tree inside the Author pane. */
-function authorTree(page: import('@playwright/test').Page) {
-  return page
-    .getByRole('navigation', { name: 'Author sections' })
-    .getByRole('list', { name: 'Pipelines' });
-}
-
 test.describe('#483 held/parked node pills', () => {
   /**
    * Asserts the STYLESHEET contract, not a live run: reaching a real
    * `retry_pending` node from the browser needs a transient failure and a
-   * wall-clock hold, which belongs in a server test, not here. What only a
-   * browser can answer is whether the two pills the fix introduces actually
-   * PAINT — a missing rule, a typo'd class, or a `--warning` token declared in
-   * one theme block and not the other computes to `rgb(0, 0, 0)` (or inherits
-   * the row's colour) with every unit test still green.
+   * wall-clock hold, which belongs in a server test, not here.
+   *
+   * THE ASSERTION THAT MATTERS is that each pill resolves to the token it is
+   * SUPPOSED to paint. An earlier cut of this spec only asserted "opaque, ≥4.5:1,
+   * and the two differ", and it passed with `.node-status-retrying` DELETED —
+   * `color` is an inherited property, so an unmatched class quietly computes to
+   * the body's `--text` (15.4:1, and a different string from `--muted`), and all
+   * three assertions held. Verified by deleting the rule and watching it stay
+   * green. Comparing against the resolved token is what makes a missing rule, a
+   * typo'd class, or a missing light override fail.
    */
-  const PILLS = ['node-status-retrying', 'node-status-waiting'] as const;
+  const PILLS = [
+    { cls: 'node-status-retrying', token: '--warning' },
+    { cls: 'node-status-waiting', token: '--muted' },
+  ] as const;
 
   async function pillColours(page: import('@playwright/test').Page) {
-    return page.evaluate((classes) => {
+    return page.evaluate((pills) => {
       const host = document.createElement('div');
       document.body.append(host);
       try {
-        return classes.map((cls) => {
+        return pills.map(({ cls, token }) => {
           const el = document.createElement('span');
           el.className = `node-status ${cls}`;
           host.append(el);
           const cs = getComputedStyle(el);
-          return { cls, color: cs.color, background: cs.backgroundColor };
+          // Resolve the EXPECTED token through the same engine, on a probe that
+          // is styled ONLY by it — so both sides are computed values and the
+          // comparison is hex-vs-rgb-serialization proof.
+          const probe = document.createElement('span');
+          probe.style.color = `var(${token})`;
+          host.append(probe);
+          return {
+            cls,
+            token,
+            color: cs.color,
+            borderColor: cs.borderColor,
+            expected: getComputedStyle(probe).color,
+          };
         });
       } finally {
         host.remove();
@@ -179,7 +194,7 @@ test.describe('#483 held/parked node pills', () => {
   }
 
   for (const theme of ['dark', 'light'] as const) {
-    test(`both pills paint a legible colour in ${theme} mode`, async ({ page }) => {
+    test(`both pills paint their own token in ${theme} mode`, async ({ page }) => {
       const problems = collectPageProblems(page);
 
       await page.goto('/#/runs');
@@ -191,11 +206,19 @@ test.describe('#483 held/parked node pills', () => {
       const surface = await computedStyleOf(page, 'body', 'background-color');
       expect(isOpaque(surface), `body background is not opaque in ${theme}`).toBe(true);
 
-      for (const { cls, color } of await pillColours(page)) {
+      const measured = await pillColours(page);
+      for (const { cls, token, color, borderColor, expected } of measured) {
+        // 1. The rule MATCHED and painted the intended token. Fails outright if
+        //    the rule is missing (the class then inherits `--text`).
+        expect(color, `${cls} does not paint var(${token}) in ${theme}`).toBe(expected);
+        // 2. Every sibling pill colours its ring to match; `waiting` was the one
+        //    that did not until this sweep, and it is now reachable for the first
+        //    time (`NodeActivityStatus` had no `waiting` before #483).
+        expect(borderColor, `${cls} ring does not match its text colour`).toBe(expected);
         expect(isOpaque(color), `${cls} paints a transparent colour`).toBe(true);
-        // The pills are 0.72rem — small text, so WCAG AA asks 4.5:1. This is the
-        // assertion that fails if a theme block forgets the light override: the
-        // dark amber would then be read on the light surface, or vice versa.
+        // 3. The pills are 0.72rem — small text, so WCAG AA asks 4.5:1. This is
+        //    what catches a light override that is merely a DIFFERENT wrong hue
+        //    rather than an absent one.
         expect(
           contrastRatio(color, surface),
           `${cls} on the ${theme} surface is below AA for small text (${color} on ${surface})`,
@@ -204,7 +227,7 @@ test.describe('#483 held/parked node pills', () => {
 
       // ...and the two states are visually TELLABLE APART, which is the whole
       // point of #483: a held node must not read like a routine park.
-      const [retrying, waiting] = await pillColours(page);
+      const [retrying, waiting] = measured;
       expect(retrying!.color).not.toBe(waiting!.color);
 
       await expectQuiet(page, problems);
@@ -229,21 +252,12 @@ test.describe('#720 the open canvas follows a rename', () => {
     const before = `sweep3-retitle-a-${Date.now()}`;
     const after = `sweep3-retitle-b-${Date.now()}`;
 
-    await page.goto('/#/author/pipelines');
-    await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
-    await fluentRootReady(page);
-
-    await page.getByRole('textbox', { name: 'Name', exact: true }).fill(before);
-    await page.getByRole('button', { name: 'Create pipeline' }).click();
-    await page.getByRole('link', { name: `Open ${before}` }).click();
+    await openCanvas(page, before);
 
     // The canvas is open, on its own route, showing the ORIGINAL name.
-    await expect(page.locator('.react-flow')).toBeVisible();
     await expect(page.getByRole('heading', { name: before })).toBeVisible();
 
-    const row = authorTree(page).getByRole('listitem').filter({ hasText: before }).first();
-    await row.hover();
-    await row.getByRole('button', { name: `More actions for ${before}` }).click();
+    await openRowMenu(page, before);
     await page.getByRole('menuitem', { name: 'Rename' }).click();
     const field = page.getByRole('textbox', { name: 'Pipeline name' });
     await expect(field).toHaveValue(before);

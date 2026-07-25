@@ -138,7 +138,11 @@ describe('deriveNodeActivity', () => {
       {
         nodeId: 'c',
         status: 'failure',
-        attempts: 0,
+        // 1, not 0, since #483: a call node is never dispatched, so `call.returned`
+        // is the only event it has and it IS the node's one attempt. It read 0
+        // before, which renders as "never ran" for a node that ran a whole child
+        // pipeline.
+        attempts: 1,
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
@@ -450,5 +454,64 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       }),
     ]);
     expect(sw!.status).toBe('success');
+  });
+});
+
+describe('deriveNodeActivity — attempts for the never-dispatched activities (#483)', () => {
+  it('counts a `fail` / `filter` control node, whose ONLY event is its terminal one', () => {
+    // `fail` and `filter` are engine-evaluated: the reducer emits `failNode` /
+    // `succeedControl` and the driver appends only the terminal event — there is
+    // no `node.dispatched` to count. Without the unstarted rule both rows read
+    // terminal after 0 attempts, i.e. "never ran".
+    const [failed] = deriveNodeActivity([
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'z',
+        attemptId: 'z#0',
+        error: 'stop here',
+        kind: 'permanent',
+      }),
+    ]);
+    expect(failed!.attempts).toBe(1);
+    expect(failed!.status).toBe('failure');
+
+    const [filtered] = deriveNodeActivity([
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'f', attemptId: 'f#0', outputs: {} }),
+    ]);
+    expect(filtered!.attempts).toBe(1);
+    expect(filtered!.status).toBe('success');
+  });
+
+  it('counts a call node, whose only event is call.returned', () => {
+    const [call] = deriveNodeActivity([
+      envelope({
+        type: 'call.returned',
+        runId: 'r',
+        callNodeId: 'c',
+        attemptId: 'c#0',
+        childRunId: 'run_child',
+        childOutcome: 'success',
+        outputs: {},
+      }),
+    ]);
+    expect(call!.attempts).toBe(1);
+    expect(call!.status).toBe('success');
+  });
+
+  it('does NOT double-count a node that WAS dispatched', () => {
+    // The unstarted rule must be invisible on the ordinary path: a dispatched
+    // node already has attempts >= 1 when its terminal event lands.
+    const [a] = deriveNodeActivity([
+      envelope({
+        type: 'node.dispatched',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        idempotent: true,
+      }),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
+    ]);
+    expect(a!.attempts).toBe(1);
   });
 });

@@ -40,8 +40,18 @@ export function runStreamUrl(
  *
  * - `retrying` — the node failed `transient`ly, its policy still has budget, and
  *   it is waiting out the retry interval (the engine's `retry_pending`).
- * - `waiting`  — the node is PARKED on something external: a `wait`'s timer
- *   (`wait_pending`) or a `webhook`'s inbound callback (`external_wait_pending`).
+ * - `waiting`  — the node is PARKED on a DURABLE alarm that announced itself in
+ *   the log: a `wait`'s timer (`wait_pending`) or a `webhook`'s inbound callback
+ *   (`external_wait_pending`).
+ *
+ * NOT the engine's `NodeRunStatus.waiting`, which means something else entirely
+ * (a `call_pipeline` node whose child run is in flight). This vocabulary is the
+ * MONITOR's, and deliberately lossy — see the module doc on why this view is
+ * doc-free. A call node is in fact the one park this status CANNOT show: the
+ * engine parks it via a `startChild` COMMAND and appends no event until
+ * `call.returned`, so there is nothing in the log to fold and the node stays
+ * absent from the table for the whole child run (#735 — it needs a new engine
+ * event, not a projection change).
  *
  * Both are healthy, in-progress states. They are deliberately distinct from
  * `running`: `running` means the node is executing, and a held/parked node is
@@ -56,12 +66,21 @@ export interface NodeActivity {
   /**
    * How many times the node has been STARTED, and retries bump it.
    *
-   * For an executed node that is its dispatch count. Control activities
-   * (`if`/`switch`/`wait`/`webhook`) are engine-evaluated and NEVER dispatched,
-   * so their count comes from the event that STARTS them instead — the
-   * evaluation or the park, each of which carries its own `attemptId` and so is
-   * one attempt exactly. Counting only dispatches would leave every control node
-   * reading `success` after 0 attempts, which reads as "never ran".
+   * For an executed node that is its dispatch count. But SIX activity kinds are
+   * engine-evaluated and never dispatched at all — `if`, `switch`, `wait`,
+   * `webhook`, `fail`, `filter` — as is a `call_pipeline` node, so counting only
+   * `node.dispatched` would leave every one of them reading terminal after 0
+   * attempts, i.e. "never ran".
+   *
+   * Two rules cover them without a doc (which this view does not have, so it
+   * cannot ask what KIND a node is):
+   *  - an event that STARTS a node counts (a dispatch, an `if`/`switch`
+   *    evaluation, a `wait`/`webhook` park) — each carries its own `attemptId`,
+   *    so one event is one attempt exactly;
+   *  - a TERMINAL event for a node with no attempts yet is itself the start
+   *    (`fail`/`filter`, whose only event is their `node.failed`/`node.succeeded`,
+   *    and a call node, whose only event is `call.returned`). A dispatched node
+   *    already has attempts ≥ 1 by then, so this never double-counts.
    */
   attempts: number;
   /** Count of streamed `node.output` observability events. */
@@ -86,7 +105,21 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   // collapse the sequential foreach's rounds already have. CAVEAT: a literal
   // node id shaped like `x@2` is folded onto `x` too — accepted; save-time now
   // refuses such ids for parallel docs, and a doc-free event view cannot tell
-  // the two apart.
+  // the two apart. Since #483 that collapse also covers the PARKED statuses, and
+  // reads worse there: a parallel foreach over a `wait` shows `success` the
+  // moment the FIRST instance's timer fires, while its siblings are still parked.
+  // Same last-write-wins rule as before, just newly visible.
+  //
+  // NO STALENESS GUARD, unlike every reducer fold this mirrors (which check node
+  // status + `attemptId` and no-op on redelivery). That is safe only because the
+  // durable-alarm handlers gate the APPEND — `retry-alarm.ts`, `wait-alarm.ts`,
+  // `external-wait-alarm.ts` all check the node is still parked at that attempt
+  // before writing, and the webhook route has its own row-status guard — so a
+  // stale `timer.due`/`externalWait.expired`/`node.retryDue` never reaches the
+  // log at all. That is an EXTERNAL guarantee this file depends on: if an append
+  // guard were ever relaxed, a late `externalWait.expired` would flip a green row
+  // red here while the reducer treats it as a no-op, and the two views would
+  // disagree with nothing failing.
   const ensure = (rawNodeId: string): NodeActivity => {
     const nodeId = docNodeIdOf(rawNodeId);
     let n = byNode.get(nodeId);
@@ -102,6 +135,19 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       byNode.set(nodeId, n);
     }
     return n;
+  };
+
+  /**
+   * A TERMINAL event for a node we never saw start. That happens for the
+   * activities the engine evaluates itself and never dispatches — `fail` and
+   * `filter`, whose only event is the `node.failed`/`node.succeeded` the driver
+   * appends for them, and a `call_pipeline` node, whose only event is
+   * `call.returned`. Their one event IS their one attempt. A dispatched (or
+   * evaluated, or parked) node already has attempts ≥ 1 by the time it
+   * terminates, so this can never double-count.
+   */
+  const countIfUnstarted = (n: NodeActivity): void => {
+    if (n.attempts === 0) n.attempts = 1;
   };
 
   for (const row of events) {
@@ -123,13 +169,16 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         break;
       }
       case 'node.succeeded': {
-        ensure(e.nodeId).status = 'success';
+        const n = ensure(e.nodeId);
+        n.status = 'success';
+        countIfUnstarted(n); // a `filter`'s only event
         break;
       }
       case 'node.failed': {
         const n = ensure(e.nodeId);
         n.status = 'failure';
         n.error = e.error;
+        countIfUnstarted(n); // a `fail` control node's only event
         break;
       }
       case 'node.retryRequested':
@@ -195,28 +244,63 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         break;
       }
       case 'call.returned': {
-        ensure(e.callNodeId).status = e.childOutcome === 'success' ? 'success' : 'failure';
+        const n = ensure(e.callNodeId);
+        n.status = e.childOutcome === 'success' ? 'success' : 'failure';
+        countIfUnstarted(n); // a call node's only event
         break;
       }
-      default:
-        // Everything reaching here is deliberately NOT node activity. Stated
-        // exhaustively, because an unexplained `default:` is how #483 happened:
-        // five node-bearing events fell in here and the monitor quietly lied.
-        //
-        // - run.started / run.finished / run.resumed / run.interrupted /
-        //   run.waiting / run.triggerContext / run.reseeded — RUN-level, folded by
-        //   `deriveRunLifecycle`.
-        // - container.timeoutScheduled / container.timedOut — CONTAINER-level:
-        //   they carry a `containerId` and no `nodeId`, and this is a per-node
-        //   table. A container's own state has no row to land in (a P6c
-        //   follow-up, which needs the doc this page does not fetch).
-        // - activity.metered / activity.captured / activity.agentTelemetry /
-        //   activity.toolCalled — node-bearing but pure OBSERVABILITY: they say
-        //   nothing about whether the node is running, and folding them would
-        //   create rows for nodes that never started. `node.output` is the one
-        //   observability event folded here, and only because it feeds the
-        //   `outputs` count / `lastOutputName` progress hint.
+
+      // ── Deliberately NOT node activity ────────────────────────────────────
+      // Listed as explicit empty cases rather than swept into a `default:`, and
+      // that is the actual fix for #483's defect CLASS. #483 was not "two events
+      // were missed"; it was that a `default:` silently absorbed NINE node-bearing
+      // events and the monitor lied with every unit test green. Prose cannot stop
+      // that recurring — the `never` assertion below can: every one of the union's
+      // members is now named, so adding a 29th `EngineEvent` narrows `e` to
+      // something other than `never` in the final branch and fails TYPECHECK until
+      // its author decides which side it falls on. Same guard `engine/reduce.ts`
+      // documents for `NodeRunStatus`, in the form a non-returning switch needs.
+
+      // Why each is ignored, kept HERE rather than beside its `case` so the
+      // labels stay adjacent — eslint's `no-fallthrough` counts a case carrying
+      // only a comment as non-empty (the same constraint `engine/reduce.ts`
+      // records):
+      //   - `run.*` — RUN-level, no node row. `run.started`/`run.resumed`/
+      //     `run.waiting` and the terminal pair are folded by
+      //     `deriveRunLifecycle` below. `run.triggerContext` and `run.reseeded`
+      //     are folded by NOTHING today — they are provenance that only the raw
+      //     event feed renders.
+      //   - `container.*` — CONTAINER-level: they carry a `containerId` and NO
+      //     `nodeId`, so in a per-node table there is no row for them to land in.
+      //     Surfacing container state needs the version doc this page does not
+      //     fetch (a P6c follow-up).
+      //   - `activity.*` — node-bearing but pure OBSERVABILITY: they say nothing
+      //     about whether the node is running, and folding them would create rows
+      //     for nodes that never started. `node.output` is the one observability
+      //     event folded above, and only because it feeds the `outputs` count and
+      //     the `lastOutputName` progress hint.
+      case 'run.started':
+      case 'run.finished':
+      case 'run.resumed':
+      case 'run.interrupted':
+      case 'run.waiting':
+      case 'run.triggerContext':
+      case 'run.reseeded':
+      case 'container.timeoutScheduled':
+      case 'container.timedOut':
+      case 'activity.metered':
+      case 'activity.captured':
+      case 'activity.agentTelemetry':
+      case 'activity.toolCalled':
         break;
+      default: {
+        // Unreachable while every member above is named — which is exactly the
+        // property being enforced. A new event type makes this assignment fail to
+        // compile; it is not a runtime branch.
+        const exhaustive: never = e;
+        void exhaustive;
+        break;
+      }
     }
   }
 

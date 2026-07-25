@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
+import { openRowMenu, pane, tree } from './support/authorPane';
 
 /**
  * U4 — the Factory Resources pane.
@@ -20,16 +21,6 @@ import { fluentRootReady } from './support/theme';
  * exactly …" would be counting other tests' work.
  */
 
-/** The pane, addressed the way a user perceives it. */
-function pane(page: Page) {
-  return page.getByRole('navigation', { name: 'Author sections' });
-}
-
-/** The pipelines tree inside the pane. */
-function tree(page: Page) {
-  return pane(page).getByRole('list', { name: 'Pipelines' });
-}
-
 async function gotoAuthor(page: Page): Promise<void> {
   await page.goto('/#/author/pipelines');
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
@@ -42,13 +33,6 @@ async function createInPane(page: Page, name: string): Promise<void> {
   await page.getByRole('textbox', { name: 'Pipeline name' }).fill(name);
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(tree(page).getByRole('link', { name, exact: true })).toBeVisible();
-}
-
-/** Open a row's `⋯` menu. It is revealed on hover, so hover first. */
-async function openRowMenu(page: Page, name: string): Promise<void> {
-  const row = tree(page).getByRole('listitem').filter({ hasText: name }).first();
-  await row.hover();
-  await row.getByRole('button', { name: `More actions for ${name}` }).click();
 }
 
 test.describe('U4 Factory Resources pane', () => {

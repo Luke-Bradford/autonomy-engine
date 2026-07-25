@@ -309,32 +309,12 @@ describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)
     expect(s.getState().nodes[0]!.config['outputs']).toEqual([{ name: 'verdict', type: 'string' }]);
   });
 
-  it('leaves an already-declared contract alone (a post-F13b row, and any author override)', () => {
-    const declared = [{ name: 'custom', type: 'string' }];
-    const s = createCanvasStore();
-    s.getState().loadVersion(
-      version({
-        nodes: [
-          {
-            id: 'n_a',
-            type: 'http_request',
-            config: { outputs: declared },
-            position: { x: 0, y: 0 },
-          },
-        ],
-        edges: [],
-      }),
-    );
-    expect(s.getState().nodes[0]!.config['outputs']).toEqual(declared);
-  });
-
-  it('does NOT mark the canvas dirty — lowering is a display fix, not an author edit', () => {
-    // Otherwise every legacy pipeline would open with unsaved changes and prompt
-    // a save the author never made.
-    const s = createCanvasStore();
-    s.getState().loadVersion(version());
-    expect(s.getState().dirty).toBe(false);
-  });
+  // NOT tested here, deliberately: "an already-declared contract is left alone"
+  // and "loading does not set `dirty`". Both pass with this whole change
+  // REVERTED — the first is guaranteed one layer down by `lowerNodeOutputs`'s
+  // never-overwrite rule (covered in `lower.test.ts`), and the second is already
+  // asserted by "loadVersion(v) populates nodes/edges and is not dirty" above.
+  // A test that cannot fail is not a test; it is a claim of coverage.
 
   it('leaves `loaded` UN-lowered — it is the server’s doc and the rebase basis', () => {
     const v = version();
