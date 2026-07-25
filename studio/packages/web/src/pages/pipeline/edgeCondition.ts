@@ -58,6 +58,46 @@ export function edgeVariantClass(e: Edge): string {
 }
 
 /**
+ * Every value `on` can take, i.e. every edge VARIANT the canvas must have a hue
+ * and an arrowhead for. `EdgeOnSchema.options` plus the `branch` discriminant,
+ * which is not one of them (`EdgeOnSchema` is the four OPERATIONAL outcomes).
+ *
+ * One list, so the marker defs, the CSS hue rules and the palette guard cannot
+ * disagree about how many variants exist — a fifth engine outcome then shows up
+ * as a failing test rather than as an unstyled edge with no arrowhead.
+ */
+export const EDGE_VARIANTS: readonly Edge['on'][] = [...EdgeOnSchema.options, 'branch'];
+
+/**
+ * The `<marker>` id for an edge's arrowhead (U6b).
+ *
+ * Keyed on `on` exactly like `edgeVariantClass`, because the arrowhead carries
+ * the same hue as the stroke it caps.
+ *
+ * A STRING marker id (rather than React Flow's `{ type: MarkerType.ArrowClosed }`
+ * object form) is what makes this possible: `getMarkerId` returns a string marker
+ * verbatim, so the edge references a marker the canvas defines itself
+ * (`EdgeMarkers`) instead of one React Flow generates.
+ *
+ * The reason is NOT that RF's object form cannot carry a custom property. It was
+ * written here as "a `fill="var(--success)"` presentation attribute does not
+ * resolve", and that claim is FALSE — measured in Chromium, an attribute-form
+ * `fill="var(--success)"` computes to `rgb(88, 214, 141)` exactly like the CSS
+ * form. Recorded because a false reason invites the next author to "simplify"
+ * this away on the strength of disproving it.
+ *
+ * The real reason is where the condition → hue MAPPING lives. RF generates one
+ * def per literal `color` string it is handed, so the object form needs that
+ * string in the edge derivation — i.e. a `color: 'var(--success)'` per condition
+ * in TSX, beside the `.edge-variant-*` rules in CSS that already express the same
+ * mapping and that `palette.test.ts` guards (including the light-mode
+ * overrides). One mapping, in the stylesheet that owns the palette.
+ */
+export function edgeArrowMarkerId(e: Pick<Edge, 'on'>): string {
+  return `edge-arrow-${e.on}`;
+}
+
+/**
  * The accessible name for an edge.
  *
  * React Flow renders each edge as `role="img"` (or `role="group"` when

@@ -105,25 +105,51 @@ export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP Request')
   // nodes above edges.
   await dragNodeBy(page, 1, 300, 60);
 
-  const handles = await page.evaluate(() => {
-    const nodes = document.querySelectorAll('.react-flow__node');
-    const s = nodes[0]?.querySelector('.react-flow__handle-right')?.getBoundingClientRect();
-    const t = nodes[1]?.querySelector('.react-flow__handle-left')?.getBoundingClientRect();
-    if (!s || !t) throw new Error('node handles are not laid out');
-    return {
-      sx: s.x + s.width / 2,
-      sy: s.y + s.height / 2,
-      tx: t.x + t.width / 2,
-      ty: t.y + t.height / 2,
-    };
-  });
-  await page.mouse.move(handles.sx, handles.sy);
-  await page.mouse.down();
-  await page.mouse.move(handles.tx, handles.ty, { steps: 10 });
-  await page.mouse.up();
+  await connectNodes(page, 0, 1);
   await expect(edgeGroup(page)).toHaveCount(1);
 
   await selectEdge(page);
+}
+
+/** The centre of one node's source (right) or target (left) port, in screen coords. */
+export function portCentre(
+  page: Page,
+  index: number,
+  side: 'source' | 'target',
+): Promise<{ x: number; y: number }> {
+  return page.evaluate(
+    ([i, cls]) => {
+      const node = document.querySelectorAll('.react-flow__node')[i as number];
+      const box = node?.querySelector(cls as string)?.getBoundingClientRect();
+      if (!box) throw new Error(`node ${String(i)} has no ${cls as string} port laid out`);
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    },
+    [index, side === 'source' ? '.react-flow__handle-right' : '.react-flow__handle-left'],
+  );
+}
+
+/**
+ * Drag a connection from one node's SOURCE port to another's TARGET port.
+ *
+ * Deliberately does NOT assert that an edge appeared: as of U6b a connection can
+ * be legitimately REFUSED, and the specs that exercise a refusal need the same
+ * gesture as the ones that expect an edge. `inspect` runs while the pointer is
+ * still DOWN over the target port, which is the only moment React Flow's
+ * mid-gesture handle state (`connectingto`, `valid`) exists to be read.
+ */
+export async function connectNodes(
+  page: Page,
+  from: number,
+  to: number,
+  inspect?: () => Promise<void>,
+): Promise<void> {
+  const source = await portCentre(page, from, 'source');
+  const target = await portCentre(page, to, 'target');
+  await page.mouse.move(source.x, source.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 10 });
+  if (inspect) await inspect();
+  await page.mouse.up();
 }
 
 /**

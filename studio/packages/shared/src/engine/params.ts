@@ -2654,10 +2654,58 @@ function forwardCycleErrors(
 }
 
 /**
+ * Would adding a FORWARD edge `from → to` close a forward cycle that is not
+ * already there? (U6b — the connect-time half of the DAG rule above.)
+ *
+ * The canvas has to answer this while a connection drag is still IN FLIGHT, so
+ * it cannot simply save and read the error back. It is therefore expressed as a
+ * DELTA over `forwardCycleErrors` — the very function `validatePipelineDoc`
+ * calls — rather than as its own traversal. Two reasons, both learned the hard
+ * way in review:
+ *
+ *  - **It cannot drift.** A predicate written over `forwardReach` (below) looks
+ *    equivalent and is not: that map deliberately adds CONTAINMENT edges for the
+ *    back-edge ancestry rule, while the DAG rule's graph is built purely from
+ *    `doc.edges`. Over any doc with containers the two disagree, and the canvas
+ *    would refuse a `b → C` edge — legal, savable, and refused for a reason
+ *    (C contains b) the canvas does not even render yet.
+ *  - **A DELTA, not an absolute.** An already-cyclic doc (a legacy version, or
+ *    another edit in the same session) must not make every subsequent edge
+ *    guilty; that would refuse every connection on the canvas until the operator
+ *    found a cycle they did not just draw. The pre-existing cycle is already on
+ *    screen as a validation badge and still blocks the save.
+ *
+ * Cost is two Kahn sweeps, O(V+E) each. That is deliberate: the caller runs this
+ * per pointer-move during a drag, so it must stay linear — and the cheap
+ * rejections (self-loop, unknown endpoint, duplicate edge) are expected to be
+ * checked FIRST, so this only runs for a candidate that is otherwise legal.
+ *
+ * `back: true` edges are exempt BY CONSTRUCTION rather than by a flag here: they
+ * are not in the forward graph at all, so a caller authoring one must simply not
+ * consult this.
+ */
+export function closesForwardCycle(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: Container[],
+  from: string,
+  to: string,
+): boolean {
+  if (forwardCycleErrors(doc, containers).length > 0) return false;
+  const probe: Edge = { id: '__probe__', from, to, on: 'success' };
+  return (
+    forwardCycleErrors({ nodes: doc.nodes, edges: [...doc.edges, probe] }, containers).length > 0
+  );
+}
+
+/**
  * Forward reachability over the doc's forward edges (node OR container
  * endpoints), PLUS containment: a container reaches (encloses) its own
  * children, so a back-edge from a child to its enclosing loop/stage counts the
  * container as an ancestor.
+ *
+ * NOTE the containment edges: this is the ANCESTRY relation the back-edge rule
+ * needs, NOT the DAG rule's graph. Do not reach for it to answer "would this
+ * edge make a cycle" — see `closesForwardCycle` above.
  */
 function forwardReach(
   doc: Pick<PipelineVersion, 'nodes' | 'edges'>,

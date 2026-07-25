@@ -3,14 +3,14 @@ import {
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
-  type EdgeOn,
   type Edge,
   type Node,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
-import { authoringEdgeKey, retypeCollides, type EdgeCondition } from './edgeCondition';
+import { retypeCollides, type EdgeCondition } from './edgeCondition';
+import { connectRejection, precomputeConnect } from './connectRules';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -113,7 +113,17 @@ export interface CanvasState {
   addNode(type: string, position?: Position): void;
   moveNode(id: string, position: Position): void;
   deleteNode(id: string): void;
-  connect(from: string, to: string, on: EdgeOn): void;
+  /**
+   * Append an edge from `from` to `to` carrying `condition`. Refuses (no-op) a
+   * candidate `connectRejection` rejects — a self-loop, an endpoint that is not
+   * a current node/container, a duplicate, or an edge that would close a forward
+   * cycle.
+   *
+   * Takes a whole `EdgeCondition` rather than an `EdgeOn`: `on: 'branch'` is only
+   * half an edge (the label is the routing key), so the looser signature could
+   * author an edge `EdgeSchema` does not accept.
+   */
+  connect(from: string, to: string, condition: EdgeCondition): void;
   deleteEdge(id: string): void;
   /**
    * Retype an edge to a new condition. Refuses (no-op) a retype that would make
@@ -238,13 +248,28 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       });
     },
 
-    connect(from, to, on) {
-      if (from === to) return; // no self-loops
-      const ids = new Set(get().nodes.map((n) => n.id));
-      if (!ids.has(from) || !ids.has(to)) return; // both endpoints must be nodes
-      const edge: Edge = { id: newLocalId('e'), from, to, on };
-      const key = authoringEdgeKey(edge);
-      if (get().edges.some((e) => authoringEdgeKey(e) === key)) return; // dedupe
+    /**
+     * Append an edge, or refuse it.
+     *
+     * The refusal rules are NOT written here any more: they are
+     * `connectRejection`, the same predicate the canvas measures a connection
+     * DRAG against (U6b), so the gesture React Flow refuses and the call this
+     * store refuses cannot come to disagree. This end stays the backstop for a
+     * caller that is not the canvas, and it is deliberately silent — the canvas
+     * is where a refusal is explained, because it is where the operator is.
+     *
+     * The forward-DAG rule is new here. It was previously left entirely to the
+     * save gate, so a cycle-closing edge could be drawn, seen, and only then
+     * refused by a validation badge.
+     */
+    connect(from, to, condition) {
+      const graph = {
+        nodes: get().nodes,
+        edges: get().edges,
+        containers: get().loaded?.containers ?? [],
+      };
+      if (connectRejection(precomputeConnect(graph), { from, to, condition }) !== null) return;
+      const edge = { id: newLocalId('e'), from, to, ...condition } as Edge;
       set((s) => ({ edges: [...s.edges, edge], dirty: true }));
     },
 

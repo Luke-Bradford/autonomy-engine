@@ -1041,6 +1041,112 @@ td button + button {
   --edge-color: var(--branch);
 }
 
+/* ── U6b arrowheads ──────────────────────────────────────────────────────────
+ *
+ * The marker defs (`EdgeMarkers.tsx`) live OUTSIDE the edge `<g>` — that is a
+ * fact about SVG, and the reason U6a shipped without arrowheads — so a marker
+ * cannot inherit `--edge-color` from the edge that references it. Each one
+ * therefore declares the SAME palette var its stroke rule above declares, and
+ * `palette.test.ts` pins the two lists equal so an added or re-hued condition
+ * cannot end up with a mismatched arrowhead. (Verified in the browser rather than
+ * assumed: `#edge-arrow-success path` computes `fill: rgb(88, 214, 141)`, the
+ * same value the edge stroke computes.)
+ *
+ * `fill: context-stroke` would have removed the duplication outright (it takes
+ * the referencing element's stroke), and was rejected for ONE reason: it cannot
+ * be verified. `getComputedStyle(...).fill` returns the literal
+ * `context-stroke`, so the browser gate could only ever confirm the declaration
+ * applied, never that the arrow paints the hue — whereas a `var()` resolves to a
+ * concrete `rgb(...)` that a Playwright spec can assert.
+ */
+.edge-marker-defs {
+  /* Zero-size and absolute, NOT `display: none`: a marker inside a
+     `display: none` svg is not guaranteed to resolve when referenced. */
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.edge-marker-defs marker path {
+  fill: var(--edge-color, var(--colorNeutralStroke1));
+}
+
+#edge-arrow-success {
+  --edge-color: var(--success);
+}
+
+#edge-arrow-failure {
+  --edge-color: var(--error);
+}
+
+#edge-arrow-completion {
+  --edge-color: var(--accent);
+}
+
+#edge-arrow-skipped {
+  --edge-color: var(--muted);
+}
+
+#edge-arrow-branch {
+  --edge-color: var(--branch);
+}
+
+/*
+ * Connect-time feedback (U6b). React Flow puts `connectingto` on the handle
+ * under the pointer during a drag and adds `valid` only when the connection
+ * would be accepted — `isValidConnection` is what decides that — so the two
+ * states are distinguishable here without any extra plumbing.
+ *
+ * Colour is NOT the only channel: an invalid handle also loses its grow, and the
+ * refusal panel below names the reason in words.
+ */
+.react-flow__handle.connectingto {
+  transform: scale(1.6);
+}
+
+.react-flow__handle.connectingto.valid {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.react-flow__handle.connectingto:not(.valid) {
+  background: var(--error);
+  border-color: var(--error);
+  transform: none;
+}
+
+/* The refused-connection message. Sits in an RF `Panel`, so it is already
+   positioned; this only styles the surface. `max-width` keeps a long reason
+   (which names both endpoints) from spanning a wide canvas. */
+.canvas-refusal {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: 46rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.canvas-refusal button {
+  flex: none;
+  padding: 0 0.3rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.canvas-refusal button:hover {
+  color: var(--text);
+}
+
 /*
  * A SELECTED edge keeps its variant hue, and says "selected" by getting
  * heavier instead.

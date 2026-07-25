@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EdgeOnSchema } from '@autonomy-studio/shared';
+import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -117,6 +118,26 @@ describe('U6a edge variant hues', () => {
     for (const on of EdgeOnSchema.options) {
       const body = ruleBody(css, `.react-flow__edge.edge-variant-${on}`);
       expect(body, `no .edge-variant-${on} rule — the picker offers it`).not.toBe('');
+    }
+  });
+
+  /**
+   * U6b — the ARROWHEAD hue must equal the STROKE hue it caps.
+   *
+   * The two cannot be one declaration: SVG renders a `<marker>` outside the edge
+   * `<g>` that references it, so `--edge-color` set on the edge never reaches it
+   * (the reason U6a shipped with no arrowheads at all). Two lists that must agree
+   * are therefore asserted equal here rather than left to inspection — a green
+   * edge ending in a red arrowhead is a rendered defect no unit test can see, and
+   * `EDGE_VARIANTS` is what makes "every variant" checkable rather than assumed.
+   */
+  it('gives every edge variant an arrowhead marker in the SAME hue as its stroke', () => {
+    expect([...EDGE_VARIANTS].sort()).toEqual(EXPECTED.map(([c]) => c).sort());
+    for (const [condition, cssVar] of EXPECTED) {
+      const stroke = customProps(ruleBody(css, `.react-flow__edge.edge-variant-${condition}`));
+      const arrow = customProps(ruleBody(css, `#edge-arrow-${condition}`));
+      expect(arrow.get('--edge-color'), `#edge-arrow-${condition} hue`).toBe(`var(${cssVar})`);
+      expect(arrow.get('--edge-color')).toBe(stroke.get('--edge-color'));
     }
   });
 });

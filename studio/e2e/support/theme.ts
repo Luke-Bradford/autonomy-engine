@@ -59,6 +59,30 @@ export function customProperty(page: Page, name: string): Promise<string> {
   );
 }
 
+/**
+ * The `rgb(...)` a palette custom property actually PAINTS as.
+ *
+ * `customProperty` returns the DECLARED text (`#58d68d`), while
+ * `getComputedStyle(el).backgroundColor` returns the resolved
+ * `rgb(88, 214, 141)` — comparing the two directly always fails, and hardcoding
+ * the rgb form in a spec forks the palette. So the value is resolved the only
+ * way a browser will resolve it: by making something use it.
+ *
+ * The probe is appended to `document.body` (never inside the React tree, whose
+ * children React reconciles) and removed in the same evaluate, so the page is
+ * unchanged by the measurement.
+ */
+export function resolvedPaletteColor(page: Page, name: string): Promise<string> {
+  return page.evaluate((v) => {
+    const probe = document.createElement('span');
+    probe.style.color = `var(${v})`;
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  }, name);
+}
+
 /** Computed value of a normal CSS property on the first matching element. */
 export function computedStyleOf(page: Page, selector: string, property: string): Promise<string> {
   return page.evaluate(
