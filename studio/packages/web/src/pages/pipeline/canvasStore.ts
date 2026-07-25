@@ -18,6 +18,37 @@ export interface Selection {
   id: string;
 }
 
+/** Do two selections name the same element? `null` equals only `null`. */
+export function sameSelection(a: Selection | null, b: Selection | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.kind === b.kind && a.id === b.id;
+}
+
+/**
+ * #737 — the next single selection after React Flow reports that `target`
+ * became (or stopped being) selected.
+ *
+ * The canvas mirrors RF's selection into the store one `select` CHANGE at a
+ * time, so this has to be decided per element, without the full selected set.
+ *
+ * The DESELECT guard is the load-bearing half. RF emits a select and the
+ * matching deselects in one batch and across BOTH element kinds:
+ * `addSelectedNodes` calls `triggerNodeChanges` and then
+ * `triggerEdgeChanges(getSelectionChanges(edgeLookup, …))`, so selecting node A
+ * arrives as `{A, selected:true}` immediately followed by a `selected:false` for
+ * every other node AND every edge. Clearing on any deselect would therefore undo
+ * the selection microseconds after making it — the panel would flicker open and
+ * shut on every click. Only the CURRENT selection's own deselect clears.
+ */
+export function nextSelection(
+  current: Selection | null,
+  target: Selection,
+  selected: boolean,
+): Selection | null {
+  if (selected) return target;
+  return sameSelection(current, target) ? null : current;
+}
+
 /**
  * Retype an edge to a new condition, operational or business.
  *
@@ -282,7 +313,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       }));
     },
 
+    /**
+     * IDEMPOTENT — re-selecting what is already selected is a no-op.
+     *
+     * #737: the canvas now mirrors React Flow's selection back into the store,
+     * while the store drives RF's edge `selected` prop. Writing an equal-but-new
+     * `Selection` object on every RF report would re-render the canvas, rebuild
+     * the derived edge array and hand RF a fresh selection state, which reports
+     * again — a loop that the value guard, not a `useEffect` dependency, is what
+     * actually stops.
+     */
     select(sel) {
+      if (sameSelection(get().selected, sel)) return;
       set({ selected: sel });
     },
   }));

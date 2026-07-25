@@ -7,6 +7,7 @@ import {
   pathStyle,
   seedSelectedEdge,
   selectEdge,
+  tabToFocus,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
@@ -231,16 +232,7 @@ test.describe('U6a typed edge styling', () => {
     const restingWidth = await pathStyle(page, 'strokeWidth');
     const restingStroke = await pathStyle(page, 'stroke');
 
-    // The canvas sits behind the rail, pane, command bar and toolbox, so the
-    // edge is deep in the tab order; the bound is generous on purpose.
-    let reached = false;
-    for (let i = 0; i < 150 && !reached; i++) {
-      await page.keyboard.press('Tab');
-      reached = await page.evaluate(() =>
-        Boolean(document.activeElement?.classList.contains('react-flow__edge')),
-      );
-    }
-    expect(reached, 'TAB never reached the edge — it is not in the tab order').toBe(true);
+    await tabToFocus(page, 'react-flow__edge');
     expect(
       await page.evaluate(() => document.activeElement?.matches(':focus-visible')),
       'the focused edge did not match :focus-visible',

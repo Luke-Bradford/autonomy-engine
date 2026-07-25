@@ -148,6 +148,31 @@ export async function selectEdge(page: Page): Promise<void> {
   await expect(firesOn(page)).toBeVisible();
 }
 
+/**
+ * TAB forward until the focused element carries `className`.
+ *
+ * TAB, never `.focus()`: `:focus-visible` deliberately ignores programmatic
+ * focus, and React Flow's own `onKeyDown` handlers hang off the focused
+ * element — a scripted `.focus()` reaches the DOM node without reproducing the
+ * keyboard path either spec is actually about.
+ *
+ * The canvas sits behind the rail, pane, command bar and toolbox, so a node or
+ * edge is deep in the tab order; the bound is generous on purpose, and it
+ * throws rather than returning false so the caller cannot silently proceed
+ * against whatever happened to hold focus instead.
+ */
+export async function tabToFocus(page: Page, className: string, limit = 150): Promise<void> {
+  for (let i = 0; i < limit; i++) {
+    await page.keyboard.press('Tab');
+    const reached = await page.evaluate(
+      (cls) => Boolean(document.activeElement?.classList.contains(cls)),
+      className,
+    );
+    if (reached) return;
+  }
+  throw new Error(`TAB never reached .${className} in ${String(limit)} presses`);
+}
+
 /** Deselect everything by clicking empty canvas. */
 export async function deselect(page: Page): Promise<void> {
   await page.locator('.react-flow__pane').click({ position: { x: 30, y: 30 } });
