@@ -82,3 +82,53 @@ describe('SecondaryPane', () => {
     expect(pane()).toHaveAttribute('id', PANE_ELEMENT_ID);
   });
 });
+
+/**
+ * U4 — a hub with a surface of its own replaces the pane's BODY, never its
+ * `<nav>` wrapper. The wrapper's id, `hidden` and `aria-label` are what the
+ * command bar's `aria-controls`, its focus restoration and the shell's column
+ * arithmetic all depend on; a hub surface that brought its own container would
+ * have to re-earn all three, silently, one hub at a time.
+ */
+describe('SecondaryPane — per-hub content', () => {
+  const author = hubById('author')!;
+
+  function renderAuthor() {
+    return renderWithRouter(<SecondaryPane hub={author} collapsed={false} />, '/author/pipelines');
+  }
+
+  it('keeps the wrapper contract for a hub that brings its own content', () => {
+    renderAuthor();
+    const el = screen.getByRole('navigation', { name: 'Author sections' });
+    expect(el).toHaveAttribute('id', PANE_ELEMENT_ID);
+  });
+
+  it('still hides it wholesale when collapsed', () => {
+    renderWithRouter(<SecondaryPane hub={author} collapsed />, '/author/pipelines');
+    expect(document.getElementById(PANE_ELEMENT_ID)).not.toBeVisible();
+  });
+
+  it('titles the Author pane for what it HOLDS, not for the hub', () => {
+    renderAuthor();
+    // The Shell diagram labels this pane "Factory Resources": it is a resource
+    // tree, not a section list.
+    expect(screen.getByRole('heading', { name: 'Factory Resources' })).toBeInTheDocument();
+  });
+
+  it('renders the resources tree instead of a bare section list', () => {
+    renderAuthor();
+    expect(screen.getByRole('button', { name: 'New pipeline' })).toBeInTheDocument();
+    // The hub's own section survives as the tree's group header, so `HUBS`
+    // stays the single source of the pane's navigation.
+    expect(screen.getByRole('link', { name: 'Pipelines' })).toHaveAttribute(
+      'href',
+      '/author/pipelines',
+    );
+  });
+
+  it('leaves a hub with no custom content on the default section list', () => {
+    renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
+    expect(screen.getByRole('heading', { name: 'Manage' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New pipeline' })).toBeNull();
+  });
+});

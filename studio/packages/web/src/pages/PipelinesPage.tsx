@@ -1,49 +1,43 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router';
+import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { ApiError } from '../api/client';
-import { createPipeline, deletePipeline, listPipelines } from '../api/pipelines';
-import { PipelineCanvas } from './pipeline/PipelineCanvas';
+import { createPipeline, deletePipeline } from '../api/pipelines';
+import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
+import { pipelinePath } from './author/pipelinePath';
 
 /**
  * Pipelines: list / create / delete, and open one on the authoring canvas.
- * "Open" swaps this page for `<PipelineCanvas>` (local state, no route change) —
- * the canvas is a full-bleed editor that doesn't fit the list layout.
+ *
+ * Since U4 this page is one of TWO views of the same list — the Factory
+ * Resources pane beside it is the other, and both are mounted at once — so the
+ * list lives in `pipelinesStore` rather than in this component. A create here
+ * has to appear in the tree, and a delete in the tree has to disappear from
+ * here; two independent `useState` copies could only be kept in step by luck.
+ *
+ * "Open" is a `<Link>` to the pipeline's own route, not local state. Before U4
+ * the canvas replaced this page in place and had no address at all.
+ *
+ * The page is deliberately NOT reduced to a landing screen now that the pane
+ * can do everything it does. The pane can be COLLAPSED (globally, and the
+ * preference persists), and Author would then have no way to reach or create a
+ * pipeline at all.
  */
-export function PipelinesPage() {
-  const [pipelines, setPipelines] = useState<Pipeline[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
+  const status = useStore(store, (s) => s.status);
+  const pipelines = useStore(store, (s) => s.pipelines);
+  const loadError = useStore(store, (s) => s.error);
+  const ensureLoaded = useStore(store, (s) => s.ensureLoaded);
+  const refresh = useStore(store, (s) => s.refresh);
+
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
-  const [open, setOpen] = useState<{ id: string; name: string } | null>(null);
 
-  // Refetch after a mutation (create / delete). Called only from event handlers,
-  // never synchronously inside an effect — so its setState is safe.
-  const refresh = useCallback(async () => {
-    try {
-      const list = await listPipelines();
-      setPipelines(list);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
-
-  // Initial load: promise-callback form keeps setState off the synchronous
-  // effect body (React's `set-state-in-effect` guidance).
   useEffect(() => {
-    const ctrl = new AbortController();
-    listPipelines(ctrl.signal)
-      .then((list) => {
-        setPipelines(list);
-        setLoadError(null);
-      })
-      .catch((err: unknown) => {
-        if (ctrl.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
-      });
-    return () => ctrl.abort();
-  }, []);
+    ensureLoaded();
+  }, [ensureLoaded]);
 
   const onCreate = useCallback(
     async (e: React.FormEvent) => {
@@ -86,20 +80,6 @@ export function PipelinesPage() {
     [refresh],
   );
 
-  if (open) {
-    return (
-      <PipelineCanvas
-        key={open.id}
-        pipelineId={open.id}
-        pipelineName={open.name}
-        onBack={() => {
-          setOpen(null);
-          void refresh();
-        }}
-      />
-    );
-  }
-
   return (
     <section aria-labelledby="pipelines-heading">
       <div className="page-header">
@@ -117,9 +97,11 @@ export function PipelinesPage() {
       )}
       {actionMsg && <p className="notice">{actionMsg}</p>}
 
-      {pipelines && pipelines.length === 0 && <p>No pipelines yet — create one below.</p>}
+      {/* Gated on a load having SUCCEEDED: an empty list and a failed load are
+          different facts, and "no pipelines yet" is a lie about the second. */}
+      {status === 'ready' && pipelines.length === 0 && <p>No pipelines yet — create one below.</p>}
 
-      {pipelines && pipelines.length > 0 && (
+      {pipelines.length > 0 && (
         <table>
           <thead>
             <tr>
@@ -132,13 +114,12 @@ export function PipelinesPage() {
               <tr key={p.id}>
                 <td>{p.name}</td>
                 <td>
-                  <button
-                    type="button"
-                    onClick={() => setOpen({ id: p.id, name: p.name })}
-                    aria-label={`Open ${p.name}`}
-                  >
+                  {/* A link, so it can be middle-clicked, copied and bookmarked
+                      — the navigation idiom U2 settled: `useNavigate` on a
+                      button is only for navigating as the RESULT of an action. */}
+                  <Link to={pipelinePath(p.id)} aria-label={`Open ${p.name}`}>
                     Open
-                  </button>
+                  </Link>
                   <button
                     type="button"
                     onClick={() => void onDelete(p)}

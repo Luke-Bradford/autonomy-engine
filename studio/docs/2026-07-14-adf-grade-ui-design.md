@@ -309,9 +309,8 @@ Decisions worth not re-deriving:
   grid's row action into a real link.
 
 URL-state slots named in the Shell section but NOT yet in the hash, with their owning ticket:
-pipeline id (`#/author/pipelines/:pipelineId` — **U4**; opening the canvas is still local state
-inside `PipelinesPage`), version id (**U22**), selected node id (**U7**), monitor filter tab
-(**U10**).
+version id (**U22**), selected node id (**U7**), monitor filter tab (**U10**). The pipeline id
+(`#/author/pipelines/:pipelineId`) landed in **U4** — see that section below.
 
 Deliberately NOT in U2, from its own ticket row and the Shell description:
 
@@ -447,6 +446,119 @@ NOT in U3, with owners: the command bar's **actions region** (Validate / Save→
 zoom-fit-layout) is **U9** — an empty container now would be dead code plus a seam chosen
 before its first consumer; real per-hub pane content is **U4** (Factory Resources tree) and
 **U10**; `#/settings` is **U15**.
+
+## U4 — Factory Resources pane (AS BUILT, 2026-07-25)
+
+The Author hub's pane is now a resource tree, and the canvas has an address.
+
+```text
+.secondary-pane  (the <nav> U3 built — id/hidden/aria-label unchanged)
+  h2  "Factory Resources"          ← PANE_CONTENT[hub].title, not the hub name
+  .factory-resources
+    ├ toolbar    🔎 filter    + (New pipeline)
+    ├ group      ▾ [Pipelines]     ← disclosure + the HUB SECTION's own NavLink
+    └ ul#factory-pipelines         ← one row per pipeline: NavLink + ⋯ menu
+```
+
+| Piece | Where | Notes |
+|---|---|---|
+| The pipelines list | `stores/pipelinesStore.ts` | one store, two mounted views |
+| Which hub gets a custom pane | `PANE_CONTENT` in `SecondaryPane.tsx` | `{title, Content}` per `HubId` |
+| Canvas route | `/author/pipelines/:pipelineId` | `PipelineCanvasRoute`, mirrors `:runId` |
+| Path builder | `pages/author/pipelinePath.ts` | the `runDetailPath` twin |
+| Rename / duplicate | `api/pipelines.ts` | PATCH; duplicate is COMPOSED client-side |
+
+Decisions worth not re-deriving:
+
+- **A hub surface replaces the pane's BODY, never its `<nav>`.** The wrapper's `id`, `hidden`
+  and `aria-label` are what the command bar's `aria-controls`, its focus restoration and the
+  shell's column arithmetic all hang off; a hub that brought its own container would have to
+  re-earn all three, silently, one hub at a time. `PANE_CONTENT` is a `Partial<Record<HubId,…>>`
+  rather than an `if (hub.id === 'author')` because **U10** puts the Monitor filters here next.
+- **The group header IS the hub's section link**, not a new label beside it. `HUBS` therefore
+  stays the single source of the pane's navigation — the section still reaches the list page and
+  still supplies the breadcrumb — and the tree hangs beneath it rather than forking a second
+  navigation that could disagree. This is also why Author keeps `sections` at all.
+- **The pane heading says "Factory Resources", the nav landmark still says "Author sections".**
+  They answer different questions: the heading names what the pane HOLDS (the Shell diagram's
+  label), the landmark names which of the page's three navs this is, and that answer should not
+  change every time a hub re-decorates its pane.
+- **The list lives in a shared store, and the pipelines page was migrated onto it.** After U4
+  there are TWO views of the same list mounted at once; two `useState` copies could only agree
+  by luck. Every mutation ends in a `refresh()`, which is the whole point of the store.
+  Its loads carry a monotonic sequence id and a superseded load DROPS its result — success *or*
+  rejection — so two overlapping refreshes cannot apply in completion order and leave the tree
+  showing a list the server no longer has, nor bury a fresh answer under a stale error.
+- **`ensureLoaded()` is not a retry.** Once a load has failed the status is `error` and further
+  mounts do nothing, so a broken server cannot be hammered by remounts; recovery is the explicit
+  Retry control. And `error` is kept DISTINCT from "loaded, empty" in both views — "there are
+  none" and "we could not find out" are different facts, and the empty state is a lie about the
+  second.
+- **The pipelines PAGE was NOT reduced to a landing screen** even though the pane can now do
+  everything it does. The pane collapses — globally, and the preference persists — and Author
+  would then have no way to reach or create a pipeline at all.
+- **The canvas is fetched BY ID, not looked up in the store.** A bookmarked pipeline must not
+  wait on the page-walked list, and a 404 is then a real answer ("no such pipeline, or not
+  yours") rather than "not in the list yet". `key={pipelineId}` forces a remount, for the same
+  reason `RunDetailRoute` does: the canvas holds an unsaved graph, and react-router reuses a
+  route component instance when only a param changes.
+- **The `:pipelineId` crumb is the ID, not the name.** Resolving the name would need the shell to
+  subscribe to a page-domain store (or a route loader) *and* re-render when it arrived — a
+  coupling the shell has deliberately avoided — for a label the canvas's own `<h2>` already
+  shows. `:runId` sets the precedent. **U9** owns the command bar's per-pipeline region and can
+  carry the name there.
+- **Duplicate is COMPOSED from existing endpoints and ROLLS BACK.** No server route, because the
+  epic's stated non-goal is that its only backend work is read-only read-models. There is no
+  transaction across two HTTP requests, so a copy whose version write fails is deleted again
+  (seconds old, no run history, so `DELETE` cannot 409) and the ORIGINAL error is what surfaces —
+  an empty husk appearing in the tree at the moment the user is told it failed is worse than no
+  copy. If the rollback itself fails the original error still wins; a rollback error names the
+  wrong problem. The copy carries the SOURCE's `catalogVersion`: duplicating is a copy, not a
+  re-authoring, so re-stamping it with today's would assert a compatibility nobody checked.
+- **An inline name ROW for create/rename/duplicate, not a Fluent `Dialog`.** All three are "give
+  me a name". Renaming in place is what a resources tree does, a modal to type six characters
+  into is a worse interaction, and `Dialog` would be the first import of a surface U0's bundle
+  budget has not paid for — the same reasoning that hand-rolled U3's breadcrumb. A failed
+  mutation keeps the row open with the typed name intact.
+- **NOT an ARIA `tree`.** A real `role="tree"` owes roving tabindex, typeahead and arrow-key
+  traversal over a structure that is one flat group today, and a half-implemented tree is less
+  usable than the list it replaced. A disclosure over a list of `NavLink`s keeps `isActive` as
+  the ONE source of "which one am I on" — the same reason `@fluentui/react-nav` was rejected for
+  the pane in U3. Revisit when U5/U20 give the tree real nesting.
+- **No header `⋯`.** The Shell diagram draws `+ ⋯`, but every action it could hold is per-row and
+  already in the row's own menu. An overflow menu with nothing in it is the empty-seam
+  anti-pattern U9's actions region was deferred to avoid.
+- **The row's `⋯` uses `visibility`, not `display: none`, and `:focus-within` as well as
+  `:hover`.** `visibility` keeps it in the layout so rows do not jump; `:focus-within` is what
+  makes the row's actions reachable at all without a pointer. Browser-verified by tabbing from
+  the row link with no hover anywhere — jsdom computes no cascade, so a rule that hid it outright
+  would pass every unit test.
+- **Focus restoration runs in an EFFECT, off a `ref`.** Closing the draft row unmounts the
+  element focus is inside, which strands focus on `<body>` and restarts Tab from the top. The
+  handler cannot do it (React has not removed the row yet), and holding the target in state would
+  mean a `setState` inside that effect purely to clear it — a cascading render for a value
+  nothing renders.
+- **Deleting the pipeline you are EDITING navigates away**; deleting any other one does not. A
+  canvas left mounted on a deleted pipeline shows a graph that no longer exists and 404s on the
+  next load — but yanking the user out of what they are editing because they tidied up something
+  else would be worse than the stale row.
+- **`latestVersion` moved into `api/pipelines.ts`.** The canvas had it privately, and duplicate
+  needed the same rule; two copies of "highest `version`, not the last element" is exactly the
+  kind that drifts, and the server's ordering is its own business.
+
+Browser-verified (Chromium, 2026-07-25): Fluent tokens resolve on `.app-fluent-root`
+(`--colorNeutralBackground1: #292929` dark / white light); ZERO `--xy-*` bridge overrides left
+holding an unresolved `var()` in either theme; the shell grid stays `48px 240px 5px 987px` with
+the tree mounted, and `48px 180px 5px 1047px` at the pane minimum with zero horizontal overflow
+anywhere (the filter's `min-width: 0` is load-bearing — a text input's intrinsic minimum is its
+`size` attribute, ~20 characters, which would push the toolbar wider than the pane); the `⋯`
+menu portals OUTSIDE the pane onto an opaque `rgb(41,41,41)` surface at z-index 1000000, so the
+pane's own overflow clip cannot slice it; focus returns to the `+` / the row's `⋯` after every
+draft row closes. The only console error on any page is the pre-existing favicon 404 (**#717**).
+
+NOT in U4, with owners: drag-and-drop reordering and non-pipeline resource types (**U5**,
+**U20**); a version picker under a pipeline (**U22**); the command bar's per-pipeline actions and
+name (**U9**); `Publish`/`Commit` command-bar states (**U18**, DB-only path first).
 
 ## Non-goals (YAGNI)
 

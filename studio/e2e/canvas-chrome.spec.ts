@@ -80,7 +80,9 @@ async function openCanvas(page: Page, name: string): Promise<void> {
   await fluentRootReady(page);
   await page.getByLabel('Name').fill(name);
   await page.getByRole('button', { name: 'Create pipeline' }).click();
-  await page.getByRole('button', { name: `Open ${name}` }).click();
+  // U4 turned Open into a LINK to the pipeline's own route — the canvas used to
+  // be local state with no address at all.
+  await page.getByRole('link', { name: `Open ${name}` }).click();
   // The RF viewport, not just the wrapper — the chrome below is its child.
   await page.locator('.react-flow__renderer').waitFor();
 }
