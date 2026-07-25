@@ -864,6 +864,22 @@ td button + button {
   color: var(--muted);
 }
 
+/* The same heading, rendered STATIC while a search suspends the collapses (see
+   `ActivityToolbox.tsx`). Matched to the disclosure's type treatment so the
+   groups do not visibly reflow as the user starts typing — only the chevron
+   goes. The left padding replaces the chevron's width so the labels stay on the
+   same optical line. */
+.activity-toolbox__heading {
+  margin: 0;
+  padding: 0.2rem 0.15rem 0.2rem 1.3rem;
+  line-height: 1.2;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .activity-toolbox__list {
   list-style: none;
   margin: 0;

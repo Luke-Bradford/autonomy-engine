@@ -56,6 +56,32 @@ test.describe('U5 activities toolbox', () => {
     await expectQuiet(page, problems);
   });
 
+  test('a search surfaces matches through a COLLAPSED group, and restores it after', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'e2e u5 collapse search');
+
+    await toolbox(page).getByRole('button', { name: 'Collapse General' }).click();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toHaveCount(0);
+
+    // The match must not stay behind a disclosure closed while looking at a
+    // different list — otherwise search appears to return nothing at all.
+    await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('http');
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toBeVisible();
+    // ...and no disclosure is offered while it has nothing to control, so there
+    // is no control whose label disagrees with the screen and whose click would
+    // rewrite the saved preference invisibly.
+    await expect(toolbox(page).getByRole('button', { name: /General$/ })).toHaveCount(0);
+
+    await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).fill('');
+    // Suspended, not discarded.
+    await expect(toolbox(page).getByRole('button', { name: 'Expand General' })).toBeVisible();
+    await expect(toolbox(page).getByRole('button', { name: 'HTTP Request' })).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
   test('collapses a category group without collapsing the others', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e u5 collapse');

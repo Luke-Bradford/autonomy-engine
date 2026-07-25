@@ -54,7 +54,7 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
   const groups = useMemo(() => toolboxGroups(query), [query]);
 
   /**
-   * A SEARCH OVERRIDES A COLLAPSE.
+   * A SEARCH SUSPENDS EVERY COLLAPSE — and, with it, the disclosures themselves.
    *
    * Without this, collapse "General" and then type `http`: the filter returns
    * exactly one group, so the "no matches" state does not render either — and
@@ -63,9 +63,12 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
    * nothing. Results the user explicitly asked for must not stay behind a
    * disclosure they closed while looking at a different list.
    *
-   * The collapsed SET is deliberately not cleared: clearing it would make the
-   * groups stay open once the query is cleared again, quietly discarding a
-   * preference the operator set. Overriding at render restores it instead.
+   * Suspended, not cleared: the collapsed SET is untouched, so clearing the
+   * query restores exactly what the operator had rather than quietly discarding
+   * it. The disclosure BUTTON is replaced by a static heading for the duration
+   * (see the render below) — a toggle whose collapse cannot take effect can only
+   * either lie about its own state or rewrite the preference invisibly, and
+   * removing it while it has nothing to control retires both.
    */
   const searching = query.trim() !== '';
 
@@ -101,32 +104,46 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
       </p>
 
       {groups.map((group) => {
-        const isCollapsed = collapsed.has(group.category) && !searching;
+        const isCollapsed = collapsed.has(group.category);
         return (
           <div className="activity-toolbox__group" key={group.category}>
-            <button
-              type="button"
-              className="icon-button activity-toolbox__disclosure"
-              aria-expanded={!isCollapsed}
-              aria-controls={listId(group.category)}
-              aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${group.label}`}
-              onClick={() => toggle(group.category)}
-            >
-              {/* `aria-hidden`, like U4's identical pair: the button already
-                  carries an explicit `aria-label`, and a decorative glyph must
-                  not join the accessible name. */}
-              {isCollapsed ? (
-                <ChevronRightRegular aria-hidden="true" />
-              ) : (
-                <ChevronDownRegular aria-hidden="true" />
-              )}
-              <span aria-hidden="true">{group.label}</span>
-            </button>
+            {searching ? (
+              /* A STATIC heading while searching — not a disclosure.
+                 Every group is expanded during a search, so a toggle here would
+                 be a control that cannot take effect, and one whose label is
+                 guaranteed to disagree with what the user sees: it would read
+                 "Collapse" over an expanded list, and clicking it would silently
+                 rewrite the saved preference without changing anything on
+                 screen. Removing the control while it has nothing to control
+                 retires that whole class rather than picking which of the two
+                 states it should lie about. The list keeps its `aria-label`, so
+                 the grouping is still conveyed. */
+              <p className="activity-toolbox__heading">{group.label}</p>
+            ) : (
+              <button
+                type="button"
+                className="icon-button activity-toolbox__disclosure"
+                aria-expanded={!isCollapsed}
+                aria-controls={listId(group.category)}
+                aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${group.label}`}
+                onClick={() => toggle(group.category)}
+              >
+                {/* `aria-hidden`, like U4's identical pair: the button already
+                    carries an explicit `aria-label`, and a decorative glyph must
+                    not join the accessible name. */}
+                {isCollapsed ? (
+                  <ChevronRightRegular aria-hidden="true" />
+                ) : (
+                  <ChevronDownRegular aria-hidden="true" />
+                )}
+                <span aria-hidden="true">{group.label}</span>
+              </button>
+            )}
             <ul
               id={listId(group.category)}
               className="activity-toolbox__list"
               aria-label={group.label}
-              hidden={isCollapsed}
+              hidden={isCollapsed && !searching}
             >
               {group.entries.map((entry) => (
                 <li key={entry.type}>

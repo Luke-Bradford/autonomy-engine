@@ -675,11 +675,19 @@ Decisions worth not re-deriving:
   refuses an unknown or structural-call type on its own — verified by mutation, which left every
   node-count assertion green. The payload rules are pinned where they are observable, in
   `activityDnd.test.ts`.
-- **A SEARCH overrides a COLLAPSE.** Otherwise, collapsing a group and then filtering shows a
-  lone collapsed heading and nothing else — and the empty state does not fire either, because the
-  group *did* match, so search silently appears to return nothing. The override is at render and
-  the collapsed set is left untouched, so clearing the query restores the operator's preference
-  instead of quietly discarding it.
+- **A SEARCH SUSPENDS every collapse — and replaces the disclosures with static headings.**
+  Otherwise, collapsing a group and then filtering shows a lone collapsed heading and nothing
+  else, and the empty state does not fire either (the group *did* match), so search silently
+  appears to return nothing. Suspended, not cleared: the collapsed set is untouched, so clearing
+  the query restores the operator's preference rather than discarding it.
+  The disclosure BUTTON goes for the duration, which is the second half of the decision and was
+  found by the PR review bot: a toggle whose collapse cannot take effect can only lie about its
+  own state or rewrite the preference invisibly. With the button still rendered it read
+  "Collapse" over an already-expanded list, and clicking it deleted the category from the
+  collapsed set while changing nothing on screen — so the preference vanished the moment the
+  search was cleared. Removing the control while it has nothing to control retires both failures
+  instead of choosing which state to lie about; the list keeps its `aria-label`, so the grouping
+  is still conveyed.
 - **The `role="status"` empty state is ALWAYS mounted, with only its text changing.** A live
   region inserted into the DOM in the same commit as its content is announced unreliably —
   screen readers watch regions they already know about. Rendering it conditionally would satisfy

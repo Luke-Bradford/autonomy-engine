@@ -170,7 +170,7 @@ describe('ActivityToolbox', () => {
   });
 
   it('restores the collapse once the search is cleared, rather than discarding it', async () => {
-    // The override is at RENDER; the collapsed set is untouched. Clearing the
+    // The suspension is at RENDER; the collapsed set is untouched. Clearing the
     // set instead would quietly throw away a preference the operator set.
     const user = userEvent.setup();
     renderToolbox();
@@ -185,6 +185,61 @@ describe('ActivityToolbox', () => {
     expect(
       screen.getByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
     ).toBeTruthy();
+  });
+
+  it('offers NO disclosure while searching — only a static heading', async () => {
+    // A toggle whose collapse cannot take effect can only lie about its state or
+    // rewrite the preference invisibly. While a search suspends the collapses
+    // there is nothing for it to control, so it is not rendered at all.
+    const user = userEvent.setup();
+    renderToolbox();
+    expect(
+      screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeTruthy();
+
+    await user.type(filterBox(), 'http');
+    expect(
+      screen.queryByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeNull();
+    // The grouping is still conveyed — by the heading, and by the list's own
+    // accessible name.
+    expect(screen.getByText(ACTIVITY_CATEGORY_LABELS.general)).toBeTruthy();
+    expect(screen.getByRole('list', { name: ACTIVITY_CATEGORY_LABELS.general })).toBeTruthy();
+
+    // ...and it comes back when the search ends, in the state it had (this
+    // group was never collapsed, so it reads "Collapse").
+    await user.clear(filterBox());
+    expect(
+      screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeTruthy();
+  });
+
+  it('a collapse set BEFORE a search survives the whole search round-trip untouched', async () => {
+    // The interleaving that motivated removing the control: with a disclosure
+    // still rendered during a search, its label read "Collapse" over an already-
+    // expanded list, and clicking it deleted the category from the collapsed set
+    // while changing nothing on screen — so the preference vanished silently the
+    // moment the search was cleared. There is now no control to click, and this
+    // pins the property that mattered.
+    const user = userEvent.setup();
+    renderToolbox();
+    await user.click(
+      screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    );
+
+    await user.type(filterBox(), 'http');
+    // Whatever the user does with the toolbox mid-search, no disclosure exists
+    // to corrupt the preference.
+    await user.click(screen.getByRole('button', { name: 'HTTP Request' }));
+    await user.clear(filterBox());
+
+    expect(
+      screen.getByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
   });
 
   it('collapsing one group leaves the others open', async () => {
