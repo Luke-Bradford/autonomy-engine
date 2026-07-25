@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolvePrice } from '@autonomy-studio/shared';
 import { anthropicAdapter } from '../anthropic.js';
+import { DEFAULT_LLM_TIMEOUT_MS } from '../llm-shared.js';
 import type { ActivityContext, ActivityEvent } from '../types.js';
 import { sha256Hex } from '../../util/hash.js';
 
@@ -184,18 +185,30 @@ describe('anthropicAdapter.runActivity', () => {
     expect(body.messages).toEqual([{ role: 'user', content: 'p' }]);
   });
 
-  // #708 — the default `max_tokens`, pinned because it is COUPLED to the
-  // default model rather than free to drift. `max_tokens` caps thinking +
-  // response text together, and the Opus 5 default thinks unless told not to,
-  // so the old 1024 would be spent on reasoning and leave a truncated or
-  // text-free response — which `extractText` turns into a PERMANENT
-  // `empty_completion_set` failure. If someone lowers this, that is the
-  // failure they will get, and this test is where they should find out.
-  it('defaults max_tokens to a budget that leaves room for thinking', async () => {
+  // #708 — the default `max_tokens`, pinned because it is COUPLED in BOTH
+  // directions and a change either way has a silent failure mode.
+  //
+  // Too LOW and thinking eats the budget: `max_tokens` caps thinking + response
+  // text together, the Opus 5 default thinks unless told not to, and a truncated
+  // or text-free response is what `extractText` turns into a PERMANENT
+  // `empty_completion_set` failure.
+  //
+  // Too HIGH and it outruns this connector's own 120s non-streaming timeout
+  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path emits NO `activity.metered` event
+  // even though the provider generated and billed the tokens, and classifies
+  // `transient`, so the engine retries and buys another unmetered generation.
+  // That is the very telemetry hole this ticket closed, via a different door.
+  //
+  // So this is an upper AND lower bound, not a preference. Anyone moving it
+  // should read the `DEFAULT_MAX_TOKENS` block and #725 first.
+  it('defaults max_tokens to a budget that fits the non-streaming timeout', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(anthropicAdapter.runActivity(ctx({ input: { prompt: 'p' } }), 'sk'));
     const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
-    expect(body.max_tokens).toBe(16000);
+    expect(body.max_tokens).toBe(4096);
+    // The bound that matters: at a pessimistic ~40 tok/s this must still finish
+    // inside DEFAULT_LLM_TIMEOUT_MS, or the silent-billing path above opens.
+    expect((body.max_tokens / 40) * 1000).toBeLessThan(DEFAULT_LLM_TIMEOUT_MS);
   });
 
   // #708 — the REGRESSION GUARD for this ticket's actual defect: the connector

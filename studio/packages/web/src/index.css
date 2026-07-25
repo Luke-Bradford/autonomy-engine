@@ -483,7 +483,9 @@ body {
 
 /* #721 — folded onto `.icon-button` with the other two. It gains a hover fill
    and a 4px radius it did not have; that is the point of unifying rather than
-   leaving a third near-miss to be copied into a fourth. */
+   leaving a third near-miss to be copied into a fourth. It also picks up the
+   shared `line-height: 0` — no rendered effect on a fixed-size flex-centred box
+   like this one, but noted so the inheritance is not a surprise later. */
 .factory-resources__disclosure {
   width: 20px;
   height: 24px;
@@ -579,13 +581,18 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-/* #721 — folded onto `.icon-button`. Two deliberate rendered changes came with
-   it: the box loses a TRANSPARENT 1px border (which was invisible but still
-   occupied layout space, so the button is now 2px narrower and shorter), and
-   the radius drops from the global `button` rule's 6px to the shared 4px. Both
-   were browser-verified rather than assumed. `padding` is respecified here
-   because `.icon-button` zeroes it — this button sizes by padding, not by a
-   fixed box like the Factory ones. */
+/* #721 — folded onto `.icon-button`. THREE deliberate changes came with it, all
+   browser-verified rather than assumed:
+     1. the box loses a TRANSPARENT 1px border (invisible, but it still occupied
+        layout space, so the button is now 2px narrower and shorter — measured
+        28x28 -> 26x26);
+     2. the radius drops from the global `button` rule's 6px to the shared 4px;
+     3. it inherits `flex: 0 0 auto`, which it did not have — so it can no longer
+        SHRINK inside the flex command bar. That is the wanted behaviour for a
+        fixed-size icon target (it previously had `flex-shrink: 1`), but it is a
+        real change, not a no-op.
+   `padding` is respecified here because `.icon-button` zeroes it — this button
+   sizes by padding, not by a fixed box like the Factory ones. */
 .command-bar__pane-toggle {
   padding: 0.25rem;
   font-size: 18px;

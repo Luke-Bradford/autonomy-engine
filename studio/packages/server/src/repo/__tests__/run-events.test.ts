@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BUILTIN_PRICE_TABLE_VERSION,
   CATALOG_VERSION,
   computeRunCost,
   rollupFromAggregates,
@@ -134,7 +135,11 @@ describe('run-events repo', () => {
         base['inUnitPrice'] = 5;
         base['outUnitPrice'] = 25;
         base['costEstimate'] = fields.cost;
-        base['priceTableVersion'] = 'builtin-2026-07-25';
+        // Inert provenance for this suite (nothing here asserts on the version —
+        // `price-table.test.ts` owns that). Imported rather than pinned as a
+        // literal so a table bump does not need an edit here, per the repo's
+        // single-source-of-truth-for-constants rule.
+        base['priceTableVersion'] = BUILTIN_PRICE_TABLE_VERSION;
       }
       return base;
     }

@@ -324,6 +324,14 @@ export const llmToolsArraySchema = z
  * billing — each exchange is itself bounded by `maxTokens` and
  * `MAX_TOOL_RESULT_CHARS`, making 25 a generous but finite worst case. Nothing
  * in the spec pins the number; it can be raised deliberately, never implicitly.
+ *
+ * #708 — that "finite worst case" is a FUNCTION of the connector's default
+ * `maxTokens`, so re-derive it whenever that moves rather than assuming this
+ * number still means what it meant. At the anthropic connector's current 4096
+ * default the ceiling is 26 exchanges x 4096 output tokens ~= 106k tokens, about
+ * $2.66 at Opus-5's $25/Mtok (it was ~$0.67 against the old 1024 default). Note
+ * this bounds OUTPUT only: input is re-sent and re-billed each exchange, and
+ * prompt caching is what keeps that from dominating.
  */
 export const MAX_TOOL_ITERATIONS = 25;
 

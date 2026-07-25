@@ -61,14 +61,40 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * failure — on a pipeline that worked the day before, with nothing in the
  * error naming the real cause.
  *
- * 16000 is the documented default for non-streaming requests (it keeps a
- * response inside the SDK/HTTP timeout envelope, and this connector is
- * non-streaming with a 120s ceiling). Note this raises a CAP, not a spend:
- * tokens are billed as generated, so a short answer still costs a short
- * answer. The real cost increase is the thinking itself, which is the model
- * default now and is not something `max_tokens` can opt out of.
+ * WHY 4096 AND NOT THE ~16000 USUALLY RECOMMENDED FOR NON-STREAMING: that
+ * guidance is calibrated to the Anthropic SDK's own ~10-minute timeout envelope.
+ * This connector is non-streaming with a **120s** whole-exchange budget
+ * (`DEFAULT_LLM_TIMEOUT_MS`), so the two numbers are COUPLED and 16000 does not
+ * fit inside it: 16000 output tokens at any plausible Opus-5 standard-speed rate
+ * is 2-6 minutes of generation. Exceeding the budget is far worse than
+ * truncating, because `llmPost` aborts and `usageOf` is only ever reached after
+ * a 2xx parse — so the provider generates and BILLS the tokens while no
+ * `activity.metered` event is emitted at all, and the failure is classified
+ * `transient`, which is retry-eligible, so the engine re-issues the whole call
+ * and buys another unmetered generation. That is precisely the silent loss of
+ * cost telemetry this ticket set out to remove, re-entering through the timeout
+ * door instead of the price-table door.
+ *
+ * 4096 is the largest round budget that finishes inside 120s even pessimistically
+ * (~40 tok/s → ~102s), while being 4x the old cap so adaptive thinking has room
+ * before it starves the answer. It also happens to be the output ceiling of the
+ * legacy `claude-3-*` ids, which are API-active until 2026-04 and which an
+ * operator may still name explicitly — at 16000 those would have started
+ * returning a 400, classified `permanent`, on a pipeline that worked the day
+ * before.
+ *
+ * The residual risk is the ORIGINAL one, merely made much less likely: a
+ * thinking-heavy prompt can still truncate. That failure is at least loud and
+ * un-retried (`empty_completion_set`, `permanent`) rather than silent and
+ * billed. Raising the budget further needs streaming or a token-scaled timeout,
+ * not a bigger constant — tracked in #725.
+ *
+ * Note this is a CAP, not a spend: tokens are billed as generated, so a short
+ * answer still costs a short answer. The real cost increase is the thinking
+ * itself, which is the model default now and is not something `max_tokens` can
+ * opt out of.
  */
-const DEFAULT_MAX_TOKENS = 16000;
+const DEFAULT_MAX_TOKENS = 4096;
 /** The default model when neither the node nor the connection specifies one. */
 const DEFAULT_MODEL = 'claude-opus-5';
 
@@ -242,8 +268,9 @@ export const anthropicAdapter: ConnectorAdapter = {
     // (not a message) and has no `seed` (dropped, documented #2 L1). Tools +
     // tool_choice travel as ONE `toolWire` group so a `tool_choice` without
     // `tools` (a provider 400) is unrepresentable. `allowThinking` carries each
-    // path's reasoning posture — see the callers for why a forced choice
-    // precludes the adaptive-thinking surface.
+    // path's reasoning posture — see the callers, and #724, for why the forced
+    // `tool_choice` paths suppress it (the ORIGINAL "a forced choice precludes
+    // adaptive thinking" reason was false; the flag is kept for now regardless).
     const buildBody = (
       msgs: readonly unknown[],
       opts: { toolWire?: { tools: unknown[]; choice: unknown }; allowThinking: boolean },
@@ -262,18 +289,25 @@ export const anthropicAdapter: ConnectorAdapter = {
       if (sampling.topP !== undefined) body.top_p = sampling.topP;
       if (sampling.stop !== undefined) body.stop_sequences = sampling.stop;
       // #2 L3 — reasoning effort. The MODERN Messages-API surface is adaptive
-      // thinking + `output_config.effort`; the older `thinking:{enabled,budget_tokens}`
-      // is REMOVED (HTTP 400) on every current model, including the DEFAULT_MODEL
-      // `claude-opus-5`. Both keys are emitted together: `output_config.effort` sets
-      // the depth, `thinking:{adaptive}` turns reasoning ON.
+      // thinking + `output_config.effort`. The older `thinking:{enabled,budget_tokens}`
+      // is REMOVED (HTTP 400) on the DEFAULT_MODEL `claude-opus-5` and on Opus
+      // 4.8/4.7 and Sonnet 5 — NOT on literally every model an operator can name
+      // here: it is deprecated-but-functional on Opus 4.6/Sonnet 4.6 and is still
+      // the ONLY way to get thinking on Sonnet 4.5/Haiku 4.5. This connector
+      // never emits it on any model, which is correct for all of them.
       //
-      // #708 — that second clause used to read "omitting it leaves Opus 4.8
-      // non-thinking, making effort inert", which was true of Opus 4.8 and is
-      // NOT true of the current default. On Opus 5 an omitted `thinking` runs
-      // ADAPTIVE anyway, so emitting `{type:'adaptive'}` is equivalent to the
-      // model default rather than the thing that switches reasoning on. It is
-      // still emitted deliberately: it remains load-bearing for Opus 4.8/4.7 and
-      // Sonnet 5, which a node or connection may still select by name.
+      // Both keys are emitted together: `output_config.effort` sets the depth,
+      // `thinking:{adaptive}` selects the adaptive surface.
+      //
+      // #708 — that used to read "omitting it leaves Opus 4.8 non-thinking,
+      // making effort inert", which was true of Opus 4.8 and is NOT true of the
+      // current default. On Opus 5 an omitted `thinking` runs ADAPTIVE anyway, so
+      // emitting `{type:'adaptive'}` is equivalent to the model default rather
+      // than the thing that switches reasoning on. It stays emitted because it is
+      // still load-bearing on **Opus 4.8/4.7 and Sonnet 4.6**, which a node or
+      // connection may select by name and which do NOT think when `thinking` is
+      // omitted. (Sonnet 5 is NOT in that list — like Opus 5 it runs adaptive on
+      // omission, so the emit is a no-op there.)
       //
       // CAVEAT: thinking tokens count against `max_tokens` — see the
       // DEFAULT_MAX_TOKENS note, which is now load-bearing rather than advisory.

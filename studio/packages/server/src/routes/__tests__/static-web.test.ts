@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -14,20 +14,33 @@ const tmpRoot = mkdtempSync(join(tmpdir(), 'autonomy-studio-staticweb-test-'));
 const dbBase = join(tmpRoot, 'db');
 mkdirSync(dbBase, { recursive: true });
 
-const INDEX_HTML =
-  '<!doctype html><html><head><link rel="icon" type="image/svg+xml" href="/favicon.svg" /></head><body><div id="root"></div><script src="/assets/app.js"></script></body></html>';
+/**
+ * #717 — the fixture is seeded from the REAL shipped web sources, not from
+ * string literals written here.
+ *
+ * That distinction is the whole value of these two favicon tests. Seeded from a
+ * local `INDEX_HTML` constant containing its own `<link rel="icon">` plus a
+ * hand-written `favicon.svg`, they would assert that `@fastify/static` can serve
+ * a file this test just wrote — a property that already held before #717 — and
+ * would stay GREEN with the actual fix reverted. Reading the real files makes
+ * them discriminate: delete `packages/web/public/favicon.svg` and the
+ * module-scope read below throws; drop the `<link>` from `packages/web/index.html`
+ * and the declaration test fails.
+ */
+const WEB_PKG = join(import.meta.dirname, '../../../../web');
+const REAL_INDEX_HTML = readFileSync(join(WEB_PKG, 'index.html'), 'utf8');
+const REAL_FAVICON_SVG = readFileSync(join(WEB_PKG, 'public', 'favicon.svg'), 'utf8');
 const APP_JS = 'console.log("autonomy studio web");';
-const FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"></svg>';
 
 /** A populated web build: index.html + an assets/ bundle + the #717 favicon. */
 function seedWebRoot(name: string): string {
   const dir = join(tmpRoot, name);
   mkdirSync(join(dir, 'assets'), { recursive: true });
-  writeFileSync(join(dir, 'index.html'), INDEX_HTML);
+  writeFileSync(join(dir, 'index.html'), REAL_INDEX_HTML);
   writeFileSync(join(dir, 'assets', 'app.js'), APP_JS);
   // `vite build` copies `packages/web/public/*` to the dist ROOT, so the
-  // favicon sits beside index.html rather than under assets/.
-  writeFileSync(join(dir, 'favicon.svg'), FAVICON_SVG);
+  // favicon sits beside index.html rather than under assets/ — mirrored here.
+  writeFileSync(join(dir, 'favicon.svg'), REAL_FAVICON_SVG);
   return dir;
 }
 
@@ -54,16 +67,23 @@ describe('static web SPA serving (P7)', () => {
     expect(res.body).toContain('<div id="root">');
   });
 
-  // #717 — a browser requests the favicon on every navigation whether or not
-  // the page asks for one; with nothing to serve, the answer was a 404 logged
-  // as a console ERROR on every load of a self-hosted install. The e2e console
-  // guard cannot cover this (Playwright's context issues no implicit favicon
-  // request), so the single-origin serving path is asserted here instead.
+  // #717 — a browser requests the favicon on every navigation whether or not the
+  // page asks for one; with nothing to serve, the answer was a 404 logged as a
+  // console ERROR on every load of a self-hosted install.
   //
-  // Both halves matter and fail independently: the FILE must be served from the
-  // web root, and index.html must POINT at it — a correct file with a typo'd
-  // href still 404s, because the SPA fallback deliberately does not rewrite
-  // non-HTML misses to the shell.
+  // WHERE THE GUARD ACTUALLY LIVES: `e2e/bug-sweep.spec.ts` is the primary one —
+  // it reads the `link[rel="icon"]` out of the SHIPPED build and fetches the real
+  // href, and it runs in the merge gate via `pnpm test:e2e`. (An earlier version
+  // of this comment claimed the opposite — that the e2e guard was blind and these
+  // tests were the real net. Only the narrower fact is true: Playwright issues no
+  // IMPLICIT `/favicon.ico` request, so the guard cannot observe the 404 a real
+  // browsing session would log; it verifies the declared icon resolves instead.)
+  //
+  // These two add the SINGLE-ORIGIN serving path, which the e2e run gets for free
+  // from its own server but which no other test pins: the file must be reachable
+  // from the web root, and index.html must point at it — a correct file with a
+  // typo'd href still 404s, because the SPA fallback deliberately does not
+  // rewrite non-HTML misses to the shell.
   it('serves the favicon from the web root with an svg content-type (#717)', async () => {
     const res = await app.inject({ method: 'GET', url: '/favicon.svg' });
     expect(res.statusCode).toBe(200);
@@ -72,8 +92,12 @@ describe('static web SPA serving (P7)', () => {
 
   it('declares the favicon in index.html so no browser falls back to /favicon.ico (#717)', async () => {
     const res = await app.inject({ method: 'GET', url: '/', headers: { accept: 'text/html' } });
-    expect(res.body).toContain('rel="icon"');
-    expect(res.body).toContain('/favicon.svg');
+    // Matched as a real TAG, not as the loose substrings `rel="icon"` and
+    // `/favicon.svg`. Those two appear in `index.html`'s own explanatory comment,
+    // so a substring assertion would be satisfied by the COMMENT alone and would
+    // survive deletion of the actual element — the exact way a regression test
+    // stops discriminating without anyone noticing.
+    expect(res.body).toMatch(/<link[^>]*\srel="icon"[^>]*\shref="\/favicon\.svg"/);
   });
 
   it('serves a hashed asset from /assets with its own content-type', async () => {
