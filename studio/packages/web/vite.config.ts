@@ -26,11 +26,14 @@ export default defineConfig({
         // barrel import escaped this rule.
         //
         // #698 measured (route-level code-splitting, bug sweep) — gzip:
-        // `fluent` 71.03 kB · `router` 30.64 kB · entry 109.45 kB · index css
+        // `fluent` 71.03 kB · `router` 30.64 kB · entry 109.46 kB · index css
         // 2.87 kB · NEW `PipelineCanvasRoute` 60.01 kB + its own css 2.56 kB.
-        // The entry chunk fell 169.39 -> 109.45 kB gzip (559 -> 373 kB raw), a
-        // 35% cut, and Rollup's >500 kB raw warning is gone. The whole of that
-        // came from ONE route: `@xyflow/react` is imported only by the pipeline
+        // The before-figure is from building `origin/main` (e45e5b4) in a
+        // throwaway worktree rather than reusing U4's recorded 169.39 — the two
+        // differ by 0.06 kB, so quote the one that reproduces against a commit.
+        // The entry chunk fell 169.45 -> 109.46 kB gzip (558.91 -> 372.62 kB
+        // raw), a 35% cut, and Rollup's >500 kB raw warning is gone. The whole
+        // of that came from ONE route: `@xyflow/react` is imported only by the
         // canvas, so until now every visitor downloaded React Flow to look at a
         // list of runs. Vite split the canvas's CSS out on the same boundary
         // without being asked; total CSS is a shade larger (5.43 vs 5.17 kB
