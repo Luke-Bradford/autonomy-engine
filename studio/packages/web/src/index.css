@@ -19,6 +19,7 @@
   --accent: #6ea8fe;
   --error: #ff6b6b;
   --success: #58d68d;
+  --warning: #f0b429;
   font-family:
     system-ui,
     -apple-system,
@@ -47,6 +48,10 @@
   /* #15703f, not a lighter green: on `--bg` the status pills are 0.72rem, i.e.
      small text, so WCAG AA wants 4.5:1 — a lighter green lands on the margin. */
   --success: #15703f;
+  /* Same reasoning as `--success`: a true amber (#f0b429) is ~1.9:1 on this
+     background, so light mode takes a dark amber (~5.7:1) rather than a
+     brighter one that reads as amber but fails the pills' small text. */
+  --warning: #8a5300;
   color-scheme: light;
 }
 
@@ -1061,6 +1066,16 @@ td button + button {
 .node-status-waiting,
 .stream-phase-closed {
   color: var(--muted);
+}
+
+/* #483 — a node HELD for its retry interval. Amber, deliberately NOT the red it
+   used to inherit from its `node.failed`: the run is healthy and the node is
+   coming back, so it must not read as a failure. Amber rather than the muted
+   grey a parked `waiting` node takes, because a retry follows a failure and is
+   worth an operator's attention; a park is routine. */
+.node-status-retrying {
+  color: var(--warning);
+  border-color: var(--warning);
 }
 
 /* The blinking "● live" indicator, so a running stream is unmistakable. */

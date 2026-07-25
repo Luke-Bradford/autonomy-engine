@@ -248,3 +248,207 @@ describe('deriveNodeActivity — parallel foreach instance keys (#566 slice 2 / 
     expect(activity[0]!.error).toBe('item 1 broke');
   });
 });
+
+describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () => {
+  const dispatched = (nodeId: string, attempt = 0) =>
+    envelope({
+      type: 'node.dispatched',
+      runId: 'r',
+      nodeId,
+      attemptId: `${nodeId}#${attempt}`,
+      idempotent: true,
+    });
+
+  it('a HELD node reads `retrying`, not the red `failure` its node.failed set', () => {
+    // The defect: `node.retryScheduled` fell through `default:`, so a node
+    // waiting out its retry interval kept the RED pill for the whole hold
+    // (`retryIntervalSeconds` can make that minutes) and the monitor said a node
+    // had failed while the run was perfectly healthy.
+    const events = [
+      dispatched('a'),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'timeout',
+        kind: 'transient',
+      }),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        nextAttemptAt: 1_700_000_000_000,
+      }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a!.status).toBe('retrying');
+    // The failure message SURVIVES the hold: it is why the node is retrying, and
+    // the detail column is the only place it is shown.
+    expect(a!.error).toBe('timeout');
+    expect(a!.attempts).toBe(1);
+  });
+
+  it('folds a whole retry loop back to success, counting both attempts', () => {
+    const events = [
+      dispatched('a', 0),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'timeout',
+        kind: 'transient',
+      }),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        nextAttemptAt: 1,
+      }),
+      envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }),
+      dispatched('a', 1),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#1', outputs: {} }),
+    ];
+    expect(deriveNodeActivity(events)).toEqual([
+      {
+        nodeId: 'a',
+        status: 'success',
+        attempts: 2,
+        outputs: 0,
+        lastOutputName: undefined,
+        error: undefined,
+      },
+    ]);
+  });
+
+  it('node.retryDue re-opens the node WITHOUT counting an attempt of its own', () => {
+    // Decided explicitly rather than by omission: `retryDue` clears the hold, and
+    // the `node.dispatched` that follows it is what bumps `attempts`. Asserted on
+    // its own so a future change cannot double-count silently.
+    const events = [
+      dispatched('a'),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'timeout',
+        kind: 'transient',
+      }),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        nextAttemptAt: 1,
+      }),
+      envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a!.status).toBe('running');
+    expect(a!.attempts).toBe(1);
+    expect(a!.error).toBeUndefined();
+  });
+
+  it('a parked `wait` node APPEARS at all, then completes on its timer', () => {
+    // A `wait` is engine-evaluated and NEVER dispatched (`scheduleWait`, not
+    // `dispatchNode`), so before this fix it was absent from the table entirely
+    // — start to finish, the monitor showed nothing for it.
+    const parked = [
+      envelope({
+        type: 'timer.waitScheduled',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 1_700_000_000_000,
+      }),
+    ];
+    const [waiting] = deriveNodeActivity(parked);
+    expect(waiting!.status).toBe('waiting');
+    expect(waiting!.attempts).toBe(1);
+
+    const [done] = deriveNodeActivity([
+      ...parked,
+      envelope({ type: 'timer.due', runId: 'r', nodeId: 'w', previousAttemptId: 'w#0' }),
+    ]);
+    expect(done!.status).toBe('success');
+  });
+
+  it('a parked `webhook` node reads `waiting`, then succeeds on its callback', () => {
+    const parked = [
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'h',
+        attemptId: 'h#0',
+        dueAt: 1_700_000_000_000,
+      }),
+    ];
+    expect(deriveNodeActivity(parked)[0]!.status).toBe('waiting');
+
+    const [done] = deriveNodeActivity([
+      ...parked,
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+      }),
+    ]);
+    expect(done!.status).toBe('success');
+  });
+
+  it('an EXPIRED webhook fails, with a reason (the event carries no error text)', () => {
+    const [expired] = deriveNodeActivity([
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'h',
+        attemptId: 'h#0',
+        dueAt: 1,
+      }),
+      envelope({
+        type: 'externalWait.expired',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+      }),
+    ]);
+    expect(expired!.status).toBe('failure');
+    // Without this the detail column would be blank on a red row — the one
+    // place the operator looks to find out WHY.
+    expect(expired!.error).toBe('external wait expired before a callback arrived');
+  });
+
+  it('a control node (`if`/`switch`) appears and succeeds on its evaluation', () => {
+    // Control nodes are never dispatched either: `condition.evaluated` /
+    // `switch.evaluated` ARE their terminal-success event (reduce.ts
+    // `onControlBranchEvaluated`), so without folding them an `if` node was
+    // invisible in the monitor for the whole run.
+    const [cond] = deriveNodeActivity([
+      envelope({
+        type: 'condition.evaluated',
+        runId: 'r',
+        nodeId: 'c',
+        attemptId: 'c#0',
+        branch: 'true',
+      }),
+    ]);
+    expect(cond!.status).toBe('success');
+    expect(cond!.attempts).toBe(1);
+
+    const [sw] = deriveNodeActivity([
+      envelope({
+        type: 'switch.evaluated',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: 's#0',
+        branch: 'case_b',
+      }),
+    ]);
+    expect(sw!.status).toBe('success');
+  });
+});

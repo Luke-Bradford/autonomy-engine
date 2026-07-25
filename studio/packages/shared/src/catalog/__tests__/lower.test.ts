@@ -4,6 +4,7 @@ import {
   lowerLlmEmitMessages,
   lowerLlmStructuredOutputs,
   lowerNodeOutputs,
+  lowerPipelineNodes,
 } from '../lower.js';
 import { getActivity } from '../registry.js';
 import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from '../types.js';
@@ -416,5 +417,76 @@ describe('lowerLlmEmitMessages — toggle-off heal (#2 L12)', () => {
     });
     const [lowered] = lowerLlmEmitMessages([structured]);
     expect(lowered).toBe(structured);
+  });
+});
+
+describe('lowerPipelineNodes (#526) — the ONE composition of the four passes', () => {
+  it('seeds a catalog default, exactly as the bare lowerNodeOutputs pass does', () => {
+    const [lowered] = lowerPipelineNodes([node('a', 'http_request')]);
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'status', type: 'number' },
+      { name: 'body', type: 'string' },
+      { name: 'headers', type: 'json' },
+    ]);
+  });
+
+  it('DERIVES a structured llm_call contract instead of seeding the text-mode default', () => {
+    // The whole reason this composition exists: `lowerNodeOutputs` ALONE would
+    // seed `[text, stopReason]` here, because it only ever fills an ABSENT key
+    // and cannot know the node is structured. Ordering is the fix.
+    const [lowered] = lowerPipelineNodes([
+      node('a', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([{ name: 'verdict', type: 'string' }]);
+  });
+
+  it('DERIVES a structured agent_task contract instead of seeding [output, exitCode]', () => {
+    const [lowered] = lowerPipelineNodes([
+      node('a', AGENT_TASK_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputSchema: { type: 'object', properties: { summary: { type: 'string' } } },
+      }),
+    ]);
+    expect(lowered!.config['outputs']).toEqual([{ name: 'summary', type: 'string' }]);
+  });
+
+  it('APPENDS the emitMessages transcript row on top of the seeded default (L12 runs LAST)', () => {
+    const [lowered] = lowerPipelineNodes([
+      node('a', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true }),
+    ]);
+    // Both facts in one assertion: the base contract was seeded FIRST, and the
+    // transcript row was appended to it rather than replacing it.
+    expect(lowered!.config['outputs']).toEqual([
+      { name: 'text', type: 'string' },
+      { name: 'stopReason', type: 'string' },
+      { name: 'messages', type: 'json' },
+    ]);
+  });
+
+  it('is EXACTLY the composition the server write path applies (the anti-drift property)', () => {
+    // #526's real risk is FE and BE lowering DIFFERENTLY, so assert equivalence
+    // against the hand-composed chain rather than re-asserting each pass.
+    const nodes = [
+      node('a', 'http_request'),
+      node('b', LLM_CALL_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputMode: 'structured',
+        outputSchema: { type: 'object', properties: { v: { type: 'number' } } },
+      }),
+      node('c', LLM_CALL_ACTIVITY_TYPE, { prompt: 'p', emitMessages: true }),
+      node('d', AGENT_TASK_ACTIVITY_TYPE, {
+        prompt: 'p',
+        outputSchema: { type: 'object', properties: { s: { type: 'string' } } },
+      }),
+    ];
+    expect(lowerPipelineNodes(nodes)).toEqual(
+      lowerLlmEmitMessages(
+        lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(nodes))),
+      ),
+    );
   });
 });

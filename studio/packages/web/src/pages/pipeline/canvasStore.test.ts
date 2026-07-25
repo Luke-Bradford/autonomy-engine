@@ -269,3 +269,92 @@ describe('canvasStore', () => {
     expect(s.getState().nodes.find((n) => n.id === 'n_a')!.connectionId).toBeUndefined();
   });
 });
+
+describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)', () => {
+  it('seeds config.outputs on a LEGACY node that persisted without one', () => {
+    // A pre-F13b version is IMMUTABLE, so its absent contract can never be
+    // repaired in place — the canvas has to show what the server WILL store on
+    // the author's next save, not the empty contract the row happens to hold.
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    const [a] = s.getState().nodes;
+    expect(a!.config['outputs']).toEqual([
+      { name: 'status', type: 'number' },
+      { name: 'body', type: 'string' },
+      { name: 'headers', type: 'json' },
+    ]);
+  });
+
+  it('DERIVES a structured llm_call contract rather than seeding the text-mode default', () => {
+    // The reason the load path composes all four passes instead of calling
+    // `lowerNodeOutputs` alone: alone, it would seed `[text, stopReason]` here.
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_s',
+            type: 'llm_call',
+            config: {
+              prompt: 'p',
+              outputMode: 'structured',
+              outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+            },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    expect(s.getState().nodes[0]!.config['outputs']).toEqual([{ name: 'verdict', type: 'string' }]);
+  });
+
+  it('leaves an already-declared contract alone (a post-F13b row, and any author override)', () => {
+    const declared = [{ name: 'custom', type: 'string' }];
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { outputs: declared },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    expect(s.getState().nodes[0]!.config['outputs']).toEqual(declared);
+  });
+
+  it('does NOT mark the canvas dirty — lowering is a display fix, not an author edit', () => {
+    // Otherwise every legacy pipeline would open with unsaved changes and prompt
+    // a save the author never made.
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('leaves `loaded` UN-lowered — it is the server’s doc and the rebase basis', () => {
+    const v = version();
+    const s = createCanvasStore();
+    s.getState().loadVersion(v);
+    expect(s.getState().loaded).toBe(v);
+    expect(v.nodes[0]!.config['outputs']).toBeUndefined();
+  });
+
+  it('still owns its own node objects (lowering returns unchanged nodes BY REFERENCE)', () => {
+    // `lowerPipelineNodes` is copy-on-write: a node it does not change comes back
+    // as the SAME object, so the store's own copy pass is still load-bearing.
+    const v = version({
+      nodes: [
+        { id: 'n_a', type: 'http_request', config: { outputs: [] }, position: { x: 0, y: 0 } },
+      ],
+      edges: [],
+    });
+    const s = createCanvasStore();
+    s.getState().loadVersion(v);
+    expect(s.getState().nodes[0]).not.toBe(v.nodes[0]);
+  });
+});

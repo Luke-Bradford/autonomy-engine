@@ -33,12 +33,36 @@ export function runStreamUrl(
   return `${proto}//${loc.host}/api/runs/${encodeURIComponent(runId)}/events/stream`;
 }
 
-export type NodeActivityStatus = 'running' | 'success' | 'failure';
+/**
+ * What the monitor says a node is doing. `retrying` and `waiting` are the two
+ * NON-TERMINAL holds, and they exist because without them a held node is
+ * indistinguishable from a failed one (#483):
+ *
+ * - `retrying` — the node failed `transient`ly, its policy still has budget, and
+ *   it is waiting out the retry interval (the engine's `retry_pending`).
+ * - `waiting`  — the node is PARKED on something external: a `wait`'s timer
+ *   (`wait_pending`) or a `webhook`'s inbound callback (`external_wait_pending`).
+ *
+ * Both are healthy, in-progress states. They are deliberately distinct from
+ * `running`: `running` means the node is executing, and a held/parked node is
+ * not — conflating them would tell an operator watching a stuck run that work is
+ * happening when nothing is.
+ */
+export type NodeActivityStatus = 'running' | 'retrying' | 'waiting' | 'success' | 'failure';
 
 export interface NodeActivity {
   nodeId: string;
   status: NodeActivityStatus;
-  /** How many times the node has been dispatched (retries bump this). */
+  /**
+   * How many times the node has been STARTED, and retries bump it.
+   *
+   * For an executed node that is its dispatch count. Control activities
+   * (`if`/`switch`/`wait`/`webhook`) are engine-evaluated and NEVER dispatched,
+   * so their count comes from the event that STARTS them instead — the
+   * evaluation or the park, each of which carries its own `attemptId` and so is
+   * one attempt exactly. Counting only dispatches would leave every control node
+   * reading `success` after 0 attempts, which reads as "never ran".
+   */
   attempts: number;
   /** Count of streamed `node.output` observability events. */
   outputs: number;
@@ -108,11 +132,66 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.error = e.error;
         break;
       }
-      case 'node.retryRequested': {
-        // A retry re-opens the node; the following node.dispatched bumps attempts.
+      case 'node.retryRequested':
+      case 'node.retryDue': {
+        // Both re-OPEN the node, and the `node.dispatched` that follows is what
+        // bumps `attempts` — so neither counts an attempt of its own, or every
+        // retry would be counted twice. (`retryRequested` is the boot
+        // reconciler's crash-recovery decision, `retryDue` is F2b/F2c's policy
+        // retry firing; they differ in the engine, not in what the monitor shows.)
         const n = ensure(e.nodeId);
         n.status = 'running';
         n.error = undefined;
+        break;
+      }
+      case 'node.retryScheduled': {
+        // F2b/F2c (#483) — the node is HELD for its retry interval. `node.failed`
+        // just painted it red; this says the run is still healthy and the node is
+        // coming back. `error` is deliberately KEPT: it is the reason for the
+        // hold, and the detail column is the only place it appears. It is cleared
+        // by the `node.retryDue`/`node.dispatched` that re-open the node.
+        ensure(e.nodeId).status = 'retrying';
+        break;
+      }
+      case 'timer.waitScheduled':
+      case 'externalWait.created': {
+        // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
+        // inbound callback (a `webhook`). These are the START of a control node's
+        // life, not a transition within it: such nodes are engine-evaluated and
+        // never dispatched, so this is also the event that counts their attempt.
+        const n = ensure(e.nodeId);
+        n.status = 'waiting';
+        n.attempts += 1;
+        n.error = undefined;
+        break;
+      }
+      case 'timer.due':
+      case 'externalWait.completed': {
+        // The park resolved successfully. These ARE the node's success event —
+        // there is no following `node.succeeded` for a parked node (reduce.ts
+        // `onWaitDue` / `onExternalWaitCompleted` flip it to `success` directly).
+        ensure(e.nodeId).status = 'success';
+        break;
+      }
+      case 'externalWait.expired': {
+        // #4 A13 — the expiry alarm beat the callback, which the reducer treats as
+        // a PERMANENT failure. The event carries no message (there is no provider
+        // to quote), so state the reason rather than leave a red row with a blank
+        // detail column.
+        const n = ensure(e.nodeId);
+        n.status = 'failure';
+        n.error = 'external wait expired before a callback arrived';
+        break;
+      }
+      case 'condition.evaluated':
+      case 'switch.evaluated': {
+        // An `if`/`switch` is engine-evaluated and never dispatched, and THIS is
+        // its terminal-success event (reduce.ts `onControlBranchEvaluated`). Until
+        // it was folded, control nodes never appeared in this table at all — the
+        // author drew them, the run executed them, and the monitor showed nothing.
+        const n = ensure(e.nodeId);
+        n.status = 'success';
+        n.attempts += 1;
         break;
       }
       case 'call.returned': {
@@ -120,16 +199,23 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         break;
       }
       default:
-        // run.started / run.finished / run.resumed / run.interrupted are
-        // run-level (see deriveRunLifecycle), not node activity.
+        // Everything reaching here is deliberately NOT node activity. Stated
+        // exhaustively, because an unexplained `default:` is how #483 happened:
+        // five node-bearing events fell in here and the monitor quietly lied.
         //
-        // F2b/F2c's `node.retryScheduled` + `node.retryDue` also land here, and
-        // they are NOT run-level — this is a known gap, not a classification. A
-        // node held for its retry interval keeps the RED `failure` pill its
-        // `node.failed` set, though it is waiting to be retried, not failed. The
-        // raw event feed below shows both events, so nothing is hidden; only this
-        // per-node summary is wrong. Tracked as its own ticket because the fix
-        // changes rendered UI and so needs the browser-verify gate.
+        // - run.started / run.finished / run.resumed / run.interrupted /
+        //   run.waiting / run.triggerContext / run.reseeded — RUN-level, folded by
+        //   `deriveRunLifecycle`.
+        // - container.timeoutScheduled / container.timedOut — CONTAINER-level:
+        //   they carry a `containerId` and no `nodeId`, and this is a per-node
+        //   table. A container's own state has no row to land in (a P6c
+        //   follow-up, which needs the doc this page does not fetch).
+        // - activity.metered / activity.captured / activity.agentTelemetry /
+        //   activity.toolCalled — node-bearing but pure OBSERVABILITY: they say
+        //   nothing about whether the node is running, and folding them would
+        //   create rows for nodes that never started. `node.output` is the one
+        //   observability event folded here, and only because it feeds the
+        //   `outputs` count / `lastOutputName` progress hint.
         break;
     }
   }
