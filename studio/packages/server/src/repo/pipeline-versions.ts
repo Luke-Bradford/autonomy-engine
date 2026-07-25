@@ -1,10 +1,7 @@
 import { asc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
-  lowerAgentTaskStructuredOutputs,
-  lowerLlmEmitMessages,
-  lowerLlmStructuredOutputs,
-  lowerNodeOutputs,
+  lowerPipelineNodes,
   NewPipelineVersionSchema,
   PipelineVersionSchema,
   StrictNodeSchema,
@@ -95,37 +92,19 @@ export function createPipelineVersion(
   // read-tolerant, so without the re-parse a seeded contract would bypass the
   // write-path validation the field is supposed to have.
   //
-  // #2 L4a — `lowerLlmStructuredOutputs` runs FIRST: a `structured` `llm_call`'s
-  // `config.outputs` is DERIVED from its `outputSchema` (overwriting any stale
-  // catalog-default seed), so it must set the contract before `lowerNodeOutputs`,
-  // which then sees a present value and skips it (text-mode `llm_call`s still get
-  // the `[text, stopReason]` default). An INVALID `outputSchema` is left
-  // un-lowered here and reported by `validateLlmCallOutput` in
-  // `validatePipelineDoc` below → 400, so no garbage contract persists.
-  //
-  // #2 L11b — `lowerAgentTaskStructuredOutputs` is the `agent_task` counterpart,
-  // composed in the SAME derive-before-seed slot: a structured `agent_task`'s
-  // `config.outputs` is derived from its `outputSchema` (opt-in by presence), so it
-  // too must run before `lowerNodeOutputs` seeds the `[output, exitCode]` default.
-  // An invalid schema is left un-lowered and reported by `validateAgentTaskOutput`.
-  //
-  // #2 L12 — `lowerLlmEmitMessages` runs LAST (after `lowerNodeOutputs`, unlike
-  // the two structured passes): the transcript row APPENDS to the seeded
-  // `[text, stopReason]` default rather than replacing it, so the base contract
-  // must already be present. Composed INSIDE the strict re-parse below, so the
-  // appended row goes through F13a's strict-on-write validation like every
-  // other lowered contract.
+  // #526 — the four passes and their ORDER (L4a derive → L11b derive → F13b seed
+  // → L12 append) live in `lowerPipelineNodes`, not inline here, because the web
+  // canvas's LOAD path must apply the IDENTICAL composition: it lowers a legacy
+  // pre-F13b version for display so the author sees the contract this write path
+  // will store on their next save. Two hand-written chains would be free to
+  // drift, and that drift is invisible — the author authors `${}` refs against
+  // one contract while the server stores another. See that function's doc for
+  // why each pass sits where it does. The composition runs INSIDE the strict
+  // re-parse below, so every lowered contract goes through F13a's
+  // strict-on-write validation.
   const lowered = {
     ...parsed,
-    nodes: z
-      .array(StrictNodeSchema)
-      .parse(
-        lowerLlmEmitMessages(
-          lowerNodeOutputs(
-            lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(parsed.nodes)),
-          ),
-        ),
-      ),
+    nodes: z.array(StrictNodeSchema).parse(lowerPipelineNodes(parsed.nodes)),
   };
 
   // Mint the id BEFORE validation so the call-graph analysis (#495) has a

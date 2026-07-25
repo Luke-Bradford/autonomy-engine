@@ -22,7 +22,13 @@ export async function openCanvas(page: Page, name: string): Promise<void> {
   await page.goto('/#/author/pipelines');
   await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
   await fluentRootReady(page);
-  await page.getByLabel('Name').fill(name);
+  // `exact`, and by ROLE. `getByLabel('Name')` is a SUBSTRING matcher over every
+  // accessible name on the page, so it also matched the row controls of any
+  // pipeline whose name contains "name" — and the suite runs single-worker
+  // against one shared SQLite file, so one spec creating a pipeline called
+  // "…rename…" broke this helper for every LATER spec, with a strict-mode
+  // violation that reads as "the create form is missing".
+  await page.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
   await page.getByRole('button', { name: 'Create pipeline' }).click();
   // U4 turned Open into a LINK to the pipeline's own route — the canvas used to
   // be local state with no address at all.

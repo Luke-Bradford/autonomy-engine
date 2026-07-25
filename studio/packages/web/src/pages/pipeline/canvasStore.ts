@@ -2,6 +2,7 @@ import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
   getActivity,
   isStructuralCallActivity,
+  lowerPipelineNodes,
   type EdgeOn,
   type Edge,
   type Node,
@@ -100,10 +101,26 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
     loadVersion(v) {
       set({
+        // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
+        // basis and the carry-forward source for the parts of the doc this slice
+        // has no UI for; only the WORKING graph below is lowered.
         loaded: v,
+        // #526 (F13b follow-up) — LOWER on load, with the same composition the
+        // server applies on write. A version created BEFORE F13b persisted its
+        // known-type nodes with `config.outputs` ABSENT, and versions are
+        // immutable, so that row can never be repaired in place. Loading it raw
+        // showed the author an empty contract: `validateRefs` name-checked
+        // nothing and the badges/output pills disagreed with what the server
+        // WILL store the moment they save. Lowering here makes the canvas show
+        // the contract that save will mint. It deliberately does NOT set
+        // `dirty` — this is a display fix, not an author edit, and marking every
+        // legacy pipeline dirty on open would prompt a save nobody made.
+        //
         // Deep-ish copy: fresh arrays with fresh node/edge objects so editing
-        // the working graph never mutates the loaded version in place.
-        nodes: v ? v.nodes.map((n) => ({ ...n })) : [],
+        // the working graph never mutates the loaded version in place. Still
+        // load-bearing after the lowering — `lowerPipelineNodes` is
+        // copy-on-write and hands back an unchanged node BY REFERENCE.
+        nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
         edges: v ? v.edges.map((e) => ({ ...e })) : [],
         selected: null,
         dirty: false,
@@ -116,8 +133,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     },
 
     addNode(type, position) {
-      const entry = getActivity(type);
-      if (!entry) return; // unknown catalog type — ignore rather than author garbage
+      if (!getActivity(type)) return; // unknown catalog type — ignore rather than author garbage
       // A structural-call activity (`execute_pipeline`) stores its settings in
       // `node.call`, not `node.config`, so this generic config-form path would
       // author a call-less, un-saveable node. Refuse it (the toolbox also hides
@@ -126,18 +142,22 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       // placement, never a bypass.
       if (isStructuralCallActivity(type)) return;
       const n = get().addCount;
-      const node: Node = {
+      const created: Node = {
         id: newLocalId('n'),
         type,
-        // Seed the node's declared output contract from the catalog template
-        // (the run-time SSOT is the node's own config.outputs, see catalog docs).
-        config: { outputs: entry.outputs.map((o) => ({ ...o })) },
+        config: {},
         // COPIED, never aliased: the store owns its graph, and holding a
         // caller's object would let that caller mutate a node's position from
         // outside the actions — the single mutation point this store's doc
         // claims. Otherwise, stagger so repeated adds don't stack exactly.
         position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
       };
+      // #526 — seed the declared output contract through the SAME composition the
+      // server and the load path use, rather than reaching into the catalog entry
+      // here. Hand-seeding worked, but it was a third place that had to agree
+      // about what a node's contract is; one function is what makes them unable
+      // to disagree. (The run-time SSOT remains the node's own `config.outputs`.)
+      const node = lowerPipelineNodes([created])[0]!;
       set((s) => ({
         nodes: [...s.nodes, node],
         // Only a stagger consumes a slot — see the `addCount` doc.

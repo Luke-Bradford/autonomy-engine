@@ -1165,9 +1165,9 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * run's raw event feed renders it. The alarm row — not this event — is what
      * actually fires the retry and what the reconciler checks. So this is an
      * operator/audit fact; if it ever disagrees with the row, the ROW is right.
-     * (The monitor's per-node activity summary does not fold it at all yet —
-     * `web/…/runSummary.ts`, tracked in #483 — so a held node renders as failed
-     * for the retry interval; only the raw feed shows it.)
+     * (The monitor's per-node activity summary DOES fold it since #483, but only
+     * for the status — `web/…/runSummary.ts` paints the node `retrying` for the
+     * hold and still does not read `nextAttemptAt`. Nothing does.)
      *
      * `nextAttemptAt` is a STORED fact (epoch ms), never recomputed at fold
      * time — that is what keeps replay deterministic (spec #5's spike block).

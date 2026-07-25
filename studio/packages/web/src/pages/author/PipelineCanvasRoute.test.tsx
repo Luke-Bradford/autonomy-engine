@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { PipelineCanvasRoute } from './PipelineCanvasRoute';
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import * as pipelinesApi from '../../api/pipelines';
+import { createPipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 
 vi.mock('../../api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('../../api/pipelines')>()),
@@ -160,5 +161,67 @@ describe('PipelineCanvasRoute', () => {
 
     expect(await screen.findByText('canvas:pl_1:Nightly digest')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('PipelineCanvasRoute — the name stays in step with a rename (#720)', () => {
+  /** A store standing in for the shared one, pre-loaded with the given rows. */
+  function storeWith(pipelines: { id: string; name: string }[]) {
+    const store = createPipelinesStore(() =>
+      Promise.resolve(pipelines.map((p) => ({ ...pipelineRow, ...p }))),
+    );
+    return store;
+  }
+
+  const pipelineRow = {
+    id: 'pl_1',
+    resourceId: 'res_pl1',
+    ownerId: 'local',
+    name: 'Nightly digest',
+    concurrency: null,
+    archived: false,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+
+  function renderWithStore(store: PipelinesStore, path = '/author/pipelines/pl_1') {
+    return renderWithRouter(
+      <Routes>
+        <Route path="/author/pipelines" element={<span>list</span>} />
+        <Route
+          path="/author/pipelines/:pipelineId"
+          element={<PipelineCanvasRoute store={store} />}
+        />
+      </Routes>,
+      path,
+    );
+  }
+
+  it('re-renders the heading when the pipeline is renamed in the tree while open', async () => {
+    // The defect: the canvas took its name from a ONE-SHOT `getPipeline`, so
+    // renaming in the Factory Resources pane left the two mounted views
+    // disagreeing about the very fact the shared store exists to keep in step —
+    // until a full reload.
+    const store = storeWith([{ id: 'pl_1', name: 'Nightly digest' }]);
+    await act(async () => {
+      await store.getState().refresh();
+    });
+    renderWithStore(store);
+    expect(await screen.findByText('canvas:pl_1:Nightly digest')).toBeInTheDocument();
+
+    await act(async () => {
+      store.setState((s) => ({
+        pipelines: s.pipelines.map((p) => ({ ...p, name: 'Nightly digest v2' })),
+      }));
+    });
+    expect(await screen.findByText('canvas:pl_1:Nightly digest v2')).toBeInTheDocument();
+  });
+
+  it('falls back to the FETCHED name when the store has no row for this id', async () => {
+    // A deep link renders before (or without) any list load — the fetched name is
+    // the only answer there is, and it must not be blanked by an empty store.
+    const store = storeWith([]);
+    renderWithStore(store);
+    expect(await screen.findByText('canvas:pl_1:Nightly digest')).toBeInTheDocument();
   });
 });

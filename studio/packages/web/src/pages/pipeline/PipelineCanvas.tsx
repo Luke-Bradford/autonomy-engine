@@ -236,7 +236,8 @@ function EmptyPanel() {
 
 /**
  * Editor for one activity node. Config is edited as JSON (minus the internal
- * `outputs` contract, which the palette seeds and this slice does not surface);
+ * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
+ * since #526 — and which this slice does not surface);
  * Apply parses the JSON and validates it against the activity's `configSchema`
  * before committing, so an invalid blob never reaches the store. The connection
  * dropdown is filtered to the kinds this activity accepts.

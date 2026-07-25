@@ -269,3 +269,72 @@ describe('canvasStore', () => {
     expect(s.getState().nodes.find((n) => n.id === 'n_a')!.connectionId).toBeUndefined();
   });
 });
+
+describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)', () => {
+  it('seeds config.outputs on a LEGACY node that persisted without one', () => {
+    // A pre-F13b version is IMMUTABLE, so its absent contract can never be
+    // repaired in place — the canvas has to show what the server WILL store on
+    // the author's next save, not the empty contract the row happens to hold.
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    const [a] = s.getState().nodes;
+    expect(a!.config['outputs']).toEqual([
+      { name: 'status', type: 'number' },
+      { name: 'body', type: 'string' },
+      { name: 'headers', type: 'json' },
+    ]);
+  });
+
+  it('DERIVES a structured llm_call contract rather than seeding the text-mode default', () => {
+    // The reason the load path composes all four passes instead of calling
+    // `lowerNodeOutputs` alone: alone, it would seed `[text, stopReason]` here.
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_s',
+            type: 'llm_call',
+            config: {
+              prompt: 'p',
+              outputMode: 'structured',
+              outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+            },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    expect(s.getState().nodes[0]!.config['outputs']).toEqual([{ name: 'verdict', type: 'string' }]);
+  });
+
+  // NOT tested here, deliberately: "an already-declared contract is left alone"
+  // and "loading does not set `dirty`". Both pass with this whole change
+  // REVERTED — the first is guaranteed one layer down by `lowerNodeOutputs`'s
+  // never-overwrite rule (covered in `lower.test.ts`), and the second is already
+  // asserted by "loadVersion(v) populates nodes/edges and is not dirty" above.
+  // A test that cannot fail is not a test; it is a claim of coverage.
+
+  it('leaves `loaded` UN-lowered — it is the server’s doc and the rebase basis', () => {
+    const v = version();
+    const s = createCanvasStore();
+    s.getState().loadVersion(v);
+    expect(s.getState().loaded).toBe(v);
+    expect(v.nodes[0]!.config['outputs']).toBeUndefined();
+  });
+
+  it('still owns its own node objects (lowering returns unchanged nodes BY REFERENCE)', () => {
+    // `lowerPipelineNodes` is copy-on-write: a node it does not change comes back
+    // as the SAME object, so the store's own copy pass is still load-bearing.
+    const v = version({
+      nodes: [
+        { id: 'n_a', type: 'http_request', config: { outputs: [] }, position: { x: 0, y: 0 } },
+      ],
+      edges: [],
+    });
+    const s = createCanvasStore();
+    s.getState().loadVersion(v);
+    expect(s.getState().nodes[0]).not.toBe(v.nodes[0]);
+  });
+});

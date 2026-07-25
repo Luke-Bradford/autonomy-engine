@@ -236,3 +236,40 @@ export function lowerAgentTaskStructuredOutputs(nodes: Node[]): Node[] {
     };
   });
 }
+
+/**
+ * #526 — the ONE composition of the four lowering passes, in the one order that
+ * is correct. Every caller that needs "the `config.outputs` contract this doc
+ * will actually carry" calls THIS, never the individual passes.
+ *
+ * The order is not stylistic — each pass above documents why it sits where it
+ * does, and getting it wrong changes the contract:
+ *
+ * 1. `lowerLlmStructuredOutputs` / 2. `lowerAgentTaskStructuredOutputs` — DERIVE
+ *    a structured node's contract from its `outputSchema`. They must run BEFORE
+ *    the catalog seed, which only ever fills an ABSENT key: seed first and a
+ *    structured node keeps the text-mode `[text, stopReason]` default forever.
+ * 3. `lowerNodeOutputs` — seed the catalog default into whatever is still absent.
+ * 4. `lowerLlmEmitMessages` — LAST, because the transcript row APPENDS to the
+ *    seeded default rather than replacing it, so the base must already be there.
+ *
+ * WHY IT LIVES HERE rather than in the server route that used to compose it
+ * inline: it has TWO callers with a hard parity requirement. The server's
+ * `createPipelineVersion` lowers on WRITE (so every stored version carries the
+ * contract), and the web canvas lowers on LOAD (so an author editing a LEGACY
+ * pre-F13b version — immutable, therefore un-repairable in place — sees the
+ * contract the server WILL store on their next save, instead of the empty one
+ * the row happens to hold). Two hand-written chains would be free to drift, and
+ * a drift here is invisible: the author sees one contract and saves another.
+ * The web copy is display-only — the server re-lowers every save regardless —
+ * but "display-only" is exactly how a wrong contract reaches an author who then
+ * writes `${nodes.x.output.NAME}` refs against it.
+ *
+ * PURE and copy-on-write, like every pass it composes: an unchanged node is
+ * returned by reference, so a caller that needs its own objects still copies.
+ */
+export function lowerPipelineNodes(nodes: Node[]): Node[] {
+  return lowerLlmEmitMessages(
+    lowerNodeOutputs(lowerAgentTaskStructuredOutputs(lowerLlmStructuredOutputs(nodes))),
+  );
+}
