@@ -376,8 +376,15 @@ type PreparedDispatch = {
  * and resolve each other's reset body. REACHABLE and load-bearing since #4 A1 —
  * an `if`'s two arms can both target one node (e.g. an approval "redo" back-edge
  * arm alongside the forward arm) — so this must stay in the key.
+ *
+ * EXPORTED for the canvas (U6a): "are these the same edge?" has exactly one
+ * right answer and it is this one. `validatePipelineDoc` has no duplicate-EDGE
+ * rule (id uniqueness covers nodes/containers only), so the authoring store's
+ * dedupe is the only thing standing between an operator and two byte-identical
+ * edges — which share this key, halve a back-edge's `maxBounces`, resolve each
+ * other's reset body, and stack as two unclickable overlapping SVG paths.
  */
-function stableEdgeKey(e: Edge): string {
+export function stableEdgeKey(e: Edge): string {
   return `${e.from}\x00${e.to}\x00${e.on}\x00${e.on === 'branch' ? e.branch : ''}`;
 }
 

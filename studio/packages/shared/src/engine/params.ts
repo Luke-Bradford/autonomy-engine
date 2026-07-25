@@ -1977,8 +1977,20 @@ export function validateDoc(
  * `true`/`false`; every other type — and a container — declares none
  * (`undefined`: only a control branching activity routes). A2 extends this with a
  * `switch`'s configured case labels + `default`.
+ *
+ * EXPORTED for the canvas's branch picker (U6a): offering exactly this set is
+ * what makes the picker unable to author an edge the rule above would refuse.
+ * The tri-state return is load-bearing to that caller too — `undefined` ("this
+ * source can never emit a branch") must hide the branch group, NOT show an
+ * empty one, so do not let a caller collapse it to `new Set()`.
+ *
+ * It stays HERE, beside the rule that reads it, rather than moving to the
+ * catalog as an `ActivityDefinition` field: a `switch`'s labels are derived from
+ * `node.config.cases`, so a catalog entry would have to hold a function over a
+ * `Node`, unlike every other field there. U19 (outcome-by-source-handle) is
+ * where that move gets decided, once — not half-done here.
  */
-function declaredBranchesOf(node: Node): Set<string> | undefined {
+export function declaredBranchesOf(node: Node): Set<string> | undefined {
   if (node.type === IF_ACTIVITY_TYPE) return new Set([IF_BRANCH_TRUE, IF_BRANCH_FALSE]);
   if (node.type === SWITCH_ACTIVITY_TYPE) {
     // A `switch` declares its configured case labels PLUS the implicit `default`

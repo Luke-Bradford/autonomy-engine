@@ -158,7 +158,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | **U16** | **Params/Variables/Outputs/Globals AUTHORING** (T14) — the bottom-pane tab to *define* what the `${}` flyout references; routed through `toVersionBody` (currently discards them) | Author |
 | **U17** | **Undo/redo** (T14) — reversible-command store; land EARLY (before U6*) | Author |
 | **U18** | **Save-vs-Publish reconciliation** (T14) — command-bar states: DB-only `Save→v` vs git-connected `Save/Commit→branch` + `Publish→active` + CAS-stale "pull first"; Manage **Git** section | Author/Manage |
-| **U19** | **Outcome-by-source-handle** (T14) — colored/labeled handles per ActivityDefinition (operational success/failure/completion/skipped; control `true/false`/case), NOT the retro dropdown. **Carries two debts from #1 F1** (which settled the engine schema but deliberately shipped no rendered change — no browser-verify available headless): (1) the canvas dropdown is pinned to `AUTHORABLE_EDGE_ON = ['success','failure','completion']` in `PipelineCanvas.tsx`, so the engine routes `skipped` but nothing can author it; (2) `<select value={edge.on}>` has no `<option>` for a `skipped`/`branch` edge (savable via API or git import), so it renders as something other than the persisted value — a silent lie about state; (3) `FlowCanvas.tsx`'s `label: e.on` renders a branch edge as the literal `"branch"`, dropping the `true`/`false`/case label that IS its routing key. Retiring the dropdown for handles fixes all three; if U6a lands first, it should render a disabled `<option>` for a non-authorable value and label branch edges by `branch`, not `on`. | Author |
+| **U19** | **Outcome-by-source-handle** (T14) — colored/labeled handles per ActivityDefinition (operational success/failure/completion/skipped; control `true/false`/case), NOT the retro dropdown. **Its three inherited #1 F1 debts were DISCHARGED by U6a** (2026-07-25), which landed first: `skipped` is authorable, a persisted value the source does not offer renders as a disabled `<option>` instead of silently showing another, and a branch edge is labelled by its routing key rather than the literal `"branch"`. What remains for U19 is the shape change itself — retiring the dropdown for per-outcome SOURCE HANDLES — plus the one open question U6a deliberately left it: whether `declaredBranchesOf` moves from `engine/params.ts` onto `ActivityDefinition` (it cannot be a plain data field — a `switch`'s labels derive from `node.config.cases`). | Author |
 | **U20** | **`call_pipeline` authoring** (T14) — target-pipeline picker + param-map + call-graph validation + Monitor child-run drill | Author/Monitor |
 | **U21** | copy/paste + multi-select + marquee + group move/delete (T14) | Author |
 | **U22** | version-history / picker (open/compare/restore; trigger bind-to-version) (T14) | Author/Manage |
@@ -802,6 +802,151 @@ Known and accepted: on an EMPTY canvas `<ReactFlow fitView>`
 has not resolved yet, so the FIRST node added — by click or by drop — re-centres and re-zooms the
 viewport as it is measured; every subsequent drop lands where the pointer released. That is
 pre-existing click-add behaviour, not a U5 regression, and **U9** owns zoom/fit.
+
+## U6a — typed edges + branch picker (AS BUILT, 2026-07-25)
+
+Edges were one grey default painted with the literal `on` as their label. They now carry a hue
+per condition, a label that is the actual routing key, and the property panel offers every
+condition the edge's SOURCE can really emit.
+
+| Piece | Lives in |
+|---|---|
+| Condition vocabulary (pure) | `pages/pipeline/edgeCondition.ts` |
+| Declared branch labels (SSOT) | `shared` `engine/params.ts` — `declaredBranchesOf`, now exported |
+| Edge identity (SSOT) | `shared` `engine/reduce.ts` — `stableEdgeKey`, now exported |
+| Retype action | `pages/pipeline/canvasStore.ts` — `updateEdgeCondition` |
+| The picker | `pages/pipeline/PipelineCanvas.tsx` — `EdgePanel` (exported) |
+| Colours | `index.css` — `.edge-variant-*` → `--edge-color`; new `--branch` palette var |
+| Browser coverage | `e2e/edge-typing.spec.ts`, `e2e/support/canvasGraph.ts` |
+
+Decisions worth not re-deriving:
+
+- **The variant class sets `--edge-color`, which feeds RF's `--xy-edge-stroke` AND
+  `--xy-edge-stroke-selected`.** Three seams were rejected for concrete reasons: an inline
+  `edge.style.stroke` outranks RF's own `.react-flow__edge.selected .react-flow__edge-path`
+  rule and silently kills the selection highlight; a class rule written against
+  `.react-flow__edge-path` TIES that rule on specificity (0,3,0), so the winner depends on
+  stylesheet import order; and setting only the unselected slot leaves the selected one
+  repainting every edge brand-blue. It does NOT colour arrowheads — `MarkerDefinitions` renders
+  once as a sibling of the edge layer, not inside each edge `<g>`, so a variable set on the edge
+  cannot reach it, and the canvas configures no `markerEnd` anyway. Whoever adds arrowheads
+  (**U6b**/**U19**) needs one marker id per condition.
+- **A SELECTED edge keeps its variant hue; WIDTH carries selection (1.5 → 3).** Found in the
+  browser, not by review: the picker lives in the property panel, which only opens for a
+  selected edge, so RF's default behaviour masked the colour for exactly as long as it could be
+  edited — pick `failure`, watch nothing change, click away, discover it worked. The class list,
+  the unit tests and a screenshot of a *deselected* edge all looked correct.
+- **The `<option>` value is TAGGED (`op:success` vs `branch:success`).** A `switch` case label is
+  an arbitrary string — `validateSwitchConfig` reserves only `default` — so `cases: ['success']`
+  is a legal, savable doc. With raw values the select emits two `<option value="success">` and
+  the change handler cannot tell them apart: picking the business branch would silently author
+  the operational outcome. Only the FIRST delimiter splits, so a label containing `:` survives.
+- **`skipped` is authorable now.** It was pinned out of `AUTHORABLE_EDGE_ON` when #1 F1 gave the
+  engine skip routing — the engine routed it, `EdgeOnSchema` carried it and `validatePipelineDoc`
+  never refused it; only the canvas could not author it. That pin named this ticket.
+- **The branch list is `declaredBranchesOf`, the same function the write gate reads**, so every
+  option offered is one a save accepts, BY CONSTRUCTION rather than by two lists staying in step.
+  Its tri-state return is load-bearing: `undefined` ("cannot emit a branch") hides the group,
+  which is not the same as an empty group ("branches, but declares nothing").
+- **A persisted value the source does not offer renders as a DISABLED option**, not as a silent
+  fallback to the first one. Reachable WITHOUT leaving the canvas — `declaredBranchesOf` reads a
+  `switch`'s `config.cases` live, so editing that config un-declares a branch an existing edge
+  still uses. Browser-verified: the select still reads `branch:reject`, the option says
+  "reject — not offered by this source", the badge says *"edge 'e_1': source 'n_sw' does not
+  declare branch 'reject' — it routes only 'approve'/'default'"*, and Save is disabled.
+- **A condition another edge already holds is shown DISABLED, not refused on click.** The store
+  refuses such a retype (below), and a refusal the operator cannot see is a control that silently
+  does nothing: pick `failure`, React re-renders from the unchanged store, the select snaps back,
+  no explanation. The option now reads "failure — already used by another edge" and cannot be
+  picked. `takenConditions` re-expresses `stableEdgeKey`'s identity in terms of a condition (the
+  key needs a whole retyped `Edge`, i.e. the store's `retypeEdge`), so the equivalence is asserted
+  directly against `stableEdgeKey` in the tests rather than left to two definitions staying in
+  step — the same anti-drift pattern #526 used for `lowerPipelineNodes`.
+- **`updateEdgeCondition` REFUSES a retype that would duplicate another edge**, using
+  `stableEdgeKey`. `connect`'s dedupe alone is walked around by retyping (connect A→B success,
+  retype to skipped, connect again, retype again → two byte-identical edges), and nothing
+  downstream catches it: `validatePipelineDoc` has no duplicate-EDGE rule, its id-uniqueness
+  check covers nodes and containers only. Duplicates share one bounce counter as back-edges and
+  stack as unclickable overlapping paths. The `branch` label must stay in the key — both arms of
+  one `if` may legitimately target one node.
+- **All arms of a branching node share ONE hue; the LABEL distinguishes them.** A per-arm colour
+  needs an unbounded palette (a `switch`'s cases are arbitrary strings) and would collide with
+  the operational hues it has to stay distinct from.
+- **`ariaLabel` is set explicitly.** RF renders an edge as `role="img"` (or `group` when
+  focusable); under either, the SVG `<text>` label is NOT exposed — so without it, colour is the
+  only channel assistive technology gets, which the cross-cutting "non-color status labels"
+  criterion rules out.
+- **Colours are the MVP palette's existing outcome hues** — the same `--success`/`--error`/
+  `--accent`/`--muted` the run monitor's status pills use — so there is ONE outcome palette, not a
+  second one invented for the canvas, and `palette.test.ts` now pins which var each condition
+  reads. `--branch` is the one new var, and the existing reflective guard covers its light/dark
+  parity for free. Note the mapping is NOT injective ACROSS surfaces, and **U11**/**U25** inherit
+  that: `--accent` is `completion` on the canvas and `running` in the Monitor, and `--muted` is
+  `skipped` here but `pending`/`waiting` there (the Monitor has no `skipped` pill yet — **U25**
+  owns adding one). Same palette, two vocabularies; a semantic layer
+  (`--status-success: var(--success)`) is the fix if that starts to bite.
+- **Contrast is measured against the CANVAS surface, not `--bg`.** The canvas is Fluent's
+  `--colorNeutralBackground1` (`#292929` dark / `#ffffff` light); the palette's light values were
+  darkened for `--bg`. A stroke is a non-text graphical object, so the bar is WCAG 1.4.11's 3:1.
+  Measured in-browser, every condition, both themes: dark 5.24–7.91:1, light 5.87–7.38:1.
+- **`@autonomy-studio/shared`'s public surface GREW by two functions**, and that is worth saying
+  out loud because the package is published: `engine/index.ts` re-exports `params.ts` and
+  `reduce.ts` with `export *`, so `declaredBranchesOf` and `stableEdgeKey` are now API. The
+  authoring uniqueness rule deliberately does NOT live on `stableEdgeKey` itself —
+  `edgeCondition.ts`'s `authoringEdgeKey` delegates to it and adds `back`, so a change to the
+  AUTHORING rule can never become a change to a key that indexes `bounces[...]` across saves.
+  (The engine can exclude `back` safely because it only ever keys BACK edges by it; two edges
+  sharing `(from,to,on,branch)` where one is a back-edge are distinct and legal, and refusing to
+  author them would refuse something that runs.)
+- **`declaredBranchesOf` stays in `params.ts`, beside the rule that reads it.** The catalog cannot
+  express it as a data field — a `switch`'s labels derive from `node.config.cases`, so the entry
+  would have to hold a function over a `Node`, unlike every other field there. **U19** ("handles
+  per ActivityDefinition") is where that move gets decided, once.
+- **`connect()` defaulting to `success` off an `if` is NOT a bug.** A control node terminates
+  `success`, and nothing refuses an operational edge off one — a drawn edge there is a legal,
+  live `success` edge. Defaulting to a branch would author `on:'branch'` with a guessed label.
+
+**The P5c drag-reconciliation regression check U5 handed to this ticket is DELIVERED**, as
+`e2e/canvas-drag-reconciliation.spec.ts`. It drives a real pointer drag, forces a store change
+mid-gesture, and asserts the dragged node did not snap back to its domain position. BOTH halves of
+the carry-forward line were mutation-checked separately: deleting `existing?.position ??` fails the
+spec, and deleting the `...existing` spread fails it plus three edge-typing specs. Two browser facts
+made it flaky before they were handled, both now encoded in the spec: React Flow only attaches drag
+handlers once the node is `draggable`, and a `boundingBox()` read while `fitView` is still animating
+is a screen box that has moved by the time the pointer arrives — the drag then never starts and the
+spec fails for a reason unrelated to the invariant.
+
+**KNOWN LIMIT recorded for U17/U9/U22:** `position` is carried forward UNCONDITIONALLY, so once a
+node is in the view array a DOMAIN position write never reaches the screen. Correct mid-drag, wrong
+for undo-of-a-move (**U17**), auto-layout (**U9**) and restore-version (**U22**), which are all
+domain position writes. Those need a "domain wins" escape hatch (a move epoch, or clearing the view
+entry on a programmatic move) — not a relaxation of the line the spec now pins.
+
+Bundle, measured with and without the diff: entry CSS 3.09 → 3.25 kB gzip, the LAZY
+`PipelineCanvasRoute` chunk 60.83 → 61.47 kB gzip (where the cost belongs), entry JS 110.04 →
+110.08 kB gzip, `fluent` vendor UNCHANGED at 71.03 kB gzip.
+
+NOT in U6a, with owners: back-edge rendering — a `back: true` edge paints identically to a forward
+one, and it is the one edge whose apparent direction is a lie (**U6e**, which owns back-edge
+rendering + bounce config); typed ports / multi-handle / connect-time validation (**U6b**); the
+`skipped`-edge scope cliff (a node behind an `on:'skipped'` edge inherits nothing from its
+predecessor's guarantees — `computeGraph` INVERTS them across a skip — so an upstream
+`${nodes.X.output}` ref behind one stops resolving. This is correct engine behaviour and it is
+already surfaced: `validateRefs` rejects the ref, the canvas badges it, `canSave` is false and the
+#444 write gate refuses the doc. Making `skipped` authorable therefore opens no save-clean-fail-at-
+run hole; what **U8a** owns is presenting such an issue better than a flat list);
+retiring the dropdown for per-outcome source handles (**U19**).
+
+**Accessibility, honestly:** the picker itself is a native `<select>` in a `<label>`, so it is
+keyboard-operable and correctly named, and the edge's own accessible name now carries the routing
+key. But browser-verification found that an edge can be FOCUSED by keyboard and not SELECTED —
+`Enter`/`Space` on a focused edge leave the property panel empty, because `FlowCanvas` sets
+`selected` only from `onNodeClick`/`onEdgeClick`. So the picker is reachable only with a mouse.
+That is PRE-EXISTING (it affects the node panel identically and has since P5c) and not a U6a
+regression, but U6a is where it became visible. Filed as **#737**; the fix is to wire React Flow's
+`onSelectionChange` — which sees the keyboard path too — into the store, and it needs its own
+tests because `FlowCanvas` currently DRIVES RF's `selected` prop from the store, so store→view→store
+has to be idempotent and RF multi-select (**U21**) has to degrade to the store's single `Selection`.
 
 ## Non-goals (YAGNI)
 

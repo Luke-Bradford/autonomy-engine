@@ -20,6 +20,13 @@
   --error: #ff6b6b;
   --success: #58d68d;
   --warning: #f0b429;
+  /* U6a — business BRANCH edges. A neutral hue, deliberately not green/red:
+     those are taken by success/failure, and a branch is a routing decision, not
+     an outcome. Graphical (a ~1.5px stroke), so the bar is WCAG 1.4.11's 3:1
+     against the CANVAS surface — which is Fluent's --colorNeutralBackground1
+     (#292929 dark / #ffffff light), NOT --bg. Both measured in the browser and
+     pinned in e2e/edge-typing.spec.ts. */
+  --branch: #b98cf5;
   font-family:
     system-ui,
     -apple-system,
@@ -53,6 +60,9 @@
      5.75:1 on `--bg` — rather than a brighter one that reads as amber but fails
      the pills' small text. Both numbers are asserted in `e2e/bug-sweep.spec.ts`. */
   --warning: #8a5300;
+  /* Darkened for a WHITE canvas surface (#ffffff), the same reason every hue
+     above is darkened for `--bg`. */
+  --branch: #6b3fa0;
   color-scheme: light;
 }
 
@@ -988,6 +998,111 @@ td button + button {
 
 .flow-node.selected {
   border-color: var(--accent);
+}
+
+/* ── U6a typed edges ─────────────────────────────────────────────────────────
+ *
+ * Each variant class lands on React Flow's edge `<g>` and sets ONE hue,
+ * `--edge-color`, which the rule below feeds into the two variables RF's own
+ * `.react-flow__edge-path` rules read. Setting RF's variables rather than
+ * `stroke` is deliberate: an inline `edge.style.stroke` outranks RF's selected
+ * rule (killing the selection highlight), and a competing class rule on
+ * `.react-flow__edge-path` TIES that rule on specificity (0,3,0), leaving the
+ * winner decided by stylesheet import order. Going through the variables also
+ * NOT true of arrowheads, despite the obvious guess: `MarkerDefinitions` renders
+ * ONCE as a sibling at the top of `.react-flow__edges`, not inside each edge
+ * `<g>`, so a variable set here can never reach it — and the canvas configures
+ * no `markerEnd`/`markerStart` anyway, so there are no arrowheads to colour.
+ * Whoever adds them (U6b/U19) needs one marker id per condition.
+ *
+ * The colours are the MVP palette's existing outcome hues, the SAME ones the
+ * run monitor's status pills use (`.run-status-*`/`.node-status-*` below):
+ * success green, failure red, completion blue, skipped grey. One mapping, so
+ * the canvas and the Monitor overlay (U11) cannot come to disagree about what
+ * "success green" means. `--branch` is the one new hue.
+ */
+.react-flow__edge.edge-variant-success {
+  --edge-color: var(--success);
+}
+
+.react-flow__edge.edge-variant-failure {
+  --edge-color: var(--error);
+}
+
+.react-flow__edge.edge-variant-completion {
+  --edge-color: var(--accent);
+}
+
+.react-flow__edge.edge-variant-skipped {
+  --edge-color: var(--muted);
+}
+
+.react-flow__edge.edge-variant-branch {
+  --edge-color: var(--branch);
+}
+
+/*
+ * A SELECTED edge keeps its variant hue, and says "selected" by getting
+ * heavier instead.
+ *
+ * Browser-verified during U6a, and it is the reason this rule exists: RF's
+ * `.react-flow__edge.selected .react-flow__edge-path` reads
+ * `--xy-edge-stroke-selected`, so out of the box a selected edge is repainted
+ * one brand blue whatever its condition. That masks the colour for the entire
+ * time it can be edited — the picker lives in the property panel, which only
+ * opens for a SELECTED edge — so the operator would pick `failure` and watch
+ * nothing change until they clicked away. Both slots therefore take the variant
+ * hue and the WIDTH carries selection, which is a channel RF leaves free.
+ *
+ * The fallbacks keep an untyped edge (any RF-internal edge with no variant
+ * class) on React Flow's own defaults rather than blanking its stroke.
+ */
+/*
+ * NOTE: this SHADOWS the two edge slots `theme/xyThemeBridge.css` declares on
+ * `.app-fluent-root` — custom properties resolve by proximity, and this rule is
+ * on a descendant. That is deliberate (an edge's colour is its CONDITION now,
+ * not one neutral stroke), and the fallbacks are the bridge's own token values
+ * rather than React Flow's `--xy-*-default`: an edge that somehow reached the
+ * canvas WITHOUT a variant class must land on the Fluent neutral, not on RF's
+ * hardcoded `#b1b1b7`, which is the light-default-leaking-into-dark failure the
+ * bridge exists to kill. Unreachable today (`FlowCanvas` classes every edge),
+ * which is exactly why the fallback has to be right rather than observed.
+ */
+.react-flow__edge {
+  --xy-edge-stroke: var(--edge-color, var(--colorNeutralStroke1));
+  --xy-edge-stroke-selected: var(--edge-color, var(--colorBrandStroke1));
+  /* Edges are hairlines at any zoom-out; 1.5 keeps the hue readable without
+     making the graph heavy. */
+  --xy-edge-stroke-width: 1.5;
+}
+
+/*
+ * Selection AND keyboard focus both widen the stroke.
+ *
+ * `:focus-visible` is NOT redundant with `.selected`: React Flow's own
+ * stylesheet sets `outline: none` on a focused edge and indicates focus SOLELY
+ * by repainting the path with `--xy-edge-stroke-selected`. Once that slot
+ * carries the variant hue (above), a tabbed-to edge would be pixel-identical to
+ * a resting one — no outline, no colour change, no width change — i.e. no focus
+ * affordance at all, against a cross-cutting criterion that names visible focus
+ * rings. `edgesFocusable` defaults to true, so every edge is tab-reachable and
+ * this is reachable, not theoretical.
+ *
+ * Focus and selection look the same here, which is honest: they cannot be
+ * confused, because selecting an edge is what opens the property panel beside
+ * it. (Focus does not currently select — #737.)
+ */
+.react-flow__edge.selected,
+.react-flow__edge:focus-visible {
+  --xy-edge-stroke-width: 3;
+}
+
+/* A skip is the one condition that fires because the activity never RAN, so it
+   gets a second, non-colour channel. `stroke-dasharray` is a property RF sets
+   on no edge rule of its own (only `.animated`, which the canvas never uses),
+   so there is no cascade contest here either. */
+.react-flow__edge.edge-variant-skipped .react-flow__edge-path {
+  stroke-dasharray: 6 4;
 }
 
 .flow-node-sub {

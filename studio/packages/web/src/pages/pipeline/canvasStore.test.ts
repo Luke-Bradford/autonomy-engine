@@ -195,12 +195,107 @@ describe('canvasStore', () => {
     expect(s.getState().selected).toBeNull();
   });
 
-  it('updateEdgeOn changes the `on` outcome of the targeted edge', () => {
+  it('updateEdgeCondition changes the `on` outcome of the targeted edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().updateEdgeOn('e_1', 'completion');
+    s.getState().updateEdgeCondition('e_1', { on: 'completion' });
     expect(s.getState().edges[0]!.on).toBe('completion');
     expect(s.getState().dirty).toBe(true);
+  });
+
+  /**
+   * The other direction of the same rewrite, authorable from the canvas as of
+   * U6a: the `branch` key is REQUIRED on a business edge, so setting one must
+   * add it rather than leave an `on:'branch'` edge that fails `EdgeSchema`.
+   */
+  it('updateEdgeCondition sets the business `branch` key when retyping TO a branch', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().updateEdgeCondition('e_1', { on: 'branch', branch: 'true' });
+
+    const edge = s.getState().edges[0]!;
+    expect(edge).toMatchObject({ on: 'branch', branch: 'true' });
+    expect(() => EdgeSchema.parse(edge)).not.toThrow();
+  });
+
+  it('updateEdgeCondition rewrites the routing key when moving between branch arms', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({ edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }] }),
+    );
+    s.getState().updateEdgeCondition('e_1', { on: 'branch', branch: 'false' });
+    expect(s.getState().edges[0]).toMatchObject({ on: 'branch', branch: 'false' });
+  });
+
+  /**
+   * `connect`'s dedupe is keyed on the CURRENT condition, so retyping walks
+   * around it: connect A→B success, retype to skipped, connect A→B success
+   * again, retype THAT to skipped → two byte-identical edges. Nothing
+   * downstream refuses them (`validatePipelineDoc` has no duplicate-edge rule),
+   * they share one `stableEdgeKey` bounce counter as back-edges, and they stack
+   * as overlapping unclickable paths on the canvas.
+   */
+  it('updateEdgeCondition REFUSES a retype that would duplicate another edge', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+          { id: 'e_2', from: 'n_a', to: 'n_b', on: 'failure' },
+        ],
+      }),
+    );
+    s.getState().updateEdgeCondition('e_2', { on: 'success' });
+
+    expect(s.getState().edges.find((e) => e.id === 'e_2')!.on).toBe('failure'); // unchanged
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  /** The same guard on the business arm — two arms differ only by routing key. */
+  it('updateEdgeCondition REFUSES a retype onto an occupied branch arm', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' },
+          { id: 'e_2', from: 'n_a', to: 'n_b', on: 'branch', branch: 'false' },
+        ],
+      }),
+    );
+    s.getState().updateEdgeCondition('e_2', { on: 'branch', branch: 'true' });
+    expect(s.getState().edges.find((e) => e.id === 'e_2')).toMatchObject({ branch: 'false' });
+  });
+
+  /** ...but a no-op retype to the edge's OWN condition must not self-collide. */
+  it('updateEdgeCondition allows a retype to the edge’s own current condition', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().updateEdgeCondition('e_1', { on: 'success' });
+    expect(s.getState().edges[0]!.on).toBe('success');
+  });
+
+  /**
+   * The collision guard must use the ENGINE's edge identity, which includes the
+   * `branch` label. Both arms of one `if` may legitimately target one node (the
+   * `stableEdgeKey` doc names an approval's "redo" arm alongside its forward
+   * arm), and they share `(from, to, 'branch')` — so a key without the label
+   * would refuse the second arm as a duplicate of the first.
+   */
+  it('updateEdgeCondition ALLOWS a second branch arm between the same pair of nodes', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' },
+          { id: 'e_2', from: 'n_a', to: 'n_b', on: 'success' },
+        ],
+      }),
+    );
+    s.getState().updateEdgeCondition('e_2', { on: 'branch', branch: 'false' });
+    expect(s.getState().edges.find((e) => e.id === 'e_2')).toMatchObject({
+      on: 'branch',
+      branch: 'false',
+    });
   });
 
   // Retyping a BUSINESS branch edge to an operational outcome must drop the
@@ -208,14 +303,14 @@ describe('canvasStore', () => {
   // longer routes by it — a doc that then fails `EdgeSchema` (the union has no
   // operational member carrying `branch`). Reachable via a git-imported doc:
   // the canvas can't author a branch edge, but it can load and retype one.
-  it('updateEdgeOn drops the business `branch` key when retyping a branch edge', () => {
+  it('updateEdgeCondition drops the business `branch` key when retyping a branch edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
         edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }],
       }),
     );
-    s.getState().updateEdgeOn('e_1', 'success');
+    s.getState().updateEdgeCondition('e_1', { on: 'success' });
 
     const edge = s.getState().edges[0]!;
     expect(edge.on).toBe('success');
@@ -226,7 +321,7 @@ describe('canvasStore', () => {
 
   // The same retype must preserve the shared `edgeBase` fields — dropping
   // `branch` must not drop the back-edge cap along with it.
-  it('updateEdgeOn preserves back/maxBounces when retyping a branch back-edge', () => {
+  it('updateEdgeCondition preserves back/maxBounces when retyping a branch back-edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
@@ -243,7 +338,7 @@ describe('canvasStore', () => {
         ],
       }),
     );
-    s.getState().updateEdgeOn('e_1', 'failure');
+    s.getState().updateEdgeCondition('e_1', { on: 'failure' });
 
     const edge = s.getState().edges[0]!;
     expect(edge).toMatchObject({ on: 'failure', back: true, maxBounces: 3 });
