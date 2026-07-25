@@ -8,7 +8,7 @@ import {
   type Pipeline,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
-import { apiFetch } from './client';
+import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
 
 const PipelinePageSchema = paginatedResponseSchema(PipelineSchema);
@@ -28,6 +28,18 @@ const PipelineVersionListSchema = z.array(PipelineVersionSchema);
 const PipelineWriteSchema = NewPipelineSchema.omit({ ownerId: true });
 export type PipelineWrite = z.input<typeof PipelineWriteSchema>;
 
+/**
+ * The rename body, `pick`ed from the same write shape rather than re-declared,
+ * so the name rule (non-empty) is the server's rule.
+ *
+ * Deliberately NOT the whole write shape `.partial()`: `PipelineWriteSchema`
+ * DEFAULTS `concurrency` to `null`, and a `.partial()` over a defaulted field
+ * still applies the default — so a rename would ship `concurrency: null` and
+ * silently clear the pipeline's cap. The server guards its own PATCH body the
+ * same way, for the same reason (`routes/pipelines.ts`).
+ */
+const PipelineRenameSchema = PipelineWriteSchema.pick({ name: true });
+
 export const PipelineVersionWriteSchema = NewPipelineVersionSchema.omit({ pipelineId: true });
 export type PipelineVersionWrite = z.input<typeof PipelineVersionWriteSchema>;
 
@@ -40,6 +52,20 @@ export function listPipelines(signal?: AbortSignal): Promise<Pipeline[]> {
   return fetchAllPages((cursor) =>
     apiFetch(`/api/pipelines${pageQuery(cursor)}`, { schema: PipelinePageSchema, signal }),
   );
+}
+
+/**
+ * One pipeline by id (`GET /api/pipelines/:id`).
+ *
+ * Used by the canvas ROUTE (U4), which resolves `:pipelineId` straight from the
+ * server rather than looking it up in `pipelinesStore`. A deep link into the
+ * canvas must not depend on the list having finished loading — and the list is
+ * page-walked, so waiting on it would make a bookmarked pipeline the slowest
+ * page in the app. A pipeline id that is not this owner's surfaces as a 404
+ * (`requireOwned`), never as someone else's graph.
+ */
+export function getPipeline(id: string, signal?: AbortSignal): Promise<Pipeline> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}`, { schema: PipelineSchema, signal });
 }
 
 /**
@@ -91,4 +117,115 @@ export function createPipelineVersion(
     body,
     schema: PipelineVersionSchema,
   });
+}
+
+/**
+ * Rename a pipeline (`PATCH /api/pipelines/:id`).
+ *
+ * The name is trimmed here rather than at each call site: the pane and the page
+ * both take it from a free-text field, and a name of spaces is the same user
+ * error in both. An empty result throws BEFORE the request — the server would
+ * refuse it anyway (`name: z.string().min(1)`), and a 400 round trip to learn
+ * what the shared schema already knows is a worse experience for the same
+ * answer.
+ *
+ * `async` so that refusal is a REJECTED promise rather than a synchronous
+ * throw: every caller is in `await`/`.catch()` shape, and a promise-returning
+ * function that sometimes throws before returning one needs a `try` around the
+ * call as well — a trap that only springs on the invalid input.
+ */
+export async function renamePipeline(id: string, name: string): Promise<Pipeline> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: PipelineRenameSchema.parse({ name: name.trim() }),
+    schema: PipelineSchema,
+  });
+}
+
+/**
+ * The highest-numbered version of a pipeline, or `null` when it has none yet.
+ *
+ * Highest `version`, NOT the last element: the server's ordering is its own
+ * business and a list that arrives oldest-first would silently open the wrong
+ * graph. Shared by the canvas (which loads it for editing) and `duplicate`
+ * below (which copies it) — one rule, not two that can drift.
+ */
+export function latestVersion(versions: PipelineVersion[]): PipelineVersion | null {
+  return versions.reduce<PipelineVersion | null>(
+    (best, v) => (best === null || v.version > best.version ? v : best),
+    null,
+  );
+}
+
+/**
+ * Duplicate a pipeline under a new name (U4).
+ *
+ * COMPOSED from existing endpoints — create, read the source's latest version,
+ * write it as the copy's first version — rather than added as a server route,
+ * because the UI epic's stated non-goal is that its ONLY backend work is
+ * read-only read-models. A source that has never been saved has no version to
+ * copy, and the result is simply an empty pipeline.
+ *
+ * The copy carries the SOURCE's `catalogVersion` rather than defaulting to
+ * today's. Duplicating is a copy, not a re-authoring: the graph is byte-identical
+ * to one that was validated against that catalog, so stamping it with a newer
+ * one would assert a compatibility nobody checked.
+ *
+ * NOT ATOMIC — there is no transaction across two HTTP requests. So the failure
+ * path ROLLS BACK: a copy whose version write fails is deleted again (it is
+ * seconds old and has no run history, so `DELETE` cannot 409 on it) and the
+ * ORIGINAL error is what the caller sees. Leaving the empty husk behind would be
+ * an unexplained pipeline appearing in the tree at the exact moment the user was
+ * told the operation failed. If the rollback itself fails, the original error
+ * still wins — a rollback error names the wrong problem.
+ */
+export async function duplicatePipeline(source: Pipeline, name: string): Promise<Pipeline> {
+  let copy: Pipeline | undefined;
+  try {
+    /* Inside the `try`, not before it. The POST can COMMIT (201) and still
+       throw here if its response body fails `PipelineSchema` — and a copy
+       created outside the try would then never be rolled back, which is
+       precisely the husk this function exists to avoid. `copy` is only bound
+       after a successful parse, so the rollback below is a no-op in the case
+       where nothing was created. */
+    copy = await createPipeline({
+      name: name.trim(),
+      // A copy, not a re-authoring: `concurrency` is the only other
+      // user-settable field on a pipeline, and letting the write schema's
+      // `.default(null)` silently uncap the copy would be the same class of
+      // manufactured-absence the project bans elsewhere (#473).
+      concurrency: source.concurrency,
+    });
+    const latest = latestVersion(await listPipelineVersions(source.id));
+    if (latest) {
+      await createPipelineVersion(copy.id, {
+        params: latest.params,
+        outputs: latest.outputs,
+        nodes: latest.nodes,
+        edges: latest.edges,
+        containers: latest.containers,
+        catalogVersion: latest.catalogVersion,
+      });
+    }
+    return copy;
+  } catch (err) {
+    if (copy) await deletePipeline(copy.id).catch(() => undefined);
+    throw err;
+  }
+}
+
+/**
+ * What to tell the user about a failed pipeline delete.
+ *
+ * The 409 (`pipeline_has_runs`) is a real, explainable REFUSAL rather than a
+ * fault, so it gets its own sentence. Shared because both delete surfaces — the
+ * Factory Resources row menu and the pipelines page — face the same refusal,
+ * and two hand-written copies of the sentence had already drifted apart
+ * typographically before this was extracted.
+ */
+export function describeDeleteFailure(name: string, err: unknown): string {
+  if (err instanceof ApiError && err.status === 409) {
+    return `Cannot delete “${name}”: it has run history.`;
+  }
+  return `Could not delete “${name}”: ${messageOf(err)}`;
 }

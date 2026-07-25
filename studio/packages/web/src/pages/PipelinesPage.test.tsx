@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { PipelinesPage } from './PipelinesPage';
 import { ApiError } from '../api/client';
+import { createPipelinesStore } from '../stores/pipelinesStore';
+import { renderWithRouter } from '../testing/renderWithRouter';
 import * as pipelinesApi from '../api/pipelines';
 
-// Mock only the network layer; the canvas is DOM-heavy (React Flow) and has its
-// own coverage — stub it so this page test stays about list/create/delete/open.
+// Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
+// each case gets its own store — the app's singleton is shared with the Factory
+// Resources pane, and a shared store shared across test cases leaks state.
 vi.mock('../api/pipelines', async (importActual) => {
   const actual = await importActual<typeof import('../api/pipelines')>();
   return {
@@ -17,16 +20,6 @@ vi.mock('../api/pipelines', async (importActual) => {
     deletePipeline: vi.fn(),
   };
 });
-vi.mock('./pipeline/PipelineCanvas', () => ({
-  PipelineCanvas: ({ pipelineName, onBack }: { pipelineName: string; onBack: () => void }) => (
-    <div>
-      <span>canvas:{pipelineName}</span>
-      <button type="button" onClick={onBack}>
-        ← Back to pipelines
-      </button>
-    </div>
-  ),
-}));
 
 const listMock = vi.mocked(pipelinesApi.listPipelines);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
@@ -46,6 +39,11 @@ function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
   };
 }
 
+/** The page under a router (its Open control is a `<Link>`), on a fresh store. */
+function renderPage() {
+  return renderWithRouter(<PipelinesPage store={createPipelinesStore()} />, '/author/pipelines');
+}
+
 beforeEach(() => {
   listMock.mockResolvedValue([]);
   createMock.mockResolvedValue(pipeline());
@@ -58,19 +56,19 @@ afterEach(() => {
 
 describe('PipelinesPage', () => {
   it('shows the empty state after loading', async () => {
-    render(<PipelinesPage />);
+    renderPage();
     expect(await screen.findByText(/No pipelines yet/i)).toBeInTheDocument();
   });
 
   it('lists pipelines from the API', async () => {
     listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
-    render(<PipelinesPage />);
+    renderPage();
     expect(await screen.findByText('Nightly digest')).toBeInTheDocument();
   });
 
   it('creates a pipeline with the entered name and refreshes', async () => {
     const user = userEvent.setup();
-    render(<PipelinesPage />);
+    renderPage();
     await screen.findByText(/No pipelines yet/i);
     const form = within(screen.getByRole('form', { name: /New pipeline/i }));
     await user.type(form.getByLabelText('Name'), 'Fresh');
@@ -78,12 +76,14 @@ describe('PipelinesPage', () => {
 
     await waitFor(() => expect(createMock).toHaveBeenCalledWith({ name: 'Fresh' }));
     // Refresh after create: listPipelines called again (mount + post-create).
-    expect(listMock).toHaveBeenCalledTimes(2);
+    // That refresh is also what keeps the Factory Resources pane — mounted
+    // beside this page over the same store — from showing a stale tree.
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
   });
 
   it('does not create when the name is blank', async () => {
     const user = userEvent.setup();
-    render(<PipelinesPage />);
+    renderPage();
     await screen.findByText(/No pipelines yet/i);
     const form = within(screen.getByRole('form', { name: /New pipeline/i }));
     await user.click(form.getByRole('button', { name: /Create pipeline/i }));
@@ -94,7 +94,7 @@ describe('PipelinesPage', () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     listMock.mockResolvedValue([pipeline({ name: 'Doomed' })]);
-    render(<PipelinesPage />);
+    renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Doomed/i }));
     await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('pl_1'));
   });
@@ -104,7 +104,7 @@ describe('PipelinesPage', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     deleteMock.mockRejectedValue(new ApiError(409, 'pipeline has runs'));
     listMock.mockResolvedValue([pipeline({ name: 'Busy' })]);
-    render(<PipelinesPage />);
+    renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Busy/i }));
     expect(await screen.findByText(/it has run history/i)).toBeInTheDocument();
   });
@@ -113,24 +113,33 @@ describe('PipelinesPage', () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     listMock.mockResolvedValue([pipeline({ name: 'Safe' })]);
-    render(<PipelinesPage />);
+    renderPage();
     await user.click(await screen.findByRole('button', { name: /Delete Safe/i }));
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
-  it('opens a pipeline on the canvas and returns to the list', async () => {
-    const user = userEvent.setup();
-    listMock.mockResolvedValue([pipeline({ name: 'Editable' })]);
-    render(<PipelinesPage />);
-    await user.click(await screen.findByRole('button', { name: /Open Editable/i }));
-    expect(await screen.findByText('canvas:Editable')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /Back to pipelines/i }));
-    expect(await screen.findByRole('form', { name: /New pipeline/i })).toBeInTheDocument();
+  /**
+   * U4 moved the open pipeline into the URL. Open used to be a BUTTON that
+   * swapped this page for the canvas in local state, which meant the canvas had
+   * no address to link to, bookmark, or come Back from.
+   */
+  it('opens a pipeline through a LINK to its own route, encoding the id', async () => {
+    listMock.mockResolvedValue([pipeline({ id: 'pl/1', name: 'Editable' })]);
+    renderPage();
+    const open = await screen.findByRole('link', { name: /Open Editable/i });
+    expect(open).toHaveAttribute('href', '/author/pipelines/pl%2F1');
   });
 
   it('surfaces a load error', async () => {
     listMock.mockRejectedValue(new Error('boom'));
-    render(<PipelinesPage />);
+    renderPage();
     expect(await screen.findByRole('alert')).toHaveTextContent(/boom/i);
+  });
+
+  it('does not claim "no pipelines yet" when the load FAILED', async () => {
+    listMock.mockRejectedValue(new Error('boom'));
+    renderPage();
+    await screen.findByRole('alert');
+    expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
   });
 });

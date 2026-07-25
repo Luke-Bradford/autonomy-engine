@@ -7,9 +7,8 @@ import {
   isStructuralCallActivity,
   type ConnectionPublic,
   type EdgeOn,
-  type PipelineVersion,
 } from '@autonomy-studio/shared';
-import { createPipelineVersion, listPipelineVersions } from '../../api/pipelines';
+import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { createCanvasStore } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
@@ -26,14 +25,6 @@ import { FlowCanvas } from './FlowCanvas';
  * canvas; U6a/U19 widen it deliberately, with a browser check.
  */
 const AUTHORABLE_EDGE_ON: readonly EdgeOn[] = ['success', 'failure', 'completion'];
-
-/** Pick the highest-numbered version, or null when a pipeline has none yet. */
-function latestVersion(versions: PipelineVersion[]): PipelineVersion | null {
-  return versions.reduce<PipelineVersion | null>(
-    (best, v) => (best === null || v.version > best.version ? v : best),
-    null,
-  );
-}
 
 interface PipelineCanvasProps {
   pipelineId: string;

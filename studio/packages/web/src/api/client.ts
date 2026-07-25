@@ -25,6 +25,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The human-readable half of any thrown value.
+ *
+ * `catch` binds `unknown`, so every call site that wants to show a failure has
+ * to narrow it — and this exact ternary had been written out inline more than
+ * twenty times across the app before it was given a name. Named here, next to
+ * `ApiError`, because that is where a caller is already looking when it decides
+ * what to say about a failed request (project rule: export once, import
+ * everywhere). Existing inline copies are equivalent and can migrate as their
+ * files are touched.
+ */
+export function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function messageFromBody(status: number, body: ApiErrorBody | undefined): string {
   if (!body) return `request failed (${status})`;
   if (body.message) return body.message;

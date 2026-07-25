@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { SecondaryPane, PANE_ELEMENT_ID } from './SecondaryPane';
 import { hubById } from './hubs';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import * as pipelinesApi from '../api/pipelines';
+
+// The Author pane mounts `FactoryResources`, which loads the pipelines list.
+// Without this the cases below would make a REAL relative-URL `fetch` (which
+// cannot resolve under jsdom) against the app SINGLETON, leaving it in `error`
+// for every later case in the file — a unit test with cross-case shared state
+// and a network call in it.
+vi.mock('../api/pipelines', async (importActual) => ({
+  ...(await importActual<typeof import('../api/pipelines')>()),
+  listPipelines: vi.fn(),
+}));
 
 /**
  * The pane takes its hub as a PROP rather than reading `useMatches()` itself.
@@ -80,5 +91,85 @@ describe('SecondaryPane', () => {
   it('carries the id the command-bar toggle controls', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
     expect(pane()).toHaveAttribute('id', PANE_ELEMENT_ID);
+  });
+});
+
+/**
+ * U4 — a hub with a surface of its own replaces the pane's BODY, never its
+ * `<nav>` wrapper. The wrapper's id, `hidden` and `aria-label` are what the
+ * command bar's `aria-controls`, its focus restoration and the shell's column
+ * arithmetic all depend on; a hub surface that brought its own container would
+ * have to re-earn all three, silently, one hub at a time.
+ */
+describe('SecondaryPane — per-hub content', () => {
+  const author = hubById('author')!;
+
+  beforeEach(() => {
+    vi.mocked(pipelinesApi.listPipelines).mockResolvedValue([]);
+  });
+
+  function renderAuthor(path = '/author/pipelines') {
+    return renderWithRouter(<SecondaryPane hub={author} collapsed={false} />, path);
+  }
+
+  it('keeps the wrapper contract for a hub that brings its own content', () => {
+    renderAuthor();
+    const el = screen.getByRole('navigation', { name: 'Author sections' });
+    expect(el).toHaveAttribute('id', PANE_ELEMENT_ID);
+  });
+
+  it('still hides it wholesale when collapsed', () => {
+    renderWithRouter(<SecondaryPane hub={author} collapsed />, '/author/pipelines');
+    expect(document.getElementById(PANE_ELEMENT_ID)).not.toBeVisible();
+  });
+
+  it('titles the Author pane for what it HOLDS, not for the hub', () => {
+    renderAuthor();
+    // The Shell diagram labels this pane "Factory Resources": it is a resource
+    // tree, not a section list.
+    expect(screen.getByRole('heading', { name: 'Factory Resources' })).toBeInTheDocument();
+  });
+
+  it('renders the resources tree instead of a bare section list', () => {
+    renderAuthor();
+    expect(screen.getByRole('button', { name: 'New pipeline' })).toBeInTheDocument();
+    // The hub's own section survives as the tree's group header, so `HUBS`
+    // stays the single source of the pane's navigation.
+    expect(screen.getByRole('link', { name: 'Pipelines' })).toHaveAttribute(
+      'href',
+      '/author/pipelines',
+    );
+  });
+
+  /**
+   * The tree's rows are `NavLink`s, so "which one am I on" comes from the
+   * router and nothing else — the same single source the rail and the default
+   * section list use. `end` on the group link is what stops `Pipelines` also
+   * claiming to be current while a pipeline is open beneath it.
+   */
+  it('marks the open pipeline, and not the group header, as the current page', async () => {
+    vi.mocked(pipelinesApi.listPipelines).mockResolvedValue([
+      {
+        id: 'pl_1',
+        resourceId: 'res_pl1',
+        ownerId: 'local',
+        name: 'Alpha',
+        concurrency: null,
+        archived: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    renderAuthor('/author/pipelines/pl_1');
+
+    const row = await screen.findByRole('link', { name: 'Alpha' });
+    expect(row).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Pipelines' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('leaves a hub with no custom content on the default section list', () => {
+    renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
+    expect(screen.getByRole('heading', { name: 'Manage' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New pipeline' })).toBeNull();
   });
 });

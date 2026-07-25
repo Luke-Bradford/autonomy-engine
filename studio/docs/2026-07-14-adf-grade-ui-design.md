@@ -309,9 +309,8 @@ Decisions worth not re-deriving:
   grid's row action into a real link.
 
 URL-state slots named in the Shell section but NOT yet in the hash, with their owning ticket:
-pipeline id (`#/author/pipelines/:pipelineId` — **U4**; opening the canvas is still local state
-inside `PipelinesPage`), version id (**U22**), selected node id (**U7**), monitor filter tab
-(**U10**).
+version id (**U22**), selected node id (**U7**), monitor filter tab (**U10**). The pipeline id
+(`#/author/pipelines/:pipelineId`) landed in **U4** — see that section below.
 
 Deliberately NOT in U2, from its own ticket row and the Shell description:
 
@@ -447,6 +446,170 @@ NOT in U3, with owners: the command bar's **actions region** (Validate / Save→
 zoom-fit-layout) is **U9** — an empty container now would be dead code plus a seam chosen
 before its first consumer; real per-hub pane content is **U4** (Factory Resources tree) and
 **U10**; `#/settings` is **U15**.
+
+## U4 — Factory Resources pane (AS BUILT, 2026-07-25)
+
+The Author hub's pane is now a resource tree, and the canvas has an address.
+
+```text
+.secondary-pane  (the <nav> U3 built — id/hidden/aria-label unchanged)
+  h2  "Factory Resources"          ← PANE_CONTENT[hub].title, not the hub name
+  .factory-resources
+    ├ toolbar    🔎 filter    + (New pipeline)
+    ├ group      ▾ [Pipelines]     ← disclosure + the HUB SECTION's own NavLink
+    └ ul#factory-pipelines         ← one row per pipeline: NavLink + ⋯ menu
+```
+
+| Piece | Where | Notes |
+|---|---|---|
+| The pipelines list | `stores/pipelinesStore.ts` | one store, two mounted views |
+| Which hub gets a custom pane | `PANE_CONTENT` in `SecondaryPane.tsx` | `{title, Content}` per `HubId` |
+| Canvas route | `/author/pipelines/:pipelineId` | `PipelineCanvasRoute`, mirrors `:runId` |
+| Path builder | `pages/author/pipelinePath.ts` | the `runDetailPath` twin |
+| Rename / duplicate | `api/pipelines.ts` | PATCH; duplicate is COMPOSED client-side |
+
+Decisions worth not re-deriving:
+
+- **A hub surface replaces the pane's BODY, never its `<nav>`.** The wrapper's `id`, `hidden`
+  and `aria-label` are what the command bar's `aria-controls`, its focus restoration and the
+  shell's column arithmetic all hang off; a hub that brought its own container would have to
+  re-earn all three, silently, one hub at a time. `PANE_CONTENT` is a `Partial<Record<HubId,…>>`
+  rather than an `if (hub.id === 'author')` because **U10** puts the Monitor filters here next.
+- **The group header IS the hub's section link**, not a new label beside it. `HUBS` therefore
+  stays the single source of the pane's navigation — the section still reaches the list page and
+  still supplies the breadcrumb — and the tree hangs beneath it rather than forking a second
+  navigation that could disagree. This is also why Author keeps `sections` at all.
+- **The pane heading says "Factory Resources", the nav landmark still says "Author sections".**
+  They answer different questions: the heading names what the pane HOLDS (the Shell diagram's
+  label), the landmark names which of the page's three navs this is, and that answer should not
+  change every time a hub re-decorates its pane.
+- **The list lives in a shared store, and the pipelines page was migrated onto it.** After U4
+  there are TWO views of the same list mounted at once; two `useState` copies could only agree
+  by luck. Every mutation ends in a `refresh()`, which is the whole point of the store.
+  Its loads carry a monotonic sequence id and a superseded load DROPS its result — success *or*
+  rejection — so two overlapping refreshes cannot apply in completion order and leave the tree
+  showing a list the server no longer has, nor bury a fresh answer under a stale error.
+  (One caveat the sequence id creates: a superseded `refresh()` resolves as soon as its OWN
+  request settles, so `await refresh()` means "my request is done", not "the list is current".
+  No caller needs the stronger reading; one that did would need the winning load's promise.)
+- **`ensureFresh()` is the one mount-time entry point, and it is deliberately three-way.** It
+  loads from `idle` AND from `ready` — re-entering the Author hub RE-READS, so a pipeline created
+  by the CLI, an import or a second tab is not invisible until a browser reload. (An earlier cut
+  only loaded from `idle`, which quietly turned a per-mount fetch into fetch-once-per-page-load.)
+  It skips while `loading`, which is what makes the request count DETERMINISTIC when the hub
+  mounts two consumers in one commit — whichever effect runs first wins and the other stands
+  down, so it is exactly one request either way. And it skips on `error`, so a broken server
+  cannot be hammered by remounts; recovery is the explicit Retry, which BOTH surfaces offer —
+  the pane's alone would not do, because the pane can be collapsed and a collapsed pane is
+  `hidden`, i.e. neither clickable nor focusable.
+- **`error` is kept DISTINCT from "loaded, empty" in both views** — "there are none" and "we
+  could not find out" are different facts, and the empty state is a lie about the second. The
+  error is also cleared when a retry STARTS, not only when one succeeds, so the banner never
+  describes a request that is no longer the current one.
+- **The pipelines PAGE was NOT reduced to a landing screen** even though the pane can now do
+  everything it does. The pane collapses — globally, and the preference persists — and Author
+  would then have no way to reach or create a pipeline at all.
+- **The canvas is fetched BY ID, not looked up in the store.** A bookmarked pipeline must not
+  wait on the page-walked list, and a 404 is then a real answer ("no such pipeline, or not
+  yours") rather than "not in the list yet". `key={pipelineId}` forces a remount, for the same
+  reason `RunDetailRoute` does: the canvas holds an unsaved graph, and react-router reuses a
+  route component instance when only a param changes.
+- **The `:pipelineId` crumb is the ID, not the name.** Resolving the name would need the shell to
+  subscribe to a page-domain store (or a route loader) *and* re-render when it arrived — a
+  coupling the shell has deliberately avoided — for a label the canvas's own `<h2>` already
+  shows. `:runId` sets the precedent. **U9** owns the command bar's per-pipeline region and can
+  carry the name there.
+- **Duplicate is COMPOSED from existing endpoints and ROLLS BACK.** No server route, because the
+  epic's stated non-goal is that its only backend work is read-only read-models. There is no
+  transaction across two HTTP requests, so a copy whose version write fails is deleted again
+  (seconds old, and `pipeline_versions` cascades, so `DELETE` cannot 409) and the ORIGINAL error
+  is what surfaces — an empty husk appearing in the tree at the moment the user is told it failed
+  is worse than no copy. If the rollback itself fails the original error still wins; a rollback
+  error names the wrong problem. The `createPipeline` call sits INSIDE the `try`: a 201 whose
+  body fails `PipelineSchema` has still committed server-side, and a create outside the try would
+  leave exactly the husk the rollback exists to prevent.
+- **A duplicate copies the source's `catalogVersion` AND its `concurrency` cap.** Duplicating is
+  a copy, not a re-authoring: re-stamping the graph with today's catalog would assert a
+  compatibility nobody checked, and letting the write schema's `.default(null)` stand would
+  silently UNCAP the copy — an absent fact manufactured as a benign default, the shape #473
+  banned. Those two are the only fields a pipeline carries beyond its name.
+- **An inline name ROW for create/rename/duplicate, not a Fluent `Dialog`.** All three are "give
+  me a name". Renaming in place is what a resources tree does, a modal to type six characters
+  into is a worse interaction, and `Dialog` would be the first import of a surface U0's bundle
+  budget has not paid for — the same reasoning that hand-rolled U3's breadcrumb. A failed
+  mutation keeps the row open with the typed name intact.
+- **NOT an ARIA `tree`.** A real `role="tree"` owes roving tabindex, typeahead and arrow-key
+  traversal over a structure that is one flat group today, and a half-implemented tree is less
+  usable than the list it replaced. A disclosure over a list of `NavLink`s keeps `isActive` as
+  the ONE source of "which one am I on" — the same reason `@fluentui/react-nav` was rejected for
+  the pane in U3. Revisit when U5/U20 give the tree real nesting.
+- **No header `⋯`.** The Shell diagram draws `+ ⋯`, but every action it could hold is per-row and
+  already in the row's own menu. An overflow menu with nothing in it is the empty-seam
+  anti-pattern U9's actions region was deferred to avoid.
+- **The row's `⋯` uses `opacity: 0`, NOT `visibility: hidden` (the first cut) or `display:
+  none`.** Both of those EXCLUDE an element from the accessibility tree, which would make
+  rename/duplicate/delete undiscoverable to a screen reader and unreachable by a BACKWARDS
+  Shift+Tab — the button is not focusable until the row already has focus in it, so the reveal
+  would depend on the very focus it gates. `opacity` keeps it in the layout (rows do not jump),
+  in the a11y tree, and focusable; `:hover`/`:focus-within` then reveal it. Pinned by an e2e that
+  tabs BACKWARDS into it, which is the direction the broken version fails — the forward-only
+  test the first cut shipped passed against `visibility: hidden`.
+- **Focus restoration runs in an EFFECT, off a `ref`, and covers DELETE too.** Closing the draft
+  row — or deleting the row a menu was anchored to — unmounts the element focus is inside, which
+  strands focus on `<body>` and restarts Tab from the top. (Fluent restores focus to its trigger
+  on close, but after a delete that trigger is gone.) The handler cannot do it, because React has
+  not removed the row yet; holding the target in state would mean a `setState` inside that effect
+  purely to clear it, a cascading render for a value nothing renders. The effect depends on the
+  pipelines list as well as the draft, since a delete closes no draft and the list changing is
+  the only signal the row has gone.
+- **A rename whose pipeline vanishes is handled by DERIVING the draft, not reconciling it.** If a
+  refresh drops the row mid-rename, the editor would otherwise have no row to render in while
+  `draft` stayed set — the editor silently disappears, and focus is never restored because the
+  effect above needs a null draft. Computed at render instead: an effect would have to `setState`
+  to fix state it just observed.
+- **Deleting the pipeline you are EDITING navigates away**; deleting any other one does not. A
+  canvas left mounted on a deleted pipeline shows a graph that no longer exists and 404s on the
+  next load — but yanking the user out of what they are editing because they tidied up something
+  else would be worse than the stale row.
+- **`latestVersion` moved into `api/pipelines.ts`.** The canvas had it privately, and duplicate
+  needed the same rule; two copies of "highest `version`, not the last element" is exactly the
+  kind that drifts, and the server's ordering is its own business. `describeDeleteFailure` and
+  `messageOf` were extracted for the same reason — the 409 sentence had already drifted
+  typographically between the two delete surfaces before it was shared.
+- **Deleting the pipeline you are editing navigates with `replace`.** A push would leave the dead
+  pipeline's URL in history, so Back lands on "Pipeline not found" — the trap `routes.tsx` states
+  the house rule for. The navigation happens AFTER the mutation returns, not inside it: a
+  navigation that threw would otherwise be reported as "could not delete" for a delete that had
+  already succeeded.
+- **A hub with custom pane content renders `sections[0]` ONLY.** A second Author section would
+  therefore vanish from the pane rather than render — the same silent unreachability that hid
+  `/manage/triggers` between U2 and U3. Rather than build speculative UI for a hub that does not
+  exist, `hubs.test.ts` pins Author at exactly one section, so ADDING one fails loudly and lands
+  the decision on whoever adds it.
+- **Bundle: the row `⋯` costs +31 kB gzip, and it is the reason there is no `Dialog`.** Fluent's
+  `Menu` took the `fluent` vendor chunk from 40.12 to 71.03 kB gzip (125.79 → 234.03 kB raw),
+  priced by building with and without it rather than inferred. It landed in `fluent`, NOT the
+  entry — which is what U1's chunk split exists for and the property to keep holding — and the
+  entry is flat (167.13 → 169.39 kB gzip, which is the pane, store, route and tree themselves).
+  A `Dialog` for create/rename/duplicate would have been a second heavy surface on top, for an
+  interaction a resources tree is better off doing in place.
+
+Browser-verified (Chromium, 2026-07-25): Fluent tokens resolve on `.app-fluent-root`
+(`--colorNeutralBackground1: #292929` dark / white light); ZERO `--xy-*` bridge overrides left
+holding an unresolved `var()` in either theme; the shell grid stays `48px 240px 5px 987px` with
+the tree mounted, and `48px 180px 5px 1047px` at the pane minimum with zero horizontal overflow
+anywhere (the filter's `min-width: 0` is load-bearing — a text input's intrinsic minimum is its
+`size` attribute, ~20 characters, which would push the toolbar wider than the pane); the `⋯`
+menu portals OUTSIDE the pane onto an opaque `rgb(41,41,41)` surface at z-index 1000000, so the
+pane's own overflow clip cannot slice it; focus returns to the `+` / the row's `⋯` whenever the
+control that opened the draft row is still on screen. The only console error on any page is the
+pre-existing favicon 404 (**#717**).
+
+NOT in U4, with owners: drag-and-drop reordering and non-pipeline resource types (**U5**,
+**U20**); a version picker under a pipeline (**U22**); the command bar's per-pipeline actions and
+name (**U9**); `Publish`/`Commit` command-bar states (**U18**, DB-only path first). Deferred with
+tickets: the canvas deep-link request waterfall and the canvas heading not following a rename
+(**#720**); one shared `.icon-button` class across the command bar and the pane (**#721**).
 
 ## Non-goals (YAGNI)
 

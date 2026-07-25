@@ -46,6 +46,18 @@ vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),
   listPipelineVersions: vi.fn().mockResolvedValue([]),
+  getPipeline: vi.fn((id: string) =>
+    Promise.resolve({
+      id,
+      resourceId: `res_${id}`,
+      ownerId: 'local',
+      name: `Pipeline ${id}`,
+      concurrency: null,
+      archived: false,
+      createdAt: 1,
+      updatedAt: 1,
+    }),
+  ),
 }));
 vi.mock('./api/triggers', async (importActual) => ({
   ...(await importActual<typeof import('./api/triggers')>()),
@@ -144,6 +156,59 @@ describe('route tree', () => {
   it('renders the run detail page at /monitor/runs/:runId', async () => {
     renderAt('/monitor/runs/run_42');
     expect(await page().findByText('run_42')).toBeInTheDocument();
+  });
+
+  /**
+   * U4 — the canvas has an address. Before it, the open pipeline was local
+   * state inside `PipelinesPage`, so this path matched nothing and the
+   * catch-all sent it to Home.
+   */
+  it('renders the canvas at /author/pipelines/:pipelineId', async () => {
+    renderAt('/author/pipelines/pl_42');
+    // The canvas heading is the pipeline's NAME, resolved by the route from
+    // the server — proving the param reached a real fetch, not just a match.
+    expect(await page().findByRole('heading', { name: 'Pipeline pl_42' })).toBeInTheDocument();
+  });
+
+  /** Same one-decode contract as `:runId`; see the note on that case. */
+  it('decodes :pipelineId exactly once', async () => {
+    renderAt(`/author/pipelines/${encodeURIComponent('pl%20x')}`);
+    expect(await page().findByRole('heading', { name: 'Pipeline pl%20x' })).toBeInTheDocument();
+  });
+
+  /**
+   * `/author/pipelines/` must be the LIST, not an empty-id canvas. Read from
+   * the router's initial state rather than after `render()`: RTL flushes a
+   * redirect inside `act()`, so a post-render read would describe wherever it
+   * ended up — and `pipelines` is the name of the parent route either way.
+   */
+  it('matches a trailing slash as the pipelines index, not as a pipeline id', () => {
+    const matched = initialMatches('/author/pipelines/').at(-1);
+    expect(matched?.params).not.toHaveProperty('pipelineId');
+  });
+
+  /**
+   * The canvas holds an UNSAVED graph per pipeline, and React Router reuses a
+   * route component instance when only a param changes — so `key` is what stops
+   * one pipeline's edits appearing under another's id. Proved through the load
+   * error, the state a user would actually see leak.
+   */
+  it('remounts the canvas when the pipeline id changes', async () => {
+    const getPipeline = vi.mocked((await import('./api/pipelines')).getPipeline);
+    getPipeline.mockImplementation((id: string) =>
+      id === 'pl_a'
+        ? Promise.reject(new Error('pl_a exploded'))
+        : Promise.resolve({ id, name: 'Pipeline B' } as never),
+    );
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/author/pipelines/pl_a'] });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('pl_a exploded');
+
+    await router.navigate('/author/pipelines/pl_b');
+
+    expect(await page().findByRole('heading', { name: 'Pipeline B' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('pl_a exploded')).not.toBeInTheDocument());
   });
 
   /**
@@ -354,6 +419,7 @@ describe('shell chrome over the real route tree', () => {
     ['/', ['Home']],
     ['/author/pipelines', ['Author', 'Pipelines']],
     ['/monitor/runs', ['Monitor', 'Runs']],
+    ['/author/pipelines/pl_42', ['Author', 'Pipelines', 'pl_42']],
     ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
     ['/manage/connections', ['Manage', 'Connections']],
     ['/manage/triggers', ['Manage', 'Triggers']],

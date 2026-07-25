@@ -5,6 +5,7 @@ import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
+import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute';
 import { TriggersPage } from './pages/TriggersPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
@@ -82,10 +83,9 @@ const HUB_HANDLE = {
  * Exported (rather than a router being built here) so tests can mount the exact
  * same tree under `createMemoryRouter` at any initial entry.
  *
- * NOT here, deliberately:
- * - `/author/pipelines/:pipelineId` — opening a pipeline on the canvas is still
- *   local state inside `PipelinesPage`; U4 (Factory Resources) is where that
- *   becomes URL state. See the URL-state block in the UI design doc.
+ * U4 added `/author/pipelines/:pipelineId`: opening a pipeline on the canvas
+ * used to be local state inside `PipelinesPage`, so the canvas had no address
+ * to link to, bookmark, or go Back from.
  */
 export const ROUTES: RouteObject[] = [
   {
@@ -99,10 +99,31 @@ export const ROUTES: RouteObject[] = [
         handle: HUB_HANDLE.author,
         children: [
           { index: true, element: <Navigate to="/author/pipelines" replace /> },
+          /* `:pipelineId` is a CHILD of `pipelines`, not its sibling, so the
+             breadcrumb reads Author › Pipelines › pl_42 with a linkable middle
+             crumb — the same shape (and the same reasoning) as `runs/:runId`.
+             `pipelines` itself has no `element`, so react-router renders its
+             `<Outlet/>`. */
           {
             path: 'pipelines',
-            element: <PipelinesPage />,
             handle: { crumb: sectionLabel('/author/pipelines') } satisfies ShellRouteHandle,
+            children: [
+              { index: true, element: <PipelinesPage /> },
+              {
+                path: ':pipelineId',
+                element: <PipelineCanvasRoute />,
+                /* The id, not the pipeline's NAME. A name crumb would need the
+                   shell to subscribe to a page-domain store (or a route loader)
+                   to know it, and to re-render when it arrived — a coupling the
+                   shell has deliberately avoided, for a label the canvas's own
+                   heading already shows. `:runId` sets the precedent. U9 owns
+                   the command bar's per-pipeline region and can carry the name
+                   there. `useParams` has already decoded this. */
+                handle: {
+                  crumb: (params) => params.pipelineId ?? '',
+                } satisfies ShellRouteHandle,
+              },
+            ],
           },
         ],
       },

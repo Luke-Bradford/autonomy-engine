@@ -40,8 +40,16 @@ export type HubId = 'home' | 'author' | 'monitor' | 'manage';
  * `routes.test.tsx` pins the two equal, so a renamed section cannot leave a
  * stale breadcrumb behind.
  *
- * U4 replaces the Author hub's flat list with the Factory Resources tree; the
- * pane is the container, this list is what it holds until then.
+ * U4 did NOT replace this for the Author hub — the Factory Resources tree hangs
+ * BENEATH `sections[0]`, using it as the tree's group header, so `HUBS` remains
+ * the single source of the pane's navigation rather than forking a second one
+ * that could disagree. Author's section is therefore load-bearing, not
+ * transitional.
+ *
+ * Caveat worth knowing before adding one: a hub with custom pane content
+ * renders `sections[0]` only, so a second section would silently vanish from
+ * that hub's pane. `hubs.test.ts` pins Author at exactly one so that adding a
+ * section FAILS rather than disappears.
  */
 export interface HubSection {
   /** Link text in the pane, and the breadcrumb label for the same route. */
