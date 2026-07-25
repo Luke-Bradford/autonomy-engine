@@ -631,3 +631,128 @@ describe('openaiAdapter — local tools (#2 L10a)', () => {
     expect(requestBody(fetchSpy, 1)).not.toHaveProperty('tools');
   });
 });
+
+/**
+ * #730 — the sampling-parameter preflight, the `openai_api` half of the defect
+ * class #727 fixed for `anthropic_api`.
+ *
+ * OpenAI's reasoning models reject `temperature`/`top_p` with a 400 whose body
+ * does not name which of the author's fields was at fault. These tests assert
+ * the refusal happens BEFORE `fetch`, which is the whole point: the diagnosis
+ * has to come from us, because the provider's does not identify the field.
+ */
+describe('openaiAdapter unsupported-parameter preflight (#730)', () => {
+  it('refuses permanent, without issuing a request, when a reasoning model gets temperature', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'o3', temperature: 0.3 } }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The message names the model AND the author-facing field, which is exactly
+    // what the provider's own 400 leaves out.
+    const failure = events[0] as Extract<ActivityEvent, { type: 'failed' }>;
+    expect(failure.error).toContain('o3');
+    expect(failure.error).toContain('temperature');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('covers the STRUCTURED path too — the preflight precedes the branch', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'p',
+            model: 'gpt-5',
+            topP: 0.9,
+            structuredOutput: { type: 'object', properties: { a: { type: 'string' } } },
+          },
+        }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('resolves the model from the CONNECTION default, which node config cannot see', async () => {
+    // The case that cannot be caught by author-time Zod validation: the node
+    // sets only `temperature`, and the rejecting model arrives from the
+    // connection.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', temperature: 0.3 },
+          connectionConfig: { model: 'o4-mini' },
+        }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT refuse when the author set no sampling params', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(ctx({ input: { prompt: 'p', model: 'o3' } }), 'sk'),
+    );
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('does NOT refuse a non-reasoning model that accepts sampling', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'gpt-4o', temperature: 0.3 } }),
+        'sk',
+      ),
+    );
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+    expect(JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).temperature).toBe(
+      0.3,
+    );
+  });
+
+  it('does NOT refuse an OpenAI-COMPATIBLE gateway serving the same model name', async () => {
+    // The inverted-proxy case. These gateways deliberately reuse OpenAI's model
+    // ids while deciding their own request surface, so a fact about
+    // api.openai.com is not a fact about them — refusing would manufacture a
+    // local failure of a call that works. The request goes out unchanged.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'o3', temperature: 0.3 },
+          connectionConfig: { baseUrl: 'https://openrouter.ai/api/v1' },
+        }),
+        'sk',
+      ),
+    );
+    expect(succeeded(events)).toMatchObject({ type: 'succeeded' });
+    expect(JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).temperature).toBe(
+      0.3,
+    );
+  });
+
+  it('still refuses when the connection pins the DEFAULT base url explicitly', async () => {
+    // A trailing slash is normalised away before the gate sees it, so an
+    // explicitly-configured default host is still first-party.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'o3', temperature: 0.3 },
+          connectionConfig: { baseUrl: 'https://api.openai.com/v1/' },
+        }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
