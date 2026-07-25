@@ -336,6 +336,117 @@ export function structuredValidationFailure(
 }
 
 /**
+ * #727 — WHY a model will not accept a parameter. The two directions fail for
+ * OPPOSITE reasons, and one remedy sentence cannot serve both:
+ *
+ * - `removed` — the knob EXISTED and was taken away on a newer model. Remedy:
+ *   an OLDER model, or drop the field.
+ * - `unavailable` — the surface was ADDED after this model shipped, so the model
+ *   predates it. Remedy: a NEWER model, or drop the field.
+ *
+ * Conflating them is not cosmetic. "removed on this model — select a model that
+ * still accepts it" sends an author whose `reasoningEffort` hit
+ * `claude-haiku-4-5` BACKWARDS in time, away from the 4.6+ models that actually
+ * support it. That is worse than the opaque provider 400 this preflight
+ * replaces, which at least gave no directions. Provider-generic and defined
+ * here, not in `anthropic-models.ts`: the vocabulary is the shared layer's, and
+ * the per-provider table produces values of it.
+ */
+export type UnsupportedParamCause = 'removed' | 'unavailable';
+
+/** One author-facing config field the resolved model will not accept, and why. */
+export interface UnsupportedParam {
+  /** The node-config field name (`temperature`, `topP`, `reasoningEffort`). */
+  readonly name: string;
+  /** Which direction of history put it out of reach. */
+  readonly cause: UnsupportedParamCause;
+}
+
+/**
+ * #727 — the single failure event for a call whose AUTHORED config names a
+ * parameter the resolved model will not accept. Emitted as a PREFLIGHT, before
+ * any request is issued.
+ *
+ * `permanent`, and deliberately the SAME class the provider 400 would have
+ * produced via `classifyHttpStatus`. A retry of the identical request cannot
+ * succeed, so it must never be `transient`.
+ *
+ * "SAME class" is NOT the same as "same outcome", and the difference is a real
+ * behaviour change rather than a nicety. On the TEXT path and the `auto` tools
+ * path this genuinely only changes the diagnosis: those requests already 400d.
+ * On the STRUCTURED and `toolChoice:'required'` paths it does NOT — before #724
+ * those two suppressed the reasoning keys, so a node naming a
+ * no-adaptive-surface model while setting `reasoningEffort` sent a valid body
+ * and SUCCEEDED. Deleting the suppression makes the pair emitted, so those
+ * calls are now refused. That break is deliberate and pinned by test: what the
+ * old path actually did was ignore the author's `reasoningEffort` without
+ * saying so, which is the silent defect #724 exists to remove. Do not "restore
+ * compatibility" by dropping the keys instead — that reinstates the silence.
+ *
+ * GRAMMAR — this builder DELIBERATELY breaks the house shape, and the exception
+ * is the point. Its siblings state a bare `<kind> <symptom>` fact
+ * (`<kind> returned a 2xx response with no completion (<reason>)`), because
+ * there the symptom IS the diagnosis and the operator has nothing to change.
+ * Here the whole reason the preflight exists is that the provider's own 400 left
+ * the author guessing WHICH of their fields was at fault, so the message names
+ * the model, the offending author-facing field(s) and the fix. Dropping the
+ * remedy to match the siblings would restore the diagnostic gap this replaces.
+ * The `<kind> ` prefix and the `permanent` kind still match, so the taxonomy is
+ * unchanged; only the prose is longer.
+ *
+ * Field NAMES are plain strings rather than a typed sub-reason (the siblings take
+ * a `NoCompletionReason`) because they are author-facing CONFIG FIELD names,
+ * which vary per provider and are already validated by the caller's schema — an
+ * enum here would duplicate the config surface without adding a check. The
+ * CAUSE is typed, because it selects the remedy and getting it wrong misdirects
+ * the author (see `UnsupportedParamCause`).
+ *
+ * The parameter is a NON-EMPTY tuple type. An empty list would render "does not
+ * support the undefined parameter"; the sole caller guards on length, but this
+ * builder is exported and provider-generic, so the precondition is enforced by
+ * the compiler rather than left for the next caller to rediscover.
+ */
+export function unsupportedParamFailure(
+  kind: LlmConnectionKind,
+  model: string,
+  params: readonly [UnsupportedParam, ...UnsupportedParam[]],
+): Extract<ActivityEvent, { type: 'failed' }> {
+  // "a and b", not "a, b" — an operator reads this. The join is n-safe; today
+  // the list happens to be ≤2 because the two capability sets are disjoint, but
+  // nothing here relies on that (a model in both sets yields three names).
+  const join = (names: readonly string[]): string =>
+    names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]!;
+
+  // One clause per CAUSE, because the remedies point in opposite directions.
+  // Groups are emitted in a fixed order so the message is deterministic.
+  const CLAUSES: readonly { cause: UnsupportedParamCause; why: string; remedy: string }[] = [
+    {
+      cause: 'removed',
+      why: 'removed on this model',
+      remedy: 'select a model that still accepts',
+    },
+    {
+      cause: 'unavailable',
+      why: 'not available on this model, which predates it',
+      remedy: 'select a newer model that supports',
+    },
+  ];
+
+  const sentences = CLAUSES.flatMap(({ cause, why, remedy }) => {
+    const names = params.filter((p) => p.cause === cause).map((p) => p.name);
+    if (names.length === 0) return [];
+    const them = names.length > 1 ? 'them' : 'it';
+    return [
+      `${kind} model ${model} does not support the ${join(names)} ` +
+        `parameter${names.length > 1 ? 's' : ''} (${why}); remove ${them} from the ` +
+        `activity config or ${remedy} ${them}.`,
+    ];
+  });
+
+  return { type: 'failed', kind: 'permanent', error: sentences.join(' ') };
+}
+
+/**
  * #2 L4c — how many INTERNAL repair sub-calls a structured `llm_call` makes after
  * a 2xx response that parsed but produced no schema-valid structured output. `1`
  * = up to ONE repair (≤2 total provider calls per attempt).

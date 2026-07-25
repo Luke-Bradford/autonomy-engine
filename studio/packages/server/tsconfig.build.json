@@ -1,4 +1,14 @@
 {
   "extends": "./tsconfig.json",
+  // #726 — the EMIT project. `rootDir` + `include` are re-stated here (rather
+  // than inherited) so the emitted layout stays `dist/index.js`: the parent now
+  // also includes `vitest.config.ts`, which lies outside `src` and would both
+  // break `rootDir` and shift every output path down a directory. A child's
+  // `include` replaces the parent's, so this is a complete override, not a
+  // merge — the build output is unchanged by the #726 restructure.
+  "compilerOptions": {
+    "rootDir": "src"
+  },
+  "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }

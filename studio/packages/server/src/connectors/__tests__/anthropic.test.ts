@@ -415,7 +415,21 @@ describe('anthropicAdapter v2 config (L1)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(
       anthropicAdapter.runActivity(
-        ctx({ input: { prompt: 'p', topP: 0.9, stop: ['STOP'], seed: 7, temperature: 0.3 } }),
+        // #727 — pinned to a model that still ACCEPTS sampling params. This case
+        // previously rode the implicit `DEFAULT_MODEL`, so it was asserting a
+        // wire shape the provider answers 400 on — the defect #727 describes,
+        // sitting unnoticed in the suite. The subject here is the wire-NAME
+        // mapping, which the pin preserves; the reject path has its own tests.
+        ctx({
+          input: {
+            prompt: 'p',
+            model: 'claude-opus-4-6',
+            topP: 0.9,
+            stop: ['STOP'],
+            seed: 7,
+            temperature: 0.3,
+          },
+        }),
         'sk',
       ),
     );
@@ -557,7 +571,7 @@ function toolResponse(input: unknown): unknown {
 }
 
 describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
-  it('forces the structured_output tool and omits the reasoning surface', async () => {
+  it('forces the structured_output tool and NOW emits the reasoning surface (#724)', async () => {
     const spy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(fakeResponse(200, toolResponse({ category: 'bug' })));
@@ -573,9 +587,25 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
       name: 'structured_output',
       input_schema: STRUCTURED_INPUT.outputSchema,
     });
-    // forced tool_choice precludes adaptive thinking → reasoning keys are dropped.
-    expect(body.thinking).toBeUndefined();
-    expect(body.output_config).toBeUndefined();
+    // #724 — this used to assert BOTH keys were dropped, on the false premise
+    // that a forced `tool_choice` precludes the adaptive-thinking surface. It
+    // does not (only MANUAL extended thinking errors under a forced choice), so
+    // an authored `reasoningEffort` is now honoured here instead of silently
+    // ignored.
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
+  });
+
+  it('still emits NO reasoning surface when the author set no reasoningEffort', async () => {
+    // The keys are a pure function of the author's opt-in on every path — a
+    // structured node without `reasoningEffort` stays byte-identical to pre-L3.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, toolResponse({ category: 'bug' })));
+    await drain(anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'));
+    const body = sentBody(spy);
+    expect(body).not.toHaveProperty('thinking');
+    expect(body).not.toHaveProperty('output_config');
   });
 
   it('meters then succeeds with the validated object (only schema fields)', async () => {
@@ -642,6 +672,85 @@ describe('anthropicAdapter.runActivity — structured output (#2 L4b)', () => {
     expect(msgs[2]!.content).toContain('enum');
     // the structured scaffold is rebuilt on the repair call, not dropped.
     expect(secondBody.tool_choice).toEqual({ type: 'tool', name: 'structured_output' });
+  });
+
+  it('#724 — the REPAIR call carries the reasoning surface and the same budget', async () => {
+    // The repair is the call that re-issues under an ALREADY-EXHAUSTED budget
+    // when thinking starves the forced tool_use block, so its wire shape is the
+    // one that matters for the max_tokens interaction #724 introduces. Round 0
+    // is covered above; this pins the second call.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'question' })))
+      .mockResolvedValueOnce(fakeResponse(200, toolResponse({ category: 'bug' })));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    expect(repairBody.thinking).toEqual({ type: 'adaptive' });
+    expect(repairBody.output_config).toEqual({ effort: 'high' });
+    // Same budget as round 0 — the repair gets no extra headroom, which is why
+    // an exhausted budget costs TWO billed calls before terminalizing.
+    expect(repairBody.max_tokens).toBe(4096);
+  });
+
+  it('#724 — a truncated forced-tool response names the stop_reason in its failure', async () => {
+    // Budget starvation and a disobedient model produce the SAME symptom (no
+    // structured_output block). Without the stop reason the durable error blames
+    // the model; `max_tokens` names the real cause.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 4, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).toHaveBeenCalledTimes(2); // original + one repair, both billed
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('max_tokens');
+    // and the repair CRITIQUE carries it too, so the model is told what happened
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = repairBody.messages as { role: string; content: string }[];
+    expect(msgs[msgs.length - 1]!.content).toContain('max_tokens');
+  });
+
+  it('#724 — a TRUNCATED (present but short) tool_use block also names the stop_reason', async () => {
+    // The sharper truncation shape, and the one an earlier pass missed: the block
+    // IS present, so `findStructuredToolInput` finds it and validation — not the
+    // no-block branch — produces the reason. Un-annotated, the durable error read
+    // "category: expected string, received undefined", which blames the model for
+    // a schema defect when the cause was the budget.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [{ type: 'tool_use', name: 'structured_output', input: {} }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 4, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { ...STRUCTURED_INPUT, reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).toHaveBeenCalledTimes(2); // original + one repair, both billed
+    expect(failed(events).kind).toBe('permanent');
+    // Both the schema complaint AND the budget cause, so the reader can tell them apart.
+    expect(failed(events).error).toContain('max_tokens');
+    expect(failed(events).error).toContain('category');
+    // and the repair critique carries it too
+    const repairBody = JSON.parse((spy.mock.calls[1]![1] as RequestInit).body as string);
+    const msgs = repairBody.messages as { role: string; content: string }[];
+    expect(msgs[msgs.length - 1]!.content).toContain('max_tokens');
   });
 
   it('#2 L4c — does NOT repair a transport failure; only ONE call, no metered', async () => {
@@ -781,7 +890,7 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     ]);
   });
 
-  it("maps toolChoice 'required' to {type:'any'} and suppresses the thinking surface", async () => {
+  it("maps toolChoice 'required' to {type:'any'} and NOW keeps the thinking surface (#724)", async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(
       anthropicAdapter.runActivity(
@@ -791,10 +900,12 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     );
     const body = requestBody(fetchSpy, 0);
     expect(body.tool_choice).toEqual({ type: 'any' });
-    // A forced tool_choice precludes adaptive thinking (the structured-path
-    // precedent) — the whole flow suppresses it rather than 400.
-    expect(body).not.toHaveProperty('thinking');
-    expect(body).not.toHaveProperty('output_config');
+    // #724 — this used to assert suppression, citing the structured path's
+    // (equally false) precedent. Adaptive thinking supports forced tool use, and
+    // the continuation replays raw content blocks, so thinking blocks travel back
+    // intact as the API requires during tool use.
+    expect(body.thinking).toEqual({ type: 'adaptive' });
+    expect(body.output_config).toEqual({ effort: 'high' });
   });
 
   it("omits tools entirely under toolChoice 'none' (the plain text path)", async () => {
@@ -974,5 +1085,281 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     const body = requestBody(fetchSpy, 0);
     expect(body).not.toHaveProperty('tools');
     expect(body).not.toHaveProperty('tool_choice');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #727 / #724 — the unsupported-parameter PREFLIGHT.
+//
+// The connector emits `temperature`/`top_p` and the `thinking`+`output_config`
+// reasoning pair only when the AUTHOR opted in. Several current models REMOVED
+// those knobs and answer 400. The preflight refuses such a call LOCALLY, before
+// any request, with an error naming the model, the parameter and the remedy —
+// same terminal class (`permanent`) as the provider 400 it replaces, but
+// diagnosable without reading a provider body.
+// ---------------------------------------------------------------------------
+describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727)', () => {
+  it.each([
+    ['temperature', 'claude-opus-5', { temperature: 0.2 }],
+    ['topP', 'claude-opus-5', { topP: 0.9 }],
+    // The model #727's own ticket text MISSED — sampling params are removed on
+    // Sonnet 5 too, so the list had to be re-derived rather than transcribed.
+    ['temperature', 'claude-sonnet-5', { temperature: 0.2 }],
+    ['temperature', 'claude-opus-4-8', { temperature: 0.2 }],
+  ])('refuses %s on %s before issuing any request', async (param, model, over) => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', model, ...over } }), 'sk'),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(events.map((e) => e.type)).toEqual(['failed']);
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain(model);
+    expect(failed(events).error).toContain(param);
+  });
+
+  it('refuses a sampling param on the DEFAULT model when the node names none', async () => {
+    // DEFAULT_MODEL is `claude-opus-5`, which rejects them — so a node that sets
+    // only `temperature` must refuse. This is why the gate is a DISPATCH-time
+    // check and not an author-time Zod refinement: the resolved model can come
+    // from the connection or the built-in default, neither visible to the node.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: { prompt: 'hi', temperature: 0.2 } }), 'sk'),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).error).toContain('claude-opus-5');
+  });
+
+  it('refuses a sampling param when the CONNECTION supplies the rejecting model', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: { prompt: 'hi', temperature: 0.2 },
+          connectionConfig: { model: 'claude-fable-5' },
+        }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).error).toContain('claude-fable-5');
+  });
+
+  it('refuses an explicitly-set DEFAULT-valued temperature too (conscious over-refusal)', async () => {
+    // Sources differ on whether the 400 is on ANY temperature or only a
+    // non-default one. The gate gates on PRESENCE: the authored intent (steer
+    // sampling) cannot be honoured on a model with no sampling knobs, and
+    // "the default" is not well-defined for `topP`. Pinned so the choice is
+    // deliberate rather than incidental.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-5', temperature: 1 } }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+  });
+
+  it('does NOT refuse a sampling param on a model that still accepts it', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-4-6', temperature: 0.2 } }),
+        'sk',
+      ),
+    );
+    expect(sentBody(spy).temperature).toBe(0.2);
+  });
+
+  it('does NOT refuse on an unknown / dated model id (absent fact is never a refusal)', async () => {
+    // Exact-string matching only. A dated or proxied id is NOT asserted to
+    // reject anything, so it falls through to the pre-existing behaviour (the
+    // provider decides). The inverse of `price-table.ts`'s fail-closed default,
+    // and deliberately so — see the module note.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-5-20260101', temperature: 0.2 } }),
+        'sk',
+      ),
+    );
+    expect(sentBody(spy).temperature).toBe(0.2);
+  });
+
+  it('refuses reasoningEffort on a model with no adaptive-thinking surface', async () => {
+    // A THIRD defect, pre-existing and independent of #724: the TEXT path has
+    // always emitted `thinking`+`output_config` whenever `reasoningEffort` is
+    // set, so this already 400d on main.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-haiku-4-5', reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('reasoningEffort');
+  });
+
+  it('refuses reasoningEffort on claude-opus-4-5 even though it accepts effort', async () => {
+    // The one model where the two facts come apart: 4.5 accepts
+    // `output_config.effort` (low/medium/high) but predates the adaptive
+    // surface, and the connector emits both keys TOGETHER — so the pair is
+    // rejected on the `thinking` key whatever the effort value.
+    //
+    // Pinned deliberately, because an earlier draft of this sweep exempted 4.5
+    // and asserted `thinking:{type:'adaptive'}` as its correct wire body — which
+    // enshrined the very 400 this preflight exists to prevent, invisibly,
+    // because `fetch` is mocked.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-4-5', reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('reasoningEffort');
+  });
+
+  it("refuses reasoningEffort 'max' on claude-opus-4-5 (the per-value 400, subsumed)", async () => {
+    // `reasoningEffortSchema` admits `max`, which 4.5 rejects even though it
+    // accepts the other three levels — a per-(model, VALUE) fact a boolean set
+    // cannot express. Refusing 4.5 wholesale subsumes it; this pins that the
+    // value dimension really is covered, so removing 4.5 from the set later
+    // cannot silently reopen the hole.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({ input: { prompt: 'hi', model: 'claude-opus-4-5', reasoningEffort: 'max' } }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+  });
+
+  it('REGRESSION, accepted: a structured node that worked on main is now refused', async () => {
+    // The one case where this branch is NOT "same outcome, better diagnosis".
+    //
+    // On main the structured path passed `allowThinking:false`, so a node naming
+    // a no-adaptive-surface model AND setting `reasoningEffort` emitted NEITHER
+    // reasoning key — a valid body the provider answered 200. #724 deletes that
+    // suppression, so the pair is now emitted, the model is in
+    // MODELS_REJECTING_ADAPTIVE_THINKING, and the preflight refuses outright.
+    // `permanent` is retry-ineligible, so there is no self-recovery.
+    //
+    // Kept as a REFUSAL rather than silently dropping the keys, for the reason
+    // `unsupportedAnthropicParams` gives about `temperature`: proceeding would
+    // grant the letter of the authored request while dropping its point. What
+    // main actually did was ignore the author's `reasoningEffort` without
+    // saying so — the silent defect #724 exists to remove — so the loud failure
+    // is the intended direction, not collateral damage. Pinned so the break is
+    // a visible decision rather than a production discovery.
+    //
+    // Affects `claude-opus-4-5` / `claude-sonnet-4-5` / `claude-haiku-4-5` on
+    // the STRUCTURED and `toolChoice:'required'` paths only. The text path and
+    // the `auto` tools path already 400d on main.
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'classify',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { c: { type: 'string' } } },
+            model: 'claude-haiku-4-5',
+            reasoningEffort: 'high',
+          },
+        }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('reasoningEffort');
+  });
+
+  it('the same structured node WITHOUT reasoningEffort still succeeds', async () => {
+    // The other half of the regression pin: proves the refusal above is caused
+    // by `reasoningEffort` alone and that the model itself is still reachable
+    // on the structured path. This body is byte-identical to what main sent for
+    // the node above, because main dropped both reasoning keys — so this is the
+    // behaviour that was lost, captured next to the loss.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(fakeResponse(200, toolResponse({ c: 'ok' })));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'classify',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { c: { type: 'string' } } },
+            model: 'claude-haiku-4-5',
+          },
+        }),
+        'sk',
+      ),
+    );
+    const body = JSON.parse((spy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.thinking).toBeUndefined();
+    expect(body.output_config).toBeUndefined();
+    expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+  });
+
+  it('fires on the STRUCTURED path too, not just text', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'classify',
+            outputMode: 'structured',
+            outputSchema: { type: 'object', properties: { c: { type: 'string' } } },
+            model: 'claude-opus-5',
+            temperature: 0.2,
+          },
+        }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(events.map((e) => e.type)).toEqual(['failed']);
+  });
+
+  it('fires on the TOOLS path too', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      anthropicAdapter.runActivity(
+        ctx({
+          input: {
+            prompt: 'add',
+            model: 'claude-opus-5',
+            temperature: 0.2,
+            tools: [
+              {
+                name: 'sum',
+                description: 'add',
+                parameters: {
+                  type: 'object',
+                  properties: { a: { type: 'number' } },
+                  required: ['a'],
+                },
+                expression: '1',
+              },
+            ],
+          },
+        }),
+        'sk',
+      ),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(events.map((e) => e.type)).toEqual(['failed']);
   });
 });

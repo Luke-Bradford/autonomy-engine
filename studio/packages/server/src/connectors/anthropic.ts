@@ -16,9 +16,11 @@ import {
   runTextWithTools,
   structuredEcho,
   toolWireParameters,
+  unsupportedParamFailure,
   validateStructuredOutput,
 } from './llm-shared.js';
 import type { NoCompletionReason, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
+import { unsupportedAnthropicParams } from './anthropic-models.js';
 
 /** The forced-tool name a structured `llm_call` requires Anthropic to call. */
 const STRUCTURED_TOOL_NAME = 'structured_output';
@@ -88,6 +90,19 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * un-retried (`empty_completion_set`, `permanent`) rather than silent and
  * billed. Raising the budget further needs streaming or a token-scaled timeout,
  * not a bigger constant — tracked in #725.
+ *
+ * #724 — THIS BUDGET NOW BINDS ON ALL THREE PATHS, not just text. Deleting
+ * `allowThinking` means a node that sets `reasoningEffort` puts thinking in
+ * competition with the STRUCTURED path's forced `tool_use` block and with the
+ * `toolChoice:'required'` flow, where it previously could not. The structured
+ * case is the sharpest: an exhausted budget yields no complete `tool_use` block,
+ * L4c spends a REPAIR call under the identical budget, and only then
+ * terminalizes `permanent` — two billed calls for one budget problem. That is
+ * why BOTH invalid shapes now carry the response's `stop_reason` (see the
+ * structured `doCall`): the diagnosis has to name the budget, because either
+ * symptom otherwise looks like a disobedient model. The `required` tools path
+ * shares the exposure but degrades better (a bad call becomes an error
+ * `tool_result` and the flow downgrades to `auto`).
  *
  * Note this is a CAP, not a spend: tokens are billed as generated, so a short
  * answer still costs a short answer. The real cost increase is the thinking
@@ -262,18 +277,48 @@ export const anthropicAdapter: ConnectorAdapter = {
     };
     const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
 
+    // #727 — PREFLIGHT: refuse locally when the AUTHOR set a parameter the
+    // RESOLVED model has removed, before issuing a request the provider would
+    // 400. Placed after `resolveModel` + `normalizeLlmRequest` and before the
+    // structured / tools / text branch, so all three dispatch paths are covered
+    // by one check.
+    //
+    // This is necessarily a DISPATCH-time check, not an author-time Zod
+    // refinement: `resolveModel` takes the model from the node, ELSE the
+    // connection's default, ELSE `DEFAULT_MODEL` — and the latter two are
+    // invisible to node-config validation. A node that sets only `temperature`
+    // and names no model resolves to `claude-opus-5`, which rejects it.
+    //
+    // `testConnection` needs no equivalent: it is a GET to `/v1/models` with no
+    // sampling or reasoning body at all.
+    const unsupported = unsupportedAnthropicParams(model, {
+      hasTemperature: sampling.temperature !== undefined,
+      hasTopP: sampling.topP !== undefined,
+      hasReasoningEffort: reasoningEffort !== undefined,
+    });
+    // The destructure is what proves non-emptiness to the compiler, which is the
+    // precondition `unsupportedParamFailure`'s tuple type encodes.
+    const [firstUnsupported, ...restUnsupported] = unsupported;
+    if (firstUnsupported !== undefined) {
+      yield unsupportedParamFailure('anthropic_api', model, [firstUnsupported, ...restUnsupported]);
+      return;
+    }
+
     // #648 — ONE wire-body builder for all three paths (text / structured L4c /
     // tools L10a); previously the system/temperature/top_p/stop stanza was
     // duplicated per path. The Messages API takes `system` as a top-level param
     // (not a message) and has no `seed` (dropped, documented #2 L1). Tools +
     // tool_choice travel as ONE `toolWire` group so a `tool_choice` without
-    // `tools` (a provider 400) is unrepresentable. `allowThinking` carries each
-    // path's reasoning posture — see the callers, and #724, for why the forced
-    // `tool_choice` paths suppress it (the ORIGINAL "a forced choice precludes
-    // adaptive thinking" reason was false; the flag is kept for now regardless).
+    // `tools` (a provider 400) is unrepresentable.
+    //
+    // #724 — there is no longer a per-path reasoning posture. An `allowThinking`
+    // flag used to let the two FORCED-`tool_choice` callers suppress the
+    // reasoning keys; it is deleted, so the reasoning surface is now a pure
+    // function of whether the author set `reasoningEffort`, identically on all
+    // three paths.
     const buildBody = (
       msgs: readonly unknown[],
-      opts: { toolWire?: { tools: unknown[]; choice: unknown }; allowThinking: boolean },
+      opts: { toolWire?: { tools: unknown[]; choice: unknown } } = {},
     ): Record<string, unknown> => {
       const body: Record<string, unknown> = {
         model,
@@ -304,16 +349,23 @@ export const anthropicAdapter: ConnectorAdapter = {
       // current default. On Opus 5 an omitted `thinking` runs ADAPTIVE anyway, so
       // emitting `{type:'adaptive'}` is equivalent to the model default rather
       // than the thing that switches reasoning on. It stays emitted because it is
-      // still load-bearing on **Opus 4.8/4.7 and Sonnet 4.6**, which a node or
-      // connection may select by name and which do NOT think when `thinking` is
-      // omitted. (Sonnet 5 is NOT in that list — like Opus 5 it runs adaptive on
-      // omission, so the emit is a no-op there.)
+      // still load-bearing on **Opus 4.8/4.7, Opus 4.6 and Sonnet 4.6**, which a
+      // node or connection may select by name and which do NOT think when
+      // `thinking` is omitted. (Sonnet 5 is NOT in that list — like Opus 5 it
+      // runs adaptive on omission, so the emit is a no-op there. Opus 4.6 was
+      // absent from this list until #724 — it needs the explicit
+      // `{type:'adaptive'}` exactly as 4.8/4.7 do.)
       //
       // CAVEAT: thinking tokens count against `max_tokens` — see the
       // DEFAULT_MAX_TOKENS note, which is now load-bearing rather than advisory.
       // Only fires when the author opted in, so a node with no `reasoningEffort`
       // is byte-identical to a pre-L3 request.
-      if (reasoningEffort !== undefined && opts.allowThinking) {
+      //
+      // #727 — a model with NO adaptive surface (`claude-sonnet-4-5`,
+      // `claude-haiku-4-5`) would 400 on both keys. The dispatch preflight
+      // refuses that combination before this builder is ever reached, so this
+      // emit is unconditional on the author's opt-in alone.
+      if (reasoningEffort !== undefined) {
         body.thinking = { type: 'adaptive' };
         body.output_config = { effort: reasoningEffort };
       }
@@ -333,32 +385,40 @@ export const anthropicAdapter: ConnectorAdapter = {
     // is the robust, model-agnostic Anthropic structured mechanism (the newer
     // `output_config.format` is model-gated), and it makes a `tool_use`-only
     // response the COMPLETION rather than a no-completion (superseding the text-mode
-    // note in `extractText`). Structured mode does NOT emit `thinking`/`output_config`
-    // even when `reasoningEffort` is set, so reasoning stays available in text mode
-    // and on the other providers.
+    // note in `extractText`).
     //
-    // #708 — the ORIGINAL justification for that suppression was "a forced
-    // `tool_choice` precludes the adaptive-thinking surface". That is FALSE and
-    // is corrected here rather than propagated: forcing tool use errors only
-    // under MANUAL extended thinking (`thinking:{type:'enabled'}`), and
-    // "adaptive thinking supports forced tool use". So there is no 400 to avoid.
-    // The suppression is also now INERT on the Opus 5 default: omitting
-    // `thinking` no longer suppresses reasoning, it just accepts the model's
-    // adaptive default, which is why DEFAULT_MAX_TOKENS had to be raised for
-    // this path too. Left in place deliberately — deleting it changes the
-    // reasoning posture of every structured/`required` node, which is a
-    // behaviour change that belongs in its own ticket, not a bug sweep. See #724.
+    // #724 — structured mode now emits `thinking`/`output_config` exactly as text
+    // mode does when the author set `reasoningEffort`. It used to SUPPRESS them,
+    // on the stated grounds that "a forced `tool_choice` precludes the
+    // adaptive-thinking surface". That was FALSE: forcing tool use errors only
+    // under MANUAL extended thinking (`thinking:{type:'enabled'}`), while
+    // "adaptive thinking supports forced tool use" — and this connector only ever
+    // emits `{type:'adaptive'}`, so there was never a 400 to avoid. The
+    // suppression was additionally INERT on the Opus 5 default, which thinks on an
+    // omitted `thinking` anyway. Net effect of the deletion: `reasoningEffort` is
+    // HONOURED here instead of being silently ignored.
+    //
+    // The premise holds on the FIRST-PARTY Messages API, which is the qualifier
+    // that matters: on Amazon Bedrock, Claude Sonnet 5 with a forced `tool_choice`
+    // does require `thinking:{type:'disabled'}`. Reachable only via a proxied
+    // `baseUrl`, and the exact-string capability sets could not cover it anyway
+    // (Bedrock ids carry an `anthropic.` prefix), so the preflight is not the
+    // remedy — a Bedrock-aware connection kind would be. Noted so the premise
+    // reads as scoped rather than universal.
+    //
+    // Safe against the API's thinking-REPLAY rule (thinking blocks must come back
+    // intact alongside a replayed `tool_use`, and a rebuilt message 400s): this
+    // path never replays a `tool_use` block at all — `buildRepairTurns` echoes the
+    // invalid result as PLAIN TEXT turns — so the rule is not engaged here.
+    //
     // L4c wraps the call in a bounded internal repair loop:
     // `runStructuredWithRepair` rebuilds the body from the (possibly repair-extended)
     // turns each call, meters every billed call, re-prompts on an invalid/absent
     // forced-tool result, and terminalizes `permanent` only once repairs run out —
     // all inside ONE attempt.
     if (structuredOutput !== undefined) {
-      // Structured mode never emits `thinking`/`output_config`
-      // (`allowThinking:false`) — see the #708 note above for why the original
-      // "forced tool_choice precludes thinking" rationale was wrong and why the
-      // flag is nonetheless kept for now. Only `messages` changes across repair
-      // calls, so the static scaffold is rebuilt with the passed turns.
+      // Only `messages` changes across repair calls, so the static scaffold is
+      // rebuilt with the passed turns.
       const structuredWire = {
         tools: [
           {
@@ -375,7 +435,7 @@ export const anthropicAdapter: ConnectorAdapter = {
           'anthropic_api',
           url,
           headers,
-          buildBody(turns, { toolWire: structuredWire, allowThinking: false }),
+          buildBody(turns, { toolWire: structuredWire }),
           timeoutMs,
         );
         if (!res.ok) return { type: 'terminal', event: res.event };
@@ -387,21 +447,52 @@ export const anthropicAdapter: ConnectorAdapter = {
         // A missing forced-tool block is now REPAIRABLE (fold into an invalid
         // result) rather than an immediate terminal — a model that answered with
         // text instead of the tool may correct on a re-prompt.
+        //
+        // #724 — the `stop_reason` is CARRIED INTO the reason string on BOTH
+        // invalid shapes, and it is the reasoning change that makes it
+        // load-bearing. `max_tokens` caps thinking and the `tool_use` block
+        // TOGETHER, so a node that sets `reasoningEffort` now has thinking
+        // competing for the same budget here. When it exhausts, the block comes
+        // back either ABSENT (no `tool_use` at all) or TRUNCATED (a `tool_use`
+        // whose `input` is short of the schema) — and the two take different
+        // code paths, which is why annotating only the first was not enough:
+        //
+        //   absent    → `!tool.found` below → "carried no ... tool_use block"
+        //   truncated → `validateStructuredOutput` → "category: expected string,
+        //               received undefined"
+        //
+        // The truncated shape is the SHARPER of the two, because its message
+        // reads like a schema defect and blames the model outright. Both now
+        // carry the stop reason, so `max_tokens` names the real cause in the
+        // repair critique and in the durable error. Either shape costs two
+        // billed calls (the repair re-issues under the same budget) before
+        // terminalizing `permanent`.
+        //
+        // Annotated unconditionally rather than only on `max_tokens`: an
+        // `end_turn` is equally diagnostic (the model finished and simply got the
+        // schema wrong), and a value-dependent annotation would make the absence
+        // of the note ambiguous between "not truncated" and "not annotated".
+        const stopReason = coerceStopReason((res.json as { stop_reason?: unknown }).stop_reason);
         if (!tool.found) {
           return {
             type: 'validated',
             usage,
             result: {
               ok: false,
-              reason: `response carried no ${STRUCTURED_TOOL_NAME} tool_use block`,
+              reason:
+                `response carried no ${STRUCTURED_TOOL_NAME} tool_use block ` +
+                `(stop_reason: ${stopReason})`,
             },
             echo: structuredEcho(undefined),
           };
         }
+        const validated = validateStructuredOutput(structuredOutput, tool.input);
         return {
           type: 'validated',
           usage,
-          result: validateStructuredOutput(structuredOutput, tool.input),
+          result: validated.ok
+            ? validated
+            : { ok: false, reason: `${validated.reason} (stop_reason: ${stopReason})` },
           echo: structuredEcho(tool.input),
         };
       });
@@ -415,19 +506,19 @@ export const anthropicAdapter: ConnectorAdapter = {
     const tools = input.data.tools;
     const authorChoice = input.data.toolChoice ?? 'auto';
     if (tools !== undefined && authorChoice !== 'none') {
-      // A `required` flow suppresses `thinking`/`output_config` for the WHOLE
-      // attempt (one rule per node; enabling it only on the downgraded
-      // continuation would split one node's reasoning posture across calls). An
-      // `auto` flow keeps reasoning as text mode does.
+      // #724 — a `required` flow used to suppress `thinking`/`output_config` for
+      // the whole attempt, on the same false premise the structured path carried
+      // (see the note there). Both flows now keep reasoning exactly as text mode
+      // does, so there is no longer a per-choice posture to compute — and no risk
+      // of splitting one node's posture across the downgraded continuation,
+      // because there is only one rule.
       //
-      // #708 — this used to say a forced `tool_choice` "precludes the
-      // adaptive-thinking surface, exactly as the structured path's forced
-      // `{type:'tool'}` does". Both halves of that were wrong: forcing tool use
-      // errors only under MANUAL extended thinking, and adaptive thinking
-      // supports it. As on the structured path the flag is now also inert on
-      // the Opus 5 default. Kept rather than removed for the same reason — see
-      // #724.
-      const suppressThinking = authorChoice === 'required';
+      // The replay rule IS engaged on this path (unlike the structured one), and
+      // is already satisfied: the continuation below replays the response's RAW
+      // content blocks, so thinking blocks travel back intact as the API
+      // requires during tool use. The `auto` flow has emitted thinking every
+      // round since L10a shipped, so this extends a proven mechanism rather than
+      // introducing one.
       const localTools = tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -458,7 +549,6 @@ export const anthropicAdapter: ConnectorAdapter = {
                 tools: localTools,
                 choice: { type: choice === 'required' ? 'any' : 'auto' },
               },
-              allowThinking: !suppressThinking,
             }),
             timeoutMs,
           );
@@ -560,7 +650,7 @@ export const anthropicAdapter: ConnectorAdapter = {
       'anthropic_api',
       url,
       headers,
-      buildBody(messages, { allowThinking: true }),
+      buildBody(messages),
       timeoutMs,
     );
     // #2 L9a — the prompt/completion CAPTURE fact, emitted before EVERY post-request
