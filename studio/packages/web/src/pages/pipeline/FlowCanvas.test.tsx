@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
 import { createCanvasStore } from './canvasStore';
@@ -15,23 +16,10 @@ import { createCanvasStore } from './canvasStore';
  * is a genuine no-op rather than a node authored somewhere unhelpful.
  */
 
-/**
- * A `DataTransfer` stand-in, since jsdom implements none.
- *
- * `protectedMode` reproduces the HTML drag-data store's behaviour during
- * `dragenter`/`dragover`: `types` is readable, `getData()` returns `''`. Without
- * it a `dragover` gate written against the payload would pass here and reject
- * every real drag in a browser.
- */
+/** A `DataTransfer` stand-in — see `testing/fakeDataTransfer.ts` for why the
+ * protected-mode distinction matters and why it is defined once. */
 function dataTransfer(entries: Record<string, string>, protectedMode = false): DataTransfer {
-  const data = new Map(Object.entries(entries));
-  return {
-    types: [...data.keys()],
-    dropEffect: 'none',
-    effectAllowed: 'uninitialized',
-    getData: (format: string) => (protectedMode ? '' : (data.get(format) ?? '')),
-    setData: (format: string, value: string) => data.set(format, value),
-  } as unknown as DataTransfer;
+  return fakeDataTransfer({ data: entries, protectedMode });
 }
 
 /** An activity drag, as the toolbox arms it. */
@@ -52,7 +40,7 @@ function mountCanvas() {
   // Both must exist, or a spec below would pass by dispatching into nothing.
   expect(surface).not.toBeNull();
   expect(chrome).not.toBeNull();
-  return { store, surface: surface!, chrome: chrome! };
+  return { store, container, surface: surface!, chrome: chrome! };
 }
 
 describe('FlowCanvas drop target (U5)', () => {
@@ -76,17 +64,24 @@ describe('FlowCanvas drop target (U5)', () => {
   });
 
   /**
-   * A drop this canvas does not own must be left ALONE, not merely made
-   * ineffective — so each case below asserts `preventDefault` was NOT called as
-   * well as "no node".
+   * What THIS layer uniquely decides is whether the event is default-prevented,
+   * so that is what these specs assert alongside "no node".
    *
-   * The second half is the load-bearing one. Asserting only "no node" does not
-   * test this layer at all: `canvasStore.addNode` refuses an unknown and a
-   * structural-call type on its own, so replacing the whole payload check with a
-   * raw `getData()` leaves the node count identical and the assertion green
-   * (verified by mutation). Whether the event is default-prevented is the one
-   * thing only THIS layer decides — and it is the thing the operator sees, since
-   * swallowing a file drag means the browser silently does nothing with it.
+   * They deliberately do NOT try to pin the payload RULES (which types are
+   * authorable). Asserting only "no node was added" would test nothing here:
+   * `canvasStore.addNode` refuses an unknown and a structural-call type on its
+   * own, so replacing the whole payload check with a raw `getData()` leaves
+   * every node count identical (verified by mutation — it survived). Those rules
+   * are pinned where they are observable, in `activityDnd.test.ts`.
+   *
+   * The line these specs DO draw is between two different kinds of refusal:
+   *  - a drag that is NOT OURS is left alone — un-cancelled, so the browser
+   *    still does whatever it would have done with a dropped file or link;
+   *  - a drag that IS ours but is unauthorable is CLAIMED and then ignored,
+   *    because `dragover` already promised to accept it. Bailing without
+   *    cancelling would hand a drop we invited back to the browser's default
+   *    action — and `types` being a list, a drag carrying our MIME alongside
+   *    `text/uri-list` would navigate the page away from an unsaved graph.
    */
   it('leaves a foreign drag alone — a dropped file or text selection is not ours', () => {
     const { store, surface } = mountCanvas();
@@ -99,24 +94,25 @@ describe('FlowCanvas drop target (U5)', () => {
     expect(prevented).toBe(false);
   });
 
-  it('leaves a payload naming a type the catalog does not have alone', () => {
+  it('CLAIMS a drop it invited but cannot author — an uncatalogued type', () => {
     const { store, surface } = mountCanvas();
     const prevented = !fireEvent.drop(surface, {
       dataTransfer: activityDrag('not_an_activity'),
       clientX: 0,
     });
     expect(store.getState().nodes).toHaveLength(0);
-    expect(prevented).toBe(false);
+    // Claimed, NOT handed back to the browser — see the block comment above.
+    expect(prevented).toBe(true);
   });
 
-  it('leaves a payload naming the structural-call activity alone (#4 A9 / #425)', () => {
+  it('CLAIMS a drop naming the structural-call activity, and authors nothing (#4 A9 / #425)', () => {
     const { store, surface } = mountCanvas();
     const prevented = !fireEvent.drop(surface, {
       dataTransfer: activityDrag('execute_pipeline'),
       clientX: 0,
     });
     expect(store.getState().nodes).toHaveLength(0);
-    expect(prevented).toBe(false);
+    expect(prevented).toBe(true);
   });
 
   it('CLAIMS a drop it does own, so the browser does not also act on it', () => {
@@ -127,6 +123,19 @@ describe('FlowCanvas drop target (U5)', () => {
       clientY: 0,
     });
     expect(prevented).toBe(true);
+  });
+
+  it('does NOT claim a drop on the chrome, even carrying our own payload', () => {
+    // The chrome guard runs BEFORE the claim, so a drop over the minimap is
+    // never invited in the first place — `dragover` refused it too.
+    const { store, chrome } = mountCanvas();
+    const prevented = !fireEvent.drop(chrome, {
+      dataTransfer: activityDrag('http_request'),
+      clientX: 0,
+      clientY: 0,
+    });
+    expect(store.getState().nodes).toHaveLength(0);
+    expect(prevented).toBe(false);
   });
 
   it('accepts the drag on dragover — preventDefault is what makes it a drop target', () => {

@@ -153,6 +153,40 @@ describe('ActivityToolbox', () => {
     expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
   });
 
+  it('a SEARCH overrides a collapsed group, so results are never hidden behind it', async () => {
+    // Without this, collapsing General and then searching `http` shows a lone
+    // collapsed heading and nothing else — and the empty state does not fire
+    // either, because the group DID match. Search, the ticket's headline
+    // capability, would silently appear to return nothing.
+    const user = userEvent.setup();
+    renderToolbox();
+    await user.click(
+      screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    );
+    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+
+    await user.type(filterBox(), 'http');
+    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+  });
+
+  it('restores the collapse once the search is cleared, rather than discarding it', async () => {
+    // The override is at RENDER; the collapsed set is untouched. Clearing the
+    // set instead would quietly throw away a preference the operator set.
+    const user = userEvent.setup();
+    renderToolbox();
+    await user.click(
+      screen.getByRole('button', { name: `Collapse ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    );
+    await user.type(filterBox(), 'http');
+    expect(screen.getByRole('button', { name: 'HTTP Request' })).toBeTruthy();
+
+    await user.clear(filterBox());
+    expect(screen.queryByRole('button', { name: 'HTTP Request' })).toBeNull();
+    expect(
+      screen.getByRole('button', { name: `Expand ${ACTIVITY_CATEGORY_LABELS.general}` }),
+    ).toBeTruthy();
+  });
+
   it('collapsing one group leaves the others open', async () => {
     const user = userEvent.setup();
     renderToolbox();

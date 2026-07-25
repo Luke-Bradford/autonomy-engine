@@ -67,10 +67,19 @@ const nodeTypes = { activity: ActivityNode };
  */
 const CANVAS_CHROME_SELECTOR = '.react-flow__panel';
 
-/** Is this drag event over the canvas surface (as opposed to its chrome)? */
+/**
+ * Is this drag event over the canvas surface (as opposed to its chrome)?
+ *
+ * `event.target` — not `currentTarget` (always the wrapper) and not
+ * `relatedTarget` (only meaningful on `dragenter`/`dragleave`).
+ *
+ * Fails CLOSED on a target that is not an `Element`: unreachable in practice
+ * (a hit-tested drag target always is one), but "we could not tell where this
+ * landed" must not resolve to "author a node there".
+ */
 function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
   const target = event.target;
-  return !(target instanceof Element) || target.closest(CANVAS_CHROME_SELECTOR) === null;
+  return target instanceof Element && target.closest(CANVAS_CHROME_SELECTOR) === null;
 }
 
 /**
@@ -84,6 +93,16 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * measured size; view changes (drag/remove) flow BACK into the store. Edges,
  * which carry no measured state, are derived straight from the store.
  * `onlyRenderVisibleElements` keeps a large graph responsive.
+ *
+ * NOTE for whoever pins this as a regression test (the epic asks for one before
+ * U6a): the obvious unit test — "an unrelated store change does not remount an
+ * existing node" — does NOT discriminate. React keys node elements by id, so DOM
+ * identity survives even if the carry-forward below is deleted outright
+ * (confirmed by mutation: the test stays green). The property only diverges
+ * while a drag is IN FLIGHT, when the view position leads the domain position
+ * and `measured` is already populated — neither of which jsdom can produce, and
+ * neither of which survives a settled drag. A real check has to drive an actual
+ * pointer drag in a browser and observe mid-gesture.
  */
 export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const nodes = useStore(store, (s) => s.nodes);
@@ -177,10 +196,21 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
-    if (!isOverCanvasSurface(event)) return;
+    /* The SAME predicate as `onDragOver`, and it must stay the same one.
+       `dragover` can only see the drag's SHAPE, so it accepts on the MIME type
+       alone; if `drop` then bailed on an unreadable PAYLOAD without cancelling,
+       the canvas would have promised a copy-drop with the cursor and then handed
+       the event back to the browser to perform its DEFAULT action.
+       `DataTransfer.types` is a LIST, so a drag carrying our type alongside
+       `text/uri-list` would navigate the page to the dropped URL — discarding an
+       unsaved graph with no confirmation. Claim every drop we invited, THEN
+       decide whether it authors anything. */
+    if (!hasActivityDragType(event.dataTransfer) || !isOverCanvasSurface(event)) return;
+    event.preventDefault();
+    // Ours, but not something we can author (an uncatalogued or structural-call
+    // type from another tab or an older build): a no-op, not a default action.
     const type = readActivityDragType(event.dataTransfer);
     if (type === null) return;
-    event.preventDefault();
     /* The node's TOP-LEFT lands under the pointer. Deliberately not offset to
        centre it: the drag image is a toolbox BUTTON, whose size bears no
        relation to the node's, so subtracting the grab offset inside it would be

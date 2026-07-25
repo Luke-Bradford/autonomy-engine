@@ -4,11 +4,11 @@ import { getActivity, isStructuralCallActivity } from '@autonomy-studio/shared';
  * The drag-and-drop PROTOCOL between the activity toolbox (drag source) and the
  * canvas (drop target) — U5.
  *
- * Its own module, rather than living in `activityToolbox.ts`, because it has two
+ * Its own module, rather than living in `activityGroups.ts`, because it has two
  * consumers in DIFFERENT roles: `ActivityToolbox.tsx` writes the payload and
- * `FlowCanvas.tsx` reads it. Folding it into the toolbox module would make the
- * canvas import the toolbox's presentation concerns (group labels, filtering) to
- * read three fields off a `DataTransfer`.
+ * `FlowCanvas.tsx` reads it. Folding it into that module would make the canvas
+ * import the toolbox's presentation concerns (group labels, filtering) to read
+ * three fields off a `DataTransfer`.
  */
 
 /**

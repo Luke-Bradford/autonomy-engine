@@ -661,13 +661,41 @@ Decisions worth not re-deriving:
   A gate written against the payload passes any test whose `DataTransfer` fake hands the data
   back, and then rejects every real drag in a browser. `hasActivityDragType` exists for exactly
   this asymmetry; `readActivityDragType` re-validates at drop, where the payload is readable.
-- **`preventDefault()` is called ONLY for our own drags.** It is what makes an element a drop
-  target, so an unconditional call would make the canvas swallow every file/link/text drag
-  released over it — silently doing nothing instead of letting the browser do its default thing.
-  The unit specs assert the *not-default-prevented* half deliberately: asserting only "no node
-  was added" tests nothing here, because `canvasStore.addNode` refuses an unknown or
-  structural-call type on its own (verified by mutation — replacing the whole payload check with
-  a raw `getData()` left every node-count assertion green).
+- **`preventDefault()` is called for our own drags — and "ours" is NOT "authorable".** It is what
+  makes an element a drop target, so an unconditional call would make the canvas swallow every
+  file/link/text drag released over it. But the two gates are asymmetric: `dragover` can only see
+  a drag's SHAPE (its MIME types), while `drop` can read the payload. So `drop` cancels on the
+  SAME predicate `dragover` accepted on, and only then decides whether to author. Bailing before
+  `preventDefault` on an unauthorable payload would hand back a drop we had already invited with
+  a copy cursor — and since `DataTransfer.types` is a LIST, a drag carrying our MIME alongside
+  `text/uri-list` would then run the browser's default action and navigate the page away from an
+  unsaved graph.
+- **The `FlowCanvas` unit specs assert the default-prevented half, not the payload rules.**
+  Asserting only "no node was added" tests nothing at that layer, because `canvasStore.addNode`
+  refuses an unknown or structural-call type on its own — verified by mutation, which left every
+  node-count assertion green. The payload rules are pinned where they are observable, in
+  `activityDnd.test.ts`.
+- **A SEARCH overrides a COLLAPSE.** Otherwise, collapsing a group and then filtering shows a
+  lone collapsed heading and nothing else — and the empty state does not fire either, because the
+  group *did* match, so search silently appears to return nothing. The override is at render and
+  the collapsed set is left untouched, so clearing the query restores the operator's preference
+  instead of quietly discarding it.
+- **The `role="status"` empty state is ALWAYS mounted, with only its text changing.** A live
+  region inserted into the DOM in the same commit as its content is announced unreliably —
+  screen readers watch regions they already know about. Rendering it conditionally would satisfy
+  the visual requirement and quietly fail the one it exists for. Neither the unit nor the e2e
+  test can see this difference; it is a correctness decision, not a tested one.
+- **`aria-controls` ids come from `useId`, not a module constant.** Two toolboxes on one page
+  (a compare/side-by-side canvas is a plausible later ticket) would otherwise emit duplicate DOM
+  ids and every disclosure would point at the FIRST toolbox's list.
+- **`addNode` COPIES the caller's `position`.** Retaining the reference would let a caller mutate
+  a node's position from outside the actions, which are the single mutation point this store's
+  own doc claims.
+- **`isOverCanvasSurface` fails CLOSED on a non-`Element` target** — unreachable in practice, but
+  "we could not tell where this landed" must not resolve to "author a node there".
+- **The canvas height is one `--canvas-height` custom property** on `.canvas-grid`, read by both
+  `.canvas-wrap` and the toolbox's `max-height`. As two bare `620px` literals, editing one left
+  the toolbox silently short of, or overflowing past, the canvas beside it.
 - **A drop released over the canvas CHROME is refused.** React Flow spreads unknown props —
   including `onDrop` — onto its OUTER wrapper, and `MiniMap`, `Controls` and the attribution all
   render inside it through its `Panel` primitive (they share `react-flow__panel`). Without the
@@ -698,6 +726,14 @@ Decisions worth not re-deriving:
 - **`Palette.test.tsx` was renamed to `NodePanel.test.tsx`** (its remaining contents), because
   `src/palette.test.ts` — the CSS COLOUR-palette guard — already owned "palette" in this
   package's test names.
+- **The `DataTransfer` fake lives once**, in `testing/fakeDataTransfer.ts`, used by both drag
+  specs. Its protected-mode behaviour is precisely the subtlety that gets hardened in one copy
+  and not the other — the failure `e2e/support/theme.ts` records this repo already paying for.
+- **`title={entry.type}` on an item is a pointer-only affordance, accepted as such.** A native
+  `title` never appears on keyboard focus, so the raw activity type is not reachable by the users
+  this ticket's keyboard path is for. Fluent's `Tooltip relationship="label"` (U4's answer) is not
+  used here because it would attach a portalling surface to every one of ~15 items for a hint the
+  properties panel (**U7**) will show properly.
 - **`.activity-toolbox__list[hidden] { display: none }` is load-bearing**, and was a real bug
   for one commit. `display: flex` outranks the UA stylesheet's `[hidden] { display: none }` —
   ANY author `display` does — so a collapsed group stayed fully visible and fully in the
@@ -711,8 +747,15 @@ Decisions worth not re-deriving:
 - **Bundle, measured with and without the diff rather than inferred:** the `fluent` vendor chunk
   is UNCHANGED at 71.03 kB gzip (the chevrons were already imported by `FactoryResources`), the
   entry moves 109.46 → 109.52 kB gzip, and the toolbox's own cost lands in the LAZY
-  `PipelineCanvasRoute` chunk (60.01 → 60.76 kB gzip) — which is the property U1's chunk split
-  exists to keep. CSS 2.87 → 3.02 kB gzip.
+  `PipelineCanvasRoute` chunk (60.01 → 60.78 kB gzip) — which is the property U1's chunk split
+  exists to keep. CSS 2.87 → 3.03 kB gzip.
+
+Browser-verified after the review round: `--canvas-height` resolves to `620px` and the toolbox's
+`max-height` equals `.canvas-wrap`'s height; a group collapsed and THEN searched shows its match
+(`hidden` absent, `display: flex`, item height > 0) and re-collapses when the query is cleared,
+with sibling groups untouched; the `role="status"` region is mounted with empty text while
+results are on screen; `aria-controls` is `useId`-scoped and resolves; zero console errors or
+warnings.
 
 Browser-verified (Chromium, 2026-07-25, both themes): Fluent tokens resolve on
 `.app-fluent-root` (`--colorNeutralBackground1` `#292929` dark / `#ffffff` light); all 23 `--xy-*`
@@ -730,7 +773,24 @@ INTO a container (**U23**, which owns drag-into-container drop mechanics); a nod
 PREVIEW instead of the default button drag image (**U9**/**U23** polish); undoing an add
 (**U17**, which the epic says should land before U6*); zoom-to-fit after an add (**U9**); the
 `execute_pipeline` entry staying hidden (**U20** / **#425**); pane-tree drag REORDERING
-(**#732**, filed by this ticket). Known and accepted: on an EMPTY canvas `<ReactFlow fitView>`
+(**#732**, filed by this ticket); persisting the group-collapse preference across a canvas
+remount (it is component state today, and `PipelineCanvasRoute` keys the canvas per pipeline, so
+switching pipelines reopens every group — **U9**, which owns the command bar's per-pipeline
+region, or `uiStore` alongside U3's pane preference).
+
+**The P5c drag-reconciliation regression check the cross-cutting block asks for "before U6a" is
+NOT delivered here, and U6a owns it.** It was attempted: the obvious unit test — "an unrelated
+store change does not remount an existing node" — was written, and then found NOT to
+discriminate, because React keys node elements by id so DOM identity survives even with the
+carry-forward deleted outright (confirmed by mutation). The property only diverges while a drag
+is IN FLIGHT, when the view position leads the domain position and `measured` is populated —
+neither of which jsdom can produce, and neither of which survives a settled drag. A real check
+must drive a pointer drag in a browser and observe mid-gesture. The attempted test was deleted
+rather than shipped green, since a vacuous test under that name would have told U6a the invariant
+was covered; the trap is recorded in `FlowCanvas.tsx`'s own doc comment so it is not re-attempted
+blind.
+
+Known and accepted: on an EMPTY canvas `<ReactFlow fitView>`
 has not resolved yet, so the FIRST node added — by click or by drop — re-centres and re-zooms the
 viewport as it is measured; every subsequent drop lands where the pointer released. That is
 pre-existing click-add behaviour, not a U5 regression, and **U9** owns zoom/fit.

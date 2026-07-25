@@ -1,15 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import type { StoreApi } from 'zustand';
 import type { ActivityCategory } from '@autonomy-studio/shared';
 import { setActivityDragType } from './activityDnd';
 import { toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
-
-/** The list element id a group's disclosure names via `aria-controls`. */
-function listId(category: ActivityCategory): string {
-  return `activity-toolbox-${category}`;
-}
 
 /**
  * The Activities toolbox (U5) — the canvas's searchable, categorized palette.
@@ -35,6 +30,17 @@ function listId(category: ActivityCategory): string {
  * keep the pipelines PAGE alive alongside the pane tree.)
  */
 export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
+  /**
+   * Instance-scoped id prefix for the disclosure↔list `aria-controls` pairing.
+   *
+   * A module-level constant would be fine for today's single toolbox, but two
+   * mounted at once (a compare/side-by-side canvas is a plausible later ticket)
+   * would emit duplicate DOM ids, and every disclosure's `aria-controls` would
+   * then resolve to the FIRST toolbox's list — a silently wrong a11y
+   * relationship, which is what `useId` exists to prevent.
+   */
+  const uid = useId();
+  const listId = (category: ActivityCategory) => `${uid}-${category}`;
   const [query, setQuery] = useState('');
   /**
    * Which category groups the operator has collapsed.
@@ -46,6 +52,22 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<ActivityCategory>>(new Set());
 
   const groups = useMemo(() => toolboxGroups(query), [query]);
+
+  /**
+   * A SEARCH OVERRIDES A COLLAPSE.
+   *
+   * Without this, collapse "General" and then type `http`: the filter returns
+   * exactly one group, so the "no matches" state does not render either — and
+   * the operator sees a lone collapsed heading with nothing under it. Search,
+   * which is the ticket's headline capability, silently appears to return
+   * nothing. Results the user explicitly asked for must not stay behind a
+   * disclosure they closed while looking at a different list.
+   *
+   * The collapsed SET is deliberately not cleared: clearing it would make the
+   * groups stay open once the query is cleared again, quietly discarding a
+   * preference the operator set. Overriding at render restores it instead.
+   */
+  const searching = query.trim() !== '';
 
   function toggle(category: ActivityCategory) {
     setCollapsed((prev) => {
@@ -61,22 +83,25 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
       <input
         type="search"
         className="activity-toolbox__filter"
-        placeholder="Filter…"
+        placeholder="Filter"
         aria-label="Filter activities"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      {groups.length === 0 && (
-        /* `role="status"` so the result CHANGE is announced. A silently empty
-           column reads as "still loading" to someone who cannot see it. */
-        <p className="activity-toolbox__empty" role="status">
-          No activities match “{query.trim()}”.
-        </p>
-      )}
+      {/* ALWAYS mounted, with only its TEXT changing. `role="status"` is a live
+          region, and a live region inserted into the DOM in the same commit as
+          its content is announced unreliably — screen readers watch a region
+          they already know about. Rendering it conditionally would satisfy the
+          visual requirement and quietly fail the one it exists for. (Neither the
+          unit nor the e2e test can see this difference; it is a correctness
+          decision, not a tested one.) */}
+      <p className="activity-toolbox__empty" role="status">
+        {groups.length === 0 ? `No activities match “${query.trim()}”.` : ''}
+      </p>
 
       {groups.map((group) => {
-        const isCollapsed = collapsed.has(group.category);
+        const isCollapsed = collapsed.has(group.category) && !searching;
         return (
           <div className="activity-toolbox__group" key={group.category}>
             <button
@@ -87,7 +112,14 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
               aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${group.label}`}
               onClick={() => toggle(group.category)}
             >
-              {isCollapsed ? <ChevronRightRegular /> : <ChevronDownRegular />}
+              {/* `aria-hidden`, like U4's identical pair: the button already
+                  carries an explicit `aria-label`, and a decorative glyph must
+                  not join the accessible name. */}
+              {isCollapsed ? (
+                <ChevronRightRegular aria-hidden="true" />
+              ) : (
+                <ChevronDownRegular aria-hidden="true" />
+              )}
               <span aria-hidden="true">{group.label}</span>
             </button>
             <ul

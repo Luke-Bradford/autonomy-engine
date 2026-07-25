@@ -92,6 +92,38 @@ test.describe('U5 activities toolbox', () => {
     await expectQuiet(page, problems);
   });
 
+  test('a keyboard-focused activity has a visible focus ring', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'e2e u5 focus');
+
+    // TABBED to, not `.focus()`ed. `:focus-visible` is a heuristic on how focus
+    // ARRIVED: after `openCanvas`'s clicks, Chromium treats a programmatic
+    // `.focus()` as pointer-originated and matches no ring at all — so a
+    // `.focus()` version of this spec fails against correct CSS, and would have
+    // been "fixed" by weakening the assertion. Tab out of the filter box: one
+    // hop to the group disclosure, a second to its first activity.
+    await toolbox(page).getByRole('searchbox', { name: 'Filter activities' }).focus();
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+
+    // Assert WHERE focus landed before asserting how it looks — otherwise a
+    // changed tab order would silently move this test onto another element.
+    const item = toolbox(page).getByRole('button', { name: 'Copy File' });
+    await expect(item).toBeFocused();
+
+    const ring = await item.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset };
+    });
+    expect(ring.style).toBe('solid');
+    expect(parseFloat(ring.width)).toBeGreaterThan(0);
+    // STRICTLY negative: drawn inside the border box, so the toolbox's own
+    // `overflow-y: auto` cannot clip it — the same reasoning as the U3 pane.
+    expect(parseFloat(ring.offset)).toBeLessThan(0);
+
+    await expectQuiet(page, problems);
+  });
+
   test('drags an activity onto the canvas and drops it AT THE POINTER', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e u5 drag');

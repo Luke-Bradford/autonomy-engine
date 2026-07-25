@@ -78,7 +78,10 @@ interface FactoryResourcesProps {
  * readers already handle, and it keeps `NavLink`'s `isActive` as the ONE source of
  * "which one am I on" (the same reason `@fluentui/react-nav` was rejected for the
  * pane in U3: its `selectedValue` would be a second opinion beside the router's).
- * When U5/U20 give the tree real nesting, revisit.
+ * Revisit when the tree gains real nesting — U20 (`call_pipeline` authoring brings
+ * non-pipeline resources into it) or U22 (a version picker under a pipeline). NOT
+ * U5, which this used to name: U5's toolbox is a canvas-column surface and never
+ * touches the pane.
  *
  * The group HEADER is the hub's own section link, not a new label: `HUBS` stays
  * the single source of the pane's navigation, so the section still reaches the

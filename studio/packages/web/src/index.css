@@ -786,6 +786,13 @@ td button + button {
   grid-template-columns: 180px 1fr 320px;
   gap: 0.75rem;
   margin-top: 1rem;
+  /* The canvas's fixed height, declared ONCE. React Flow needs an explicitly
+     sized parent (`.canvas-wrap`), and the toolbox column caps itself to the
+     same value so a long catalog scrolls inside its own column instead of
+     stretching the grid row past the canvas beside it. Written as a custom
+     property because two rules must agree: as two bare `620px` literals, editing
+     one silently left the toolbox short of, or overflowing past, the canvas. */
+  --canvas-height: 620px;
 }
 
 .activity-toolbox,
@@ -815,8 +822,9 @@ td button + button {
 
 .activity-toolbox {
   /* Long catalogs scroll inside the column rather than stretching the grid row
-     past the canvas. */
-  max-height: 620px;
+     past the canvas. Same height as `.canvas-wrap`, from the one declaration on
+     `.canvas-grid`. */
+  max-height: var(--canvas-height);
   overflow-y: auto;
 }
 
@@ -894,6 +902,18 @@ td button + button {
   cursor: grabbing;
 }
 
+/* An EXPLICIT ring, matching `.secondary-pane__link` and `.icon-button`, rather
+   than leaning on the UA default. Keyboard operation is not a side path here —
+   it is this control's accessibility story, since the drag half has no keyboard
+   equivalent at all (WCAG 2.2 SC 2.5.7) — so the focus indicator should be the
+   app's, and consistent with every other list of activatable rows in the shell.
+   Drawn INSIDE the border box, like the rail and the pane, so the toolbox's own
+   `overflow-y: auto` cannot clip it. */
+.activity-toolbox__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .activity-toolbox__empty {
   margin: 0;
   font-size: 0.85rem;
@@ -925,7 +945,7 @@ td button + button {
 
 /* React Flow needs an explicitly-sized parent. */
 .canvas-wrap {
-  height: 620px;
+  height: var(--canvas-height);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;

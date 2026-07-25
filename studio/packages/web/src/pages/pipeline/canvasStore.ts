@@ -132,8 +132,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // Seed the node's declared output contract from the catalog template
         // (the run-time SSOT is the node's own config.outputs, see catalog docs).
         config: { outputs: entry.outputs.map((o) => ({ ...o })) },
-        // Stagger so repeated adds don't stack exactly on top of each other.
-        position: position ?? { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
+        // COPIED, never aliased: the store owns its graph, and holding a
+        // caller's object would let that caller mutate a node's position from
+        // outside the actions — the single mutation point this store's doc
+        // claims. Otherwise, stagger so repeated adds don't stack exactly.
+        position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
       };
       set((s) => ({
         nodes: [...s.nodes, node],
