@@ -51,6 +51,28 @@ class TestBlocks(unittest.TestCase):
         self.assertBlocked("FOO=bar git restore .")
         self.assertBlocked("env GIT_DIR=.git git stash")
 
+    def test_flagged_wrappers_do_not_smuggle_it_past(self):
+        # review: consuming only the bare wrapper keyword left `-u root git reset
+        # --hard` unrecognised as git at all, so it sailed through.
+        for cmd in ("sudo -u root git reset --hard",
+                    "env -i git restore .",
+                    "time -p git clean -fd",
+                    "nice -n 10 git stash",
+                    "nohup git reset --hard HEAD",
+                    "command git restore .",
+                    "sudo -u root env FOO=1 git clean -fd"):
+            self.assertBlocked(cmd)
+
+    def test_a_wrapper_with_no_git_is_not_git(self):
+        for cmd in ("sudo -u root rm -rf /tmp/x", "env -i pnpm test", "time -p ls"):
+            self.assertAllowed(cmd)
+
+    def test_non_wrapper_commands_that_MENTION_git_are_not_running_it(self):
+        # `man`/`which`/`apt` are not wrappers, so the token after them is not a
+        # subcommand -- otherwise reading docs would be blocked.
+        for cmd in ("man git stash", "which git", "apt list git", "type git"):
+            self.assertAllowed(cmd)
+
     def test_ordinary_git_is_untouched(self):
         for cmd in ("git status --short",
                     "git add -A",

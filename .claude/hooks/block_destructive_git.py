@@ -32,6 +32,9 @@ import re
 import sys
 
 OVERRIDE = "ALLOW_DESTRUCTIVE_GIT"
+# Commands that WRAP another command. Once one of these leads a segment, tokens are
+# skipped until `git`, because a wrapper's own flags and their values are unbounded.
+WRAPPERS = ("sudo", "env", "time", "nice", "nohup", "stdbuf", "command", "exec")
 # Stash subcommands that INSPECT or RESTORE work rather than remove it. `pop`/`apply`
 # put work back (and git refuses them when they would overwrite local changes), and
 # `branch` moves a stash onto a new branch -- all restorative. Only bare `stash`,
@@ -140,13 +143,28 @@ def commands_in(cmd):
         if not seg:
             continue
         overridden = False
+        # 1. leading env assignments: FOO=bar git ...  (this is where the override lives)
         while True:
-            m = re.match(r"^(?:([A-Za-z_][A-Za-z0-9_]*)=(\S*)|sudo|time|env)\s+", seg)
+            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+", seg)
             if not m:
                 break
             if m.group(1) == OVERRIDE and m.group(2) == "1":
                 overridden = True
             seg = seg[m.end():]
+        # 2. WRAPPER commands. Review found that consuming only the bare keyword left
+        # `sudo -u root git reset --hard` / `env -i git restore .` / `time -p git clean
+        # -fd` unrecognised as git at all -- silently allowed. A wrapper takes arbitrary
+        # flags AND flag VALUES, so enumerating them is a losing game: instead, once a
+        # known wrapper leads, skip tokens until `git` is found. Only KNOWN wrappers
+        # trigger this, so `man git stash` (not a wrapper) is not misread as running it.
+        toks = seg.split()
+        if toks and toks[0] in WRAPPERS:
+            for i, t in enumerate(toks):
+                if t == "git":
+                    seg = " ".join(toks[i:])
+                    break
+            else:
+                seg = ""
         yield seg, overridden
 
 
