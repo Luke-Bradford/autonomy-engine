@@ -377,6 +377,70 @@ describe('FactoryResources — row actions', () => {
   });
 
   /**
+   * The mirror of the case above: a delete that FAILED removed no row, so there
+   * is nothing to hand focus back FROM. Arming the restoration anyway leaves it
+   * armed indefinitely — a failed delete never refreshes, so the effect that
+   * would consume it does not run — and the next unrelated change to the SHARED
+   * list (the pipelines page, mounted beside this pane, creating or deleting)
+   * fires it instead, yanking focus out of whatever the user had moved on to.
+   */
+  it('disarms focus restoration when the delete FAILED, so nothing steals it later', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
+    const { store } = renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await screen.findByRole('alert');
+
+    // The row survived the failure; the user moves on to the filter.
+    const filter = screen.getByRole('searchbox', { name: 'Filter pipelines' });
+    filter.focus();
+
+    // The SIBLING view mutates the shared list — nothing to do with this pane.
+    listMock.mockResolvedValue([ALPHA]);
+    await act(async () => {
+      await store.getState().refresh();
+    });
+    await waitFor(() => expect(tree().queryByRole('link', { name: 'Beta' })).toBeNull());
+
+    expect(filter).toHaveFocus();
+  });
+
+  /**
+   * The other half of "transactional": unwinding a failed delete to `null`
+   * outright would clear a target that is not the delete's to clear. A draft
+   * open on ANOTHER pipeline parks its own return target in the same slot, and
+   * the focus effect deliberately leaves it there until the draft closes — so a
+   * failed delete in between must put back what it found, not blank it.
+   */
+  it('leaves an OPEN draft’s focus target intact when an unrelated delete fails', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    // A rename is in progress on Alpha — its `⋯` button is the return target.
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    await screen.findByRole('textbox', { name: 'Pipeline name' });
+
+    // Meanwhile the user deletes Beta, and that delete fails.
+    await openRowMenu(user, 'Beta');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await screen.findByRole('alert');
+
+    // Cancelling the rename must still land focus on the row it came from.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'More actions for Alpha' })).toHaveFocus(),
+    );
+  });
+
+  /**
    * A failed DELETE closes no draft row, so nothing else would ever clear its
    * message: the pane outlives every route change inside the hub.
    */

@@ -224,13 +224,29 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
       if (!window.confirm(`Delete pipeline “${p.name}”? This cannot be undone.`)) return;
       /* The row — and the Fluent menu anchored to it — is about to be unmounted
          by the refresh, so focus needs somewhere to land. Fluent restores focus
-         to its trigger on close, which by then is gone. */
+         to its trigger on close, which by then is gone.
+
+         Armed TRANSACTIONALLY: a delete that fails must leave this exactly as it
+         found it. Unwinding to `null` unconditionally would be wrong — a draft
+         row open on ANOTHER pipeline has its own target parked here, and the
+         effect below deliberately leaves it alone until that draft closes, so
+         clearing it would strand focus on `<body>` when it did. */
+      const focusBefore = returnFocusTo.current;
       returnFocusTo.current = NEW_PIPELINE_BUTTON_ID;
       const ok = await run(
         () => deletePipeline(p.id),
         (err) => describeDeleteFailure(p.name, err),
       );
-      if (!ok) return;
+      if (!ok) {
+        /* A failed delete removed no row, so there is nothing to hand focus back
+           FROM — and nothing will ever consume the request either, since the
+           failure path skips the refresh the effect watches. Left armed it stays
+           armed, until the SHARED list next changes for an unrelated reason (the
+           pipelines page, mounted beside this pane, creating or deleting) and
+           steals focus then. */
+        returnFocusTo.current = focusBefore;
+        return;
+      }
       /* Leaving the canvas mounted on a pipeline that no longer exists would
          show a stale graph over a 404 on the next load. Only when it IS the
          open one — deleting a different pipeline must not yank the user out of
