@@ -105,6 +105,33 @@ class TestBlocks(unittest.TestCase):
                     "git checkout -q -f other-branch"):
             self.assertBlocked(cmd)
 
+    def test_bare_pathspec_checkout_is_blocked(self):
+        # review WARNING: `git checkout .` / `git checkout <file>` discard changes
+        # exactly like `checkout -- <path>`, and are the COMMONEST form of the
+        # accident. `exists` is injected so this does not depend on the real cwd.
+        tracked = {"README.md", "src/app.ts"}
+        def ex(p):
+            return p in tracked
+        for cmd in ("git checkout .",
+                    "git checkout ./",
+                    "git checkout README.md",
+                    "git checkout src/app.ts",
+                    "git checkout studio/",
+                    "git checkout -q README.md"):
+            self.assertTrue(guard.verdict(cmd, exists=ex)[0], "should BLOCK: %r" % cmd)
+
+    def test_refs_are_still_checkoutable(self):
+        # the loop does these constantly; blocking them would wedge it
+        def ex(p):
+            return p in {"README.md"}
+        for cmd in ("git checkout main",
+                    "git checkout feat/711b-destructive-git-guard",
+                    "git checkout origin/main",
+                    "git checkout -b feat/x origin/main",
+                    "git checkout -B studio-loop-work origin/main",
+                    "git checkout --track origin/x"):
+            self.assertFalse(guard.verdict(cmd, exists=ex)[0], "should ALLOW: %r" % cmd)
+
     def test_nondestructive_neighbours_of_those_flags(self):
         for cmd in ("git reset --soft HEAD~1",
                     "git reset --mixed HEAD",

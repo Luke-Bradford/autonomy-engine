@@ -27,6 +27,7 @@ Escape hatch: prefix the command with ALLOW_DESTRUCTIVE_GIT=1.
 Stdlib only (repo policy: no third-party imports).
 """
 import json
+import os
 import re
 import sys
 
@@ -35,7 +36,21 @@ OVERRIDE = "ALLOW_DESTRUCTIVE_GIT"
 STASH_READONLY = ("list", "show")
 
 
-def destructive_form(sub, args):
+def _looks_like_path(arg, exists):
+    """Is this checkout argument a PATHSPEC (discards changes) rather than a ref?
+
+    git itself needs `--` to disambiguate, so this is a heuristic and says so:
+    `.`, a trailing-slash dir, or a name that EXISTS in the working tree is treated
+    as a path; anything else (`main`, `feat/x`, `origin/main`) is treated as a ref.
+    A branch that shares a name with a file is genuinely ambiguous to git too, and
+    lands on the safe side here (blocked).
+    """
+    if arg in (".", "./") or arg.endswith("/"):
+        return True
+    return exists(arg)
+
+
+def destructive_form(sub, args, exists=os.path.exists):
     """The human label if `git <sub> <args>` can delete uncommitted work, else None.
 
     Decided over the ARGUMENT LIST, not by matching the first token: review found
@@ -56,6 +71,16 @@ def destructive_form(sub, args):
         if any(a == "--force" or (a.startswith("-") and not a.startswith("--") and "f" in a)
                for a in args):
             return "git checkout --force"
+        # A BARE pathspec discards changes exactly like `checkout -- <path>`:
+        # `git checkout .` / `git checkout README.md`. This is the commonest form of
+        # the accident this hook exists to prevent, and the `--`-only check missed it.
+        # `-b`/`-B` create a branch from a ref, so the operand is never a pathspec.
+        if not any(a in ("-b", "-B") for a in args):
+            for a in args:
+                if a.startswith("-"):
+                    continue
+                if _looks_like_path(a, exists):
+                    return "git checkout <path>"
         return None
     if sub == "reset":
         return "git reset --hard" if "--hard" in args else None
@@ -120,8 +145,8 @@ def commands_in(cmd):
         yield seg, overridden
 
 
-def verdict(cmd):
-    """(blocked, human_label). Pure: unit-testable without the harness."""
+def verdict(cmd, exists=os.path.exists):
+    """(blocked, human_label). `exists` is injected so tests are deterministic."""
     for seg, overridden in commands_in(strip_noncode(cmd)):
         if overridden:
             continue
@@ -131,7 +156,7 @@ def verdict(cmd):
         parts = m.group(1).split()
         if not parts:
             continue
-        label = destructive_form(parts[0], parts[1:])
+        label = destructive_form(parts[0], parts[1:], exists)
         if label:
             return True, label
     return False, None
