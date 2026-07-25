@@ -32,8 +32,12 @@ import re
 import sys
 
 OVERRIDE = "ALLOW_DESTRUCTIVE_GIT"
-# Read-only stash forms are explicitly fine.
-STASH_READONLY = ("list", "show")
+# Stash subcommands that INSPECT or RESTORE work rather than remove it. `pop`/`apply`
+# put work back (and git refuses them when they would overwrite local changes), and
+# `branch` moves a stash onto a new branch -- all restorative. Only bare `stash`,
+# `push`/`save` (move work out of the tree) and `drop`/`clear` (delete a stash
+# outright) are destructive.
+STASH_SAFE = ("list", "show", "apply", "pop", "branch")
 
 
 def _looks_like_path(arg, exists):
@@ -60,9 +64,10 @@ def destructive_form(sub, args, exists=os.path.exists):
     if sub == "restore":
         return "git restore"
     if sub == "stash":
-        # `git stash`, `git stash push|save`, but NOT list/show
-        if args and args[0] in STASH_READONLY:
+        if args and args[0] in STASH_SAFE:
             return None
+        if args and args[0] in ("drop", "clear"):
+            return "git stash %s" % args[0]
         return "git stash"
     if sub == "checkout":
         if "--" in args:

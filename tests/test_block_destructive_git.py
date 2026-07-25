@@ -63,9 +63,20 @@ class TestBlocks(unittest.TestCase):
                     "git diff origin/main...HEAD"):
             self.assertAllowed(cmd)
 
-    def test_readonly_stash_is_allowed(self):
-        self.assertAllowed("git stash list")
-        self.assertAllowed("git stash show -p")
+    def test_stash_forms_split_by_whether_they_LOSE_work(self):
+        # review NITPICK: pop/apply/branch RESTORE work (git refuses them when they
+        # would overwrite local changes), so only the work-removing forms are refused.
+        for cmd in ("git stash list", "git stash show -p", "git stash apply",
+                    "git stash pop", "git stash apply stash@{1}",
+                    "git stash branch fix/x stash@{0}"):
+            self.assertAllowed(cmd)
+        for cmd in ("git stash", "git stash push -u", "git stash save wip",
+                    "git stash drop", "git stash drop stash@{0}", "git stash clear"):
+            self.assertBlocked(cmd)
+
+    def test_stash_label_names_the_form(self):
+        self.assertEqual(guard.verdict("git stash drop")[1], "git stash drop")
+        self.assertEqual(guard.verdict("git stash clear")[1], "git stash clear")
 
     def test_text_ABOUT_a_command_is_not_the_command(self):
         # the regression that the live probe exposed
