@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import {
   FOREGROUND_TOKEN,
@@ -6,7 +7,6 @@ import {
   contrastRatio,
   customProperty,
   documentTheme,
-  fluentRootReady,
   isOpaque,
   luminanceOf,
 } from './support/theme';
@@ -68,23 +68,6 @@ async function expectSurface(
     expect(luminance, `${name} rendered DARK (${color}) in the light theme`).toBeGreaterThan(0.5);
   }
   return color;
-}
-
-async function openCanvas(page: Page, name: string): Promise<void> {
-  // U2 moved the pipelines list under the Author hub. The MVP's flat
-  // `#/pipelines` still resolves (U3r redirects it, and `legacy-routes.spec.ts`
-  // covers that) — this spec navigates to the canonical path directly, so a
-  // canvas failure here can never be a routing failure in disguise.
-  await page.goto('/#/author/pipelines');
-  await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
-  await fluentRootReady(page);
-  await page.getByLabel('Name').fill(name);
-  await page.getByRole('button', { name: 'Create pipeline' }).click();
-  // U4 turned Open into a LINK to the pipeline's own route — the canvas used to
-  // be local state with no address at all.
-  await page.getByRole('link', { name: `Open ${name}` }).click();
-  // The RF viewport, not just the wrapper — the chrome below is its child.
-  await page.locator('.react-flow__renderer').waitFor();
 }
 
 test.describe('React Flow chrome follows the Fluent theme', () => {

@@ -104,6 +104,47 @@ describe('canvasStore', () => {
     expect(s.getState().dirty).toBe(false);
   });
 
+  // U5 — a node dropped from the toolbox lands where the pointer released it,
+  // which the caller has already converted from screen to flow coordinates.
+  it('addNode places the node at an explicitly-given position', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('http_request', { x: 412.5, y: -37 });
+    expect(s.getState().nodes[0]!.position).toEqual({ x: 412.5, y: -37 });
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  it('a positioned add does not consume a STAGGER slot from the clicked adds', () => {
+    // `addCount` exists so successive CLICKED adds don't stack at one point. A
+    // drop places explicitly and stacks nothing, so counting it would shift the
+    // next clicked add for no reason the user can see. Asserted on the resulting
+    // POSITION, not on the counter: the counter is the mechanism, the position is
+    // the behaviour, and a test on the mechanism would survive its removal.
+    const staggered = createCanvasStore();
+    staggered.getState().loadVersion(null);
+    staggered.getState().addNode('http_request');
+    staggered.getState().addNode('http_request');
+    const secondClickAlone = staggered.getState().nodes[1]!.position;
+
+    const interleaved = createCanvasStore();
+    interleaved.getState().loadVersion(null);
+    interleaved.getState().addNode('http_request');
+    interleaved.getState().addNode('http_request', { x: 900, y: 900 }); // a drop
+    interleaved.getState().addNode('http_request');
+    expect(interleaved.getState().nodes[2]!.position).toEqual(secondClickAlone);
+  });
+
+  it('addNode still refuses an unknown or structural-call type WITH a position', () => {
+    // The position argument is not a bypass: the drop path runs the same guards
+    // as the click path, so a hand-crafted drag payload cannot author garbage.
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('not_a_real_activity', { x: 10, y: 10 });
+    s.getState().addNode('execute_pipeline', { x: 10, y: 10 });
+    expect(s.getState().nodes).toHaveLength(0);
+    expect(s.getState().dirty).toBe(false);
+  });
+
   it('moveNode updates only the targeted node; an unknown id is a no-op', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());

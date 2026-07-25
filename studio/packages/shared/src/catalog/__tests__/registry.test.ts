@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { catalog, getActivity, isStructuralCallActivity } from '../registry.js';
-import { EXECUTE_PIPELINE_ACTIVITY_TYPE } from '../types.js';
+import {
+  ACTIVITY_CATEGORIES,
+  ACTIVITY_CATEGORY_LABELS,
+  EXECUTE_PIPELINE_ACTIVITY_TYPE,
+} from '../types.js';
 
 describe('activity catalog', () => {
   it('exposes the MVP activity types', () => {
@@ -219,6 +223,37 @@ describe('activity definition contract (#1 D6)', () => {
     // Spec #4 lists `agent_task` under "Execution — AI (Spec #2)" alongside
     // `llm_call` — an external CLI agent is an AI activity, not a third class.
     expect(getActivity('agent_task')!.category).toBe('ai');
+  });
+});
+
+// U5 — the toolbox renders one GROUP per category, headed by its label. The map
+// lives beside `ACTIVITY_CATEGORIES` (not web-side) for the same reason `title`
+// does: `ActivityCatalogEntry.title` is already a display string owned by the
+// catalog, and `ACTIVITY_CATEGORIES`'s own doc already owns the palette's group
+// ORDER — splitting order and label across two packages would let one drift.
+describe('ACTIVITY_CATEGORY_LABELS (U5 toolbox group headings)', () => {
+  it('labels every category, with no blank or slug-shaped label', () => {
+    // The Record type makes a MISSING key a compile error; this pins the
+    // remaining runtime risk — a key present but useless.
+    for (const category of ACTIVITY_CATEGORIES) {
+      const label = ACTIVITY_CATEGORY_LABELS[category];
+      expect(label.trim()).not.toBe('');
+      // A label equal to its own slug means somebody added a category and left
+      // the raw union member as the heading.
+      expect(label).not.toBe(category);
+    }
+  });
+
+  it('has no keys beyond the declared categories', () => {
+    // A category REMOVED from the union would otherwise leave a dead label
+    // behind; `Record` only constrains the other direction.
+    expect(Object.keys(ACTIVITY_CATEGORY_LABELS).sort()).toEqual([...ACTIVITY_CATEGORIES].sort());
+  });
+
+  it('every catalogued activity falls in a labelled category', () => {
+    for (const entry of catalog.values()) {
+      expect(ACTIVITY_CATEGORY_LABELS[entry.category]).toBeTruthy();
+    }
   });
 });
 

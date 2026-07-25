@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
-  catalog,
   getActivity,
   isStructuralCallActivity,
   type ConnectionPublic,
@@ -10,6 +9,7 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
+import { ActivityToolbox } from './ActivityToolbox';
 import { createCanvasStore } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { FlowCanvas } from './FlowCanvas';
@@ -147,7 +147,9 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
 
       {ready && (
         <div className="canvas-grid">
-          <Palette store={store} />
+          {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
+              position via `useReactFlow` on its own side of the drag. */}
+          <ActivityToolbox store={store} />
           <div className="canvas-wrap">
             <ReactFlowProvider>
               <FlowCanvas store={store} />
@@ -159,26 +161,6 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
 
       {dirty && <p className="page-hint">Unsaved changes — click “Save version” to persist.</p>}
     </section>
-  );
-}
-
-/** The add-a-node palette: one button per generically-authorable catalog activity.
- * A structural-call activity (`execute_pipeline`) stores its config in `node.call`,
- * not `node.config`, so the generic property panel cannot author it — it is
- * excluded here (and `NodePanel` shows a read-only stub for an already-loaded one)
- * until the dedicated call-node authoring UI (#425) exists. Exported for a headless
- * render test. */
-export function Palette({ store }: { store: ReturnType<typeof createCanvasStore> }) {
-  const entries = [...catalog.values()].filter((e) => !isStructuralCallActivity(e.type));
-  return (
-    <aside className="palette" aria-label="Activity palette">
-      <h3>Add activity</h3>
-      {entries.map((entry) => (
-        <button key={entry.type} type="button" onClick={() => store.getState().addNode(entry.type)}>
-          + {entry.title}
-        </button>
-      ))}
-    </aside>
   );
 }
 

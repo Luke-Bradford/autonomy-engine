@@ -34,6 +34,24 @@ export const ACTIVITY_CATEGORIES = ['general', 'ai', 'control'] as const;
 export type ActivityCategory = (typeof ACTIVITY_CATEGORIES)[number];
 
 /**
+ * The GROUP HEADING the authoring toolbox renders for each category (U5).
+ *
+ * Lives here rather than web-side for the same reason `ActivityCatalogEntry.title`
+ * does: the catalog already owns activity display strings, and the doc above
+ * already owns the palette's group ORDER — splitting order and label across two
+ * packages leaves two half-owners and lets one drift when a category is added.
+ *
+ * `Record<ActivityCategory, string>` is EXHAUSTIVE by construction: extending
+ * `ACTIVITY_CATEGORIES` without adding a label is a compile error here, not a raw
+ * `control` slug rendered as a heading at run time.
+ */
+export const ACTIVITY_CATEGORY_LABELS: Record<ActivityCategory, string> = {
+  general: 'General',
+  ai: 'AI',
+  control: 'Control flow',
+};
+
+/**
  * The `Node.type` of the `llm_call` execution activity (#2 L-series). A named
  * constant, not a magic string, because — like the control types below — it is a
  * TYPED identifier read structurally in agreeing places: the catalog entry

@@ -1,34 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { catalog, isStructuralCallActivity } from '@autonomy-studio/shared';
-import { NodePanel, Palette } from './PipelineCanvas';
+import { isStructuralCallActivity } from '@autonomy-studio/shared';
+import { NodePanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
 
-// #4 A9 — the palette auto-renders one button per catalog entry. `execute_pipeline`
-// is catalogued but is a STRUCTURAL-CALL activity (config in `node.call`, not
-// `node.config`), so the generic property panel cannot author it — the palette must
-// hide it until the dedicated call-node authoring UI (#425). A headless render test
-// verifies the omission (a button removal has no visual subtlety needing a real
-// browser); `NodePanel`'s read-only stub for a loaded one is covered separately.
-describe('Palette (#4 A9 structural-call exclusion)', () => {
-  it('renders a button for every generically-authorable activity but hides execute_pipeline', () => {
-    render(<Palette store={createCanvasStore()} />);
-
-    // Every non-structural-call entry is offered by its catalog title.
-    const authorable = [...catalog.values()].filter((e) => !isStructuralCallActivity(e.type));
-    for (const entry of authorable) {
-      expect(screen.getByRole('button', { name: `+ ${entry.title}` })).toBeTruthy();
-    }
-    // The structural-call entry is NOT offered.
-    expect(screen.queryByRole('button', { name: '+ Execute Pipeline' })).toBeNull();
-
-    // Sanity: the exclusion is real (execute_pipeline exists in the catalog) and
-    // it removed exactly one button, not the whole palette.
-    const rendered = screen.getAllByRole('button').filter((b) => b.textContent?.startsWith('+ '));
-    expect(rendered).toHaveLength(authorable.length);
-    expect(authorable.length).toBe(catalog.size - 1);
-  });
-});
+// Named for what it tests, not for the sibling that used to share the file. U5
+// replaced the flat `Palette` with `ActivityToolbox` (own file, own spec), and
+// `src/palette.test.ts` — the CSS COLOUR-palette test — already owned the word
+// "palette" in this package's test names.
 
 // A structural-call node can still be LOADED (authored via the API), so the
 // inspector must not offer the generic `node.config` editor for it — that would

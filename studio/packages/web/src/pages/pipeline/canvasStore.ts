@@ -48,7 +48,13 @@ export interface CanvasState {
   selected: Selection | null;
   /** True once the working graph diverges from `loaded`; reset on load/save. */
   dirty: boolean;
-  /** Monotonic counter so successive palette adds don't stack at one point. */
+  /**
+   * Monotonic counter so successive UNPOSITIONED adds don't stack at one point.
+   *
+   * Advanced only when the stagger is actually used — a drop (U5) supplies its
+   * own position and stacks nothing, so counting it would shift the next clicked
+   * add for a reason the operator cannot see.
+   */
   addCount: number;
 
   loadVersion(v: PipelineVersion | null): void;
@@ -58,7 +64,12 @@ export interface CanvasState {
    * in-flight request, so their edits are not clobbered by the just-saved graph.
    */
   rebaseLoaded(v: PipelineVersion): void;
-  addNode(type: string): void;
+  /**
+   * Append a node of `type`. `position` is the FLOW-coordinate placement for a
+   * node dropped from the toolbox (U5); omit it and the node takes the next
+   * staggered default, as a clicked add does.
+   */
+  addNode(type: string, position?: Position): void;
   moveNode(id: string, position: Position): void;
   deleteNode(id: string): void;
   connect(from: string, to: string, on: EdgeOn): void;
@@ -104,13 +115,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       set({ loaded: v });
     },
 
-    addNode(type) {
+    addNode(type, position) {
       const entry = getActivity(type);
       if (!entry) return; // unknown catalog type — ignore rather than author garbage
       // A structural-call activity (`execute_pipeline`) stores its settings in
       // `node.call`, not `node.config`, so this generic config-form path would
-      // author a call-less, un-saveable node. Refuse it (the palette also hides its
-      // button); call-node authoring is #425.
+      // author a call-less, un-saveable node. Refuse it (the toolbox also hides
+      // its entry, and the drop path refuses the payload); call-node authoring is
+      // #425. Both guards run for a DROPPED node too — a position argument is
+      // placement, never a bypass.
       if (isStructuralCallActivity(type)) return;
       const n = get().addCount;
       const node: Node = {
@@ -119,10 +132,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // Seed the node's declared output contract from the catalog template
         // (the run-time SSOT is the node's own config.outputs, see catalog docs).
         config: { outputs: entry.outputs.map((o) => ({ ...o })) },
-        // Stagger so repeated adds don't stack exactly on top of each other.
-        position: { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
+        // COPIED, never aliased: the store owns its graph, and holding a
+        // caller's object would let that caller mutate a node's position from
+        // outside the actions — the single mutation point this store's doc
+        // claims. Otherwise, stagger so repeated adds don't stack exactly.
+        position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
       };
-      set((s) => ({ nodes: [...s.nodes, node], addCount: s.addCount + 1, dirty: true }));
+      set((s) => ({
+        nodes: [...s.nodes, node],
+        // Only a stagger consumes a slot — see the `addCount` doc.
+        addCount: position ? s.addCount : s.addCount + 1,
+        dirty: true,
+      }));
     },
 
     moveNode(id, position) {
