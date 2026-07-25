@@ -27,6 +27,12 @@
      (#292929 dark / #ffffff light), NOT --bg. Both measured in the browser and
      pinned in e2e/edge-typing.spec.ts. */
   --branch: #b98cf5;
+  /* U6c — the container group box. TRANSLUCENT on purpose: it is drawn behind
+     its children over React Flow's own canvas surface (Fluent's
+     --colorNeutralBackground1, not --bg), so an opaque panel colour would either
+     punch a hole in the canvas or wash the dot grid out entirely. Alpha lets the
+     grid read through and keeps the box a region rather than a large node. */
+  --container-fill: rgba(110, 168, 254, 0.07);
   font-family:
     system-ui,
     -apple-system,
@@ -63,6 +69,10 @@
   /* Darkened for a WHITE canvas surface (#ffffff), the same reason every hue
      above is darkened for `--bg`. */
   --branch: #6b3fa0;
+  /* Light mode's canvas surface is WHITE, where the dark tint above is invisible;
+     a neutral grey wash at slightly higher alpha reads as a recessed region
+     without tinting the enclosed nodes' own panel colour. */
+  --container-fill: rgba(42, 93, 176, 0.06);
   color-scheme: light;
 }
 
@@ -998,6 +1008,48 @@ td button + button {
 
 .flow-node.selected {
   border-color: var(--accent);
+}
+
+/* ── U6c container groups ────────────────────────────────────────────────────
+ *
+ * The box a container's children sit in. It fills its React Flow node, whose
+ * width/height are DERIVED from those children (`containerLayout.ts`) — so the
+ * geometry is set in JS and only the skin is here.
+ *
+ * `pointer-events: none` is the load-bearing line. The box spans a region of the
+ * canvas that contains other interactive things, and a React Flow node is a
+ * plain absolutely-positioned div that would otherwise sit in front of the pane
+ * and swallow every gesture aimed at it: clicking empty space inside a stage to
+ * DESELECT, and — the one that bit U6b in its `.react-flow__panel` form — a
+ * toolbox activity DROPPED over the box's empty area, which would be silently
+ * discarded. Handles opt back IN below, because a container is a legal edge
+ * endpoint and its ports must stay draggable.
+ *
+ * Dashed, and one shade off the canvas rather than a filled panel: the box has
+ * to read as a REGION behind its children, not as a large node in front of them.
+ */
+.flow-container {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--container-fill);
+  pointer-events: none;
+}
+
+.flow-container .react-flow__handle {
+  pointer-events: all;
+}
+
+.flow-container-label {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* ── U6a typed edges ─────────────────────────────────────────────────────────
