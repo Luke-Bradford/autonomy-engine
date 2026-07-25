@@ -235,9 +235,16 @@ export const openaiAdapter: ConnectorAdapter = {
 
     // #2 L10a — LOCAL TOOLS path (text mode only; the config coupling forbids
     // tools+structured). `toolChoice:'none'` falls through to the plain text
-    // path with NO tools on the wire. Unlike Anthropic there is no
-    // reasoning-vs-forced-choice clash: `reasoning_effort` is a sibling knob,
-    // kept in both calls.
+    // path with NO tools on the wire. `reasoning_effort` is a sibling knob,
+    // kept in both calls — there is no reasoning-vs-forced-choice clash.
+    //
+    // #724 — this used to read "Unlike Anthropic...", contrasting with a clash
+    // the Anthropic adapter was believed to have. That premise was FALSE (only
+    // MANUAL extended thinking errors under a forced `tool_choice`, which no
+    // adapter here emits), so the suppression it described is gone and the two
+    // adapters now agree: reasoning is a pure function of the author's
+    // `reasoningEffort`, on every path. Nothing about THIS adapter changed —
+    // only the comparison it was drawing.
     const tools = input.data.tools;
     const authorChoice = input.data.toolChoice ?? 'auto';
     if (tools !== undefined && authorChoice !== 'none') {
