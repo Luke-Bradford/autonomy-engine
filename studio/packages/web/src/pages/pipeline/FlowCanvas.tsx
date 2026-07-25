@@ -21,7 +21,7 @@ import { getActivity } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeLabel, edgeVariantClass } from './edgeCondition';
-import type { CanvasState } from './canvasStore';
+import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -91,9 +91,16 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * would drop `measured` and make connected edges flicker on every drag tick.
  * The two are reconciled: store changes (add/delete/config/connection/select)
  * flow INTO the view array preserving each surviving node's live position and
- * measured size; view changes (drag/remove) flow BACK into the store. Edges,
- * which carry no measured state, are derived straight from the store.
+ * measured size; view changes (drag/remove/select) flow BACK into the store.
+ * Edges, which carry no measured state, are derived straight from the store.
  * `onlyRenderVisibleElements` keeps a large graph responsive.
+ *
+ * SELECTION is a round trip (#737), and the store is the authority at both ends:
+ * React Flow reports a selection as a `select` CHANGE, which the handlers below
+ * fold into the store; the store then re-derives `selected` for every node and
+ * edge. See `applySelectChange` for why the change handlers — not
+ * `onSelectionChange` — are the seam, and the `selected:` line in the reconcile
+ * effect for why the view must not be allowed to disagree.
  *
  * The regression check the epic asks for is `e2e/canvas-drag-reconciliation.spec.ts`
  * (U6a). Do NOT try to replace it with a unit test: "an unrelated store change
@@ -143,6 +150,28 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             title: getActivity(n.type)?.title ?? n.type,
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,
+          // #737 — RE-DERIVED from the store every time, NOT carried forward in
+          // the spread above. The store is the single authority on what is
+          // selected, in both directions: the `select` changes below write into
+          // it, and this line writes back out.
+          //
+          // Carrying `selected` forward instead (so React Flow could own node
+          // selection and keep a shift-marquee alive) was tried and is WRONG,
+          // because the two can then disagree — and React Flow's recovery path
+          // is a dead end. `handleNodeClick` early-returns when the node it was
+          // given is ALREADY `selected`, emitting no change at all. So any state
+          // where the view says selected and the store says not — after a save,
+          // where `loadVersion` writes `selected: null` while the view entry
+          // survives by id — leaves a node that paints its selection ring,
+          // reports nothing to the property panel, and CANNOT be re-selected by
+          // clicking it or by Enter. (Backspace would still delete it.) The
+          // operator's only way out is to click empty canvas first.
+          //
+          // The cost of re-deriving, stated plainly: a shift-marquee or
+          // ctrl-click collapses to a single selection, so multi-node drag is
+          // not available. That is the store's model — one `Selection` — and
+          // real multi-select is U21's, which widens it. Consistency beats a
+          // capability that leaves the canvas stuck.
           selected: selected?.kind === 'node' && selected.id === n.id,
         };
       });
@@ -173,9 +202,32 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     selected: selected?.kind === 'edge' && selected.id === e.id,
   }));
 
+  /**
+   * #737 — mirror one React Flow `select` change into the store.
+   *
+   * THIS is the seam, and it is not interchangeable with `onSelectionChange`.
+   * The canvas drives React Flow from `nodes`/`edges` props, i.e. CONTROLLED
+   * mode, in which `triggerNodeChanges`/`triggerEdgeChanges` do not touch RF's
+   * own store — they hand the change to these callbacks and nothing else. RF's
+   * `edgeLookup`, which is what `onSelectionChange` reports from, is rebuilt
+   * verbatim from the `edges` prop, so for edges that callback can only ever
+   * report back the selection this component already told it about. Every real
+   * selection — click, TAB+Enter, Escape, pane-click — arrives here or nowhere.
+   *
+   * `store.getState()` is re-read per change rather than hoisted: a batch can
+   * carry a select and the matching deselects together, and `nextSelection`'s
+   * guard has to see the selection the earlier change in the SAME batch just
+   * made.
+   */
+  function applySelectChange(target: Selection, selected: boolean) {
+    const st = store.getState();
+    st.select(nextSelection(st.selected, target, selected));
+  }
+
   function onNodesChange(changes: NodeChange[]) {
     // Apply every change to the view first (this is where React Flow records
-    // measured dimensions and the in-progress drag position).
+    // measured dimensions, the in-progress drag position, and its own node
+    // selection).
     onNodesChangeRaw(changes);
     const st = store.getState();
     for (const c of changes) {
@@ -186,6 +238,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         st.moveNode(c.id, c.position);
       } else if (c.type === 'remove') {
         st.deleteNode(c.id);
+      } else if (c.type === 'select') {
+        applySelectChange({ kind: 'node', id: c.id }, c.selected);
       }
     }
   }
@@ -194,6 +248,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     const st = store.getState();
     for (const c of changes) {
       if (c.type === 'remove') st.deleteEdge(c.id);
+      else if (c.type === 'select') applySelectChange({ kind: 'edge', id: c.id }, c.selected);
     }
   }
 
@@ -256,9 +311,6 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       onConnect={onConnect}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      onNodeClick={(_, node) => store.getState().select({ kind: 'node', id: node.id })}
-      onEdgeClick={(_, edge) => store.getState().select({ kind: 'edge', id: edge.id })}
-      onPaneClick={() => store.getState().select(null)}
       onlyRenderVisibleElements
       fitView
       proOptions={{ hideAttribution: true }}

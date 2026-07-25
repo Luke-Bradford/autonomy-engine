@@ -447,6 +447,26 @@ export function unsupportedParamFailure(
 }
 
 /**
+ * The preflight REFUSAL for a resolved model, or `null` when there is nothing to
+ * refuse — the shape every adapter actually needs.
+ *
+ * Wraps `unsupportedParamFailure` so the non-emptiness dance (a destructure
+ * whose only job is to prove the tuple precondition to the compiler) lives in
+ * one place instead of being copied, comment and all, into each adapter. Added
+ * with #730, when the `openai_api` preflight would have been the second verbatim
+ * copy of `anthropic.ts`'s.
+ */
+export function unsupportedParamRefusal(
+  kind: LlmConnectionKind,
+  model: string,
+  params: readonly UnsupportedParam[],
+): Extract<ActivityEvent, { type: 'failed' }> | null {
+  const [first, ...rest] = params;
+  if (first === undefined) return null;
+  return unsupportedParamFailure(kind, model, [first, ...rest]);
+}
+
+/**
  * #2 L4c — how many INTERNAL repair sub-calls a structured `llm_call` makes after
  * a 2xx response that parsed but produced no schema-valid structured output. `1`
  * = up to ONE repair (≤2 total provider calls per attempt).

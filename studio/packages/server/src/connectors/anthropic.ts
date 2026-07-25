@@ -16,7 +16,7 @@ import {
   runTextWithTools,
   structuredEcho,
   toolWireParameters,
-  unsupportedParamFailure,
+  unsupportedParamRefusal,
   validateStructuredOutput,
 } from './llm-shared.js';
 import type { NoCompletionReason, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
@@ -291,16 +291,17 @@ export const anthropicAdapter: ConnectorAdapter = {
     //
     // `testConnection` needs no equivalent: it is a GET to `/v1/models` with no
     // sampling or reasoning body at all.
-    const unsupported = unsupportedAnthropicParams(model, {
-      hasTemperature: sampling.temperature !== undefined,
-      hasTopP: sampling.topP !== undefined,
-      hasReasoningEffort: reasoningEffort !== undefined,
-    });
-    // The destructure is what proves non-emptiness to the compiler, which is the
-    // precondition `unsupportedParamFailure`'s tuple type encodes.
-    const [firstUnsupported, ...restUnsupported] = unsupported;
-    if (firstUnsupported !== undefined) {
-      yield unsupportedParamFailure('anthropic_api', model, [firstUnsupported, ...restUnsupported]);
+    const refusal = unsupportedParamRefusal(
+      'anthropic_api',
+      model,
+      unsupportedAnthropicParams(model, {
+        hasTemperature: sampling.temperature !== undefined,
+        hasTopP: sampling.topP !== undefined,
+        hasReasoningEffort: reasoningEffort !== undefined,
+      }),
+    );
+    if (refusal !== null) {
+      yield refusal;
       return;
     }
 

@@ -18,8 +18,14 @@ import {
   structuredEcho,
   structuredOutputInstruction,
   toolWireParameters,
+  unsupportedParamRefusal,
 } from './llm-shared.js';
 import type { LlmToolChoice, LlmTurn, ToolCallRequest, ToolRoundOutcome } from './llm-shared.js';
+import {
+  DEFAULT_OPENAI_BASE_URL,
+  isOpenAiFirstParty,
+  unsupportedOpenAiParams,
+} from './openai-models.js';
 
 /**
  * The `openai_api` connector adapter: a single non-streaming call to the
@@ -39,8 +45,6 @@ import type { LlmToolChoice, LlmTurn, ToolCallRequest, ToolRoundOutcome } from '
  * (#461) rather than manufacturing `text:''`; a non-2xx is mapped by
  * `classifyHttpStatus`.
  */
-
-const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 /**
  * #2 L10a — extract a Chat Completions response message's `tool_calls` as
@@ -137,6 +141,45 @@ export const openaiAdapter: ConnectorAdapter = {
     const url = `${baseUrl}/chat/completions`;
     const headers = { Authorization: `Bearer ${secret}` };
     const timeoutMs = config.data.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+
+    // #730 — PREFLIGHT: refuse locally when the AUTHOR set a sampling parameter
+    // the RESOLVED model does not accept, instead of issuing a request OpenAI
+    // answers with a 400 whose body does not name which of their fields was at
+    // fault. Placed after `resolveModel` + `normalizeLlmRequest` and before the
+    // structured / tools / text branch, so all three dispatch paths are covered
+    // by one check — the same placement as `anthropic.ts`.
+    //
+    // Two things differ from that sibling and both are load-bearing:
+    //
+    //  - It is gated on `isOpenAiFirstParty`. These are facts about OpenAI's own
+    //    request surface, and an author-set `baseUrl` is an OpenAI-COMPATIBLE
+    //    gateway that reuses OpenAI's model names while deciding its own surface
+    //    — refusing there would manufacture a local failure of a call that
+    //    works. See the essay in `openai-models.ts`.
+    //  - The dispatch-time argument is weaker but still real. Unlike
+    //    `anthropic.ts`, `resolveModel` here has NO fallback, so a node that
+    //    names no model fails "no model" rather than silently resolving to a
+    //    rejecting default. What stays invisible to node-config Zod validation
+    //    is the CONNECTION's default `model` — a node setting only
+    //    `temperature` against a connection defaulted to `o3` is the case this
+    //    catches, and it cannot be caught at author time.
+    //
+    // `testConnection` needs no equivalent: it is a GET to `/models` with no
+    // sampling body at all.
+    if (isOpenAiFirstParty(baseUrl)) {
+      const refusal = unsupportedParamRefusal(
+        'openai_api',
+        model,
+        unsupportedOpenAiParams(model, {
+          hasTemperature: sampling.temperature !== undefined,
+          hasTopP: sampling.topP !== undefined,
+        }),
+      );
+      if (refusal !== null) {
+        yield refusal;
+        return;
+      }
+    }
 
     // Chat Completions carries the system instruction as a LEADING `role:system`
     // message (not a top-level param). #2 L4b — a structured node appends the schema

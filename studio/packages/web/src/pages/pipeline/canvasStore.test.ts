@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EdgeSchema, PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
-import { createCanvasStore } from './canvasStore';
+import { createCanvasStore, nextSelection, sameSelection } from './canvasStore';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -431,5 +431,81 @@ describe('canvasStore — loadVersion lowers legacy node contracts (#526 / F13b)
     const s = createCanvasStore();
     s.getState().loadVersion(v);
     expect(s.getState().nodes[0]).not.toBe(v.nodes[0]);
+  });
+});
+
+/**
+ * #737 — the selection model the canvas mirrors React Flow into.
+ *
+ * These are the unit half. The half a unit test CANNOT reach is that React Flow
+ * emits the change at all: jsdom can focus an element but produces none of RF's
+ * keyboard handling, and RF's controlled-mode change routing is exactly what the
+ * defect turned on. `e2e/keyboard-selection.spec.ts` is the one that discriminates.
+ */
+describe('selection model (#737)', () => {
+  const nodeA = { kind: 'node', id: 'n_a' } as const;
+  const nodeB = { kind: 'node', id: 'n_b' } as const;
+  const edge1 = { kind: 'edge', id: 'e_1' } as const;
+
+  it('sameSelection compares by kind AND id, and null only equals null', () => {
+    expect(sameSelection(nodeA, { kind: 'node', id: 'n_a' })).toBe(true);
+    expect(sameSelection(nodeA, nodeB)).toBe(false);
+    // A node and an edge can share an id in principle; the kind is what parts them.
+    expect(sameSelection({ kind: 'node', id: 'x' }, { kind: 'edge', id: 'x' })).toBe(false);
+    expect(sameSelection(null, null)).toBe(true);
+    expect(sameSelection(null, nodeA)).toBe(false);
+    expect(sameSelection(nodeA, null)).toBe(false);
+  });
+
+  it('nextSelection takes any select, and clears ONLY on the current selection', () => {
+    expect(nextSelection(null, nodeA, true)).toEqual(nodeA);
+    expect(nextSelection(edge1, nodeA, true)).toEqual(nodeA);
+    expect(nextSelection(nodeA, nodeA, false)).toBeNull();
+    expect(nextSelection(null, nodeA, false)).toBeNull();
+  });
+
+  it('nextSelection IGNORES the deselect of anything that is not selected', () => {
+    // The batch React Flow actually emits when node A is clicked: A selected,
+    // then a deselect for every other node AND every edge. Folding the batch in
+    // order must land on A, not null — an unguarded clear would open the property
+    // panel and shut it again in the same tick.
+    const batch: [{ kind: 'node' | 'edge'; id: string }, boolean][] = [
+      [nodeA, true],
+      [nodeB, false],
+      [edge1, false],
+    ];
+    const settled = batch.reduce<ReturnType<typeof nextSelection>>(
+      (current, [target, selected]) => nextSelection(current, target, selected),
+      edge1,
+    );
+    expect(settled).toEqual(nodeA);
+  });
+
+  it('select is idempotent — re-selecting the same element does not write', () => {
+    const s = createCanvasStore();
+    s.getState().select({ kind: 'edge', id: 'e_1' });
+    const before = s.getState();
+    s.getState().select({ kind: 'edge', id: 'e_1' });
+    // Object identity, not deep equality: an equal-but-new `selected` re-renders
+    // the canvas, which re-derives the edge array, which makes React Flow report
+    // the selection again. The value guard is what breaks that cycle.
+    expect(s.getState()).toBe(before);
+    expect(s.getState().selected).toBe(before.selected);
+  });
+
+  it('select(null) on an already-empty selection does not write either', () => {
+    const s = createCanvasStore();
+    const before = s.getState();
+    s.getState().select(null);
+    expect(s.getState()).toBe(before);
+  });
+
+  it('select still moves the selection when it genuinely changes', () => {
+    const s = createCanvasStore();
+    s.getState().select(nodeA);
+    s.getState().select(edge1);
+    expect(s.getState().selected).toEqual(edge1);
+    s.getState().select(null);
+    expect(s.getState().selected).toBeNull();
   });
 });

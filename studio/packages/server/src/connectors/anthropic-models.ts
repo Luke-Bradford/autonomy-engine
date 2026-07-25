@@ -97,6 +97,21 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * shape of gap on the SAMPLING set above (documented Fable-family surface, so it
  * very probably rejects the knobs) and rides the same ticket.
  *
+ * RE-CHECKED 2026-07-25 (bug sweep 4) against the same source, and the four ids
+ * still do NOT clear the bar — recorded here because the near-miss is a trap the
+ * next author will hit too. The tempting citation is the migration guide's
+ * heading "Effort parameter (Opus 4.5, Opus 4.6, Sonnet 4.6 only)", read as a
+ * global list of what supports `effort`. It is not one: it sits under
+ * "Migrating to Opus 4.6 / Sonnet 4.6" and is scoped to that era. Read globally
+ * it would also exclude `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-7/4-8`
+ * and `claude-fable-5` — every one of which the CURRENT effort table shows
+ * supporting effort, and every one of which this module deliberately PERMITS
+ * (pinned by `anthropic-models.test.ts`). Using it as authority for the legacy
+ * ids while ignoring what it says about the modern ones is exactly the over-read
+ * the fail-direction essay above exists to prevent. Settling #729 needs a
+ * per-model fact — the Models API `capabilities.thinking.types.adaptive`
+ * tree — not a sharper reading of a generation-level statement.
+ *
  * WHY 4.5 IS IN AND THEY ARE OUT, since both rest partly on inference and the
  * asymmetry is otherwise a double standard: the two errors are not symmetric.
  * Omitting a model that does reject costs a provider 400 classified `permanent`

@@ -148,6 +148,39 @@ export async function selectEdge(page: Page): Promise<void> {
   await expect(firesOn(page)).toBeVisible();
 }
 
+/**
+ * TAB forward until the focused element carries `className`.
+ *
+ * TAB, never `.focus()`, for two reasons — and NOT for the tempting third one.
+ * `:focus-visible` deliberately ignores programmatic focus, so a scripted
+ * `.focus()` reports "no focus ring" against a perfectly working rule; and
+ * TAB-REACHABILITY is itself part of what these specs assert (an element that
+ * no amount of tabbing reaches is unusable however well it handles keys).
+ *
+ * What is NOT a reason: React Flow's `onKeyDown` is an ordinary React prop on
+ * the node/edge element, so `.focus()` followed by a real key press does reach
+ * it and the selection does happen. Said explicitly because the plausible
+ * mechanism story ("programmatic focus doesn't wire up the handlers") is false,
+ * and a false reason invites someone to "simplify" this to `.focus()` on the
+ * strength of it working — losing both real reasons above.
+ *
+ * The canvas sits behind the rail, pane, command bar and toolbox, so a node or
+ * edge is deep in the tab order; the bound is generous on purpose, and it
+ * throws rather than returning false so the caller cannot silently proceed
+ * against whatever happened to hold focus instead.
+ */
+export async function tabToFocus(page: Page, className: string, limit = 150): Promise<void> {
+  for (let i = 0; i < limit; i++) {
+    await page.keyboard.press('Tab');
+    const reached = await page.evaluate(
+      (cls) => Boolean(document.activeElement?.classList.contains(cls)),
+      className,
+    );
+    if (reached) return;
+  }
+  throw new Error(`TAB never reached .${className} in ${String(limit)} presses`);
+}
+
 /** Deselect everything by clicking empty canvas. */
 export async function deselect(page: Page): Promise<void> {
   await page.locator('.react-flow__pane').click({ position: { x: 30, y: 30 } });
