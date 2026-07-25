@@ -8,7 +8,7 @@ import {
   type Pipeline,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
-import { apiFetch } from './client';
+import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
 
 const PipelinePageSchema = paginatedResponseSchema(PipelineSchema);
@@ -179,23 +179,53 @@ export function latestVersion(versions: PipelineVersion[]): PipelineVersion | nu
  * told the operation failed. If the rollback itself fails, the original error
  * still wins — a rollback error names the wrong problem.
  */
-export async function duplicatePipeline(sourceId: string, name: string): Promise<Pipeline> {
-  const copy = await createPipeline({ name: name.trim() });
+export async function duplicatePipeline(source: Pipeline, name: string): Promise<Pipeline> {
+  let copy: Pipeline | undefined;
   try {
-    const source = latestVersion(await listPipelineVersions(sourceId));
-    if (source) {
+    /* Inside the `try`, not before it. The POST can COMMIT (201) and still
+       throw here if its response body fails `PipelineSchema` — and a copy
+       created outside the try would then never be rolled back, which is
+       precisely the husk this function exists to avoid. `copy` is only bound
+       after a successful parse, so the rollback below is a no-op in the case
+       where nothing was created. */
+    copy = await createPipeline({
+      name: name.trim(),
+      // A copy, not a re-authoring: `concurrency` is the only other
+      // user-settable field on a pipeline, and letting the write schema's
+      // `.default(null)` silently uncap the copy would be the same class of
+      // manufactured-absence the project bans elsewhere (#473).
+      concurrency: source.concurrency,
+    });
+    const latest = latestVersion(await listPipelineVersions(source.id));
+    if (latest) {
       await createPipelineVersion(copy.id, {
-        params: source.params,
-        outputs: source.outputs,
-        nodes: source.nodes,
-        edges: source.edges,
-        containers: source.containers,
-        catalogVersion: source.catalogVersion,
+        params: latest.params,
+        outputs: latest.outputs,
+        nodes: latest.nodes,
+        edges: latest.edges,
+        containers: latest.containers,
+        catalogVersion: latest.catalogVersion,
       });
     }
     return copy;
   } catch (err) {
-    await deletePipeline(copy.id).catch(() => undefined);
+    if (copy) await deletePipeline(copy.id).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * What to tell the user about a failed pipeline delete.
+ *
+ * The 409 (`pipeline_has_runs`) is a real, explainable REFUSAL rather than a
+ * fault, so it gets its own sentence. Shared because both delete surfaces — the
+ * Factory Resources row menu and the pipelines page — face the same refusal,
+ * and two hand-written copies of the sentence had already drifted apart
+ * typographically before this was extracted.
+ */
+export function describeDeleteFailure(name: string, err: unknown): string {
+  if (err instanceof ApiError && err.status === 409) {
+    return `Cannot delete “${name}”: it has run history.`;
+  }
+  return `Could not delete “${name}”: ${messageOf(err)}`;
 }

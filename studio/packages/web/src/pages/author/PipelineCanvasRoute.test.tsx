@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Route, Routes, useLocation } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { PipelineCanvasRoute } from './PipelineCanvasRoute';
 import { ApiError } from '../../api/client';
 import { renderWithRouter } from '../../testing/renderWithRouter';
@@ -116,18 +117,48 @@ describe('PipelineCanvasRoute', () => {
     expect(screen.getByTestId('location').textContent).toBe('/author/pipelines');
   });
 
-  it('does not report an aborted in-flight fetch as an error', async () => {
-    // Unmounting mid-request aborts it; the rejection that follows must not be
-    // painted onto a component that is already gone (React logs a warning) or
-    // onto the NEXT pipeline's canvas.
-    let reject!: (reason: unknown) => void;
-    getMock.mockReturnValue(new Promise((_, rej) => (reject = rej)));
-    const { unmount } = renderRoute('/author/pipelines/pl_1');
-    await screen.findByText(/Loading pipeline/i);
+  /**
+   * An ABORTED request must not be reported as a failure.
+   *
+   * Getting this test honest took two attempts, both worth recording:
+   *
+   * 1. Asserting `queryByRole('alert')` is null after `unmount()` proves
+   *    nothing — the query returns null whatever the code does, because the
+   *    tree is gone.
+   * 2. Navigating pl_a → pl_b and rejecting pl_a's promise proves nothing
+   *    either: `PipelineCanvasRoute` keys the inner component by id, so a
+   *    param change UNMOUNTS the old one rather than re-running its effect,
+   *    and React 19 makes a setState on an unmounted component a silent no-op.
+   *
+   * The case where the guard genuinely earns its keep is `StrictMode`, which
+   * `main.tsx` really does wrap the app in: it runs the effect, cleans it up
+   * (aborting request #1) and runs it again on the SAME MOUNTED component. So
+   * request #1's AbortError lands on a live tree, and without the guard every
+   * canvas open in development would flash "Could not open pipeline: aborted".
+   * The mock therefore honours the signal the way a real `fetch` does.
+   */
+  it('drops an ABORTED request instead of reporting it as a failure', async () => {
+    getMock.mockImplementation(
+      (id: string, signal?: AbortSignal) =>
+        new Promise((resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('aborted', 'AbortError')),
+          );
+          setTimeout(() => resolve({ id, name: 'Nightly digest' } as never), 0);
+        }),
+    );
 
-    unmount();
-    reject(new DOMException('aborted', 'AbortError'));
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/author/pipelines/pl_1']}>
+          <Routes>
+            <Route path="/author/pipelines/:pipelineId" element={<PipelineCanvasRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </StrictMode>,
+    );
 
+    expect(await screen.findByText('canvas:pl_1:Nightly digest')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });

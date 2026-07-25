@@ -16,10 +16,11 @@ import {
   MoreHorizontalRegular,
 } from '@fluentui/react-icons';
 import type { Pipeline } from '@autonomy-studio/shared';
-import { ApiError } from '../../api/client';
+import { messageOf } from '../../api/client';
 import {
   createPipeline,
   deletePipeline,
+  describeDeleteFailure,
   duplicatePipeline,
   renamePipeline,
 } from '../../api/pipelines';
@@ -44,7 +45,9 @@ const CANVAS_ROUTE = '/author/pipelines/:pipelineId';
  */
 type Draft =
   | { kind: 'create'; name: string }
-  | { kind: 'duplicate'; sourceId: string; name: string }
+  /* The whole source row, not just its id: a duplicate copies the source's
+     `concurrency` cap as well as its graph. */
+  | { kind: 'duplicate'; source: Pipeline; name: string }
   | { kind: 'rename'; pipelineId: string; name: string };
 
 /** The label on the draft row's confirm button — also how a test names it. */
@@ -88,7 +91,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
-  const ensureLoaded = useStore(store, (s) => s.ensureLoaded);
+  const ensureFresh = useStore(store, (s) => s.ensureFresh);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [query, setQuery] = useState('');
@@ -106,9 +109,19 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
-    ensureLoaded();
-  }, [ensureLoaded]);
+    ensureFresh();
+  }, [ensureFresh]);
 
+  /**
+   * The section the tree hangs beneath.
+   *
+   * A hub with custom pane content renders ONLY this one, so a hub that grew a
+   * second section would silently lose it from the pane's navigation — the
+   * exact class of quiet drop this project treats as a defect. Rather than
+   * build speculative UI for a consumer that does not exist, `hubs.test.ts`
+   * pins Author at exactly one section, so ADDING one fails loudly and lands
+   * the decision on whoever adds it.
+   */
   const section = hub.sections[0];
 
   const visible = useMemo(() => {
@@ -117,20 +130,40 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     return pipelines.filter((p) => p.name.toLowerCase().includes(needle));
   }, [pipelines, query]);
 
-  /* Focus lives INSIDE the row being unmounted, so closing the draft would
-     otherwise strand it on a removed element — focus falls to `<body>` and Tab
-     restarts from the top of the document. The spec names focus restoration for
-     panes explicitly, and the command bar's collapse toggle guards the same
-     failure. This runs as an EFFECT rather than inside the close handler
-     because React has not removed the row yet when the handler runs; by the
-     time the effect fires, the control being focused is the only one left. */
+  /**
+   * The draft as far as rendering is concerned.
+   *
+   * A rename whose pipeline disappears from under it — deleted in another tab,
+   * then picked up by a refresh — would otherwise leave `draft` set with no row
+   * to render it in: the editor silently vanishes and, because the focus effect
+   * below needs a null draft, focus is never restored either. DERIVED rather
+   * than reconciled in an effect: an effect would have to `setState` to fix
+   * state it just observed, which is a cascading render for a fact the render
+   * can simply compute.
+   */
+  const activeDraft = useMemo(
+    () =>
+      draft?.kind === 'rename' && !pipelines.some((p) => p.id === draft.pipelineId) ? null : draft,
+    [draft, pipelines],
+  );
+
+  /* Focus lives INSIDE the row being unmounted, so closing the draft — or
+     deleting the row a menu was anchored to — would otherwise strand it on a
+     removed element: focus falls to `<body>` and Tab restarts from the top of
+     the document. The spec names focus restoration for panes explicitly, and
+     the command bar's collapse toggle guards the same failure.
+
+     An EFFECT rather than the handler, because React has not removed the row
+     yet when the handler runs. It depends on `pipelines` as well as `draft`:
+     a DELETE closes no draft, so the list changing is the only signal that the
+     row is gone. */
   useEffect(() => {
-    if (draft !== null) return;
+    if (activeDraft !== null) return;
     const target = returnFocusTo.current;
     if (target === null) return;
     returnFocusTo.current = null;
     document.getElementById(target)?.focus();
-  }, [draft]);
+  }, [activeDraft, pipelines]);
 
   const closeDraft = useCallback(() => {
     setDraft(null);
@@ -170,47 +203,52 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   );
 
   const submitDraft = useCallback(async () => {
-    if (!draft) return;
+    if (!activeDraft) return;
+    const draft = activeDraft;
     const name = draft.name.trim();
     if (name === '') return;
 
     const ok = await run(
       () => {
         if (draft.kind === 'create') return createPipeline({ name });
-        if (draft.kind === 'duplicate') return duplicatePipeline(draft.sourceId, name);
+        if (draft.kind === 'duplicate') return duplicatePipeline(draft.source, name);
         return renamePipeline(draft.pipelineId, name);
       },
       (err) => `Could not ${draft.kind} “${name}”: ${messageOf(err)}`,
     );
     if (ok) closeDraft();
-  }, [closeDraft, draft, run]);
+  }, [activeDraft, closeDraft, run]);
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
       if (!window.confirm(`Delete pipeline “${p.name}”? This cannot be undone.`)) return;
-      await run(
-        async () => {
-          await deletePipeline(p.id);
-          /* Leaving the canvas mounted on a pipeline that no longer exists
-             would show a stale graph over a 404 on the next load. Only when it
-             IS the open one — deleting a different pipeline must not yank the
-             user out of what they are editing. */
-          if (editing === p.id) await navigate(section?.path ?? '/author');
-        },
-        /* The server refuses (409 `pipeline_has_runs`) a pipeline with run
-           history — a real, explainable refusal rather than a fault, so it gets
-           its own sentence instead of a raw status line. Same wording as the
-           pipelines page, which faces the same refusal. */
-        (err) =>
-          err instanceof ApiError && err.status === 409
-            ? `Cannot delete “${p.name}”: it has run history.`
-            : `Could not delete “${p.name}”: ${messageOf(err)}`,
+      /* The row — and the Fluent menu anchored to it — is about to be unmounted
+         by the refresh, so focus needs somewhere to land. Fluent restores focus
+         to its trigger on close, which by then is gone. */
+      returnFocusTo.current = NEW_PIPELINE_BUTTON_ID;
+      const ok = await run(
+        () => deletePipeline(p.id),
+        (err) => describeDeleteFailure(p.name, err),
       );
+      if (!ok) return;
+      /* Leaving the canvas mounted on a pipeline that no longer exists would
+         show a stale graph over a 404 on the next load. Only when it IS the
+         open one — deleting a different pipeline must not yank the user out of
+         what they are editing.
+
+         AFTER `run`, not inside it: a navigation that threw would otherwise be
+         reported as "could not delete" for a delete that had already succeeded,
+         and would skip the refresh, leaving the deleted row in the tree.
+
+         `replace`, per the house rule `routes.tsx` states for exactly this: a
+         pushed navigation leaves the dead pipeline's URL in history, so Back
+         lands on "Pipeline not found". */
+      if (editing === p.id) await navigate(section?.path ?? hub.path, { replace: true });
     },
-    [editing, navigate, run, section],
+    [editing, hub.path, navigate, run, section],
   );
 
-  const listLabel = section?.label ?? 'Pipelines';
+  const listLabel = section?.label ?? hub.label;
 
   return (
     <div className="factory-resources">
@@ -278,12 +316,12 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
         aria-label={listLabel}
         hidden={!expanded}
       >
-        {draft && draft.kind !== 'rename' && (
+        {activeDraft && activeDraft.kind !== 'rename' && (
           <li>
             <NameRow
-              draft={draft}
+              draft={activeDraft}
               busy={busy}
-              onChange={(name) => setDraft({ ...draft, name })}
+              onChange={(name) => setDraft({ ...activeDraft, name })}
               onSubmit={() => void submitDraft()}
               onCancel={closeDraft}
             />
@@ -291,12 +329,12 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
         )}
 
         {visible.map((p) =>
-          draft?.kind === 'rename' && draft.pipelineId === p.id ? (
+          activeDraft?.kind === 'rename' && activeDraft.pipelineId === p.id ? (
             <li key={p.id}>
               <NameRow
-                draft={draft}
+                draft={activeDraft}
                 busy={busy}
-                onChange={(name) => setDraft({ ...draft, name })}
+                onChange={(name) => setDraft({ ...activeDraft, name })}
                 onSubmit={() => void submitDraft()}
                 onCancel={closeDraft}
               />
@@ -342,7 +380,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
                       onClick={() => {
                         setExpanded(true);
                         openDraft(
-                          { kind: 'duplicate', sourceId: p.id, name: `${p.name} (copy)` },
+                          { kind: 'duplicate', source: p, name: `${p.name} (copy)` },
                           rowMenuId(p.id),
                         );
                       }}
@@ -360,24 +398,44 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 
       {/* "There are none" and "we could not find out" are different facts, so
           the empty state is gated on a load having actually SUCCEEDED. */}
-      {expanded && status === 'ready' && pipelines.length === 0 && !draft && (
+      {expanded && status === 'ready' && pipelines.length === 0 && !activeDraft && (
         <p className="factory-resources__empty">No pipelines yet — use + to create one.</p>
       )}
       {expanded && pipelines.length > 0 && visible.length === 0 && (
         <p className="factory-resources__empty">No pipelines match “{query.trim()}”.</p>
       )}
 
-      {(actionError ?? loadError) && (
-        <p className="factory-resources__error" role="alert">
-          {actionError ?? loadError}
-        </p>
-      )}
-      {status === 'error' && !actionError && (
+      {/* The two failures are reported SEPARATELY, and only one of them is an
+          `alert`. A failed mutation is the direct result of something the user
+          just did, so it interrupts; a failed LOAD is also being announced by
+          the pipelines page mounted beside this pane, and two `role="alert"`s
+          carrying one message means a screen reader says it twice. */}
+      {loadError && <p className="factory-resources__error">{loadError}</p>}
+      {status === 'error' && (
         <div className="factory-resources__empty">
+          {/* Rendered whatever else has gone wrong. Gating this on
+              `!actionError` meant a failed load followed by a failed create hid
+              the only way back. */}
           <button type="button" onClick={() => void refresh()} disabled={busy}>
             Retry
           </button>
         </div>
+      )}
+      {actionError && (
+        <p className="factory-resources__error" role="alert">
+          {actionError}{' '}
+          {/* A failed DELETE closes no draft row, so nothing else would ever
+              clear this: the pane outlives every route change inside the hub,
+              and the message would sit there indefinitely — including after the
+              pipeline it names has been filtered out of view. */}
+          <button
+            type="button"
+            className="factory-resources__dismiss"
+            onClick={() => setActionError(null)}
+          >
+            Dismiss
+          </button>
+        </p>
       )}
     </div>
   );
@@ -386,11 +444,6 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
 /** The `⋯` trigger's id, so a closing draft row can hand focus back to it. */
 function rowMenuId(pipelineId: string): string {
   return `factory-row-menu-${pipelineId}`;
-}
-
-/** The human-readable half of any thrown value. */
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 interface NameRowProps {

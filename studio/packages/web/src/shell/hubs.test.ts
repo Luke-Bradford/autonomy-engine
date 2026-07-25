@@ -39,4 +39,19 @@ describe('sectionLabel', () => {
       }
     }
   });
+
+  /**
+   * A hub whose pane renders CUSTOM content (`PANE_CONTENT` in
+   * `SecondaryPane.tsx`) shows `sections[0]` only — U4's Factory Resources tree
+   * uses it as the group header. So a second Author section would not merely
+   * look wrong, it would silently disappear from the pane's navigation, which
+   * is how `/manage/triggers` became unreachable between U2 and U3.
+   *
+   * This pins the constraint where it can FAIL rather than vanish: whoever adds
+   * an Author section has to decide how the tree renders it, and this test is
+   * what tells them.
+   */
+  it('keeps Author at exactly one section, which its custom pane renders', () => {
+    expect(hubById('author')!.sections).toHaveLength(1);
+  });
 });

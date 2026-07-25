@@ -486,17 +486,23 @@ body {
   min-width: 0;
 }
 
-/* The row's `⋯` is revealed on hover/focus, but NEVER hidden from assistive
-   tech or from keyboard users: `visibility` (not `display: none`) keeps it in
-   the layout so rows do not jump, and `:focus-within` brings it back for a
-   keyboard tab that no pointer ever hovered. */
+/* The row's `⋯` is revealed on hover/focus, and it is `opacity`, NOT
+   `visibility: hidden` (the first cut) or `display: none`. Both of those
+   EXCLUDE an element from the accessibility tree, which would make
+   rename/duplicate/delete undiscoverable to a screen reader and unreachable by
+   a backwards Shift+Tab — the button is not focusable until the row already
+   has focus in it, so the reveal would depend on the very focus it gates.
+   `opacity: 0` keeps the element in the layout (rows do not jump), in the
+   a11y tree, and focusable; `:focus-within` then makes it visible the moment a
+   keyboard reaches it. */
 .factory-resources__row .factory-resources__icon-button {
-  visibility: hidden;
+  opacity: 0;
 }
 
 .factory-resources__row:hover .factory-resources__icon-button,
-.factory-resources__row:focus-within .factory-resources__icon-button {
-  visibility: visible;
+.factory-resources__row:focus-within .factory-resources__icon-button,
+.factory-resources__row .factory-resources__icon-button:focus-visible {
+  opacity: 1;
 }
 
 .factory-resources__name-row {
@@ -534,6 +540,11 @@ body {
 
 .factory-resources__error {
   color: var(--error);
+}
+
+.factory-resources__dismiss {
+  padding: 0 0.3rem;
+  font-size: 0.72rem;
 }
 
 .command-bar {

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
-import { ApiError } from '../api/client';
-import { createPipeline, deletePipeline } from '../api/pipelines';
+import { messageOf } from '../api/client';
+import { createPipeline, deletePipeline, describeDeleteFailure } from '../api/pipelines';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { pipelinePath } from './author/pipelinePath';
 
@@ -28,7 +28,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
-  const ensureLoaded = useStore(store, (s) => s.ensureLoaded);
+  const ensureFresh = useStore(store, (s) => s.ensureFresh);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -36,8 +36,8 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    ensureLoaded();
-  }, [ensureLoaded]);
+    ensureFresh();
+  }, [ensureFresh]);
 
   const onCreate = useCallback(
     async (e: React.FormEvent) => {
@@ -51,9 +51,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         setName('');
         await refresh();
       } catch (err) {
-        setActionMsg(
-          `Could not create pipeline: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        setActionMsg(`Could not create pipeline: ${messageOf(err)}`);
       } finally {
         setCreating(false);
       }
@@ -69,12 +67,9 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         await deletePipeline(p.id);
         await refresh();
       } catch (err) {
-        // The server refuses (409) a pipeline that has run history.
-        const msg =
-          err instanceof ApiError && err.status === 409
-            ? `Cannot delete "${p.name}": it has run history.`
-            : `Could not delete "${p.name}": ${err instanceof Error ? err.message : String(err)}`;
-        setActionMsg(msg);
+        // Shared with the Factory Resources row menu, which faces the same
+        // 409 refusal — two hand-written copies had already drifted apart.
+        setActionMsg(describeDeleteFailure(p.name, err));
       }
     },
     [refresh],
@@ -93,6 +88,19 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
       {loadError && (
         <p className="error" role="alert">
           {loadError}
+        </p>
+      )}
+      {/* The page needs its OWN recovery control. `ensureFresh` deliberately
+          does not retry from `error`, and the Factory Resources pane's Retry
+          can be put away — pane collapse is a persisted GLOBAL preference, and
+          a collapsed pane is `hidden`, so it is neither clickable nor
+          focusable. Without this, a failed first load with a collapsed pane
+          left no in-app way back at all. */}
+      {status === 'error' && (
+        <p>
+          <button type="button" onClick={() => void refresh()}>
+            Retry
+          </button>
         </p>
       )}
       {actionMsg && <p className="notice">{actionMsg}</p>}

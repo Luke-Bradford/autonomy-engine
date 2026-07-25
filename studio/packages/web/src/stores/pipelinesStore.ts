@@ -19,24 +19,36 @@ export interface PipelinesState {
   /** Message from the most recent failed load; cleared by the next success. */
   error: string | null;
   /**
-   * Load the list if nothing has loaded it yet. Idempotent and safe to call
-   * from every consumer's mount effect — the Author hub mounts TWO of them at
-   * once (the Factory Resources pane and the pipelines page), and a page
-   * remounts on every navigation back to it.
+   * The MOUNT-TIME entry point, for every consumer: bring the list up to date,
+   * unless doing so would be wasteful or harmful.
    *
-   * Deliberately NOT a retry: once a load has failed, `status` is `error` and
-   * further calls do nothing, so a broken server cannot be hammered by remounts.
-   * Recovery is an explicit `refresh()` behind a Retry control.
+   * - `idle` / `ready` → load. Loading from `ready` is what keeps a re-entered
+   *   hub honest: a pipeline created by the CLI, by an import, or in another
+   *   tab is otherwise invisible until a browser reload. (An earlier cut only
+   *   loaded from `idle`, which silently made the list fetch-once-per-page-load
+   *   — a freshness regression against the per-mount fetch it replaced.)
+   * - `loading` → skip. This is what makes the count DETERMINISTIC while the
+   *   Author hub mounts two consumers in one commit: the first to run starts
+   *   the load, the second sees `loading` and stands down. Exactly one request,
+   *   whichever order React runs their effects in.
+   * - `error` → skip, so a broken server cannot be hammered by remounts.
+   *   Recovery is the explicit Retry control, which BOTH consumers offer.
    */
-  ensureLoaded: () => void;
+  ensureFresh: () => void;
   /**
    * Refetch unconditionally. Every mutation (create/rename/duplicate/delete)
    * ends in one of these, which is the whole reason this store exists: the pane
    * and the page are mounted SIMULTANEOUSLY over the same list, so a write in
-   * one has to be visible in the other.
+   * one has to be visible in the other. It is also what Retry calls.
    *
    * NEVER rejects — a caller awaiting a post-mutation refresh must not have to
    * handle a second failure mode on top of the mutation's own.
+   *
+   * CAVEAT: a SUPERSEDED refresh resolves as soon as its own request settles,
+   * without waiting for the fresher one that replaced it. So `await refresh()`
+   * means "my request is done", not "the list is now current". No caller
+   * depends on the stronger reading — both only use it to sequence UI state —
+   * but one that did would need the store to expose the winning load's promise.
    */
   refresh: () => Promise<void>;
 }
@@ -72,7 +84,12 @@ export function createPipelinesStore(fetchList = listPipelines): PipelinesStore 
   return createStore<PipelinesState>((set, get) => {
     const load = async (): Promise<void> => {
       const id = (latestLoad += 1);
-      set({ status: 'loading' });
+      /* `error` is cleared on the way IN, not just on success: otherwise a
+         Retry runs with the previous failure still on screen and the Retry
+         control (gated on `status === 'error'`) vanishing under the user's
+         cursor — the banner would be describing a request that is no longer
+         the current one. */
+      set({ status: 'loading', error: null });
       try {
         const pipelines = await fetchList();
         if (id !== latestLoad) return;
@@ -90,8 +107,10 @@ export function createPipelinesStore(fetchList = listPipelines): PipelinesStore 
       status: 'idle',
       pipelines: [],
       error: null,
-      ensureLoaded: () => {
-        if (get().status === 'idle') void load();
+      ensureFresh: () => {
+        const status = get().status;
+        if (status === 'loading' || status === 'error') return;
+        void load();
       },
       refresh: load,
     };

@@ -33,17 +33,36 @@ describe('pipelinesStore', () => {
     expect(store.getState()).toMatchObject({ status: 'idle', pipelines: [], error: null });
   });
 
-  it('ensureLoaded fetches once, however many consumers ask', async () => {
+  /**
+   * The Author hub mounts TWO consumers in one commit. Whichever effect React
+   * runs first starts the load; the second must see `loading` and stand down,
+   * so the request count does not depend on render order.
+   */
+  it('ensureFresh fetches ONCE when several consumers mount together', async () => {
     const list = vi.fn().mockResolvedValue([pipeline()]);
     const store = createPipelinesStore(list);
 
-    store.getState().ensureLoaded();
-    store.getState().ensureLoaded();
+    store.getState().ensureFresh();
+    store.getState().ensureFresh();
     await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
-    store.getState().ensureLoaded();
 
     expect(list).toHaveBeenCalledTimes(1);
     expect(store.getState().pipelines).toEqual([pipeline()]);
+  });
+
+  /**
+   * Re-entering the hub RE-READS. Before this, the list was fetched once per
+   * page load and a pipeline created by the CLI, an import or a second tab
+   * stayed invisible until a browser reload.
+   */
+  it('ensureFresh refetches once a load has already succeeded', async () => {
+    const list = vi.fn().mockResolvedValue([pipeline()]);
+    const store = createPipelinesStore(list);
+
+    store.getState().ensureFresh();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().ensureFresh();
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 
   it('refresh always refetches, even once ready', async () => {
@@ -65,15 +84,38 @@ describe('pipelinesStore', () => {
     expect(store.getState().error).toBe('offline');
   });
 
-  it('does not re-fetch after a failure — ensureLoaded is not a retry loop', async () => {
+  it('does not re-fetch after a failure — ensureFresh is not a retry loop', async () => {
     const list = vi.fn().mockRejectedValue(new Error('offline'));
     const store = createPipelinesStore(list);
 
-    store.getState().ensureLoaded();
+    store.getState().ensureFresh();
     await vi.waitFor(() => expect(store.getState().status).toBe('error'));
-    store.getState().ensureLoaded();
+    store.getState().ensureFresh();
 
     expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The Retry path. A banner describing the PREVIOUS attempt, sitting over an
+   * in-flight retry — with the Retry button (gated on `status === 'error'`)
+   * vanishing under the cursor — describes a request that is no longer current.
+   */
+  it('clears the error when a retry STARTS, not only when one succeeds', async () => {
+    const pending = deferred<Pipeline[]>();
+    const list = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(pending.promise);
+    const store = createPipelinesStore(list);
+
+    await store.getState().refresh();
+    expect(store.getState().error).toBe('offline');
+
+    const retry = store.getState().refresh();
+    expect(store.getState()).toMatchObject({ status: 'loading', error: null });
+
+    pending.resolve([]);
+    await retry;
   });
 
   it('keeps the last good list when a REFRESH fails, and clears the error when one succeeds', async () => {

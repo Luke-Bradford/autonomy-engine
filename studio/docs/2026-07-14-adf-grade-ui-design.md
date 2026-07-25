@@ -489,11 +489,23 @@ Decisions worth not re-deriving:
   Its loads carry a monotonic sequence id and a superseded load DROPS its result — success *or*
   rejection — so two overlapping refreshes cannot apply in completion order and leave the tree
   showing a list the server no longer has, nor bury a fresh answer under a stale error.
-- **`ensureLoaded()` is not a retry.** Once a load has failed the status is `error` and further
-  mounts do nothing, so a broken server cannot be hammered by remounts; recovery is the explicit
-  Retry control. And `error` is kept DISTINCT from "loaded, empty" in both views — "there are
-  none" and "we could not find out" are different facts, and the empty state is a lie about the
-  second.
+  (One caveat the sequence id creates: a superseded `refresh()` resolves as soon as its OWN
+  request settles, so `await refresh()` means "my request is done", not "the list is current".
+  No caller needs the stronger reading; one that did would need the winning load's promise.)
+- **`ensureFresh()` is the one mount-time entry point, and it is deliberately three-way.** It
+  loads from `idle` AND from `ready` — re-entering the Author hub RE-READS, so a pipeline created
+  by the CLI, an import or a second tab is not invisible until a browser reload. (An earlier cut
+  only loaded from `idle`, which quietly turned a per-mount fetch into fetch-once-per-page-load.)
+  It skips while `loading`, which is what makes the request count DETERMINISTIC when the hub
+  mounts two consumers in one commit — whichever effect runs first wins and the other stands
+  down, so it is exactly one request either way. And it skips on `error`, so a broken server
+  cannot be hammered by remounts; recovery is the explicit Retry, which BOTH surfaces offer —
+  the pane's alone would not do, because the pane can be collapsed and a collapsed pane is
+  `hidden`, i.e. neither clickable nor focusable.
+- **`error` is kept DISTINCT from "loaded, empty" in both views** — "there are none" and "we
+  could not find out" are different facts, and the empty state is a lie about the second. The
+  error is also cleared when a retry STARTS, not only when one succeeds, so the banner never
+  describes a request that is no longer the current one.
 - **The pipelines PAGE was NOT reduced to a landing screen** even though the pane can now do
   everything it does. The pane collapses — globally, and the preference persists — and Author
   would then have no way to reach or create a pipeline at all.
@@ -510,11 +522,17 @@ Decisions worth not re-deriving:
 - **Duplicate is COMPOSED from existing endpoints and ROLLS BACK.** No server route, because the
   epic's stated non-goal is that its only backend work is read-only read-models. There is no
   transaction across two HTTP requests, so a copy whose version write fails is deleted again
-  (seconds old, no run history, so `DELETE` cannot 409) and the ORIGINAL error is what surfaces —
-  an empty husk appearing in the tree at the moment the user is told it failed is worse than no
-  copy. If the rollback itself fails the original error still wins; a rollback error names the
-  wrong problem. The copy carries the SOURCE's `catalogVersion`: duplicating is a copy, not a
-  re-authoring, so re-stamping it with today's would assert a compatibility nobody checked.
+  (seconds old, and `pipeline_versions` cascades, so `DELETE` cannot 409) and the ORIGINAL error
+  is what surfaces — an empty husk appearing in the tree at the moment the user is told it failed
+  is worse than no copy. If the rollback itself fails the original error still wins; a rollback
+  error names the wrong problem. The `createPipeline` call sits INSIDE the `try`: a 201 whose
+  body fails `PipelineSchema` has still committed server-side, and a create outside the try would
+  leave exactly the husk the rollback exists to prevent.
+- **A duplicate copies the source's `catalogVersion` AND its `concurrency` cap.** Duplicating is
+  a copy, not a re-authoring: re-stamping the graph with today's catalog would assert a
+  compatibility nobody checked, and letting the write schema's `.default(null)` stand would
+  silently UNCAP the copy — an absent fact manufactured as a benign default, the shape #473
+  banned. Those two are the only fields a pipeline carries beyond its name.
 - **An inline name ROW for create/rename/duplicate, not a Fluent `Dialog`.** All three are "give
   me a name". Renaming in place is what a resources tree does, a modal to type six characters
   into is a worse interaction, and `Dialog` would be the first import of a surface U0's bundle
@@ -528,23 +546,53 @@ Decisions worth not re-deriving:
 - **No header `⋯`.** The Shell diagram draws `+ ⋯`, but every action it could hold is per-row and
   already in the row's own menu. An overflow menu with nothing in it is the empty-seam
   anti-pattern U9's actions region was deferred to avoid.
-- **The row's `⋯` uses `visibility`, not `display: none`, and `:focus-within` as well as
-  `:hover`.** `visibility` keeps it in the layout so rows do not jump; `:focus-within` is what
-  makes the row's actions reachable at all without a pointer. Browser-verified by tabbing from
-  the row link with no hover anywhere — jsdom computes no cascade, so a rule that hid it outright
-  would pass every unit test.
-- **Focus restoration runs in an EFFECT, off a `ref`.** Closing the draft row unmounts the
-  element focus is inside, which strands focus on `<body>` and restarts Tab from the top. The
-  handler cannot do it (React has not removed the row yet), and holding the target in state would
-  mean a `setState` inside that effect purely to clear it — a cascading render for a value
-  nothing renders.
+- **The row's `⋯` uses `opacity: 0`, NOT `visibility: hidden` (the first cut) or `display:
+  none`.** Both of those EXCLUDE an element from the accessibility tree, which would make
+  rename/duplicate/delete undiscoverable to a screen reader and unreachable by a BACKWARDS
+  Shift+Tab — the button is not focusable until the row already has focus in it, so the reveal
+  would depend on the very focus it gates. `opacity` keeps it in the layout (rows do not jump),
+  in the a11y tree, and focusable; `:hover`/`:focus-within` then reveal it. Pinned by an e2e that
+  tabs BACKWARDS into it, which is the direction the broken version fails — the forward-only
+  test the first cut shipped passed against `visibility: hidden`.
+- **Focus restoration runs in an EFFECT, off a `ref`, and covers DELETE too.** Closing the draft
+  row — or deleting the row a menu was anchored to — unmounts the element focus is inside, which
+  strands focus on `<body>` and restarts Tab from the top. (Fluent restores focus to its trigger
+  on close, but after a delete that trigger is gone.) The handler cannot do it, because React has
+  not removed the row yet; holding the target in state would mean a `setState` inside that effect
+  purely to clear it, a cascading render for a value nothing renders. The effect depends on the
+  pipelines list as well as the draft, since a delete closes no draft and the list changing is
+  the only signal the row has gone.
+- **A rename whose pipeline vanishes is handled by DERIVING the draft, not reconciling it.** If a
+  refresh drops the row mid-rename, the editor would otherwise have no row to render in while
+  `draft` stayed set — the editor silently disappears, and focus is never restored because the
+  effect above needs a null draft. Computed at render instead: an effect would have to `setState`
+  to fix state it just observed.
 - **Deleting the pipeline you are EDITING navigates away**; deleting any other one does not. A
   canvas left mounted on a deleted pipeline shows a graph that no longer exists and 404s on the
   next load — but yanking the user out of what they are editing because they tidied up something
   else would be worse than the stale row.
 - **`latestVersion` moved into `api/pipelines.ts`.** The canvas had it privately, and duplicate
   needed the same rule; two copies of "highest `version`, not the last element" is exactly the
-  kind that drifts, and the server's ordering is its own business.
+  kind that drifts, and the server's ordering is its own business. `describeDeleteFailure` and
+  `messageOf` were extracted for the same reason — the 409 sentence had already drifted
+  typographically between the two delete surfaces before it was shared.
+- **Deleting the pipeline you are editing navigates with `replace`.** A push would leave the dead
+  pipeline's URL in history, so Back lands on "Pipeline not found" — the trap `routes.tsx` states
+  the house rule for. The navigation happens AFTER the mutation returns, not inside it: a
+  navigation that threw would otherwise be reported as "could not delete" for a delete that had
+  already succeeded.
+- **A hub with custom pane content renders `sections[0]` ONLY.** A second Author section would
+  therefore vanish from the pane rather than render — the same silent unreachability that hid
+  `/manage/triggers` between U2 and U3. Rather than build speculative UI for a hub that does not
+  exist, `hubs.test.ts` pins Author at exactly one section, so ADDING one fails loudly and lands
+  the decision on whoever adds it.
+- **Bundle: the row `⋯` costs +31 kB gzip, and it is the reason there is no `Dialog`.** Fluent's
+  `Menu` took the `fluent` vendor chunk from 40.12 to 71.03 kB gzip (125.79 → 234.03 kB raw),
+  priced by building with and without it rather than inferred. It landed in `fluent`, NOT the
+  entry — which is what U1's chunk split exists for and the property to keep holding — and the
+  entry is flat (167.13 → 169.39 kB gzip, which is the pane, store, route and tree themselves).
+  A `Dialog` for create/rename/duplicate would have been a second heavy surface on top, for an
+  interaction a resources tree is better off doing in place.
 
 Browser-verified (Chromium, 2026-07-25): Fluent tokens resolve on `.app-fluent-root`
 (`--colorNeutralBackground1: #292929` dark / white light); ZERO `--xy-*` bridge overrides left
@@ -553,12 +601,15 @@ the tree mounted, and `48px 180px 5px 1047px` at the pane minimum with zero hori
 anywhere (the filter's `min-width: 0` is load-bearing — a text input's intrinsic minimum is its
 `size` attribute, ~20 characters, which would push the toolbar wider than the pane); the `⋯`
 menu portals OUTSIDE the pane onto an opaque `rgb(41,41,41)` surface at z-index 1000000, so the
-pane's own overflow clip cannot slice it; focus returns to the `+` / the row's `⋯` after every
-draft row closes. The only console error on any page is the pre-existing favicon 404 (**#717**).
+pane's own overflow clip cannot slice it; focus returns to the `+` / the row's `⋯` whenever the
+control that opened the draft row is still on screen. The only console error on any page is the
+pre-existing favicon 404 (**#717**).
 
 NOT in U4, with owners: drag-and-drop reordering and non-pipeline resource types (**U5**,
 **U20**); a version picker under a pipeline (**U22**); the command bar's per-pipeline actions and
-name (**U9**); `Publish`/`Commit` command-bar states (**U18**, DB-only path first).
+name (**U9**); `Publish`/`Commit` command-bar states (**U18**, DB-only path first). Deferred with
+tickets: the canvas deep-link request waterfall and the canvas heading not following a rename
+(**#720**); one shared `.icon-button` class across the command bar and the pane (**#721**).
 
 ## Non-goals (YAGNI)
 

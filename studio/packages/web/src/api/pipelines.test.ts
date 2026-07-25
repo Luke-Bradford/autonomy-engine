@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from './client';
 import {
   createPipeline,
   createPipelineVersion,
   deletePipeline,
+  describeDeleteFailure,
   duplicatePipeline,
   getPipeline,
   latestVersion,
@@ -189,7 +191,7 @@ describe('pipelines API', () => {
         { status: 201, body: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
       ]);
 
-      await expect(duplicatePipeline('pl_1', 'My pipeline (copy)')).resolves.toEqual(clone);
+      await expect(duplicatePipeline(pipeline, 'My pipeline (copy)')).resolves.toEqual(clone);
       expect(urls(fetchMock)).toEqual([
         '/api/pipelines',
         '/api/pipelines/pl_1/versions',
@@ -202,6 +204,33 @@ describe('pipelines API', () => {
       expect(copied).toMatchObject({ params: [], outputs: [], nodes: [], edges: [] });
     });
 
+    it('carries the source’s concurrency cap onto the copy', async () => {
+      const capped = { ...pipeline, concurrency: 3 };
+      const fetchMock = stubFetchSequence([
+        { status: 201, body: { ...capped, id: 'pl_2' } },
+        { status: 200, body: [] },
+      ]);
+
+      await duplicatePipeline(capped, 'Copy');
+
+      // Letting the write schema's `.default(null)` stand would silently
+      // UNCAP the copy — an absent fact manufactured as a benign default.
+      expect(JSON.parse(initOf(fetchMock, 0).body as string)).toEqual({
+        name: 'Copy',
+        concurrency: 3,
+      });
+    });
+
+    it('does NOT roll back when the create itself never produced a pipeline', async () => {
+      // A 201 whose body fails `PipelineSchema` throws AFTER the server has
+      // committed. Nothing is bound, so there is nothing to delete — and the
+      // rollback must not fire on an undefined id.
+      const fetchMock = stubFetchSequence([{ status: 201, body: { id: 'pl_2' } }]);
+
+      await expect(duplicatePipeline(pipeline, 'Copy')).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it('skips the version copy when the source has never been saved', async () => {
       const clone = { ...pipeline, id: 'pl_2' };
       const fetchMock = stubFetchSequence([
@@ -209,7 +238,7 @@ describe('pipelines API', () => {
         { status: 200, body: [] },
       ]);
 
-      await expect(duplicatePipeline('pl_1', 'Empty copy')).resolves.toEqual(clone);
+      await expect(duplicatePipeline(pipeline, 'Empty copy')).resolves.toEqual(clone);
       expect(urls(fetchMock)).toHaveLength(2);
     });
 
@@ -223,7 +252,7 @@ describe('pipelines API', () => {
       ]);
 
       // The ORIGINAL failure surfaces — never a rollback error standing in for it.
-      await expect(duplicatePipeline('pl_1', 'Copy')).rejects.toThrow(/nodes: invalid/);
+      await expect(duplicatePipeline(pipeline, 'Copy')).rejects.toThrow(/nodes: invalid/);
       expect(urls(fetchMock)[3]).toBe('/api/pipelines/pl_2');
       expect(initOf(fetchMock, 3).method).toBe('DELETE');
     });
@@ -236,8 +265,20 @@ describe('pipelines API', () => {
         { status: 500, body: { error: 'internal', message: 'rollback exploded' } },
       ]);
 
-      await expect(duplicatePipeline('pl_1', 'Copy')).rejects.toThrow(/nodes: invalid/);
+      await expect(duplicatePipeline(pipeline, 'Copy')).rejects.toThrow(/nodes: invalid/);
       expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+  });
+
+  describe('describeDeleteFailure', () => {
+    it('explains the 409 refusal in terms the user can act on', () => {
+      expect(describeDeleteFailure('Nightly', new ApiError(409, 'pipeline_has_runs'))).toMatch(
+        /run history/,
+      );
+    });
+
+    it('passes any other failure through with its message', () => {
+      expect(describeDeleteFailure('Nightly', new Error('offline'))).toMatch(/offline/);
     });
   });
 });

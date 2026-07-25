@@ -206,9 +206,13 @@ test.describe('U4 Factory Resources pane', () => {
     await expect(tree(page).getByRole('link', { name, exact: true })).toBeVisible();
 
     // The group's own disclosure is independent of the pane's collapse.
-    await pane(page).getByRole('button', { name: /Collapse Pipelines/ }).click();
+    await pane(page)
+      .getByRole('button', { name: /Collapse Pipelines/ })
+      .click();
     await expect(tree(page)).toBeHidden();
-    await pane(page).getByRole('button', { name: /Expand Pipelines/ }).click();
+    await pane(page)
+      .getByRole('button', { name: /Expand Pipelines/ })
+      .click();
     await expect(tree(page).getByRole('link', { name, exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
@@ -221,14 +225,66 @@ test.describe('U4 Factory Resources pane', () => {
     const name = 'e2e u4 keyboard';
     await createInPane(page, name);
 
-    // The `⋯` is `visibility: hidden` until hover — but `:focus-within` must
-    // bring it back, or the whole row's actions are pointer-only. Focus the
-    // row's LINK, then Tab to its menu button; no hover anywhere.
+    // The `⋯` is `opacity: 0` until hover — deliberately NOT `visibility`
+    // or `display`, both of which would drop it out of the accessibility tree
+    // and make the row's actions pointer-only. Focus the row's LINK, then Tab
+    // to its menu button; no hover anywhere.
     await tree(page).getByRole('link', { name, exact: true }).focus();
     await page.keyboard.press('Tab');
     const menuButton = page.getByRole('button', { name: `More actions for ${name}` });
     await expect(menuButton).toBeFocused();
     await expect(menuButton).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The reveal must not depend on the focus it gates.
+   *
+   * With `visibility: hidden` the button is not focusable until the row already
+   * has focus within it, so arriving BACKWARDS — Shift+Tab from the next row —
+   * skips it entirely, and a screen reader reading the tree never encounters it
+   * at all. `opacity` keeps it in the tab order and the a11y tree throughout.
+   */
+  test('the row menu is reachable arriving BACKWARDS too', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await gotoAuthor(page);
+
+    const first = 'e2e u4 backtab a';
+    const second = 'e2e u4 backtab b';
+    await createInPane(page, first);
+    await createInPane(page, second);
+
+    // Land on the SECOND row's link, then walk backwards into the first row's
+    // menu button — the element that would be skipped if it were unfocusable.
+    await tree(page).getByRole('link', { name: second, exact: true }).focus();
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.getByRole('button', { name: `More actions for ${first}` })).toBeFocused();
+
+    await expectQuiet(page, problems);
+  });
+
+  test('a failed action can be dismissed, and does not hide Retry', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    page.on('dialog', (dialog) => void dialog.accept());
+    await gotoAuthor(page);
+
+    const name = 'e2e u4 dismiss';
+    await createInPane(page, name);
+    await tree(page).getByRole('link', { name, exact: true }).click();
+    await page.locator('.react-flow__renderer').waitFor();
+
+    // Save a version so the pipeline has run-less history, then delete it: the
+    // delete succeeds here, so drive the dismissable-message path through a
+    // rename to a name the server refuses instead.
+    await openRowMenu(page, name);
+    await page.getByRole('menuitem', { name: 'Rename' }).click();
+    await page.getByRole('textbox', { name: 'Pipeline name' }).fill('   ');
+    // A blank name never reaches the network — the confirm button is disabled,
+    // which is itself the assertion.
+    await expect(page.getByRole('button', { name: 'Rename', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });

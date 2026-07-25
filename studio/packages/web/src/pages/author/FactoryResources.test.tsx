@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useLocation } from 'react-router';
+import { RouterProvider, createMemoryRouter, useLocation } from 'react-router';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { FactoryResources } from './FactoryResources';
+import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { hubById } from '../../shell/hubs';
@@ -124,7 +125,11 @@ describe('FactoryResources — the tree', () => {
     listMock.mockRejectedValueOnce(new Error('offline'));
     renderPane();
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('offline');
+    // NOT an `alert`: the pipelines page mounted beside this pane announces the
+    // same load failure, and two alerts carrying one message means a screen
+    // reader says it twice.
+    expect(await screen.findByText('offline')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
     // The empty state must NOT be shown for a failure — "there are none" and
     // "we could not find out" are different facts.
     expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
@@ -132,6 +137,22 @@ describe('FactoryResources — the tree', () => {
     listMock.mockResolvedValue([ALPHA]);
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('link', { name: 'Alpha' })).toBeInTheDocument();
+  });
+
+  it('keeps Retry available when a MUTATION also fails on top of the load', async () => {
+    const user = userEvent.setup();
+    listMock.mockRejectedValue(new Error('offline'));
+    createMock.mockRejectedValueOnce(new Error('also broken'));
+    renderPane();
+    await screen.findByText('offline');
+
+    await user.click(screen.getByRole('button', { name: 'New pipeline' }));
+    await user.type(screen.getByRole('textbox', { name: 'Pipeline name' }), 'Gamma');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await screen.findByRole('alert');
+
+    // Gating Retry on `!actionError` meant a second failure hid the only way back.
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 });
 
@@ -243,7 +264,7 @@ describe('FactoryResources — row actions', () => {
     expect(screen.getByRole('textbox', { name: 'Pipeline name' })).toHaveValue('Alpha (copy)');
     await user.click(screen.getByRole('button', { name: 'Duplicate' }));
 
-    await waitFor(() => expect(duplicateMock).toHaveBeenCalledWith('pl_1', 'Alpha (copy)'));
+    await waitFor(() => expect(duplicateMock).toHaveBeenCalledWith(ALPHA, 'Alpha (copy)'));
   });
 
   it('deletes only after a confirmation', async () => {
@@ -265,7 +286,6 @@ describe('FactoryResources — row actions', () => {
   it('explains a 409 delete refusal in terms of run history', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const { ApiError } = await import('../../api/client');
     deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
     renderPane();
     await screen.findByRole('link', { name: 'Alpha' });
@@ -287,9 +307,92 @@ describe('FactoryResources — row actions', () => {
 
     await waitFor(() => expect(deleteMock).toHaveBeenCalled());
     await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('/author/pipelines'),
+      expect(screen.getByTestId('location').textContent).toBe('/author/pipelines'),
     );
-    expect(screen.getByTestId('location').textContent).toBe('/author/pipelines');
+  });
+
+  /**
+   * A PUSHED navigation would leave the dead pipeline's URL in history, so Back
+   * lands on "Pipeline not found" — the trap `routes.tsx` states the house rule
+   * for. Asserted through the history LENGTH, which is the only way to tell a
+   * push from a replace apart.
+   */
+  it('leaves the deleted pipeline by REPLACE, so Back is not a trap', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const store = createPipelinesStore();
+    const router = createMemoryRouter(
+      [
+        {
+          path: '/author/pipelines',
+          element: (
+            <>
+              <FactoryResources hub={AUTHOR} store={store} />
+              <LocationProbe />
+            </>
+          ),
+        },
+        {
+          path: '/author/pipelines/:pipelineId',
+          element: (
+            <>
+              <FactoryResources hub={AUTHOR} store={store} />
+              <LocationProbe />
+            </>
+          ),
+        },
+      ],
+      { initialEntries: ['/author/pipelines', '/author/pipelines/pl_1'] },
+    );
+    render(<RouterProvider router={router} />);
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/author/pipelines'));
+
+    // Back must reach the entry BEFORE the canvas, not the canvas itself.
+    await act(async () => {
+      await router.navigate(-1);
+    });
+    expect(router.state.location.pathname).toBe('/author/pipelines');
+  });
+
+  /**
+   * Delete unmounts the row the Fluent menu was anchored to. Fluent restores
+   * focus to its trigger on close — which by then is gone — so focus would fall
+   * to `<body>` and Tab would restart from the top of the document.
+   */
+  it('hands focus somewhere real after deleting the row it came from', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([BETA]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New pipeline' })).toHaveFocus());
+  });
+
+  /**
+   * A failed DELETE closes no draft row, so nothing else would ever clear its
+   * message: the pane outlives every route change inside the hub.
+   */
+  it('lets the user dismiss a failed action’s message', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    deleteMock.mockRejectedValueOnce(new ApiError(409, 'nope'));
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await screen.findByRole('alert');
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('stays put when the deleted pipeline is not the one being edited', async () => {

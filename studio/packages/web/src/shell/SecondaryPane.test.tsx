@@ -1,8 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { SecondaryPane, PANE_ELEMENT_ID } from './SecondaryPane';
 import { hubById } from './hubs';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import * as pipelinesApi from '../api/pipelines';
+
+// The Author pane mounts `FactoryResources`, which loads the pipelines list.
+// Without this the cases below would make a REAL relative-URL `fetch` (which
+// cannot resolve under jsdom) against the app SINGLETON, leaving it in `error`
+// for every later case in the file — a unit test with cross-case shared state
+// and a network call in it.
+vi.mock('../api/pipelines', async (importActual) => ({
+  ...(await importActual<typeof import('../api/pipelines')>()),
+  listPipelines: vi.fn(),
+}));
 
 /**
  * The pane takes its hub as a PROP rather than reading `useMatches()` itself.
@@ -93,8 +104,12 @@ describe('SecondaryPane', () => {
 describe('SecondaryPane — per-hub content', () => {
   const author = hubById('author')!;
 
-  function renderAuthor() {
-    return renderWithRouter(<SecondaryPane hub={author} collapsed={false} />, '/author/pipelines');
+  beforeEach(() => {
+    vi.mocked(pipelinesApi.listPipelines).mockResolvedValue([]);
+  });
+
+  function renderAuthor(path = '/author/pipelines') {
+    return renderWithRouter(<SecondaryPane hub={author} collapsed={false} />, path);
   }
 
   it('keeps the wrapper contract for a hub that brings its own content', () => {
@@ -124,6 +139,32 @@ describe('SecondaryPane — per-hub content', () => {
       'href',
       '/author/pipelines',
     );
+  });
+
+  /**
+   * The tree's rows are `NavLink`s, so "which one am I on" comes from the
+   * router and nothing else — the same single source the rail and the default
+   * section list use. `end` on the group link is what stops `Pipelines` also
+   * claiming to be current while a pipeline is open beneath it.
+   */
+  it('marks the open pipeline, and not the group header, as the current page', async () => {
+    vi.mocked(pipelinesApi.listPipelines).mockResolvedValue([
+      {
+        id: 'pl_1',
+        resourceId: 'res_pl1',
+        ownerId: 'local',
+        name: 'Alpha',
+        concurrency: null,
+        archived: false,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ]);
+    renderAuthor('/author/pipelines/pl_1');
+
+    const row = await screen.findByRole('link', { name: 'Alpha' });
+    expect(row).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Pipelines' })).not.toHaveAttribute('aria-current');
   });
 
   it('leaves a hub with no custom content on the default section list', () => {
