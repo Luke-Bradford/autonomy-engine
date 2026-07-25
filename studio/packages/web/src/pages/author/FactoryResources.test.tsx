@@ -481,6 +481,39 @@ describe('FactoryResources — row actions', () => {
   });
 
   /**
+   * A draft's return target can be deleted out from under it. Only a `rename`
+   * draft replaces its row — a `duplicate` leaves the source row live and
+   * deletable beneath the open draft — and `activeDraft` reconciles for rename
+   * only, so the delete's own restoration stands down and the draft's branch is
+   * what eventually runs, against a `⋯` button that no longer exists. Without a
+   * fallback, focus lands nowhere at all.
+   */
+  it('falls back to a control that EXISTS when the draft’s row was deleted underneath it', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValueOnce([ALPHA, BETA]).mockResolvedValue([BETA]);
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+
+    // Duplicate leaves Alpha's own row in place, still carrying its `⋯` menu.
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Duplicate' }));
+    await screen.findByRole('textbox', { name: 'Pipeline name' });
+
+    // Delete that very row while its duplicate draft is still open.
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Alpha' })).toBeNull());
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // The row's `⋯` is gone, so focus must land on the pane's stable control —
+    // anywhere real rather than `<body>`.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New pipeline' })).toHaveFocus());
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  /**
    * Two deletes in flight at once, the FIRST one failing. Under the old
    * save-and-restore slot, delete A captured the pre-arm value, delete B then
    * armed on top, and A's failure unwound to a value that predated B — silently

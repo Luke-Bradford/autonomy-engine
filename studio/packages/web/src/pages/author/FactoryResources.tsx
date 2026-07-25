@@ -203,7 +203,16 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
          rather than leaving it pending is what stops it firing later, on some
          unrelated refresh, once its row is long gone. */
       deletingRow.current = null;
-      document.getElementById(target)?.focus();
+      /* ...but the row it came from may itself be GONE. Only a `rename` draft
+         replaces its row; a `duplicate` leaves the source row live and deletable
+         underneath the open draft, and `activeDraft` never nulls out for it
+         (that reconciliation is rename-only), so the delete's own restoration
+         stands down and this branch is what eventually runs — against a `⋯`
+         button that no longer exists. Falling back to the pane's one stable
+         control is the difference between landing somewhere and stranding on
+         `<body>`, which is the entire failure this mechanism exists to prevent. */
+      const el = document.getElementById(target) ?? document.getElementById(NEW_PIPELINE_BUTTON_ID);
+      el?.focus();
       return;
     }
 
