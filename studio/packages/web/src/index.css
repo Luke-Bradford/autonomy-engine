@@ -1016,14 +1016,23 @@ td button + button {
  * width/height are DERIVED from those children (`containerLayout.ts`) — so the
  * geometry is set in JS and only the skin is here.
  *
- * `pointer-events: none` is the load-bearing line. The box spans a region of the
- * canvas that contains other interactive things, and a React Flow node is a
- * plain absolutely-positioned div that would otherwise sit in front of the pane
- * and swallow every gesture aimed at it: clicking empty space inside a stage to
- * DESELECT, and — the one that bit U6b in its `.react-flow__panel` form — a
- * toolbox activity DROPPED over the box's empty area, which would be silently
- * discarded. Handles opt back IN below, because a container is a legal edge
- * endpoint and its ports must stay draggable.
+ * `pointer-events: none` keeps the box from swallowing the gesture aimed through
+ * it. The box spans a region of the canvas containing other interactive things,
+ * and a React Flow node is a plain absolutely-positioned div that would otherwise
+ * sit in front of the pane and eat the click on empty space inside a stage that
+ * should DESELECT — the shape of the bug U6b paid for once in its
+ * `.react-flow__panel` form. (A toolbox DROP is not at risk: `onDrop` is bound on
+ * the ReactFlow root, which every node is a descendant of, so the drop bubbles
+ * there whether or not the box is hit-testable. Claiming otherwise would be an
+ * as-built claim the code does not support.)
+ *
+ * Belt and braces, honestly labelled: React Flow ALREADY writes
+ * `pointer-events: none` inline on the wrapper of a node that is neither
+ * selectable nor draggable, and both rules here are inert while that holds.
+ * They are kept because U6d makes a container selectable, which flips RF's
+ * inline value to `all` and leaves these as the only thing standing. Handles opt
+ * back IN below for the same reason — a container is a legal edge endpoint and
+ * its ports must stay draggable once the box itself is hit-testable.
  *
  * Dashed, and one shade off the canvas rather than a filled panel: the box has
  * to read as a REGION behind its children, not as a large node in front of them.

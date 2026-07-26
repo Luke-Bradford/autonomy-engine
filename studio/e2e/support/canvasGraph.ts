@@ -111,21 +111,44 @@ export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP Request')
   await selectEdge(page);
 }
 
+/**
+ * How a spec names one node on the canvas.
+ *
+ * By INDEX is the original form and stays valid for docs the canvas authored
+ * itself. By ID is what a SEEDED doc needs (`support/seedDoc.ts`): U6c renders
+ * container boxes FIRST so they paint behind their children, so in any doc with
+ * a container, index 0 is a box rather than the first activity — a positional
+ * lookup would quietly address the wrong element.
+ */
+export type NodeRef = { index: number } | { id: string };
+
 /** The centre of one node's source (right) or target (left) port, in screen coords. */
+export function portCentreOf(
+  page: Page,
+  ref: NodeRef,
+  side: 'source' | 'target',
+): Promise<{ x: number; y: number }> {
+  return page.evaluate(
+    ({ ref: r, cls }) => {
+      const node =
+        'id' in r
+          ? document.querySelector(`.react-flow__node[data-id="${r.id}"]`)
+          : document.querySelectorAll('.react-flow__node')[r.index];
+      const box = node?.querySelector(cls)?.getBoundingClientRect();
+      if (!box) throw new Error(`node ${JSON.stringify(r)} has no ${cls} port laid out`);
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    },
+    { ref, cls: side === 'source' ? '.react-flow__handle-right' : '.react-flow__handle-left' },
+  );
+}
+
+/** The centre of the port of the node at `index`. */
 export function portCentre(
   page: Page,
   index: number,
   side: 'source' | 'target',
 ): Promise<{ x: number; y: number }> {
-  return page.evaluate(
-    ([i, cls]) => {
-      const node = document.querySelectorAll('.react-flow__node')[i as number];
-      const box = node?.querySelector(cls as string)?.getBoundingClientRect();
-      if (!box) throw new Error(`node ${String(i)} has no ${cls as string} port laid out`);
-      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    },
-    [index, side === 'source' ? '.react-flow__handle-right' : '.react-flow__handle-left'],
-  );
+  return portCentreOf(page, { index }, side);
 }
 
 /**
@@ -137,19 +160,38 @@ export function portCentre(
  * still DOWN over the target port, which is the only moment React Flow's
  * mid-gesture handle state (`connectingto`, `valid`) exists to be read.
  */
-export async function connectNodes(
+export async function connectRefs(
   page: Page,
-  from: number,
-  to: number,
+  from: NodeRef,
+  to: NodeRef,
   inspect?: () => Promise<void>,
 ): Promise<void> {
-  const source = await portCentre(page, from, 'source');
-  const target = await portCentre(page, to, 'target');
+  const source = await portCentreOf(page, from, 'source');
+  const target = await portCentreOf(page, to, 'target');
   await page.mouse.move(source.x, source.y);
   await page.mouse.down();
   await page.mouse.move(target.x, target.y, { steps: 10 });
   if (inspect) await inspect();
   await page.mouse.up();
+}
+
+export function connectNodes(
+  page: Page,
+  from: number,
+  to: number,
+  inspect?: () => Promise<void>,
+): Promise<void> {
+  return connectRefs(page, { index: from }, { index: to }, inspect);
+}
+
+/** `connectNodes`, for a seeded doc where the endpoints are named by id. */
+export function connectById(
+  page: Page,
+  from: string,
+  to: string,
+  inspect?: () => Promise<void>,
+): Promise<void> {
+  return connectRefs(page, { id: from }, { id: to }, inspect);
 }
 
 /**
@@ -162,13 +204,22 @@ export async function connectNodes(
  * connection gestures go through this path, so a rule that is only ever tested
  * forwards is only half tested.
  */
-export async function connectNodesBackwards(page: Page, from: number, to: number): Promise<void> {
-  const target = await portCentre(page, to, 'target');
-  const source = await portCentre(page, from, 'source');
+export async function connectRefsBackwards(page: Page, from: NodeRef, to: NodeRef): Promise<void> {
+  const target = await portCentreOf(page, to, 'target');
+  const source = await portCentreOf(page, from, 'source');
   await page.mouse.move(target.x, target.y);
   await page.mouse.down();
   await page.mouse.move(source.x, source.y, { steps: 10 });
   await page.mouse.up();
+}
+
+export function connectNodesBackwards(page: Page, from: number, to: number): Promise<void> {
+  return connectRefsBackwards(page, { index: from }, { index: to });
+}
+
+/** `connectNodesBackwards`, for a seeded doc where the endpoints are named by id. */
+export function connectByIdBackwards(page: Page, from: string, to: string): Promise<void> {
+  return connectRefsBackwards(page, { id: from }, { id: to });
 }
 
 /**

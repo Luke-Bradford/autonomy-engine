@@ -16,6 +16,7 @@ import {
   type FinalConnectionState,
   type Node as FlowNode,
   type NodeChange,
+  type NodeHandle,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -108,6 +109,45 @@ const nodeTypes = { activity: ActivityNode, container: ContainerNode };
  * of a zero-area one, not as a layout constant anything depends on.
  */
 const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
+
+/**
+ * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
+ * centred on the node's border (`left: -4px` and friends).
+ */
+const HANDLE_SIZE = 6;
+
+/**
+ * The port bounds of a derived container box, stated rather than measured.
+ *
+ * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
+ * off them positionally (`getHandlePosition`): a LEFT handle contributes
+ * `(x, y + height/2)` and a RIGHT one `(x + width, y + height/2)`. Centring each
+ * dot on its border therefore puts the edge exactly on the box's edge midpoint,
+ * where the rendered handle is drawn — so the line meets the dot rather than
+ * ending a few pixels off it.
+ */
+function containerHandles(width: number, height: number): NodeHandle[] {
+  const y = (height - HANDLE_SIZE) / 2;
+  const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
+  return [
+    {
+      id: TARGET_PORT_ID,
+      type: 'target',
+      position: Position.Left,
+      x: -HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+    {
+      id: SOURCE_PORT_ID,
+      type: 'source',
+      position: Position.Right,
+      x: width - HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+  ];
+}
 
 /**
  * Canvas CHROME that must not accept a toolbox drop (U5).
@@ -295,6 +335,34 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         width: rect.width,
         height: rect.height,
         style: { width: rect.width, height: rect.height },
+        /* A DERIVED node must state its own geometry — React Flow can never
+           measure one, and a container that stays "uninitialized" loses every
+           edge that touches it, which is the whole defect U6c exists to fix.
+           Why it cannot be measured: `adoptUserNodes` reuses a node's internals
+           only while the SAME object identity comes back through the `nodes`
+           prop. This object is rebuilt on every render (it is a `useMemo` over
+           the activity rects), so RF re-adopts it every time, and `parseHandles`
+           then reads `!userNode.measured ? undefined : <previous bounds>` —
+           discarding whatever its ResizeObserver had just measured. The measured
+           size cannot come back the normal way either: a container's dimension
+           change is filtered out at `onNodesChange` (below) precisely because it
+           is not the store's to hold. The result is a node RF resets to
+           unmeasured forever, and `getEdgePosition` returns `null` for an
+           endpoint with no handle bounds — silently, since RF's error channel is
+           a no-op in a production build. So both facts are STATED rather than
+           observed — two different things about a node whose geometry is derived,
+           not two attempts at one fix:
+             - `measured`, the size. Also what `adoptUserNodes` reads to decide
+               whether the graph counts as initialised at all.
+             - `handles`, the port bounds, taken verbatim by `parseHandles`, so
+               initialisation does not depend on a DOM measurement landing.
+           Mutation-tested (`e2e/container-rendering.spec.ts`): either one alone
+           is enough to keep the edges — removing BOTH is what reproduces the
+           original defect. They are kept together because each answers a
+           question the other does not, and both are exactly as trustworthy as
+           `rect`, which is this node's only source of truth anyway. */
+        measured: { width: rect.width, height: rect.height },
+        handles: containerHandles(rect.width, rect.height),
         data: {
           kind: c.kind,
           childCount: c.children.length,

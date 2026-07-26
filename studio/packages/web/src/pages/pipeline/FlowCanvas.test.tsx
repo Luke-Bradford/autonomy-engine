@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
@@ -165,5 +166,79 @@ describe('FlowCanvas drop target (U5)', () => {
     // The same predicate gates both, so the operator gets the browser's "no drop"
     // cursor over the minimap rather than an invitation to drop there.
     expect(accepted).toBe(false);
+  });
+});
+
+/**
+ * U6c — the DERIVED container node, at the wiring level.
+ *
+ * What jsdom can see is which nodes the canvas hands React Flow and what they
+ * carry; what it cannot see is any of the geometry, because it measures every
+ * element as 0×0 and resolves no cascade. So the box's size, its enclosure of its
+ * children and — the defect that shipped once — whether an edge with a container
+ * endpoint actually renders are all `e2e/container-rendering.spec.ts`'s to prove.
+ * These specs cover the half that is cheap here and awkward there: that a loaded
+ * container reaches the canvas at all, and that it is NOT in the domain graph.
+ */
+describe('FlowCanvas container rendering (U6c)', () => {
+  function withContainer() {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
+        ],
+        edges: [],
+        containers: [{ id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] }],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container };
+  }
+
+  it('renders a loaded container as its own node type, labelled by KIND', () => {
+    const { container } = withContainer();
+    const box = container.querySelector('.flow-container');
+    expect(box).not.toBeNull();
+    // The word, not a colour or a shape — the same one `connectRules` refuses a
+    // boundary crossing by, so a refusal points at something on screen.
+    expect(box!.querySelector('.flow-container-label')?.textContent).toBe('stage');
+    expect(box!.getAttribute('aria-label')).toBe('stage container, 2 activities');
+  });
+
+  /**
+   * Containers are handed to React Flow FIRST, which is what puts the box behind
+   * the activities it encloses.
+   *
+   * Order is the whole mechanism: with React Flow's basic z-index mode an
+   * unselected activity resolves to the same z as the container's explicit
+   * `zIndex: 0`, so the tie is broken by the order of the `nodes` prop, which RF
+   * emits verbatim. Cheap to state here and red the moment the spread flips.
+   *
+   * (The change-seam filter that keeps container changes out of the domain store
+   * is deliberately NOT tested — `moveNode`/`deleteNode` both early-return on an
+   * unknown id, so removing the filter changes nothing observable today. It is
+   * documented at the seam as a guard for U6d, when it starts to matter, rather
+   * than pinned by a test that cannot fail.)
+   */
+  it('hands the container to React Flow before its children, so it paints behind', () => {
+    const { container } = withContainer();
+    const ids = [...container.querySelectorAll('.react-flow__node')].map((n) =>
+      n.getAttribute('data-id'),
+    );
+    expect(ids).toEqual(['c_1', 'n_a', 'n_b']);
   });
 });
