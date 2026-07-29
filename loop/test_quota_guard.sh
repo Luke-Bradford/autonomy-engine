@@ -122,6 +122,17 @@ check "10% util with MAX_FIRES=3 -> exactly 3 fires" "3" "$(fires_of "$r")"
 check "fire cap logs its own STOP reason" "0" \
   "$(grep -q 'STOP: MAX_FIRES=3 reached' "$(logof "$r")" && echo 0 || echo 1)"
 
+# --- 2b. the DEFAULT is UNCAPPED (operator, 2026-07-29) ----------------------
+# MAX_FIRES defaulted to 6, which ended a run while the weekly window still had
+# room. The operator removed the cap and kept QUOTA_STOP_PCT as the sole spend
+# bound. Asserted on the DEFAULT (no MAX_FIRES passed), because the previous
+# default was load-bearing and nothing pinned it -- MAX_LOOPS caps this run at
+# 12 iterations, so 12 fires means "no fire cap intervened".
+r="$(run_case 0.10 QUOTA_STOP_PCT=80)"
+check "default is uncapped -> fires every iteration (12), not 6" "12" "$(fires_of "$r")"
+check "no fire-cap STOP is logged by default" "1" \
+  "$(grep -q 'STOP: MAX_FIRES' "$(logof "$r")" && echo 0 || echo 1)"
+
 # --- 3. boundary: exactly AT the stop pct refuses (>=, not >) -----------------
 r="$(run_case 0.80 QUOTA_STOP_PCT=80)"
 check "exactly 80% refuses (boundary is >=)" "0" "$(fires_of "$r")"

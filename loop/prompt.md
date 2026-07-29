@@ -31,6 +31,45 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 `studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list IS your queue. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
 - `#1 foundation-domain-activity-framework.md` (F0-F15) · `#6 foundation-expression-language.md` (E1-E8) · `#5 foundation-scheduler-lifecycle.md` (S1-S12) · `#2 foundation-llm-activity-model.md` (L1-L14) · `#4 foundation-activity-library.md` (A0-A17) · `#3 foundation-git-publish.md` (G1-G10) · `RS foundation-rerun-from-failed.md` (RS1-RS6) · UI `adf-grade-ui-design.md` (U0-U29, R1-R3).
 
+## CURRENT PRIORITY — CUTOVER (operator, 2026-07-29) — do these THREE, in order, BEFORE resuming the numbered WORK ORDER below
+
+The operator has verified studio end-to-end themselves (fired a manual trigger, watched the run
+reach `success` with a full event trail in the run-detail view) and has decided: **the old
+bash/python engine goes.** Nobody is using it. `#410` was operator-gated on exactly this decision
+and is now GO.
+
+**Do not skip steps to get there faster — the ordering exists because step 3 is destructive and
+step 1 is what makes it safe.**
+
+**C1. `#440` — native control room, INCLUDING a machine-readable quota endpoint.**
+The operator-facing live view is the headline, but the load-bearing part is smaller and must not be
+dropped: **this loop's own driver depends on the old dashboard.** `loop/drive.sh` `quota_pct()` reads
+`http://127.0.0.1:8787/api/state` as PRIMARY (`lib/claude_usage.py` as fallback) — both old-engine
+code — and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
+of their weekly window. Retiring the engine without a replacement **disarms your own spend guard.**
+Serve the 7-day utilization in the shape the existing parser already reads
+(`account.claude.seven_day.utilization`) so C2 is a URL change, not a rewrite. Two properties are
+load-bearing and pinned by `loop/test_quota_guard.sh` — preserve both: **UNREADABLE must stay
+distinct from `0`** (reporting `0%` for "I don't know" silently disarms the guard), and **keep a
+SECOND source** (the 2026-07-26 incident was both sources failing at once, which cost a $24 blind
+fire into a ~98% window). Read `#440`'s comment thread — the acceptance detail is there.
+
+**C2. Repoint `loop/drive.sh` at studio and PROVE the guard still works.**
+Change `DASH_URL`. Then verify end-to-end against the real studio server — not just the happy path:
+the **UNREADABLE** path is the one with teeth. `loop/test_quota_guard.sh` (32 assertions) must stay
+green, and add a case if the new endpoint's failure mode differs from the old one's.
+
+**C3. `#410` — PARK the old engine.** `bin/ lib/ tests/ templates/ start` — **PARK, NOT DELETE**:
+git history preserves it and the ticket says so explicitly. Do NOT start this until C2 is merged and
+a scheduled fire has run green against the studio-served quota figure. `loop/` itself is NOT part of
+the old engine — it is the control plane and it STAYS. Note `.github/workflows/ci.yml` has a
+`lint-and-test` job scoped to the engine and a SEPARATE `loop` job: removing the engine means
+retiring the former and keeping the latter.
+
+**Then resume the numbered WORK ORDER** — the UI epic (item 10) at U6d, per the standing order.
+`#425`/`#429`/`#748` are the known canvas gaps. The standing defect-backlog rule still applies
+throughout: at ~8 open loop-filed defects, sweep before the next feature.
+
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
 2. **Unified edge/branch schema** (ONE ticket in #1: `Edge.condition` discriminated union operational vs business `branch`) + `skipped` + success-semantics tests.
