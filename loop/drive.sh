@@ -84,11 +84,12 @@ MAX_BUDGET_REGRANTS="${MAX_BUDGET_REGRANTS:-1}"  # how many times ONE driver run
 QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last READABLE reading
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
 DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
-# Studio's native replacement (#440 C1). Studio's default PORT is 8080; the plist
-# sets this explicitly rather than relying on the default, because 8080 is a
-# heavily-contended port on this machine and a DIFFERENT studio checkout has been
-# seen listening on a neighbouring one -- a wrong-but-answering server would 404
-# and read as UNREADABLE forever while looking configured.
+# Studio's native replacement (#440 C1), matching studio's own default PORT of
+# 8080. NOTE this does not by itself identify the RIGHT server: another studio
+# checkout has been seen listening nearby on this machine, and a wrong-but-live
+# server 404s, which reads as UNREADABLE forever while looking correctly
+# configured. Pinning the port cannot distinguish them -- only giving studio its
+# own dedicated port can, which is part of #765 (no supervised studio server).
 STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8080/api/quota}"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
@@ -113,9 +114,12 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #     so it adds ZERO upstream load and cannot make anything worse. It strictly
 #     dominates the fallback it replaces, which was dead (`refresh_live_quota()`
 #     returned None on every call -- verified 2026-07-29, cause: the same 429).
-#   * studio FIRST would add up to four direct polls per iteration, competing for
-#     the very budget the dashboard's sampler needs to stay warm. It could break
-#     the working source to feed the unproven one.
+#   * studio FIRST would add a direct poll to EVERY read -- three per iteration
+#     from quota_gate plus one per AUTH_LONG_BLOCK retries while blocked, so
+#     during the 71h block this file documents, tens of polls in a single
+#     iteration. It is unbounded, and it competes for the very budget the
+#     dashboard's sampler needs to stay warm: it could break the working source
+#     in order to feed the unproven one.
 #
 # Studio is promoted to primary once its reader stops polling upstream on the
 # request path (a sampler -- the escape hatch its own docs name). Until then this
@@ -128,7 +132,7 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # schema was built to the dashboard's wire contract so this stayed a URL change.
 # A second copy could only ever drift from the first.
 quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
-  curl -s --max-time 8 "$1" 2>/dev/null | python3 -c "
+  qr_out="$(curl -s --max-time 8 "$1" 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -136,7 +140,31 @@ try:
     print(int(round(float(u) * 100)) if u is not None else '')
 except Exception:
     print('')
-" 2>/dev/null
+" 2>/dev/null)"
+  # TOTALITY GUARD, applied per-read at the boundary the value crosses.
+  #
+  # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
+  # with an operand `test` cannot parse returns 2 -- which is NEITHER branch, so
+  # the `if` takes the else, logs "quota ok" and FIRES. Fail-open, on the one
+  # guard that must never be.
+  #
+  # Digit-only is NOT sufficient, and that is not hypothetical: on bash 3.2
+  # `[ 10000000000000000000 -ge 80 ]` is all digits and still errors with rc=2,
+  # because it exceeds the signed-64-bit range. `quota_cache_read`'s
+  # `$(( 10# ))` is worse -- it wraps such a value SILENTLY, fabricating a
+  # last-known reading. The comment further down this file already records
+  # "digit-only is not enough" for `$(( ))`; this is the same lesson for `test`.
+  # Hence a LENGTH bound as well as a character class. Six digits allows a
+  # nonsensical 999999% while staying ~13 orders of magnitude clear of overflow.
+  #
+  # Per-read, not once after the fallback: a guard applied after source selection
+  # would let a malformed PRIMARY reading suppress the second source (non-empty,
+  # so no fallthrough) and only then blank it -- fail-safe in direction, but it
+  # skips a working fallback. Validating where the value enters is what makes
+  # "validate at boundaries" actually true here.
+  case "$qr_out" in *[!0-9]*) qr_out="" ;; esac
+  [ "${#qr_out}" -gt 6 ] && qr_out=""
+  echo "$qr_out"
 }
 
 quota_pct() {
@@ -150,12 +178,6 @@ quota_pct() {
     qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
     [ -n "$qp_out" ] && qp_src="studio"
   fi
-  # Totality guard at the boundary. Everything downstream is arithmetic --
-  # `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]` with a non-numeric operand makes `test`
-  # return 2, which is NEITHER branch and falls through to "quota ok", i.e. it
-  # FIRES. That is fail-open on the one guard that must never be, so a value that
-  # is not a plain integer is discarded here as unreadable rather than carried.
-  case "$qp_out" in *[!0-9]*) qp_out=""; qp_src="" ;; esac
   if [ -n "$qp_out" ]; then
     quota_cache_write "$qp_out"
     # Attribution goes to the LOG, never to stdout: this function's stdout IS the

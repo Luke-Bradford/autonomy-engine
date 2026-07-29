@@ -44,8 +44,9 @@ step 1 is what makes it safe.**
 **C1. `#440` — native control room, INCLUDING a machine-readable quota endpoint.**
 The operator-facing live view is the headline, but the load-bearing part is smaller and must not be
 dropped: **this loop's own driver depends on the old dashboard.** `loop/drive.sh` `quota_pct()` reads
-`http://127.0.0.1:8787/api/state` as PRIMARY (`lib/claude_usage.py` as fallback) — both old-engine
-code — and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
+`http://127.0.0.1:8787/api/state` as PRIMARY, with studio's `/api/quota` as the second source since
+C2 (the old `lib/claude_usage.py` fallback was dead and is deleted). The primary is still old-engine
+code, and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
 of their weekly window. Retiring the engine without a replacement **disarms your own spend guard.**
 Serve the 7-day utilization in the shape the existing parser already reads
 (`account.claude.seven_day.utilization`) so C2 is a URL change, not a rewrite. Two properties are
@@ -54,14 +55,26 @@ distinct from `0`** (reporting `0%` for "I don't know" silently disarms the guar
 SECOND source** (the 2026-07-26 incident was both sources failing at once, which cost a $24 blind
 fire into a ~98% window). Read `#440`'s comment thread — the acceptance detail is there.
 
-**C2. Repoint `loop/drive.sh` at studio and PROVE the guard still works.**
-Change `DASH_URL`. Then verify end-to-end against the real studio server — not just the happy path:
-the **UNREADABLE** path is the one with teeth. `loop/test_quota_guard.sh` (32 assertions) must stay
-green, and add a case if the new endpoint's failure mode differs from the old one's.
+**C2. DONE (2026-07-29) — but NOT in the shape specified, and that changes C3's gate.**
+Studio is wired into `quota_pct()` as the **SECOND** source, behind the dashboard; the dead
+`claude_usage.py` fallback is deleted. `DASH_URL` was deliberately **not** repointed. Verifying
+end-to-end showed studio's `/api/quota` returns `account.claude: null` on EVERY probe — its reader
+is lazy and its upstream `GET /api/oauth/usage` answers 429 to direct polls — so making studio
+primary would have disarmed the guard outright. Both endpoints share one rate-limit budget, so
+studio second costs nothing (when the dashboard answers, studio is never polled) whereas studio
+first could starve the sampler that keeps the working source warm. See **#765**.
 
 **C3. `#410` — PARK the old engine.** `bin/ lib/ tests/ templates/ start` — **PARK, NOT DELETE**:
-git history preserves it and the ticket says so explicitly. Do NOT start this until C2 is merged and
-a scheduled fire has run green against the studio-served quota figure. `loop/` itself is NOT part of
+git history preserves it and the ticket says so explicitly. **BLOCKED ON #765 — do not start.**
+The old entry gate ("a scheduled fire has run green against the studio-served quota figure") is
+now UNSATISFIABLE and must not be read as met: studio is the SECOND source, so a healthy dashboard
+means every fire logs `quota source: dashboard` and studio is never polled at all. A fire running
+green proves nothing about studio. The real gate is **a scheduled fire that logged `quota source:
+studio`** — which requires #765 first (studio's reader needs a background sampler, and nothing
+supervises a studio server today, so at 03:05 `/api/quota` is connection-refused, not merely 429).
+Parking the engine before then kills `/api/state` and leaves the guard with a single source that
+has never once returned a number: every fire blind, bounded only by `QUOTA_UNKNOWN_FIRES=2`,
+against a WEEKLY window. `loop/` itself is NOT part of
 the old engine — it is the control plane and it STAYS. Note `.github/workflows/ci.yml` has a
 `lint-and-test` job scoped to the engine and a SEPARATE `loop` job: removing the engine means
 retiring the former and keeping the latter.

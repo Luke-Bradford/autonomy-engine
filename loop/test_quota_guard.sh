@@ -58,6 +58,11 @@ EOS
 #!/bin/bash
 case "$*" in
   */api/quota*)
+    # Marker: records that studio was POLLED, independently of whether it won.
+    # The source log line names only the winning source, so it cannot
+    # distinguish "studio was never asked" from "studio was asked and lost" --
+    # and "never asked" is the entire justification for the read order.
+    : >"${STUDIO_POLL_MARKER:-/dev/null}"
     if [ -n "${STUDIO_UTIL:-}" ]; then
       echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
     else
@@ -130,7 +135,8 @@ EOS
   # assignment (assignments are recognised before expansion), so writing
   # `... "$@" bash drive.sh` would execute `QUOTA_STOP_PCT=80` as the COMMAND.
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    ENGINE_LIB="$tmp/nonexistent-lib" BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
+    STUDIO_POLL_MARKER="$tmp/studio_polled" \
+    BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
   # count|logpath -- the caller cannot see assignments made in this subshell.
@@ -302,22 +308,31 @@ check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2"
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 GH_OPEN_PR=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
 check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "$(fires_of "$r")"
 
-# --- 23-26. TWO sources: the dashboard first, studio second (cutover C2) -----
-# These assert on the SOURCE LOG LINE, not on the fire count. Fire count is
-# deliberately NOT the observable here: a reading of 10% fires exactly the same
-# number of times whichever source produced it, so a fire-count assertion would
-# pass with the second source never wired up at all. The log line is the only
-# thing that distinguishes them.
+# --- 23-27. TWO sources: the dashboard first, studio second (cutover C2) -----
+# Cases 23-24 assert on the SOURCE LOG LINE rather than the fire count, because
+# for those two the fire count is NOT an observable: a 10% reading fires exactly
+# the same number of times whichever source produced it, so a fire-count
+# assertion would pass with the second source never wired up at all. Cases 25-27
+# do use the fire count and the cache file, and legitimately so -- there the
+# behaviour under test (refusing, and the blind-fire bound) IS the fire count.
 
-# 23. the dashboard answers -> studio is NEVER polled. This is the property that
+# 23. the dashboard answers -> studio is NEVER POLLED. This is the property that
 # keeps studio free: studio's reader is a DIRECT provider poll sharing one
 # rate-limit budget with the dashboard's sampler, so polling it when the
 # dashboard already answered would spend the budget that keeps the primary alive.
+#
+# The marker, not the log line, is what pins this. The log names only the
+# WINNING source, so its absence is equally consistent with "studio was polled
+# and lost" -- which is precisely the regression this case has to catch, since
+# reading both sources unconditionally and preferring the dashboard would look
+# identical in the log while doubling upstream load.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
 check "dashboard readable -> the dashboard is named as the source" "0" \
   "$(grep -q 'quota source: dashboard' "$(logof "$r")" && echo 0 || echo 1)"
 check "dashboard readable -> studio is never consulted" "1" \
   "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard readable -> studio is never POLLED (not merely outvoted)" "1" \
+  "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
 
 # 24. the dashboard is down and studio answers -> the reading is USED, and the
 # run is NOT blind. This is the case the whole second source exists for: today's
@@ -353,6 +368,18 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
 check "both sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
 check "both sources down -> the WARN names dashboard AND studio" "0" \
   "$(grep -q 'UNREADABLE (dashboard and studio both unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
+# alone are not enough to make a value safe for `test`: on bash 3.2
+# `[ 10000000000000000000 -ge 80 ]` errors with rc=2, which is NEITHER branch --
+# the `if` takes the else, logs "quota ok" and FIRES, uncapped, while claiming
+# the window is fine. `utilization: 1e19` reaches the guard as 10^21, i.e. 22
+# digits, which is why the guard bounds LENGTH and not just the character class.
+# QUOTA_UNKNOWN_FIRES=0 makes the distinction observable: unreadable => refuse.
+r="$(run_case 1e19 QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0)"
+check "an out-of-range all-digit reading -> zero fires (not fail-open)" "0" "$(fires_of "$r")"
+check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1" \
+  "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
