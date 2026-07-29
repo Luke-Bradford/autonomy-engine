@@ -66,9 +66,15 @@ the old engine — it is the control plane and it STAYS. Note `.github/workflows
 `lint-and-test` job scoped to the engine and a SEPARATE `loop` job: removing the engine means
 retiring the former and keeping the latter.
 
+**C1-C3 OUTRANK THE DEFECT-BACKLOG SWEEP RULE.** Read this before deciding what to do: the standing
+rule says sweep when ~8 loop-filed defects are open, and roughly ten are open right now — so that
+rule fires immediately and would send you into a sweep instead of the cutover. It does NOT apply to
+C1-C3. The operator prioritised the cutover on 2026-07-29 knowing the backlog was over the cap, and
+the defects are not what blocks retiring the engine. Do the cutover.
+
 **Then resume the numbered WORK ORDER** — the UI epic (item 10) at U6d, per the standing order.
-`#425`/`#429`/`#748` are the known canvas gaps. The standing defect-backlog rule still applies
-throughout: at ~8 open loop-filed defects, sweep before the next feature.
+`#425`/`#429`/`#748` are the known canvas gaps. The defect-backlog sweep rule resumes AT THAT POINT,
+and it will almost certainly fire on the first fire after C3: expect to sweep before U6d.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
