@@ -304,8 +304,7 @@ export async function buildApp(opts?: BuildAppOptions) {
             // one of these events means the build loop's spend guard is
             // currently blind. The payload is two scalars — no credential, no
             // provider body — so it is safe at any log level.
-            log: (event) =>
-              fastify.log.warn({ ...event }, 'account-quota provider availability changed'),
+            log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
           })
         : UNREADABLE_ACCOUNT_QUOTA_READER),
   );

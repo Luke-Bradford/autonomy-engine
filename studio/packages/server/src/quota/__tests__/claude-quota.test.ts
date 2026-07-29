@@ -477,6 +477,98 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
     ]);
   });
 
+  it('reports the window it ACTUALLY adopted, even when the cap binds immediately', async () => {
+    // `throttleMs * 2` and the adopted window diverge as soon as the cap binds,
+    // and a log line that overstates the backoff is actively misleading when its
+    // only job is explaining why the guard is blind.
+    const log = vi.fn();
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => RATE_LIMITED,
+      now: () => 0,
+      ttlMs: 60_000,
+      maxThrottleMs: 90_000, // caps below the doubled 120s
+      log,
+    });
+    await reader.read();
+    expect(log).toHaveBeenCalledWith({ event: 'rate_limited', throttleMs: 90_000 });
+  });
+
+  it('still reports the transition ONCE when the cap disables the backoff entirely', async () => {
+    // `maxThrottleMs === ttlMs` pins the window, so "am I already backed off?"
+    // cannot be inferred from the window having moved — it never moves. Inferring
+    // it repeats the log on every read and never reports the recovery at all.
+    const log = vi.fn();
+    let clock = 0;
+    let outcome: unknown = RATE_LIMITED;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => outcome,
+      now: () => clock,
+      ttlMs: 60_000,
+      maxThrottleMs: 60_000,
+      log,
+    });
+    await reader.read();
+    clock += 60_000;
+    await reader.read();
+    clock += 60_000;
+    await reader.read();
+    expect(log.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['rate_limited']);
+
+    outcome = LIVE_PAYLOAD;
+    clock += 60_000;
+    await reader.read();
+    expect(log.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual([
+      'rate_limited',
+      'rate_limit_cleared',
+    ]);
+  });
+
+  it('a throwing log sink can neither lose a reading nor disable the backoff', async () => {
+    // `applyOutcome` runs in the `.then`, OUTSIDE `sample()`'s catch-all, so an
+    // unisolated sink escapes into `inFlight` and rejects `read()` — which the
+    // route turns into UNREADABLE, spending a blind fire on a provider call that
+    // actually SUCCEEDED. Worse, on the rate-limited branch the throw lands
+    // before the window is widened, so a broken logger silently disables the
+    // backoff. An observability sink must not alter what it observes.
+    const log = vi.fn(() => {
+      throw new Error('sink down');
+    });
+    let clock = 0;
+    let outcome: unknown = RATE_LIMITED;
+    const fetcher = vi.fn(async () => outcome);
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher,
+      now: () => clock,
+      ttlMs: 60_000,
+      log,
+    });
+
+    await expect(reader.read()).resolves.toBeNull();
+    clock += 60_000; // past the flat TTL — only the widened window suppresses this
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    clock += 60_000; // the 120s window has now elapsed
+    outcome = LIVE_PAYLOAD;
+    await expect(reader.read()).resolves.not.toBeNull(); // recovery log throws too
+    expect(log).toHaveBeenCalledTimes(2);
+  });
+
+  it('floors the cap at the TTL, so a bad ceiling cannot SHORTEN the throttle', async () => {
+    // Without the `Math.max(ttlMs, …)` floor, `maxThrottleMs: 1_000` makes a 429
+    // *shrink* the window to 1s — the reader would then hammer a rate-limited
+    // endpoint 60× faster than its own base TTL, which is the exact behaviour
+    // this whole change exists to prevent, triggered by a misconfigured ceiling.
+    const { reader, fetcher, advance } = rateLimitedReader({ maxThrottleMs: 1_000 });
+    await reader.read();
+    advance(59_999);
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it('degrades to UNREADABLE, never to a reading, if the sentinel is not recognised', async () => {
     // Defence in depth: even with the identity check gone, the sentinel must
     // not map to a quota. It survives `buildQuota` as `null`, so the worst a

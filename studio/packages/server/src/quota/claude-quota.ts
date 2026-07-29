@@ -269,7 +269,12 @@ export async function readKeychainToken(
 }
 
 /**
- * GETs the usage endpoint, returning the parsed JSON or `null`.
+ * GETs the usage endpoint. THREE outcomes, not two: the parsed JSON on 200, the
+ * `RATE_LIMITED` sentinel on a 429, and `null` on anything else. The declared
+ * `Promise<unknown>` hides that (it is `unknown` so the `fetcher` seam stays
+ * cheap to inject), so a caller treating a non-null result as a payload without
+ * checking the sentinel silently loses the backoff — which is survivable by
+ * design, since `buildQuota(RATE_LIMITED)` is `null`, but is not the intent.
  *
  * Follows the house fetch pattern (`connectors/llm-shared.ts`'s `llmProbeGet`):
  * `AbortController` + a cleared timer. It deliberately returns NO error detail —
@@ -301,8 +306,15 @@ export async function fetchUsage(token: string, fetchImpl: typeof fetch = fetch)
       await res.body?.cancel();
       // 429 is reported DISTINCTLY (#765): the limit is sticky, so it is the one
       // failure whose correct response is to poll less, not to retry on the TTL.
-      // No `Retry-After` parse — the header is measurably present-but-`0` on this
-      // endpoint, so it carries no usable hint and a parse of it would be dead code.
+      //
+      // No `Retry-After` parse. Not because the header is absent — it is present
+      // and measurably `0` on this endpoint — but because honouring it would be
+      // BEHAVIOUR-NEUTRAL: the house parser (`connectors/llm-shared.ts`'s
+      // `parseRetryAfter`) routes anything `< 1` through `clampRetryAfter` to
+      // `undefined`, i.e. "no usable hint", which is exactly what is done here by
+      // not parsing. If the provider ever starts sending a real delta, that
+      // helper is the thing to reach for — see the note on borrowing patterns
+      // rather than the module from `connectors/`.
       return res.status === 429 ? RATE_LIMITED : null;
     }
     return await res.json();
@@ -376,6 +388,14 @@ export function createClaudeAccountQuotaReader(
    * thing extending a reading's life beyond the minute the TTL is justified by.
    */
   let throttleMs = ttlMs;
+  /**
+   * Whether the provider is currently rate-limiting us, tracked EXPLICITLY
+   * rather than inferred from `throttleMs !== ttlMs`. The inference is wrong
+   * whenever the cap equals the TTL (a caller disabling the backoff): the window
+   * never moves, so every sample would look like a fresh transition and the log
+   * would repeat per read while the recovery line never fired at all.
+   */
+  let rateLimited = false;
   /** De-dupes concurrent reads so a burst is one subprocess + one request. */
   let inFlight: Promise<ClaudeAccountQuota | null> | null = null;
 
@@ -399,6 +419,27 @@ export function createClaudeAccountQuotaReader(
   }
 
   /**
+   * Emits to the caller's sink, absorbing anything it throws.
+   *
+   * `applyOutcome` runs in the `.then` — OUTSIDE `sample()`'s catch-all — so
+   * without this a throwing sink escapes into `inFlight` and breaks the `read()`
+   * contract two ways at once: a reading that was successfully obtained is
+   * discarded and reported as UNREADABLE (spending one of the guard's bounded
+   * blind fires for a provider call that actually worked), and on the
+   * rate-limited branch the throw lands BEFORE the window is widened, silently
+   * disabling the very backoff this change exists to add. An observability sink
+   * must never be able to alter the behaviour it observes.
+   */
+  function report(event: QuotaReaderLogEvent): void {
+    try {
+      log?.(event);
+    } catch {
+      // Deliberately silent: the only sink available to complain to is the one
+      // that just threw.
+    }
+  }
+
+  /**
    * Folds a sample's outcome into the throttle window.
    *
    * Widened on a 429. Reset ONLY on a real success — NOT on any non-429 failure
@@ -407,15 +448,31 @@ export function createClaudeAccountQuotaReader(
    * transport error while limited says nothing either way, so it leaves the
    * window where it is rather than resetting it and resuming the polling that
    * caused the problem.
+   *
+   * One accepted cost of that rule: a host that is rate-limited and then loses
+   * its credential entirely reports `rate_limited` and never reports
+   * `rate_limit_cleared`, so the warn reads as a stale rate-limit long after the
+   * real cause changed. Diagnostic only — every read in that state is UNREADABLE
+   * either way, and the cap bounds the retry latency at `maxThrottleMs`.
    */
   function applyOutcome(outcome: SampleOutcome): void {
     if (outcome.rateLimited) {
-      if (throttleMs === ttlMs) log?.({ event: 'rate_limited', throttleMs: throttleMs * 2 });
-      throttleMs = Math.min(throttleMs * 2, maxThrottleMs);
+      const next = Math.min(throttleMs * 2, maxThrottleMs);
+      // Report the window we ACTUALLY adopted, not `throttleMs * 2` — those
+      // differ once the cap binds, and a log line that overstates the backoff is
+      // worse than none when the whole point is diagnosing a blind guard.
+      if (!rateLimited) {
+        rateLimited = true;
+        report({ event: 'rate_limited', throttleMs: next });
+      }
+      throttleMs = next;
       return;
     }
     if (outcome.value === null) return;
-    if (throttleMs !== ttlMs) log?.({ event: 'rate_limit_cleared' });
+    if (rateLimited) {
+      rateLimited = false;
+      report({ event: 'rate_limit_cleared' });
+    }
     throttleMs = ttlMs;
   }
 

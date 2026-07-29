@@ -63,7 +63,7 @@ the worse outcome.
 The provider's usage endpoint enforces a tight, sticky, **account-level** rate
 limit — measured at roughly a handful of calls per minute, after which it returns
 `429` and stays there while you keep polling. So when it rate-limits, the reader
-**backs off geometrically** (60s, doubling, capped at 8 minutes) rather than
+**backs off geometrically** — the window doubles from the 60s baseline (120s, 240s, …) up to a cap of 8 minutes — rather than
 re-asking every 60s, and logs a `warn` on entering and leaving that state. During
 a backoff the route reports `null`, which is honest: it never serves a stale
 reading to fill the gap. Because the limit is per-account, anything else on the
