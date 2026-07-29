@@ -807,16 +807,55 @@ describe('openaiAdapter maxTokens wire field (#739)', () => {
     expect(body).not.toHaveProperty('max_completion_tokens');
   });
 
-  it('renames on the STRUCTURED path too, not just plain text', async () => {
-    // One body builder feeds all three dispatch paths (#648), but that is an
-    // implementation fact — asserted here so a future split cannot silently
-    // regress one path.
+  // One body builder feeds all three dispatch paths (#648), but that is an
+  // implementation fact, so each path is pinned separately — a future split
+  // cannot then silently regress one of them.
+  //
+  // The first draft of these two tests was VACUOUS and both pre-PR review lenses
+  // caught it independently: it passed `structuredOutput`, which is the INTERNAL
+  // name `normalizeLlmRequest` produces, not an author input. `llmCallConfigSchema`
+  // is a non-strict `z.object`, so the unknown key was silently stripped and the
+  // "structured" case was a second copy of the text case. Both tests below now
+  // assert a path MARKER (`response_format` / `tools`) alongside the field name,
+  // so a request that quietly fell back to the text path fails here rather than
+  // passing under a misleading title.
+  it('renames on the STRUCTURED path (#2 L4b)', async () => {
     const body = await bodyFor({
-      prompt: 'p',
+      prompt: 'classify this ticket',
       model: 'o3',
       maxTokens: 256,
-      structuredOutput: { schema: { type: 'object', properties: { a: { type: 'string' } } } },
+      outputMode: 'structured',
+      outputSchema: {
+        type: 'object',
+        properties: { category: { type: 'string', enum: ['bug', 'feature'] } },
+      },
     });
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.max_completion_tokens).toBe(256);
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('renames on the TOOLS path (#2 L10a)', async () => {
+    const body = await bodyFor({
+      prompt: 'add 1 and 2',
+      model: 'o3',
+      maxTokens: 256,
+      tools: [
+        {
+          name: 'adder',
+          description: 'Adds two numbers.',
+          parameters: {
+            type: 'object',
+            properties: { a: { type: 'number' }, b: { type: 'number' } },
+          },
+          // L10a tools are PURE local expressions; omitting this fails config
+          // validation before dispatch, which is how the first draft of this
+          // test surfaced its own malformed fixture rather than passing blind.
+          expression: '${add(tool.args.a, tool.args.b)}',
+        },
+      ],
+    });
+    expect(Array.isArray(body.tools)).toBe(true);
     expect(body.max_completion_tokens).toBe(256);
     expect(body).not.toHaveProperty('max_tokens');
   });

@@ -78,10 +78,20 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * publishes an explicit **"Adaptive thinking"** row per model in both its
  * current and legacy comparison tables. It reads `No` for `claude-opus-4-5`,
  * `claude-sonnet-4-5`, `claude-haiku-4-5` and `claude-opus-4-1`, and `Yes` for
- * every model this module deliberately PERMITS (Opus 4.6/4.7/4.8, Sonnet 4.6,
- * Fable 5, Opus 5, Sonnet 5) — so the same source that adds a member also
- * confirms each non-member, which is the half a one-directional citation
- * usually leaves unchecked.
+ * every PERMITTED model that HAS a row (Opus 4.6/4.7/4.8, Sonnet 4.6, Fable 5,
+ * Opus 5, Sonnet 5) — so the same source that adds a member also confirms each
+ * non-member, which is the half a one-directional citation usually leaves
+ * unchecked. The "that has a row" qualifier is load-bearing, not hedging:
+ * `claude-mythos-5` is permitted here and has no row (the page covers it in
+ * prose only), so its permission still rests on absence, like the three ids in
+ * the KNOWN GAP below.
+ *
+ * RETIREMENT, because it changes how much this settlement is worth:
+ * `claude-opus-4-1` is DEPRECATED and retires 2026-08-05, days after this entry
+ * was added. The entry is still correct and still worth having — an operator
+ * naming it today gets a local diagnostic instead of a provider 400 — but it is
+ * short-lived by construction, and after that date it becomes dead weight to
+ * prune rather than a fact to maintain.
  *
  * `claude-opus-4-5` is worth spelling out because it is the one model where the
  * two facts come apart: it accepts `output_config.effort` (at
@@ -90,14 +100,6 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * `thinking:{type:'adaptive'}` TOGETHER, and the row above says 4.5 has no
  * adaptive thinking, so the pair is rejected on the `thinking` key regardless of
  * the effort value.
- *
- * That membership also closes a second hole rather than merely a stylistic one.
- * `reasoningEffortSchema` admits `max`, which 4.5 rejects even though it accepts
- * `low`/`medium`/`high` — a per-(model, VALUE) fact that a boolean set cannot
- * express. With 4.5 refused wholesale that dimension is empty: every remaining
- * model the connector can reach either accepts all four schema values or is
- * refused outright, so the set shape stays sufficient. Re-check that claim
- * before removing any model from this set.
  *
  * SEPARATELY, and NOT as a justification for membership: 4.5 also rejects
  * `reasoningEffort:'max'` while accepting `low`/`medium`/`high`. That fact does
@@ -117,6 +119,19 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * `claude-mythos-preview` is a different shape of gap on the SAMPLING set above
  * (the page names it in prose but gives it no capability row) and rides the same
  * ticket.
+ *
+ * Two of those three are near or past retirement — `claude-3-haiku-20240307`'s
+ * published retirement date (2026-04-19) has ALREADY passed, so its row may be
+ * absent because the model is gone rather than because the fact is unpublished,
+ * and no classification would change any outcome for it. Treat the live residue
+ * of #729 as `claude-opus-4-0` and `claude-sonnet-4-0`, and confirm the third is
+ * actually retired before spending a cycle on it.
+ *
+ * Settling those needs a per-model fact this page cannot supply — it has no row
+ * for them at all. The Models API `capabilities.thinking.types.adaptive` tree
+ * remains the only named route, as it was before the overview page grew these
+ * rows; what changed is that the page CAN now settle any id it lists, which is
+ * how the other four were closed without it.
  *
  * The trap that cost two prior passes, kept because it is still live for those
  * three: the tempting citation is the migration guide's heading "Effort

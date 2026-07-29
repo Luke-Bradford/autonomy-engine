@@ -90,6 +90,14 @@ import type { UnsupportedParam } from './llm-shared.js';
  *
  * Each omission costs at most the pre-existing 400. Adding one on a guess costs
  * a refusal of a call that works, which is not symmetric.
+ *
+ * THAT CALCULUS IS ABOUT THE REFUSAL, and #739 gave this set a second consumer
+ * with a different one. For `openAiUsesMaxCompletionTokens` a wrong ADD costs
+ * only a field name — and OpenAI accepts `max_completion_tokens` on
+ * non-reasoning models too, so the wrong name is usually served anyway. Do not
+ * carry the refusal's high bar over to a rename question, or the reverse: the
+ * membership decision is governed by the STRICTER of the two, which is the
+ * refusal.
  */
 export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
   // o-series
@@ -152,7 +160,8 @@ export function isOpenAiFirstParty(baseUrl: string): boolean {
  *
  * The two facts are not perfectly co-extensive, and the difference is stated
  * rather than glossed. The source's feature tables mark several members
- * (`o3-pro`, `gpt-5-pro`, and the `*-codex` ids) as Responses-API-only — no
+ * (the `-pro` ids — `o3-pro`, `gpt-5-pro`, `gpt-5.4-pro` — and the `*-codex` ids)
+ * as Responses-API-only — no
  * Chat Completions row, and on Responses the budget field is
  * `max_output_tokens`, a third name again. So the sampling-rejection fact
  * covers every member, while the `max_completion_tokens` fact covers only the
@@ -171,12 +180,19 @@ export function isOpenAiFirstParty(baseUrl: string): boolean {
  * surprising result. `max_tokens` bounded VISIBLE output; `max_completion_tokens`
  * bounds reasoning + visible output together. So a `maxTokens` an author tuned
  * against a non-reasoning model can, on a reasoning model, be consumed entirely
- * by invisible reasoning and yield an empty completion with
- * `finish_reason: 'length'`. That is a REAL result and still succeeds, per the
- * settled #461 contract (`stopReason` carries why and downstream branches on
- * it) — deliberately not re-litigated here. Whether an empty completion with
- * `stopReason: 'length'` deserves louder treatment is a genuine re-open of #461
- * and is filed separately rather than decided in a bug sweep.
+ * by invisible reasoning and yield a truncated completion with
+ * `finish_reason: 'length'`.
+ *
+ * What that then does depends on a response shape this module does NOT pin, so
+ * both branches are named rather than one asserted: an empty STRING (`''`) is a
+ * REAL result and still succeeds per the settled #461 contract (`stopReason`
+ * carries why, downstream branches on it), whereas a `null` content would take
+ * `noCompletionFailure`'s `malformed_block` path — a `permanent` failure whose
+ * diagnostic blames the response shape when the actual cause was the budget.
+ * Neither is silent and neither is worse than the guaranteed 400 this rename
+ * replaces, which is why the sweep documents them instead of choosing. Whether
+ * an empty-and-truncated completion deserves louder treatment is a genuine
+ * re-open of #461 and is filed as #750.
  */
 export function openAiUsesMaxCompletionTokens(model: string): boolean {
   return MODELS_REJECTING_SAMPLING_PARAMS.has(model);

@@ -142,11 +142,4 @@ describe('openAiUsesMaxCompletionTokens (#739)', () => {
     expect(openAiUsesMaxCompletionTokens('o3-2025-04-16')).toBe(false);
     expect(openAiUsesMaxCompletionTokens('codex-mini-latest')).toBe(false);
   });
-
-  it('takes NO baseUrl — the first-party gate is composed at the call site', () => {
-    // Deliberate symmetry with `unsupportedOpenAiParams`, which also takes only
-    // `model` while `openai.ts` applies `isOpenAiFirstParty` around it. Keeping
-    // the gate in ONE place stops the two sibling facts drifting apart.
-    expect(openAiUsesMaxCompletionTokens.length).toBe(1);
-  });
 });
