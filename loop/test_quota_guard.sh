@@ -88,6 +88,26 @@ EOS
   for rc_a in "$@"; do
     case "$rc_a" in SEED_CACHE=*) printf '%s\n' "${rc_a#SEED_CACHE=}" >"$tmp/infra/.last_quota" ;; esac
   done
+  # Optional FALLBACK_UTIL=<0-1> stands up a fake `claude_usage` implementing the
+  # REAL module's two-call contract: refresh_live_quota() does the I/O and returns
+  # None, live_quota() returns the mapped windows. A stub that returned the value
+  # from the refresher would let the driver's broken call LOOK correct, so this
+  # deliberately mirrors the real shape.
+  for rc_a in "$@"; do
+    case "$rc_a" in
+      FALLBACK_UTIL=*)
+        mkdir -p "$tmp/fallback-lib"
+        cat >"$tmp/fallback-lib/claude_usage.py" <<EOS
+_cache = {}
+def refresh_live_quota(*a, **k):
+    _cache['v'] = {'seven_day': {'utilization': ${rc_a#FALLBACK_UTIL=}}, 'source': 'live'}
+    return None
+def live_quota(*a, **k):
+    return _cache.get('v')
+EOS
+        ;;
+    esac
+  done
   printf '#!/bin/bash\necho fired >>"%s/fires.txt"\nexit 0\n' "$tmp" >"$tmp/infra/run.sh"
   chmod +x "$tmp/infra/run.sh"
   cp "$HERE/drive.sh" "$tmp/infra/drive.sh"
@@ -100,8 +120,14 @@ EOS
   # `env` is REQUIRED: a var=value word arriving via "$@" is NOT parsed as an
   # assignment (assignments are recognised before expansion), so writing
   # `... "$@" bash drive.sh` would execute `QUOTA_STOP_PCT=80` as the COMMAND.
+  # ENGINE_LIB points at the fake `claude_usage` when a case asked for one, and
+  # at a path that does not exist otherwise — so every case that does NOT set
+  # FALLBACK_UTIL still exercises "no fallback available".
+  rc_lib="$tmp/nonexistent-lib"
+  [ -f "$tmp/fallback-lib/claude_usage.py" ] && rc_lib="$tmp/fallback-lib"
+
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    ENGINE_LIB="$tmp/nonexistent-lib" BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
+    ENGINE_LIB="$rc_lib" BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
   # count|logpath -- the caller cannot see assignments made in this subshell.
@@ -272,6 +298,31 @@ check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2"
 # headroom the guard protects. 10% before the wait, 97% after.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 GH_OPEN_PR=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
 check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "$(fires_of "$r")"
+
+# --- 23. the FALLBACK source actually works (measured dead 2026-07-29) -------
+# `quota_pct`'s fallback called `cu.refresh_live_quota()` and read its RETURN
+# value. That function is a WRITER — it populates a module cache and returns None
+# on every path; the getter is `live_quota()`. So the fallback always yielded ""
+# and the guard had ONE source, not two, since the day it was written.
+#
+# Observed live: at 16:45Z a momentary dashboard blip took the reading straight
+# to UNREADABLE and spent a blind fire, with the dashboard answering 200 seconds
+# later. It also reframes 2026-07-26, recorded as "both sources failed at once" —
+# the fallback was already dead, so one outage was always enough. That one cost
+# $24.
+#
+# Dashboard EMPTY + a working fallback reading 97% must REFUSE, not fire blind.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.97)"
+check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
+check "the fallback reading drives the STOP, not the blind path" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 24. the fallback also feeds the last-known cache ------------------------
+# Both sources must write it (a fix for the same class already landed once, when
+# an early `return` skipped caching the PRIMARY reading).
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.42)"
+check "a fallback reading is cached like a primary one" "42" \
+  "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
