@@ -128,6 +128,24 @@ configure() {
   case "$STATE_DIR" in /*) : ;; *) STATE_DIR="$PWD/$STATE_DIR" ;; esac
   case "$REPO_SRC" in /*) : ;; *) REPO_SRC="$PWD/$REPO_SRC" ;; esac
 
+  SERVICE_ROOT="$STATE_DIR/repo"
+  SERVER_DIR="$SERVICE_ROOT/studio/packages/server"
+  WEB_ROOT="$SERVICE_ROOT/studio/packages/web/dist"
+  DB_PATH="$STATE_DIR/data/app.sqlite"
+  WORKSPACE_GIT_ROOT="$STATE_DIR/data/git"
+  LOG_DIR="$STATE_DIR/logs"
+  PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
+}
+
+# --- validate_install_target: preconditions that apply ONLY to installing.
+#
+# These live here rather than in `configure` for the same reason `resolve_node`
+# does: anything `configure` rejects is rejected for EVERY mode, including
+# `--uninstall`. A moved template or an awkward `--state-dir` would then block
+# you from removing a crash-looping unit -- the precise failure the node lookup
+# was pulled out to avoid. Teardown must never depend on the preconditions for
+# setup.
+validate_install_target() {
   # The service's state must not live inside the source checkout. That checkout
   # is branch-switched and rebuilt every loop fire, and the whole point of a
   # separate DB is that no other studio process can reach it.
@@ -138,18 +156,9 @@ configure() {
   build-loop fire."
       return 1 ;;
   esac
-
-  # Checked HERE, not at render time: a missing template used to be discovered
-  # only AFTER a full clone + pnpm install + build, minutes in.
+  # Checked up front, not at render time: a missing template used to be
+  # discovered only AFTER a full clone + pnpm install + build, minutes in.
   [ -f "$TMPL" ] || { die "template missing: $TMPL"; return 1; }
-
-  SERVICE_ROOT="$STATE_DIR/repo"
-  SERVER_DIR="$SERVICE_ROOT/studio/packages/server"
-  WEB_ROOT="$SERVICE_ROOT/studio/packages/web/dist"
-  DB_PATH="$STATE_DIR/data/app.sqlite"
-  WORKSPACE_GIT_ROOT="$STATE_DIR/data/git"
-  LOG_DIR="$STATE_DIR/logs"
-  PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 }
 
 # --- resolve_node: deliberately NOT part of `configure`. It used to run before
@@ -313,6 +322,7 @@ main() {
     uninstall) uninstall_unit; return 0 ;;
   esac
 
+  validate_install_target || return 1
   resolve_node || return 1
 
   if [ "$DRY_RUN" -eq 1 ]; then

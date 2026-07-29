@@ -374,6 +374,27 @@ rm -f "$sb/bin/node" 2>/dev/null
   >"$sb/nonode.out" 2>&1
 check "--uninstall works without node on PATH" "0" "$?"
 
+# Teardown must not depend on the preconditions for SETUP. Anything `configure`
+# rejects is rejected for every mode, so a moved template or an awkward
+# --state-dir would block removing a crash-looping unit. Same class of bug as
+# the node lookup above; caught by the review bot on the first push.
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --port 8788 --state-dir "$sb/state" --repo-src "$sb/src" \
+    --node /usr/bin/node ) >/dev/null 2>&1
+(
+  load_sut "$sb"   # sourcing sets TMPL, so the override has to come after it
+  # shellcheck disable=SC2034  # consumed by the sourced installer, not by this file
+  TMPL="$sb/definitely-not-here.tmpl"
+  main --uninstall --state-dir "$sb/state"
+) >"$sb/notmpl.out" 2>&1
+check "--uninstall works with the template missing" "0" "$?"
+check "and it really did remove the unit" "0" \
+  "$(find "$sb/home/Library/LaunchAgents" -type f | wc -l | tr -d ' ')"
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --uninstall --state-dir "$sb/src/inside" --repo-src "$sb/src" ) \
+  >"$sb/insideun.out" 2>&1
+check "--uninstall is not blocked by an install-only --state-dir check" "0" "$?"
+
 echo "== uninstall is scoped to THIS HOME's installation =="
 # The rm was HOME-scoped but the bootout was not, so running with a temp HOME
 # unloaded the operator's LIVE service while reporting a tidy success. Observed
