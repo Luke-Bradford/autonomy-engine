@@ -1892,9 +1892,12 @@ export function validateDoc(
   // the message below stays here, so this validator's error ARRAY is unchanged.
   for (const e of doc.edges) {
     if (e.back) continue;
-    const fromOwner = childOwner.get(e.from);
-    const toOwner = childOwner.get(e.to);
     if (crossesContainerBoundary(childOwner, e.from, e.to)) {
+      // Looked up INSIDE the branch: the owners are message material only, and
+      // the overwhelmingly common edge does not cross, so the non-crossing pass
+      // stays at the predicate's two lookups rather than four.
+      const fromOwner = childOwner.get(e.from);
+      const toOwner = childOwner.get(e.to);
       const loc = (id: string, owner: string | undefined): string =>
         owner !== undefined ? `'${id}' (child of '${owner}')` : `'${id}'`;
       errors.push(
