@@ -79,7 +79,32 @@ export default defineConfig({
     baseURL: BASE_URL,
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        /**
+         * STATED, because #757 made it matter — and it MUST live here, after the
+         * device spread, not in the top-level `use` above. Project-level `use`
+         * wins, and `devices['Desktop Chrome']` carries its own
+         * `viewport: 1280x720`; a viewport set above is silently overridden, so
+         * the config reads as changed while every spec still runs at 1280x720.
+         * (Measured that trap directly: a "1600x1000" setting above reported
+         * `innerWidth: 1280`.)
+         *
+         * Why it is now a decision at all: the canvas used to be a fixed 620px
+         * whatever the window did, so canvas-spec geometry was independent of
+         * the viewport. The editor now fills the content area, which makes the
+         * viewport the canvas size — and the canvas COLUMN is what the drag
+         * distances in `support/canvasGraph.ts` are really against (a node
+         * measures ~240px on screen at the zoom `fitView` picks, so a ~397px
+         * column at 1280 wide cannot hold two side by side).
+         */
+        viewport: { width: 1600, height: 1000 },
+      },
+    },
+  ],
   webServer: {
     // `reset-state.mjs` clears the throwaway data dir immediately BEFORE the
     // server opens it — see that file for why this cannot live in
