@@ -207,5 +207,31 @@ r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 FRESH_LOGDIR=1)"
 check "a missing log dir is created, not silently swallowed" "0" \
   "$(grep -q 'DRIVER START' "$(logof "$r")" 2>/dev/null && echo 0 || echo 1)"
 
+# --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
+# The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
+# same commit added -- so sourcing the file to unit-test its functions created
+# $INFRA/logs/ anyway. The guard is only worth having if nothing outruns it.
+# Bounded with a background pid + poll: if the guard ever breaks, the body is an
+# unconditional `while true` and a plain `.` would hang this suite forever.
+srctmp="$(mktemp -d)"
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$srctmp/infra"
+  export DLOG="$srctmp/infra/logs/driver.log"
+  export QUOTA_CACHE="$srctmp/infra/.last_quota"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+) >/dev/null 2>&1 &
+src_pid=$!
+src_i=0
+while [ "$src_i" -lt 10 ]; do kill -0 "$src_pid" 2>/dev/null || break; sleep 1; src_i=$((src_i + 1)); done
+if kill -0 "$src_pid" 2>/dev/null; then kill -9 "$src_pid" 2>/dev/null; src_hung=0; else src_hung=1; fi
+check "sourcing drive.sh returns instead of running the loop" "1" "$src_hung"
+check "sourcing drive.sh creates no directories" "1" \
+  "$([ -d "$srctmp/infra/logs" ] && echo 0 || echo 1)"
+rm -rf "$srctmp"
+
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi

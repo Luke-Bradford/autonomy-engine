@@ -39,11 +39,6 @@ INFRA="${INFRA:-/Users/lukebradford/Dev/studio-loop}"
 REPO="${REPO:-/Users/lukebradford/Dev/studio-loop-repo}"
 ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
-# Create the log directory HERE, not per fire. run.sh mkdir'd it, but only once a
-# fire had already started -- so a first run under a fresh INFRA (exactly what
-# the cutover in README.md does) silently swallowed `DRIVER START` and every
-# FATAL, because `log()` appends to a path whose directory does not exist.
-mkdir -p "$(dirname "$DLOG")" 2>/dev/null || true
 MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
 GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # x30s = up to 30 min for a gate to settle
@@ -248,6 +243,18 @@ Driver log: \`studio-loop/logs/driver.log\`."
 # the body is an unconditional `while true`, so sourcing this file to unit-test
 # its functions would hang the sourcing shell outright.
 [ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
+# Create the log directory. run.sh mkdir'd it, but only once a fire had already
+# started -- so a first run under a fresh INFRA (exactly what the cutover in
+# README.md does) silently swallowed `DRIVER START` and every FATAL, because
+# log() appends to a path whose directory does not exist.
+#
+# BELOW the guard, not next to the DLOG assignment where it first landed. At file
+# scope it ran on `source` too, which made the guard directly above it a lie --
+# the round-1 fix for the missing directory and the round-1 fix adding the guard
+# contradicted each other. Config and function definitions go above the guard;
+# anything that TOUCHES THE WORLD goes here.
+mkdir -p "$(dirname "$DLOG")" 2>/dev/null || true
 
 cd "$REPO" || { log "FATAL: worktree $REPO missing"; exit 1; }
 
