@@ -323,6 +323,74 @@ describe('connectRejection — container boundaries', () => {
   });
 
   /**
+   * Naming by KIND is right until there are two of a kind, and then it says
+   * nothing: *"they are in different containers (the stage container and the
+   * stage container)"* reads as a contradiction. The id cannot be the
+   * disambiguator — the test above exists precisely because a raw `c_<uuid>` is
+   * unreadable — so the sentence disambiguates by what the operator CAN see on
+   * the canvas: the two nodes it already names.
+   */
+  it('does not name two containers of the same kind identically', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'c_11111111-1111-4111-8111-111111111111', kind: 'stage', children: ['a'] },
+        { id: 'c_22222222-2222-4222-8222-222222222222', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toBeDefined();
+    expect(message).not.toContain('the stage container and the stage container');
+    expect(message).toContain('different stage containers');
+    expect(message).not.toContain('c_11111111');
+    expect(message).not.toContain('c_22222222');
+  });
+
+  /** Two DIFFERENT kinds still name both, since the kinds already distinguish them. */
+  it('names both kinds when the two containers differ', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'C', kind: 'loop', children: ['a'], exitWhen: '${true}' },
+        { id: 'D', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toContain('the loop container');
+    expect(message).toContain('the stage container');
+  });
+
+  /**
+   * The fix-up suggestion has to match the case it is appended to. "Connect the
+   * container itself instead, so the outside step waits for the whole container
+   * to finish" is right when ONE end is enclosed — and false when both are,
+   * because then there is no outside step to wait.
+   */
+  it('does not offer an "outside step" when BOTH ends are enclosed', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'C', kind: 'loop', children: ['a'], exitWhen: '${true}' },
+        { id: 'D', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toBeDefined();
+    expect(message).not.toContain('outside step');
+    expect(message).toContain('Connect the containers themselves instead');
+  });
+
+  /** ...and the one-sided case, which the suggestion was written for, keeps it. */
+  it('keeps the "outside step" suggestion when only one end is enclosed', () => {
+    const message = reject(CONTAINED, 'inside', 'outside')?.message;
+    expect(message).toContain('Connect the container itself instead');
+    expect(message).toContain('outside step');
+  });
+
+  /**
    * Equivalence with the shared predicate, the same anti-drift assertion the
    * cycle rule carries: this module must never grow a second opinion about what
    * a boundary is.

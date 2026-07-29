@@ -137,9 +137,13 @@ function endpointLabel(pre: ConnectPrecheck, id: string): string {
 }
 
 /** How a container is named when it is the OBSTACLE rather than an endpoint. */
+function containerKind(pre: ConnectPrecheck, id: string | undefined): string | undefined {
+  return id === undefined ? undefined : pre.containerById.get(id)?.kind;
+}
+
 function containerName(pre: ConnectPrecheck, id: string | undefined): string {
-  const container = id === undefined ? undefined : pre.containerById.get(id);
-  return container === undefined ? 'a container' : `the ${container.kind} container`;
+  const kind = containerKind(pre, id);
+  return kind === undefined ? 'a container' : `the ${kind} container`;
 }
 
 /** The edge a candidate would become — the value both remaining rules read. */
@@ -203,20 +207,39 @@ export function connectRejection(
   if (candidate.back !== true && crossesContainerBoundary(pre.childOwner, from, to)) {
     const fromOwner = pre.childOwner.get(from);
     const toOwner = pre.childOwner.get(to);
-    // Which side is enclosed decides how the sentence reads. Both enclosed (in
-    // DIFFERENT containers) is the third case, and it names both.
-    const detail =
-      fromOwner !== undefined && toOwner !== undefined
-        ? `they are in different containers (${containerName(pre, fromOwner)} and ${containerName(pre, toOwner)})`
-        : fromOwner !== undefined
-          ? `'${fromName}' is inside ${containerName(pre, fromOwner)}`
-          : `'${toName}' is inside ${containerName(pre, toOwner)}`;
+    // Which side is enclosed decides BOTH how the sentence reads and what it can
+    // honestly suggest. Both enclosed (in DIFFERENT containers) is the third
+    // case, and it is the one with the traps:
+    //  - naming both by kind says nothing when the kinds MATCH — "the stage
+    //    container and the stage container" reads as a contradiction. The id is
+    //    not available as the disambiguator (`containerName`: a raw `c_<uuid>`
+    //    is what U6b's browser pass caught), so the shared-kind sentence names
+    //    the two NODES instead, which is what the operator can see on screen;
+    //  - the one-sided suggestion is false here. With both ends enclosed there
+    //    is no "outside step" to wait on the container, so it points at the two
+    //    containers instead.
+    const bothEnclosed = fromOwner !== undefined && toOwner !== undefined;
+    const fromKind = containerKind(pre, fromOwner);
+    const sharedKind =
+      bothEnclosed && fromKind === containerKind(pre, toOwner) ? fromKind : undefined;
+    const detail = bothEnclosed
+      ? sharedKind !== undefined
+        ? `'${fromName}' and '${toName}' are in different ${sharedKind} containers`
+        : `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
+          `inside ${containerName(pre, toOwner)}`
+      : fromOwner !== undefined
+        ? `'${fromName}' is inside ${containerName(pre, fromOwner)}`
+        : `'${toName}' is inside ${containerName(pre, toOwner)}`;
+    const suggestion = bothEnclosed
+      ? `Connect the containers themselves instead, so one waits for the whole of the other ` +
+        `to finish`
+      : `Connect the container itself instead, so the outside step waits for the whole ` +
+        `container to finish`;
     return {
       reason: 'container-boundary',
       message:
         `'${fromName}' → '${toName}' would cross a container boundary — ${detail}, and a ` +
-        `child's edges must stay inside it. Connect the container itself instead, so the ` +
-        `outside step waits for the whole container to finish`,
+        `child's edges must stay inside it. ${suggestion}`,
     };
   }
 
