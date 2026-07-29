@@ -31,8 +31,16 @@
      its children over React Flow's own canvas surface (Fluent's
      --colorNeutralBackground1, not --bg), so an opaque panel colour would either
      punch a hole in the canvas or wash the dot grid out entirely. Alpha lets the
-     grid read through and keeps the box a region rather than a large node. */
-  --container-fill: rgba(110, 168, 254, 0.07);
+     grid read through and keeps the box a region rather than a large node.
+
+     The HUE is --muted's grey (#9aa3b2), and deliberately NOT --accent: that is
+     the `completion` edge hue (see .edge-variant-completion below) as well as the
+     selection colour, so an accent wash would paint every container in the
+     language of an edge outcome. A container is a grouping, not an outcome — the
+     same reasoning that gave `branch` its own neutral hue above. It cannot be
+     `var(--muted)` itself: this palette is one colour literal per variable, which
+     is what makes palette.test.ts's non-vacuity check work. */
+  --container-fill: rgba(154, 163, 178, 0.1);
   font-family:
     system-ui,
     -apple-system,
@@ -69,10 +77,11 @@
   /* Darkened for a WHITE canvas surface (#ffffff), the same reason every hue
      above is darkened for `--bg`. */
   --branch: #6b3fa0;
-  /* Light mode's canvas surface is WHITE, where the dark tint above is invisible;
-     a neutral grey wash at slightly higher alpha reads as a recessed region
-     without tinting the enclosed nodes' own panel colour. */
-  --container-fill: rgba(42, 93, 176, 0.06);
+  /* Light mode's canvas surface is WHITE, where the light grey above is nearly
+     invisible, so this is light mode's --muted (#5b6270) — a DARKER grey, which
+     needs slightly LESS alpha to read as the same recessed region against white
+     than the light grey needs against the dark canvas. */
+  --container-fill: rgba(91, 98, 112, 0.08);
   color-scheme: light;
 }
 
@@ -1059,6 +1068,26 @@ td button + button {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/*
+ * A container in the MINIMAP.
+ *
+ * React Flow's minimap draws every node in the lookup as one filled rect, so
+ * without this a container is a large blob in the SAME fill as the activities it
+ * encloses, painted over them (containers come first in the nodes prop, and the
+ * minimap keeps that order). Drawn as an outline instead — the same "region, not
+ * a node" reading the box has on the canvas.
+ *
+ * `fill`/`stroke` here, not `background`: these are SVG `<rect>`s. RF writes both
+ * inline only when a `nodeColor`/`nodeStrokeColor` prop is given — neither is —
+ * so this class rule (0,2,0, beating RF's own `.react-flow__minimap-node`) is
+ * what paints them.
+ */
+.react-flow__minimap-node.minimap-node-container {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
 }
 
 /* ── U6a typed edges ─────────────────────────────────────────────────────────

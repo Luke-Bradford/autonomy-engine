@@ -150,8 +150,16 @@ test.describe('U6c container rendering', () => {
     // The KIND, in words — the epic's non-colour status encoding, and the same
     // word `connectRules` refuses a boundary crossing by.
     await expect(box.locator('.flow-container-label')).toHaveText('loop');
-    await expect(box).toHaveAttribute('role', 'group');
-    await expect(box).toHaveAttribute('aria-label', 'loop container, 2 activities');
+    /* The accessible name/role are on the NODE element React Flow renders (via the
+       node's `ariaRole`/`ariaLabel`), not on the inner box — which is
+       `pointer-events: none` inside a wrapper that, being non-focusable, would
+       carry no role of its own. Asserted through the a11y tree rather than by
+       selector, so it fails if the name stops being reachable. */
+    await expect(page.getByRole('group', { name: 'loop container, 2 activities' })).toHaveCount(1);
+    await expect(page.locator('.react-flow__node[data-id="loop_1"]')).toHaveAttribute(
+      'aria-label',
+      'loop container, 2 activities',
+    );
 
     const boxRect = await rectOf(page, '.flow-container');
     for (const child of ['a', 'b']) {
@@ -320,8 +328,10 @@ test.describe('U6c container rendering', () => {
    *
    * The settle assertion is the regression net for the feedback loop the
    * derivation exists to avoid: a container held in `useNodesState` would be
-   * set → measured → recomputed → set, which shows up as an unsettled layout and
-   * React Flow warnings rather than as a wrong number.
+   * set → measured → recomputed → set. It shows up here as a height that never
+   * stops changing — NOT as a console warning, since RF's error channel is a
+   * no-op in the production build these specs run against, which is the whole
+   * reason the missing edges went unnoticed. The poll is the only net there.
    */
   test('moving a child re-derives its container box', async ({ page }) => {
     const problems = collectPageProblems(page);
@@ -431,8 +441,8 @@ test.describe('U6c container rendering', () => {
    * "is it defined" check would sail straight past.
    *
    * Contrast is measured against the CANVAS surface. The fill is deliberately
-   * translucent at 6–7% alpha, so compositing it over that surface moves the
-   * effective background by well under a percent.
+   * translucent (8–10% alpha), so compositing it over that surface moves the
+   * effective background by about a percent.
    */
   test('the container box paints, and reads, in both themes', async ({ page }) => {
     const problems = collectPageProblems(page);
@@ -462,6 +472,46 @@ test.describe('U6c container rendering', () => {
       ).toBeGreaterThan(TEXT_CONTRAST);
     }
     expect(light.fill, 'both themes paint the same container fill').not.toBe(dark.fill);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The MINIMAP, which U6c changed without meaning to.
+   *
+   * React Flow's minimap draws every node in the lookup as one filled rect, so
+   * putting containers in the lookup put them in the minimap too — a large blob in
+   * the SAME fill as the activities it encloses, painted OVER them (containers
+   * come first in the `nodes` prop and the minimap keeps that order). The overview
+   * of a doc with a `loop` became a solid block.
+   *
+   * Asserted on the computed `fill`, because that is the whole claim: nothing about
+   * the DOM changes when the rule is lost, only the paint. `fill: none` also has to
+   * be read off the CONTAINER's rect specifically — a rule that hit every minimap
+   * node would hide the whole overview and still satisfy a "container is not
+   * filled" check, so the activity's fill is asserted in the same breath.
+   */
+  test('a container is an OUTLINE in the minimap, not another filled node', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'e2e u6c minimap', loopDoc());
+
+    const CONTAINER = '.react-flow__minimap-node.minimap-node-container';
+    const ACTIVITY = '.react-flow__minimap-node:not(.minimap-node-container)';
+    // One box, three activities — the seeded doc's own shape, so a miscounted
+    // class (all nodes, or none) fails here rather than looking plausible.
+    await expect(page.locator(CONTAINER)).toHaveCount(1);
+    await expect(page.locator(ACTIVITY)).toHaveCount(3);
+
+    expect(
+      await computedStyleOf(page, CONTAINER, 'fill'),
+      'the container is FILLED in the minimap, so it covers its own children',
+    ).toBe('none');
+    const stroke = await computedStyleOf(page, CONTAINER, 'stroke');
+    expect(stroke, 'the outline did not resolve, so the container is invisible').toMatch(/^rgb/);
+
+    const activityFill = await computedStyleOf(page, ACTIVITY, 'fill');
+    expect(activityFill, 'the activities lost their fill too').not.toBe('none');
+    expect(activityFill).toMatch(/^rgb/);
 
     await expectQuiet(page, problems);
   });

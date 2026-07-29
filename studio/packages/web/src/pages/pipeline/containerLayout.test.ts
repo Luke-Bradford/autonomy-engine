@@ -130,4 +130,47 @@ describe('containerRects — the box a container is drawn as', () => {
     const boxes = containerRects([stage('s', ['a']), stage('t', [])], nodes);
     expect([...boxes.keys()]).toEqual(['s', 't']);
   });
+
+  /**
+   * `childCount` counts what the box is DRAWN from, never `children.length`.
+   *
+   * The box and the accessible label are two statements about the same thing, so
+   * they have to come from one set. Taken from the raw array they disagree exactly
+   * when it matters: an empty fallback box announcing "2 activities" tells a
+   * screen-reader user the opposite of what a sighted one sees.
+   */
+  describe('childCount — what the box announces', () => {
+    it('counts the children it actually encloses', () => {
+      const nodes = new Map([
+        ['a', rect(0, 0)],
+        ['b', rect(200, 0)],
+      ]);
+      expect(containerRects([stage('s', ['a', 'b'])], nodes).get('s')!.childCount).toBe(2);
+    });
+
+    it('does NOT count a phantom child, which is not in the box', () => {
+      const nodes = new Map([['a', rect(0, 0)]]);
+      expect(containerRects([stage('s', ['a', 'ghost'])], nodes).get('s')!.childCount).toBe(1);
+    });
+
+    it('reports zero for a container whose every child is a phantom', () => {
+      const nodes = new Map([['other', rect(0, 0)]]);
+      const box = containerRects([stage('s', ['gone', 'also_gone'])], nodes).get('s')!;
+      // The box is the empty FALLBACK here, so a count of 2 would caption an
+      // empty box with the children it no longer draws.
+      expect(box.width).toBe(EMPTY_CONTAINER_SIZE.width);
+      expect(box.childCount).toBe(0);
+    });
+
+    it('does NOT count a child a FIRST-wins earlier container already claimed', () => {
+      const nodes = new Map([
+        ['a', rect(0, 0)],
+        ['b', rect(400, 0)],
+      ]);
+      const boxes = containerRects([stage('s', ['a']), stage('t', ['a', 'b'])], nodes);
+      expect(boxes.get('s')!.childCount).toBe(1);
+      // 't' lists two children and draws one: 'a' belongs to 's'.
+      expect(boxes.get('t')!.childCount).toBe(1);
+    });
+  });
 });

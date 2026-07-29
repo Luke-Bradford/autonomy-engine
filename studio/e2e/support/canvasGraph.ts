@@ -122,8 +122,14 @@ export async function seedSelectedEdge(page: Page, sourceTitle = 'HTTP Request')
  */
 export type NodeRef = { index: number } | { id: string };
 
-/** The centre of one node's source (right) or target (left) port, in screen coords. */
-export function portCentreOf(
+/**
+ * The centre of one node's source (right) or target (left) port, in screen coords.
+ *
+ * Module-internal: every spec reaches it through one of the `connect*` gestures
+ * below, which is the useful unit. Exporting the coordinate helpers as well would
+ * offer two ways to do the same thing and invite a spec to hand-roll the drag.
+ */
+function portCentreOf(
   page: Page,
   ref: NodeRef,
   side: 'source' | 'target',
@@ -142,15 +148,6 @@ export function portCentreOf(
   );
 }
 
-/** The centre of the port of the node at `index`. */
-export function portCentre(
-  page: Page,
-  index: number,
-  side: 'source' | 'target',
-): Promise<{ x: number; y: number }> {
-  return portCentreOf(page, { index }, side);
-}
-
 /**
  * Drag a connection from one node's SOURCE port to another's TARGET port.
  *
@@ -160,7 +157,7 @@ export function portCentre(
  * still DOWN over the target port, which is the only moment React Flow's
  * mid-gesture handle state (`connectingto`, `valid`) exists to be read.
  */
-export async function connectRefs(
+async function connectRefs(
   page: Page,
   from: NodeRef,
   to: NodeRef,
@@ -204,7 +201,7 @@ export function connectById(
  * connection gestures go through this path, so a rule that is only ever tested
  * forwards is only half tested.
  */
-export async function connectRefsBackwards(page: Page, from: NodeRef, to: NodeRef): Promise<void> {
+async function connectRefsBackwards(page: Page, from: NodeRef, to: NodeRef): Promise<void> {
   const target = await portCentreOf(page, to, 'target');
   const source = await portCentreOf(page, from, 'source');
   await page.mouse.move(target.x, target.y);

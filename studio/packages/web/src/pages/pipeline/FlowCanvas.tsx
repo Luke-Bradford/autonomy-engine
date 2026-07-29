@@ -61,7 +61,6 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
 
 interface ContainerData extends Record<string, unknown> {
   kind: ContainerKind;
-  childCount: number;
 }
 
 /**
@@ -84,17 +83,31 @@ interface ContainerData extends Record<string, unknown> {
 const ContainerNode = memo(function ContainerNode({ data }: NodeProps) {
   const d = data as ContainerData;
   return (
-    <div
-      className="flow-container"
-      role="group"
-      aria-label={`${d.kind} container, ${d.childCount} ${d.childCount === 1 ? 'activity' : 'activities'}`}
-    >
+    <div className="flow-container">
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.kind}</span>
       <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
     </div>
   );
 });
+
+/**
+ * What the box announces. Lives on the NODE (`ariaRole`/`ariaLabel`), not on this
+ * component's own `<div>`.
+ *
+ * React Flow owns the outer element — `role: node.ariaRole ?? (isFocusable ?
+ * 'group' : undefined)` and `aria-label: node.ariaLabel` — and this file already
+ * takes that route for edges (`ariaLabel: edgeAriaLabel(e)` below). Labelling the
+ * inner div instead put the accessible name on a `pointer-events: none` child of
+ * a wrapper that, because the container is not focusable, had NO role at all
+ * while still carrying RF's unconditional `aria-roledescription="node"`.
+ *
+ * Counted from the box's OWN `childCount`, not `container.children.length`: see
+ * `ContainerBox`. What is announced is what is drawn.
+ */
+function containerAriaLabel(kind: ContainerKind, childCount: number): string {
+  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
+}
 
 // Module-level constant: React Flow requires a stable `nodeTypes` identity (a
 // new object each render re-mounts every node and warns).
@@ -121,10 +134,14 @@ const HANDLE_SIZE = 6;
  *
  * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
  * off them positionally (`getHandlePosition`): a LEFT handle contributes
- * `(x, y + height/2)` and a RIGHT one `(x + width, y + height/2)`. Centring each
- * dot on its border therefore puts the edge exactly on the box's edge midpoint,
- * where the rendered handle is drawn — so the line meets the dot rather than
- * ending a few pixels off it.
+ * `(handle.x, y + height/2)` and a RIGHT one `(handle.x + handle.width, …)`.
+ *
+ * So centring each 6px dot on its border puts the endpoint 3px OUTSIDE the box
+ * (`-HANDLE_SIZE / 2` on the left, `width + HANDLE_SIZE / 2` on the right) and
+ * exactly on the vertical midpoint. Three pixels out is the convention, not a
+ * miss: RF's own stylesheet draws an activity's handle the same way, and what it
+ * MEASURES for one lands within a pixel of this. The line therefore meets the
+ * rendered dot on a container exactly as it does on an activity.
  */
 function containerHandles(width: number, height: number): NodeHandle[] {
   const y = (height - HANDLE_SIZE) / 2;
@@ -365,8 +382,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         handles: containerHandles(rect.width, rect.height),
         data: {
           kind: c.kind,
-          childCount: c.children.length,
         } satisfies ContainerData,
+        /* On the node, so RF puts them on the element it owns — the wrapper this
+           component renders inside. `ariaRole` is needed explicitly because a
+           non-focusable node otherwise gets no role at all. */
+        ariaRole: 'group',
+        ariaLabel: containerAriaLabel(c.kind, rect.childCount),
         /* Read-only in U6c: the box states membership, it does not edit it.
            Creating/editing a container and dragging nodes in and out is U6d, and
            the RF `parentId` mapping that would make a container draggable as a
@@ -388,8 +409,23 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [containerNodes, flowNodes],
   );
 
-  /** Ids RF may report changes for that the domain store must never see. */
-  const containerIds = useMemo(() => new Set(containerNodes.map((n) => n.id)), [containerNodes]);
+  /**
+   * Ids RF may report changes for that the domain store must never see.
+   *
+   * Container ids MINUS the activity ids, because the two share ONE namespace.
+   * A collision is refused by `validateDoc`, but that gate is advisory and
+   * write-path only, so a version written before it can still load. In that doc
+   * `renderedNodes` carries the id twice, and RF's Map-keyed `nodeLookup` keeps
+   * the LAST one — the activity. Filtering the id would then drop every change
+   * for a node that IS in the store: no drag, no select, no delete, i.e. no way
+   * to edit the doc back out of the collision. Subtracting means the activity
+   * behaves normally and only the (invisible) container loses its changes, which
+   * it has none of.
+   */
+  const containerIds = useMemo(() => {
+    const activityIds = new Set(flowNodes.map((n) => n.id));
+    return new Set(containerNodes.map((n) => n.id).filter((id) => !activityIds.has(id)));
+  }, [containerNodes, flowNodes]);
 
   /**
    * Typed edges (U6a). The variant CLASS goes on React Flow's edge `<g>`, where
@@ -636,7 +672,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         proOptions={{ hideAttribution: true }}
       >
         <Background />
-        <MiniMap pannable zoomable />
+        {/* U6c — containers are in `nodeLookup` now, and the MiniMap draws EVERY
+            node in it with one fill. Left alone, a `stage`/`loop` paints a large
+            solid blob in the same colour as the activities it encloses, on top of
+            them (containers come first, so they paint first). Classed instead, so
+            the CSS can draw it as an outline the way it reads on the canvas. */}
+        <MiniMap
+          pannable
+          zoomable
+          nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
+        />
         <Controls />
         {refusal !== null && (
           /* Canvas-LOCAL, via RF's own `Panel`, per the epic's z-index/portal

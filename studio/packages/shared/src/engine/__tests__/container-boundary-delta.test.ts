@@ -97,11 +97,18 @@ describe('crossesContainerBoundary — agrees with the save gate on the candidat
    * refuses a gesture the gate allows, or worse the reverse.
    */
   it('a doubly-listed child is owned by the FIRST container that lists it', () => {
-    const containers = [stage('s', ['a']), stage('t', ['a'])];
+    /* The containers are built so the two rules DISAGREE: 'b' is a child of 't'
+       only, so for the edge a -> b …
+         FIRST-wins: 'a' belongs to 's', 'b' to 't'  → crosses
+         LAST-wins:  'a' belongs to 't', 'b' to 't'  → does NOT cross
+       An earlier draft asserted `crosses(…, 'a', 'b')` with 'b' owned by NOBODY,
+       which is `true` under either resolution — it pinned nothing. */
+    const containers = [stage('s', ['a']), stage('t', ['a', 'b'])];
     const owner = containerMembership(containers).owner;
     expect(owner.get('a')).toBe('s');
-    // 'a' belongs to 's', so an edge to a child of 's' stays inside.
     expect(crossesContainerBoundary(owner, 'a', 'b')).toBe(true);
+    // And the gate agrees, which is the point of resolving it the same way.
+    expect(gateSeesCrossing(doc([node('a'), node('b')], [edge('a', 'b')], containers))).toBe(true);
   });
 
   /**

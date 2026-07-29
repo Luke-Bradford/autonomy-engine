@@ -16,6 +16,14 @@ import { containerMembership, type Container } from '@autonomy-studio/shared';
  *    membership becomes authorable (U6d) and RF `parentId` lands (U23), that is
  *    the point at which a container may need geometry of its own; until then
  *    deriving it is strictly less state.
+ *  - The box can assert a membership the DOC DOES NOT HAVE. It is the union of
+ *    its children's rects, so a NON-member positioned between two spread-out
+ *    members is drawn inside the box, and two containers with interleaved
+ *    children draw overlapping boxes. That undercuts the point of U6c — the box
+ *    exists to make membership visible — and it is not fixable here: only RF
+ *    `parentId` subflows, which clip children to their parent and are U23's,
+ *    make enclosure and membership the same fact. Until then the box is a HINT
+ *    at membership, and `connectRules` (not the picture) is what enforces it.
  *
  * Pure and framework-free — no React, no React Flow — so the arithmetic is
  * testable without mounting a canvas jsdom cannot measure anyway.
@@ -26,6 +34,21 @@ export interface Rect {
   y: number;
   width: number;
   height: number;
+}
+
+/**
+ * A container's box, plus the number of children that box was DERIVED from.
+ *
+ * The count travels with the rect deliberately. It is what the box announces to
+ * a screen reader, and taking it from `container.children.length` instead would
+ * make the announcement disagree with the picture the moment the two sets differ
+ * — a phantom child (deleted node, id still listed) or a child an earlier
+ * container already claimed both count in the raw array and are both absent from
+ * the box. That reads as "loop container, 2 activities" over an empty fallback
+ * box: not a rounding error, a straight lie about what is on screen.
+ */
+export interface ContainerBox extends Rect {
+  childCount: number;
 }
 
 /** Breathing room between a container's edge and its outermost children. */
@@ -71,7 +94,7 @@ function union(a: Rect, b: Rect): Rect {
 export function containerRects(
   containers: Container[],
   nodeRects: ReadonlyMap<string, Rect>,
-): Map<string, Rect> {
+): Map<string, ContainerBox> {
   const { owner } = containerMembership(containers);
 
   // Children grouped by their RESOLVED owner, so a phantom child (no node) and a
@@ -99,7 +122,7 @@ export function containerRects(
   const fallbackY = content === null ? 0 : content.y;
   let emptyIndex = 0;
 
-  const rects = new Map<string, Rect>();
+  const rects = new Map<string, ContainerBox>();
   for (const c of containers) {
     const children = drawable.get(c.id) ?? [];
     if (children.length === 0) {
@@ -107,6 +130,7 @@ export function containerRects(
         x: fallbackX,
         y: fallbackY + emptyIndex * (EMPTY_CONTAINER_SIZE.height + CONTAINER_GAP),
         ...EMPTY_CONTAINER_SIZE,
+        childCount: 0,
       });
       emptyIndex += 1;
       continue;
@@ -120,6 +144,7 @@ export function containerRects(
       y: box.y - CONTAINER_PADDING - CONTAINER_HEADER_HEIGHT,
       width: box.width + 2 * CONTAINER_PADDING,
       height: box.height + 2 * CONTAINER_PADDING + CONTAINER_HEADER_HEIGHT,
+      childCount: children.length,
     });
   }
   return rects;

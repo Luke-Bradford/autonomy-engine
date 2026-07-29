@@ -139,6 +139,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U6b | Typed ports / multi-handle + connection validation | Author |
 | | **AS BUILT (2026-07-25):** port IDENTITY + connect-time validation + per-condition arrowheads. The multi-handle SET is **U19**'s (per-outcome source ports, which that row already owns) — doing it here would have built the same thing twice. | |
 | U6c | Container group rendering | Author |
+| | **AS BUILT (2026-07-29):** derived boxes + the container-BOUNDARY connect rule U6b deferred here. A derived node must STATE `measured`+`handles` or React Flow drops every edge touching it. The box HINTS at membership; RF `parentId` subflows (**U23**) are what would make enclosure authoritative. | |
 | U6d | Container create/edit/drag-membership | Author |
 | U6e | Back-edge rendering/editing + bounce config | Author |
 | U7 | Node properties panel (tabbed, per-activity, conn picker) | Author |
@@ -1060,6 +1061,96 @@ SOURCE port outside the pane (they land under the toolbox, still in the DOM). A 
 source→target drag works anyway — which is why U6a never noticed — but a REVERSE drag puts the
 pointer down on the toolbox and starts nothing, failing as "no refusal was shown". The spec widens
 the viewport.
+
+## U6c — container group rendering (AS BUILT, 2026-07-29)
+
+A doc with a `loop`/`stage`/`foreach` rendered as a flat pile of activities: containers were pure
+pass-through on the canvas (carried forward on save, fed to the connect rules, never drawn). And
+because React Flow renders NOTHING for an edge whose endpoint node it cannot resolve, every edge
+touching a container was silently missing too. Now the box is drawn, and the container-BOUNDARY
+connect rule U6b deferred here has something visible to refuse against.
+
+| Piece | Lives in |
+|---|---|
+| The box's geometry (pure, framework-free) | `pages/pipeline/containerLayout.ts` |
+| Boundary predicate (SSOT with the save gate) | `shared` `engine/params.ts` — `crossesContainerBoundary` |
+| The boundary refusal | `pages/pipeline/connectRules.ts` |
+| `container` node type + derived-node wiring | `pages/pipeline/FlowCanvas.tsx` |
+| Box, label, minimap outline | `index.css` — `.flow-container*`, `.minimap-node-container` |
+| Browser coverage + doc seeding | `e2e/container-rendering.spec.ts`, `e2e/support/seedDoc.ts` |
+
+Decisions worth not re-deriving:
+
+- **The box is DERIVED from its children's rects; a container is NOT in `useNodesState`.** A
+  `Container` carries no geometry (`{id, kind, children}`), deliberately — the engine groups by
+  MEMBERSHIP, and a stored box would be a second source of truth about what is inside a loop. A
+  container placed in the view-state array is also a feedback loop (set → measured → recompute →
+  set); deriving breaks it by construction, because container geometry depends only on ACTIVITY
+  geometry, never on its own.
+- **A derived container must STATE its own geometry — `measured` AND `handles` — or its edges
+  vanish.** This is the defect that shipped in the first cut with every green signal agreeing, and
+  it is the one thing here worth reading twice. `adoptUserNodes` reuses a node's internals only
+  while the SAME object identity keeps arriving through the `nodes` prop; a derived node is rebuilt
+  every render, so on each re-adopt `parseHandles` evaluates `!userNode.measured ? undefined :
+  <previous bounds>` and discards whatever its ResizeObserver measured. The size cannot come back
+  the normal way either — a container's dimension change is filtered at `onNodesChange` precisely
+  because it is not the store's to hold. `getEdgePosition` then returns `null` for the endpoint and
+  `Edge` renders null, silently, since RF's error channel is a no-op in a production build. Both
+  facts are stated because each answers a question the other does not: `handles` is what
+  `parseHandles` takes verbatim, and `measured` is what `nodesInitialized` reads — and with
+  `fitView` on, dropping `measured` leaves the graph permanently uninitialised. Either alone keeps
+  the edges; removing both reproduces the defect (mutation-tested).
+- **Size as TOP-LEVEL `width`/`height`, not only `style`.** `onlyRenderVisibleElements` culls
+  against `measured.width ?? width ?? initialWidth ?? 0`, so a derived node RF has not measured is
+  culled against a 0×0 box — taking its edges with it.
+- **The box HINTS at membership; `connectRules` ENFORCES it.** Because the box is the union of its
+  children's rects, a non-member positioned between two spread-out members is drawn inside it, and
+  two containers with interleaved children draw overlapping boxes. Only RF `parentId` subflows —
+  which clip children to their parent, and are **U23**'s — make enclosure and membership the same
+  fact. Stated at the seam rather than left for a reader to discover.
+- **What the box ANNOUNCES is what it DRAWS.** `childCount` travels with the rect and counts the
+  children actually enclosed, not `children.length`. The two disagree exactly when it matters — a
+  phantom child (node deleted, id still listed: reachable today, see **#746**) or a child a
+  FIRST-wins earlier container already claimed — and the raw count captions an empty fallback box
+  with "2 activities".
+- **Ownership is `containerMembership`, FIRST-declared-wins (#492)** — one resolution shared by the
+  reducer, the save gate, the layout and the connect rule, so the picture and the refusal cannot
+  drift. `crossesContainerBoundary` single-sources the boundary CONDITION with `validateDoc`, whose
+  error array is byte-identical after the refactor.
+- **A container is a legal EDGE ENDPOINT, so an empty one still gets a real box** — placed
+  deterministically clear of the graph. An empty `stage` is a valid doc, and a min/max over no
+  children is ±Infinity, which as an RF position renders garbage.
+- **Read-only, and the aria route is RF's.** Authoring is **U6d**/**U23**; container changes are
+  filtered at the change seam so the domain store never sees one — by container ids MINUS activity
+  ids, because the two share one namespace and RF's Map-keyed lookup keeps the ACTIVITY on a
+  collision (filtering by id alone made that node undraggable, unselectable and undeletable). The
+  accessible name/role go on the NODE (`ariaRole`/`ariaLabel`), the same route the edges use, not on
+  the inner `<div>` — which is `pointer-events: none` and sits inside a wrapper that, being
+  non-focusable, has no role of its own.
+- **The fill is `--muted`'s grey, NOT `--accent`.** `--accent` is the `completion` edge hue (and the
+  selection colour), so an accent wash paints every container in the language of an edge outcome —
+  the same reasoning that gave `branch` its own neutral hue. Caught by the FIT lens after shipping
+  a comment claiming "a neutral grey wash" over an accent-blue literal.
+- **Containers are in `nodeLookup`, so they are in the MINIMAP.** RF draws every node there with one
+  fill, which made a `loop` a solid blob over its own children. Drawn as an outline instead.
+
+**Verified by `pnpm -C studio test:e2e`** (`container-rendering.spec.ts`, 10 specs, every one
+mutation-proven: drop `measured`+`handles` → 4 red; drop the container source `Handle` → 4 red;
+`selectable: true` → the pointer spec red; flip the containers-first spread → the paint-order spec
+red; delete the light-mode `--container-fill` → the theme spec red; disable the boundary rule → the
+boundary spec red; drop the minimap class → the minimap spec red). Containers cannot be authored
+from the canvas until U6d, so the specs seed docs through the REAL write gate (`support/seedDoc.ts`)
+— a doc these specs can mint is a doc an operator can have.
+
+Two things the specs deliberately do NOT assert, because they cannot fail: the computed
+`pointer-events` value (it inherits from RF's own inline default, so the assertion stays green with
+the rule deleted — a gesture covers it instead) and FIRST-wins resolution of a doubly-listed child
+(`validateDoc` refuses that doc, so it cannot be seeded — it stays in the unit suites).
+
+NOT in U6c, with owners: creating/editing a container and dragging membership (**U6d**); RF
+`parentId` subflows, which would make a container draggable as a group and enclosure authoritative
+(**U23**); back-edge authoring (**U6e**); pruning a deleted node from `containers[].children`
+(**#746**, U6d's path).
 
 ## Non-goals (YAGNI)
 
