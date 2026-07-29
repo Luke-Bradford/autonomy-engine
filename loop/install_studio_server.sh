@@ -108,21 +108,7 @@ configure() {
     esac
   done
 
-  valid_port "$PORT" || { die "invalid --port '$PORT' (want an integer 1-65535, no leading zero)"; return 1; }
-  # 8080 is studio's DEV default. Installing a KeepAlive unit there would fight
-  # any `pnpm dev` for the port forever, and if it won it would share that
-  # server's sqlite DB -- the exact corruption this unit is shaped to avoid
-  # (reconcileOnBoot pumps `running` rows without the drive lock; lease.ts
-  # reclaims the other instance's live runs). Refuse rather than warn.
-  [ "$PORT" != "8080" ] || {
-    die "refusing --port 8080: that is studio's dev-server default, and a
-  supervised unit there would contend with any 'pnpm dev' and share its
-  database. Use the dedicated service port instead (default $DEFAULT_PORT)."
-    return 1
-  }
   [ -n "$STATE_DIR" ] || { die "--state-dir may not be empty"; return 1; }
-  no_hostile_chars "--state-dir" "$STATE_DIR" || return 1
-  no_hostile_chars "--repo-src" "$REPO_SRC" || return 1
 
   # Absolute, without `cd` (STATE_DIR need not exist yet).
   case "$STATE_DIR" in /*) : ;; *) STATE_DIR="$PWD/$STATE_DIR" ;; esac
@@ -146,6 +132,24 @@ configure() {
 # was pulled out to avoid. Teardown must never depend on the preconditions for
 # setup.
 validate_install_target() {
+  valid_port "$PORT" || { die "invalid --port '$PORT' (want an integer 1-65535, no leading zero)"; return 1; }
+  # 8080 is studio's DEV default. Installing a KeepAlive unit there would fight
+  # any `pnpm dev` for the port forever, and if it won it would share that
+  # server's sqlite DB -- the exact corruption this unit is shaped to avoid
+  # (reconcileOnBoot pumps `running` rows without the drive lock; lease.ts
+  # reclaims the other instance's live runs). Refuse rather than warn.
+  [ "$PORT" != "8080" ] || {
+    die "refusing --port 8080: that is studio's dev-server default, and a
+  supervised unit there would contend with any 'pnpm dev' and share its
+  database. Use the dedicated service port instead (default $DEFAULT_PORT)."
+    return 1
+  }
+  # Only the RENDERED plist is sensitive to these characters, so this is
+  # install-only too -- an operator uninstalling with an explicit override must
+  # not be turned away on grounds that only matter when writing a plist.
+  no_hostile_chars "--state-dir" "$STATE_DIR" || return 1
+  no_hostile_chars "--repo-src" "$REPO_SRC" || return 1
+
   # The service's state must not live inside the source checkout. That checkout
   # is branch-switched and rebuilt every loop fire, and the whole point of a
   # separate DB is that no other studio process can reach it.

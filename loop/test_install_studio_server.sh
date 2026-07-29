@@ -394,6 +394,17 @@ sb="$(new_sandbox)"
 ( load_sut "$sb"; main --uninstall --state-dir "$sb/src/inside" --repo-src "$sb/src" ) \
   >"$sb/insideun.out" 2>&1
 check "--uninstall is not blocked by an install-only --state-dir check" "0" "$?"
+# Same rule for the port refusal and the character checks: they only matter when
+# a plist is being written, so an operator recovering with an explicit override
+# must not be turned away on install-only grounds.
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --uninstall --port 8080 --state-dir "$sb/state" ) \
+  >"$sb/un8080.out" 2>&1
+check "--uninstall is not blocked by the 8080 refusal" "0" "$?"
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --uninstall --port 0080 --state-dir "$sb/st&ate" ) \
+  >"$sb/unbad.out" 2>&1
+check "--uninstall is not blocked by install-only argument validation" "0" "$?"
 
 echo "== uninstall is scoped to THIS HOME's installation =="
 # The rm was HOME-scoped but the bootout was not, so running with a temp HOME
