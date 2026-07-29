@@ -42,11 +42,16 @@ EOS
   else
     cat >"$bin/curl" <<EOS
 #!/bin/bash
-if [ -n "\${CURL_READABLE_CALLS:-}" ]; then
-  ccf="$tmp/curlcalls"
-  cc="\$(cat "\$ccf" 2>/dev/null || echo 0)"
-  echo \$((cc + 1)) >"\$ccf"
-  [ "\$cc" -ge "\$CURL_READABLE_CALLS" ] && { echo ""; exit 0; }
+ccf="$tmp/curlcalls"
+cc="\$(cat "\$ccf" 2>/dev/null || echo 0)"
+echo \$((cc + 1)) >"\$ccf"
+if [ -n "\${CURL_READABLE_CALLS:-}" ] && [ "\$cc" -ge "\$CURL_READABLE_CALLS" ]; then
+  echo ""; exit 0
+fi
+# CURL_UTIL_AFTER + CURL_SWITCH_CALLS: the window CHANGES mid-run, which is what
+# a long block looks like from the outside.
+if [ -n "\${CURL_UTIL_AFTER:-}" ] && [ "\$cc" -ge "\${CURL_SWITCH_CALLS:-1}" ]; then
+  echo '{"account":{"claude":{"seven_day":{"utilization":'"\$CURL_UTIL_AFTER"'}}}}'; exit 0
 fi
 echo '{"account":{"claude":{"seven_day":{"utilization":$rc_util}}}}'
 EOS
@@ -215,6 +220,25 @@ check "a missing log dir is created, not silently swallowed" "0" \
 # MAX_FIRES=1, so block 2 lands precisely at fires == MAX_FIRES.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=2)"
 check "a long block AT the budget boundary re-grants -> 2 fires, not 1" "2" "$(fires_of "$r")"
+
+# --- 19. quota is RE-CHECKED after a block (review round 4, BLOCKING) --------
+# The guard ran once per iteration, BEFORE ensure_auth -- which can block for
+# days (measured: 71h). So the fire straight after recovery was authorised by a
+# reading taken before the entire block. Worse, a block is frequently CAUSED by
+# quota exhaustion (a cap and an expired token look identical to the probe), so
+# the re-grant case is exactly the one most likely to fire into a window that has
+# since changed. Here it is 10% before the block and 97% after.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
+check "quota re-checked after a block -> refuses, does not fire on a stale read" "0" "$(fires_of "$r")"
+check "the post-block re-check states why" "0" \
+  "$(grep -q 'stale' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 20. a cache line with no separator is malformed, not two fields ---------
+# `${qc_line%% *}` and `${qc_line##* }` BOTH degrade to the whole string when
+# there is no space, so a single-token line was read as epoch AND pct. A lone
+# recent epoch therefore parsed as a colossal "percent" and refused every fire.
+r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 "SEED_CACHE=$now")"
+check "single-field cache line is rejected, not read as epoch+pct" "2" "$(fires_of "$r")"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

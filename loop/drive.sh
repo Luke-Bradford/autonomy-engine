@@ -114,6 +114,11 @@ quota_cache_write() {  # $1=pct
 quota_cache_read() {
   [ -f "$QUOTA_CACHE" ] || return 0
   qc_line="$(cat "$QUOTA_CACHE" 2>/dev/null)" || return 0
+  # A separator is REQUIRED before splitting: with no space, `%% *` and `##* `
+  # BOTH degrade to the whole string, so a single-token line was read as epoch
+  # AND pct. A lone recent epoch then parsed as a colossal "percent" and refused
+  # every fire -- over-refusing, so fail-safe, but for a fabricated reason.
+  case "$qc_line" in *" "*) ;; *) return 0 ;; esac
   qc_when="${qc_line%% *}"; qc_pct="${qc_line##* }"
   case "$qc_when$qc_pct" in *[!0-9]*|"") return 0 ;; esac
   # 10# forces BASE TEN. Digit-only is not enough for $(( )): it reads a leading
@@ -126,6 +131,60 @@ quota_cache_read() {
   [ "$qc_age" -lt 0 ] && return 0
   [ "$qc_age" -gt "$QUOTA_CACHE_MAX_AGE" ] && return 0
   echo $(( 10#$qc_pct ))
+}
+
+# --- quota_gate: the spend guard. Returns 1 to STOP the driver, 0 to proceed.
+#
+# A FUNCTION rather than inline code because it must run TWICE per iteration in
+# the worst case: once before the auth probe (so a quota-blocked scheduled start
+# costs ZERO tokens) and again after a long block, because ensure_auth can sit in
+# backoff for DAYS -- measured 71h -- and the reading taken before that block is
+# not evidence about the window the next fire would actually land in. Worse, a
+# block is frequently CAUSED by quota exhaustion (a cap and an expired token look
+# identical to the probe), so the re-grant path is exactly the one most likely to
+# fire into a window that has since changed. The periodic quota_pct calls inside
+# ensure_auth only warm the log and the cache; they deliberately do not decide
+# anything, because the decision belongs here where it can stop the loop.
+#
+# Mutates blind_fires (a global) rather than running in a subshell, so the blind
+# allowance is spent exactly once per authorised blind fire.
+quota_gate() {
+  qg_pct="$(quota_pct)"
+  if [ -n "$qg_pct" ]; then
+    if [ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]; then
+      log "STOP: 7-day quota utilization ${qg_pct}% >= QUOTA_STOP_PCT=${QUOTA_STOP_PCT}% -- refusing to fire (window resets weekly; protecting the operator's own headroom)"
+      return 1
+    fi
+    log "quota ok: 7-day utilization ${qg_pct}% (< ${QUOTA_STOP_PCT}%)"
+    return 0
+  fi
+  # UNREADABLE, so before firing blind, ask what we last KNEW. Measured
+  # 2026-07-26: both sources failed at 02:05 while the account sat at ~98% (it
+  # had refused at 99% eight hours earlier), and the blind fire cost $24, hit the
+  # cap and shipped nothing. A fresh high reading is enough to refuse.
+  qg_cached="$(quota_cache_read)"
+  if [ -n "$qg_cached" ] && [ "$qg_cached" -ge "$QUOTA_STOP_PCT" ]; then
+    log "STOP: 7-day quota UNREADABLE and the last known reading was ${qg_cached}% >= QUOTA_STOP_PCT=${QUOTA_STOP_PCT}% -- refusing to fire blind into a window that was already exhausted (usage only rises until the weekly reset)"
+    return 1
+  fi
+  # UNREADABLE is not the same as "fine". Allow a bounded number of blind fires
+  # so a monitoring hiccup does not waste a whole night, then stop.
+  #
+  # Counted with its OWN counter, not the cumulative `fires`. Reusing `fires`
+  # meant a run that had already done QUOTA_UNKNOWN_FIRES *readable* fires hit the
+  # cap on its FIRST unreadable reading and stopped with none of the grace this
+  # cap documents -- the dashboard dying mid-run ended the night. That fix is
+  # mildly MORE permissive, which is only safe because the last-known cache above
+  # refuses outright when the window was already exhausted; that is the check with
+  # teeth, and this is the monitoring-hiccup allowance it was always described as.
+  # Deliberately NOT reset by a budget re-grant: blind fires stay bounded per RUN.
+  if [ "$blind_fires" -ge "$QUOTA_UNKNOWN_FIRES" ]; then
+    log "STOP: 7-day quota utilization UNREADABLE and $blind_fires blind fire(s) already spent (cap QUOTA_UNKNOWN_FIRES=$QUOTA_UNKNOWN_FIRES) -- refusing to fire blind"
+    return 1
+  fi
+  blind_fires=$((blind_fires + 1))
+  log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires)) blind fire(s) left"
+  return 0
 }
 
 # Escalating backoff: attempt N -> min(30 * 2^(N-1), 600)s. Shift is capped so a
@@ -292,42 +351,7 @@ while true; do
   # window resets WEEKLY, so exhausting it does not self-heal overnight -- it
   # blocks the operator's interactive work for days. Stopping is therefore the
   # fail-safe direction, and the driver's scheduled restarts re-check cheaply.
-  qpct="$(quota_pct)"
-  if [ -n "$qpct" ]; then
-    if [ "$qpct" -ge "$QUOTA_STOP_PCT" ]; then
-      log "STOP: 7-day quota utilization ${qpct}% >= QUOTA_STOP_PCT=${QUOTA_STOP_PCT}% -- refusing to fire (window resets weekly; protecting the operator's own headroom)"
-      break
-    fi
-    log "quota ok: 7-day utilization ${qpct}% (< ${QUOTA_STOP_PCT}%)"
-  else
-    # UNREADABLE, so before firing blind, ask what we last KNEW. Measured
-    # 2026-07-26: both sources failed at 02:05 while the account sat at ~98%
-    # (it had refused at 99% eight hours earlier), and the blind fire cost $24,
-    # hit the cap and shipped nothing. A fresh high reading is enough to refuse.
-    qcached="$(quota_cache_read)"
-    if [ -n "$qcached" ] && [ "$qcached" -ge "$QUOTA_STOP_PCT" ]; then
-      log "STOP: 7-day quota UNREADABLE and the last known reading was ${qcached}% >= QUOTA_STOP_PCT=${QUOTA_STOP_PCT}% -- refusing to fire blind into a window that was already exhausted (usage only rises until the weekly reset)"
-      break
-    fi
-    # UNREADABLE is not the same as "fine". Allow a bounded number of blind
-    # fires so a monitoring hiccup does not waste a whole night, then stop.
-    #
-    # Counted with its OWN counter, not the cumulative `fires`. Reusing `fires`
-    # meant a run that had already done QUOTA_UNKNOWN_FIRES *readable* fires hit
-    # the cap on its FIRST unreadable reading and stopped with none of the grace
-    # this cap documents -- the dashboard dying mid-run ended the night. Note the
-    # fix is mildly MORE permissive, which is only safe because the last-known
-    # cache above now refuses outright when the window was already exhausted;
-    # that is the check with teeth, and this one is the monitoring-hiccup
-    # allowance it was always described as. Deliberately NOT reset by a budget
-    # re-grant: blind fires stay bounded per RUN.
-    if [ "$blind_fires" -ge "$QUOTA_UNKNOWN_FIRES" ]; then
-      log "STOP: 7-day quota utilization UNREADABLE and $blind_fires blind fire(s) already spent (cap QUOTA_UNKNOWN_FIRES=$QUOTA_UNKNOWN_FIRES) -- refusing to fire blind"
-      break
-    fi
-    blind_fires=$((blind_fires + 1))
-    log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires)) blind fire(s) left"
-  fi
+  quota_gate || break
 
   # --- PAUSE+BACKOFF until auth is good (never stops the loop for auth) --------
   ensure_auth || { log "auth capped out (test mode) -- ending"; break; }
@@ -355,6 +379,17 @@ while true; do
   # and publishes it unconditionally on every success (0 included), so it cannot
   # be stale by the time this block reads it. A second reset here was mutation-
   # tested and survived -- i.e. it was unprovable, so it is gone.
+
+  # --- RE-CHECK QUOTA after any block -----------------------------------------
+  # The reading above was taken BEFORE ensure_auth, which can sit in backoff for
+  # days. It is not evidence about the window this fire would land in, and the
+  # re-grant just above may have handed the budget back on the strength of that
+  # same block -- so this is precisely where a stale "quota ok" does the most
+  # damage. Cheap (a curl and a log line), and it re-runs the identical rules.
+  if [ "$auth_block_retries" -gt 0 ]; then
+    log "re-checking quota: the pre-block reading is stale after $auth_block_retries auth retr(y/ies)"
+    quota_gate || break
+  fi
 
   # --- FIRE CAP ---------------------------------------------------------------
   # AFTER ensure_auth and the re-grant, deliberately. Checked before them, the
