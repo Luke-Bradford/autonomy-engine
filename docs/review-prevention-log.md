@@ -546,3 +546,42 @@ before merging.** The entries above and this one follow that form deliberately;
 that is why their `fixed #N` examples are in backticks. Note the file you are
 reading is safe either way — GitHub parses commit messages, PR bodies, and
 comments, not repo file contents — but the PR that lands a file like this is not.
+
+## 27. The hazard you SPOTTED and waved through is the one the reviewer files — write the test at the moment of the thought, not after the verdict
+
+Measured on PR #754 (2026-07-29), which took **five review rounds** to reach a
+clean APPROVE. Round 1 found things genuinely new to the author. **Every finding
+from round 2 onward was already present in the author's own reasoning**, recorded
+in the session, and consciously dismissed:
+
+| round | finding | the author's prior thought |
+|---|---|---|
+| 2 | `mkdir` at file scope outran the source guard | both fixes written in the **same commit**, neither checked against the other |
+| 3 | fire cap ordering made the re-grant boundary-dependent | *"the driver exits, the scheduled start resumes with a fresh budget, fine"* |
+| 4 | quota reading stale across a long block | the PR body's own claim *"checked before every single fire"* — written, not verified |
+| 5 | blind allowance charged twice per fire | *"is that OK? conservative... acceptable, but slightly odd"* |
+
+The engineering around these was not the weak part: every fix was RED-first and
+mutation-proven, and the mutations discriminated. **The failure was judgement
+about what is "acceptable", and it failed four times running in the same
+direction** — each dismissal leaned on the outcome being *fail-safe* (stops
+early, never overspends). Fail-safe is a reason not to panic. It is not a reason
+not to fix, and it is never a reason not to *test*, because the next change can
+flip the direction underneath an untested assumption. Round 4 is the proof: round
+3's reorder widened the exact window round 4's BLOCKING defect lived in.
+
+**Rule: when you think "this case is probably fine because it fails safe", that
+sentence is the trigger to write the test — immediately, in that turn.** The
+thought has already done the expensive part (finding the case); stopping before
+the assertion throws that away and hands it to a reviewer a round later. A
+dismissal is only sound if it survives being written down as an executable
+expectation. If the case is genuinely fine, the test is cheap and pins it against
+the change that would break it; if it is not, you have found it yourself.
+
+**Corollary — a claim in a PR body is an assertion under test, not narration.**
+Round 4's BLOCKING finding was located by reading a sentence *the author wrote*
+("the quota guard is still checked before every single fire") against the code,
+and it was false across a long block. Before writing a safety property into a PR
+body, name the test that pins it; if there is no such test, either write it or
+downgrade the sentence to what is actually true. Same family as #25 — the guard
+your comment argues for is the one nothing tests.

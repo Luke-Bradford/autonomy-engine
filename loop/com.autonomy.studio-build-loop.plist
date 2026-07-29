@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  studio-build-loop LaunchAgent. StartInterval (NOT KeepAlive): launchd runs
+  run.sh, it fires ONE fresh headless `claude`, exits; launchd waits 2h and
+  fires again = fresh context per fire (the whole point of the loop model).
+  RunAtLoad is FALSE so `launchctl load` does not fire immediately -- the first
+  fire is run manually + supervised. To install:
+    cp this file to ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.autonomy.studio-build-loop.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autonomy.studio-build-loop</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/lukebradford/Dev/studio-loop/run.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/lukebradford/Dev/studio-loop-repo</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StartInterval</key>
+  <integer>7200</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/lukebradford/Dev/studio-loop/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/lukebradford/Dev/studio-loop/logs/launchd.err.log</string>
+</dict>
+</plist>
