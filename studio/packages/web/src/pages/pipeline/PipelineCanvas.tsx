@@ -85,11 +85,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     const savedNodes = store.getState().nodes;
     const savedEdges = store.getState().edges;
     // #746 — containers ride along in the snapshot and the race check below.
-    // Redundant TODAY, stated plainly rather than dressed up as a fix: the only
-    // writer of `containers` is `deleteNode`, which always writes `nodes` too,
-    // so the node check already implies this one. It is here so the first U6d
-    // mutator that touches membership WITHOUT touching nodes cannot slip past
-    // the race check silently.
+    // Redundant TODAY, stated plainly rather than dressed up as a fix: EVERY
+    // writer of `containers` (`deleteNode` and `loadVersion`) also writes
+    // `nodes`, so the node check already implies this one. It is here so the
+    // first U6d mutator that touches membership WITHOUT touching nodes cannot
+    // slip past the race check silently.
     const savedContainers = store.getState().containers;
     try {
       const created = await createPipelineVersion(

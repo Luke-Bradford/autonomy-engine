@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   PipelineVersionSchema,
-  type Container,
   type Edge,
   type EdgeOn,
   type Node,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
-import { canSave, pruneContainerChild, toVersionBody, validateCanvas } from './canvasDoc';
+import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 
 function node(id: string, config: Record<string, unknown> = {}): Node {
   return { id, type: 'http_request', config, position: { x: 0, y: 0 } };
@@ -45,8 +44,12 @@ describe('toVersionBody', () => {
     const edges = [edge('e', 'a', 'b')];
     const body = toVersionBody(loaded, nodes, edges, loaded.containers);
 
-    // The distinctive values survive (containers is non-empty here, so a
-    // drop-to-`[]` default would be visible, not masked).
+    // The distinctive values survive. `containers` is passed here rather than
+    // carried forward — it stopped being a carry-forward in #746 and is the
+    // canvas's own working state now, so the drop-to-`[]` hazard this guard was
+    // written for no longer applies to it. Kept in the value checks because the
+    // CLASS assertion below counts it, and covered as a behaviour by the
+    // 'carries the CANVAS containers' test.
     expect(body.params).toEqual(loaded.params);
     expect(body.outputs).toEqual(loaded.outputs);
     expect(body.containers).toEqual(loaded.containers);
@@ -98,41 +101,6 @@ describe('toVersionBody', () => {
   it('produces a body that parses cleanly through the shared write schema', () => {
     const body = toVersionBody(loaded, [node('a'), node('b')], [edge('e', 'a', 'b')], []);
     expect(() => PipelineVersionWriteSchema.parse(body)).not.toThrow();
-  });
-});
-
-describe('pruneContainerChild (#746)', () => {
-  const stage = (id: string, children: string[]): Container => ({ id, kind: 'stage', children });
-
-  it('removes the id from every container that lists it', () => {
-    const before = [stage('c1', ['a', 'b']), stage('c2', ['a'])];
-    expect(pruneContainerChild(before, 'a').map((c) => c.children)).toEqual([['b'], []]);
-  });
-
-  /**
-   * COPY-ON-WRITE at both levels — asserted by identity, because deep equality
-   * cannot tell a preserved reference from an equal copy, and the reference is
-   * the whole point: `FlowCanvas` memoises the boxes on this array and
-   * `PipelineCanvas` compares it to detect a concurrent edit.
-   */
-  it('returns unlisted containers, and the whole array, BY REFERENCE', () => {
-    const untouched = stage('c2', ['b']);
-    const before = [stage('c1', ['a']), untouched];
-    expect(pruneContainerChild(before, 'a')[1]).toBe(untouched);
-    expect(pruneContainerChild(before, 'zzz')).toBe(before);
-  });
-
-  it('keeps a container that loses its last child, rather than dropping it', () => {
-    expect(pruneContainerChild([stage('c1', ['a'])], 'a')).toEqual([stage('c1', [])]);
-  });
-
-  /**
-   * Prunes ONE id, never "every child that is not a node". A general normalise
-   * would silently repair legacy phantoms in a doc the operator never touched,
-   * hiding a real defect report about a doc that arrived broken.
-   */
-  it('leaves OTHER phantom children alone', () => {
-    expect(pruneContainerChild([stage('c1', ['a', 'ghost'])], 'a')[0]!.children).toEqual(['ghost']);
   });
 });
 

@@ -87,9 +87,15 @@ test.describe('#746 container membership follows a delete', () => {
    * A container is deliberately NOT deleted with its last child — it owns edges
    * and config (`exitWhen`/`items`/`maxRounds`/`timeout`) that the canvas cannot
    * re-author until U6d/#425, so a cascade would destroy authored structure to
-   * spare one refused save. An empty `loop` is still refused, and that is the
-   * point of this test: the message the operator now reads names the REAL
-   * problem instead of naming the node they just deleted.
+   * spare one refused save.
+   *
+   * So #746's trap SURVIVES for this case, and this test pins it rather than
+   * hiding it: an emptied `loop` still cannot be saved, and the canvas offers no
+   * way to delete the container either (#748). What changed is the message —
+   * it names the REAL problem instead of naming the node the operator just
+   * deleted — which is the difference between an error you can act on and one
+   * you cannot, but it is not an escape route. Fixed for stages and for every
+   * non-last child; open for a loop/foreach last child.
    */
   test('emptying a loop is refused for the right reason, not for a phantom', async ({ page }) => {
     const problems = collectPageProblems(page);

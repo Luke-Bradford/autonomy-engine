@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { EdgeSchema, PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
-import { createCanvasStore, nextSelection, sameSelection } from './canvasStore';
+import {
+  EdgeSchema,
+  PipelineVersionSchema,
+  type Container,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
+import {
+  createCanvasStore,
+  nextSelection,
+  pruneContainerChild,
+  sameSelection,
+} from './canvasStore';
 import { canSave, validateCanvas } from './canvasDoc';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -600,9 +610,10 @@ describe('canvasStore — container membership on delete (#746)', () => {
     s.getState().deleteNode('n_a');
     const after = s.getState().containers;
     expect(after.map((c) => c.children)).toEqual([[], ['n_b']]);
-    // Untouched containers keep their identity — `FlowCanvas` derives the boxes
-    // through a `useMemo` keyed on this array, so a fresh object per delete would
-    // re-derive (and re-mount) every box on screen, not just the one that changed.
+    // Untouched containers keep their identity. Pinned as the helper's stated
+    // contract, NOT because a consumer depends on it — none does today, and an
+    // earlier version of this comment claimed two that do not (a delete always
+    // rebuilds `flowNodes`, so `FlowCanvas` re-derives its boxes either way).
     expect(after[1]).toBe(before[1]);
   });
 
@@ -618,10 +629,10 @@ describe('canvasStore — container membership on delete (#746)', () => {
    * The store owns its containers outright, `children` arrays included.
    *
    * The shallow `{...c}` a copy usually means is NOT enough here: it aliases
-   * `c.children`, and `loaded` is the rebase basis a later save carries forward
-   * from. The `not.toBe` on the array is what discriminates the two — the
-   * "loaded is untouched" assertion below passes either way, because the prune
-   * is copy-on-write.
+   * `c.children` into the SERVER's version object, which this store does not own.
+   * The `not.toBe` on the children ARRAY is the assertion that discriminates a
+   * shallow copy from a deep-enough one; a "loaded is untouched" check would pass
+   * either way, because the prune is copy-on-write, so it is not made.
    */
   it('loadVersion copies the containers it seeds, children arrays included', () => {
     const s = createCanvasStore();
@@ -631,8 +642,6 @@ describe('canvasStore — container membership on delete (#746)', () => {
     expect(st.containers).not.toBe(v.containers);
     expect(st.containers[0]).not.toBe(v.containers[0]);
     expect(st.containers[0]!.children).not.toBe(v.containers[0]!.children);
-    s.getState().deleteNode('n_a');
-    expect(v.containers[0]!.children).toEqual(['n_a', 'n_b']);
   });
 
   /**
@@ -671,13 +680,30 @@ describe('canvasStore — container membership on delete (#746)', () => {
   });
 
   /**
+   * Prunes ONE id, never "every child that is not a node" — the only property of
+   * `pruneContainerChild` the store-level cases above do not already pin.
+   *
+   * A general normalise would silently repair legacy phantoms in a doc the
+   * operator never touched, hiding a real defect report about a doc that arrived
+   * broken (and turning `FlowCanvas`'s "announces the children it DRAWS" case
+   * into a fixture that auto-heals).
+   */
+  it('leaves OTHER phantom children alone', () => {
+    const stage: Container = { id: 'c_1', kind: 'stage', children: ['n_a', 'ghost'] };
+    expect(pruneContainerChild([stage], 'n_a')[0]!.children).toEqual(['ghost']);
+  });
+
+  /**
    * The DOCUMENTED RESIDUE, pinned so the PR body's claim is not just a comment.
    *
    * An empty `loop` is refused — it re-rounds forever, resetting nothing — so
-   * emptying one still blocks the save. That is not this fix failing: the
-   * refusal now names the REAL problem ("a loop needs at least one child")
-   * instead of naming a node that no longer exists, which is the difference
-   * between an error an operator can act on and one they cannot.
+   * emptying one still blocks the save, and the operator has no way to delete
+   * the container either. #746's trap therefore SURVIVES for a loop/foreach
+   * last-child delete; it is fixed for stages and for every non-last child.
+   * Tracked as #748, and named here rather than dressed up: the refusal now
+   * states the REAL problem ("a loop needs at least one child") instead of
+   * naming a node that no longer exists, but a better message is not an escape
+   * route.
    */
   it('a loop emptied by a delete is refused for the RIGHT reason, not for a phantom', () => {
     const s = createCanvasStore();
@@ -721,6 +747,8 @@ describe('canvasStore — container membership on delete (#746)', () => {
     const st = s.getState();
     const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
     expect(issues.some((m) => m.includes('is not a node in this pipeline'))).toBe(false);
-    expect(issues.length).toBeGreaterThan(0);
+    // The REFERENCE error the docstring names, not merely "some error" — an
+    // `issues.length > 0` would have passed on any unrelated complaint.
+    expect(issues).toEqual([expect.stringContaining('exitWhen')]);
   });
 });
