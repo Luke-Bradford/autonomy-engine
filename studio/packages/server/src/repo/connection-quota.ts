@@ -1,3 +1,7 @@
+// NOT to be confused with #440's ACCOUNT quota (`quota/claude-quota.ts`,
+// `GET /api/quota`), which is the operator's Claude SUBSCRIPTION utilization
+// and backs the build loop's spend guard. This module is the per-CONNECTION
+// rate-limit reset window used by the executor's admission gate.
 import { eq, sql } from 'drizzle-orm';
 
 import { connectionQuotaState } from '../db/schema.js';

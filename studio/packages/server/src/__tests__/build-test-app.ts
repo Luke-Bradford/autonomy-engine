@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuildAppOptions } from '../index.js';
+import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../quota/claude-quota.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -43,6 +44,13 @@ export async function buildTestAppWithContext(
     // shared across concurrent test files, so without this default a stray env
     // token would make the pull-request route attempt a real network auto-open.
     githubToken: null,
+    // #440 (C1) — isolate every test app from the DEVELOPER'S OWN credential
+    // store and the live provider, for the same reason as `githubToken` above:
+    // the real reader shells out to the macOS Keychain and calls the usage
+    // endpoint, so an un-stubbed test app would read a real credential and make
+    // a real network call on any machine that has one. The quota suite passes
+    // its own reader.
+    claudeAccountQuotaReader: UNREADABLE_ACCOUNT_QUOTA_READER,
     ...overrides,
   });
   await app.ready();
