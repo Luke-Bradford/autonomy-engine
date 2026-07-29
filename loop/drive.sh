@@ -47,11 +47,33 @@ GATE_WAIT_SLEEP="${GATE_WAIT_SLEEP:-30}"   # seconds between gate polls; tests s
 AUTH_TRIES="${AUTH_TRIES:-0}"     # 0 = back off + retry auth FOREVER; >0 caps it (tests only)
 MAX_LOOPS="${MAX_LOOPS:-0}"       # 0 = run forever; >0 caps iterations (tests only)
 BACKOFF_BASE="${BACKOFF_BASE:-30}"   # base backoff seconds; tests set 0 to neutralise sleeps
-MAX_FIRES="${MAX_FIRES:-6}"       # 0 = uncapped. A cap exists because the 2026-07-25 quota
-                                  # incident ran 16 fires overnight (~$652) and took the 7-DAY
-                                  # window to 97%; that window resets weekly, so one uncapped
-                                  # night can lock the operator out of their own sessions for
-                                  # days. Six fires is roughly a night's useful work.
+MAX_FIRES="${MAX_FIRES:-0}"       # 0 = UNCAPPED (operator, 2026-07-29). Was 6.
+                                  #
+                                  # HISTORY, because removing this is only safe for a reason. The
+                                  # cap was added after the 2026-07-25 incident: 16 fires overnight
+                                  # (~$652) took the 7-DAY window to 97%, and that window resets
+                                  # weekly, so one uncapped night locked the operator out of their
+                                  # own sessions for days. At the time the cap was the only bound
+                                  # that WORKED -- QUOTA_STOP_PCT existed but could be defeated by
+                                  # an unreadable reading, and it was (2026-07-26: both sources
+                                  # down, fired blind into a ~98% window).
+                                  #
+                                  # What changed: #754 made the quota guard load-bearing on its own
+                                  # -- it refuses on a fresh cached high reading when live reads
+                                  # fail, bounds blind fires with their own counter, and re-checks
+                                  # after EVERY blocking construct (auth block, PR-gate wait) so a
+                                  # fire is never authorised by a stale figure. The cap was
+                                  # meanwhile ending runs with the window at 3%.
+                                  #
+                                  # RESIDUAL RISK, stated rather than discovered: the guard is
+                                  # checked BEFORE each fire, so the driver will start a fire at
+                                  # 79% and one fire has measured up to ~$58. Expect overshoot of
+                                  # at most one fire past QUOTA_STOP_PCT, which is why that is set
+                                  # to 80 and not 95. The 5-hour window is the other natural
+                                  # throttle: hitting it is a LIMIT, which pauses and backs off
+                                  # rather than stopping.
+                                  #
+                                  # Set MAX_FIRES to a positive number to restore a per-run cap.
 QUOTA_STOP_PCT="${QUOTA_STOP_PCT:-80}"      # refuse to fire at/above this 7-day utilization %
 QUOTA_UNKNOWN_FIRES="${QUOTA_UNKNOWN_FIRES:-2}"  # fires allowed while utilization is UNREADABLE
 AUTH_LONG_BLOCK="${AUTH_LONG_BLOCK:-6}"     # ensure_auth retries that make a block "long". The
