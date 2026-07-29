@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
+import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../../quota/claude-quota.js';
 import type { ClaudeAccountQuota } from '@autonomy-studio/shared';
 
 /**
@@ -23,14 +24,13 @@ import type { ClaudeAccountQuota } from '@autonomy-studio/shared';
 const READING: ClaudeAccountQuota = {
   five_hour: { utilization: 0.08, resets_at: 1_785_100_200 },
   seven_day: { utilization: 0.07, resets_at: 1_785_636_000 },
-  source: 'live',
 };
 
 const apps: FastifyInstance[] = [];
 
 async function appReading(claude: ClaudeAccountQuota | null): Promise<FastifyInstance> {
   const { app } = await buildTestAppWithContext({
-    claudeQuotaReader: { read: async () => claude },
+    claudeAccountQuotaReader: { read: async () => claude },
   });
   apps.push(app);
   return app;
@@ -59,7 +59,6 @@ describe('GET /api/quota', () => {
     const body = res.json();
     expect(body.account.claude.seven_day.utilization).toBe(0.07);
     expect(body.account.claude.five_hour.utilization).toBe(0.08);
-    expect(body.account.claude.source).toBe('live');
     // Pinned as epoch SECONDS for the same reason `resets_at` is: `Date.now()`
     // returns ms, and an ms value here would still be "a number".
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -97,21 +96,40 @@ describe('GET /api/quota', () => {
     expect(consumerPercent(body)).toBe(0);
   });
 
-  it('reports null when the surface is switched off', async () => {
+  it('wires the UNREADABLE reader — not the live one — when switched off', async () => {
     const { app } = await buildTestAppWithContext({
-      claudeQuotaEnabled: false,
+      claudeAccountQuotaEnabled: false,
       // Explicitly UNSET the test-app's stub reader, so what answers here is
       // the DISABLED branch of the decoration rather than the test default.
-      claudeQuotaReader: undefined,
+      claudeAccountQuotaReader: undefined,
     });
     apps.push(app);
+    // Assert the WIRING, not the output. Asserting only `claude === null` is
+    // vacuous on CI: `studio-ci` runs ubuntu, and the real reader returns null
+    // on any non-darwin host BEFORE it touches anything — so the flag could be
+    // ignored entirely and the body would look identical. (Worse, on the
+    // operator's Mac that version of the test made a real Keychain read and a
+    // real provider call from the unit suite.) Identity is the only assertion
+    // that distinguishes "disabled" from "enabled but on the wrong OS".
+    expect(app.claudeAccountQuota).toBe(UNREADABLE_ACCOUNT_QUOTA_READER);
     const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
     expect(body.account.claude).toBeNull();
   });
 
+  it('wires the LIVE reader when enabled — the flag is not ignored', async () => {
+    // The other half: without this, wiring the UNREADABLE reader unconditionally
+    // would satisfy the test above.
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaEnabled: true,
+      claudeAccountQuotaReader: undefined,
+    });
+    apps.push(app);
+    expect(app.claudeAccountQuota).not.toBe(UNREADABLE_ACCOUNT_QUOTA_READER);
+  });
+
   it('never 500s when the reader throws — the guard polls this', async () => {
     const { app } = await buildTestAppWithContext({
-      claudeQuotaReader: {
+      claudeAccountQuotaReader: {
         read: async () => {
           throw new Error('unexpected');
         },

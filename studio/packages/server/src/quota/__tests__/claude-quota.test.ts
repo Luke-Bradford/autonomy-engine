@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AccountQuotaWindowSchema } from '@autonomy-studio/shared';
 import {
-  createClaudeQuotaReader,
+  createClaudeAccountQuotaReader,
   mapWindow,
   buildQuota,
   readKeychainToken,
@@ -27,7 +27,7 @@ function readerWith(payload: unknown, opts: { token?: string | null } = {}) {
   const fetcher = vi.fn(async () => payload);
   const tokenReader = vi.fn(async () => (opts.token === undefined ? 'tok' : opts.token));
   let clock = 1_000_000;
-  const reader = createClaudeQuotaReader({
+  const reader = createClaudeAccountQuotaReader({
     tokenReader,
     fetcher,
     now: () => clock,
@@ -62,6 +62,20 @@ describe('mapWindow — percent → fraction, ISO → epoch seconds', () => {
     const off = mapWindow({ utilization: 1, resets_at: '2026-08-05T02:00:00Z', overage: false });
     expect(on).toHaveProperty('overage', true);
     expect(off).not.toHaveProperty('overage');
+  });
+
+  it.each([
+    ['the string "false"', 'false'],
+    ['the string "no"', 'no'],
+    ['the number 1', 1],
+    ['an object', {}],
+  ])('does not turn %s into overage: true', (_label, value) => {
+    // A TRUTHINESS test here (which is what the prototype used) would convert
+    // any of these into a schema `literal(true)` — the one place in this module
+    // that would MANUFACTURE a fact rather than reject an input it does not
+    // recognise. Every other path degrades to null instead of guessing.
+    const got = mapWindow({ utilization: 1, resets_at: '2026-08-05T02:00:00Z', overage: value });
+    expect(got).not.toHaveProperty('overage');
   });
 
   it.each([
@@ -104,7 +118,6 @@ describe('buildQuota — all-or-nothing', () => {
     expect(buildQuota(LIVE_PAYLOAD)).toEqual({
       five_hour: { utilization: 0.08, resets_at: expect.any(Number) },
       seven_day: { utilization: 0.07, resets_at: expect.any(Number) },
-      source: 'live',
     });
   });
 
@@ -157,7 +170,7 @@ describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () =>
   });
 
   it('returns null when the provider read throws', async () => {
-    const reader = createClaudeQuotaReader({
+    const reader = createClaudeAccountQuotaReader({
       tokenReader: async () => 'tok',
       fetcher: async () => {
         throw new Error('ECONNRESET');
@@ -168,7 +181,7 @@ describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () =>
   });
 
   it('returns null when the token read throws', async () => {
-    const reader = createClaudeQuotaReader({
+    const reader = createClaudeAccountQuotaReader({
       tokenReader: async () => {
         throw new Error('keychain timeout');
       },
@@ -215,7 +228,7 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
   it('throttles a FAILING read too — an outage must not become a subprocess storm', async () => {
     let calls = 0;
     let clock = 0;
-    const reader = createClaudeQuotaReader({
+    const reader = createClaudeAccountQuotaReader({
       tokenReader: async () => {
         calls += 1;
         throw new Error('down');
@@ -233,7 +246,7 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
   it('does NOT serve the last-good value once a read fails — no stale-as-fresh grace', async () => {
     let payload: unknown = LIVE_PAYLOAD;
     let clock = 0;
-    const reader = createClaudeQuotaReader({
+    const reader = createClaudeAccountQuotaReader({
       tokenReader: async () => 'tok',
       fetcher: async () => payload,
       now: () => clock,
@@ -245,11 +258,53 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
     // A stale low reading served as if current would PERMIT a fire the guard
     // should have refused. Unknown is the honest, fail-safe answer.
     expect(await reader.read()).toBeNull();
+    // THE ASSERTION THAT ACTUALLY BITES. On a TTL miss `read()` returns the
+    // FRESH sample, so a grace window is invisible on the failing read itself —
+    // it only shows up on the NEXT read, inside the new TTL. Without this line
+    // the test passes with `if (value !== null) cached = value` (i.e. with the
+    // prototype's grace window fully reinstated), which is exactly the
+    // 2026-07-26 shape: 10% cached, provider dies, guard later reads 10% and
+    // fires into a window that is really at 98%.
+    clock += 1;
+    expect(await reader.read()).toBeNull();
+  });
+
+  it('re-samples on a BACKWARDS clock step instead of extending the TTL', async () => {
+    // `now` is wall clock, not monotonic. Under `at - cachedAt < ttlMs` alone, a
+    // negative delta is still "inside" the TTL, so an NTP step-back or a VM
+    // resume pins a stale LOW reading for as long as the step — unbounded
+    // staleness in the fail-open direction, and a direct falsification of the
+    // "at most one minute" bound the TTL is justified by.
+    let utilization = 10;
+    let clock = 5_000_000;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => ({
+        five_hour: { utilization, resets_at: '2026-08-05T02:00:00Z' },
+        seven_day: { utilization, resets_at: '2026-08-05T02:00:00Z' },
+      }),
+      now: () => clock,
+      ttlMs: 60_000,
+    });
+    expect((await reader.read())?.seven_day.utilization).toBe(0.1);
+    utilization = 98;
+    clock -= 3_600_000; // the clock steps back an hour
+    expect((await reader.read())?.seven_day.utilization).toBe(0.98);
+  });
+
+  it('treats the TTL boundary itself as expired', async () => {
+    // Pins `<` rather than `<=` at exactly ttlMs, so the boundary is a decision
+    // on the record instead of an accident of the comparison operator.
+    const { reader, fetcher, advance } = readerWith(LIVE_PAYLOAD);
+    await reader.read();
+    advance(60_000);
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('collapses concurrent reads into a single provider call', async () => {
     let calls = 0;
-    const reader = createClaudeQuotaReader({
+    const reader = createClaudeAccountQuotaReader({
       tokenReader: async () => 'tok',
       fetcher: async () => {
         calls += 1;
@@ -289,9 +344,33 @@ describe('readKeychainToken — the credential-store path', () => {
       return JSON.stringify({ claudeAiOauth: { accessToken: 'x' } });
     }, 'darwin');
     expect(seen.service).toBe('Claude Code-credentials');
-    // Must stay under the consumer's `curl --max-time 8` budget alongside the
-    // 3s HTTP bound, or a slow read spends a bounded blind fire.
-    expect(seen.timeoutMs).toBeLessThanOrEqual(3_000);
+    expect(seen.timeoutMs).toBe(2_000);
+  });
+
+  it('leaves the two I/O bounds summing to less than the consumer budget', async () => {
+    // The property that actually matters, and the one nothing else pinned:
+    // `loop/drive.sh` calls this endpoint with `curl --max-time 8`, and a curl
+    // timeout reads as UNREADABLE — i.e. it SPENDS one of the guard's bounded
+    // blind fires. Raising either bound past the budget converts a slow read
+    // into a blind fire, silently.
+    let keychainMs = 0;
+    await readKeychainToken(async (_s, timeoutMs) => {
+      keychainMs = timeoutMs;
+      return JSON.stringify({ claudeAiOauth: { accessToken: 'x' } });
+    }, 'darwin');
+    let httpMs = 0;
+    await fetchUsage('t', ((_url: string, init: RequestInit) => {
+      // The abort signal carries the HTTP bound; read it by racing the timer.
+      const started = Date.now();
+      return new Promise<never>((_resolve, reject) => {
+        (init.signal as AbortSignal).addEventListener('abort', () => {
+          httpMs = Date.now() - started;
+          reject(new Error('aborted'));
+        });
+      });
+    }) as unknown as typeof fetch);
+    expect(httpMs).toBeGreaterThan(0);
+    expect(keychainMs + httpMs).toBeLessThan(8_000);
   });
 
   it('never spawns anything off darwin', async () => {
@@ -399,8 +478,11 @@ describe('the credential never escapes', () => {
   it('does not put the token in the reading when the provider echoes it back', async () => {
     // A hostile/buggy upstream is the case the assertion above cannot see: the
     // token reaching the reading via the PAYLOAD rather than via the reader's
-    // own state. `buildQuota` is `.strict()` all the way down, so an extra key
-    // is dropped rather than passed through — that is what this pins.
+    // own state. It cannot, because `mapWindow` and `buildQuota` WHITELIST-
+    // construct fresh objects rather than spreading the input. (`.strict()` is
+    // the second line of defence and behaves differently — it REJECTS an
+    // unknown key, turning the whole reading into an honest `null`, rather than
+    // dropping it.) Either way the token never reaches the wire; this pins it.
     const { reader } = readerWith({
       ...LIVE_PAYLOAD,
       leaked: 'tok',

@@ -47,9 +47,9 @@ import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { quotaRoutes } from './routes/quota.js';
 import {
-  createClaudeQuotaReader,
-  UNREADABLE_QUOTA_READER,
-  type ClaudeQuotaReader,
+  createClaudeAccountQuotaReader,
+  UNREADABLE_ACCOUNT_QUOTA_READER,
+  type ClaudeAccountQuotaReader,
 } from './quota/claude-quota.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
@@ -219,9 +219,18 @@ export interface BuildAppOptions {
    * Disabled means the host credential store is never touched and the reading
    * is always `null`. Call-time only, for test isolation + operator override.
    */
-  claudeQuotaEnabled?: boolean;
-  /** #440 (C1) — test seam: a reader override. Defaults to the real Keychain + provider reader. */
-  claudeQuotaReader?: ClaudeQuotaReader;
+  claudeAccountQuotaEnabled?: boolean;
+  /**
+   * #440 (C1) — test seam: a reader override.
+   *
+   * TAKES PRECEDENCE over `claudeAccountQuotaEnabled`: an explicit reader is
+   * used whichever way the flag is set. Left unset, the flag decides — the real
+   * Keychain + provider reader when enabled, `UNREADABLE_ACCOUNT_QUOTA_READER`
+   * when not. So a test that wants to exercise the DISABLED branch must pass
+   * `claudeAccountQuotaReader: undefined` explicitly, because the shared test
+   * app supplies a stub by default.
+   */
+  claudeAccountQuotaReader?: ClaudeAccountQuotaReader;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -275,11 +284,18 @@ export async function buildApp(opts?: BuildAppOptions) {
   // install that never calls `GET /api/quota` never touches the credential
   // store. Disabled resolves to a reader that always reports UNREADABLE rather
   // than to an absent decoration, so the route stays uniform.
-  const claudeQuotaEnabled = opts?.claudeQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
+  // Only the exact string '0' disables; anything else (including `false`/`off`)
+  // leaves it ENABLED. Deliberate, and the safe direction for this particular
+  // flag: a typo that silently DISARMED the spend guard would be far worse than
+  // one that leaves it armed. Documented as `0` in the README for that reason.
+  const claudeAccountQuotaEnabled =
+    opts?.claudeAccountQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
   fastify.decorate(
-    'claudeQuota',
-    opts?.claudeQuotaReader ??
-      (claudeQuotaEnabled ? createClaudeQuotaReader() : UNREADABLE_QUOTA_READER),
+    'claudeAccountQuota',
+    opts?.claudeAccountQuotaReader ??
+      (claudeAccountQuotaEnabled
+        ? createClaudeAccountQuotaReader()
+        : UNREADABLE_ACCOUNT_QUOTA_READER),
   );
 
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it

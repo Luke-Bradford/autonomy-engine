@@ -7,9 +7,11 @@ import { z } from 'zod';
  * `GET /api/state`, built for ONE specific consumer: the build loop's own spend
  * guard (`loop/drive.sh`'s `quota_pct()`), which refuses to fire when the
  * account's 7-day utilization is at or above `QUOTA_STOP_PCT`. When the old
- * bash/python engine is parked (#410) that endpoint disappears, and with it the
- * only thing stopping an unattended loop from spending the operator out of
- * their own weekly window. So this surface is not a nicety — it is the guard.
+ * bash/python engine is parked (#410) that endpoint disappears, and this takes
+ * its place as the guard's primary source. (It is not the guard's ONLY defence:
+ * `drive.sh` also keeps a last-known cache that it trusts in the refuse
+ * direction only, and a bounded blind-fire allowance. Those bound the damage;
+ * they are not a substitute for knowing the number.)
  *
  * ## Why snake_case in a camelCase codebase
  *
@@ -19,9 +21,9 @@ import { z } from 'zod';
  * d['account']['claude']['seven_day']['utilization']
  * ```
  *
- * Keeping that exact shape makes the cutover a `DASH_URL` change rather than a
- * rewrite of a guard whose failure mode is "spend the operator's quota". This
- * file is therefore a deliberate, documented COMPAT CONTRACT and the one
+ * Keeping that exact shape means the cutover changes `DASH_URL` and nothing
+ * else — the parser, and the tests that pin it, are untouched. This file is
+ * therefore a deliberate, documented COMPAT CONTRACT and the one
  * snake_case surface in the API — not a style lapse, and not a precedent for
  * anything else. Changing a key here is a BREAKING change to the spend guard;
  * `loop/test_quota_guard.sh` is what pins the consumer side.
@@ -59,7 +61,12 @@ import { z } from 'zod';
  */
 export const AccountQuotaWindowSchema = z
   .object({
-    /** Fraction of the window consumed, 0-1. NEVER a percent. */
+    /**
+     * Fraction of the window consumed. NEVER a percent: the provider's `7.0`
+     * arrives here as `0.07`. `1.0` is the full window; values ABOVE 1 are
+     * legitimate and expected when the account draws on overage credit, which
+     * is why there is a lower bound but no upper one.
+     */
     utilization: z.number().min(0),
     /** When this window resets, epoch SECONDS. */
     resets_at: z.number().int(),
@@ -76,15 +83,16 @@ export type AccountQuotaWindow = z.infer<typeof AccountQuotaWindowSchema>;
  * inherited from the prototype's `_build` — a partial payload is a confusing
  * live/stale mix, and half a reading is not evidence.
  *
- * `source` is `'live'` for a fresh sample from the provider. There is
- * deliberately no `'stale'`/aged variant: see `claude-quota.ts` for why a
- * grace window is fail-open for a machine guard.
+ * There is deliberately NO `source`/freshness discriminator. The prototype
+ * carried one because it had two sources and a 900s grace window to badge; this
+ * reader has neither (see `claude-quota.ts`), so every reading here is a fresh
+ * live sample by construction. A field with exactly one possible value is an
+ * inert wire surface that implies alternatives which do not exist.
  */
 export const ClaudeAccountQuotaSchema = z
   .object({
     five_hour: AccountQuotaWindowSchema,
     seven_day: AccountQuotaWindowSchema,
-    source: z.literal('live'),
   })
   .strict();
 

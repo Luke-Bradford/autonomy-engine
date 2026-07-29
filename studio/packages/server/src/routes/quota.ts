@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { AccountQuotaStateSchema, type AccountQuotaState } from '@autonomy-studio/shared';
+import { type AccountQuotaState } from '@autonomy-studio/shared';
 
 /**
  * #440 (C1) — `GET /api/quota`, the machine-readable account-quota surface.
@@ -31,6 +31,19 @@ import { AccountQuotaStateSchema, type AccountQuotaState } from '@autonomy-studi
  * `account.claude: null`, because the consumer's parse treats any transport or
  * shape error identically to a null reading, and a 500 here would be a
  * confusing way to say something the body can say precisely.
+ *
+ * ## macOS ONLY — this surface is `null` everywhere else, permanently
+ *
+ * The reading comes from the macOS Keychain, so on Linux (including studio's own
+ * Docker image) this route returns `account.claude: null` for the lifetime of
+ * the process while answering 200 and looking perfectly healthy. The DIRECTION
+ * is fail-safe — the consumer treats `null` as UNREADABLE, spends its bounded
+ * blind-fire allowance and then stops — but "healthy-looking surface that never
+ * once knows the number" is precisely the shape this endpoint exists to prevent,
+ * so it is called out here rather than left to be discovered. The cutover (C2)
+ * must therefore keep a second, non-Keychain source rather than treating this
+ * endpoint as sufficient on its own; a Linux deployment that wants a real
+ * reading needs a credential source added here first.
  */
 export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/api/quota', async (request): Promise<AccountQuotaState> => {
@@ -40,23 +53,22 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
     // 500 whose body the consumer cannot parse.
     let claude = null;
     try {
-      claude = await fastify.claudeQuota.read();
+      claude = await fastify.claudeAccountQuota.read();
     } catch (err) {
       request.log.warn({ err }, 'account-quota read failed; reporting UNREADABLE');
     }
-    const body = {
+    // No re-validation here, deliberately. `claude` was already checked against
+    // `ClaudeAccountQuotaSchema` by the reader — the ONE place untrusted
+    // provider bytes are validated — and `generated_at` is a locally computed
+    // integer, so `satisfies` proves the whole body at compile time. A runtime
+    // parse of our OWN output would be a third definition of the same shape
+    // that can only ever fail by drifting from itself, and its failure branch
+    // would be untestable dead code. CLAUDE.md: validate at boundaries, trust
+    // internal code. Returning the literal also makes "never throws" structural
+    // rather than something a `safeParse` has to defend.
+    return {
       generated_at: Math.floor(Date.now() / 1000),
       account: { claude },
     } satisfies AccountQuotaState;
-    // `safeParse`, not `parse`: a throw here escapes the try/catch above and the
-    // global handler turns it into a 400, which is NOT what this route's
-    // contract says it does. The reader already validates its own output
-    // against the same schema, so a failure here means the two have drifted —
-    // report UNREADABLE (true, and safe) rather than an error the consumer
-    // cannot parse.
-    const parsed = AccountQuotaStateSchema.safeParse(body);
-    if (parsed.success) return parsed.data;
-    request.log.error({ issues: parsed.error.issues }, 'account-quota body failed its own schema');
-    return { generated_at: body.generated_at, account: { claude: null } };
   });
 };

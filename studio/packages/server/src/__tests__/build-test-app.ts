@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuildAppOptions } from '../index.js';
-import { UNREADABLE_QUOTA_READER } from '../quota/claude-quota.js';
+import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../quota/claude-quota.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -50,7 +50,7 @@ export async function buildTestAppWithContext(
     // endpoint, so an un-stubbed test app would read a real credential and make
     // a real network call on any machine that has one. The quota suite passes
     // its own reader.
-    claudeQuotaReader: UNREADABLE_QUOTA_READER,
+    claudeAccountQuotaReader: UNREADABLE_ACCOUNT_QUOTA_READER,
     ...overrides,
   });
   await app.ready();

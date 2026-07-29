@@ -45,6 +45,27 @@ local principal. The container also binds `0.0.0.0` (via `HOST`) so Docker's
 published port is reachable — a loopback bind inside the container network
 namespace would not be.
 
+The one surface that reads a **host credential** is `GET /api/quota`, which
+reports the account's Claude subscription utilization for the build loop's spend
+guard. Enabled (the default), it reads the operator's Claude OAuth token from the
+macOS Keychain **on request only** — a lazy read, so an install that never calls
+the route never touches the credential store — and queries the provider's usage
+endpoint, caching the result for 60s. The token is never logged, never placed on
+a command line, and never appears in the response; the body carries only two
+utilization fractions and two reset timestamps. The route is **unauthenticated**
+like everything else here, so on an exposed instance that figure is readable by
+anyone who can reach the port. Set `CLAUDE_QUOTA_ENABLED=0` to switch it off
+entirely, after which it always reports `null` and the credential store is never
+touched. Note that only the exact string `0` disables it — the flag fails
+towards _armed_, since a typo that silently disarmed the spend guard would be
+the worse outcome.
+
+**It is macOS-only.** On any other host — including the Docker image above —
+the reading is always `null`, permanently, while the route still answers `200`.
+That is the fail-safe direction (the consumer treats `null` as "unknown" rather
+than as `0%`), but a Linux deployment gets a quota surface that never once knows
+the number.
+
 Only expose it on a trusted network or behind your own authenticating reverse
 proxy. To keep it strictly local, bind the published port to loopback on the
 host — change the Compose port mapping to `127.0.0.1:8080:8080` (or use
@@ -74,21 +95,21 @@ you get in the Docker image; where the image explicitly overrides a
 bare-process default (`HOST`, `DB_PATH`, `AUTONOMY_DATA_DIR`, `WEB_ROOT`), the
 description notes the bare-process value.
 
-| Variable                      | Default                | Description                                                                                                                                                                                                                                                                                                                                                                            |
-| ----------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                        | `8080`                 | HTTP port the server listens on.                                                                                                                                                                                                                                                                                                                                                       |
-| `HOST`                        | `0.0.0.0`              | Bind address. Defaults to `127.0.0.1` for a bare process; the image binds all interfaces so the published port is reachable.                                                                                                                                                                                                                                                           |
-| `DB_PATH`                     | `/app/data/app.sqlite` | SQLite database file. Bare-process default is `data/app.sqlite` (relative to the working directory).                                                                                                                                                                                                                                                                                   |
-| `AUTONOMY_DATA_DIR`           | `/app/data`            | Base directory for derived state — the master key is stored at `<dir>/secrets/master.key` when no explicit key/key-file is set.                                                                                                                                                                                                                                                        |
-| `WEB_ROOT`                    | `/app/web`             | Directory of the built web bundle to serve. Unset for a bare process (dev serves the web via Vite); the image serves the built SPA.                                                                                                                                                                                                                                                    |
-| `AUTONOMY_MASTER_KEY`         | _(unset)_              | Pin the secret-encryption master key directly (base64 or hex). Takes precedence over the key file and generation.                                                                                                                                                                                                                                                                      |
-| `AUTONOMY_MASTER_KEY_FILE`    | _(unset)_              | Absolute path to a mounted master-key file (`0600`). Used when `AUTONOMY_MASTER_KEY` is unset.                                                                                                                                                                                                                                                                                         |
-| `GH_TOKEN` / `GITHUB_TOKEN`   | _(unset)_              | GitHub token used to auto-open pull requests for git-connected workspaces. Without one, PRs fall back to a guided-manual flow.                                                                                                                                                                                                                                                         |
-| `WAKEUP_RETENTION_DAYS`       | `30`                   | Days to retain settled scheduled-wakeup rows before the housekeeping sweep prunes them. `0` disables the sweep.                                                                                                                                                                                                                                                                        |
-| `WEBHOOK_RETENTION_DAYS`      | `30`                   | Days to retain delivered webhook rows before pruning. `0` disables the sweep.                                                                                                                                                                                                                                                                                                          |
-| `RETENTION_BATCH_ROWS`        | `1000`                 | Rows deleted per bounded batch by the retention sweeps.                                                                                                                                                                                                                                                                                                                                |
-| `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                                                                                                                                                                                                                                                                        |
-| `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`). Enabled, it reads the operator's Claude OAuth token from the macOS Keychain **on request only** and queries the provider's usage endpoint; disabled, it always reports `null` and never touches the credential store. macOS-only — on any other host (including the Docker image) the reading is always `null`. |
+| Variable                      | Default                | Description                                                                                                                         |
+| ----------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                        | `8080`                 | HTTP port the server listens on.                                                                                                    |
+| `HOST`                        | `0.0.0.0`              | Bind address. Defaults to `127.0.0.1` for a bare process; the image binds all interfaces so the published port is reachable.        |
+| `DB_PATH`                     | `/app/data/app.sqlite` | SQLite database file. Bare-process default is `data/app.sqlite` (relative to the working directory).                                |
+| `AUTONOMY_DATA_DIR`           | `/app/data`            | Base directory for derived state — the master key is stored at `<dir>/secrets/master.key` when no explicit key/key-file is set.     |
+| `WEB_ROOT`                    | `/app/web`             | Directory of the built web bundle to serve. Unset for a bare process (dev serves the web via Vite); the image serves the built SPA. |
+| `AUTONOMY_MASTER_KEY`         | _(unset)_              | Pin the secret-encryption master key directly (base64 or hex). Takes precedence over the key file and generation.                   |
+| `AUTONOMY_MASTER_KEY_FILE`    | _(unset)_              | Absolute path to a mounted master-key file (`0600`). Used when `AUTONOMY_MASTER_KEY` is unset.                                      |
+| `GH_TOKEN` / `GITHUB_TOKEN`   | _(unset)_              | GitHub token used to auto-open pull requests for git-connected workspaces. Without one, PRs fall back to a guided-manual flow.      |
+| `WAKEUP_RETENTION_DAYS`       | `30`                   | Days to retain settled scheduled-wakeup rows before the housekeeping sweep prunes them. `0` disables the sweep.                     |
+| `WEBHOOK_RETENTION_DAYS`      | `30`                   | Days to retain delivered webhook rows before pruning. `0` disables the sweep.                                                       |
+| `RETENTION_BATCH_ROWS`        | `1000`                 | Rows deleted per bounded batch by the retention sweeps.                                                                             |
+| `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                     |
+| `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`) — see below. macOS-only either way.                           |
 
 An invalid numeric value (e.g. a non-integer `PORT`, or a retention count below
 `1`) fails fast at boot with a clear error rather than degrading silently.

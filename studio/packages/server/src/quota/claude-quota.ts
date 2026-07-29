@@ -30,28 +30,25 @@ import {
  *    reader is lazy: it does no I/O at all until someone asks. A studio install
  *    that never calls `GET /api/quota` never touches the credential store.
  *
- *    This one is a genuine TRADEOFF, not a pure win, and it should not be read
- *    as one. The sampler is *why* `drive.sh` preferred the dashboard over
- *    calling the provider directly: the dashboard answered from a warm cache,
- *    while the upstream endpoint rate-limits and 429s when polled (its comment
- *    records observing this, and it was re-measured on 2026-07-29 — a burst
- *    earns 429s that outlast a minute and clear by ~2). Lazy means a cache miss
- *    puts a live upstream call on the request path, so a blip that the
- *    prototype would have absorbed now surfaces as UNREADABLE and spends one of
- *    the guard's bounded blind fires. Accepted here because the consumer polls
- *    a couple of times per fire and fires are hours apart, so the TTL almost
- *    always covers a poll pair, and because a background sampler would put the
- *    credential store back on the boot path for every install. If C2 measures
+ *    This one is a TRADEOFF, not a pure win. The sampler is *why* `drive.sh`
+ *    preferred the dashboard over calling the provider directly: the dashboard
+ *    answered from a warm cache, while the upstream endpoint rate-limits and
+ *    429s when polled directly (`loop/drive.sh`, observed 2026-07-25). Lazy
+ *    means a cache miss puts a live upstream call on the request path, so a
+ *    blip the prototype would have absorbed now surfaces as UNREADABLE and
+ *    spends one of the guard's bounded blind fires. Accepted because the
+ *    consumer polls a couple of times per fire and fires are hours apart, so
+ *    the TTL almost always covers a poll pair, and because a sampler would put
+ *    the credential store back on every install's boot path. If C2 measures
  *    real UNREADABLE rates, an `unref`'d refresh gated on the same env flag is
- *    the escape hatch — that is a deliberate open door, not an oversight.
+ *    the escape hatch.
  *
- * The TTL is not zero-staleness, and the argument above should not be read as
- * claiming it is: a cached SUCCESS is served for up to 60s, which is the same
- * kind of window as the grace, just two orders of magnitude smaller. What makes
- * it acceptable is the bound plus the direction — 7-day utilization only rises
- * within a window, so a cached reading is always <= the true current one, and
- * the error is at most one minute of spend against an 80% threshold on a
- * seven-day window. The grace window's 900s of the same error was not.
+ * The TTL is not zero-staleness: a cached SUCCESS is served for up to 60s,
+ * which is the same kind of window as the grace, two orders of magnitude
+ * smaller. What makes it acceptable is the bound plus the DIRECTION — 7-day
+ * utilization only rises within a window, so a cached reading is always <= the
+ * true current one, and the error is at most one minute of spend against an
+ * 80% threshold on a seven-day window. The grace window's 900s was not.
  *
  * ## What is NOT a divergence: the TTL throttle
  *
@@ -134,7 +131,12 @@ export function mapWindow(input: unknown): AccountQuotaWindow | null {
   const resetsAt = isoToEpochSeconds(w.resets_at);
   if (resetsAt === null) return null;
   const mapped: AccountQuotaWindow = { utilization: util / 100, resets_at: resetsAt };
-  return w.overage ? { ...mapped, overage: true } : mapped;
+  // `=== true`, not truthiness. The prototype used a truthy test, but this is
+  // the one place in the module that would MANUFACTURE a value rather than
+  // reject one: a wire `"false"`, `"no"` or `1` is truthy and would become a
+  // schema `literal(true)`. Everything else here degrades to null on anything
+  // it does not recognise; this should too.
+  return w.overage === true ? { ...mapped, overage: true } : mapped;
 }
 
 /**
@@ -150,18 +152,16 @@ export function buildQuota(payload: unknown): ClaudeAccountQuota | null {
   const fiveHour = mapWindow(p.five_hour);
   const sevenDay = mapWindow(p.seven_day);
   if (fiveHour === null || sevenDay === null) return null;
-  // The SCHEMA is the single definition of a valid reading, and the reader
-  // validates its own output against it. Without this, `mapWindow`'s predicate
-  // and `AccountQuotaWindowSchema` are two hand-maintained definitions of the same
-  // thing that can drift: anything the reader accepts but the schema rejects
-  // becomes a 400 at the route's `parse`, i.e. a reading the reader thought was
-  // fine turning into an error response for the whole TTL. Rejecting it HERE
-  // makes it an honest UNREADABLE instead, and means a future tightening of the
-  // schema can only ever make readings null — never make the endpoint throw.
+  // The SCHEMA is the single definition of a valid reading, and this is the ONE
+  // place it is enforced at runtime — the route trusts what it gets from here.
+  // It matters because these are untrusted provider bytes and because
+  // `mapWindow`'s hand-written predicate and `AccountQuotaWindowSchema` are two
+  // definitions of the same thing that could drift. Rejecting a divergence here
+  // makes it an honest UNREADABLE, and means a future tightening of the schema
+  // can only ever make readings null — never make the endpoint fail.
   const parsed = ClaudeAccountQuotaSchema.safeParse({
     five_hour: fiveHour,
     seven_day: sevenDay,
-    source: 'live',
   });
   return parsed.success ? parsed.data : null;
 }
@@ -224,8 +224,10 @@ export async function readKeychainToken(
 export async function fetchUsage(token: string, fetchImpl: typeof fetch = fetch): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
-  // Matches every other timer in the server: an in-flight quota read must never
-  // be the thing keeping the event loop alive at shutdown.
+  // A DELIBERATE departure from the house pattern above, which leaves its abort
+  // timers ref'd: an in-flight quota read must never be the thing keeping the
+  // event loop alive at shutdown. The `finally` clears the timer on every path
+  // anyway, so this only covers the window before that runs.
   timer.unref();
   try {
     const res = await fetchImpl(USAGE_URL, {
@@ -252,7 +254,7 @@ export async function fetchUsage(token: string, fetchImpl: typeof fetch = fetch)
   }
 }
 
-export interface ClaudeQuotaReaderOptions {
+export interface ClaudeAccountQuotaReaderOptions {
   /** Test seam. Defaults to the macOS Keychain read. */
   tokenReader?: () => Promise<string | null>;
   /** Test seam. Defaults to the live provider GET. */
@@ -268,9 +270,9 @@ export interface ClaudeQuotaReaderOptions {
  * branch and the test-app default are ONE definition rather than two identical
  * literals drifting apart (CLAUDE.md: export once, import everywhere).
  */
-export const UNREADABLE_QUOTA_READER: ClaudeQuotaReader = { read: async () => null };
+export const UNREADABLE_ACCOUNT_QUOTA_READER: ClaudeAccountQuotaReader = { read: async () => null };
 
-export interface ClaudeQuotaReader {
+export interface ClaudeAccountQuotaReader {
   /** The current reading, or `null` when it cannot be obtained. Never throws. */
   read(): Promise<ClaudeAccountQuota | null>;
 }
@@ -279,7 +281,9 @@ export interface ClaudeQuotaReader {
  * Builds the reader. One per app instance so two apps in one process never
  * share a cache (matching how every other per-app service is scoped).
  */
-export function createClaudeQuotaReader(opts: ClaudeQuotaReaderOptions = {}): ClaudeQuotaReader {
+export function createClaudeAccountQuotaReader(
+  opts: ClaudeAccountQuotaReaderOptions = {},
+): ClaudeAccountQuotaReader {
   const tokenReader = opts.tokenReader ?? readKeychainToken;
   const fetcher = opts.fetcher ?? fetchUsage;
   const now = opts.now ?? (() => Date.now());
@@ -305,7 +309,15 @@ export function createClaudeQuotaReader(opts: ClaudeQuotaReaderOptions = {}): Cl
   return {
     async read() {
       const at = now();
-      if (cachedAt !== null && at - cachedAt < ttlMs) return cached;
+      // `at >= cachedAt` is load-bearing, not defensive noise. `now` is WALL
+      // clock, not monotonic, so an NTP step-back, a VM suspend/resume or a
+      // manual clock change makes `at - cachedAt` NEGATIVE — which is still
+      // `< ttlMs`, so the cache would be served until wall time caught up.
+      // That is unbounded staleness in the FAIL-OPEN direction (a low reading
+      // outliving the window it was taken in), and it would falsify the "at
+      // most one minute" bound this TTL is justified by. A backwards step now
+      // simply misses the cache and re-samples.
+      if (cachedAt !== null && at >= cachedAt && at - cachedAt < ttlMs) return cached;
       if (inFlight) return inFlight;
       inFlight = sample()
         .then((value) => {
