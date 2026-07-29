@@ -6,6 +6,7 @@ import {
   buildQuota,
   readKeychainToken,
   fetchUsage,
+  RATE_LIMITED,
 } from '../claude-quota.js';
 
 /**
@@ -319,6 +320,172 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
 });
 
 /**
+ * #765 — the provider's usage endpoint enforces a tight, STICKY, account-level
+ * rate limit, measured 2026-07-29 against the live endpoint:
+ *
+ *   - polls at 15s intervals: 200, 200, 200, then 429, 429, 429;
+ *   - an immediate 6-request burst: 6 × 429;
+ *   - and once tripped it STAYS tripped — eleven consecutive polls at 60s
+ *     intervals were all 429, i.e. re-polling on a fixed TTL does not recover
+ *     it, because the polling is itself what keeps the bucket empty.
+ *
+ * A flat 60s retry against a sticky limit is therefore part of the outage, not
+ * a probe of it. These tests pin the geometric backoff that replaces it, and —
+ * more importantly — pin that the longer window can NEVER be the thing keeping
+ * a successful reading alive, which is the one way this could turn fail-open.
+ */
+describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', () => {
+  const rateLimitedReader = (opts: { maxThrottleMs?: number } = {}) => {
+    let clock = 0;
+    let outcome: unknown = RATE_LIMITED;
+    const fetcher = vi.fn(async () => outcome);
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher,
+      now: () => clock,
+      ttlMs: 60_000,
+      ...opts,
+    });
+    return {
+      reader,
+      fetcher,
+      advance: (ms: number) => (clock += ms),
+      serve: (next: unknown) => (outcome = next),
+    };
+  };
+
+  it('doubles the retry window on each rate-limited sample', async () => {
+    const { reader, fetcher, advance } = rateLimitedReader();
+    expect(await reader.read()).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1); // window is now 120s, not 60s
+
+    advance(60_000); // the OLD flat TTL — must NOT re-poll a limit we just hit
+    expect(await reader.read()).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    advance(60_000); // t=120s: the doubled window has elapsed
+    expect(await reader.read()).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(2); // window is now 240s
+
+    advance(120_000); // t=240s, but the window started at t=120s
+    expect(await reader.read()).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    advance(120_000); // t=360s = 240s after the last sample
+    expect(await reader.read()).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('caps the window so a permanent limit still gets probed', async () => {
+    const { reader, fetcher, advance } = rateLimitedReader({ maxThrottleMs: 240_000 });
+    await reader.read(); // 60s -> 120s
+    advance(120_000);
+    await reader.read(); // 120s -> 240s
+    advance(240_000);
+    await reader.read(); // 240s -> capped at 240s
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    advance(239_999);
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    advance(1);
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(4); // still probing, never wedged shut
+  });
+
+  it('resets the window only on a real SUCCESS, not on any non-429 failure', async () => {
+    const { reader, fetcher, advance, serve } = rateLimitedReader();
+    await reader.read(); // rate-limited: window 60s -> 120s
+    advance(120_000);
+    serve(null); // a transport failure — NOT evidence the provider is serving
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    // THE ASSERTION THAT BITES, and it has to sit strictly BETWEEN the two
+    // windows: past the flat 60s TTL, inside the elevated 120s one. Advancing a
+    // full 120s instead would sample under both rules and prove nothing.
+    advance(90_000);
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    advance(30_000); // now 120s past the last sample — the elevated window ends
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+
+    serve(LIVE_PAYLOAD); // now the provider really is serving again
+    advance(120_000);
+    expect(await reader.read()).not.toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    advance(60_000); // and the window is back to the flat TTL
+    await reader.read();
+    expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
+  /**
+   * THE FAIL-OPEN GUARD, and the reason the reset rule is "on success" rather
+   * than "on any outcome". The backoff widens the window in which `read()`
+   * answers from cache without re-sampling. If an elevated window could ever
+   * coexist with a non-null `cached`, a LOW reading would outlive the minute
+   * the TTL is justified by — the 2026-07-26 shape, and exactly what the
+   * prototype's 900s grace does wrong.
+   *
+   * The invariant that forecloses it: the window is only ever raised by a
+   * rate-limited sample, and EVERY sample stamps the cache with its own result,
+   * so a raised window always coexists with `cached === null`.
+   */
+  it('never lets the widened window extend the life of a SUCCESSFUL reading', async () => {
+    const { reader, advance, serve } = rateLimitedReader();
+    serve(LIVE_PAYLOAD);
+    expect(await reader.read()).not.toBeNull();
+
+    serve(RATE_LIMITED);
+    advance(60_000);
+    expect(await reader.read()).toBeNull(); // window widens to 120s here
+
+    // Deep inside the widened window. Under a grace, or under any rule that
+    // kept the last-good value while the window grew, this returns the reading
+    // taken 100s ago and the guard fires on it.
+    advance(40_000);
+    expect(await reader.read()).toBeNull();
+  });
+
+  it('reports entering and leaving the backoff ONCE each, not on every read', async () => {
+    // Without this the endpoint is undiagnosable from outside: "studio says
+    // null" looks identical whether the credential is missing, the provider is
+    // down, or the account is rate-limited — which is precisely the ambiguity
+    // that produced #765's original (wrong) diagnosis.
+    const log = vi.fn();
+    let clock = 0;
+    let outcome: unknown = RATE_LIMITED;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => outcome,
+      now: () => clock,
+      ttlMs: 60_000,
+      log,
+    });
+    await reader.read();
+    clock += 120_000;
+    await reader.read(); // still limited — must not log again
+    expect(log.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual(['rate_limited']);
+
+    outcome = LIVE_PAYLOAD;
+    clock += 240_000;
+    await reader.read();
+    expect(log.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual([
+      'rate_limited',
+      'rate_limit_cleared',
+    ]);
+  });
+
+  it('degrades to UNREADABLE, never to a reading, if the sentinel is not recognised', async () => {
+    // Defence in depth: even with the identity check gone, the sentinel must
+    // not map to a quota. It survives `buildQuota` as `null`, so the worst a
+    // missed check can do is lose the backoff — never invent a number.
+    expect(buildQuota(RATE_LIMITED)).toBeNull();
+  });
+});
+
+/**
  * The two functions that do the REAL work. Every test above injects a seam past
  * them, so without this block a typo in `claudeAiOauth`/`accessToken`, a wrong
  * beta header, or a broken non-200 branch would leave the feature returning
@@ -421,18 +588,28 @@ describe('fetchUsage — the provider path', () => {
     expect(payload).toEqual({ seven_day: { utilization: 7 } });
   });
 
-  it('returns null on a non-200 and drains the body', async () => {
-    let cancelled = false;
-    const res = {
-      status: 429,
+  const drainableRes = (status: number, onCancel: () => void) =>
+    ({
+      status,
       json: async () => ({}),
-      body: {
-        cancel: async () => {
-          cancelled = true;
-        },
-      },
-    } as unknown as Response;
-    // 429 is the ROUTINE branch here — the provider rate-limits this endpoint.
+      body: { cancel: async () => onCancel() },
+    }) as unknown as Response;
+
+  it('reports a 429 as RATE_LIMITED — distinctly from every other failure', async () => {
+    // 429 is the ROUTINE branch here — the provider rate-limits this endpoint —
+    // and #765 measured that the limit is STICKY, so the reader has to be able
+    // to tell "slow down" apart from "something broke" to back off correctly.
+    let cancelled = false;
+    const res = drainableRes(429, () => (cancelled = true));
+    await expect(fetchUsage('t', (async () => res) as unknown as typeof fetch)).resolves.toBe(
+      RATE_LIMITED,
+    );
+    expect(cancelled).toBe(true);
+  });
+
+  it('returns null on any OTHER non-200 and drains the body', async () => {
+    let cancelled = false;
+    const res = drainableRes(500, () => (cancelled = true));
     await expect(fetchUsage('t', (async () => res) as unknown as typeof fetch)).resolves.toBeNull();
     expect(cancelled).toBe(true);
   });

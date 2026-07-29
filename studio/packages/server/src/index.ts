@@ -294,7 +294,19 @@ export async function buildApp(opts?: BuildAppOptions) {
     'claudeAccountQuota',
     opts?.claudeAccountQuotaReader ??
       (claudeAccountQuotaEnabled
-        ? createClaudeAccountQuotaReader()
+        ? createClaudeAccountQuotaReader({
+            // #765 — provider-availability TRANSITIONS only (entering and
+            // leaving the rate-limit backoff), never per read. Without this an
+            // UNREADABLE reading is undiagnosable from outside the process:
+            // a missing credential, a provider outage and a rate-limited
+            // account all present as the same `null`, which is what produced
+            // #765's original misdiagnosis. `warn`, not `info`, because every
+            // one of these events means the build loop's spend guard is
+            // currently blind. The payload is two scalars — no credential, no
+            // provider body — so it is safe at any log level.
+            log: (event) =>
+              fastify.log.warn({ ...event }, 'account-quota provider availability changed'),
+          })
         : UNREADABLE_ACCOUNT_QUOTA_READER),
   );
 
