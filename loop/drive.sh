@@ -39,6 +39,11 @@ INFRA="${INFRA:-/Users/lukebradford/Dev/studio-loop}"
 REPO="${REPO:-/Users/lukebradford/Dev/studio-loop-repo}"
 ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
+# Create the log directory HERE, not per fire. run.sh mkdir'd it, but only once a
+# fire had already started -- so a first run under a fresh INFRA (exactly what
+# the cutover in README.md does) silently swallowed `DRIVER START` and every
+# FATAL, because `log()` appends to a path whose directory does not exist.
+mkdir -p "$(dirname "$DLOG")" 2>/dev/null || true
 MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
 GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # x30s = up to 30 min for a gate to settle
@@ -116,10 +121,16 @@ quota_cache_read() {
   qc_line="$(cat "$QUOTA_CACHE" 2>/dev/null)" || return 0
   qc_when="${qc_line%% *}"; qc_pct="${qc_line##* }"
   case "$qc_when$qc_pct" in *[!0-9]*|"") return 0 ;; esac
-  qc_age=$(( $(date +%s) - qc_when ))
+  # 10# forces BASE TEN. Digit-only is not enough for $(( )): it reads a leading
+  # zero as octal, so a value like 018 is "value too great for base" -- fatal to
+  # this subshell (and under set -u the next line then reads unbound). The caller
+  # would still degrade correctly (empty result => treated as unreadable), but
+  # noisily and for the wrong reason. `test` is unaffected: [ 098 -ge 80 ] is
+  # true, so only this arithmetic was ever exposed.
+  qc_age=$(( $(date +%s) - 10#$qc_when ))
   [ "$qc_age" -lt 0 ] && return 0
   [ "$qc_age" -gt "$QUOTA_CACHE_MAX_AGE" ] && return 0
-  echo "$qc_pct"
+  echo $(( 10#$qc_pct ))
 }
 
 # Escalating backoff: attempt N -> min(30 * 2^(N-1), 600)s. Shift is capped so a
@@ -231,6 +242,13 @@ Driver log: \`studio-loop/logs/driver.log\`."
   done
 }
 
+# --- executable body ---------------------------------------------------------
+# Everything above is configuration + function definitions; everything below runs
+# the loop. The guard is the repo convention, and it matters MORE here than most:
+# the body is an unconditional `while true`, so sourcing this file to unit-test
+# its functions would hang the sourcing shell outright.
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
 cd "$REPO" || { log "FATAL: worktree $REPO missing"; exit 1; }
 
 stall=0
@@ -239,6 +257,7 @@ loops=0
 fires=0
 auth_block_retries=0      # length of the auth block ensure_auth just cleared (set -u: must exist)
 budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGRANTS
+blind_fires=0             # fires spent while quota was UNREADABLE; bounded by QUOTA_UNKNOWN_FIRES
 prev_head=""
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
@@ -285,11 +304,22 @@ while true; do
     fi
     # UNREADABLE is not the same as "fine". Allow a bounded number of blind
     # fires so a monitoring hiccup does not waste a whole night, then stop.
-    if [ "$fires" -ge "$QUOTA_UNKNOWN_FIRES" ]; then
-      log "STOP: 7-day quota utilization UNREADABLE and $fires blind fire(s) already spent (cap QUOTA_UNKNOWN_FIRES=$QUOTA_UNKNOWN_FIRES) -- refusing to fire blind"
+    #
+    # Counted with its OWN counter, not the cumulative `fires`. Reusing `fires`
+    # meant a run that had already done QUOTA_UNKNOWN_FIRES *readable* fires hit
+    # the cap on its FIRST unreadable reading and stopped with none of the grace
+    # this cap documents -- the dashboard dying mid-run ended the night. Note the
+    # fix is mildly MORE permissive, which is only safe because the last-known
+    # cache above now refuses outright when the window was already exhausted;
+    # that is the check with teeth, and this one is the monitoring-hiccup
+    # allowance it was always described as. Deliberately NOT reset by a budget
+    # re-grant: blind fires stay bounded per RUN.
+    if [ "$blind_fires" -ge "$QUOTA_UNKNOWN_FIRES" ]; then
+      log "STOP: 7-day quota utilization UNREADABLE and $blind_fires blind fire(s) already spent (cap QUOTA_UNKNOWN_FIRES=$QUOTA_UNKNOWN_FIRES) -- refusing to fire blind"
       break
     fi
-    log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - fires)) blind fire(s) left"
+    blind_fires=$((blind_fires + 1))
+    log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires)) blind fire(s) left"
   fi
 
   # --- FIRE CAP ---------------------------------------------------------------

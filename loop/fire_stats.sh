@@ -14,6 +14,10 @@
 # Columns: cost · wall minutes · tool calls · browser calls (the cost driver) ·
 # cache-read tokens (what you actually pay for) · output tokens (nearly free).
 set -uo pipefail
+# --- executable body (repo convention: sourcing this file must only define,
+# never run) ------------------------------------------------------------
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
 INFRA="${INFRA:-$(cd "$(dirname "$0")" && pwd)}"
 N="${1:-15}"
 case "${2:-}" in --jsonl) MODE=jsonl ;; *) MODE=table ;; esac

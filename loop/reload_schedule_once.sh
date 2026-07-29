@@ -6,6 +6,10 @@
 # if the job is already not running. Logs to logs/schedule_reload.log.
 set -u
 
+# --- executable body (repo convention: sourcing this file must only define,
+# never run) ------------------------------------------------------------
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
 LABEL="com.autonomy.studio-build-driver"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="/Users/lukebradford/Dev/studio-loop/logs/schedule_reload.log"

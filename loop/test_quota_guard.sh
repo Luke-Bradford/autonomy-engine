@@ -34,12 +34,20 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOS
-  # curl serves the dashboard payload; EMPTY utilization => unreadable path
+  # curl serves the dashboard payload; EMPTY utilization => unreadable path.
+  # CURL_READABLE_CALLS=N makes it readable for the first N calls and unreadable
+  # after, so "the dashboard died PART WAY THROUGH a run" is reachable.
   if [ "$rc_util" = "EMPTY" ]; then
     printf '#!/bin/bash\necho ""\n' >"$bin/curl"
   else
     cat >"$bin/curl" <<EOS
 #!/bin/bash
+if [ -n "\${CURL_READABLE_CALLS:-}" ]; then
+  ccf="$tmp/curlcalls"
+  cc="\$(cat "\$ccf" 2>/dev/null || echo 0)"
+  echo \$((cc + 1)) >"\$ccf"
+  [ "\$cc" -ge "\$CURL_READABLE_CALLS" ] && { echo ""; exit 0; }
+fi
 echo '{"account":{"claude":{"seven_day":{"utilization":$rc_util}}}}'
 EOS
   fi
@@ -75,15 +83,20 @@ EOS
   chmod +x "$tmp/infra/run.sh"
   cp "$HERE/drive.sh" "$tmp/infra/drive.sh"
 
+  # FRESH_LOGDIR=1 points DLOG at a directory that does NOT exist, which is what
+  # a first run under a new INFRA looks like (the README's cutover procedure).
+  rc_dlog="$tmp/driver.log"
+  case " $* " in *" FRESH_LOGDIR=1 "*) rm -rf "$tmp/infra/logs"; rc_dlog="$tmp/infra/logs/driver.log" ;; esac
+
   # `env` is REQUIRED: a var=value word arriving via "$@" is NOT parsed as an
   # assignment (assignments are recognised before expansion), so writing
   # `... "$@" bash drive.sh` would execute `QUOTA_STOP_PCT=80` as the COMMAND.
-  env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$tmp/driver.log" \
+  env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
     ENGINE_LIB="$tmp/nonexistent-lib" BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
   # count|logpath -- the caller cannot see assignments made in this subshell.
-  echo "$n|$tmp/driver.log"
+  echo "$n|$rc_dlog"
 }
 fires_of()  { echo "${1%%|*}"; }
 logof()     { echo "${1##*|}"; }
@@ -172,6 +185,27 @@ check "a successful quota read caches the value" "42" \
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1)"
 check "a long auth block reports quota alongside the auth failures" "0" \
   "$(grep -q 'quota during auth block' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 14. a leading-zero cached epoch is decimal, not octal (review WARNING) ---
+# `$(( ))` reads 018 as octal and dies; `test` does NOT (verified: [ 098 -ge 80 ]
+# is true), so only the epoch field is exposed. Degradation was graceful (the
+# subshell died, the value read empty, the blind path ran) but noisy and wrong.
+r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 "SEED_CACHE=0$now 98")"
+check "leading-zero cached epoch is read as decimal -> still refuses" "0" "$(fires_of "$r")"
+
+# --- 15. blind fires are counted SEPARATELY from readable ones (WARNING) ------
+# The cap read the CUMULATIVE fire count, so a run that had already done
+# QUOTA_UNKNOWN_FIRES readable fires stopped on the FIRST unreadable reading with
+# none of the documented grace. Dashboard dies after 2 readable fires here.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 CURL_READABLE_CALLS=2)"
+check "2 readable fires then unreadable -> 2 readable + 2 blind = 4" "4" "$(fires_of "$r")"
+
+# --- 16. the driver creates its own log directory (WARNING) ------------------
+# Only run.sh mkdir'd it, and only per fire -- so a first run under a new INFRA
+# (exactly the README's cutover) silently lost DRIVER START and every FATAL.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 FRESH_LOGDIR=1)"
+check "a missing log dir is created, not silently swallowed" "0" \
+  "$(grep -q 'DRIVER START' "$(logof "$r")" 2>/dev/null && echo 0 || echo 1)"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi

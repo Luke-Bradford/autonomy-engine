@@ -22,6 +22,10 @@
 #   Do NOT "simplify" this away by trusting settings inheritance -- there is none.
 set -uo pipefail
 
+# --- executable body (repo convention: sourcing this file must only define,
+# never run) ------------------------------------------------------------
+[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0
+
 INFRA="/Users/lukebradford/Dev/studio-loop"
 REPO="/Users/lukebradford/Dev/studio-loop-repo"
 PROMPT="$INFRA/prompt.md"
