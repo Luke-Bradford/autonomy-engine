@@ -1,5 +1,9 @@
 import { execFile } from 'node:child_process';
-import type { ClaudeQuota, QuotaWindow } from '@autonomy-studio/shared';
+import {
+  ClaudeAccountQuotaSchema,
+  type ClaudeAccountQuota,
+  type AccountQuotaWindow,
+} from '@autonomy-studio/shared';
 
 /**
  * #440 (C1) — reads the account's Claude subscription utilization.
@@ -26,6 +30,29 @@ import type { ClaudeQuota, QuotaWindow } from '@autonomy-studio/shared';
  *    reader is lazy: it does no I/O at all until someone asks. A studio install
  *    that never calls `GET /api/quota` never touches the credential store.
  *
+ *    This one is a genuine TRADEOFF, not a pure win, and it should not be read
+ *    as one. The sampler is *why* `drive.sh` preferred the dashboard over
+ *    calling the provider directly: the dashboard answered from a warm cache,
+ *    while the upstream endpoint rate-limits and 429s when polled (its comment
+ *    records observing this, and it was re-measured on 2026-07-29 — a burst
+ *    earns 429s that outlast a minute and clear by ~2). Lazy means a cache miss
+ *    puts a live upstream call on the request path, so a blip that the
+ *    prototype would have absorbed now surfaces as UNREADABLE and spends one of
+ *    the guard's bounded blind fires. Accepted here because the consumer polls
+ *    a couple of times per fire and fires are hours apart, so the TTL almost
+ *    always covers a poll pair, and because a background sampler would put the
+ *    credential store back on the boot path for every install. If C2 measures
+ *    real UNREADABLE rates, an `unref`'d refresh gated on the same env flag is
+ *    the escape hatch — that is a deliberate open door, not an oversight.
+ *
+ * The TTL is not zero-staleness, and the argument above should not be read as
+ * claiming it is: a cached SUCCESS is served for up to 60s, which is the same
+ * kind of window as the grace, just two orders of magnitude smaller. What makes
+ * it acceptable is the bound plus the direction — 7-day utilization only rises
+ * within a window, so a cached reading is always <= the true current one, and
+ * the error is at most one minute of spend against an 80% threshold on a
+ * seven-day window. The grace window's 900s of the same error was not.
+ *
  * ## What is NOT a divergence: the TTL throttle
  *
  * The TTL bounds BOTH outcomes, exactly as the prototype's does. Throttling a
@@ -42,16 +69,35 @@ const USAGE_BETA = 'oauth-2025-04-20';
 const KEYCHAIN_SERVICE = 'Claude Code-credentials';
 
 /**
- * Bounds on the two I/O calls. The Keychain read is bounded because a prompt or
- * a hung `security` would otherwise stall a Fastify request handler
- * indefinitely — the prototype ran this on its own sampler thread and could
- * afford to be relaxed about it; a request-path read cannot.
+ * Bounds on the two I/O calls, and they must sum to less than the CONSUMER'S
+ * budget: `loop/drive.sh` calls this with `curl --max-time 8`, and a curl
+ * timeout reads as UNREADABLE, i.e. it spends one of the guard's bounded blind
+ * fires. 2s + 3s leaves ~3s of margin for everything else in the request.
+ *
+ * The Keychain read is bounded at all because a prompt or a hung `security`
+ * would otherwise stall a Fastify request handler indefinitely — the prototype
+ * ran this on its own sampler thread and could afford to be relaxed about it; a
+ * request-path read cannot. 2s is already generous for a local keychain read.
  */
-const KEYCHAIN_TIMEOUT_MS = 4_000;
+const KEYCHAIN_TIMEOUT_MS = 2_000;
 const HTTP_TIMEOUT_MS = 3_000;
 
 /** How long a reading (success OR failure) is reused before re-attempting. */
 const DEFAULT_TTL_MS = 60_000;
+
+/**
+ * A timestamp carrying an EXPLICIT UTC offset (`Z`, `+00:00`, `-0500`).
+ *
+ * Required because `Date.parse` is both looser and differently-behaved than the
+ * prototype's `datetime.fromisoformat`: an offset-less date-TIME is parsed as
+ * LOCAL time per ECMA-262, where the prototype assumed UTC — a silent skew of
+ * up to 14 hours depending on the host's zone. `Date.parse` also accepts things
+ * the prototype rejected (`'Aug 5 2026'`, a bare `'2026-08-05'`), which would
+ * weaken "malformed → null" into "malformed → a plausible wrong number". The
+ * provider always sends an offset, so requiring one costs nothing and keeps the
+ * rejection behaviour honest.
+ */
+const EXPLICIT_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
 /**
  * ISO-8601 → epoch **SECONDS**, or `null` if unparseable.
@@ -61,7 +107,7 @@ const DEFAULT_TTL_MS = 60_000;
  * while still looking like a plausible number.
  */
 function isoToEpochSeconds(value: unknown): number | null {
-  if (typeof value !== 'string') return null;
+  if (typeof value !== 'string' || !EXPLICIT_OFFSET.test(value)) return null;
   const ms = Date.parse(value);
   if (Number.isNaN(ms)) return null;
   return Math.floor(ms / 1000);
@@ -74,16 +120,20 @@ function isoToEpochSeconds(value: unknown): number | null {
  * unparsable window is an ABSENCE of a reading, and manufacturing a benign
  * value for it is the exact fail-open this surface exists to prevent.
  */
-export function mapWindow(input: unknown): QuotaWindow | null {
+export function mapWindow(input: unknown): AccountQuotaWindow | null {
   if (typeof input !== 'object' || input === null) return null;
   const w = input as Record<string, unknown>;
   const util = w.utilization;
-  // `typeof true === 'boolean'` already excludes booleans, but NaN is a number
-  // and would otherwise sail through into arithmetic downstream.
-  if (typeof util !== 'number' || Number.isNaN(util) || util < 0) return null;
+  // `typeof true === 'boolean'` already excludes booleans, but NaN and Infinity
+  // are both numbers and would otherwise sail through into arithmetic
+  // downstream. Infinity is reachable from the wire, not just theoretically:
+  // JSON overflows an out-of-range literal to it (`JSON.parse('{"a":1e999}').a`
+  // is `Infinity`), and it would then fail `ClaudeAccountQuotaSchema` — turning a
+  // reading the reader considered valid into a 400 for the whole TTL.
+  if (typeof util !== 'number' || !Number.isFinite(util) || util < 0) return null;
   const resetsAt = isoToEpochSeconds(w.resets_at);
   if (resetsAt === null) return null;
-  const mapped: QuotaWindow = { utilization: util / 100, resets_at: resetsAt };
+  const mapped: AccountQuotaWindow = { utilization: util / 100, resets_at: resetsAt };
   return w.overage ? { ...mapped, overage: true } : mapped;
 }
 
@@ -94,14 +144,41 @@ export function mapWindow(input: unknown): QuotaWindow | null {
  * map, or the whole reading is UNREADABLE. Half a reading is not evidence, and
  * a partial object would let a caller read a window that was never validated.
  */
-export function buildQuota(payload: unknown): ClaudeQuota | null {
+export function buildQuota(payload: unknown): ClaudeAccountQuota | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
   const fiveHour = mapWindow(p.five_hour);
   const sevenDay = mapWindow(p.seven_day);
   if (fiveHour === null || sevenDay === null) return null;
-  return { five_hour: fiveHour, seven_day: sevenDay, source: 'live' };
+  // The SCHEMA is the single definition of a valid reading, and the reader
+  // validates its own output against it. Without this, `mapWindow`'s predicate
+  // and `AccountQuotaWindowSchema` are two hand-maintained definitions of the same
+  // thing that can drift: anything the reader accepts but the schema rejects
+  // becomes a 400 at the route's `parse`, i.e. a reading the reader thought was
+  // fine turning into an error response for the whole TTL. Rejecting it HERE
+  // makes it an honest UNREADABLE instead, and means a future tightening of the
+  // schema can only ever make readings null — never make the endpoint throw.
+  const parsed = ClaudeAccountQuotaSchema.safeParse({
+    five_hour: fiveHour,
+    seven_day: sevenDay,
+    source: 'live',
+  });
+  return parsed.success ? parsed.data : null;
 }
+
+/** Test seam: runs the credential-store command, resolving its stdout or `null`. */
+export type KeychainRunner = (service: string, timeoutMs: number) => Promise<string | null>;
+
+/** The real credential-store read. The token comes back on STDOUT, never argv. */
+const defaultKeychainRunner: KeychainRunner = (service, timeoutMs) =>
+  new Promise<string | null>((resolve) => {
+    execFile(
+      'security',
+      ['find-generic-password', '-s', service, '-w'],
+      { timeout: timeoutMs, encoding: 'utf8' },
+      (err, stdout) => resolve(err ? null : stdout),
+    );
+  });
 
 /**
  * Reads the OAuth access token from the macOS Keychain, or `null`.
@@ -112,16 +189,17 @@ export function buildQuota(payload: unknown): ClaudeQuota | null {
  * the one thing that could carry it. Non-darwin hosts return `null` without
  * spawning anything.
  */
-export async function readKeychainToken(): Promise<string | null> {
-  if (process.platform !== 'darwin') return null;
-  const raw = await new Promise<string | null>((resolve) => {
-    execFile(
-      'security',
-      ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'],
-      { timeout: KEYCHAIN_TIMEOUT_MS, encoding: 'utf8' },
-      (err, stdout) => resolve(err ? null : stdout),
-    );
-  });
+export async function readKeychainToken(
+  runner: KeychainRunner = defaultKeychainRunner,
+  platform: string = process.platform,
+): Promise<string | null> {
+  if (platform !== 'darwin') return null;
+  let raw: string | null;
+  try {
+    raw = await runner(KEYCHAIN_SERVICE, KEYCHAIN_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
   if (raw === null) return null;
   try {
     const blob: unknown = JSON.parse(raw);
@@ -143,11 +221,14 @@ export async function readKeychainToken(): Promise<string | null> {
  * unlike `llmProbeGet`, which redacts secrets out of the message it surfaces,
  * this path simply never produces a message, so there is no vector to redact.
  */
-export async function fetchUsage(token: string): Promise<unknown> {
+export async function fetchUsage(token: string, fetchImpl: typeof fetch = fetch): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  // Matches every other timer in the server: an in-flight quota read must never
+  // be the thing keeping the event loop alive at shutdown.
+  timer.unref();
   try {
-    const res = await fetch(USAGE_URL, {
+    const res = await fetchImpl(USAGE_URL, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -156,7 +237,13 @@ export async function fetchUsage(token: string): Promise<unknown> {
       },
       signal: controller.signal,
     });
-    if (res.status !== 200) return null;
+    if (res.status !== 200) {
+      // Drain the body so keep-alive does not hold the socket. The 429 path is
+      // ROUTINE here, not exceptional: the provider rate-limits this endpoint
+      // and penalises bursts, so this branch is taken often enough to matter.
+      await res.body?.cancel();
+      return null;
+    }
     return await res.json();
   } catch {
     return null;
@@ -176,9 +263,16 @@ export interface ClaudeQuotaReaderOptions {
   ttlMs?: number;
 }
 
+/**
+ * The reader used when the surface is switched off. Exported so the disabled
+ * branch and the test-app default are ONE definition rather than two identical
+ * literals drifting apart (CLAUDE.md: export once, import everywhere).
+ */
+export const UNREADABLE_QUOTA_READER: ClaudeQuotaReader = { read: async () => null };
+
 export interface ClaudeQuotaReader {
   /** The current reading, or `null` when it cannot be obtained. Never throws. */
-  read(): Promise<ClaudeQuota | null>;
+  read(): Promise<ClaudeAccountQuota | null>;
 }
 
 /**
@@ -192,11 +286,11 @@ export function createClaudeQuotaReader(opts: ClaudeQuotaReaderOptions = {}): Cl
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
 
   let cachedAt: number | null = null;
-  let cached: ClaudeQuota | null = null;
+  let cached: ClaudeAccountQuota | null = null;
   /** De-dupes concurrent reads so a burst is one subprocess + one request. */
-  let inFlight: Promise<ClaudeQuota | null> | null = null;
+  let inFlight: Promise<ClaudeAccountQuota | null> | null = null;
 
-  async function sample(): Promise<ClaudeQuota | null> {
+  async function sample(): Promise<ClaudeAccountQuota | null> {
     try {
       const token = await tokenReader();
       if (!token) return null;

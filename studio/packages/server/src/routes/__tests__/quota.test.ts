@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
-import type { ClaudeQuota } from '@autonomy-studio/shared';
+import type { ClaudeAccountQuota } from '@autonomy-studio/shared';
 
 /**
  * #440 (C1) — `GET /api/quota`, the spend guard's source.
@@ -20,7 +20,7 @@ import type { ClaudeQuota } from '@autonomy-studio/shared';
  * break a type check anywhere; it would just quietly disarm the guard.
  */
 
-const READING: ClaudeQuota = {
+const READING: ClaudeAccountQuota = {
   five_hour: { utilization: 0.08, resets_at: 1_785_100_200 },
   seven_day: { utilization: 0.07, resets_at: 1_785_636_000 },
   source: 'live',
@@ -28,7 +28,7 @@ const READING: ClaudeQuota = {
 
 const apps: FastifyInstance[] = [];
 
-async function appReading(claude: ClaudeQuota | null): Promise<FastifyInstance> {
+async function appReading(claude: ClaudeAccountQuota | null): Promise<FastifyInstance> {
   const { app } = await buildTestAppWithContext({
     claudeQuotaReader: { read: async () => claude },
   });
@@ -40,7 +40,11 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((a) => a.close()));
 });
 
-/** The consumer's arithmetic, reproduced exactly. `null` → UNREADABLE (''). */
+/**
+ * The consumer's arithmetic. Outcome-equivalent, not character-identical: this
+ * uses optional chaining where the python raises into `except: print('')`. Both
+ * yield UNREADABLE for a null reading, which is the property under test.
+ */
 function consumerPercent(body: unknown): number | '' {
   const u = (body as { account: { claude: { seven_day: { utilization: number } } | null } }).account
     .claude?.seven_day.utilization;
@@ -56,7 +60,11 @@ describe('GET /api/quota', () => {
     expect(body.account.claude.seven_day.utilization).toBe(0.07);
     expect(body.account.claude.five_hour.utilization).toBe(0.08);
     expect(body.account.claude.source).toBe('live');
-    expect(body.generated_at).toBeTypeOf('number');
+    // Pinned as epoch SECONDS for the same reason `resets_at` is: `Date.now()`
+    // returns ms, and an ms value here would still be "a number".
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    expect(body.generated_at).toBeGreaterThan(nowSeconds - 60);
+    expect(body.generated_at).toBeLessThanOrEqual(nowSeconds + 1);
   });
 
   it('round-trips through the consumer arithmetic to the right percent', async () => {

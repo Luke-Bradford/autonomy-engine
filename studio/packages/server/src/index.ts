@@ -46,7 +46,11 @@ import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { quotaRoutes } from './routes/quota.js';
-import { createClaudeQuotaReader, type ClaudeQuotaReader } from './quota/claude-quota.js';
+import {
+  createClaudeQuotaReader,
+  UNREADABLE_QUOTA_READER,
+  type ClaudeQuotaReader,
+} from './quota/claude-quota.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -275,7 +279,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   fastify.decorate(
     'claudeQuota',
     opts?.claudeQuotaReader ??
-      (claudeQuotaEnabled ? createClaudeQuotaReader() : { read: async (): Promise<null> => null }),
+      (claudeQuotaEnabled ? createClaudeQuotaReader() : UNREADABLE_QUOTA_READER),
   );
 
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it

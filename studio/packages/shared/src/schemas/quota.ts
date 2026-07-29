@@ -26,6 +26,12 @@ import { z } from 'zod';
  * anything else. Changing a key here is a BREAKING change to the spend guard;
  * `loop/test_quota_guard.sh` is what pins the consumer side.
  *
+ * NOT to be confused with the server's `repo/connection-quota.ts` /
+ * `connection_quota_state`, which is an entirely unrelated concept: the
+ * per-CONNECTION rate-limit reset window used by the executor's admission gate.
+ * This file is the ACCOUNT's subscription utilization. Hence the `Account`
+ * prefix on every type here.
+ *
  * ## The two load-bearing properties (both pinned by tests)
  *
  * 1. **UNREADABLE is distinct from `0`.** When the reading cannot be obtained,
@@ -51,7 +57,7 @@ import { z } from 'zod';
  * which is the easy way to get this wrong by a factor of 1000). `overage` is
  * present only when true, mirroring the prototype's conditional key.
  */
-export const QuotaWindowSchema = z
+export const AccountQuotaWindowSchema = z
   .object({
     /** Fraction of the window consumed, 0-1. NEVER a percent. */
     utilization: z.number().min(0),
@@ -62,7 +68,7 @@ export const QuotaWindowSchema = z
   })
   .strict();
 
-export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
+export type AccountQuotaWindow = z.infer<typeof AccountQuotaWindowSchema>;
 
 /**
  * A complete account-quota reading. ALL-OR-NOTHING: both windows must be
@@ -74,15 +80,15 @@ export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
  * deliberately no `'stale'`/aged variant: see `claude-quota.ts` for why a
  * grace window is fail-open for a machine guard.
  */
-export const ClaudeQuotaSchema = z
+export const ClaudeAccountQuotaSchema = z
   .object({
-    five_hour: QuotaWindowSchema,
-    seven_day: QuotaWindowSchema,
+    five_hour: AccountQuotaWindowSchema,
+    seven_day: AccountQuotaWindowSchema,
     source: z.literal('live'),
   })
   .strict();
 
-export type ClaudeQuota = z.infer<typeof ClaudeQuotaSchema>;
+export type ClaudeAccountQuota = z.infer<typeof ClaudeAccountQuotaSchema>;
 
 /**
  * The `GET /api/quota` response body.
@@ -93,15 +99,15 @@ export type ClaudeQuota = z.infer<typeof ClaudeQuotaSchema>;
  * the RESPONSE, not the reading, so it can never be mistaken for freshness
  * evidence about a `null`.
  */
-export const QuotaStateSchema = z
+export const AccountQuotaStateSchema = z
   .object({
     generated_at: z.number().int(),
     account: z
       .object({
-        claude: ClaudeQuotaSchema.nullable(),
+        claude: ClaudeAccountQuotaSchema.nullable(),
       })
       .strict(),
   })
   .strict();
 
-export type QuotaState = z.infer<typeof QuotaStateSchema>;
+export type AccountQuotaState = z.infer<typeof AccountQuotaStateSchema>;

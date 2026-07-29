@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { QuotaStateSchema, type QuotaState } from '@autonomy-studio/shared';
+import { AccountQuotaStateSchema, type AccountQuotaState } from '@autonomy-studio/shared';
 
 /**
  * #440 (C1) — `GET /api/quota`, the machine-readable account-quota surface.
@@ -33,7 +33,7 @@ import { QuotaStateSchema, type QuotaState } from '@autonomy-studio/shared';
  * confusing way to say something the body can say precisely.
  */
 export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get('/api/quota', async (): Promise<QuotaState> => {
+  fastify.get('/api/quota', async (request): Promise<AccountQuotaState> => {
     // Total by construction. The real reader already collapses every failure to
     // `null`, so this catch is for the unforeseeable — but the surface's whole
     // value is that it answers, and an unhandled throw here would answer with a
@@ -42,11 +42,21 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       claude = await fastify.claudeQuota.read();
     } catch (err) {
-      fastify.log.warn({ err }, 'account-quota read failed; reporting UNREADABLE');
+      request.log.warn({ err }, 'account-quota read failed; reporting UNREADABLE');
     }
-    return QuotaStateSchema.parse({
+    const body = {
       generated_at: Math.floor(Date.now() / 1000),
       account: { claude },
-    } satisfies QuotaState);
+    } satisfies AccountQuotaState;
+    // `safeParse`, not `parse`: a throw here escapes the try/catch above and the
+    // global handler turns it into a 400, which is NOT what this route's
+    // contract says it does. The reader already validates its own output
+    // against the same schema, so a failure here means the two have drifted —
+    // report UNREADABLE (true, and safe) rather than an error the consumer
+    // cannot parse.
+    const parsed = AccountQuotaStateSchema.safeParse(body);
+    if (parsed.success) return parsed.data;
+    request.log.error({ issues: parsed.error.issues }, 'account-quota body failed its own schema');
+    return { generated_at: body.generated_at, account: { claude: null } };
   });
 };
