@@ -74,11 +74,15 @@ describe('toVersionBody', () => {
     expect(body).not.toHaveProperty('catalogVersion');
   });
 
+  // Only `params`/`outputs` are derived from `loaded` — those are what a null
+  // `loaded` can defaults-fill. `containers` is deliberately NOT asserted here:
+  // since #746 it is a straight pass-through of the 4th argument, so asserting
+  // `[]` in and `[]` out would be trivially true no matter what this function
+  // does with a null `loaded`. Its real contract is the next test.
   it('first-run (no loaded version) yields empty params/outputs', () => {
     const body = toVersionBody(null, [node('a')], [], []);
     expect(body.params).toEqual([]);
     expect(body.outputs).toEqual([]);
-    expect(body.containers).toEqual([]);
     expect(body.nodes).toHaveLength(1);
   });
 
