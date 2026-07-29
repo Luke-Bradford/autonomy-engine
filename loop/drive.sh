@@ -193,26 +193,24 @@ quota_pct() {
   if [ -z "$qp_out" ]; then
     # SECOND: the engine's usage reader (#766). Not a URL, so it is sanitised
     # explicitly rather than via quota_read_url.
-  # Ask the engine's usage reader directly (may be 429-limited).
-  #
-  # TWO CALLS, and that is the whole point. `refresh_live_quota()` is a WRITER —
-  # it does the I/O and populates a module cache, returning None on every path
-  # (including its self-throttled early return). The GETTER is `live_quota()`.
-  # This read used to call only the writer and use its return value, so it
-  # yielded "" every time and the guard had ONE source, not two, from the day it
-  # was written. Measured 2026-07-29: a momentary dashboard blip went straight to
-  # UNREADABLE and spent a blind fire while the dashboard answered 200 seconds
-  # later. It also reframes 2026-07-26, logged as "both sources failed at once" —
-  # the fallback was already dead, so one outage was always enough, and that one
-  # cost $24 and shipped nothing.
-  #
-  # An AGE-BADGED value is refused. `live_quota()` serves the last-good sample
-  # for up to its grace window when the current sample failed, tagging it with
-  # `age_s`. That is right for the dashboard PANEL it was built for and wrong
-  # here: a stale-but-plausible LOW reading PERMITS a fire the live figure would
-  # have refused, which is fail-open — the one polarity every guard rule here
-  # forbids. Same call the studio reader makes in #763. Absent the badge it is a
-  # fresh sample and is used normally.
+    # TWO CALLS, and that is the whole point. `refresh_live_quota()` is a WRITER —
+    # it does the I/O and populates a module cache, returning None on every path
+    # (including its self-throttled early return). The GETTER is `live_quota()`.
+    # This read used to call only the writer and use its return value, so it
+    # yielded "" every time and the guard had ONE source, not two, from the day it
+    # was written. Measured 2026-07-29: a momentary dashboard blip went straight to
+    # UNREADABLE and spent a blind fire while the dashboard answered 200 seconds
+    # later. It also reframes 2026-07-26, logged as "both sources failed at once" —
+    # the fallback was already dead, so one outage was always enough, and that one
+    # cost $24 and shipped nothing.
+    #
+    # An AGE-BADGED value is refused. `live_quota()` serves the last-good sample
+    # for up to its grace window when the current sample failed, tagging it with
+    # `age_s`. That is right for the dashboard PANEL it was built for and wrong
+    # here: a stale-but-plausible LOW reading PERMITS a fire the live figure would
+    # have refused, which is fail-open — the one polarity every guard rule here
+    # forbids. Same call the studio reader makes in #763. Absent the badge it is a
+    # fresh sample and is used normally.
     qp_out="$(cd "$ENGINE_LIB" 2>/dev/null && python3 -c "
 import claude_usage as cu
 try:
