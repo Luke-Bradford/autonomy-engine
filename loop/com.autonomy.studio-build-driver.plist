@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  studio-build-loop DRIVER LaunchAgent. Runs drive.sh ONCE at load (RunAtLoad),
+  KeepAlive=false so a clean stop-condition exit stays stopped (no thrash-restart).
+  drive.sh internally loops run.sh (fresh headless claude per piece) until a signal
+  issue / stall / cap. This is the headless continuous driver -- no interactive
+  session in the loop.
+  Load:   launchctl load ~/Library/LaunchAgents/com.autonomy.studio-build-driver.plist
+  Stop:   launchctl unload ~/Library/LaunchAgents/com.autonomy.studio-build-driver.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.autonomy.studio-build-driver</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/lukebradford/Dev/studio-loop/drive.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/lukebradford/Dev/studio-loop-repo</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <!-- Scheduled start: fires drive.sh at 03:05 local (BST) daily. Set 2026-07-14
+       to start the ADF-grade foundation build ~13h out (operator near weekly token
+       cap). drive.sh loops the whole build back-to-back; a daily re-fire is a
+       harmless resume-if-stalled heartbeat. To disable: launchctl unload this. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>3</integer>
+    <key>Minute</key><integer>5</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/lukebradford/Dev/studio-loop/logs/driver.launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/lukebradford/Dev/studio-loop/logs/driver.launchd.err.log</string>
+</dict>
+</plist>
