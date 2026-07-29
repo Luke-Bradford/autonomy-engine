@@ -147,6 +147,14 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # 60s sampler -- continuously, which is why the two direct pollers see a
 # permanently empty bucket. #766's success was measured in a gap between samples.
 #
+# There is a second-order effect on C3 too, pointing the other way. Post-C3 the
+# dashboard read fails on EVERY call, so every quota_pct invocation becomes a
+# Keychain read plus a direct poll -- and as the paragraph above notes, that is
+# tens of polls in one iteration during a long auth block, with no cross-process
+# throttle on either surviving source (this reader deliberately has no cache,
+# correctly, since each read is a fresh process). So the pair can self-inflict the
+# very 429 that then reads as UNREADABLE. Watch for that rather than assume it.
+#
 # That has a consequence for C3 worth stating BEFORE anyone acts on it: removing
 # the dashboard does not merely remove the best source, it also stops the
 # polling that starves the other two. So the post-C3 pair may well start
@@ -251,7 +259,8 @@ quota_pct() {
     # Dividing here would report every reading below 150% as 0 — "wide open" —
     # which FIRES. Post-C3 these are the only two surviving sources and they sit
     # ten lines apart, so the difference is easy to "tidy" into a fail-open bug.
-    # Pinned by `test_quota_guard.sh` cases 31-32.
+    # Pinned from both sides by `test_quota_guard.sh` cases 23-24 (a x100 slip logs
+    # 9700%/4200%, a /100 slip logs 0% and fires).
     #
     # #764 relocated this reader from the engine's `lib/claude_usage.py` to
     # `$LOOP_LIB/claude_usage.py`. It is a purpose-built port, not a copy: one

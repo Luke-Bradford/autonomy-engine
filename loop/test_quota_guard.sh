@@ -382,6 +382,16 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK
 check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
 check "the fallback reading drives the STOP, not the blind path" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+# ...and is NAMED as the source (#764). Folded onto this run rather than given its
+# own: this case ALREADY is the post-cutover topology -- dashboard EMPTY, reader
+# present -- so a separate case would have been a byte-identical second driver run
+# for one grep. The label is not cosmetic: `quota source: <name>` is the evidence
+# trail that decides when studio can be promoted and the engine retired (#765), and
+# nothing asserted the old `engine` label, which is how the rename to `loop` could
+# have shipped untested. Also pins the reading as a PERCENT: a x100 slip logs
+# 9700%, a /100 slip logs 0% and would fire.
+check "the fallback reader is NAMED as the source, unscaled" "0" \
+  "$(grep -q 'quota source: loop (7-day utilization 97%)' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 24. the fallback also feeds the last-known cache ------------------------
 # Both sources must write it (a fix for the same class already landed once, when
@@ -389,6 +399,15 @@ check "the fallback reading drives the STOP, not the blind path" "0" \
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
 check "a fallback reading is cached like a primary one" "42" \
   "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
+# Same run, two more properties for free. The percent survives unscaled all the way
+# to the log line (the cache assertion above already catches x100 as 4200 and /100
+# as 0, but the log is what a human reads), and a PRESENT reader must NOT trip the
+# missing-reader WARN -- a warning that fires unconditionally is as useless as one
+# that never fires, so both directions are asserted (the other is on case 29).
+check "a percent reading reaches the log unscaled" "0" \
+  "$(grep -q 'quota ok: 7-day utilization 42%' "$(logof "$r")" && echo 0 || echo 1)"
+check "a PRESENT fallback reader logs no missing-reader WARN" "1" \
+  "$(grep -q 'quota fallback reader MISSING' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 25-30. STUDIO as the THIRD source, behind the fallback (cutover C2) ----
 # Cases 25-26 assert on the SOURCE LOG LINE rather than the fire count, because
@@ -450,6 +469,13 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
 check "all sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
 check "all sources down -> the WARN names every source" "0" \
   "$(grep -q 'UNREADABLE (dashboard, loop reader and studio all unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
+# This case has no reader FILE, which is what a partial sync of the unversioned
+# live control plane looks like (`drive.sh` copied without `claude_usage.py`).
+# Downstream that is invisible -- a missing reader and a 429'd one both yield "" --
+# and that exact silence is how #766 stayed hidden for its entire life. So the
+# driver says so at startup. Folded here because this run already has no reader.
+check "a missing fallback reader logs a WARN naming the file" "0" \
+  "$(grep -q 'WARN: quota fallback reader MISSING at .*/claude_usage.py' "$(logof "$r")" && echo 0 || echo 1)"
 
 # 30. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
 # alone are not enough to make a value safe for `test`: on bash 3.2
@@ -463,69 +489,38 @@ check "an out-of-range all-digit reading -> zero fires (not fail-open)" "0" "$(f
 check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1" \
   "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
-# --- 31-34. the POST-CUTOVER SOURCE PAIR (#764) ------------------------------
-# Cutover C3 (#410) parks `bin/ lib/ tests/ templates/ start`, which removes the
-# DASHBOARD (source 1) and, until #764, the engine's `lib/claude_usage.py`
-# (source 2) as well -- leaving one source, and specifically the one that has
-# never yet returned a number here. #764 relocated the reader into `loop/`, which
-# C3 keeps, so the surviving pair is (loop reader, studio).
+# --- 31. the POST-CUTOVER pair: a reader that is PRESENT but cannot read ------
+# Cutover C3 (#410) parks `bin/ lib/ tests/ templates/ start`, removing the
+# DASHBOARD (source 1) and -- until #764 relocated it into `loop/` -- the reader
+# (source 2) too, which would have left only studio, the source that has never yet
+# returned a number here. The surviving pair is (loop reader, studio).
 #
-# Cases 23-26 exercise the pair's SHAPE but not this TOPOLOGY: they either have no
-# reader file at all (so "fallback down" means "absent", not "present and
-# failing") or they still lean on the dashboard. These four run with the dashboard
-# EMPTY throughout, which is what post-C3 looks like from the driver's side.
-
-# 31. the relocated reader ANSWERS, and is NAMED as the source. The name is not
-# cosmetic: `quota source: <name>` is the evidence trail that decides when studio
-# can be promoted and the engine retired (#765), so it has to say which source
-# actually answered. Nothing asserted the old `engine` label, which is how a
-# rename could have shipped untested.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97)"
-check "post-cutover pair: the relocated reader refuses at 97% -> zero fires" "0" "$(fires_of "$r")"
-check "post-cutover pair: the relocated reader is NAMED as the source" "0" \
-  "$(grep -q 'quota source: loop (7-day utilization 97%)' "$(logof "$r")" && echo 0 || echo 1)"
-
-# 32. the reader's PERCENT survives unscaled. This is the fail-open unit bug the
-# relocation could have introduced: the reader now emits a percent, while
-# `quota_read_url` multiplies its two HTTP sources by 100 to undo their 0-1 wire
-# format. Scaling this one too would report 97% as 9700% (caught here, since the
-# STOP line embeds the figure) and a *dividing* mistake would report it as 0 --
-# "wide open" -- which fires. 42% must therefore reach the log as exactly 42.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
-check "post-cutover pair: a percent reading is neither scaled nor divided" "0" \
-  "$(grep -q 'quota ok: 7-day utilization 42%' "$(logof "$r")" && echo 0 || echo 1)"
-
-# 33. the reader is PRESENT but cannot read -> studio still gets its turn. The
-# distinction from case 26 is that the reader exists and exits non-zero, which is
-# the real post-C3 failure (a 429 from the shared upstream), not a missing file.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 \
-      FALLBACK_UNREADABLE=1 STUDIO_UTIL=0.97)"
-check "post-cutover pair: a failing reader falls through to studio" "0" \
-  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
-check "post-cutover pair: studio's 97% via the pair still refuses" "0" "$(fires_of "$r")"
-
-# 34. BOTH members of the surviving pair fail -> UNREADABLE, never 0. The whole
-# guard rests on those being distinct outcomes (#440), and the reader failing by
-# printing nothing rather than a number is what keeps them distinct.
+# The pair's other properties are pinned on the runs that already exercise them:
+# cases 23-24 ARE this topology (dashboard EMPTY, reader present) and now carry the
+# source-label, unscaled-percent and no-spurious-WARN assertions; case 26 covers
+# fallthrough-to-studio; case 29 covers all-down plus the missing-reader WARN.
+# Re-running those with the same knobs would have cost four extra full driver runs
+# in a ~15-minute suite for assertions that fit on existing ones.
+#
+# One combination is covered by COMPOSITION rather than directly, and that is worth
+# naming: "reader present-but-failing, studio then answers". Case 26 pins
+# fallthrough-to-studio with the reader ABSENT, and the case below pins that a
+# present-but-failing reader yields the same "" as an absent one. Since the reader
+# is a single command substitution with exactly one non-answer representation, the
+# two compose; a dedicated run would add a fifth driver invocation to re-prove the
+# join. If the reader ever gains a second failure representation, that stops being
+# true and this needs its own case.
+#
+# What NO existing case reaches is a reader that EXISTS and FAILS -- the real
+# post-C3 failure, a 429 from the shared upstream, as opposed to an absent file.
+# The property under test is the one the whole guard rests on: UNREADABLE and 0%
+# are DISTINCT outcomes (#440). 0% means wide open and PERMITS a fire; a reader
+# that answered "0" on failure would silently disarm the guard. Mutation-checked:
+# making the failing reader print `0` flips both assertions below.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=1)"
-check "post-cutover pair: both down -> refuses to fire blind" "0" "$(fires_of "$r")"
-check "post-cutover pair: both down -> never logs a 0% reading" "1" \
+check "a present-but-failing reader -> refuses to fire blind" "0" "$(fires_of "$r")"
+check "a present-but-failing reader is never read as a 0% reading" "1" \
   "$(grep -q 'utilization 0%' "$(logof "$r")" && echo 0 || echo 1)"
-
-# --- 35-36. a MISSING fallback reader announces itself -----------------------
-# The realistic failure is a partial sync of the unversioned live control plane:
-# `drive.sh` copied without `claude_usage.py`. Downstream that is invisible --
-# a missing reader and a 429'd reader both yield "", so the fire logs a different
-# winning source and nothing indicates the guard lost one. #766 hid in exactly
-# that silence for its entire life. Both directions are asserted, because a WARN
-# that fires unconditionally would be as useless as one that never fires.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0)"
-check "a missing fallback reader logs a WARN naming the file" "0" \
-  "$(grep -q 'WARN: quota fallback reader MISSING at .*/claude_usage.py' "$(logof "$r")" && echo 0 || echo 1)"
-
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
-check "a PRESENT fallback reader logs no missing-reader WARN" "1" \
-  "$(grep -q 'quota fallback reader MISSING' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

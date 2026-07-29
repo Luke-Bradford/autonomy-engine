@@ -212,11 +212,18 @@ def seven_day_pct(data):
     (54.5 -> 54 here vs 55 there; 57.5 -> 58 vs 57; also 101.5, 103.5, 122.5,
     124.5, 125.5, 127.5), because `pct/100*100` is not an exact float round-trip
     so a .5 can land either side of round-half-to-even. The bound is +/-1
-    percentage point, at exact half-percent readings only, which can change a
-    decision only when the true utilization sits within 0.5pp of
-    QUOTA_STOP_PCT -- and in that band a 1pp disagreement is immaterial next to
-    the documented overshoot of one whole fire. Pinned by a test rather than
-    asserted away.
+    percentage point, at exact half-percent readings only.
+
+    It does NOT affect the default guard: at 79.5 and 80.5 both paths agree, so a
+    `QUOTA_STOP_PCT` of 80 decides identically whichever source answered. But that
+    threshold is an env knob, and those eight points make thresholds 55, 58, 102,
+    104, 123, 125, 126 and 128 sensitive to WHICH source answered. Nor is the skew
+    consistently fail-safe: at 54.5 this reader reads LOWER (54 vs 55, so it would
+    fire where the dashboard refuses) and at 57.5 it reads HIGHER.
+
+    Left as measured rather than "fixed" by computing `round(util/100.0*100)` to
+    force agreement -- that would contradict the do-NOT-scale rule above, which
+    guards the far more dangerous mistake. Pinned by a test as a bound.
 
     Validity is a non-bool, FINITE, non-negative number. `bool` is excluded
     because it is an `int` subclass in Python, so `True` would otherwise read as
