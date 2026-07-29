@@ -238,11 +238,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const selected = useStore(store, (s) => s.selected);
-  // The LOADED version, selected whole rather than as `s.loaded?.containers ?? []`:
-  // that selector would allocate a fresh array on every store read, and zustand
-  // compares selector results with `Object.is` — a new reference every time is a
-  // re-render loop, not a memo.
-  const loaded = useStore(store, (s) => s.loaded);
+  // #746 — the containers, straight off the store. This used to select `loaded`
+  // WHOLE and reach into it, because `s.loaded?.containers ?? []` allocates a
+  // fresh array on every store read and zustand compares selector results with
+  // `Object.is` — a new reference every time is a re-render loop, not a memo.
+  // `containers` is now a stable field the store copy-on-writes, so it can be
+  // selected directly, and this component no longer re-renders on a `rebaseLoaded`
+  // that changes nothing it draws.
+  const containers = useStore(store, (s) => s.containers);
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
   /**
@@ -319,11 +322,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * breaks it by construction: container geometry depends only on ACTIVITY
    * geometry, never on its own.
    *
-   * `containers` come from the LOADED version — the canvas cannot author one yet
-   * (U6d) — and are read through the same carry-forward a save writes back.
+   * `containers` are the store's working membership — the canvas cannot CREATE
+   * one or move a node in or out yet (U6d), but a delete prunes membership
+   * (#746), so what is drawn tracks the graph on screen rather than the version
+   * it was opened on.
    */
   const containerNodes: FlowNode[] = useMemo(() => {
-    const containers = loaded?.containers ?? [];
     if (containers.length === 0) return [];
     const rects = containerRects(
       containers,
@@ -401,7 +405,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-  }, [loaded, flowNodes]);
+  }, [containers, flowNodes]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(
@@ -530,8 +534,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * runs for a candidate the cheap rules already passed.
    */
   const connectPre = useMemo(
-    () => precomputeConnect({ nodes, edges, containers: loaded?.containers ?? [] }),
-    [nodes, edges, loaded],
+    () => precomputeConnect({ nodes, edges, containers }),
+    [nodes, edges, containers],
   );
 
   /** The candidate a DRAWN connection proposes — one definition, two callers. */

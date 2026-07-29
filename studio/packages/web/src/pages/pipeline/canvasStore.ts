@@ -3,6 +3,7 @@ import {
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
+  type Container,
   type Edge,
   type Node,
   type PipelineVersion,
@@ -75,17 +76,67 @@ function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
   return { ...base, ...condition };
 }
 
+/**
+ * Remove `nodeId` from every container's `children` (#746).
+ *
+ * Lives HERE rather than in `canvasDoc.ts` (where it was first written) because
+ * this module owns graph mutation, and `canvasDoc` imports the API layer for
+ * `PipelineVersionWrite` — importing it from the store inverted the layering,
+ * dragging zod schemas and `apiFetch` into the domain store for a function that
+ * is pure `Container[] -> Container[]`. Exported for its own tests and for U6d,
+ * the same reason `sameSelection`/`nextSelection` are.
+ *
+ * Copy-on-write at both levels — a container that does not list the id comes
+ * back BY REFERENCE, and so does the whole array when no container listed it.
+ * Stated honestly, because the first version of this comment named two
+ * consumers that turned out not to depend on it: NOTHING relies on this today.
+ * `FlowCanvas` memoises the boxes on `[containers, flowNodes]`, and a delete
+ * always rebuilds `flowNodes` into a fresh array, so the boxes re-derive either
+ * way; `PipelineCanvas`'s save-race check tests `nodes` first, which a delete
+ * always changes too. It is the reducer's own idiom (`reduce.ts`'s children
+ * filter, which neutralizes both non-node children and duplicate-owner ones),
+ * it is free, and it means a future consumer CAN rely on identity — but no
+ * present behaviour turns on it.
+ *
+ * Prunes ONE id, deliberately, rather than "every child that is not a node". A
+ * general normalise would also silently repair LEGACY phantoms in a doc the
+ * operator never touched, hiding `container 'X': child 'Y' is not a node in this
+ * pipeline` — a real defect report about a doc that arrived broken.
+ */
+export function pruneContainerChild(containers: Container[], nodeId: string): Container[] {
+  let changed = false;
+  const next = containers.map((c) => {
+    const kept = c.children.filter((ch) => ch !== nodeId);
+    if (kept.length === c.children.length) return c;
+    changed = true;
+    return { ...c, children: kept };
+  });
+  return changed ? next : containers;
+}
+
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
    * pipeline with no versions). Kept so a save can carry forward the parts of
-   * the doc this slice has no UI for (`params`/`outputs`/`containers`) and so
-   * "Save" rebases onto the new version it creates.
+   * the doc this slice has no UI for (`params`/`outputs`) and so "Save" rebases
+   * onto the new version it creates.
    */
   loaded: PipelineVersion | null;
   /** The working graph — the store owns its own copy (never the loaded arrays). */
   nodes: Node[];
   edges: Edge[];
+  /**
+   * The doc's containers — WORKING state as of #746, not a view of `loaded`.
+   *
+   * The canvas cannot yet CREATE one or move a node in or out (U6d/#425), so
+   * they look like pass-through: seeded on load, drawn by `FlowCanvas`, fed to
+   * the connect rules, written back on save. But membership is not read-only,
+   * because deleting a node changes it. While these were read off `loaded`,
+   * `deleteNode` had nothing to prune, so the deleted id stayed listed as a
+   * child and every later save was refused (`child '<id>' is not a node in this
+   * pipeline`) with no canvas affordance to repair it.
+   */
+  containers: Container[];
   selected: Selection | null;
   /** True once the working graph diverges from `loaded`; reset on load/save. */
   dirty: boolean;
@@ -149,6 +200,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     loaded: null,
     nodes: [],
     edges: [],
+    containers: [],
     selected: null,
     dirty: false,
     addCount: 0,
@@ -176,6 +228,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // copy-on-write and hands back an unchanged node BY REFERENCE.
         nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
         edges: v ? v.edges.map((e) => ({ ...e })) : [],
+        // #746 — containers are seeded as WORKING state, and the copy goes one
+        // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
+        // into the SERVER's version object, which this store does not own and
+        // must never write through. (`children` is the only array or object
+        // field on `ContainerSchema`, so one level is the whole copy.) The prune
+        // below is copy-on-write, so the alias would be harmless today and a
+        // live hazard the moment U6d edits membership in place — latent sharing
+        // that is free to rule out here.
+        containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
         selected: null,
         dirty: false,
         addCount: 0,
@@ -242,6 +303,30 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         return {
           nodes: s.nodes.filter((n) => n.id !== id),
           edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+          // #746 — container membership cascades exactly like the incident
+          // edges above. A container listing a node that no longer exists is a
+          // doc `validatePipelineDoc` refuses, so leaving the id behind made the
+          // canvas unsavable with nothing on screen able to repair it.
+          //
+          // A container that loses its LAST child is KEPT, not deleted with it.
+          // Deleting one is a structure write that also owns its incident edges
+          // and its exitWhen/items/maxRounds/timeout config, none of it
+          // re-authorable on the canvas until U6d/#425 — so a cascade destroys
+          // authored structure the operator cannot get back.
+          //
+          // That reasoning is SYMMETRIC and the choice is not a clean win, which
+          // is worth saying rather than only stating the side that favours it
+          // (#748): keeping the container is also unrecoverable, just quieter. An
+          // empty `stage` validates clean, so it SAVES — into an immutable
+          // version, carried forward forever, with no affordance to remove it.
+          // An empty `loop`/`foreach` is still refused, so emptying one still
+          // blocks the save; the refusal at least names the real problem ("a
+          // loop needs at least one child") instead of naming a node the
+          // operator just deleted, but a better message is not an escape route.
+          // Neither branch is right while the canvas offers NO container
+          // affordance at all — the fix is the affordance (#748), not a better
+          // default here.
+          containers: pruneContainerChild(s.containers, id),
           selected,
           dirty: true,
         };
@@ -271,7 +356,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       const graph = {
         nodes: get().nodes,
         edges: get().edges,
-        containers: get().loaded?.containers ?? [],
+        containers: get().containers,
       };
       if (connectRejection(precomputeConnect(graph), { from, to, condition }) !== null) return;
       const edge = { id: newLocalId('e'), from, to, ...condition } as Edge;

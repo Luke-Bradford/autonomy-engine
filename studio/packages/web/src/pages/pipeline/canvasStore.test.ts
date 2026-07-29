@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { EdgeSchema, PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
-import { createCanvasStore, nextSelection, sameSelection } from './canvasStore';
+import {
+  EdgeSchema,
+  PipelineVersionSchema,
+  type Container,
+  type PipelineVersion,
+} from '@autonomy-studio/shared';
+import {
+  createCanvasStore,
+  nextSelection,
+  pruneContainerChild,
+  sameSelection,
+} from './canvasStore';
+import { canSave, validateCanvas } from './canvasDoc';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -535,5 +546,209 @@ describe('selection model (#737)', () => {
     expect(s.getState().selected).toEqual(edge1);
     s.getState().select(null);
     expect(s.getState().selected).toBeNull();
+  });
+});
+
+/**
+ * #746 — deleting an ENCLOSED activity used to leave its id listed in
+ * `containers[].children`, and the doc became unsavable.
+ *
+ * The root cause was structural rather than a missing line: containers were not
+ * in the store at all. They lived only on `loaded` and were carried forward
+ * verbatim on save, so `deleteNode` had nothing to prune and the phantom
+ * survived into the save body — where `validatePipelineDoc` refused it with
+ * `child '<id>' is not a node in this pipeline`, a message naming a node the
+ * operator had just deliberately removed. `canSave` gates on that, and container
+ * membership is not authorable on the canvas (U6d/#425), so the only way out was
+ * to reload the page and lose every unsaved edit.
+ *
+ * These pin the fix at both levels: the prune itself, and the SYMPTOM (Save
+ * comes back), because "the validator returns []" is not the thing the operator
+ * reported.
+ */
+describe('canvasStore — container membership on delete (#746)', () => {
+  /** The loaded version's `stage` encloses both seeded activities. */
+  function enclosed(children: string[] = ['n_a', 'n_b']): PipelineVersion {
+    return version({ containers: [{ id: 'c_1', kind: 'stage', children }] });
+  }
+
+  it('prunes the deleted id from the container that lists it', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(enclosed());
+    s.getState().deleteNode('n_a');
+    expect(s.getState().containers.map((c) => c.children)).toEqual([['n_b']]);
+  });
+
+  /**
+   * THE REPRO, stated as the operator sees it: Save comes back.
+   *
+   * Asserted through `canSave`, not only through `validateCanvas`, because the
+   * report in #746 is "the doc cannot be saved" — an issues array that happens
+   * to be empty is the mechanism, and the button is the claim.
+   */
+  it('leaves a SAVABLE doc — the Save button re-enables', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(enclosed());
+    s.getState().deleteNode('n_b');
+    const st = s.getState();
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? []);
+    expect(issues).toEqual([]);
+    expect(canSave({ saving: false, ready: true, issues })).toBe(true);
+  });
+
+  it('touches only the containers that list the id, keeping the rest by reference', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        containers: [
+          { id: 'c_1', kind: 'stage', children: ['n_a'] },
+          { id: 'c_2', kind: 'stage', children: ['n_b'] },
+        ],
+      }),
+    );
+    const before = s.getState().containers;
+    s.getState().deleteNode('n_a');
+    const after = s.getState().containers;
+    expect(after.map((c) => c.children)).toEqual([[], ['n_b']]);
+    // Untouched containers keep their identity. Pinned as the helper's stated
+    // contract, NOT because a consumer depends on it — none does today, and an
+    // earlier version of this comment claimed two that do not (a delete always
+    // rebuilds `flowNodes`, so `FlowCanvas` re-derives its boxes either way).
+    expect(after[1]).toBe(before[1]);
+  });
+
+  it('leaves the containers array itself by reference when nothing was pruned', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(enclosed(['n_b']));
+    const before = s.getState().containers;
+    s.getState().deleteNode('n_a');
+    expect(s.getState().containers).toBe(before);
+  });
+
+  /**
+   * The store owns its containers outright, `children` arrays included.
+   *
+   * The shallow `{...c}` a copy usually means is NOT enough here: it aliases
+   * `c.children` into the SERVER's version object, which this store does not own.
+   * The `not.toBe` on the children ARRAY is the assertion that discriminates a
+   * shallow copy from a deep-enough one; a "loaded is untouched" check would pass
+   * either way, because the prune is copy-on-write, so it is not made.
+   */
+  it('loadVersion copies the containers it seeds, children arrays included', () => {
+    const s = createCanvasStore();
+    const v = enclosed();
+    s.getState().loadVersion(v);
+    const st = s.getState();
+    expect(st.containers).not.toBe(v.containers);
+    expect(st.containers[0]).not.toBe(v.containers[0]);
+    expect(st.containers[0]!.children).not.toBe(v.containers[0]!.children);
+  });
+
+  /**
+   * Containers are WORKING state, not a view of `loaded`.
+   *
+   * The distinction is reachable: `rebaseLoaded` runs when the operator kept
+   * editing during an in-flight save, so `loaded` becomes a server version minted
+   * from the graph as it was BEFORE those edits. Deriving the boxes from `loaded`
+   * would resurrect the phantom at exactly that moment — the one place the two
+   * genuinely disagree.
+   */
+  it('rebaseLoaded does not resurrect a child the operator deleted mid-save', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(enclosed());
+    s.getState().deleteNode('n_a');
+    s.getState().rebaseLoaded(enclosed()); // the raced save wrote the OLD membership
+    expect(s.getState().containers.map((c) => c.children)).toEqual([['n_b']]);
+  });
+
+  /**
+   * A container that loses its LAST child is KEPT, not deleted with it.
+   *
+   * Deleting the container would be a structure write that also owns its incident
+   * edges and its `exitWhen`/`items`/`maxRounds`/`timeout` config — none of it
+   * re-authorable on the canvas until U6d/#425 — so a cascade would destroy
+   * authored structure the operator cannot get back, to save them one refused
+   * save. An empty `stage` is a legal doc, so this case simply works.
+   */
+  it('keeps a stage that loses its last child, and the doc still saves', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(enclosed(['n_a']));
+    s.getState().deleteNode('n_a');
+    const st = s.getState();
+    expect(st.containers.map((c) => c.children)).toEqual([[]]);
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+  });
+
+  /**
+   * Prunes ONE id, never "every child that is not a node" — the only property of
+   * `pruneContainerChild` the store-level cases above do not already pin.
+   *
+   * A general normalise would silently repair legacy phantoms in a doc the
+   * operator never touched, hiding a real defect report about a doc that arrived
+   * broken (and turning `FlowCanvas`'s "announces the children it DRAWS" case
+   * into a fixture that auto-heals).
+   */
+  it('leaves OTHER phantom children alone', () => {
+    const stage: Container = { id: 'c_1', kind: 'stage', children: ['n_a', 'ghost'] };
+    expect(pruneContainerChild([stage], 'n_a')[0]!.children).toEqual(['ghost']);
+  });
+
+  /**
+   * The DOCUMENTED RESIDUE, pinned so the PR body's claim is not just a comment.
+   *
+   * An empty `loop` is refused — it re-rounds forever, resetting nothing — so
+   * emptying one still blocks the save, and the operator has no way to delete
+   * the container either. #746's trap therefore SURVIVES for a loop/foreach
+   * last-child delete; it is fixed for stages and for every non-last child.
+   * Tracked as #748, and named here rather than dressed up: the refusal now
+   * states the REAL problem ("a loop needs at least one child") instead of
+   * naming a node that no longer exists, but a better message is not an escape
+   * route.
+   */
+  it('a loop emptied by a delete is refused for the RIGHT reason, not for a phantom', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        containers: [{ id: 'c_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
+      }),
+    );
+    s.getState().deleteNode('n_a');
+    const st = s.getState();
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    expect(issues.some((m) => m.includes('is not a node in this pipeline'))).toBe(false);
+    expect(issues).toEqual([expect.stringContaining('makes no progress')]);
+  });
+
+  /**
+   * The OTHER residue, and the one that is easy to claim away: a container's
+   * `exitWhen`/`items` is scoped to its children, so deleting a node the
+   * expression names leaves the doc unsavable on a REFERENCE error.
+   *
+   * Unchanged by this fix and deliberately so — repairing it means editing the
+   * expression, which is container authoring (U6d/#425). Pinned here because the
+   * PR body states it, and a stated residue nothing tests is just a confident
+   * comment.
+   */
+  it('does NOT rescue a container whose exitWhen names the deleted child', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        containers: [
+          {
+            id: 'c_1',
+            kind: 'loop',
+            children: ['n_a', 'n_b'],
+            exitWhen: '${equals(nodes.n_a.status, "success")}',
+          },
+        ],
+      }),
+    );
+    s.getState().deleteNode('n_a');
+    const st = s.getState();
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    expect(issues.some((m) => m.includes('is not a node in this pipeline'))).toBe(false);
+    // The REFERENCE error the docstring names, not merely "some error" — an
+    // `issues.length > 0` would have passed on any unrelated complaint.
+    expect(issues).toEqual([expect.stringContaining('exitWhen')]);
   });
 });

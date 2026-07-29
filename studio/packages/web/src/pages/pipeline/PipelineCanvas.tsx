@@ -66,11 +66,14 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   const loaded = useStore(store, (s) => s.loaded);
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
+  const containers = useStore(store, (s) => s.containers);
   const dirty = useStore(store, (s) => s.dirty);
 
+  // `loaded` STAYS in the dep list alongside `containers` (#746): it still feeds
+  // `params`, which containers moving into the store does not change.
   const issues = useMemo(
-    () => validateCanvas(nodes, edges, loaded?.containers ?? [], loaded?.params ?? []),
-    [nodes, edges, loaded],
+    () => validateCanvas(nodes, edges, containers, loaded?.params ?? []),
+    [nodes, edges, containers, loaded],
   );
 
   const onSave = useCallback(async () => {
@@ -81,16 +84,23 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     // edited during the in-flight POST.
     const savedNodes = store.getState().nodes;
     const savedEdges = store.getState().edges;
+    // #746 — containers ride along in the snapshot and the race check below.
+    // Redundant TODAY, stated plainly rather than dressed up as a fix: EVERY
+    // writer of `containers` (`deleteNode` and `loadVersion`) also writes
+    // `nodes`, so the node check already implies this one. It is here so the
+    // first U6d mutator that touches membership WITHOUT touching nodes cannot
+    // slip past the race check silently.
+    const savedContainers = store.getState().containers;
     try {
       const created = await createPipelineVersion(
         pipelineId,
-        toVersionBody(store.getState().loaded, savedNodes, savedEdges),
+        toVersionBody(store.getState().loaded, savedNodes, savedEdges, savedContainers),
       );
       const s = store.getState();
-      if (s.nodes === savedNodes && s.edges === savedEdges) {
+      if (s.nodes === savedNodes && s.edges === savedEdges && s.containers === savedContainers) {
         // Nothing changed during the request: rebase fully onto the new
         // immutable version (clears `dirty`, and the next save carries THIS
-        // version's params/outputs/containers).
+        // version's params/outputs).
         s.loadVersion(created);
       } else {
         // The operator kept editing while the save was in flight — keep their

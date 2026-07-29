@@ -10,22 +10,29 @@ import type { PipelineVersionWrite } from '../../api/pipelines';
 
 /**
  * Build the `POST .../versions` body for a canvas save. The graph (`nodes`,
- * `edges`) is the current canvas; `params`, `outputs`, and `containers` are
+ * `edges`, `containers`) is the current canvas; `params` and `outputs` are
  * CARRIED FORWARD from the version the canvas was opened on so a save from the
- * activity-node canvas never silently drops loop/stage containers or the
- * typed param/output contract authored elsewhere (this slice has no UI for
- * them yet). `catalogVersion` is deliberately omitted — the server defaults it
- * to the current catalog, re-stamping the doc on save.
+ * activity-node canvas never silently drops the typed param/output contract
+ * authored elsewhere (this slice has no UI for it yet). `catalogVersion` is
+ * deliberately omitted — the server defaults it to the current catalog,
+ * re-stamping the doc on save.
+ *
+ * `containers` became a PARAMETER in #746. Reading `loaded?.containers` here was
+ * the carry-forward that made the phantom-child bug: the canvas could delete an
+ * enclosed activity, and the save body still listed it as a child, because the
+ * membership came from the version the canvas was opened on rather than from the
+ * graph on screen. Containers are working state now, like nodes and edges.
  */
 export function toVersionBody(
   loaded: PipelineVersion | null,
   nodes: Node[],
   edges: Edge[],
+  containers: Container[],
 ): PipelineVersionWrite {
   return {
     params: loaded?.params ?? [],
     outputs: loaded?.outputs ?? [],
-    containers: loaded?.containers ?? [],
+    containers,
     nodes,
     edges,
   };
