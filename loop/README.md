@@ -57,6 +57,15 @@ Three independent bounds, checked before every fire, each with its own test in
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
   resets weekly, so exhausting it locks the operator out of their own sessions for days; stopping
   is the fail-safe direction.
+- **Two quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
+  `http://127.0.0.1:8787/api/state`) is read FIRST, `STUDIO_QUOTA_URL` (studio's native
+  `http://127.0.0.1:8080/api/quota`, #440 C1) SECOND. Both ultimately read the same upstream
+  `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under direct
+  polling. The dashboard rides through because it samples in the background and serves a warm
+  cache; studio's reader is lazy, so every read is a direct poll. Studio is therefore second —
+  when the dashboard answers, studio is never polled and adds zero upstream load. **Do not invert
+  this** until studio's reader stops polling upstream on the request path. Every read logs
+  `quota source: <dashboard|studio>`, which is how the decision to promote it gets made.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
   evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache

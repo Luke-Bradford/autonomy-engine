@@ -38,14 +38,43 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOS
-  # curl serves the dashboard payload; EMPTY utilization => unreadable path.
-  # CURL_READABLE_CALLS=N makes it readable for the first N calls and unreadable
-  # after, so "the dashboard died PART WAY THROUGH a run" is reachable.
-  if [ "$rc_util" = "EMPTY" ]; then
-    printf '#!/bin/bash\necho ""\n' >"$bin/curl"
-  else
-    cat >"$bin/curl" <<EOS
+  # curl now serves BOTH quota sources and dispatches on the URL, because the
+  # guard reads the dashboard first and studio second. The studio arm is written
+  # FIRST and returns early, so the dashboard arm below keeps its call counter
+  # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
+  # being added.
+  #
+  # Studio defaults to UNREADABLE, and that default is load-bearing: it is the
+  # dashboard-unreadable cases that reach studio at all, and a studio which
+  # answered by default would turn every one of them into a test of the readable
+  # path instead -- green, and proving nothing. STUDIO_UTIL=<fraction> is the
+  # opt-in for a readable studio.
+  #
+  # The unreadable body is studio's REAL failure shape: a well-formed HTTP 200
+  # carrying `claude: null`, not the empty/truncated body the dashboard fails
+  # with. Both parse to "" through the same parser, which is the point -- the
+  # test exists so that stays true.
+  cat >"$bin/curl" <<'EOS'
 #!/bin/bash
+case "$*" in
+  */api/quota*)
+    if [ -n "${STUDIO_UTIL:-}" ]; then
+      echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
+    else
+      echo '{"account":{"claude":null}}'
+    fi
+    exit 0 ;;
+esac
+EOS
+  # --- the dashboard (/api/state) arm: EMPTY utilization => unreadable path.
+  # CURL_READABLE_CALLS=N makes it readable for the first N calls and unreadable
+  # after, so "the dashboard died PART WAY THROUGH a run" is reachable. The
+  # counter counts DASHBOARD calls only (studio returns above without touching
+  # it), so CURL_READABLE_CALLS/CURL_SWITCH_CALLS keep their exact meaning.
+  if [ "$rc_util" = "EMPTY" ]; then
+    printf 'echo ""\n' >>"$bin/curl"
+  else
+    cat >>"$bin/curl" <<EOS
 ccf="$tmp/curlcalls"
 cc="\$(cat "\$ccf" 2>/dev/null || echo 0)"
 echo \$((cc + 1)) >"\$ccf"
@@ -272,6 +301,58 @@ check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2"
 # headroom the guard protects. 10% before the wait, 97% after.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 GH_OPEN_PR=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
 check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "$(fires_of "$r")"
+
+# --- 23-26. TWO sources: the dashboard first, studio second (cutover C2) -----
+# These assert on the SOURCE LOG LINE, not on the fire count. Fire count is
+# deliberately NOT the observable here: a reading of 10% fires exactly the same
+# number of times whichever source produced it, so a fire-count assertion would
+# pass with the second source never wired up at all. The log line is the only
+# thing that distinguishes them.
+
+# 23. the dashboard answers -> studio is NEVER polled. This is the property that
+# keeps studio free: studio's reader is a DIRECT provider poll sharing one
+# rate-limit budget with the dashboard's sampler, so polling it when the
+# dashboard already answered would spend the budget that keeps the primary alive.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+check "dashboard readable -> the dashboard is named as the source" "0" \
+  "$(grep -q 'quota source: dashboard' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard readable -> studio is never consulted" "1" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 24. the dashboard is down and studio answers -> the reading is USED, and the
+# run is NOT blind. This is the case the whole second source exists for: today's
+# fallback is dead, so this scenario currently goes straight to a blind fire.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+check "dashboard down + studio readable -> studio is named as the source" "0" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard down + studio readable -> NOT a blind fire" "1" \
+  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 25. the second source can REFUSE, not just permit. A fallback that could only
+# ever say "fine" would be worse than none -- it would launder an unknown into
+# permission. 97% reached via studio must stop the driver exactly as via the
+# dashboard.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 STUDIO_UTIL=0.97)"
+check "studio 97% -> zero fires (the fallback can refuse)" "0" "$(fires_of "$r")"
+check "studio 97% logs the quota STOP reason" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 26. a reading from the SECOND source still writes the last-known cache. This
+# is the single-exit-point invariant, and the fallthrough branch is exactly
+# where it was broken before: an early `return` once skipped the cache write on
+# one source, leaving the cache empty precisely when that source was working.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.42)"
+check "a studio reading writes the last-known cache" "42" \
+  "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
+
+# 27. BOTH sources unreadable -> still UNREADABLE, and the WARN names both. The
+# UNREADABLE-vs-0 distinction is the guard's load-bearing property (0 = wide
+# open, "" = blind); adding a source must not create a path where a failure
+# becomes a number.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
+check "both sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
+check "both sources down -> the WARN names dashboard AND studio" "0" \
+  "$(grep -q 'UNREADABLE (dashboard and studio both unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
