@@ -28,6 +28,23 @@ if (!('ResizeObserver' in globalThis)) {
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
 }
 
+// Same gap, same reason: jsdom ships no `DOMMatrixReadOnly`, and React Flow's
+// `updateNodeInternals` builds one from the viewport's computed `transform` to
+// read the current zoom. Without it, any test whose canvas re-measures a node
+// throws `not a constructor` from a passive effect — a failure that names jsdom,
+// not the code under test.
+//
+// `m22` (the vertical scale, which RF destructures as `zoom`) is the ONLY field
+// read, and 1 is the truthful answer here: jsdom computes no transform, so the
+// viewport is unscaled. Deliberately not a fuller matrix — real zoom arithmetic
+// belongs to the e2e, which has a browser that can do it.
+class DOMMatrixReadOnlyStub {
+  readonly m22 = 1;
+}
+if (!('DOMMatrixReadOnly' in globalThis)) {
+  (globalThis as { DOMMatrixReadOnly?: unknown }).DOMMatrixReadOnly = DOMMatrixReadOnlyStub;
+}
+
 // Unmount React trees between tests so queries never leak across cases.
 afterEach(() => {
   cleanup();

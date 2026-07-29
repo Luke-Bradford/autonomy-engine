@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
+import { PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
 import { FlowCanvas } from './FlowCanvas';
 import { ACTIVITY_DND_MIME } from './activityDnd';
@@ -165,5 +166,141 @@ describe('FlowCanvas drop target (U5)', () => {
     // The same predicate gates both, so the operator gets the browser's "no drop"
     // cursor over the minimap rather than an invitation to drop there.
     expect(accepted).toBe(false);
+  });
+});
+
+/**
+ * U6c — the DERIVED container node, at the wiring level.
+ *
+ * What jsdom can see is which nodes the canvas hands React Flow and what they
+ * carry; what it cannot see is any of the geometry, because it measures every
+ * element as 0×0 and resolves no cascade. So the box's size, its enclosure of its
+ * children and — the defect that shipped once — whether an edge with a container
+ * endpoint actually renders are all `e2e/container-rendering.spec.ts`'s to prove.
+ * These specs cover the half that is cheap here and awkward there: that a loaded
+ * container reaches the canvas at all, and that it is NOT in the domain graph.
+ */
+describe('FlowCanvas container rendering (U6c)', () => {
+  function withContainer(
+    containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [
+      { id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] },
+    ],
+  ) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
+        ],
+        edges: [],
+        containers,
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container };
+  }
+
+  /** The element React Flow owns for a node — where a node's aria props land. */
+  function nodeWrapper(container: HTMLElement, id: string): HTMLElement {
+    const el = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+    expect(el, `no rendered node ${id}`).not.toBeNull();
+    return el!;
+  }
+
+  it('renders a loaded container as its own node type, labelled by KIND', () => {
+    const { container } = withContainer();
+    const box = container.querySelector('.flow-container');
+    expect(box).not.toBeNull();
+    // The word, not a colour or a shape — the same one `connectRules` refuses a
+    // boundary crossing by, so a refusal points at something on screen.
+    expect(box!.querySelector('.flow-container-label')?.textContent).toBe('stage');
+  });
+
+  /**
+   * The accessible name goes on the element React Flow owns, via the node's
+   * `ariaRole`/`ariaLabel`, not on this component's inner `<div>`.
+   *
+   * On the inner div the name sat on a `pointer-events: none` child of a wrapper
+   * that — a container being non-focusable — carried no role at all, while RF
+   * still wrote its unconditional `aria-roledescription="node"` there. So the box
+   * announced itself on one element and was described on another.
+   */
+  it('puts the accessible name and role on the node element React Flow renders', () => {
+    const { container } = withContainer();
+    const wrapper = nodeWrapper(container, 'c_1');
+    expect(wrapper.getAttribute('role')).toBe('group');
+    expect(wrapper.getAttribute('aria-label')).toBe('stage container, 2 activities');
+    // And NOT on the inner div, which cannot be reached or focused.
+    expect(container.querySelector('.flow-container')!.hasAttribute('aria-label')).toBe(false);
+  });
+
+  /**
+   * What is announced is what is DRAWN — the count comes from the box, not from
+   * `container.children.length`.
+   *
+   * The two disagree whenever a listed child is not in the box: a phantom (its
+   * node deleted, the id still listed — reachable today, since `deleteNode` does
+   * not prune `containers[].children`) or a child a FIRST-wins earlier container
+   * already claimed. Counting the raw array captions the box with children it does
+   * not contain.
+   */
+  it('announces the children it DRAWS, not the ids it lists', () => {
+    const { container } = withContainer([{ id: 'c_1', kind: 'stage', children: ['n_a', 'ghost'] }]);
+    expect(nodeWrapper(container, 'c_1').getAttribute('aria-label')).toBe(
+      'stage container, 1 activity',
+    );
+  });
+
+  /**
+   * Containers are handed to React Flow FIRST, which is what puts the box behind
+   * the activities it encloses.
+   *
+   * Order is the whole mechanism: with React Flow's basic z-index mode an
+   * unselected activity resolves to the same z as the container's explicit
+   * `zIndex: 0`, so the tie is broken by the order of the `nodes` prop, which RF
+   * emits verbatim. Cheap to state here and red the moment the spread flips.
+   *
+   * (The change-seam filter that keeps container changes out of the domain store
+   * is deliberately NOT tested — `moveNode`/`deleteNode` both early-return on an
+   * unknown id, so removing the filter changes nothing observable today. It is
+   * documented at the seam as a guard for U6d, when it starts to matter, rather
+   * than pinned by a test that cannot fail.)
+   */
+  it('hands the container to React Flow before its children, so it paints behind', () => {
+    const { container } = withContainer();
+    const ids = [...container.querySelectorAll('.react-flow__node')].map((n) =>
+      n.getAttribute('data-id'),
+    );
+    expect(ids).toEqual(['c_1', 'n_a', 'n_b']);
+  });
+
+  /**
+   * A container whose id COLLIDES with a node's must not make that node inert.
+   *
+   * Nodes and containers share one id namespace. `validateDoc` refuses a
+   * collision, but that gate is advisory and write-path only, so a version
+   * written before it still loads. When it does, RF's Map-keyed `nodeLookup`
+   * keeps the LAST entry for the id — the activity — so every change RF reports
+   * for that id belongs to a node that IS in the store. Filtering it by id alone
+   * dropped all of them: the node could not be selected, moved or deleted, which
+   * is to say the operator could not edit the doc back out of the collision.
+   */
+  it('does not swallow changes for an ACTIVITY that shares a container id', () => {
+    const { store, container } = withContainer([{ id: 'n_a', kind: 'stage', children: ['n_b'] }]);
+    fireEvent.click(nodeWrapper(container, 'n_a'));
+    expect(store.getState().selected).toEqual({ kind: 'node', id: 'n_a' });
   });
 });

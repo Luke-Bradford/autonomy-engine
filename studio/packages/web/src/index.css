@@ -27,6 +27,20 @@
      (#292929 dark / #ffffff light), NOT --bg. Both measured in the browser and
      pinned in e2e/edge-typing.spec.ts. */
   --branch: #b98cf5;
+  /* U6c — the container group box. TRANSLUCENT on purpose: it is drawn behind
+     its children over React Flow's own canvas surface (Fluent's
+     --colorNeutralBackground1, not --bg), so an opaque panel colour would either
+     punch a hole in the canvas or wash the dot grid out entirely. Alpha lets the
+     grid read through and keeps the box a region rather than a large node.
+
+     The HUE is --muted's grey (#9aa3b2), and deliberately NOT --accent: that is
+     the `completion` edge hue (see .edge-variant-completion below) as well as the
+     selection colour, so an accent wash would paint every container in the
+     language of an edge outcome. A container is a grouping, not an outcome — the
+     same reasoning that gave `branch` its own neutral hue above. It cannot be
+     `var(--muted)` itself: this palette is one colour literal per variable, which
+     is what makes palette.test.ts's non-vacuity check work. */
+  --container-fill: rgba(154, 163, 178, 0.1);
   font-family:
     system-ui,
     -apple-system,
@@ -63,6 +77,11 @@
   /* Darkened for a WHITE canvas surface (#ffffff), the same reason every hue
      above is darkened for `--bg`. */
   --branch: #6b3fa0;
+  /* Light mode's canvas surface is WHITE, where the light grey above is nearly
+     invisible, so this is light mode's --muted (#5b6270) — a DARKER grey, which
+     needs slightly LESS alpha to read as the same recessed region against white
+     than the light grey needs against the dark canvas. */
+  --container-fill: rgba(91, 98, 112, 0.08);
   color-scheme: light;
 }
 
@@ -998,6 +1017,77 @@ td button + button {
 
 .flow-node.selected {
   border-color: var(--accent);
+}
+
+/* ── U6c container groups ────────────────────────────────────────────────────
+ *
+ * The box a container's children sit in. It fills its React Flow node, whose
+ * width/height are DERIVED from those children (`containerLayout.ts`) — so the
+ * geometry is set in JS and only the skin is here.
+ *
+ * `pointer-events: none` keeps the box from swallowing the gesture aimed through
+ * it. The box spans a region of the canvas containing other interactive things,
+ * and a React Flow node is a plain absolutely-positioned div that would otherwise
+ * sit in front of the pane and eat the click on empty space inside a stage that
+ * should DESELECT — the shape of the bug U6b paid for once in its
+ * `.react-flow__panel` form. (A toolbox DROP is not at risk: `onDrop` is bound on
+ * the ReactFlow root, which every node is a descendant of, so the drop bubbles
+ * there whether or not the box is hit-testable. Claiming otherwise would be an
+ * as-built claim the code does not support.)
+ *
+ * Belt and braces, honestly labelled: React Flow ALREADY writes
+ * `pointer-events: none` inline on the wrapper of a node that is neither
+ * selectable nor draggable, and both rules here are inert while that holds.
+ * They are kept because U6d makes a container selectable, which flips RF's
+ * inline value to `all` and leaves these as the only thing standing. Handles opt
+ * back IN below for the same reason — a container is a legal edge endpoint and
+ * its ports must stay draggable once the box itself is hit-testable.
+ *
+ * Dashed, and one shade off the canvas rather than a filled panel: the box has
+ * to read as a REGION behind its children, not as a large node in front of them.
+ */
+.flow-container {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--container-fill);
+  pointer-events: none;
+}
+
+.flow-container .react-flow__handle {
+  pointer-events: all;
+}
+
+.flow-container-label {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/*
+ * A container in the MINIMAP.
+ *
+ * React Flow's minimap draws every node in the lookup as one filled rect, so
+ * without this a container is a large blob in the SAME fill as the activities it
+ * encloses, painted over them (containers come first in the nodes prop, and the
+ * minimap keeps that order). Drawn as an outline instead — the same "region, not
+ * a node" reading the box has on the canvas.
+ *
+ * `fill`/`stroke` here, not `background`: these are SVG `<rect>`s. RF writes both
+ * inline only when a `nodeColor`/`nodeStrokeColor` prop is given — neither is —
+ * so this class rule (0,2,0, beating RF's own `.react-flow__minimap-node`) is
+ * what paints them.
+ */
+.react-flow__minimap-node.minimap-node-container {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
 }
 
 /* ── U6a typed edges ─────────────────────────────────────────────────────────

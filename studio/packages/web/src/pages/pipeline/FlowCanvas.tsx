@@ -16,15 +16,17 @@ import {
   type FinalConnectionState,
   type Node as FlowNode,
   type NodeChange,
+  type NodeHandle,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { getActivity } from '@autonomy-studio/shared';
+import { getActivity, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
+import { containerRects } from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
@@ -57,9 +59,112 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
   );
 });
 
+interface ContainerData extends Record<string, unknown> {
+  kind: ContainerKind;
+}
+
+/**
+ * U6c — a container, drawn as the box its children sit in.
+ *
+ * The header states the KIND in words ('loop' / 'stage' / 'foreach'), not by
+ * colour or shape alone — the epic's non-color-status-labels criterion, and the
+ * same word `connectRules` names the container by when it refuses a boundary
+ * crossing, so a refusal points at something on screen.
+ *
+ * BOTH handle types, with the ids every edge names. `flowEdges` sets
+ * `sourceHandle: 'out'` / `targetHandle: 'in'` on every edge uniformly, so a
+ * container that is an edge SOURCE needs the source handle and one that is a
+ * TARGET needs the target handle. Without them React Flow cannot resolve the
+ * endpoint and the edge does not render — which, before U6c, is exactly what
+ * happened to every container edge (silently: RF's `onlyRenderVisibleElements`
+ * path drops an edge whose endpoint node is missing from the lookup, with no
+ * console error to notice it by).
+ */
+const ContainerNode = memo(function ContainerNode({ data }: NodeProps) {
+  const d = data as ContainerData;
+  return (
+    <div className="flow-container">
+      <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
+      <span className="flow-container-label">{d.kind}</span>
+      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
+    </div>
+  );
+});
+
+/**
+ * What the box announces. Lives on the NODE (`ariaRole`/`ariaLabel`), not on this
+ * component's own `<div>`.
+ *
+ * React Flow owns the outer element — `role: node.ariaRole ?? (isFocusable ?
+ * 'group' : undefined)` and `aria-label: node.ariaLabel` — and this file already
+ * takes that route for edges (`ariaLabel: edgeAriaLabel(e)` below). Labelling the
+ * inner div instead put the accessible name on a `pointer-events: none` child of
+ * a wrapper that, because the container is not focusable, had NO role at all
+ * while still carrying RF's unconditional `aria-roledescription="node"`.
+ *
+ * Counted from the box's OWN `childCount`, not `container.children.length`: see
+ * `ContainerBox`. What is announced is what is drawn.
+ */
+function containerAriaLabel(kind: ContainerKind, childCount: number): string {
+  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
+}
+
 // Module-level constant: React Flow requires a stable `nodeTypes` identity (a
 // new object each render re-mounts every node and warns).
-const nodeTypes = { activity: ActivityNode };
+const nodeTypes = { activity: ActivityNode, container: ContainerNode };
+
+/**
+ * The size assumed for a node React Flow has not measured yet.
+ *
+ * Used for ONE frame: `measured` is populated as soon as RF observes the node,
+ * and the container box re-derives from the real size on the next render. It
+ * exists so the first paint of a freshly-loaded doc has a plausible box instead
+ * of a zero-area one, not as a layout constant anything depends on.
+ */
+const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
+
+/**
+ * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
+ * centred on the node's border (`left: -4px` and friends).
+ */
+const HANDLE_SIZE = 6;
+
+/**
+ * The port bounds of a derived container box, stated rather than measured.
+ *
+ * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
+ * off them positionally (`getHandlePosition`): a LEFT handle contributes
+ * `(handle.x, y + height/2)` and a RIGHT one `(handle.x + handle.width, …)`.
+ *
+ * So centring each 6px dot on its border puts the endpoint 3px OUTSIDE the box
+ * (`-HANDLE_SIZE / 2` on the left, `width + HANDLE_SIZE / 2` on the right) and
+ * exactly on the vertical midpoint. Three pixels out is the convention, not a
+ * miss: RF's own stylesheet draws an activity's handle the same way, and what it
+ * MEASURES for one lands within a pixel of this. The line therefore meets the
+ * rendered dot on a container exactly as it does on an activity.
+ */
+function containerHandles(width: number, height: number): NodeHandle[] {
+  const y = (height - HANDLE_SIZE) / 2;
+  const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
+  return [
+    {
+      id: TARGET_PORT_ID,
+      type: 'target',
+      position: Position.Left,
+      x: -HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+    {
+      id: SOURCE_PORT_ID,
+      type: 'source',
+      position: Position.Right,
+      x: width - HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+  ];
+}
 
 /**
  * Canvas CHROME that must not accept a toolbox drop (U5).
@@ -204,6 +309,125 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }, [nodes, selected, setFlowNodes]);
 
   /**
+   * U6c — the container boxes, DERIVED from the activity nodes rather than held
+   * in state.
+   *
+   * They are deliberately not in the `useNodesState` array. A container's rect is
+   * a function of its children's rects, and RF writes measured dimensions back
+   * through `onNodesChange`; a container living in that array would therefore be
+   * a feedback loop — set nodes, get measured, recompute, set nodes. Deriving
+   * breaks it by construction: container geometry depends only on ACTIVITY
+   * geometry, never on its own.
+   *
+   * `containers` come from the LOADED version — the canvas cannot author one yet
+   * (U6d) — and are read through the same carry-forward a save writes back.
+   */
+  const containerNodes: FlowNode[] = useMemo(() => {
+    const containers = loaded?.containers ?? [];
+    if (containers.length === 0) return [];
+    const rects = containerRects(
+      containers,
+      new Map(
+        flowNodes.map((n) => [
+          n.id,
+          {
+            x: n.position.x,
+            y: n.position.y,
+            width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
+            height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
+          },
+        ]),
+      ),
+    );
+    return containers.map((c) => {
+      const rect = rects.get(c.id)!;
+      return {
+        id: c.id,
+        type: 'container',
+        position: { x: rect.x, y: rect.y },
+        /* Size as TOP-LEVEL props, not only in `style`. `onlyRenderVisibleElements`
+           is on, and RF culls against `measured.width ?? width ?? initialWidth ?? 0`
+           — a derived node RF has not measured would otherwise be culled against a
+           0×0 box, taking its edges with it (`isEdgeVisible`). */
+        width: rect.width,
+        height: rect.height,
+        style: { width: rect.width, height: rect.height },
+        /* A DERIVED node must state its own geometry — React Flow can never
+           measure one, and a container that stays "uninitialized" loses every
+           edge that touches it, which is the whole defect U6c exists to fix.
+           Why it cannot be measured: `adoptUserNodes` reuses a node's internals
+           only while the SAME object identity comes back through the `nodes`
+           prop. This object is rebuilt on every render (it is a `useMemo` over
+           the activity rects), so RF re-adopts it every time, and `parseHandles`
+           then reads `!userNode.measured ? undefined : <previous bounds>` —
+           discarding whatever its ResizeObserver had just measured. The measured
+           size cannot come back the normal way either: a container's dimension
+           change is filtered out at `onNodesChange` (below) precisely because it
+           is not the store's to hold. The result is a node RF resets to
+           unmeasured forever, and `getEdgePosition` returns `null` for an
+           endpoint with no handle bounds — silently, since RF's error channel is
+           a no-op in a production build. So both facts are STATED rather than
+           observed — two different things about a node whose geometry is derived,
+           not two attempts at one fix:
+             - `measured`, the size. Also what `adoptUserNodes` reads to decide
+               whether the graph counts as initialised at all.
+             - `handles`, the port bounds, taken verbatim by `parseHandles`, so
+               initialisation does not depend on a DOM measurement landing.
+           Mutation-tested (`e2e/container-rendering.spec.ts`): either one alone
+           is enough to keep the edges — removing BOTH is what reproduces the
+           original defect. They are kept together because each answers a
+           question the other does not, and both are exactly as trustworthy as
+           `rect`, which is this node's only source of truth anyway. */
+        measured: { width: rect.width, height: rect.height },
+        handles: containerHandles(rect.width, rect.height),
+        data: {
+          kind: c.kind,
+        } satisfies ContainerData,
+        /* On the node, so RF puts them on the element it owns — the wrapper this
+           component renders inside. `ariaRole` is needed explicitly because a
+           non-focusable node otherwise gets no role at all. */
+        ariaRole: 'group',
+        ariaLabel: containerAriaLabel(c.kind, rect.childCount),
+        /* Read-only in U6c: the box states membership, it does not edit it.
+           Creating/editing a container and dragging nodes in and out is U6d, and
+           the RF `parentId` mapping that would make a container draggable as a
+           group is U23's. */
+        selectable: false,
+        draggable: false,
+        deletable: false,
+        focusable: false,
+        // Behind its children. Both the explicit z-index and the array order
+        // below are set: RF sorts by `zIndex` and falls back to array order.
+        zIndex: 0,
+      } satisfies FlowNode;
+    });
+  }, [loaded, flowNodes]);
+
+  /** Containers FIRST, so they paint behind the activities they enclose. */
+  const renderedNodes = useMemo(
+    () => [...containerNodes, ...flowNodes],
+    [containerNodes, flowNodes],
+  );
+
+  /**
+   * Ids RF may report changes for that the domain store must never see.
+   *
+   * Container ids MINUS the activity ids, because the two share ONE namespace.
+   * A collision is refused by `validateDoc`, but that gate is advisory and
+   * write-path only, so a version written before it can still load. In that doc
+   * `renderedNodes` carries the id twice, and RF's Map-keyed `nodeLookup` keeps
+   * the LAST one — the activity. Filtering the id would then drop every change
+   * for a node that IS in the store: no drag, no select, no delete, i.e. no way
+   * to edit the doc back out of the collision. Subtracting means the activity
+   * behaves normally and only the (invisible) container loses its changes, which
+   * it has none of.
+   */
+  const containerIds = useMemo(() => {
+    const activityIds = new Set(flowNodes.map((n) => n.id));
+    return new Set(containerNodes.map((n) => n.id).filter((id) => !activityIds.has(id)));
+  }, [containerNodes, flowNodes]);
+
+  /**
    * Typed edges (U6a). The variant CLASS goes on React Flow's edge `<g>`, where
    * it sets `--xy-edge-stroke` — NOT an inline `style.stroke`, and not a rule on
    * `.react-flow__edge-path` directly. RF puts `edge.style` inline on the path,
@@ -260,12 +484,22 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }
 
   function onNodesChange(changes: NodeChange[]) {
+    /* Container changes are dropped before anything sees them (U6c). Container
+       nodes are DERIVED, so they are in the `nodes` prop but not in the view
+       state array and not in the domain store at all — RF still reports their
+       measured dimensions, and a `remove` if one were ever deleted. Letting those
+       through would ask `useNodesState` to track a node it does not own and,
+       worse, hand `deleteNode('<container id>')` to the store, which would find
+       no node and silently do nothing today but is a live footgun for U6d.
+       Filtered at the SEAM rather than in each branch below, so a change type
+       added later cannot miss the guard. */
+    const own = changes.filter((c) => !('id' in c) || !containerIds.has(c.id));
     // Apply every change to the view first (this is where React Flow records
     // measured dimensions, the in-progress drag position, and its own node
     // selection).
-    onNodesChangeRaw(changes);
+    onNodesChangeRaw(own);
     const st = store.getState();
-    for (const c of changes) {
+    for (const c of own) {
       // Commit a move to the domain store once the drag settles (or for a
       // programmatic move) — not on every mid-drag tick, so the domain graph
       // doesn't churn while dragging.
@@ -422,7 +656,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     <>
       <EdgeMarkers />
       <ReactFlow
-        nodes={flowNodes}
+        nodes={renderedNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
@@ -438,7 +672,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         proOptions={{ hideAttribution: true }}
       >
         <Background />
-        <MiniMap pannable zoomable />
+        {/* U6c — containers are in `nodeLookup` now, and the MiniMap draws EVERY
+            node in it with one fill. Left alone, a `stage`/`loop` paints a large
+            solid blob in the same colour as the activities it encloses, on top of
+            them (containers come first, so they paint first). Classed instead, so
+            the CSS can draw it as an outline the way it reads on the canvas. */}
+        <MiniMap
+          pannable
+          zoomable
+          nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
+        />
         <Controls />
         {refusal !== null && (
           /* Canvas-LOCAL, via RF's own `Panel`, per the epic's z-index/portal

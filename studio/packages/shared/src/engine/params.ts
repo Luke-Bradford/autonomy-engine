@@ -1885,11 +1885,19 @@ export function validateDoc(
   // before the container exits. Back-edges are exempt (a child may back-edge to
   // its own enclosing container). Top-level ↔ container-id edges are fine (both
   // have no child-owner).
+  //
+  // The CONDITION is `crossesContainerBoundary` — the same predicate the canvas
+  // refuses a connection DRAG with (U6c), so the gesture the canvas blocks and
+  // the save this gate refuses cannot drift apart. Only the condition is shared:
+  // the message below stays here, so this validator's error ARRAY is unchanged.
   for (const e of doc.edges) {
     if (e.back) continue;
-    const fromOwner = childOwner.get(e.from);
-    const toOwner = childOwner.get(e.to);
-    if (fromOwner !== toOwner) {
+    if (crossesContainerBoundary(childOwner, e.from, e.to)) {
+      // Looked up INSIDE the branch: the owners are message material only, and
+      // the overwhelmingly common edge does not cross, so the non-crossing pass
+      // stays at the predicate's two lookups rather than four.
+      const fromOwner = childOwner.get(e.from);
+      const toOwner = childOwner.get(e.to);
       const loc = (id: string, owner: string | undefined): string =>
         owner !== undefined ? `'${id}' (child of '${owner}')` : `'${id}'`;
       errors.push(
@@ -4023,4 +4031,49 @@ export function containerMembership(containers: Container[]): ContainerMembershi
     }
   }
   return { owner, duplicates };
+}
+
+/**
+ * Would a FORWARD edge between these two endpoints cross a container boundary?
+ *
+ * The encapsulation rule, as one expression: a child's forward edges must stay
+ * within its container, because an outside node wired to a child's terminal would
+ * run before the container exits. Exactly one endpoint being a child — or the two
+ * being children of DIFFERENT containers — is the violation; two top-level
+ * endpoints, and two children of the same container, are fine. A top-level node
+ * wired to a CONTAINER ID is also fine: a container is not its own child, so
+ * neither endpoint has an owner.
+ *
+ * SSOT for the U6c connect-time refusal and `validateDoc`'s own
+ * `crosses a container boundary` error, which is what the #444 write gate refuses
+ * a save for. Extracted so the two cannot drift into refusing different sets —
+ * the anti-drift shape `closesForwardCycle` (U6b) established for the DAG rule.
+ *
+ * Takes the RESOLVED owner map rather than the container list, for two reasons
+ * that both matter:
+ *  - Ownership must be `containerMembership`'s FIRST-declared-wins resolution
+ *    (#492). Re-deriving it here by scanning `children` would yield LAST-wins and
+ *    silently reopen that divergence.
+ *  - Both callers already hold the map. `validateDoc` builds it once for the
+ *    disjointness pass and loops over every edge; the canvas hoists it into its
+ *    per-graph precompute and calls this on every pointer-move of a connection
+ *    drag. Taking `Container[]` would rebuild the map in both hot paths.
+ *
+ * BACK-EDGES ARE THE CALLER'S JOB. A back-edge may legally cross (a child may
+ * back-edge to its own enclosing container), and this predicate is condition-only
+ * — it says nothing about `back`. `validateDoc` skips it with `if (e.back)
+ * continue`; the canvas skips it for a back-edge candidate. Unlike
+ * `closesForwardCycle`, which back-edges escape BY CONSTRUCTION (they are not in
+ * the forward graph at all), the exemption here has to be spelled by each caller.
+ *
+ * Not a DELTA, unlike the cycle rule: crossing is a property of the single
+ * candidate edge, so a doc that already contains a crossing does not make the
+ * next edge guilty and needs no base-state subtraction.
+ */
+export function crossesContainerBoundary(
+  owner: ReadonlyMap<string, string>,
+  from: string,
+  to: string,
+): boolean {
+  return owner.get(from) !== owner.get(to);
 }

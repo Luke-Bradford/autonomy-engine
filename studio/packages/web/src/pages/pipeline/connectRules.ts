@@ -1,5 +1,7 @@
 import {
   closesForwardCycle,
+  containerMembership,
+  crossesContainerBoundary,
   getActivity,
   type Container,
   type Edge,
@@ -25,7 +27,7 @@ import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition
 
 /** Why a candidate connection was refused. */
 export type ConnectRejectionReason =
-  'self-loop' | 'unknown-endpoint' | 'duplicate' | 'forward-cycle';
+  'self-loop' | 'unknown-endpoint' | 'duplicate' | 'container-boundary' | 'forward-cycle';
 
 export interface ConnectRejection {
   reason: ConnectRejectionReason;
@@ -79,6 +81,16 @@ export interface ConnectPrecheck {
   edgeKeys: ReadonlySet<string>;
   /** Nodes by id, for naming an endpoint the way the canvas labels it. */
   byId: ReadonlyMap<string, Node>;
+  /** Containers by id — an endpoint can be one, and it is named by its KIND. */
+  containerById: ReadonlyMap<string, Container>;
+  /**
+   * Which container owns each child, FIRST-declared-wins
+   * (`containerMembership`, the reducer's and the save gate's own SSOT).
+   * Hoisted like everything else here: the boundary rule runs on every
+   * pointer-move of a drag, and rebuilding the map per move would rescan every
+   * container's children each time.
+   */
+  childOwner: ReadonlyMap<string, string>;
 }
 
 export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
@@ -87,6 +99,8 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     endpoints: new Set([...graph.nodes.map((n) => n.id), ...graph.containers.map((c) => c.id)]),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     byId: new Map(graph.nodes.map((n) => [n.id, n])),
+    containerById: new Map(graph.containers.map((c) => [c.id, c])),
+    childOwner: containerMembership(graph.containers).owner,
   };
 }
 
@@ -105,13 +119,31 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  * transient feedback about the two ports the operator's pointer just connected,
  * so it names WHAT they wired, not which of two identical activities it was —
  * and there is no per-node name to use instead (`Node` has an id and a type).
- * An endpoint with no node — a container id (U6c/U6d), or an id from a stale
- * view — degrades to the raw id rather than inventing a name.
+ * A CONTAINER endpoint is named by its KIND — "loop", "stage", "foreach" — which
+ * is the same word its box is labelled with on the canvas (U6c), so the sentence
+ * points at something the operator can actually see. A container has no activity
+ * and no name field, and falling through to the raw id here would reproduce the
+ * exact unreadable-id defect above in its container form.
+ *
+ * An endpoint that is neither — an id from a stale view — degrades to the raw id
+ * rather than inventing a name.
  */
 function endpointLabel(pre: ConnectPrecheck, id: string): string {
   const node = pre.byId.get(id);
-  if (node === undefined) return id;
-  return getActivity(node.type)?.title ?? node.type;
+  if (node !== undefined) return getActivity(node.type)?.title ?? node.type;
+  const container = pre.containerById.get(id);
+  if (container !== undefined) return `${container.kind} container`;
+  return id;
+}
+
+/** How a container is named when it is the OBSTACLE rather than an endpoint. */
+function containerKind(pre: ConnectPrecheck, id: string | undefined): string | undefined {
+  return id === undefined ? undefined : pre.containerById.get(id)?.kind;
+}
+
+function containerName(pre: ConnectPrecheck, id: string | undefined): string {
+  const kind = containerKind(pre, id);
+  return kind === undefined ? 'a container' : `the ${kind} container`;
 }
 
 /** The edge a candidate would become — the value both remaining rules read. */
@@ -161,6 +193,53 @@ export function connectRejection(
       message:
         `'${fromName}' → '${toName}' already has a '${edgeLabel(probe)}' edge — select it to ` +
         `change its condition, or delete it first`,
+    };
+  }
+
+  /* U6c — encapsulation, checked BEFORE the cycle sweep.
+     Ordered first because it is the narrower fact (a candidate can cross a
+     boundary AND close a cycle, and the crossing is the one the operator can see
+     the cause of, now that the box is drawn) and because it is two map lookups
+     against the sweep's two linear passes.
+     A back-edge is exempt the same way the save gate exempts it — a child may
+     back-edge to its enclosing container, which is the loop idiom. The shared
+     predicate is condition-only, so the exemption is stated here. */
+  if (candidate.back !== true && crossesContainerBoundary(pre.childOwner, from, to)) {
+    const fromOwner = pre.childOwner.get(from);
+    const toOwner = pre.childOwner.get(to);
+    // Which side is enclosed decides BOTH how the sentence reads and what it can
+    // honestly suggest. Both enclosed (in DIFFERENT containers) is the third
+    // case, and it is the one with the traps:
+    //  - naming both by kind says nothing when the kinds MATCH — "the stage
+    //    container and the stage container" reads as a contradiction. The id is
+    //    not available as the disambiguator (`containerName`: a raw `c_<uuid>`
+    //    is what U6b's browser pass caught), so the shared-kind sentence names
+    //    the two NODES instead, which is what the operator can see on screen;
+    //  - the one-sided suggestion is false here. With both ends enclosed there
+    //    is no "outside step" to wait on the container, so it points at the two
+    //    containers instead.
+    const bothEnclosed = fromOwner !== undefined && toOwner !== undefined;
+    const fromKind = containerKind(pre, fromOwner);
+    const sharedKind =
+      bothEnclosed && fromKind === containerKind(pre, toOwner) ? fromKind : undefined;
+    const detail = bothEnclosed
+      ? sharedKind !== undefined
+        ? `'${fromName}' and '${toName}' are in different ${sharedKind} containers`
+        : `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
+          `inside ${containerName(pre, toOwner)}`
+      : fromOwner !== undefined
+        ? `'${fromName}' is inside ${containerName(pre, fromOwner)}`
+        : `'${toName}' is inside ${containerName(pre, toOwner)}`;
+    const suggestion = bothEnclosed
+      ? `Connect the containers themselves instead, so one waits for the whole of the other ` +
+        `to finish`
+      : `Connect the container itself instead, so the outside step waits for the whole ` +
+        `container to finish`;
+    return {
+      reason: 'container-boundary',
+      message:
+        `'${fromName}' → '${toName}' would cross a container boundary — ${detail}, and a ` +
+        `child's edges must stay inside it. ${suggestion}`,
     };
   }
 

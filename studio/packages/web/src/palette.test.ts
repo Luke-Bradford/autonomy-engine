@@ -141,3 +141,65 @@ describe('U6a edge variant hues', () => {
     }
   });
 });
+
+/**
+ * U6c — the container wash is the NEUTRAL grey, and provably not an edge hue.
+ *
+ * It shipped as `rgba(110, 168, 254, …)`, which is `--accent` — the `completion`
+ * edge hue above, and the selection colour — under a comment claiming "a neutral
+ * grey wash". Every check passed: the e2e asserts the fill resolves, is not
+ * transparent, and differs between themes, all of which a wrong hue satisfies.
+ * Nothing could see the semantics, so this asserts them.
+ *
+ * A hue, not a whole value: `--container-fill` carries the palette's grey at low
+ * alpha, so it cannot be `var(--muted)` itself — this file's own non-vacuity check
+ * requires exactly one colour LITERAL per palette variable.
+ */
+describe('U6c container fill', () => {
+  /** `#aabbcc` or `rgba(r, g, b, a)` → `r,g,b`. */
+  function hue(value: string): string {
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(value.trim());
+    if (hex)
+      return hex
+        .slice(1, 4)
+        .map((h) => parseInt(h, 16))
+        .join(',');
+    const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/.exec(value.trim());
+    expect(rgb, `cannot read a hue out of '${value}'`).not.toBeNull();
+    return rgb!.slice(1, 4).join(',');
+  }
+
+  it.each([
+    ['dark', base],
+    ['light', light],
+  ])('paints %s mode with --muted, the no-semantics grey', (_theme, palette) => {
+    const fill = palette.get('--container-fill');
+    expect(fill).toBeDefined();
+    expect(hue(fill!)).toBe(hue(palette.get('--muted')!));
+  });
+
+  it.each([
+    ['dark', base],
+    ['light', light],
+  ])('does NOT reuse an OUTCOME hue in %s mode', (_theme, palette) => {
+    // A grouping is not an outcome: --accent is `completion` (and selection),
+    // --success/--error are the success/failure edges, --branch is routing.
+    const fill = hue(palette.get('--container-fill')!);
+    for (const taken of ['--accent', '--success', '--error', '--branch']) {
+      expect(fill, `the container wash reuses ${taken}`).not.toBe(hue(palette.get(taken)!));
+    }
+  });
+
+  /** Translucent, or the box stops being a region behind its children. */
+  it.each([
+    ['dark', base],
+    ['light', light],
+  ])('keeps the %s wash translucent', (_theme, palette) => {
+    const alpha = /rgba\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*([\d.]+)\)/.exec(
+      palette.get('--container-fill')!,
+    );
+    expect(alpha, 'the container fill is not an rgba() with an alpha').not.toBeNull();
+    expect(Number(alpha![1])).toBeGreaterThan(0);
+    expect(Number(alpha![1])).toBeLessThan(0.2);
+  });
+});

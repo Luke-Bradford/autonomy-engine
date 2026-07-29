@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   closesForwardCycle,
+  containerMembership,
+  crossesContainerBoundary,
   FILE_WRITE_ACTIVITY_TYPE,
   type Container,
   type Edge,
@@ -188,12 +190,224 @@ describe('connectRejection', () => {
     }
   });
 
-  it('a container-mediated path is not a cycle (the save gate accepts it, so this must)', () => {
+  /**
+   * A container-mediated path is not a CYCLE — the point this spec was written
+   * for (U6b), and still true.
+   *
+   * Its original parenthetical, "(the save gate accepts it, so this must)", was
+   * NOT true and is corrected here. `validatePipelineDoc` refuses this very doc:
+   * *"edge 'e2': crosses a container boundary 'b' (child of 'C') → 'C'"*. The
+   * spec only ever demonstrated that the cycle rule stays quiet, while the gate
+   * refused the save for a different reason the canvas could not yet see — the
+   * draw-it-then-learn-it-is-unsavable gap U6b set out to close and could not,
+   * because container membership was not rendered. U6c renders it, so the rule
+   * lands and the expectation becomes a REFUSAL with the specific reason.
+   */
+  it('a container-mediated path is not a cycle — it is refused as a BOUNDARY crossing', () => {
     const g = graph(
       [node('a'), node('b'), node('t')],
       [edge('a', 'b'), edge('C', 't')],
       [{ id: 'C', kind: 'stage', children: ['a', 'b'] }],
     );
-    expect(reject(g, 'b', 'C')).toBeNull();
+    expect(closesForwardCycle(g, g.containers, 'b', 'C')).toBe(false);
+    expect(reject(g, 'b', 'C')?.reason).toBe('container-boundary');
+  });
+});
+
+/**
+ * U6c — the container-BOUNDARY rule.
+ *
+ * U6b deliberately left this out and named U6c/U6d as its owner: the rule was
+ * real and the save gate already enforced it, but container membership was not
+ * RENDERED, so a refusal's cause would have been invisible — the operator would
+ * have been told two activities cannot connect with no way to see the box that
+ * explains why. U6c draws the box, so the rule can now be stated.
+ */
+describe('connectRejection — container boundaries', () => {
+  const CONTAINED = graph(
+    [node('inside'), node('sibling'), node('outside')],
+    [],
+    [{ id: 'C', kind: 'stage', children: ['inside', 'sibling'] }],
+  );
+
+  it('refuses a child connecting OUT to a top-level node', () => {
+    expect(reject(CONTAINED, 'inside', 'outside')?.reason).toBe('container-boundary');
+  });
+
+  it('refuses a top-level node connecting IN to a child', () => {
+    expect(reject(CONTAINED, 'outside', 'inside')?.reason).toBe('container-boundary');
+  });
+
+  it('allows two children of the same container', () => {
+    expect(reject(CONTAINED, 'inside', 'sibling')).toBeNull();
+  });
+
+  it('allows a top-level node to connect to the CONTAINER itself', () => {
+    expect(reject(CONTAINED, 'outside', 'C')).toBeNull();
+  });
+
+  it('refuses children of DIFFERENT containers', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'C', kind: 'stage', children: ['a'] },
+        { id: 'D', kind: 'stage', children: ['b'] },
+      ],
+    );
+    expect(reject(g, 'a', 'b')?.reason).toBe('container-boundary');
+  });
+
+  /**
+   * A back-edge may legally cross — a child back-edging to its enclosing
+   * container is the loop idiom, and the save gate exempts it (`if (e.back)
+   * continue`). The exemption is the CALLER's, because the shared predicate is
+   * condition-only, so it has to be pinned at this level too.
+   */
+  it('exempts a back-edge', () => {
+    const pre = precomputeConnect(CONTAINED);
+    const candidate = { from: 'inside', to: 'outside', condition: { on: 'success' } as const };
+    expect(connectRejection(pre, candidate)?.reason).toBe('container-boundary');
+    expect(connectRejection(pre, { ...candidate, back: true })).toBeNull();
+  });
+
+  /**
+   * ORDER IS THE MESSAGE, the same principle the U6b rules are ordered by. A
+   * candidate that both crosses a boundary and closes a cycle is reported as the
+   * boundary crossing: it is the narrower, more actionable fact, and it is the
+   * one the operator can see on screen now that the box is drawn.
+   */
+  it('reports the boundary crossing in preference to a cycle', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [edge('b', 'a')],
+      [{ id: 'C', kind: 'stage', children: ['a'] }],
+    );
+    expect(closesForwardCycle(g, g.containers, 'a', 'b')).toBe(true);
+    expect(reject(g, 'a', 'b')?.reason).toBe('container-boundary');
+  });
+
+  /**
+   * The naming defect U6b's browser pass found, in its container form. A
+   * container id is minted the same way a node id is, so a message that fell
+   * through to the raw id would read *"…leaves 'c_7c44a16f-98f1-…'"*. There is no
+   * activity to name a container by, so it is named by its KIND — which is also
+   * exactly what the box on screen is labelled with, so the sentence points at
+   * something the operator can see.
+   */
+  it('names a container by KIND, never by its raw id', () => {
+    const id = 'c_7c44a16f-98f1-4958-9a1e-0d4f2b6c8e11';
+    const g = graph(
+      [
+        node('n_9c4bb103-23dc-4c1a-bb2e-1f7a5d3e9c22'),
+        node('n_1a2b3c4d-5e6f-4708-9a0b-c1d2e3f4a5b6'),
+      ],
+      [],
+      [
+        {
+          id,
+          kind: 'loop',
+          children: ['n_9c4bb103-23dc-4c1a-bb2e-1f7a5d3e9c22'],
+          exitWhen: '${true}',
+        },
+      ],
+    );
+    const message = reject(
+      g,
+      'n_9c4bb103-23dc-4c1a-bb2e-1f7a5d3e9c22',
+      'n_1a2b3c4d-5e6f-4708-9a0b-c1d2e3f4a5b6',
+    )?.message;
+    expect(message).toBeDefined();
+    expect(message).toContain('loop');
+    expect(message).not.toContain(id);
+  });
+
+  /**
+   * Naming by KIND is right until there are two of a kind, and then it says
+   * nothing: *"they are in different containers (the stage container and the
+   * stage container)"* reads as a contradiction. The id cannot be the
+   * disambiguator — the test above exists precisely because a raw `c_<uuid>` is
+   * unreadable — so the sentence disambiguates by what the operator CAN see on
+   * the canvas: the two nodes it already names.
+   */
+  it('does not name two containers of the same kind identically', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'c_11111111-1111-4111-8111-111111111111', kind: 'stage', children: ['a'] },
+        { id: 'c_22222222-2222-4222-8222-222222222222', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toBeDefined();
+    expect(message).not.toContain('the stage container and the stage container');
+    expect(message).toContain('different stage containers');
+    expect(message).not.toContain('c_11111111');
+    expect(message).not.toContain('c_22222222');
+  });
+
+  /** Two DIFFERENT kinds still name both, since the kinds already distinguish them. */
+  it('names both kinds when the two containers differ', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'C', kind: 'loop', children: ['a'], exitWhen: '${true}' },
+        { id: 'D', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toContain('the loop container');
+    expect(message).toContain('the stage container');
+  });
+
+  /**
+   * The fix-up suggestion has to match the case it is appended to. "Connect the
+   * container itself instead, so the outside step waits for the whole container
+   * to finish" is right when ONE end is enclosed — and false when both are,
+   * because then there is no outside step to wait.
+   */
+  it('does not offer an "outside step" when BOTH ends are enclosed', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [],
+      [
+        { id: 'C', kind: 'loop', children: ['a'], exitWhen: '${true}' },
+        { id: 'D', kind: 'stage', children: ['b'] },
+      ],
+    );
+    const message = reject(g, 'a', 'b')?.message;
+    expect(message).toBeDefined();
+    expect(message).not.toContain('outside step');
+    expect(message).toContain('Connect the containers themselves instead');
+  });
+
+  /** ...and the one-sided case, which the suggestion was written for, keeps it. */
+  it('keeps the "outside step" suggestion when only one end is enclosed', () => {
+    const message = reject(CONTAINED, 'inside', 'outside')?.message;
+    expect(message).toContain('Connect the container itself instead');
+    expect(message).toContain('outside step');
+  });
+
+  /**
+   * Equivalence with the shared predicate, the same anti-drift assertion the
+   * cycle rule carries: this module must never grow a second opinion about what
+   * a boundary is.
+   */
+  it('its boundary verdict IS the shared predicate', () => {
+    const owner = containerMembership(CONTAINED.containers).owner;
+    const pairs: [string, string][] = [
+      ['inside', 'outside'],
+      ['outside', 'inside'],
+      ['inside', 'sibling'],
+      ['outside', 'C'],
+      ['inside', 'C'],
+    ];
+    for (const [from, to] of pairs) {
+      const shared = crossesContainerBoundary(owner, from, to);
+      const local = reject(CONTAINED, from, to)?.reason === 'container-boundary';
+      expect(local).toBe(shared);
+    }
   });
 });
