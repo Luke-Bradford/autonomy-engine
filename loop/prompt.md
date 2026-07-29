@@ -45,8 +45,8 @@ step 1 is what makes it safe.**
 The operator-facing live view is the headline, but the load-bearing part is smaller and must not be
 dropped: **this loop's own driver depends on the old dashboard.** `loop/drive.sh` `quota_pct()` reads
 `http://127.0.0.1:8787/api/state` as PRIMARY, then `loop/claude_usage.py` (relocated out of the
-engine by #764, fixed in #766), then
-studio's `/api/quota` (added by C2). The dashboard is still old-engine code, and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
+engine by #764), then studio's `/api/quota` (added by C2). The dashboard is still old-engine
+code, and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
 of their weekly window. Retiring the engine without a replacement **disarms your own spend guard.**
 Serve the 7-day utilization in the shape the existing parser already reads
 (`account.claude.seven_day.utilization`) so C2 is a URL change, not a rewrite. Two properties are
@@ -72,8 +72,13 @@ The old entry gate ("a scheduled fire has run green against the studio-served qu
 now UNSATISFIABLE and must not be read as met: studio is the THIRD source, so a healthy dashboard
 means every fire logs `quota source: dashboard` and studio is never polled at all. A fire running
 green proves nothing about studio. The real gate is **a scheduled fire that logged `quota source:
-studio`** — which requires #765 first (studio's reader needs a background sampler, and nothing
-supervises a studio server today, so at 03:05 `/api/quota` is connection-refused, not merely 429).
+studio`**. #765 has since delivered what that needs: Defect 2 (`1381a4d`) put studio behind a
+supervised `com.autonomy.studio-server` LaunchAgent on 8788, so `/api/quota` is reachable at 03:05
+rather than connection-refused, and every UNREADABLE it now logs is a real measurement of the READER
+instead of of "no server". The gate is NOT "add a background sampler": #770 measured a cold poll
+returning 200 and rejected a sampler on the evidence; studio backs off geometrically on a 429
+instead. What is still outstanding is purely the EVIDENCE — a scheduled fire that actually logged
+`quota source: studio`.
 Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
 `loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
 polls of one shared, rate-limited budget, sharing one Keychain credential and one macOS-only

@@ -116,7 +116,7 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # THREE sources, and the ORDER is the load-bearing part (cutover C2, #440):
 #   1. the prototype dashboard (`$DASH_URL`)
 #   2. the loop's OWN usage reader (`$LOOP_LIB/claude_usage.py`; relocated out
-#      of the engine by #764, fixed in #766)
+#      of the engine by #764; #766 fixed this CALL SITE against the old module)
 #   3. studio's native endpoint (`$STUDIO_QUOTA_URL`, #440 C1)
 #
 # All three bottom out in the SAME upstream, `GET /api/oauth/usage`, with the
@@ -149,11 +149,17 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #
 # There is a second-order effect on C3 too, pointing the other way. Post-C3 the
 # dashboard read fails on EVERY call, so every quota_pct invocation becomes a
-# Keychain read plus a direct poll -- and as the paragraph above notes, that is
-# tens of polls in one iteration during a long auth block, with no cross-process
-# throttle on either surviving source (this reader deliberately has no cache,
-# correctly, since each read is a fresh process). So the pair can self-inflict the
-# very 429 that then reads as UNREADABLE. Watch for that rather than assume it.
+# Keychain read plus a direct poll -- and as the "Studio LAST" paragraph below
+# notes, that is tens of polls in one iteration during a long auth block. THIS
+# READER is the unthrottled one: it runs as a fresh process per call, so it has no
+# in-memory cache, and nothing gives it a cross-process one either. Studio is not
+# in the same position -- `claude-quota.ts` throttles to a 60s TTL and widens
+# geometrically to ~8min on a 429, held in the long-lived supervised server, and
+# it throttles FAILED reads too. So the self-inflicted-429 hazard is source 2's
+# alone, and it is UNMITIGATED -- filed as #777, to land BEFORE C3, since parking
+# source 1 is what turns it from theoretical into the normal path. #777 also owns
+# reconciling the "exactly ONE process may poll directly" invariant quoted below,
+# which the post-C3 pair structurally violates. Watch for it, don't assume it.
 #
 # That has a consequence for C3 worth stating BEFORE anyone acts on it: removing
 # the dashboard does not merely remove the best source, it also stops the
@@ -251,40 +257,26 @@ quota_pct() {
     # SECOND: the loop's own usage reader. Not a URL, so it is sanitised
     # explicitly rather than via quota_read_url.
     #
-    # ALREADY A PERCENT — do NOT multiply by 100 the way `quota_read_url` does.
-    # That is the one trap in this function. The upstream endpoint reports
-    # `utilization` as a percent (48.0); the two HTTP sources divide it by 100 for
-    # their wire format, which is the ONLY reason quota_read_url multiplies it
-    # back. This reader is called directly and hands over the percent untouched.
-    # Dividing here would report every reading below 150% as 0 — "wide open" —
-    # which FIRES. Post-C3 these are the only two surviving sources and they sit
-    # ten lines apart, so the difference is easy to "tidy" into a fail-open bug.
-    # Pinned from both sides by `test_quota_guard.sh` cases 23-24 (a x100 slip logs
-    # 9700%/4200%, a /100 slip logs 0% and fires).
+    # ALREADY A PERCENT — do NOT multiply by 100 the way `quota_read_url` does,
+    # and do NOT divide. That is the one trap in this function: the two HTTP
+    # sources carry `utilization` as a FRACTION (hence the x100 there), this
+    # reader prints the percent. A /100 slip reports every reading below 150% as
+    # 0 — "wide open" — which FIRES. The two calls sit ten lines apart and are
+    # the only survivors post-C3, so the difference is easy to "tidy" into a
+    # fail-open bug. Pinned from both sides by `test_quota_guard.sh` cases 23-24.
     #
-    # #764 relocated this reader from the engine's `lib/claude_usage.py` to
-    # `$LOOP_LIB/claude_usage.py`. It is a purpose-built port, not a copy: one
-    # call that prints the percent or prints NOTHING and exits 1.
-    #
-    # The old module needed TWO calls and that was the whole bug.
-    # `refresh_live_quota()` was a WRITER — it did the I/O into a module cache and
-    # returned None on every path, including its self-throttled early return —
-    # while the GETTER was `live_quota()`. This read called only the writer and
-    # used its return value, so it yielded "" every time and the guard had ONE
-    # source, not two, from the day it was written (#766). Measured 2026-07-29: a
-    # momentary dashboard blip went straight to UNREADABLE and spent a blind fire
-    # while the dashboard answered 200 seconds later. It also reframes 2026-07-26,
-    # logged as "both sources failed at once" — the fallback was already dead, so
-    # one outage was always enough, and that one cost $24 and shipped nothing. The
-    # port has no writer/getter split at all, so that class cannot recur.
-    #
-    # It also has no last-good GRACE window, deliberately. The old getter served
-    # its last successful sample for up to 15 minutes when the current sample
-    # failed, tagged `age_s`, and this call had to detect and refuse that tag:
-    # a stale-but-plausible LOW reading PERMITS a fire the live figure would have
-    # refused, which is fail-open — the one polarity every guard rule here forbids.
-    # Absent the feature, there is nothing to detect. The monotonic cache below is
-    # the sanctioned way to use an old reading, and it can only ever REFUSE.
+    # WHY A PURPOSE-BUILT PORT rather than a copy of the engine's old
+    # `lib/claude_usage.py`: that module split a WRITER from a GETTER and this
+    # call site used only the writer, so source 2 returned "" for its entire life
+    # and the guard silently had ONE source (#766 — it also reframes 2026-07-26's
+    # "both sources failed at once"; one outage was always enough). The port is a
+    # single call that prints the percent or prints NOTHING and exits 1, so that
+    # class is unrepresentable. It also drops the old last-good GRACE window on
+    # purpose — a stale-but-plausible LOW reading PERMITS a fire the live figure
+    # would refuse, and fail-open is the one polarity forbidden here; the
+    # monotonic `QUOTA_CACHE` below is the sanctioned way to use an old reading
+    # and it can only ever REFUSE. Full rationale lives in ONE place, the
+    # reader's own module docstring — do not re-argue it here.
     qp_out="$(python3 "$LOOP_LIB/claude_usage.py" 2>/dev/null)"
     qp_out="$(quota_sane "$qp_out")"
     [ -n "$qp_out" ] && qp_src="loop"
@@ -563,7 +555,7 @@ log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA
 # rather than trusting a README to be read. Cheap, fail-safe, and it cannot
 # suppress a fire -- it only tells the truth about how many sources exist.
 if [ ! -f "$LOOP_LIB/claude_usage.py" ]; then
-  log "WARN: quota fallback reader MISSING at $LOOP_LIB/claude_usage.py -- the guard is down to the dashboard and studio only (#764). If this followed a sync, copy claude_usage.py alongside drive.sh."
+  log "WARN: quota fallback reader MISSING at $LOOP_LIB/claude_usage.py -- the guard has lost a source and is down to its HTTP sources only (#764). If this followed a sync, copy claude_usage.py alongside drive.sh."
 fi
 
 while true; do

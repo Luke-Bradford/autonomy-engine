@@ -8,13 +8,16 @@ parameters, which is also what lets the darwin-only paths be exercised on Linux.
 
 Stdlib only (`unittest`), consistent with the rest of the control plane.
 """
+import http.server
 import io
 import json
 import math
 import os
 import subprocess
 import sys
+import threading
 import unittest
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -131,8 +134,10 @@ class TestKeychainRunner(unittest.TestCase):
         self.assertEqual(seen["argv"],
                          ["security", "find-generic-password",
                           "-s", cu.KEYCHAIN_SERVICE, "-w"])
-        # The item NAME rides argv; the SECRET must only ever come back on stdout.
-        self.assertNotIn("tok-secret", " ".join(seen["argv"]))
+        # (No "token not in argv" assertion here: the assertEqual above pins argv
+        # to an exact 5-element list, which strictly implies it, and the token is
+        # not an input to this function at all -- it arrives on the fake's stdout.
+        # It read as a security assertion while being unable to fail.)
         # A Keychain prompt or hang must not wedge a fire.
         self.assertEqual(seen["kw"].get("timeout"), cu.KEYCHAIN_TIMEOUT)
 
@@ -328,6 +333,20 @@ class TestSevenDayPct(unittest.TestCase):
             self.assertFalse(math.isfinite(data["seven_day"]["utilization"]))
             self.assertIsNone(cu.seven_day_pct(data), msg=raw)
 
+    def test_an_integer_too_large_for_a_float_returns_none_and_does_not_raise(self):
+        """The case NaN/Infinity do not reach: an `int` no float can represent.
+        json parses integer literals exactly and unbounded, and `math.isfinite`
+        takes a float -- so it CONVERTS the argument and raises OverflowError
+        instead of answering False. This function's contract is that it answers
+        None for every invalid reading; callers do catch everything, so this was
+        never a fail-open, but the rest of the file's safety argument rests on the
+        validator itself being total."""
+        data = json.loads('{"seven_day": {"utilization": 1%s}}' % ("0" * 400))
+        self.assertIsInstance(data["seven_day"]["utilization"], int)
+        with self.assertRaises(OverflowError):
+            math.isfinite(data["seven_day"]["utilization"])
+        self.assertIsNone(cu.seven_day_pct(data))
+
     def test_a_missing_five_hour_window_does_not_veto_the_reading(self):
         """A deliberate divergence from lib/claude_usage.py, which requires BOTH
         windows (its all-or-nothing rule exists so the dashboard PANEL never
@@ -459,15 +478,64 @@ class TestMain(unittest.TestCase):
     def test_a_redirect_is_refused_rather_than_followed(self):
         """The real opener must not replay the Bearer token to a redirect target.
         `urlopen` follows 30x by default and CPython's redirect handler strips only
-        content-length/content-type, so Authorization survives the rebuild --
-        including to a different host. Asserted on the REAL opener (`opener=None`),
-        not a stub: the stubbed 302 case above cannot distinguish "refused" from
-        "followed", which is what made it misleading."""
-        self.assertIsNone(cu._NoRedirect().redirect_request(
-            None, None, 302, "Found", {}, "https://evil.example/steal"))
-        # ...and it is actually installed on the default path.
+        content-length/content-type when it rebuilds the request, so an
+        `Authorization` header survives -- including a redirect to another host.
+
+        Driven through the REAL default opener (`opener=None`, so `_OPENER.open`)
+        against a LOOPBACK server, not a stub. A stubbed 302 response cannot
+        distinguish "refused" from "followed", and asserting on
+        `_NoRedirect.redirect_request` alone only shows the override returns None,
+        not that urllib then declines to follow. No network: 127.0.0.1 on an
+        ephemeral port, and the server is torn down in `finally`."""
+        secret = "tok-do-not-leak"
+        target_hits = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/redirect-me":
+                    self.send_response(302)
+                    self.send_header("Location", "/followed")
+                    self.end_headers()
+                    return
+                # Reached ONLY if urllib followed. Record what it carried.
+                target_hits.append(self.headers.get("Authorization"))
+                body = b'{"seven_day": {"utilization": 1.0}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=srv.serve_forever)
+        thread.daemon = True
+        thread.start()
+        saved = cu.USAGE_URL
+        try:
+            cu.USAGE_URL = "http://127.0.0.1:%d/redirect-me" % srv.server_port
+            got = cu.fetch_usage(secret)
+        finally:
+            cu.USAGE_URL = saved
+            srv.shutdown()
+            srv.server_close()
+            thread.join(timeout=5)
+
+        # The redirect is NOT followed, so the token never reaches the target...
+        self.assertEqual(target_hits, [])
+        # ...and the 30x surfaces as UNREADABLE, which the guard already contains.
+        self.assertIsNone(got)
+        # The handler is installed on the default path, and the base
+        # HTTPRedirectHandler is NOT also present. `build_opener` drops the default
+        # only because `_NoRedirect` subclasses it -- re-basing it on `BaseHandler`
+        # would install BOTH, base first in the chain, and the redirect would be
+        # followed again while an `isinstance` check still passed.
         self.assertTrue(any(isinstance(h, cu._NoRedirect)
                             for h in cu._OPENER.handlers))
+        self.assertFalse(any(type(h) is urllib.request.HTTPRedirectHandler
+                             for h in cu._OPENER.handlers))
 
 
 if __name__ == "__main__":

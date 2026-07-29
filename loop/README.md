@@ -123,8 +123,7 @@ without reading the diff. If the driver plist itself ever needs reinstalling, us
 runs from (#764). So syncing `drive.sh` without `claude_usage.py` silently drops the guard's second
 source, which is the exact failure #764 exists to prevent, just re-created by hand. Copy
 `drive.sh`, `claude_usage.py`, `test_quota_guard.sh` and `test_claude_usage.py` together, and
-write `drive.sh` via a sibling
-temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
+write `drive.sh` via a sibling temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
 in-place overwrite corrupts a running fire.
 
 ## Safety model
@@ -137,13 +136,18 @@ Three independent bounds, checked before every fire, each with its own test in
   is the fail-safe direction.
 - **Three quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
   `/api/state`) FIRST, then the loop's own usage reader (`LOOP_LIB/claude_usage.py`, relocated out
-  of the engine by #764 and fixed in #766), then `STUDIO_QUOTA_URL` (studio's native `/api/quota`,
+  of the engine by #764; #766 fixed the *call site* against the old engine module, which the port
+  cannot reproduce), then `STUDIO_QUOTA_URL` (studio's native `/api/quota`,
   #440 C1) LAST. All three bottom out in the same
   upstream `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under
   direct polling. Only the dashboard rides through it, because it samples in the background and
   answers from a warm cache; the other two are direct polls from a cold start and both return ""
   under a 429. Between those two the *proven* one goes first — #766 measured the loop reader
-  returning a real figure, while studio has never once returned a number here (#765). Studio last is
+  returning a real figure, while studio has never once returned a number here (#765). **Do not read
+  that as "the reader works and studio does not"**: re-measured 2026-07-29, the loop reader's token
+  read succeeded and the endpoint 429'd too — the same failure studio reports. Whichever process
+  holds the bucket answers, and that is currently the dashboard's 60s sampler, continuously. The
+  contrast is confounded; `drive.sh` spells this out at the `quota_pct` header. Studio last is
   what makes it free: it is polled only when both others failed, so it adds no upstream load in the
   common case and cannot starve the sampler the primary depends on. Every read logs
   `quota source: <dashboard|loop|studio>`, which is the evidence for promoting studio. **Do not

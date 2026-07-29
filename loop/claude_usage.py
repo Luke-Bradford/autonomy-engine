@@ -187,12 +187,15 @@ def fetch_usage(token, opener=None, timeout=HTTP_TIMEOUT):
         return None
     if opener is None:
         opener = _OPENER.open
-    req = urllib.request.Request(USAGE_URL, headers={
-        "Authorization": "Bearer %s" % token,
-        "anthropic-beta": USAGE_BETA,
-        "Accept": "application/json",
-    })
     try:
+        # Inside the `try` so the "NEVER re-raises" claim above holds literally.
+        # `Request(...)` is the one statement here that touches the token, so it
+        # is also the one whose exception text could carry it.
+        req = urllib.request.Request(USAGE_URL, headers={
+            "Authorization": "Bearer %s" % token,
+            "anthropic-beta": USAGE_BETA,
+            "Accept": "application/json",
+        })
         resp = opener(req, timeout=timeout)
     except Exception:
         return None
@@ -260,9 +263,21 @@ def seven_day_pct(data):
     util = window.get("utilization")
     if isinstance(util, bool) or not isinstance(util, (int, float)):
         return None
-    if not math.isfinite(util) or util < 0:
+    try:
+        if not math.isfinite(util) or util < 0:
+            return None
+        return int(round(float(util)))
+    except (OverflowError, ValueError):
+        # `math.isfinite` takes a float, so it CONVERTS an int argument -- and a
+        # JSON integer literal too large for a float (`1` and 400 zeroes; json
+        # parses it exactly, unbounded) makes that conversion RAISE rather than
+        # answer False. Without this the function is not total, contradicting the
+        # docstring above. Callers do contain it (`read_seven_day_pct` and `main`
+        # both catch everything), so this was never a fail-open -- but "the
+        # validator answers None for every invalid reading" is the property the
+        # rest of this file's safety argument is built on, so it should be true
+        # here rather than true two frames up.
         return None
-    return int(round(float(util)))
 
 
 def read_seven_day_pct(token_reader=read_oauth_token, fetcher=fetch_usage):
