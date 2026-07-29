@@ -114,9 +114,20 @@ async function canvasBackground(page: Page): Promise<string> {
   }, token);
 }
 
-/** A point inside the container box that is NOT over any activity node. */
-async function emptyPointInsideBox(page: Page): Promise<{ x: number; y: number }> {
-  const box = await rectOf(page, '.flow-container');
+/**
+ * A point inside the named container's box that is NOT over any activity node.
+ *
+ * Scoped to the container's own node rather than a bare `.flow-container`: the
+ * helper's name hides its selector, so an unqualified one would go from "the
+ * box" to "some box" the moment a spec seeds two containers — Playwright's
+ * strict mode would refuse it, and a `.first()` would silently probe whichever
+ * box RF happened to render first. Naming the container makes it neither.
+ */
+async function emptyPointInsideBox(
+  page: Page,
+  containerId: string,
+): Promise<{ x: number; y: number }> {
+  const box = await rectOf(page, `.react-flow__node[data-id="${containerId}"] .flow-container`);
   const point = { x: box.left + box.width / 2, y: box.bottom - 6 };
   const overNode = await page.evaluate(
     (p) => document.elementFromPoint(p.x, p.y)?.closest('.react-flow__node[data-id]') !== null,
@@ -274,7 +285,7 @@ test.describe('U6c container rendering', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'e2e u6c pointer', loopDoc());
 
-    const point = await emptyPointInsideBox(page);
+    const point = await emptyPointInsideBox(page, 'loop_1');
     const hitsBox = await page.evaluate(
       (p) => document.elementFromPoint(p.x, p.y)?.closest('.flow-container') !== null,
       point,
