@@ -37,7 +37,6 @@ set -uo pipefail
 
 INFRA="${INFRA:-/Users/lukebradford/Dev/studio-loop}"
 REPO="${REPO:-/Users/lukebradford/Dev/studio-loop-repo}"
-ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
 MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
@@ -84,20 +83,74 @@ MAX_BUDGET_REGRANTS="${MAX_BUDGET_REGRANTS:-1}"  # how many times ONE driver run
                                   # this is what stops flapping auth from uncapping the driver.
 QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last READABLE reading
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
+ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
 DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
+# Studio's native replacement (#440 C1), matching studio's own default PORT of
+# 8080. NOTE this does not by itself identify the RIGHT server: another studio
+# checkout has been seen listening nearby on this machine, and a wrong-but-live
+# server 404s, which reads as UNREADABLE forever while looking correctly
+# configured. Pinning the port cannot distinguish them -- only giving studio its
+# own dedicated port can, which is part of #765 (no supervised studio server).
+STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8080/api/quota}"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
 # --- quota_pct: the 7-day subscription utilization as an INTEGER percent, or ""
 # when it cannot be read. Echoes to stdout; never fails the caller.
 #
-# Read order is deliberate. The operator dashboard is preferred because it holds a
-# recently-refreshed CACHED value: the upstream usage endpoint has its OWN rate
-# limit and returns 429 when polled directly (observed 2026-07-25), so the direct
-# call is the FALLBACK, not the primary. "" (unknown) is a distinct outcome from
-# "0" and the caller must not conflate them -- 0% means wide open, "" means blind.
-quota_pct() {
-  qp_out="$(curl -s --max-time 8 "$DASH_URL" 2>/dev/null | python3 -c "
+# THREE sources, and the ORDER is the load-bearing part (cutover C2, #440):
+#   1. the prototype dashboard (`$DASH_URL`)
+#   2. the engine's usage reader (`$ENGINE_LIB`, fixed in #766)
+#   3. studio's native endpoint (`$STUDIO_QUOTA_URL`, #440 C1)
+#
+# All three bottom out in the SAME upstream, `GET /api/oauth/usage`, with the
+# same OAuth token off the same account -- so they share ONE rate-limit budget.
+# That endpoint 429s under direct polling (observed 2026-07-25, re-confirmed
+# 2026-07-29: eight consecutive direct polls over 12s, all 429).
+#
+# What separates them is therefore not the data but the PATH to it:
+#
+#   * the dashboard rides through a 429 because it samples on a background
+#     thread and answers from a warm cache. It is the only source that does, so
+#     it goes first -- and asking it costs the upstream nothing.
+#   * the engine reader (2) and studio (3) are both DIRECT polls, one per call,
+#     from a cold start. Under a 429 both return "" for the same reason.
+#
+# Between the two direct pollers, the PROVEN one goes first: #766 measured the
+# engine reader returning 10, matching the dashboard at that moment, whereas
+# studio has never once returned a number here (`account.claude: null` on every
+# probe -- its reader is lazy, so every read is the direct poll that 429s;
+# `studio/packages/server/src/quota/claude-quota.ts`, and #765).
+#
+# Studio LAST is what makes adding it free. It is reached only when both other
+# sources have already failed, so it adds no upstream load in the common case,
+# cannot starve the sampler that keeps source 1 warm, and still produces the
+# `quota source: studio` log line that is the evidence for promoting it. Putting
+# it first would instead put a direct poll on EVERY read -- three per iteration
+# from quota_gate plus one per AUTH_LONG_BLOCK retries while blocked, i.e. tens
+# of polls in one iteration during the 71h block this file documents, unbounded
+# -- competing for the very budget the working source depends on.
+#
+# Studio is promoted (and 1 and 2 retired with the engine, C3) once its reader
+# stops polling upstream on the request path -- a sampler, the escape hatch its
+# own docs name. Until then this order is deliberate: DO NOT reorder it because
+# studio is "the new one". #765 is the gate.
+#
+# "" (unknown) is a distinct outcome from "0" and the caller must not conflate
+# them -- 0% means wide open, "" means blind.
+#
+# ONE parser for both HTTP sources, because both bodies are the same shape by
+# design: studio's schema was built to the dashboard's wire contract, so adding
+# it needed no parser change. A second copy could only ever drift from the first.
+quota_sane() {  # $1=candidate; echoes it if usable as a percent, "" otherwise
+  qs_v="$1"
+  case "$qs_v" in *[!0-9]*) qs_v="" ;; esac
+  [ "${#qs_v}" -gt 6 ] && qs_v=""
+  echo "$qs_v"
+}
+
+quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
+  qr_out="$(curl -s --max-time 8 "$1" 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -106,31 +159,59 @@ try:
 except Exception:
     print('')
 " 2>/dev/null)"
+  # TOTALITY GUARD, applied per-read at the boundary the value crosses.
+  #
+  # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
+  # with an operand `test` cannot parse returns 2 -- which is NEITHER branch, so
+  # the `if` takes the else, logs "quota ok" and FIRES. Fail-open, on the one
+  # guard that must never be.
+  #
+  # Digit-only is NOT sufficient, and that is not hypothetical: on bash 3.2
+  # `[ 10000000000000000000 -ge 80 ]` is all digits and still errors with rc=2,
+  # because it exceeds the signed-64-bit range. `quota_cache_read`'s
+  # `$(( 10# ))` is worse -- it wraps such a value SILENTLY, fabricating a
+  # last-known reading. The comment further down this file already records
+  # "digit-only is not enough" for `$(( ))`; this is the same lesson for `test`.
+  # Hence a LENGTH bound as well as a character class. Six digits allows a
+  # nonsensical 999999% while staying ~13 orders of magnitude clear of overflow.
+  #
+  # Per-read, not once after the fallback: a guard applied after source selection
+  # would let a malformed PRIMARY reading suppress the second source (non-empty,
+  # so no fallthrough) and only then blank it -- fail-safe in direction, but it
+  # skips a working fallback. Validating where the value enters is what makes
+  # "validate at boundaries" actually true here.
+  quota_sane "$qr_out"
+}
+
+quota_pct() {
+  qp_src=""
+  qp_out="$(quota_read_url "$DASH_URL")"
+  [ -n "$qp_out" ] && qp_src="dashboard"
   # NOTE the single exit point below: BOTH sources must feed the cache. An early
   # `return` here silently skipped caching the primary (and commonest) reading,
   # leaving the cache empty exactly when it was working -- caught by a test.
   if [ -z "$qp_out" ]; then
-  # Fallback: ask the engine's usage reader directly (may be 429-limited).
-  #
-  # TWO CALLS, and that is the whole point. `refresh_live_quota()` is a WRITER —
-  # it does the I/O and populates a module cache, returning None on every path
-  # (including its self-throttled early return). The GETTER is `live_quota()`.
-  # This read used to call only the writer and use its return value, so it
-  # yielded "" every time and the guard had ONE source, not two, from the day it
-  # was written. Measured 2026-07-29: a momentary dashboard blip went straight to
-  # UNREADABLE and spent a blind fire while the dashboard answered 200 seconds
-  # later. It also reframes 2026-07-26, logged as "both sources failed at once" —
-  # the fallback was already dead, so one outage was always enough, and that one
-  # cost $24 and shipped nothing.
-  #
-  # An AGE-BADGED value is refused. `live_quota()` serves the last-good sample
-  # for up to its grace window when the current sample failed, tagging it with
-  # `age_s`. That is right for the dashboard PANEL it was built for and wrong
-  # here: a stale-but-plausible LOW reading PERMITS a fire the live figure would
-  # have refused, which is fail-open — the one polarity every guard rule here
-  # forbids. Same call the studio reader makes in #763. Absent the badge it is a
-  # fresh sample and is used normally.
-  qp_out="$(cd "$ENGINE_LIB" 2>/dev/null && python3 -c "
+    # SECOND: the engine's usage reader (#766). Not a URL, so it is sanitised
+    # explicitly rather than via quota_read_url.
+    # TWO CALLS, and that is the whole point. `refresh_live_quota()` is a WRITER —
+    # it does the I/O and populates a module cache, returning None on every path
+    # (including its self-throttled early return). The GETTER is `live_quota()`.
+    # This read used to call only the writer and use its return value, so it
+    # yielded "" every time and the guard had ONE source, not two, from the day it
+    # was written. Measured 2026-07-29: a momentary dashboard blip went straight to
+    # UNREADABLE and spent a blind fire while the dashboard answered 200 seconds
+    # later. It also reframes 2026-07-26, logged as "both sources failed at once" —
+    # the fallback was already dead, so one outage was always enough, and that one
+    # cost $24 and shipped nothing.
+    #
+    # An AGE-BADGED value is refused. `live_quota()` serves the last-good sample
+    # for up to its grace window when the current sample failed, tagging it with
+    # `age_s`. That is right for the dashboard PANEL it was built for and wrong
+    # here: a stale-but-plausible LOW reading PERMITS a fire the live figure would
+    # have refused, which is fail-open — the one polarity every guard rule here
+    # forbids. Same call the studio reader makes in #763. Absent the badge it is a
+    # fresh sample and is used normally.
+    qp_out="$(cd "$ENGINE_LIB" 2>/dev/null && python3 -c "
 import claude_usage as cu
 try:
     cu.refresh_live_quota()
@@ -140,8 +221,31 @@ try:
 except Exception:
     print('')
 " 2>/dev/null)"
+    qp_out="$(quota_sane "$qp_out")"
+    [ -n "$qp_out" ] && qp_src="engine"
   fi
-  [ -n "$qp_out" ] && quota_cache_write "$qp_out"
+  # THIRD: studio (#440 C1). Last, deliberately. It is a DIRECT upstream poll of
+  # the same rate-limited endpoint the engine reader hits, and unlike that reader
+  # it has never once returned a number here (`account.claude: null` on every
+  # probe, 2026-07-29). Trying the proven source first maximises availability;
+  # studio is reached only when both others failed, so it adds no load in the
+  # common case while still producing the `quota source: studio` signal that
+  # decides when it can be promoted. See #765.
+  if [ -z "$qp_out" ]; then
+    qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
+    [ -n "$qp_out" ] && qp_src="studio"
+  fi
+  if [ -n "$qp_out" ]; then
+    quota_cache_write "$qp_out"
+    # Attribution goes to the LOG, never to stdout: this function's stdout IS the
+    # percent (it is read in a command substitution), so an echo here would be
+    # captured as part of the reading and hit the fail-open path.
+    #
+    # Logged on every read, deliberately -- how often studio answers, and whether
+    # it ever answers at all, is the measurement that decides when it can be
+    # promoted and when the dashboard can be retired (C3).
+    log "quota source: $qp_src (7-day utilization ${qp_out}%)"
+  fi
   echo "$qp_out"
 }
 
@@ -234,7 +338,7 @@ quota_gate() {
   # an iteration that is authorised blind but then stops at the cap charges
   # nothing at all.
   gate_blind=1
-  log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires - 1)) blind fire(s) left after this one"
+  log "WARN: 7-day quota utilization UNREADABLE (dashboard, engine reader and studio all unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires - 1)) blind fire(s) left after this one"
   return 0
 }
 

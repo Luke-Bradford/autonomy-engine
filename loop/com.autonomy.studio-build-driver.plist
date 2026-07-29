@@ -26,6 +26,14 @@
   <dict>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+
+    <!-- The studio quota endpoint (#440 C1), the guard's SECOND source. Set
+         explicitly rather than left to drive.sh's default: 8080 is contended on
+         this machine and a different studio checkout has been seen listening
+         nearby, and a wrong-but-answering server 404s, which reads as UNREADABLE
+         forever while looking correctly configured. -->
+    <key>STUDIO_QUOTA_URL</key>
+    <string>http://127.0.0.1:8080/api/quota</string>
   </dict>
 
   <key>RunAtLoad</key>

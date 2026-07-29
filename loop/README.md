@@ -52,16 +52,29 @@ be kept in sync by hand. Diff them before assuming they match.
 ## Safety model
 
 Three independent bounds, checked before every fire, each with its own test in
-`test_quota_guard.sh`:
+`test_quota_guard.sh` (plus a note on the two quota SOURCES those bounds read from):
 
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
   resets weekly, so exhausting it locks the operator out of their own sessions for days; stopping
   is the fail-safe direction.
+- **Three quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
+  `/api/state`) FIRST, then the engine's usage reader (`ENGINE_LIB`, fixed in #766), then
+  `STUDIO_QUOTA_URL` (studio's native `/api/quota`, #440 C1) LAST. All three bottom out in the same
+  upstream `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under
+  direct polling. Only the dashboard rides through it, because it samples in the background and
+  answers from a warm cache; the other two are direct polls from a cold start and both return ""
+  under a 429. Between those two the *proven* one goes first — #766 measured the engine reader
+  returning a real figure, while studio has never once returned a number here (#765). Studio last is
+  what makes it free: it is polled only when both others failed, so it adds no upstream load in the
+  common case and cannot starve the sampler the primary depends on. Every read logs
+  `quota source: <dashboard|engine|studio>`, which is the evidence for promoting studio. **Do not
+  reorder** until studio's reader stops polling upstream on the request path.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
   evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache
   can only ever REFUSE a fire, never permit one.
-- **Fire budget** — `MAX_FIRES` (6) per run, re-granted at most `MAX_BUDGET_REGRANTS` (1) times
+- **Fire budget** — `MAX_FIRES` (0 = uncapped by default since `a8c72bd`) per run, re-granted
+  at most `MAX_BUDGET_REGRANTS` (1) times
   after an auth/limit block long enough that the quota window it was sized against has moved on.
 
 A usage/rate limit is always a PAUSE (back off and retry), never a stop. Only an operator signal,

@@ -38,14 +38,49 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOS
-  # curl serves the dashboard payload; EMPTY utilization => unreadable path.
-  # CURL_READABLE_CALLS=N makes it readable for the first N calls and unreadable
-  # after, so "the dashboard died PART WAY THROUGH a run" is reachable.
-  if [ "$rc_util" = "EMPTY" ]; then
-    printf '#!/bin/bash\necho ""\n' >"$bin/curl"
-  else
-    cat >"$bin/curl" <<EOS
+  # curl now serves BOTH HTTP quota sources and dispatches on the URL, because
+  # the guard reads the dashboard first and studio last (the engine reader in
+  # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL). The studio arm is written
+  # FIRST and returns early, so the dashboard arm below keeps its call counter
+  # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
+  # being added.
+  #
+  # Studio defaults to UNREADABLE, and that default is load-bearing: it is the
+  # dashboard-unreadable cases that reach studio at all, and a studio which
+  # answered by default would turn every one of them into a test of the readable
+  # path instead -- green, and proving nothing. STUDIO_UTIL=<fraction> is the
+  # opt-in for a readable studio.
+  #
+  # The unreadable body is studio's REAL failure shape: a well-formed HTTP 200
+  # carrying `claude: null`, not the empty/truncated body the dashboard fails
+  # with. Both parse to "" through the same parser, which is the point -- the
+  # test exists so that stays true.
+  cat >"$bin/curl" <<'EOS'
 #!/bin/bash
+case "$*" in
+  */api/quota*)
+    # Marker: records that studio was POLLED, independently of whether it won.
+    # The source log line names only the winning source, so it cannot
+    # distinguish "studio was never asked" from "studio was asked and lost" --
+    # and "never asked" is the entire justification for the read order.
+    : >"${STUDIO_POLL_MARKER:-/dev/null}"
+    if [ -n "${STUDIO_UTIL:-}" ]; then
+      echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
+    else
+      echo '{"account":{"claude":null}}'
+    fi
+    exit 0 ;;
+esac
+EOS
+  # --- the dashboard (/api/state) arm: EMPTY utilization => unreadable path.
+  # CURL_READABLE_CALLS=N makes it readable for the first N calls and unreadable
+  # after, so "the dashboard died PART WAY THROUGH a run" is reachable. The
+  # counter counts DASHBOARD calls only (studio returns above without touching
+  # it), so CURL_READABLE_CALLS/CURL_SWITCH_CALLS keep their exact meaning.
+  if [ "$rc_util" = "EMPTY" ]; then
+    printf 'echo ""\n' >>"$bin/curl"
+  else
+    cat >>"$bin/curl" <<EOS
 ccf="$tmp/curlcalls"
 cc="\$(cat "\$ccf" 2>/dev/null || echo 0)"
 echo \$((cc + 1)) >"\$ccf"
@@ -127,7 +162,8 @@ EOS
   [ -f "$tmp/fallback-lib/claude_usage.py" ] && rc_lib="$tmp/fallback-lib"
 
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    ENGINE_LIB="$rc_lib" BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
+    STUDIO_POLL_MARKER="$tmp/studio_polled" ENGINE_LIB="$rc_lib" \
+    BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
   # count|logpath -- the caller cannot see assignments made in this subshell.
@@ -323,6 +359,79 @@ check "the fallback reading drives the STOP, not the blind path" "0" \
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.42)"
 check "a fallback reading is cached like a primary one" "42" \
   "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
+
+# --- 25-30. STUDIO as the THIRD source, behind the fallback (cutover C2) ----
+# Cases 25-26 assert on the SOURCE LOG LINE rather than the fire count, because
+# for those two the fire count is NOT an observable: a 10% reading fires exactly
+# the same number of times whichever source produced it, so a fire-count
+# assertion would pass with the second source never wired up at all. Cases 27-30
+# do use the fire count and the cache file, and legitimately so -- there the
+# behaviour under test (refusing, and the blind-fire bound) IS the fire count.
+
+# 25. the dashboard answers -> studio is NEVER POLLED. This is the property that
+# keeps studio free: studio's reader is a DIRECT provider poll sharing one
+# rate-limit budget with the dashboard's sampler, so polling it when the
+# dashboard already answered would spend the budget that keeps the primary alive.
+#
+# The marker, not the log line, is what pins this. The log names only the
+# WINNING source, so its absence is equally consistent with "studio was polled
+# and lost" -- which is precisely the regression this case has to catch, since
+# reading both sources unconditionally and preferring the dashboard would look
+# identical in the log while doubling upstream load.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+check "dashboard readable -> the dashboard is named as the source" "0" \
+  "$(grep -q 'quota source: dashboard' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard readable -> studio is never consulted" "1" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard readable -> studio is never POLLED (not merely outvoted)" "1" \
+  "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
+
+# 26. the dashboard AND the engine reader are down, studio answers -> the
+# reading is USED and the run is NOT blind. This is the state C3 creates
+# permanently, when sources 1 and 2 are parked with the engine.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+check "dashboard+engine down, studio readable -> studio is named as the source" "0" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard+engine down, studio readable -> NOT a blind fire" "1" \
+  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 27. studio can REFUSE, not just permit. A source that could only
+# ever say "fine" would be worse than none -- it would launder an unknown into
+# permission. 97% reached via studio must stop the driver exactly as via the
+# dashboard.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 STUDIO_UTIL=0.97)"
+check "studio 97% -> zero fires (the third source can refuse)" "0" "$(fires_of "$r")"
+check "studio 97% logs the quota STOP reason" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28. a reading from studio still writes the last-known cache. This is the
+# single-exit-point invariant, and the LAST branch is the one most likely to be
+# missed: an early `return` once skipped the cache write on one source, leaving
+# the cache empty precisely when that source was working.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.42)"
+check "a studio reading writes the last-known cache" "42" \
+  "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
+
+# 29. ALL sources unreadable -> still UNREADABLE, and the WARN says so. The
+# UNREADABLE-vs-0 distinction is the guard's load-bearing property (0 = wide
+# open, "" = blind); adding a source must not create a path where a failure
+# becomes a number.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
+check "all sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
+check "all sources down -> the WARN names every source" "0" \
+  "$(grep -q 'UNREADABLE (dashboard, engine reader and studio all unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 30. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
+# alone are not enough to make a value safe for `test`: on bash 3.2
+# `[ 10000000000000000000 -ge 80 ]` errors with rc=2, which is NEITHER branch --
+# the `if` takes the else, logs "quota ok" and FIRES, uncapped, while claiming
+# the window is fine. `utilization: 1e19` reaches the guard as 10^21, i.e. 22
+# digits, which is why the guard bounds LENGTH and not just the character class.
+# QUOTA_UNKNOWN_FIRES=0 makes the distinction observable: unreadable => refuse.
+r="$(run_case 1e19 QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0)"
+check "an out-of-range all-digit reading -> zero fires (not fail-open)" "0" "$(fires_of "$r")"
+check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1" \
+  "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
