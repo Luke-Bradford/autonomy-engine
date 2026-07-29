@@ -108,11 +108,13 @@ configure() {
     esac
   done
 
-  [ -n "$STATE_DIR" ] || { die "--state-dir may not be empty"; return 1; }
-
-  # Absolute, without `cd` (STATE_DIR need not exist yet).
-  case "$STATE_DIR" in /*) : ;; *) STATE_DIR="$PWD/$STATE_DIR" ;; esac
-  case "$REPO_SRC" in /*) : ;; *) REPO_SRC="$PWD/$REPO_SRC" ;; esac
+  # Absolute, without `cd` (STATE_DIR need not exist yet). An EMPTY value is
+  # left alone rather than turned into "$PWD/", so validate_install_target can
+  # still see that it was empty -- rejecting it here would block `--uninstall`
+  # on an install-only ground, which is the whole rule this file now follows:
+  # `configure` PARSES and DERIVES, `validate_install_target` VALIDATES.
+  case "$STATE_DIR" in '' | /*) : ;; *) STATE_DIR="$PWD/$STATE_DIR" ;; esac
+  case "$REPO_SRC" in '' | /*) : ;; *) REPO_SRC="$PWD/$REPO_SRC" ;; esac
 
   SERVICE_ROOT="$STATE_DIR/repo"
   SERVER_DIR="$SERVICE_ROOT/studio/packages/server"
@@ -132,6 +134,7 @@ configure() {
 # was pulled out to avoid. Teardown must never depend on the preconditions for
 # setup.
 validate_install_target() {
+  [ -n "$STATE_DIR" ] || { die "--state-dir may not be empty"; return 1; }
   valid_port "$PORT" || { die "invalid --port '$PORT' (want an integer 1-65535, no leading zero)"; return 1; }
   # 8080 is studio's DEV default. Installing a KeepAlive unit there would fight
   # any `pnpm dev` for the port forever, and if it won it would share that

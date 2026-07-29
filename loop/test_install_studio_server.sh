@@ -405,6 +405,16 @@ sb="$(new_sandbox)"
 ( load_sut "$sb"; main --uninstall --port 0080 --state-dir "$sb/st&ate" ) \
   >"$sb/unbad.out" 2>&1
 check "--uninstall is not blocked by install-only argument validation" "0" "$?"
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --uninstall --state-dir "" ) >"$sb/unempty.out" 2>&1
+check "--uninstall is not blocked by an empty --state-dir" "0" "$?"
+sb="$(new_sandbox)"
+( load_sut "$sb"; main --port 8788 --state-dir "" --repo-src "$sb/src" \
+    --node /usr/bin/node ) >"$sb/inempty.out" 2>&1
+check "INSTALL still refuses an empty --state-dir" "1" \
+  "$([ "$?" -ne 0 ] && echo 1 || echo 0)"
+check "the empty --state-dir refusal explains itself" "1" \
+  "$(has 'may not be empty' "$sb/inempty.out")"
 
 echo "== uninstall is scoped to THIS HOME's installation =="
 # The rm was HOME-scoped but the bootout was not, so running with a temp HOME
