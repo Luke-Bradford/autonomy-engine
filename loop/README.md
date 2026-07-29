@@ -16,7 +16,9 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 | `drive.sh` | The driver: stop conditions, quota guard, fire budget, auth backoff, gate waits |
 | `run.sh` | ONE fire — a fresh headless `claude -p` with the flags that keep it authed and thinking |
 | `prompt.md` | The work order the fire is driven by. The most load-bearing file here |
-| `test_quota_guard.sh` | Drives the REAL `drive.sh` with PATH stubs. No network, no tokens, ~3 min |
+| `claude_usage.py` | The quota guard's fallback reader: prints the 7-day utilization percent, or nothing (#764) |
+| `test_quota_guard.sh` | Drives the REAL `drive.sh` with PATH stubs. No network, no tokens, ~10 min |
+| `test_claude_usage.py` | Unit tests for `claude_usage.py`; every seam injected, so no Keychain and no network |
 | `fire_stats.sh` | Per-fire cost/turn/tool report read from the stream-json logs |
 | `reload_schedule_once.sh` | Reload helper for the launchd schedule |
 | `install_studio_server.sh` | Installs the SUPERVISED studio server LaunchAgent the quota guard reads |
@@ -27,7 +29,7 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 ## The supervised studio server (#765 Defect 2)
 
 The quota guard's third source is studio's `/api/quota`, and after the engine is parked (#410) it
-is the *only* source. Nothing supervised a studio server until this unit existed — the only
+is one of only two left — the other being the reader #764 relocated into `loop/`. Nothing supervised a studio server until this unit existed — the only
 listeners were ad-hoc `pnpm dev` sessions that die with their terminal — so at 03:05 the endpoint
 was **connection-refused**, not merely rate-limited. Every "studio UNREADABLE" measured before this
 therefore measured *no server*, not the reader.
@@ -115,29 +117,46 @@ So: **diff before you sync, in both directions**, and never `cp` a plist over an
 without reading the diff. If the driver plist itself ever needs reinstalling, use
 `reload_schedule_once.sh` — a bare `launchctl unload` kills a fire in flight.
 
+**A sync is now more than one file.** `drive.sh` reads its quota fallback from
+`$LOOP_LIB/claude_usage.py`, and `LOOP_LIB` defaults to `$INFRA` — the same directory the driver
+runs from (#764). So syncing `drive.sh` without `claude_usage.py` silently drops the guard's second
+source, which is the exact failure #764 exists to prevent, just re-created by hand. Copy
+`drive.sh`, `claude_usage.py`, `test_quota_guard.sh` and `test_claude_usage.py` together, and write `drive.sh` via a sibling
+temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
+in-place overwrite corrupts a running fire.
+
 ## Safety model
 
 Three independent bounds, checked before every fire, each with its own test in
-`test_quota_guard.sh` (plus a note on the two quota SOURCES those bounds read from):
+`test_quota_guard.sh` (plus a note on the three quota SOURCES those bounds read from):
 
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
   resets weekly, so exhausting it locks the operator out of their own sessions for days; stopping
   is the fail-safe direction.
 - **Three quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
-  `/api/state`) FIRST, then the engine's usage reader (`ENGINE_LIB`, fixed in #766), then
-  `STUDIO_QUOTA_URL` (studio's native `/api/quota`, #440 C1) LAST. All three bottom out in the same
+  `/api/state`) FIRST, then the loop's own usage reader (`LOOP_LIB/claude_usage.py`, relocated out
+  of the engine by #764 and fixed in #766), then `STUDIO_QUOTA_URL` (studio's native `/api/quota`,
+  #440 C1) LAST. All three bottom out in the same
   upstream `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under
   direct polling. Only the dashboard rides through it, because it samples in the background and
   answers from a warm cache; the other two are direct polls from a cold start and both return ""
-  under a 429. Between those two the *proven* one goes first — #766 measured the engine reader
+  under a 429. Between those two the *proven* one goes first — #766 measured the loop reader
   returning a real figure, while studio has never once returned a number here (#765). Studio last is
   what makes it free: it is polled only when both others failed, so it adds no upstream load in the
   common case and cannot starve the sampler the primary depends on. Every read logs
-  `quota source: <dashboard|engine|studio>`, which is the evidence for promoting studio. **Do not
+  `quota source: <dashboard|loop|studio>`, which is the evidence for promoting studio. **Do not
   reorder** until that evidence exists. What changed with #765 is *availability*: studio is now
   served by the supervised `com.autonomy.studio-server` unit on 8788 rather than by whatever
   `pnpm dev` happened to be up, so an UNREADABLE from source 3 is finally a measurement of the
   reader instead of a measurement of "no server".
+- **What cutover C3 does to that order** — parking `bin/ lib/ tests/ templates/ start` (#410)
+  removes source 1 *and*, before #764, removed source 2 as well, because the reader lived in the
+  engine's `lib/`. #764 relocated it to `loop/claude_usage.py`, so the surviving pair is
+  (loop reader, studio). Be honest about what that pair is: two direct cold pollers of one shared
+  rate-limit budget. C3 also removes the warm-cache property that made source 1 reliable, so it is
+  a real reduction in the guard's strength, compensated only by the last-known cache below (which
+  can refuse but never permit). `loop/claude_usage.py` ships **beside** `drive.sh` — `LOOP_LIB`
+  defaults to `$INFRA`, so a sync of the live control plane must carry **both** files.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
   evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache

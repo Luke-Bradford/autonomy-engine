@@ -35,6 +35,14 @@ jobs:
       - name: shellcheck the loop control plane
         run: shellcheck -S warning loop/*.sh
 
+      - name: Quota reader unit tests
+        # The loop's own 7-day utilization reader (#764), relocated out of the
+        # engine's lib/ so cutover C3 does not take the guard's second source with
+        # it. Stdlib unittest with the Keychain runner, the URL opener and
+        # sys.platform all injected, so this makes no network or Keychain call and
+        # the darwin-only paths are still exercised on ubuntu.
+        run: python3 loop/test_claude_usage.py
+
       - name: Quota-guard + fire-budget tests
         # Drives the REAL drive.sh with PATH stubs for gh/git/curl/claude, so it
         # makes no network calls and spends no tokens.

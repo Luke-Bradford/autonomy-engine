@@ -39,7 +39,7 @@ case "$1" in
 esac
 EOS
   # curl now serves BOTH HTTP quota sources and dispatches on the URL, because
-  # the guard reads the dashboard first and studio last (the engine reader in
+  # the guard reads the dashboard first and studio last (the loop reader in
   # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL). The studio arm is written
   # FIRST and returns early, so the dashboard arm below keeps its call counter
   # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
@@ -115,6 +115,17 @@ echo '{"is_error":false,"result":"AUTH_OK"}'
 EOS
   # python3 must stay REAL (the guard parses JSON with it)
   ln -s "$(command -v python3)" "$bin/python3" 2>/dev/null || true
+  # `security` is stubbed to FAIL, which is the last line of hermeticity. python3
+  # is real by necessity, so if the reader path ever resolves to a real
+  # `claude_usage.py` instead of the fake, that module would read the operator's
+  # OAuth token from the live Keychain and poll the real rate-limited endpoint --
+  # spending from the very budget these tests exist to protect, on every case.
+  # That is not hypothetical: it happened while writing #764, when removing the
+  # old `ENGINE_LIB=$tmp/nonexistent-lib` override let drive.sh's absolute default
+  # resolve to the real engine lib mid-refactor. A failing token read makes the
+  # reader return None before any HTTP, so the suite stays offline even if the
+  # path plumbing regresses. Stubbing EVERY external command is the rule here.
+  printf '#!/bin/bash\nexit 1\n' >"$bin/security"
   chmod +x "$bin"/*
   # run.sh stub: one line per fire, so the count is the observable
   mkdir -p "$tmp/infra/logs"
@@ -123,22 +134,39 @@ EOS
   for rc_a in "$@"; do
     case "$rc_a" in SEED_CACHE=*) printf '%s\n' "${rc_a#SEED_CACHE=}" >"$tmp/infra/.last_quota" ;; esac
   done
-  # Optional FALLBACK_UTIL=<0-1> stands up a fake `claude_usage` implementing the
-  # REAL module's two-call contract: refresh_live_quota() does the I/O and returns
-  # None, live_quota() returns the mapped windows. A stub that returned the value
-  # from the refresher would let the driver's broken call LOOK correct, so this
-  # deliberately mirrors the real shape.
+  # Optional FALLBACK_UTIL=<percent> stands up a fake `claude_usage.py` beside the
+  # driver, implementing the REAL module's contract (#764): a CLI that prints the
+  # integer 7-day utilization PERCENT on stdout and exits 0, or prints NOTHING and
+  # exits 1.
+  #
+  # The UNIT here is a percent, not the 0-1 fraction this knob used to take. The
+  # relocated reader talks to the upstream endpoint directly, and upstream reports
+  # `utilization` as a PERCENT; only the two HTTP sources divide by 100 for their
+  # wire format, which is why `quota_read_url` multiplies it back. A fraction
+  # arriving here would round to 0 -- a fail-open reading -- so the fake speaks
+  # the real unit and the cases below assert the value survives unscaled.
+  #
+  # Shaped so the OLD two-call `refresh_live_quota()`/`live_quota()` module shape
+  # CANNOT satisfy it: this is a script with no importable reader function at all.
+  # That mirrors the care the previous stub took for the same reason -- a stub a
+  # broken caller can still satisfy lets the break look correct (#766).
   for rc_a in "$@"; do
     case "$rc_a" in
       FALLBACK_UTIL=*)
-        mkdir -p "$tmp/fallback-lib"
-        cat >"$tmp/fallback-lib/claude_usage.py" <<EOS
-_cache = {}
-def refresh_live_quota(*a, **k):
-    _cache['v'] = {'seven_day': {'utilization': ${rc_a#FALLBACK_UTIL=}}, 'source': 'live'}
-    return None
-def live_quota(*a, **k):
-    return _cache.get('v')
+        cat >"$tmp/infra/claude_usage.py" <<EOS
+import sys
+print(${rc_a#FALLBACK_UTIL=})
+sys.exit(0)
+EOS
+        ;;
+      FALLBACK_UNREADABLE=1)
+        # The real module's failure shape: nothing on stdout, non-zero exit. A
+        # reader that printed 0 here would silently disarm the guard, so the
+        # distinction has to be exercisable.
+        cat >"$tmp/infra/claude_usage.py" <<'EOS'
+import sys
+sys.stderr.write("claude_usage: 7-day utilization unreadable\n")
+sys.exit(1)
 EOS
         ;;
     esac
@@ -155,14 +183,16 @@ EOS
   # `env` is REQUIRED: a var=value word arriving via "$@" is NOT parsed as an
   # assignment (assignments are recognised before expansion), so writing
   # `... "$@" bash drive.sh` would execute `QUOTA_STOP_PCT=80` as the COMMAND.
-  # ENGINE_LIB points at the fake `claude_usage` when a case asked for one, and
-  # at a path that does not exist otherwise — so every case that does NOT set
-  # FALLBACK_UTIL still exercises "no fallback available".
-  rc_lib="$tmp/nonexistent-lib"
-  [ -f "$tmp/fallback-lib/claude_usage.py" ] && rc_lib="$tmp/fallback-lib"
-
+  # NOTE `LOOP_LIB` is deliberately NOT passed. The fake reader is written to
+  # `$tmp/infra/`, which is also where drive.sh is copied and what INFRA points
+  # at — so these cases exercise the PRODUCTION default (`LOOP_LIB=$INFRA`, the
+  # reader shipping beside the driver) rather than a test-only override. #764
+  # relocated that reader out of the engine's `lib/`, which cutover C3 parks; a
+  # test that pointed at some other directory would not notice if the default
+  # broke. Cases that do NOT set FALLBACK_UTIL write no reader at all, so they
+  # still exercise "no fallback available".
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    STUDIO_POLL_MARKER="$tmp/studio_polled" ENGINE_LIB="$rc_lib" \
+    STUDIO_POLL_MARKER="$tmp/studio_polled" \
     BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
@@ -348,7 +378,7 @@ check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "
 # $24.
 #
 # Dashboard EMPTY + a working fallback reading 97% must REFUSE, not fire blind.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.97)"
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97)"
 check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
 check "the fallback reading drives the STOP, not the blind path" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
@@ -356,7 +386,7 @@ check "the fallback reading drives the STOP, not the blind path" "0" \
 # --- 24. the fallback also feeds the last-known cache ------------------------
 # Both sources must write it (a fix for the same class already landed once, when
 # an early `return` skipped caching the PRIMARY reading).
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.42)"
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
 check "a fallback reading is cached like a primary one" "42" \
   "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
 
@@ -386,13 +416,13 @@ check "dashboard readable -> studio is never consulted" "1" \
 check "dashboard readable -> studio is never POLLED (not merely outvoted)" "1" \
   "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
 
-# 26. the dashboard AND the engine reader are down, studio answers -> the
+# 26. the dashboard AND the loop reader are down, studio answers -> the
 # reading is USED and the run is NOT blind. This is the state C3 creates
 # permanently, when sources 1 and 2 are parked with the engine.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
-check "dashboard+engine down, studio readable -> studio is named as the source" "0" \
+check "dashboard+loop reader down, studio readable -> studio is named as the source" "0" \
   "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
-check "dashboard+engine down, studio readable -> NOT a blind fire" "1" \
+check "dashboard+loop reader down, studio readable -> NOT a blind fire" "1" \
   "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
 
 # 27. studio can REFUSE, not just permit. A source that could only
@@ -419,7 +449,7 @@ check "a studio reading writes the last-known cache" "42" \
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
 check "all sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
 check "all sources down -> the WARN names every source" "0" \
-  "$(grep -q 'UNREADABLE (dashboard, engine reader and studio all unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
+  "$(grep -q 'UNREADABLE (dashboard, loop reader and studio all unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
 
 # 30. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
 # alone are not enough to make a value safe for `test`: on bash 3.2
@@ -432,6 +462,70 @@ r="$(run_case 1e19 QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0)"
 check "an out-of-range all-digit reading -> zero fires (not fail-open)" "0" "$(fires_of "$r")"
 check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1" \
   "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 31-34. the POST-CUTOVER SOURCE PAIR (#764) ------------------------------
+# Cutover C3 (#410) parks `bin/ lib/ tests/ templates/ start`, which removes the
+# DASHBOARD (source 1) and, until #764, the engine's `lib/claude_usage.py`
+# (source 2) as well -- leaving one source, and specifically the one that has
+# never yet returned a number here. #764 relocated the reader into `loop/`, which
+# C3 keeps, so the surviving pair is (loop reader, studio).
+#
+# Cases 23-26 exercise the pair's SHAPE but not this TOPOLOGY: they either have no
+# reader file at all (so "fallback down" means "absent", not "present and
+# failing") or they still lean on the dashboard. These four run with the dashboard
+# EMPTY throughout, which is what post-C3 looks like from the driver's side.
+
+# 31. the relocated reader ANSWERS, and is NAMED as the source. The name is not
+# cosmetic: `quota source: <name>` is the evidence trail that decides when studio
+# can be promoted and the engine retired (#765), so it has to say which source
+# actually answered. Nothing asserted the old `engine` label, which is how a
+# rename could have shipped untested.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97)"
+check "post-cutover pair: the relocated reader refuses at 97% -> zero fires" "0" "$(fires_of "$r")"
+check "post-cutover pair: the relocated reader is NAMED as the source" "0" \
+  "$(grep -q 'quota source: loop (7-day utilization 97%)' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 32. the reader's PERCENT survives unscaled. This is the fail-open unit bug the
+# relocation could have introduced: the reader now emits a percent, while
+# `quota_read_url` multiplies its two HTTP sources by 100 to undo their 0-1 wire
+# format. Scaling this one too would report 97% as 9700% (caught here, since the
+# STOP line embeds the figure) and a *dividing* mistake would report it as 0 --
+# "wide open" -- which fires. 42% must therefore reach the log as exactly 42.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
+check "post-cutover pair: a percent reading is neither scaled nor divided" "0" \
+  "$(grep -q 'quota ok: 7-day utilization 42%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 33. the reader is PRESENT but cannot read -> studio still gets its turn. The
+# distinction from case 26 is that the reader exists and exits non-zero, which is
+# the real post-C3 failure (a 429 from the shared upstream), not a missing file.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 \
+      FALLBACK_UNREADABLE=1 STUDIO_UTIL=0.97)"
+check "post-cutover pair: a failing reader falls through to studio" "0" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "post-cutover pair: studio's 97% via the pair still refuses" "0" "$(fires_of "$r")"
+
+# 34. BOTH members of the surviving pair fail -> UNREADABLE, never 0. The whole
+# guard rests on those being distinct outcomes (#440), and the reader failing by
+# printing nothing rather than a number is what keeps them distinct.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=1)"
+check "post-cutover pair: both down -> refuses to fire blind" "0" "$(fires_of "$r")"
+check "post-cutover pair: both down -> never logs a 0% reading" "1" \
+  "$(grep -q 'utilization 0%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 35-36. a MISSING fallback reader announces itself -----------------------
+# The realistic failure is a partial sync of the unversioned live control plane:
+# `drive.sh` copied without `claude_usage.py`. Downstream that is invisible --
+# a missing reader and a 429'd reader both yield "", so the fire logs a different
+# winning source and nothing indicates the guard lost one. #766 hid in exactly
+# that silence for its entire life. Both directions are asserted, because a WARN
+# that fires unconditionally would be as useless as one that never fires.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0)"
+check "a missing fallback reader logs a WARN naming the file" "0" \
+  "$(grep -q 'WARN: quota fallback reader MISSING at .*/claude_usage.py' "$(logof "$r")" && echo 0 || echo 1)"
+
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=42)"
+check "a PRESENT fallback reader logs no missing-reader WARN" "1" \
+  "$(grep -q 'quota fallback reader MISSING' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
