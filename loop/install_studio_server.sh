@@ -4,7 +4,8 @@
 #
 # The build loop's spend guard reads studio's `/api/quota` (`loop/drive.sh`
 # quota_pct), and once the old engine is parked (#410) studio is one of only TWO
-# sources left (the other is `loop/claude_usage.py`, relocated there by #764). Until this unit existed nothing supervised a studio server: the only
+# sources left (the other is `loop/claude_usage.py`, relocated there by #764).
+# Until this unit existed nothing supervised a studio server: the only
 # listeners were ad-hoc `pnpm dev` sessions that die with their terminal, so at
 # 03:05 the endpoint was connection-refused, not merely rate-limited. A guard
 # that cannot read is a guard that spends two blind fires and then halts the

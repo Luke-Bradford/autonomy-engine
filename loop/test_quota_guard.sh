@@ -40,7 +40,8 @@ esac
 EOS
   # curl now serves BOTH HTTP quota sources and dispatches on the URL, because
   # the guard reads the dashboard first and studio last (the loop reader in
-  # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL). The studio arm is written
+  # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL for a
+  # reading or FALLBACK_UNREADABLE for a present-but-failing one). The studio arm is written
   # FIRST and returns early, so the dashboard arm below keeps its call counter
   # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
   # being added.
@@ -378,8 +379,20 @@ check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "
 # $24.
 #
 # Dashboard EMPTY + a working fallback reading 97% must REFUSE, not fire blind.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97)"
+#
+# `STUDIO_UTIL=0.10` makes this run pin SOURCE PRECEDENCE too, at no extra cost.
+# README says "do not reorder" and the reason is load-bearing: the loop reader is
+# PROVEN (it has returned a number) while studio never has, and studio is polled
+# last so it adds no load to the shared upstream rate-limit budget in the common
+# case. Nothing asserted it -- swapping the two blocks in `quota_pct` left the
+# whole suite green. With studio offering a permissive 10% behind a refusing 97%
+# reader, a swap now fails three ways: fires appear, the source label changes, and
+# the poll marker shows up.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97 \
+      STUDIO_UTIL=0.10)"
 check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
+check "the loop reader OUTRANKS studio (not merely outvoted -- studio is unpolled)" "1" \
+  "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
 check "the fallback reading drives the STOP, not the blind path" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
 # ...and is NAMED as the source (#764). Folded onto this run rather than given its
@@ -500,16 +513,8 @@ check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1
 # source-label, unscaled-percent and no-spurious-WARN assertions; case 26 covers
 # fallthrough-to-studio; case 29 covers all-down plus the missing-reader WARN.
 # Re-running those with the same knobs would have cost four extra full driver runs
-# in a ~15-minute suite for assertions that fit on existing ones.
-#
-# One combination is covered by COMPOSITION rather than directly, and that is worth
-# naming: "reader present-but-failing, studio then answers". Case 26 pins
-# fallthrough-to-studio with the reader ABSENT, and the case below pins that a
-# present-but-failing reader yields the same "" as an absent one. Since the reader
-# is a single command substitution with exactly one non-answer representation, the
-# two compose; a dedicated run would add a fifth driver invocation to re-prove the
-# join. If the reader ever gains a second failure representation, that stops being
-# true and this needs its own case.
+# in a suite that already takes ~10 minutes (README), for assertions that fit on
+# existing ones.
 #
 # What NO existing case reaches is a reader that EXISTS and FAILS -- the real
 # post-C3 failure, a 429 from the shared upstream, as opposed to an absent file.
@@ -521,6 +526,39 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=
 check "a present-but-failing reader -> refuses to fire blind" "0" "$(fires_of "$r")"
 check "a present-but-failing reader is never read as a 0% reading" "1" \
   "$(grep -q 'utilization 0%' "$(logof "$r")" && echo 0 || echo 1)"
+# ...and the failing reader does not SWALLOW the fallthrough. Case 26 pins
+# fallthrough-to-studio with the reader ABSENT; this pins it for a reader that is
+# present and exits non-zero, which is the distinct post-C3 failure. Asserted on
+# the POLL MARKER rather than on the source label because studio is unreadable on
+# this run too (that is the point of the case) -- so "studio was reached" is only
+# observable as the poll having happened at all. Free: same driver run as above.
+check "a present-but-failing reader still lets studio be POLLED" "0" \
+  "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
+
+# --- 32. the SOURCE-2 boundary is sanitised, not just source 1 ----------------
+# Case 30 pins the totality guard for the DASHBOARD (`quota_read_url` calls
+# `quota_sane` internally). Source 2 is sanitised by a SEPARATE call --
+# `qp_out="$(quota_sane "$qp_out")"` in `quota_pct` -- because the reader is a
+# python call, not a URL. Nothing pinned that one: deleting the line left the whole
+# suite GREEN, which is the vacuous-coverage shape this repo has shipped twice.
+#
+# It is a fail-open, and post-C3 it sits on one of only two surviving sources.
+# `seven_day_pct` applies no UPPER bound (deliberately -- overage above 100% is the
+# strongest stop signal there is), so a malformed or hostile upstream payload of
+# 1e19 is printed verbatim. On /bin/bash 3.2.57
+# `[ 10000000000000000000 -ge 80 ]` is all digits and STILL errors with rc=2 --
+# neither branch -- so the `if` takes the else, logs "quota ok" and FIRES. That is
+# the one polarity the guard must never have.
+#
+# The value is passed as digits, not `1e19`: the stub emits `print(<literal>)`, and
+# an int literal prints as digits whereas a float literal would print `1e+19` and
+# be rejected by the character class instead of the length bound -- testing a
+# different rejection path than the real one.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 \
+      FALLBACK_UTIL=10000000000000000000)"
+check "an out-of-range reading from the LOOP READER -> zero fires" "0" "$(fires_of "$r")"
+check "an out-of-range reader value is UNREADABLE, never 'quota ok'" "1" \
+  "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

@@ -157,6 +157,24 @@ def read_oauth_token(runner=_keychain_runner, platform=None):
     return token if isinstance(token, str) and token else None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect instead of following it.
+
+    `urlopen` follows 30x by default, and CPython's `HTTPRedirectHandler` strips
+    only `content-length`/`content-type` when it rebuilds the request -- so an
+    `Authorization: Bearer <token>` header is REPLAYED to the redirect target,
+    including one on a different host. This reader sends the operator's OAuth
+    credential to exactly one URL or to none. Returning None makes urllib raise
+    the 30x as an HTTPError, which `fetch_usage` already contains as UNREADABLE
+    -- fail-safe, and no worse than any other non-200."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def fetch_usage(token, opener=None, timeout=HTTP_TIMEOUT):
     """GET the usage endpoint with `token` in the Authorization header; the
     parsed JSON object, or None.
@@ -168,7 +186,7 @@ def fetch_usage(token, opener=None, timeout=HTTP_TIMEOUT):
     if not token:
         return None
     if opener is None:
-        opener = urllib.request.urlopen
+        opener = _OPENER.open
     req = urllib.request.Request(USAGE_URL, headers={
         "Authorization": "Bearer %s" % token,
         "anthropic-beta": USAGE_BETA,
@@ -260,8 +278,11 @@ def read_seven_day_pct(token_reader=read_oauth_token, fetcher=fetch_usage):
         return None
 
 
-def main(argv=None, reader=read_seven_day_pct, out=None, err=None):
+def main(reader=read_seven_day_pct, out=None, err=None):
     """CLI: print the percent and return 0, or print nothing and return 1.
+
+    Takes NO arguments, deliberately: `drive.sh` invokes it bare, and an option
+    parser would be a second way for this to produce output on stdout.
 
     stdout carries the VALUE ALONE because drive.sh captures it in a command
     substitution and uses it as the reading -- any diagnostic on stdout would be

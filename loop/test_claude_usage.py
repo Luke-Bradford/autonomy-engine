@@ -254,7 +254,6 @@ class TestSevenDayPct(unittest.TestCase):
                           (12.7, 13)):
             self.assertEqual(cu.seven_day_pct(payload(seven=pct)), want,
                              msg=str(pct))
-            self.assertEqual(int(round((pct / 100.0) * 100)), want, msg=str(pct))
 
     def test_may_disagree_with_the_http_sources_by_one_at_half_percents(self):
         """The BOUND on the two surviving post-C3 sources disagreeing, pinned
@@ -401,10 +400,12 @@ class TestMain(unittest.TestCase):
         """The #440 invariant: UNREADABLE must never be reported as 0. Two
         independent channels say so -- empty stdout AND a non-zero exit -- because
         drive.sh reads stdout in a command substitution and treats "" as blind."""
-        rc, out, _ = self.run_main(lambda: None)
+        rc, out, err = self.run_main(lambda: None)
         self.assertEqual(rc, 1)
         self.assertEqual(out, "")
-        self.assertNotIn("0", out)
+        # The diagnostic goes to stderr and must itself not contain a bare figure
+        # drive.sh could mistake for a reading if the streams were ever merged.
+        self.assertNotIn("0", err)
 
     def test_an_exception_in_the_reader_prints_nothing_and_exits_nonzero(self):
         def boom():
@@ -423,7 +424,7 @@ class TestMain(unittest.TestCase):
 
     def test_the_token_never_reaches_stdout_or_stderr(self):
         """Security: the OAuth token transits only the in-process Authorization
-        header. It must not appear in output on ANY path, including failure."""
+        header. It must not appear in output on the SUCCESS path."""
         secret = "tok-do-not-leak"
         out, err = io.StringIO(), io.StringIO()
         cu.main(reader=lambda: cu.read_seven_day_pct(
@@ -431,6 +432,42 @@ class TestMain(unittest.TestCase):
             fetcher=lambda t: payload(seven=5.0)), out=out, err=err)
         self.assertNotIn(secret, out.getvalue())
         self.assertNotIn(secret, err.getvalue())
+
+    def test_the_token_never_leaks_through_the_REAL_fetch_path(self):
+        """The test above injects `fetcher`, so `fetch_usage` -- the ONLY code that
+        ever puts the token in a header -- never runs, and no failure path runs with
+        a token present. This one uses the real `fetch_usage` and makes the opener
+        raise with the token in the exception message, which is the realistic leak:
+        urllib puts the failing request in the error text and a re-raise would
+        carry it to stderr. Also asserts it never reaches the RETURN value, since
+        drive.sh prints that."""
+        secret = "tok-do-not-leak"
+
+        def hostile_opener(req, timeout=None):
+            raise RuntimeError("connection failed for %s"
+                               % req.get_header("Authorization"))
+
+        out, err = io.StringIO(), io.StringIO()
+        rc = cu.main(reader=lambda: cu.read_seven_day_pct(
+            token_reader=lambda: secret,
+            fetcher=lambda t: cu.fetch_usage(t, opener=hostile_opener)),
+            out=out, err=err)
+        self.assertEqual((rc, out.getvalue()), (1, ""))
+        self.assertNotIn(secret, out.getvalue())
+        self.assertNotIn(secret, err.getvalue())
+
+    def test_a_redirect_is_refused_rather_than_followed(self):
+        """The real opener must not replay the Bearer token to a redirect target.
+        `urlopen` follows 30x by default and CPython's redirect handler strips only
+        content-length/content-type, so Authorization survives the rebuild --
+        including to a different host. Asserted on the REAL opener (`opener=None`),
+        not a stub: the stubbed 302 case above cannot distinguish "refused" from
+        "followed", which is what made it misleading."""
+        self.assertIsNone(cu._NoRedirect().redirect_request(
+            None, None, 302, "Found", {}, "https://evil.example/steal"))
+        # ...and it is actually installed on the default path.
+        self.assertTrue(any(isinstance(h, cu._NoRedirect)
+                            for h in cu._OPENER.handlers))
 
 
 if __name__ == "__main__":

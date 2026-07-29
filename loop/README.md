@@ -29,7 +29,8 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 ## The supervised studio server (#765 Defect 2)
 
 The quota guard's third source is studio's `/api/quota`, and after the engine is parked (#410) it
-is one of only two left — the other being the reader #764 relocated into `loop/`. Nothing supervised a studio server until this unit existed — the only
+is one of only two left — the other being the reader #764 relocated into `loop/`.
+Nothing supervised a studio server until this unit existed — the only
 listeners were ad-hoc `pnpm dev` sessions that die with their terminal — so at 03:05 the endpoint
 was **connection-refused**, not merely rate-limited. Every "studio UNREADABLE" measured before this
 therefore measured *no server*, not the reader.
@@ -121,7 +122,8 @@ without reading the diff. If the driver plist itself ever needs reinstalling, us
 `$LOOP_LIB/claude_usage.py`, and `LOOP_LIB` defaults to `$INFRA` — the same directory the driver
 runs from (#764). So syncing `drive.sh` without `claude_usage.py` silently drops the guard's second
 source, which is the exact failure #764 exists to prevent, just re-created by hand. Copy
-`drive.sh`, `claude_usage.py`, `test_quota_guard.sh` and `test_claude_usage.py` together, and write `drive.sh` via a sibling
+`drive.sh`, `claude_usage.py`, `test_quota_guard.sh` and `test_claude_usage.py` together, and
+write `drive.sh` via a sibling
 temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
 in-place overwrite corrupts a running fire.
 

@@ -43,6 +43,44 @@ jobs:
         # the darwin-only paths are still exercised on ubuntu.
         run: python3 loop/test_claude_usage.py
 
+      - name: Quota reader CLI contract (real module, no stubs)
+        # The unit tests inject every seam, so nothing above runs the exact command
+        # line drive.sh uses (`python3 <dir>/claude_usage.py`). This does, against
+        # the REAL module. ubuntu is not darwin, so read_oauth_token returns None
+        # without touching a Keychain and without a network call -- which is
+        # precisely the UNREADABLE contract: exit 1 and print NOTHING on stdout.
+        # Empty stdout is the load-bearing half. A reader that printed `0` here
+        # would read as "quota wide open" and PERMIT a blind fire (#440).
+        run: |
+          set +e
+          out="$(python3 loop/claude_usage.py 2>/dev/null)"; rc=$?
+          set -e
+          [ "$rc" = "1" ] || { echo "expected exit 1 on non-darwin, got $rc"; exit 1; }
+          [ -z "$out" ] || { echo "expected EMPTY stdout, got '$out'"; exit 1; }
+
+      - name: Quota reader endpoint contract matches studio's
+        # Post-C3 the guard's two sources are this reader and studio's /api/quota,
+        # and they carry SEPARATE copies of the upstream contract in two languages
+        # (documented in claude_usage.py's docstring, which notes nothing enforced
+        # it). An upstream change applied to one and not the other silently costs
+        # the guard a source, and a silently-lost source is exactly the 2026-07-26
+        # single-point-of-failure this whole ticket exists to prevent. So: pin the
+        # three values that must agree. Deliberately a grep on literals rather than
+        # a shared constant -- a shared module would recouple the two sources, and
+        # independence is the property being bought.
+        run: |
+          ts=studio/packages/server/src/quota/claude-quota.ts
+          for v in \
+            "https://api.anthropic.com/api/oauth/usage" \
+            "Claude Code-credentials" \
+            "oauth-2025-04-20"
+          do
+            grep -qF "$v" loop/claude_usage.py \
+              || { echo "loop/claude_usage.py no longer contains: $v"; exit 1; }
+            grep -qF "$v" "$ts" \
+              || { echo "$ts and loop/claude_usage.py have DRIFTED on: $v"; exit 1; }
+          done
+
       - name: Quota-guard + fire-budget tests
         # Drives the REAL drive.sh with PATH stubs for gh/git/curl/claude, so it
         # makes no network calls and spends no tokens.
