@@ -45,6 +45,8 @@ import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
+import { quotaRoutes } from './routes/quota.js';
+import { createClaudeQuotaReader, type ClaudeQuotaReader } from './quota/claude-quota.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -204,6 +206,18 @@ export interface BuildAppOptions {
    * empty mount degrades to a clean 404 rather than a 500 on every navigation.
    */
   webRoot?: string;
+  /**
+   * #440 (C1) — switches the account-quota surface (`GET /api/quota`) off.
+   * Overrides `process.env.CLAUDE_QUOTA_ENABLED` ('0' disables). Defaults to
+   * ENABLED, on purpose: the build loop's spend guard reads this figure, and a
+   * surface that defaults to off would report "unknown" forever while looking
+   * healthy — the exact disarmed-guard failure the endpoint exists to prevent.
+   * Disabled means the host credential store is never touched and the reading
+   * is always `null`. Call-time only, for test isolation + operator override.
+   */
+  claudeQuotaEnabled?: boolean;
+  /** #440 (C1) — test seam: a reader override. Defaults to the real Keychain + provider reader. */
+  claudeQuotaReader?: ClaudeQuotaReader;
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
@@ -251,6 +265,18 @@ export async function buildApp(opts?: BuildAppOptions) {
       fastify.log.error({ err, runId }, 'run-event subscriber threw'),
   });
   fastify.decorate('runEventBus', runEventBus);
+
+  // #440 (C1) — the account-quota reader. Per-app so two instances in one
+  // process never share a TTL cache. LAZY: constructing it does no I/O, so an
+  // install that never calls `GET /api/quota` never touches the credential
+  // store. Disabled resolves to a reader that always reports UNREADABLE rather
+  // than to an absent decoration, so the route stays uniform.
+  const claudeQuotaEnabled = opts?.claudeQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
+  fastify.decorate(
+    'claudeQuota',
+    opts?.claudeQuotaReader ??
+      (claudeQuotaEnabled ? createClaudeQuotaReader() : { read: async (): Promise<null> => null }),
+  );
 
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it
   // straight back.
@@ -691,6 +717,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     hostClient: opts?.workspaceGitHostClient,
   });
   await fastify.register(workspaceAuditRoutes);
+  await fastify.register(quotaRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));
 

@@ -5,6 +5,7 @@ import type { RunEventBus } from './run/event-bus.js';
 import type { ExternalWaitCompleter } from './run/external-wait-service.js';
 import type { ReseedService } from './run/reseed.js';
 import type { Scheduler } from './scheduler/scheduler.js';
+import type { ClaudeQuotaReader } from './quota/claude-quota.js';
 
 /**
  * Ambient `FastifyInstance` augmentation for the app-scoped state routes and
@@ -51,5 +52,10 @@ declare module 'fastify' {
      * WebSocket route subscribes per run. Per-app so two instances in one
      * process never cross-deliver each other's run events. */
     runEventBus: RunEventBus;
+    /** #440 (C1) — this app instance's account-quota reader, backing
+     * `GET /api/quota` (the build loop's spend-guard source). Per-app so two
+     * instances in one process never share its TTL cache. Always decorated: when
+     * the surface is disabled it is a reader that reports UNREADABLE. */
+    claudeQuota: ClaudeQuotaReader;
   }
 }
