@@ -557,6 +557,65 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
     expect(log).toHaveBeenCalledTimes(2);
   });
 
+  it('absorbs an ASYNC log sink that rejects, without an unhandled rejection', async () => {
+    // `log` is typed `(event) => void`, but that does not stop an `async` sink:
+    // TypeScript permits a value-returning function where `void` is expected, so
+    // `async () => { throw }` type-checks and its rejection escapes a purely
+    // synchronous `catch`. Node terminates the process on an unhandled rejection
+    // by default, so this shape is strictly WORSE than the sync throw above —
+    // an observability sink taking the server down is the same guarantee
+    // violated, harder. Verified by listening for the real process event rather
+    // than by inspecting the reader, because "did it stay unhandled?" is a
+    // property of the runtime, not of the return value.
+    //
+    // The sink here is a PLAIN async function and must stay one: wrapping it in
+    // `vi.fn` makes this test vacuous, measured. Tinyspy records a spy's
+    // settled result, which it can only do by attaching a handler to the
+    // returned promise — so the spy itself handles the rejection and the guard
+    // under test is never needed. A bare async function leaves it genuinely
+    // unhandled. Hence the manual call counter.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let logCalls = 0;
+      const log = async () => {
+        logCalls += 1;
+        throw new Error('async sink down');
+      };
+      let clock = 0;
+      let outcome: unknown = RATE_LIMITED;
+      const reader = createClaudeAccountQuotaReader({
+        tokenReader: async () => 'tok',
+        fetcher: async () => outcome,
+        now: () => clock,
+        ttlMs: 60_000,
+        // An async sink IS the hazard under test, so `no-misused-promises`
+        // firing here is the point: it is the FIRST line of defence, and the
+        // fact that it fires proves the shape is reachable rather than
+        // theoretical. It is not the ONLY line, because it is a lint rule — it
+        // cannot see a sink arriving through an `any`, a JS caller, or a
+        // dynamically-built options object, and this module is exported for
+        // embedders who need not run our eslint config. Hence the runtime guard.
+        // eslint-disable-next-line @typescript-eslint/no-misused-promises
+        log,
+      });
+
+      await expect(reader.read()).resolves.toBeNull(); // 'rate_limited' fires
+      clock += 120_000;
+      outcome = LIVE_PAYLOAD;
+      await expect(reader.read()).resolves.not.toBeNull(); // 'rate_limit_cleared'
+      expect(logCalls).toBe(2);
+
+      // A macrotask: Node only reports an unhandled rejection once the microtask
+      // queue has drained, so asserting before this would pass vacuously.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('floors the cap at the TTL, so a bad ceiling cannot SHORTEN the throttle', async () => {
     // Without the `Math.max(ttlMs, …)` floor, `maxThrottleMs: 1_000` makes a 429
     // *shrink* the window to 1s — the reader would then hammer a rate-limited

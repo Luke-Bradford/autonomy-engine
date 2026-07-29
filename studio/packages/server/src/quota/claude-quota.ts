@@ -361,6 +361,20 @@ export interface ClaudeAccountQuotaReader {
 }
 
 /**
+ * One sample's result: the reading (`null` = UNREADABLE) plus whether the
+ * provider rate-limited us, which is carried separately because it is the one
+ * failure that must change the throttle window rather than just the cache.
+ *
+ * Module-scoped rather than local to the reader for consistency with
+ * `QuotaReaderLogEvent`. Note this is types-only either way — an `interface`
+ * erases at compile time, so nesting it cost nothing per construction.
+ */
+interface SampleOutcome {
+  value: ClaudeAccountQuota | null;
+  rateLimited: boolean;
+}
+
+/**
  * Builds the reader. One per app instance so two apps in one process never
  * share a cache (matching how every other per-app service is scoped).
  */
@@ -399,11 +413,6 @@ export function createClaudeAccountQuotaReader(
   /** De-dupes concurrent reads so a burst is one subprocess + one request. */
   let inFlight: Promise<ClaudeAccountQuota | null> | null = null;
 
-  interface SampleOutcome {
-    value: ClaudeAccountQuota | null;
-    rateLimited: boolean;
-  }
-
   async function sample(): Promise<SampleOutcome> {
     try {
       const token = await tokenReader();
@@ -429,10 +438,23 @@ export function createClaudeAccountQuotaReader(
    * rate-limited branch the throw lands BEFORE the window is widened, silently
    * disabling the very backoff this change exists to add. An observability sink
    * must never be able to alter the behaviour it observes.
+   *
+   * BOTH failure shapes are absorbed, because `log` being typed `=> void` does
+   * not actually stop a caller passing an `async` sink: TypeScript permits a
+   * value-returning function where `void` is expected, so `async () => { throw }`
+   * type-checks fine and its rejection would sail straight past a synchronous
+   * `catch` and become an unhandled rejection — which Node terminates the process
+   * on by default. That is a strictly worse outcome than the throw this function
+   * exists to swallow, so the returned value is checked for thenability and its
+   * rejection attached to. The `typeof … === 'function'` probe is inside the
+   * `try` deliberately: reading `.then` can itself throw on a hostile getter.
    */
   function report(event: QuotaReaderLogEvent): void {
     try {
-      log?.(event);
+      const returned: unknown = log?.(event);
+      if (typeof (returned as PromiseLike<void> | undefined)?.then === 'function') {
+        void (returned as PromiseLike<void>).then(undefined, () => {});
+      }
     } catch {
       // Deliberately silent: the only sink available to complain to is the one
       // that just threw.
