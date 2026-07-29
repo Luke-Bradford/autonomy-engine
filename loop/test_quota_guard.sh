@@ -38,8 +38,9 @@ case "$1" in
   *) exit 0 ;;
 esac
 EOS
-  # curl now serves BOTH quota sources and dispatches on the URL, because the
-  # guard reads the dashboard first and studio second. The studio arm is written
+  # curl now serves BOTH HTTP quota sources and dispatches on the URL, because
+  # the guard reads the dashboard first and studio last (the engine reader in
+  # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL). The studio arm is written
   # FIRST and returns early, so the dashboard arm below keeps its call counter
   # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
   # being added.
@@ -122,6 +123,26 @@ EOS
   for rc_a in "$@"; do
     case "$rc_a" in SEED_CACHE=*) printf '%s\n' "${rc_a#SEED_CACHE=}" >"$tmp/infra/.last_quota" ;; esac
   done
+  # Optional FALLBACK_UTIL=<0-1> stands up a fake `claude_usage` implementing the
+  # REAL module's two-call contract: refresh_live_quota() does the I/O and returns
+  # None, live_quota() returns the mapped windows. A stub that returned the value
+  # from the refresher would let the driver's broken call LOOK correct, so this
+  # deliberately mirrors the real shape.
+  for rc_a in "$@"; do
+    case "$rc_a" in
+      FALLBACK_UTIL=*)
+        mkdir -p "$tmp/fallback-lib"
+        cat >"$tmp/fallback-lib/claude_usage.py" <<EOS
+_cache = {}
+def refresh_live_quota(*a, **k):
+    _cache['v'] = {'seven_day': {'utilization': ${rc_a#FALLBACK_UTIL=}}, 'source': 'live'}
+    return None
+def live_quota(*a, **k):
+    return _cache.get('v')
+EOS
+        ;;
+    esac
+  done
   printf '#!/bin/bash\necho fired >>"%s/fires.txt"\nexit 0\n' "$tmp" >"$tmp/infra/run.sh"
   chmod +x "$tmp/infra/run.sh"
   cp "$HERE/drive.sh" "$tmp/infra/drive.sh"
@@ -134,8 +155,14 @@ EOS
   # `env` is REQUIRED: a var=value word arriving via "$@" is NOT parsed as an
   # assignment (assignments are recognised before expansion), so writing
   # `... "$@" bash drive.sh` would execute `QUOTA_STOP_PCT=80` as the COMMAND.
+  # ENGINE_LIB points at the fake `claude_usage` when a case asked for one, and
+  # at a path that does not exist otherwise — so every case that does NOT set
+  # FALLBACK_UTIL still exercises "no fallback available".
+  rc_lib="$tmp/nonexistent-lib"
+  [ -f "$tmp/fallback-lib/claude_usage.py" ] && rc_lib="$tmp/fallback-lib"
+
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    STUDIO_POLL_MARKER="$tmp/studio_polled" \
+    STUDIO_POLL_MARKER="$tmp/studio_polled" ENGINE_LIB="$rc_lib" \
     BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
@@ -308,15 +335,40 @@ check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2"
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 GH_OPEN_PR=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
 check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "$(fires_of "$r")"
 
-# --- 23-27. TWO sources: the dashboard first, studio second (cutover C2) -----
-# Cases 23-24 assert on the SOURCE LOG LINE rather than the fire count, because
+# --- 23. the FALLBACK source actually works (measured dead 2026-07-29) -------
+# `quota_pct`'s fallback called `cu.refresh_live_quota()` and read its RETURN
+# value. That function is a WRITER — it populates a module cache and returns None
+# on every path; the getter is `live_quota()`. So the fallback always yielded ""
+# and the guard had ONE source, not two, since the day it was written.
+#
+# Observed live: at 16:45Z a momentary dashboard blip took the reading straight
+# to UNREADABLE and spent a blind fire, with the dashboard answering 200 seconds
+# later. It also reframes 2026-07-26, recorded as "both sources failed at once" —
+# the fallback was already dead, so one outage was always enough. That one cost
+# $24.
+#
+# Dashboard EMPTY + a working fallback reading 97% must REFUSE, not fire blind.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.97)"
+check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
+check "the fallback reading drives the STOP, not the blind path" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 24. the fallback also feeds the last-known cache ------------------------
+# Both sources must write it (a fix for the same class already landed once, when
+# an early `return` skipped caching the PRIMARY reading).
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=0.42)"
+check "a fallback reading is cached like a primary one" "42" \
+  "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
+
+# --- 25-30. STUDIO as the THIRD source, behind the fallback (cutover C2) ----
+# Cases 25-26 assert on the SOURCE LOG LINE rather than the fire count, because
 # for those two the fire count is NOT an observable: a 10% reading fires exactly
 # the same number of times whichever source produced it, so a fire-count
-# assertion would pass with the second source never wired up at all. Cases 25-27
+# assertion would pass with the second source never wired up at all. Cases 27-30
 # do use the fire count and the cache file, and legitimately so -- there the
 # behaviour under test (refusing, and the blind-fire bound) IS the fire count.
 
-# 23. the dashboard answers -> studio is NEVER POLLED. This is the property that
+# 25. the dashboard answers -> studio is NEVER POLLED. This is the property that
 # keeps studio free: studio's reader is a DIRECT provider poll sharing one
 # rate-limit budget with the dashboard's sampler, so polling it when the
 # dashboard already answered would spend the budget that keeps the primary alive.
@@ -334,42 +386,42 @@ check "dashboard readable -> studio is never consulted" "1" \
 check "dashboard readable -> studio is never POLLED (not merely outvoted)" "1" \
   "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
 
-# 24. the dashboard is down and studio answers -> the reading is USED, and the
-# run is NOT blind. This is the case the whole second source exists for: today's
-# fallback is dead, so this scenario currently goes straight to a blind fire.
+# 26. the dashboard AND the engine reader are down, studio answers -> the
+# reading is USED and the run is NOT blind. This is the state C3 creates
+# permanently, when sources 1 and 2 are parked with the engine.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
-check "dashboard down + studio readable -> studio is named as the source" "0" \
+check "dashboard+engine down, studio readable -> studio is named as the source" "0" \
   "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
-check "dashboard down + studio readable -> NOT a blind fire" "1" \
+check "dashboard+engine down, studio readable -> NOT a blind fire" "1" \
   "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
 
-# 25. the second source can REFUSE, not just permit. A fallback that could only
+# 27. studio can REFUSE, not just permit. A source that could only
 # ever say "fine" would be worse than none -- it would launder an unknown into
 # permission. 97% reached via studio must stop the driver exactly as via the
 # dashboard.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 STUDIO_UTIL=0.97)"
-check "studio 97% -> zero fires (the fallback can refuse)" "0" "$(fires_of "$r")"
+check "studio 97% -> zero fires (the third source can refuse)" "0" "$(fires_of "$r")"
 check "studio 97% logs the quota STOP reason" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
 
-# 26. a reading from the SECOND source still writes the last-known cache. This
-# is the single-exit-point invariant, and the fallthrough branch is exactly
-# where it was broken before: an early `return` once skipped the cache write on
-# one source, leaving the cache empty precisely when that source was working.
+# 28. a reading from studio still writes the last-known cache. This is the
+# single-exit-point invariant, and the LAST branch is the one most likely to be
+# missed: an early `return` once skipped the cache write on one source, leaving
+# the cache empty precisely when that source was working.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.42)"
 check "a studio reading writes the last-known cache" "42" \
   "$(cut -d' ' -f2 "$(dirname "$(logof "$r")")/infra/.last_quota" 2>/dev/null || echo MISSING)"
 
-# 27. BOTH sources unreadable -> still UNREADABLE, and the WARN names both. The
+# 29. ALL sources unreadable -> still UNREADABLE, and the WARN says so. The
 # UNREADABLE-vs-0 distinction is the guard's load-bearing property (0 = wide
 # open, "" = blind); adding a source must not create a path where a failure
 # becomes a number.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=2)"
-check "both sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
-check "both sources down -> the WARN names dashboard AND studio" "0" \
-  "$(grep -q 'UNREADABLE (dashboard and studio both unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
+check "all sources down -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
+check "all sources down -> the WARN names every source" "0" \
+  "$(grep -q 'UNREADABLE (dashboard, engine reader and studio all unavailable)' "$(logof "$r")" && echo 0 || echo 1)"
 
-# 28. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
+# 30. an ALL-DIGIT but out-of-range reading is UNREADABLE, not a fire. Digits
 # alone are not enough to make a value safe for `test`: on bash 3.2
 # `[ 10000000000000000000 -ge 80 ]` errors with rc=2, which is NEITHER branch --
 # the `if` takes the else, logs "quota ok" and FIRES, uncapped, while claiming

@@ -57,15 +57,18 @@ Three independent bounds, checked before every fire, each with its own test in
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
   resets weekly, so exhausting it locks the operator out of their own sessions for days; stopping
   is the fail-safe direction.
-- **Two quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
-  `http://127.0.0.1:8787/api/state`) is read FIRST, `STUDIO_QUOTA_URL` (studio's native
-  `http://127.0.0.1:8080/api/quota`, #440 C1) SECOND. Both ultimately read the same upstream
-  `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under direct
-  polling. The dashboard rides through because it samples in the background and serves a warm
-  cache; studio's reader is lazy, so every read is a direct poll. Studio is therefore second —
-  when the dashboard answers, studio is never polled and adds zero upstream load. **Do not invert
-  this** until studio's reader stops polling upstream on the request path. Every read logs
-  `quota source: <dashboard|studio>`, which is how the decision to promote it gets made.
+- **Three quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
+  `/api/state`) FIRST, then the engine's usage reader (`ENGINE_LIB`, fixed in #766), then
+  `STUDIO_QUOTA_URL` (studio's native `/api/quota`, #440 C1) LAST. All three bottom out in the same
+  upstream `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under
+  direct polling. Only the dashboard rides through it, because it samples in the background and
+  answers from a warm cache; the other two are direct polls from a cold start and both return ""
+  under a 429. Between those two the *proven* one goes first — #766 measured the engine reader
+  returning a real figure, while studio has never once returned a number here (#765). Studio last is
+  what makes it free: it is polled only when both others failed, so it adds no upstream load in the
+  common case and cannot starve the sampler the primary depends on. Every read logs
+  `quota source: <dashboard|engine|studio>`, which is the evidence for promoting studio. **Do not
+  reorder** until studio's reader stops polling upstream on the request path.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
   evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache

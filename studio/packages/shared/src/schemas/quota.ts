@@ -8,8 +8,8 @@ import { z } from 'zod';
  * guard (`loop/drive.sh`'s `quota_pct()`), which refuses to fire when the
  * account's 7-day utilization is at or above `QUOTA_STOP_PCT`. When the old
  * bash/python engine is parked (#410) that endpoint disappears, and this takes
- * its place. NOTE, as of C2 (2026-07-29), it is the guard's SECOND source, not
- * its primary: this reader is lazy, so every read is a direct upstream poll, and
+ * its place. NOTE, as of C2 (2026-07-29), it is the guard's LAST source, not its
+ * primary: this reader is lazy, so every read is a direct upstream poll, and
  * that upstream 429s under direct polling — making it primary would have
  * disarmed the guard. Promotion is gated on #765 (add a background sampler, and
  * supervise a studio server at all). (It is not the guard's ONLY defence:
@@ -26,8 +26,8 @@ import { z } from 'zod';
  * ```
  *
  * Keeping that exact shape meant the cutover needed no parser change: C2 added
- * this URL as a second source read through the SAME parser, and the tests that
- * pin it were untouched. (`DASH_URL` itself was deliberately not repointed —
+ * this URL as an additional source read through the SAME parser, and the tests
+ * that pin it were untouched. (`DASH_URL` itself was deliberately not repointed —
  * see the note above and #765.) This file is
  * therefore a deliberate, documented COMPAT CONTRACT and the one
  * snake_case surface in the API — not a style lapse, and not a precedent for
