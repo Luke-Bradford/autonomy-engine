@@ -40,9 +40,10 @@ export interface ConnectGraph {
   nodes: Node[];
   edges: Edge[];
   /**
-   * The doc's containers. Not authorable on the canvas yet (U6c/U6d) — they come
-   * from the version the canvas was opened on, the same carry-forward a save
-   * writes back — but they are legal EDGE ENDPOINTS, so leaving them out would
+   * The doc's containers. Not authorable on the canvas yet (U6d) — the store
+   * seeds them from the version the canvas was opened on and only PRUNES
+   * membership, when a node is deleted (#746) — but they are legal EDGE
+   * ENDPOINTS, so leaving them out would
    * make an existing container edge invisible to both the endpoint and the
    * cycle rule.
    */

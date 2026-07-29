@@ -251,11 +251,17 @@ describe('FlowCanvas container rendering (U6c)', () => {
    * What is announced is what is DRAWN — the count comes from the box, not from
    * `container.children.length`.
    *
-   * The two disagree whenever a listed child is not in the box: a phantom (its
-   * node deleted, the id still listed — reachable today, since `deleteNode` does
-   * not prune `containers[].children`) or a child a FIRST-wins earlier container
-   * already claimed. Counting the raw array captions the box with children it does
-   * not contain.
+   * The two disagree whenever a listed child is not in the box: a phantom (an id
+   * listed as a child that is not a node in the doc) or a child a FIRST-wins
+   * earlier container already claimed. Counting the raw array captions the box
+   * with children it does not contain.
+   *
+   * `deleteNode` prunes membership as of #746, so a phantom is no longer
+   * something the CANVAS can create — but it is still reachable, which is why
+   * this test stands: a version minted before the write gate, an import, or a
+   * git checkout can all arrive with one, and the prune is deliberately confined
+   * to the id the operator just deleted rather than normalising the whole doc
+   * (which would silently repair — and hide — exactly those).
    */
   it('announces the children it DRAWS, not the ids it lists', () => {
     const { container } = withContainer([{ id: 'c_1', kind: 'stage', children: ['n_a', 'ghost'] }]);

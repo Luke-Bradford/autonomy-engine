@@ -3,6 +3,7 @@ import {
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
+  type Container,
   type Edge,
   type Node,
   type PipelineVersion,
@@ -11,6 +12,7 @@ import {
 import { newLocalId } from '../../lib/ids';
 import { retypeCollides, type EdgeCondition } from './edgeCondition';
 import { connectRejection, precomputeConnect } from './connectRules';
+import { pruneContainerChild } from './canvasDoc';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -79,13 +81,25 @@ export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
    * pipeline with no versions). Kept so a save can carry forward the parts of
-   * the doc this slice has no UI for (`params`/`outputs`/`containers`) and so
-   * "Save" rebases onto the new version it creates.
+   * the doc this slice has no UI for (`params`/`outputs`) and so "Save" rebases
+   * onto the new version it creates.
    */
   loaded: PipelineVersion | null;
   /** The working graph — the store owns its own copy (never the loaded arrays). */
   nodes: Node[];
   edges: Edge[];
+  /**
+   * The doc's containers — WORKING state as of #746, not a view of `loaded`.
+   *
+   * The canvas cannot yet CREATE one or move a node in or out (U6d/#425), so
+   * they look like pass-through: seeded on load, drawn by `FlowCanvas`, fed to
+   * the connect rules, written back on save. But membership is not read-only,
+   * because deleting a node changes it. While these were read off `loaded`,
+   * `deleteNode` had nothing to prune, so the deleted id stayed listed as a
+   * child and every later save was refused (`child '<id>' is not a node in this
+   * pipeline`) with no canvas affordance to repair it.
+   */
+  containers: Container[];
   selected: Selection | null;
   /** True once the working graph diverges from `loaded`; reset on load/save. */
   dirty: boolean;
@@ -149,6 +163,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     loaded: null,
     nodes: [],
     edges: [],
+    containers: [],
     selected: null,
     dirty: false,
     addCount: 0,
@@ -176,6 +191,13 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // copy-on-write and hands back an unchanged node BY REFERENCE.
         nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
         edges: v ? v.edges.map((e) => ({ ...e })) : [],
+        // #746 — containers are seeded as WORKING state, and the copy goes one
+        // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
+        // back into `loaded`, which is the rebase basis a later save carries
+        // forward from. The prune below is copy-on-write, so the alias would be
+        // harmless today and a live hazard the moment U6d edits membership in
+        // place — the kind of latent sharing that is free to rule out here.
+        containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
         selected: null,
         dirty: false,
         addCount: 0,
@@ -242,6 +264,21 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         return {
           nodes: s.nodes.filter((n) => n.id !== id),
           edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+          // #746 — container membership cascades exactly like the incident
+          // edges above. A container listing a node that no longer exists is a
+          // doc `validatePipelineDoc` refuses, so leaving the id behind made the
+          // canvas unsavable with nothing on screen able to repair it.
+          //
+          // A container that loses its LAST child is KEPT, not deleted with it.
+          // Deleting one is a structure write that also owns its incident edges
+          // and its exitWhen/items/maxRounds/timeout config, none of it
+          // re-authorable on the canvas until U6d/#425 — so a cascade would
+          // destroy authored structure the operator cannot get back, to spare
+          // them one refused save. An empty `stage` is legal and saves; an empty
+          // `loop`/`foreach` is still refused, but now for the real reason
+          // ("a loop needs at least one child") rather than for a node that no
+          // longer exists.
+          containers: pruneContainerChild(s.containers, id),
           selected,
           dirty: true,
         };
@@ -271,7 +308,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       const graph = {
         nodes: get().nodes,
         edges: get().edges,
-        containers: get().loaded?.containers ?? [],
+        containers: get().containers,
       };
       if (connectRejection(precomputeConnect(graph), { from, to, condition }) !== null) return;
       const edge = { id: newLocalId('e'), from, to, ...condition } as Edge;
