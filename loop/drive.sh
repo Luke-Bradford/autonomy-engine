@@ -41,7 +41,8 @@ ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # clau
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
 MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
-GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # x30s = up to 30 min for a gate to settle
+GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # xGATE_WAIT_SLEEP = up to 30 min for a gate to settle
+GATE_WAIT_SLEEP="${GATE_WAIT_SLEEP:-30}"   # seconds between gate polls; tests set 0
 AUTH_TRIES="${AUTH_TRIES:-0}"     # 0 = back off + retry auth FOREVER; >0 caps it (tests only)
 MAX_LOOPS="${MAX_LOOPS:-0}"       # 0 = run forever; >0 caps iterations (tests only)
 BACKOFF_BASE="${BACKOFF_BASE:-30}"   # base backoff seconds; tests set 0 to neutralise sleeps
@@ -425,10 +426,23 @@ while true; do
     while [ "$t" -lt "$GATE_WAIT_TRIES" ]; do
       pend="$(gh pr checks "$pr" --json bucket -q '[.[]|select(.bucket=="pending")]|length' 2>/dev/null || echo 1)"
       [ "${pend:-1}" = "0" ] && break
-      sleep 30
+      [ "$GATE_WAIT_SLEEP" -gt 0 ] && sleep "$GATE_WAIT_SLEEP"
       t=$((t + 1))
     done
-    log "PR #$pr gate settled (or waited ${t}x30s)"
+    log "PR #$pr gate settled (or waited ${t}x${GATE_WAIT_SLEEP}s)"
+
+    # --- RE-CHECK QUOTA after the wait ---------------------------------------
+    # Same staleness class the round-4 fix closed for auth blocks, and this one
+    # is routinely exercised: the wait runs on EVERY iteration with an open PR
+    # and lasts up to GATE_WAIT_TRIES x GATE_WAIT_SLEEP (30 min by default),
+    # sitting between the last quota_gate and the fire. Shorter window, but the
+    # operator's own interactive sessions can move the 7-day figure inside it --
+    # and their headroom is the thing this guard exists to protect. Only re-check
+    # when we ACTUALLY waited; a gate that was already settled changes nothing.
+    if [ "$t" -gt 0 ]; then
+      log "re-checking quota: the pre-wait reading is stale after ${t}x${GATE_WAIT_SLEEP}s of gate wait"
+      quota_gate || break
+    fi
   fi
 
   # --- progress / stall accounting (the ONLY "nothing more to do" detector) ---

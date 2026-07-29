@@ -17,12 +17,16 @@ run_case() {
   rc_util="$1"; shift
   tmp="$(mktemp -d)"; bin="$tmp/bin"; mkdir -p "$bin"
   # --- stubs -----------------------------------------------------------------
+  # No operator signals. GH_OPEN_PR=1 puts an open PR in front of the driver so
+  # the gate-wait path is reachable; `pr checks` then always reports pending, so
+  # the driver waits its full GATE_WAIT_TRIES.
   cat >"$bin/gh" <<'EOS'
 #!/bin/bash
-# no operator signals, no open PRs
 case "$*" in
-  *"pr list"*) echo "" ;;
-  *"issue list"*) echo "0" ;;
+  *"pr list"*length*)  [ -n "${GH_OPEN_PR:-}" ] && echo 1 || echo 0 ;;
+  *"pr list"*)         [ -n "${GH_OPEN_PR:-}" ] && echo 7 || echo "" ;;
+  *"pr checks"*)       echo 1 ;;
+  *"issue list"*)      echo "0" ;;
   *) echo "" ;;
 esac
 EOS
@@ -248,6 +252,15 @@ check "single-field cache line is rejected, not read as epoch+pct" "2" "$(fires_
 # blip on purpose: no re-grant, just enough to trigger the second gate call.
 r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 AUTH_TRIES=0 AUTHFAIL_N=1 AUTHFAIL_BLOCKS=3)"
 check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2" "$(fires_of "$r")"
+
+# --- 22. quota is RE-CHECKED after a PR-GATE WAIT (review round 7) -----------
+# Same staleness class as round 4, shorter window but routinely exercised: the
+# gate wait is up to GATE_WAIT_TRIES x 30s = 30 min and runs on EVERY iteration
+# with an open PR, sitting after the last quota_gate and before the fire. The
+# operator's own sessions can move the window during it -- which is exactly the
+# headroom the guard protects. 10% before the wait, 97% after.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=5 GH_OPEN_PR=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 CURL_UTIL_AFTER=0.97 CURL_SWITCH_CALLS=1)"
+check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "$(fires_of "$r")"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
