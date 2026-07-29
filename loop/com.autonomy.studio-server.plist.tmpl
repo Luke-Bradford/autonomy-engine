@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SUPERVISED STUDIO SERVER LaunchAgent (#765 Defect 2). Rendered by
+  `loop/install_studio_server.sh`. Do NOT hand-edit the installed copy in
+  ~/Library/LaunchAgents; re-run the installer instead.
+
+  NOTE on style: no double-hyphen appears anywhere in these comments, because a
+  double-hyphen is ILLEGAL inside an XML comment. macOS `plutil` accepts it
+  anyway, so the other plists here carry them harmlessly, but a strict parser
+  (python `plistlib`, which the test suite uses) rejects the whole file. Keep
+  this one strictly well formed so the test can assert on its parsed contents.
+
+  WHY THIS EXISTS. The build loop's spend guard (`loop/drive.sh` quota_pct) reads
+  studio's `/api/quota` as one of its sources, and after the engine is parked
+  (#410) studio becomes the ONLY source. Before this unit there was no supervised
+  studio server at all. The only listeners were ad-hoc `pnpm dev` sessions that
+  die with their terminal, so at 03:05 the endpoint was connection-refused.
+
+  WHY ITS OWN DB AND ITS OWN COPY OF THE CODE. Two studio servers against ONE
+  sqlite file corrupt each other: `packages/server/src/index.ts` reconcileOnBoot
+  treats every `running` row as a crash survivor and pumps it WITHOUT the drive
+  lock, and `scheduler/lease.ts` judges liveness from in-process
+  `drives.activeRunIds()`, so a second instance reclaims the first's live runs.
+  A developer running `pnpm dev` must therefore never share state with this
+  service. Hence a dedicated DB_PATH and WORKSPACE_GIT_ROOT under the service's
+  own state dir (WORKSPACE_GIT_ROOT defaults to a CWD-RELATIVE `data/git`, so
+  leaving it unset would put it back inside whatever tree we run from).
+
+  Likewise the CODE: the service runs from an isolated clone pinned to
+  origin/main, not from the loop's working checkout. The loop branch-switches and
+  rebuilds that checkout every fire and `dist/` is gitignored (so a checkout does
+  not restore it). With KeepAlive, a crash mid-fire would otherwise reboot the
+  guard's quota source from a foreign branch's half-written build.
+
+  DELIBERATELY NOT SET:
+    * AUTONOMY_DATA_DIR, because it also relocates the master key file
+      (`secrets/secrets.ts` DEFAULT_MASTER_KEY_FILE), so pinning it would mint a
+      NEW key and orphan every existing secret. The key stays at its
+      cwd-independent default, shared with any dev server, which is what lets
+      both decrypt the same secrets.
+    * CLAUDE_QUOTA_ENABLED, left ON. The reader is lazy (no sampler) behind a
+      60s TTL with 429 backoff, and drive.sh reaches studio only after its other
+      sources fail, so this adds no standing poller to the one rate-limited
+      upstream. #765's "exactly one process may poll /api/oauth/usage directly"
+      invariant is preserved.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>{{LABEL}}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE_BIN}}</string>
+    <string>{{SERVER_DIR}}/dist/index.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>{{SERVER_DIR}}</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{{PATH_VALUE}}</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <!-- Loopback only. This is an operator-local service; it is never exposed. -->
+    <key>HOST</key>
+    <string>127.0.0.1</string>
+    <key>PORT</key>
+    <string>{{PORT}}</string>
+    <key>DB_PATH</key>
+    <string>{{DB_PATH}}</string>
+    <key>WORKSPACE_GIT_ROOT</key>
+    <string>{{WORKSPACE_GIT_ROOT}}</string>
+    <key>WEB_ROOT</key>
+    <string>{{WEB_ROOT}}</string>
+  </dict>
+
+  <!-- RunAtLoad + KeepAlive: a quota source that is only up when someone
+       remembered to start it is the defect this unit closes. ThrottleInterval
+       bounds a crash loop (e.g. a missing dist) to one restart per 30s. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>{{LOG_DIR}}/server.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{LOG_DIR}}/server.err.log</string>
+</dict>
+</plist>

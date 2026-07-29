@@ -39,3 +39,11 @@ jobs:
         # Drives the REAL drive.sh with PATH stubs for gh/git/curl/claude, so it
         # makes no network calls and spends no tokens.
         run: bash loop/test_quota_guard.sh
+
+      - name: Studio-server LaunchAgent installer tests
+        # Sources the REAL installer and asserts on the plist it renders. HOME is
+        # redirected to a temp dir and launchctl/pnpm/git/curl are PATH stubs, so
+        # this is safe on ubuntu: it can neither install a LaunchAgent nor reach
+        # the network. Guards the isolation invariants (#765) that keep the
+        # supervised quota source out of the loop's working checkout.
+        run: bash loop/test_install_studio_server.sh

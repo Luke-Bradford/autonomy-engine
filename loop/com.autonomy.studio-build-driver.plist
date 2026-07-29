@@ -27,28 +27,47 @@
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 
-    <!-- The studio quota endpoint (#440 C1), the guard's SECOND source. Set
-         explicitly rather than left to drive.sh's default: 8080 is contended on
-         this machine and a different studio checkout has been seen listening
-         nearby, and a wrong-but-answering server 404s, which reads as UNREADABLE
-         forever while looking correctly configured. -->
-    <key>STUDIO_QUOTA_URL</key>
-    <string>http://127.0.0.1:8080/api/quota</string>
+    <!-- DELIBERATELY NO STUDIO_QUOTA_URL. THIS COPY pinned it to 8080 (added by
+         3a17fe1, the C2 PR). The pin never took effect, because this file is a
+         versioned copy and the INSTALLED agent predates it and carries no pin --
+         but it was a trap rather than a dead letter: an EnvironmentVariables
+         entry BEATS drive.sh's `${VAR:-default}`, so the first time anyone
+         copied this file over the installed one, every later change to that
+         default would have gone silently inert. The port now lives in exactly
+         one place, drive.sh's default (8788, the supervised service from #765
+         Defect 2), and `test_install_studio_server.sh` asserts the installer
+         agrees with it. Do not re-add a pin here. -->
   </dict>
 
   <key>RunAtLoad</key>
   <false/>
   <key>KeepAlive</key>
   <false/>
-  <!-- Scheduled start: fires drive.sh at 03:05 local (BST) daily. Set 2026-07-14
-       to start the ADF-grade foundation build ~13h out (operator near weekly token
-       cap). drive.sh loops the whole build back-to-back; a daily re-fire is a
-       harmless resume-if-stalled heartbeat. To disable: launchctl unload this. -->
+  <!-- Scheduled starts: fires drive.sh at 03:05 + 21:05 local (BST) daily.
+       03:05 set 2026-07-14 to start the ADF-grade foundation build ~13h out
+       (operator near weekly token cap). 21:05 added 2026-07-23 so a stop whose
+       cause clears during the day resumes the same evening instead of waiting
+       for 03:05 (kept OUT of work hours -- the loop shares the operator's
+       subscription quota). drive.sh loops the whole build back-to-back; a tick
+       on an already-running driver is a launchd no-op (single instance per
+       label), so these are harmless resume-if-stalled heartbeats.
+       To disable: launchctl unload this.
+
+       DRIFT REPAIR (#765): this copy had only the 03:05 dict while the INSTALLED
+       agent has both -- the 21:05 entry was added live on 2026-07-23 and never
+       backported. Copying this file over the live one would have silently
+       deleted a scheduled fire. Reconciled here; diff the two before any sync. -->
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>3</integer>
-    <key>Minute</key><integer>5</integer>
-  </dict>
+  <array>
+    <dict>
+      <key>Hour</key><integer>3</integer>
+      <key>Minute</key><integer>5</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>21</integer>
+      <key>Minute</key><integer>5</integer>
+    </dict>
+  </array>
 
   <key>StandardOutPath</key>
   <string>/Users/lukebradford/Dev/studio-loop/logs/driver.launchd.out.log</string>

@@ -85,13 +85,22 @@ QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last 
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
 ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
 DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
-# Studio's native replacement (#440 C1), matching studio's own default PORT of
-# 8080. NOTE this does not by itself identify the RIGHT server: another studio
-# checkout has been seen listening nearby on this machine, and a wrong-but-live
-# server 404s, which reads as UNREADABLE forever while looking correctly
-# configured. Pinning the port cannot distinguish them -- only giving studio its
-# own dedicated port can, which is part of #765 (no supervised studio server).
-STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8080/api/quota}"
+# Studio's native replacement (#440 C1). 8788 -- NOT studio's 8080 dev default --
+# because 8080 is contended on this machine: any `pnpm dev`, from any checkout,
+# takes it, and a wrong-but-answering server 404s, which reads as UNREADABLE
+# forever while looking correctly configured. 8788 belongs to the SUPERVISED
+# service installed by `install_studio_server.sh` (#765 Defect 2) and to nothing
+# else, so "is the guard's source up?" is an answerable question.
+#
+# This default is the SINGLE SOURCE OF TRUTH for that port. The repo's copy of
+# the driver LaunchAgent used to pin STUDIO_QUOTA_URL in EnvironmentVariables,
+# which BEATS a `${VAR:-default}`. That pin never actually fired (the installed
+# agent predates it and has none), so it was a trap rather than a live bug: the
+# first sync of that file would have frozen this default at 8080 and made every
+# later edit here silently inert. The pin is gone; keep it gone. The only other
+# copy is `DEFAULT_PORT` in `install_studio_server.sh`, and
+# `test_install_studio_server.sh` asserts the two agree.
+STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
@@ -122,6 +131,14 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # probe -- its reader is lazy, so every read is the direct poll that 429s;
 # `studio/packages/server/src/quota/claude-quota.ts`, and #765).
 #
+# What CHANGED with #765 is availability, not the order. Studio's endpoint used
+# to be connection-refused at fire time -- nothing supervised a studio server, so
+# the only listeners were ad-hoc `pnpm dev` sessions that die with their
+# terminal. A `com.autonomy.studio-server` LaunchAgent now holds 8788
+# (`install_studio_server.sh`), so source 3 is reachable rather than absent.
+# Every UNREADABLE it now logs is a real measurement of the READER, which is what
+# the promotion decision needs; before, it only measured "no server".
+#
 # Studio LAST is what makes adding it free. It is reached only when both other
 # sources have already failed, so it adds no upstream load in the common case,
 # cannot starve the sampler that keeps source 1 warm, and still produces the
@@ -131,10 +148,18 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # of polls in one iteration during the 71h block this file documents, unbounded
 # -- competing for the very budget the working source depends on.
 #
-# Studio is promoted (and 1 and 2 retired with the engine, C3) once its reader
-# stops polling upstream on the request path -- a sampler, the escape hatch its
-# own docs name. Until then this order is deliberate: DO NOT reorder it because
-# studio is "the new one". #765 is the gate.
+# Studio is promoted (and 1 and 2 retired with the engine, C3) once it has
+# DEMONSTRABLY answered here across scheduled fires -- the `quota source: studio`
+# lines below are that evidence, and they only became collectable once #765
+# Defect 2 gave studio a supervised server to answer from.
+#
+# Note the promotion criterion is no longer "add a sampler": #770 measured a cold
+# poll returning 200 and rejected a sampler on the evidence (it would add a
+# standing ~1/min draw on a budget already at its ceiling, contending with the
+# dashboard sampler on the same account, and #765's own invariant is that exactly
+# ONE process may poll `/api/oauth/usage` directly). Studio instead backs off
+# geometrically on a 429. Until the evidence is in, this order is deliberate:
+# DO NOT reorder it because studio is "the new one". #765 is the gate.
 #
 # "" (unknown) is a distinct outcome from "0" and the caller must not conflate
 # them -- 0% means wide open, "" means blind.
@@ -224,10 +249,12 @@ except Exception:
     qp_out="$(quota_sane "$qp_out")"
     [ -n "$qp_out" ] && qp_src="engine"
   fi
-  # THIRD: studio (#440 C1). Last, deliberately. It is a DIRECT upstream poll of
-  # the same rate-limited endpoint the engine reader hits, and unlike that reader
-  # it has never once returned a number here (`account.claude: null` on every
-  # probe, 2026-07-29). Trying the proven source first maximises availability;
+  # THIRD: studio (#440 C1), now served by the supervised `com.autonomy.studio-server`
+  # unit on 8788 (#765 Defect 2) rather than by whatever `pnpm dev` happened to be
+  # running. Last, deliberately. It is a DIRECT upstream poll of the same
+  # rate-limited endpoint the engine reader hits, and unlike that reader it has
+  # never once returned a number here (`account.claude: null` on every probe,
+  # 2026-07-29). Trying the proven source first maximises availability;
   # studio is reached only when both others failed, so it adds no load in the
   # common case while still producing the `quota source: studio` signal that
   # decides when it can be promoted. See #765.
