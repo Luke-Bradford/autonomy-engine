@@ -72,12 +72,24 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * this connector never emits). The connector emits those two keys TOGETHER and
  * only when `reasoningEffort` is set, so one set covers both.
  *
- * `claude-opus-4-5` IS a member, which is worth spelling out because it is the
- * one model where the two facts come apart: it accepts `output_config.effort`
- * (at `low`/`medium`/`high`), so it is tempting to read it as supported. But
+ * SETTLED 2026-07-29 (#729, partially). Every member below is now backed by a
+ * DIRECT PER-MODEL FACT rather than by generation-level inference: the models
+ * overview page (`platform.claude.com/docs/en/about-claude/models/overview.md`)
+ * publishes an explicit **"Adaptive thinking"** row per model in both its
+ * current and legacy comparison tables. It reads `No` for `claude-opus-4-5`,
+ * `claude-sonnet-4-5`, `claude-haiku-4-5` and `claude-opus-4-1`, and `Yes` for
+ * every model this module deliberately PERMITS (Opus 4.6/4.7/4.8, Sonnet 4.6,
+ * Fable 5, Opus 5, Sonnet 5) — so the same source that adds a member also
+ * confirms each non-member, which is the half a one-directional citation
+ * usually leaves unchecked.
+ *
+ * `claude-opus-4-5` is worth spelling out because it is the one model where the
+ * two facts come apart: it accepts `output_config.effort` (at
+ * `low`/`medium`/`high`), so it is tempting to read it as supported. But
  * `effort` is not what decides membership — the connector emits `effort` and
- * `thinking:{type:'adaptive'}` TOGETHER, and 4.5 predates the adaptive surface,
- * so the pair is rejected on the `thinking` key regardless of the effort value.
+ * `thinking:{type:'adaptive'}` TOGETHER, and the row above says 4.5 has no
+ * adaptive thinking, so the pair is rejected on the `thinking` key regardless of
+ * the effort value.
  *
  * That membership also closes a second hole rather than merely a stylistic one.
  * `reasoningEffortSchema` admits `max`, which 4.5 rejects even though it accepts
@@ -87,44 +99,46 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * refused outright, so the set shape stays sufficient. Re-check that claim
  * before removing any model from this set.
  *
- * KNOWN GAP, stated rather than left to be rediscovered: other API-active legacy
- * ids an operator may still name by hand — `claude-opus-4-1`, `claude-opus-4-0`,
- * `claude-sonnet-4-0`, `claude-3-haiku-20240307` — predate both the adaptive
- * surface and `output_config.effort` and very probably belong here too. The
- * available source shows the CONFIG FORM for that generation without stating a
- * rejection outright, which is weaker than membership warrants, so they are
- * tracked in #729 rather than guessed at. `claude-mythos-preview` is the same
- * shape of gap on the SAMPLING set above (documented Fable-family surface, so it
- * very probably rejects the knobs) and rides the same ticket.
+ * SEPARATELY, and NOT as a justification for membership: 4.5 also rejects
+ * `reasoningEffort:'max'` while accepting `low`/`medium`/`high`. That fact does
+ * different work — it is why a BOOLEAN set is a sufficient shape here.
+ * `reasoningEffortSchema` admits `max`, a per-(model, VALUE) fact no boolean set
+ * can express; with 4.5 refused wholesale that dimension is empty, because every
+ * remaining model the connector can reach either accepts all four schema values
+ * or is refused outright. Re-check THAT claim before removing any model from
+ * this set — it does not follow from the adaptive-thinking rows.
  *
- * RE-CHECKED 2026-07-25 (bug sweep 4) against the same source, and the four ids
- * still do NOT clear the bar — recorded here because the near-miss is a trap the
- * next author will hit too. The tempting citation is the migration guide's
- * heading "Effort parameter (Opus 4.5, Opus 4.6, Sonnet 4.6 only)", read as a
- * global list of what supports `effort`. It is not one: it sits under
- * "Migrating to Opus 4.6 / Sonnet 4.6" and is scoped to that era. Read globally
- * it would also exclude `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-7/4-8`
- * and `claude-fable-5` — every one of which the CURRENT effort table shows
- * supporting effort, and every one of which this module deliberately PERMITS
- * (pinned by `anthropic-models.test.ts`). Using it as authority for the legacy
- * ids while ignoring what it says about the modern ones is exactly the over-read
- * the fail-direction essay above exists to prevent. Settling #729 needs a
- * per-model fact — the Models API `capabilities.thinking.types.adaptive`
- * tree — not a sharper reading of a generation-level statement.
+ * KNOWN GAP, narrowed 2026-07-29 from four ids to three. `claude-opus-4-1` was
+ * on this list and is now a member on the direct row above. The remainder —
+ * `claude-opus-4-0`, `claude-sonnet-4-0`, `claude-3-haiku-20240307` — appear in
+ * NEITHER published comparison table, so the source that settled the other four
+ * says nothing at all about them. Under this module's governing rule an absent
+ * fact is not a refusal, so they stay PERMITTED and remain tracked in #729.
+ * `claude-mythos-preview` is a different shape of gap on the SAMPLING set above
+ * (the page names it in prose but gives it no capability row) and rides the same
+ * ticket.
  *
- * WHY 4.5 IS IN AND THEY ARE OUT, since both rest partly on inference and the
- * asymmetry is otherwise a double standard: the two errors are not symmetric.
- * Omitting a model that does reject costs a provider 400 classified `permanent`
- * — the PRE-EXISTING behaviour, bounded, and the direction this module's
- * fail-open essay prefers. Including a model that does NOT reject costs a
- * MANUFACTURED local refusal of a call that works, which is the harm that essay
- * exists to avoid. So the bar for ADDING is higher than the bar for LEAVING OUT,
- * and 4.5 clears it on a second, independent ground the legacy ids lack: it
- * demonstrably rejects `reasoningEffort:'max'`, so it belongs in the set on the
- * per-value fact alone, whatever its adaptive support turns out to be.
+ * The trap that cost two prior passes, kept because it is still live for those
+ * three: the tempting citation is the migration guide's heading "Effort
+ * parameter (Opus 4.5, Opus 4.6, Sonnet 4.6 only)", read as a global list of
+ * what supports `effort`. It is not one — it sits under "Migrating to Opus 4.6 /
+ * Sonnet 4.6" and is scoped to that era. Read globally it would also exclude
+ * `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4-7/4-8` and
+ * `claude-fable-5`, every one of which this module deliberately PERMITS (pinned
+ * by `anthropic-models.test.ts`). A per-model row settled this; a sharper
+ * reading of a generation-level statement never would have.
+ *
+ * WHY THE BAR FOR ADDING IS HIGHER THAN THE BAR FOR LEAVING OUT, which is what
+ * keeps those three out on no evidence rather than in on a plausible guess: the
+ * two errors are not symmetric. Omitting a model that DOES reject costs a
+ * provider 400 classified `permanent` — the pre-existing behaviour, bounded, and
+ * the direction this module's fail-open essay prefers. Including a model that
+ * does NOT reject costs a MANUFACTURED local refusal of a call that works, which
+ * is the harm that essay exists to avoid.
  */
 export const MODELS_REJECTING_ADAPTIVE_THINKING: ReadonlySet<string> = new Set([
   'claude-opus-4-5',
+  'claude-opus-4-1',
   'claude-sonnet-4-5',
   'claude-haiku-4-5',
 ]);

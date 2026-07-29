@@ -21,18 +21,25 @@ import type { UnsupportedParam } from './llm-shared.js';
  *
  * SCOPE, and it is NOT the whole quoted list: this connector emits THREE of
  * those eight from author config — `temperature`, `top_p`, and `max_tokens`
- * (`openai.ts`'s body builder). Only the first two are gated here. `max_tokens`
- * is deliberately left alone and tracked as #739, because its remedy is
- * different in kind: the source says reasoning models "will only work with the
- * `max_completion_tokens` parameter when using the Chat Completions API", so the
- * fix is to RENAME the field on the wire, not to refuse the call. A rename has a
- * failure mode a refusal does not — `max_completion_tokens` is newer than many
- * OpenAI-compatible gateways — and deciding that belongs in its own change
- * rather than riding along here. Until #739 lands, an author who sets BOTH
- * `temperature` and `maxTokens` on a reasoning model gets this preflight's
- * message naming `temperature`, fixes that, and then still meets the provider's
- * own 400 for `max_tokens`. Stated so the partial diagnosis is a known
- * limitation rather than a surprise.
+ * (`openai.ts`'s body builder). `stop` and `seed` are also emitted and are
+ * NOT in the quoted list, so they need no gate. The three are handled two
+ * different ways, because the source prescribes two different remedies:
+ *
+ *  - `temperature` / `top_p` are REFUSED locally (`unsupportedOpenAiParams`).
+ *    There is no replacement field; the authored intent cannot be honoured.
+ *  - `max_tokens` is RENAMED on the wire to `max_completion_tokens`
+ *    (`openAiUsesMaxCompletionTokens`, #739), because the source states the
+ *    replacement outright: reasoning models "will only work with the
+ *    `max_completion_tokens` parameter when using the Chat Completions API".
+ *    Refusing there would deny a request the provider can serve perfectly well
+ *    under a different key.
+ *
+ * #730 shipped only the first half and tracked the second as #739, on the
+ * grounds that a rename carries a gateway-compatibility failure mode a refusal
+ * does not. It does, and the answer turned out to be the gate that already
+ * existed: the rename is applied ONLY on the first-party base URL, so a gateway
+ * that predates `max_completion_tokens` keeps receiving exactly what it
+ * receives today. See `openAiUsesMaxCompletionTokens`.
  *
  * FAIL DIRECTION — the same rule as `anthropic-models.ts`, arrived at the same
  * way: list ONLY models KNOWN to reject, so absence means "not known to reject"
@@ -131,6 +138,48 @@ export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
  */
 export function isOpenAiFirstParty(baseUrl: string): boolean {
   return baseUrl === DEFAULT_OPENAI_BASE_URL;
+}
+
+/**
+ * #739 — does `model` take `max_completion_tokens` instead of `max_tokens` on
+ * Chat Completions?
+ *
+ * Membership is `MODELS_REJECTING_SAMPLING_PARAMS`, REUSED rather than
+ * duplicated: the source names `max_tokens` in the same "currently unsupported
+ * with reasoning models" sentence as `temperature` and `top_p`, so this is one
+ * fact about one class of model, and a second hand-maintained list of the same
+ * 23 ids would only drift from the first.
+ *
+ * The two facts are not perfectly co-extensive, and the difference is stated
+ * rather than glossed. The source's feature tables mark several members
+ * (`o3-pro`, `gpt-5-pro`, and the `*-codex` ids) as Responses-API-only — no
+ * Chat Completions row, and on Responses the budget field is
+ * `max_output_tokens`, a third name again. So the sampling-rejection fact
+ * covers every member, while the `max_completion_tokens` fact covers only the
+ * Chat-Completions-capable subset. Reusing the set is still correct HERE
+ * because this adapter speaks only Chat Completions (`openai.ts` posts to
+ * `/chat/completions`): a Responses-only model fails at the endpoint whatever
+ * we name the field, so the rename is moot for exactly those members rather
+ * than wrong for them. The set is a superset, and a harmless one.
+ *
+ * Takes ONLY `model`, deliberately — the same shape as `unsupportedOpenAiParams`
+ * and for the same reason. The first-party gate (`isOpenAiFirstParty`) is
+ * composed by the CALLER, so the two sibling facts share one copy of that gate
+ * instead of each carrying its own to drift.
+ *
+ * THE AUTHOR'S NUMBER CHANGES MEANING, which is worth knowing before reading a
+ * surprising result. `max_tokens` bounded VISIBLE output; `max_completion_tokens`
+ * bounds reasoning + visible output together. So a `maxTokens` an author tuned
+ * against a non-reasoning model can, on a reasoning model, be consumed entirely
+ * by invisible reasoning and yield an empty completion with
+ * `finish_reason: 'length'`. That is a REAL result and still succeeds, per the
+ * settled #461 contract (`stopReason` carries why and downstream branches on
+ * it) — deliberately not re-litigated here. Whether an empty completion with
+ * `stopReason: 'length'` deserves louder treatment is a genuine re-open of #461
+ * and is filed separately rather than decided in a bug sweep.
+ */
+export function openAiUsesMaxCompletionTokens(model: string): boolean {
+  return MODELS_REJECTING_SAMPLING_PARAMS.has(model);
 }
 
 /** The author-facing `llm_call` config fields this preflight can refuse. */

@@ -118,8 +118,12 @@ describe('unsupportedAnthropicParams (#727)', () => {
       'claude-opus-5',
       'claude-sonnet-5',
     ]);
+    // #729 (2026-07-29): `claude-opus-4-1` added on the models overview page's
+    // explicit per-model "Adaptive thinking: No" row, which also re-grounds the
+    // other three — previously carried on generation-level inference.
     expect([...MODELS_REJECTING_ADAPTIVE_THINKING].sort()).toEqual([
       'claude-haiku-4-5',
+      'claude-opus-4-1',
       'claude-opus-4-5',
       'claude-sonnet-4-5',
     ]);
@@ -179,5 +183,58 @@ describe('unsupportedParamFailure message (#727)', () => {
         '(not available on this model, which predates it); remove it from the ' +
         'activity config or select a newer model that supports it.',
     );
+  });
+});
+
+/**
+ * #729 — the legacy-id classification, settled for two of the five ids and
+ * deliberately still open for three.
+ *
+ * SOURCE: the models overview page's per-model **"Adaptive thinking"** row
+ * (fetched 2026-07-29), which is the per-model fact this module spent two
+ * passes waiting for.
+ */
+describe('adaptive-thinking classification of legacy ids (#729)', () => {
+  const EFFORT = { hasTemperature: false, hasTopP: false, hasReasoningEffort: true };
+
+  it('refuses reasoningEffort on claude-opus-4-1, whose row reads "No"', () => {
+    expect(unsupportedAnthropicParams('claude-opus-4-1', EFFORT)).toEqual([
+      // `unavailable`, not `removed`: the adaptive surface was ADDED at 4.6, so
+      // the remedy points at a NEWER model.
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('still PERMITS the three ids the source says nothing about', () => {
+    // The deliberate omission, pinned so a later author cannot quietly
+    // "complete" the list. These appear in NEITHER published comparison table,
+    // and this module's governing rule is that an absent fact is not a refusal:
+    // guessing them in would manufacture a local failure of a call that works,
+    // while leaving them out costs at most the pre-existing provider 400.
+    for (const model of ['claude-opus-4-0', 'claude-sonnet-4-0', 'claude-3-haiku-20240307']) {
+      expect(unsupportedAnthropicParams(model, EFFORT)).toEqual([]);
+    }
+  });
+
+  it('does NOT refuse claude-opus-4-1 when the author set no reasoningEffort', () => {
+    // Membership alone must stay invisible: the connector emits the adaptive
+    // pair only on author opt-in, so a plain call to a legacy model is untouched.
+    expect(
+      unsupportedAnthropicParams('claude-opus-4-1', {
+        hasTemperature: false,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it('does NOT refuse the DATED form of a member id', () => {
+    // Exact-string matching (documented on the module). `claude-opus-4-1` is an
+    // alias that resolves to `claude-opus-4-1-20250805`, and pre-4.6 aliases are
+    // convenience pointers, so BOTH strings reach the wire — but only the alias
+    // is in the set. Costs the pre-existing 400, which is the safe direction;
+    // pinned here so the hole is a known one rather than a surprise, and tracked
+    // for a uniform decision across every member rather than a one-off.
+    expect(unsupportedAnthropicParams('claude-opus-4-1-20250805', EFFORT)).toEqual([]);
   });
 });
