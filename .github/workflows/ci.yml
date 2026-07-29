@@ -35,6 +35,76 @@ jobs:
       - name: shellcheck the loop control plane
         run: shellcheck -S warning loop/*.sh
 
+      - name: Quota reader unit tests
+        # The loop's own 7-day utilization reader (#764), relocated out of the
+        # engine's lib/ so cutover C3 does not take the guard's second source with
+        # it. Stdlib unittest with the Keychain runner, the URL opener and
+        # sys.platform all injected, so this makes no network or Keychain call and
+        # the darwin-only paths are still exercised on ubuntu.
+        run: python3 loop/test_claude_usage.py
+
+      - name: Quota reader CLI contract (real module, no stubs)
+        # The unit tests inject every seam, so nothing above runs the exact command
+        # line drive.sh uses (`python3 <dir>/claude_usage.py`). This does, against
+        # the REAL module. ubuntu is not darwin, so read_oauth_token returns None
+        # without touching a Keychain and without a network call -- which is
+        # precisely the UNREADABLE contract: exit 1 and print NOTHING on stdout.
+        # Empty stdout is the load-bearing half. A reader that printed `0` here
+        # would read as "quota wide open" and PERMIT a blind fire (#440).
+        #
+        # The import check is not redundant: a module that fails to IMPORT exits 1
+        # with an empty stdout too (the traceback goes to the discarded stderr), so
+        # the contract assertion alone cannot tell a correct UNREADABLE from a
+        # syntactically broken file. Prove it loads first, then assert.
+        run: |
+          python3 -c 'import sys; sys.path.insert(0, "loop"); import claude_usage'
+          set +e
+          out="$(python3 loop/claude_usage.py 2>/dev/null)"; rc=$?
+          set -e
+          [ "$rc" = "1" ] || { echo "expected exit 1 on non-darwin, got $rc"; exit 1; }
+          [ -z "$out" ] || { echo "expected EMPTY stdout, got '$out'"; exit 1; }
+
+      - name: Quota reader endpoint contract matches studio's
+        # Post-C3 the guard's two sources are this reader and studio's /api/quota,
+        # and they carry SEPARATE copies of the upstream contract in two languages
+        # (documented in claude_usage.py's docstring, which notes nothing enforced
+        # it). An upstream change applied to one and not the other silently costs
+        # the guard a source, and a silently-lost source is exactly the 2026-07-26
+        # single-point-of-failure this whole ticket exists to prevent. So: pin what
+        # must agree. Deliberately greps rather than a shared constant -- a shared
+        # module would recouple the two sources, and independence is the property
+        # being bought.
+        #
+        # Anchored to the ASSIGNMENT, not to "the string appears somewhere in the
+        # file": updating USAGE_URL while leaving the old value behind in a
+        # docstring would otherwise pass.
+        #
+        # The FIELD PATH is pinned as well as the three connection values, because
+        # it is the miss those three let through: upstream renames `seven_day` to
+        # `week`, someone updates the TypeScript only, all three anchored checks
+        # still pass, `seven_day_pct` returns None on every call forever, and the
+        # guard is silently back to one source. Unanchored here on purpose -- both
+        # files reach the field through several expressions, so the property worth
+        # pinning is only that neither has stopped mentioning it.
+        run: |
+          py=loop/claude_usage.py
+          ts=studio/packages/server/src/quota/claude-quota.ts
+          fail() { echo "QUOTA CONTRACT DRIFT: $1"; exit 1; }
+          u='https://api\.anthropic\.com/api/oauth/usage'
+          grep -qE "^USAGE_URL = \"$u\"$" "$py" || fail "$py USAGE_URL"
+          grep -qE "^const USAGE_URL = '$u';$" "$ts" || fail "$ts USAGE_URL"
+          grep -qE '^KEYCHAIN_SERVICE = "Claude Code-credentials"$' "$py" \
+            || fail "$py KEYCHAIN_SERVICE"
+          grep -qE "^const KEYCHAIN_SERVICE = 'Claude Code-credentials';$" "$ts" \
+            || fail "$ts KEYCHAIN_SERVICE"
+          grep -qE '^USAGE_BETA = "oauth-2025-04-20"$' "$py" || fail "$py USAGE_BETA"
+          grep -qE "^const USAGE_BETA = 'oauth-2025-04-20';$" "$ts" \
+            || fail "$ts USAGE_BETA"
+          for f in "$py" "$ts"; do
+            grep -qF 'seven_day' "$f" || fail "$f no longer reads seven_day"
+            grep -qF 'utilization' "$f" || fail "$f no longer reads utilization"
+          done
+
       - name: Quota-guard + fire-budget tests
         # Drives the REAL drive.sh with PATH stubs for gh/git/curl/claude, so it
         # makes no network calls and spends no tokens.

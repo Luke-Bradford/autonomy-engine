@@ -12,9 +12,11 @@
 
   WHY THIS EXISTS. The build loop's spend guard (`loop/drive.sh` quota_pct) reads
   studio's `/api/quota` as one of its sources, and after the engine is parked
-  (#410) studio becomes the ONLY source. Before this unit there was no supervised
-  studio server at all. The only listeners were ad-hoc `pnpm dev` sessions that
-  die with their terminal, so at 03:05 the endpoint was connection-refused.
+  (#410) it is one of only TWO left. The other is `loop/claude_usage.py`, which
+  #764 relocated out of the engine for exactly that reason. Before this unit
+  there was no supervised studio server at all. The only listeners were ad-hoc
+  `pnpm dev` sessions that die with their terminal, so at 03:05 the endpoint was
+  connection-refused.
 
   WHY ITS OWN DB AND ITS OWN COPY OF THE CODE. Two studio servers against ONE
   sqlite file corrupt each other: `packages/server/src/index.ts` reconcileOnBoot

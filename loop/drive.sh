@@ -83,7 +83,13 @@ MAX_BUDGET_REGRANTS="${MAX_BUDGET_REGRANTS:-1}"  # how many times ONE driver run
                                   # this is what stops flapping auth from uncapping the driver.
 QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last READABLE reading
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
-ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # claude_usage.py lives here
+# Where `claude_usage.py` -- the loop's OWN 7-day utilization reader -- lives. It
+# ships BESIDE this file, so the default is simply $INFRA (in production this
+# script IS $INFRA/drive.sh). #764 relocated it out of the engine's `lib/`: that
+# directory is parked by cutover C3 (#410), which would have taken the guard's
+# second source with it and left only the source that has never yet answered.
+# A sync of the live control plane must therefore carry BOTH files.
+LOOP_LIB="${LOOP_LIB:-$INFRA}"
 DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
 # Studio's native replacement (#440 C1). 8788 -- NOT studio's 8080 dev default --
 # because 8080 is contended on this machine: any `pnpm dev`, from any checkout,
@@ -109,7 +115,8 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #
 # THREE sources, and the ORDER is the load-bearing part (cutover C2, #440):
 #   1. the prototype dashboard (`$DASH_URL`)
-#   2. the engine's usage reader (`$ENGINE_LIB`, fixed in #766)
+#   2. the loop's OWN usage reader (`$LOOP_LIB/claude_usage.py`; relocated out
+#      of the engine by #764; #766 fixed this CALL SITE against the old module)
 #   3. studio's native endpoint (`$STUDIO_QUOTA_URL`, #440 C1)
 #
 # All three bottom out in the SAME upstream, `GET /api/oauth/usage`, with the
@@ -122,14 +129,45 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #   * the dashboard rides through a 429 because it samples on a background
 #     thread and answers from a warm cache. It is the only source that does, so
 #     it goes first -- and asking it costs the upstream nothing.
-#   * the engine reader (2) and studio (3) are both DIRECT polls, one per call,
+#   * the loop reader (2) and studio (3) are both DIRECT polls, one per call,
 #     from a cold start. Under a 429 both return "" for the same reason.
 #
-# Between the two direct pollers, the PROVEN one goes first: #766 measured the
-# engine reader returning 10, matching the dashboard at that moment, whereas
-# studio has never once returned a number here (`account.claude: null` on every
-# probe -- its reader is lazy, so every read is the direct poll that 429s;
+# Between the two direct pollers, the PROVEN one goes first: #766 measured this
+# reader -- then still in the engine's `lib/`, before #764 relocated it --
+# returning 10, matching the dashboard at that moment, whereas studio has never
+# once returned a number here (`account.claude: null` on every probe -- its
+# reader is lazy, so every read is the direct poll that 429s;
 # `studio/packages/server/src/quota/claude-quota.ts`, and #765).
+#
+# Do not read that contrast as "the loop reader works and studio does not". Both
+# were re-measured on 2026-07-29 while the dashboard was answering 14%: the loop
+# reader's token read succeeded (108 chars) and the endpoint returned 429, i.e.
+# the SAME failure studio reports. The honest reading is that whichever process
+# holds the bucket is the one that answers, and right now that is the dashboard's
+# 60s sampler -- continuously, which is why the two direct pollers see a
+# permanently empty bucket. #766's success was measured in a gap between samples.
+#
+# There is a second-order effect on C3 too, pointing the other way. Post-C3 the
+# dashboard read fails on EVERY call, so every quota_pct invocation becomes a
+# Keychain read plus a direct poll -- and as the "Studio LAST" paragraph below
+# notes, that is tens of polls in one iteration during a long auth block. THIS
+# READER is the unthrottled one: it runs as a fresh process per call, so it has no
+# in-memory cache, and nothing gives it a cross-process one either. Studio is not
+# in the same position -- `claude-quota.ts` throttles to a 60s TTL and widens
+# geometrically to ~8min on a 429, held in the long-lived supervised server, and
+# it throttles FAILED reads too. So the self-inflicted-429 hazard is source 2's
+# alone, and it is UNMITIGATED -- filed as #777, to land BEFORE C3, since parking
+# source 1 is what turns it from theoretical into the normal path. #777 also owns
+# reconciling the "exactly ONE process may poll directly" invariant quoted below,
+# which the post-C3 pair structurally violates. Watch for it, don't assume it.
+#
+# That has a consequence for C3 worth stating BEFORE anyone acts on it: removing
+# the dashboard does not merely remove the best source, it also stops the
+# polling that starves the other two. So the post-C3 pair may well start
+# answering precisely because source 1 is gone. That is a HYPOTHESIS, not a
+# measurement -- it predicts that a fire whose dashboard read fails will log
+# `quota source: loop`, which is exactly the evidence the log lines below collect.
+# Do not treat "studio has never answered" as settled while the confound stands.
 #
 # What CHANGED with #765 is availability, not the order. Studio's endpoint used
 # to be connection-refused at fire time -- nothing supervised a studio server, so
@@ -148,7 +186,7 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # of polls in one iteration during the 71h block this file documents, unbounded
 # -- competing for the very budget the working source depends on.
 #
-# Studio is promoted (and 1 and 2 retired with the engine, C3) once it has
+# Studio is promoted (and source 1 retired with the engine, C3) once it has
 # DEMONSTRABLY answered here across scheduled fires -- the `quota source: studio`
 # lines below are that evidence, and they only became collectable once #765
 # Defect 2 gave studio a supervised server to answer from.
@@ -216,43 +254,37 @@ quota_pct() {
   # `return` here silently skipped caching the primary (and commonest) reading,
   # leaving the cache empty exactly when it was working -- caught by a test.
   if [ -z "$qp_out" ]; then
-    # SECOND: the engine's usage reader (#766). Not a URL, so it is sanitised
+    # SECOND: the loop's own usage reader. Not a URL, so it is sanitised
     # explicitly rather than via quota_read_url.
-    # TWO CALLS, and that is the whole point. `refresh_live_quota()` is a WRITER —
-    # it does the I/O and populates a module cache, returning None on every path
-    # (including its self-throttled early return). The GETTER is `live_quota()`.
-    # This read used to call only the writer and use its return value, so it
-    # yielded "" every time and the guard had ONE source, not two, from the day it
-    # was written. Measured 2026-07-29: a momentary dashboard blip went straight to
-    # UNREADABLE and spent a blind fire while the dashboard answered 200 seconds
-    # later. It also reframes 2026-07-26, logged as "both sources failed at once" —
-    # the fallback was already dead, so one outage was always enough, and that one
-    # cost $24 and shipped nothing.
     #
-    # An AGE-BADGED value is refused. `live_quota()` serves the last-good sample
-    # for up to its grace window when the current sample failed, tagging it with
-    # `age_s`. That is right for the dashboard PANEL it was built for and wrong
-    # here: a stale-but-plausible LOW reading PERMITS a fire the live figure would
-    # have refused, which is fail-open — the one polarity every guard rule here
-    # forbids. Same call the studio reader makes in #763. Absent the badge it is a
-    # fresh sample and is used normally.
-    qp_out="$(cd "$ENGINE_LIB" 2>/dev/null && python3 -c "
-import claude_usage as cu
-try:
-    cu.refresh_live_quota()
-    q = cu.live_quota() or {}
-    u = None if 'age_s' in q else ((q.get('seven_day') or {}).get('utilization'))
-    print(int(round(float(u) * 100)) if u is not None else '')
-except Exception:
-    print('')
-" 2>/dev/null)"
+    # ALREADY A PERCENT — do NOT multiply by 100 the way `quota_read_url` does,
+    # and do NOT divide. That is the one trap in this function: the two HTTP
+    # sources carry `utilization` as a FRACTION (hence the x100 there), this
+    # reader prints the percent. A /100 slip reports every reading below 150% as
+    # 0 — "wide open" — which FIRES. The two calls sit ten lines apart and are
+    # the only survivors post-C3, so the difference is easy to "tidy" into a
+    # fail-open bug. Pinned from both sides by `test_quota_guard.sh` cases 23-24.
+    #
+    # WHY A PURPOSE-BUILT PORT rather than a copy of the engine's old
+    # `lib/claude_usage.py`: that module split a WRITER from a GETTER and this
+    # call site used only the writer, so source 2 returned "" for its entire life
+    # and the guard silently had ONE source (#766 — it also reframes 2026-07-26's
+    # "both sources failed at once"; one outage was always enough). The port is a
+    # single call that prints the percent or prints NOTHING and exits 1, so that
+    # class is unrepresentable. It also drops the old last-good GRACE window on
+    # purpose — a stale-but-plausible LOW reading PERMITS a fire the live figure
+    # would refuse, and fail-open is the one polarity forbidden here; the
+    # monotonic `QUOTA_CACHE` below is the sanctioned way to use an old reading
+    # and it can only ever REFUSE. Full rationale lives in ONE place, the
+    # reader's own module docstring — do not re-argue it here.
+    qp_out="$(python3 "$LOOP_LIB/claude_usage.py" 2>/dev/null)"
     qp_out="$(quota_sane "$qp_out")"
-    [ -n "$qp_out" ] && qp_src="engine"
+    [ -n "$qp_out" ] && qp_src="loop"
   fi
   # THIRD: studio (#440 C1), now served by the supervised `com.autonomy.studio-server`
   # unit on 8788 (#765 Defect 2) rather than by whatever `pnpm dev` happened to be
   # running. Last, deliberately. It is a DIRECT upstream poll of the same
-  # rate-limited endpoint the engine reader hits, and unlike that reader it has
+  # rate-limited endpoint the loop reader hits, and unlike that reader it has
   # never once returned a number here (`account.claude: null` on every probe,
   # 2026-07-29). Trying the proven source first maximises availability;
   # studio is reached only when both others failed, so it adds no load in the
@@ -365,7 +397,7 @@ quota_gate() {
   # an iteration that is authorised blind but then stops at the cap charges
   # nothing at all.
   gate_blind=1
-  log "WARN: 7-day quota utilization UNREADABLE (dashboard, engine reader and studio all unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires - 1)) blind fire(s) left after this one"
+  log "WARN: 7-day quota utilization UNREADABLE (dashboard, loop reader and studio all unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires - 1)) blind fire(s) left after this one"
   return 0
 }
 
@@ -510,6 +542,21 @@ gate_blind=0              # last quota_gate decision was blind (set -u: must exi
 prev_head=""
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
+
+# Is the quota guard's fallback reader actually THERE? A missing reader and a
+# rate-limited one are indistinguishable downstream -- both yield "" and the fire
+# just logs a different winning source, or UNREADABLE. That silence is exactly
+# how #766 hid for its entire life: source 2 was dead from the day it was written
+# and nothing said so.
+#
+# The realistic way it goes missing is a partial sync. `~/Dev/studio-loop/` is an
+# unversioned copy kept in step by hand, so copying `drive.sh` without
+# `claude_usage.py` re-creates #764's failure by hand. Announce it once per run
+# rather than trusting a README to be read. Cheap, fail-safe, and it cannot
+# suppress a fire -- it only tells the truth about how many sources exist.
+if [ ! -f "$LOOP_LIB/claude_usage.py" ]; then
+  log "WARN: quota fallback reader MISSING at $LOOP_LIB/claude_usage.py -- the guard has lost a source and is down to its HTTP sources only (#764). If this followed a sync, copy claude_usage.py alongside drive.sh."
+fi
 
 while true; do
   loops=$((loops + 1))
