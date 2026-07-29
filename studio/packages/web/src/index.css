@@ -812,22 +812,56 @@ td button + button {
 
 /* The canvas needs the full content width; the default 900px cap is for the
    list/form pages. `:has` scopes the override to the canvas page only. */
+/* The canvas needs the full content width AND the full content height; the
+   default 900px cap and the block layout are for the list/form pages. `:has`
+   scopes both overrides to the canvas page only.
+
+   Flex column, not `display: block` — this is what lets `.canvas-page` below
+   claim the leftover height. `.content` is already a DEFINITE height (an 860px
+   grid row of `.workspace`), which is what makes "leftover" a real number. */
 .content:has(.canvas-page) {
   max-width: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Header, notices and validation badges are content-sized; the editor grid takes
+   everything that is left. A flex column rather than explicit grid rows because
+   the children are CONDITIONAL (save message, load error, issue list) — a
+   `grid-template-rows` listing them would silently mis-assign the `1fr` row the
+   moment one of them is absent. */
+.canvas-page {
+  display: flex;
+  flex-direction: column;
+  /* BOTH halves are needed and they do different jobs: `display: flex` makes
+     this a flex CONTAINER for the header/editor split below, while `flex: 1`
+     makes it a filling flex ITEM of `.content` above. Setting only the former
+     leaves the default `flex: 0 1 auto` — content-sized — which measured 762px
+     inside a 1360px parent and left the gap this rule exists to close. */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .canvas-grid {
   display: grid;
   grid-template-columns: 180px 1fr 320px;
+  /* ONE row, filling the height this grid was given. `minmax(0, 1fr)` rather
+     than `1fr`: a bare `1fr` is `minmax(auto, 1fr)`, whose auto MINIMUM is the
+     content's intrinsic height, so a tall toolbox catalog would push the row
+     past the viewport instead of scrolling inside its own column.
+     HONEST NOTE: this survives mutation today, because the catalog is 15 items
+     and never reaches that minimum at any viewport the spec exercises. It is the
+     rule that caps the row, and it is what lets `.activity-toolbox` drop its own
+     `max-height` — so it is kept for the catalog the A-series will grow, not for
+     a case the current fixture can demonstrate. */
+  grid-template-rows: minmax(0, 1fr);
   gap: 0.75rem;
   margin-top: 1rem;
-  /* The canvas's fixed height, declared ONCE. React Flow needs an explicitly
-     sized parent (`.canvas-wrap`), and the toolbox column caps itself to the
-     same value so a long catalog scrolls inside its own column instead of
-     stretching the grid row past the canvas beside it. Written as a custom
-     property because two rules must agree: as two bare `620px` literals, editing
-     one silently left the toolbox short of, or overflowing past, the canvas. */
-  --canvas-height: 620px;
+  /* Take the leftover height from `.canvas-page`, and allow shrinking below
+     intrinsic content height (same reason as the `minmax` above). */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .activity-toolbox,
@@ -857,9 +891,14 @@ td button + button {
 
 .activity-toolbox {
   /* Long catalogs scroll inside the column rather than stretching the grid row
-     past the canvas. Same height as `.canvas-wrap`, from the one declaration on
-     `.canvas-grid`. */
-  max-height: var(--canvas-height);
+     past the canvas beside it.
+
+     No `max-height` any more. It used to be `var(--canvas-height)`, and the old
+     comment rightly worried that TWO rules had to agree on one number. They no
+     longer do: `.canvas-grid`'s `minmax(0, 1fr)` caps the row, this column is
+     stretched to it, and `overflow-y` then scrolls inside. A `max-height: 100%`
+     here was mutation-tested and SURVIVED — redundant with the row cap — so the
+     coupling is gone rather than merely re-expressed. */
   overflow-y: auto;
 }
 
@@ -994,9 +1033,18 @@ td button + button {
   resize: vertical;
 }
 
-/* React Flow needs an explicitly-sized parent. */
+/* React Flow needs a parent with a resolved height — but DEFINITE is not the
+   same as CONSTANT, which is what the old `--canvas-height: 620px` literal
+   conflated.
+
+   No `height` declaration is needed here: this is a GRID ITEM of `.canvas-grid`,
+   whose single row is `minmax(0, 1fr)` of a definite-height flex chain, and the
+   default `align-self: stretch` already sizes it to that row. Verified by
+   mutation — a `height: 100%` here SURVIVED removal, i.e. it was doing nothing,
+   so it is not kept as decoration. The collapse-to-zero failure mode is guarded
+   by `canvas-fills-viewport.spec.ts` asserting a non-zero rendered height, which
+   is a real check rather than a declaration that merely looks like one. */
 .canvas-wrap {
-  height: var(--canvas-height);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
