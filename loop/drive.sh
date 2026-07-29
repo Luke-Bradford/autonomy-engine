@@ -41,7 +41,8 @@ ENGINE_LIB="${ENGINE_LIB:-/Users/lukebradford/Dev/autonomy-engine/lib}"   # clau
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
 MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
-GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # xGATE_WAIT_SLEEP = up to 30 min for a gate to settle
+GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # polls before giving up on a PR gate;
+                                  # GATE_WAIT_TRIES x GATE_WAIT_SLEEP = up to 30 min by default
 GATE_WAIT_SLEEP="${GATE_WAIT_SLEEP:-30}"   # seconds between gate polls; tests set 0
 AUTH_TRIES="${AUTH_TRIES:-0}"     # 0 = back off + retry auth FOREVER; >0 caps it (tests only)
 MAX_LOOPS="${MAX_LOOPS:-0}"       # 0 = run forever; >0 caps iterations (tests only)
