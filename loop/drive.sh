@@ -149,6 +149,7 @@ quota_cache_read() {
 # Mutates blind_fires (a global) rather than running in a subshell, so the blind
 # allowance is spent exactly once per authorised blind fire.
 quota_gate() {
+  gate_blind=0        # was THIS decision made blind? charged at the fire site
   qg_pct="$(quota_pct)"
   if [ -n "$qg_pct" ]; then
     if [ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]; then
@@ -182,8 +183,15 @@ quota_gate() {
     log "STOP: 7-day quota utilization UNREADABLE and $blind_fires blind fire(s) already spent (cap QUOTA_UNKNOWN_FIRES=$QUOTA_UNKNOWN_FIRES) -- refusing to fire blind"
     return 1
   fi
-  blind_fires=$((blind_fires + 1))
-  log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires)) blind fire(s) left"
+  # Flag it; do NOT charge it here. quota_gate runs up to TWICE per iteration
+  # (pre-auth, and again after a block), so charging inside it spent two units of
+  # QUOTA_UNKNOWN_FIRES on ONE fire -- halving the grace exactly when a monitoring
+  # hiccup coincides with an auth blip, which is the correlated case the allowance
+  # exists for. The counter is named blind_FIRES, so the fire site charges it, and
+  # an iteration that is authorised blind but then stops at the cap charges
+  # nothing at all.
+  gate_blind=1
+  log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires - 1)) blind fire(s) left after this one"
   return 0
 }
 
@@ -324,6 +332,7 @@ fires=0
 auth_block_retries=0      # length of the auth block ensure_auth just cleared (set -u: must exist)
 budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGRANTS
 blind_fires=0             # fires spent while quota was UNREADABLE; bounded by QUOTA_UNKNOWN_FIRES
+gate_blind=0              # last quota_gate decision was blind (set -u: must exist)
 prev_head=""
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
@@ -439,6 +448,8 @@ while true; do
 
   # --- fire one headless piece ------------------------------------------------
   fires=$((fires + 1))
+  # Charge the blind allowance HERE, once, for the fire it actually authorised.
+  [ "$gate_blind" = "1" ] && blind_fires=$((blind_fires + 1))
   log "=== FIRE $fires (main=$(echo "$head" | cut -c1-7) openPR=$openpr) ==="
   bash "$INFRA/run.sh"
   rc=$?

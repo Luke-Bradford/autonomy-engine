@@ -240,6 +240,15 @@ check "the post-block re-check states why" "0" \
 r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 "SEED_CACHE=$now")"
 check "single-field cache line is rejected, not read as epoch+pct" "2" "$(fires_of "$r")"
 
+# --- 21. the blind allowance is spent per FIRE, not per gate call (round 5) --
+# quota_gate runs up to TWICE an iteration (pre-auth, and again after a block).
+# Incrementing inside it charged two units of QUOTA_UNKNOWN_FIRES for ONE fire,
+# halving the grace exactly when a monitoring hiccup coincides with an auth blip
+# -- the correlated case the allowance exists to cover. AUTHFAIL_N=1 is a SHORT
+# blip on purpose: no re-grant, just enough to trigger the second gate call.
+r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0 AUTH_TRIES=0 AUTHFAIL_N=1 AUTHFAIL_BLOCKS=3)"
+check "unreadable + auth blip -> 2 blind fires, not 1 (one charge per fire)" "2" "$(fires_of "$r")"
+
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
 # same commit added -- so sourcing the file to unit-test its functions created
