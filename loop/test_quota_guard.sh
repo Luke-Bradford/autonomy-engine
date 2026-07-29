@@ -207,6 +207,15 @@ r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 FRESH_LOGDIR=1)"
 check "a missing log dir is created, not silently swallowed" "0" \
   "$(grep -q 'DRIVER START' "$(logof "$r")" 2>/dev/null && echo 0 || echo 1)"
 
+# --- 18. a block ON the budget boundary still re-grants (review round 3) -----
+# The fire cap was checked BEFORE ensure_auth, so once fires hit MAX_FIRES the
+# loop broke without ever probing auth again -- and a block starting on the LAST
+# budgeted fire could never reach the re-grant. Behaviour depended on whether the
+# block landed one fire early or exactly on the boundary, which is arbitrary.
+# MAX_FIRES=1, so block 2 lands precisely at fires == MAX_FIRES.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=2)"
+check "a long block AT the budget boundary re-grants -> 2 fires, not 1" "2" "$(fires_of "$r")"
+
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
 # same commit added -- so sourcing the file to unit-test its functions created

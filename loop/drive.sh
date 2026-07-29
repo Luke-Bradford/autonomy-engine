@@ -329,12 +329,6 @@ while true; do
     log "WARN: 7-day quota utilization UNREADABLE (dashboard down and usage endpoint unavailable) -- firing blind, $((QUOTA_UNKNOWN_FIRES - blind_fires)) blind fire(s) left"
   fi
 
-  # --- FIRE CAP ---------------------------------------------------------------
-  if [ "$MAX_FIRES" -gt 0 ] && [ "$fires" -ge "$MAX_FIRES" ]; then
-    log "STOP: MAX_FIRES=$MAX_FIRES reached -- ending this driver run (scheduled start will resume)"
-    break
-  fi
-
   # --- PAUSE+BACKOFF until auth is good (never stops the loop for auth) --------
   ensure_auth || { log "auth capped out (test mode) -- ending"; break; }
 
@@ -361,6 +355,23 @@ while true; do
   # and publishes it unconditionally on every success (0 included), so it cannot
   # be stale by the time this block reads it. A second reset here was mutation-
   # tested and survived -- i.e. it was unprovable, so it is gone.
+
+  # --- FIRE CAP ---------------------------------------------------------------
+  # AFTER ensure_auth and the re-grant, deliberately. Checked before them, the
+  # loop broke the moment `fires` hit MAX_FIRES without ever probing auth again,
+  # so a block that started on the LAST budgeted fire could never reach the
+  # re-grant -- the behaviour depended on whether the block landed one fire early
+  # or exactly on the boundary, which is arbitrary. Now a block is waited out and
+  # judged the same way wherever it falls.
+  #
+  # The QUOTA guard stays above the probe, so a quota-blocked scheduled start
+  # still costs ZERO tokens. Only a run that has actually exhausted its budget
+  # pays one auth probe before exiting, which is the price of the boundary case
+  # behaving like every other one.
+  if [ "$MAX_FIRES" -gt 0 ] && [ "$fires" -ge "$MAX_FIRES" ]; then
+    log "STOP: MAX_FIRES=$MAX_FIRES reached -- ending this driver run (scheduled start will resume)"
+    break
+  fi
 
   # --- wait for any open PR's gate to settle before the next fire -------------
   pr="$(gh pr list --state open --json number -q '.[0].number // empty' 2>/dev/null || true)"
