@@ -3,6 +3,7 @@ import {
   DEFAULT_OPENAI_BASE_URL,
   MODELS_REJECTING_SAMPLING_PARAMS,
   isOpenAiFirstParty,
+  openAiUsesMaxCompletionTokens,
   unsupportedOpenAiParams,
 } from '../openai-models.js';
 
@@ -111,5 +112,34 @@ describe('isOpenAiFirstParty (#730)', () => {
     ]) {
       expect(isOpenAiFirstParty(base)).toBe(false);
     }
+  });
+});
+
+describe('openAiUsesMaxCompletionTokens (#739)', () => {
+  it('is true for a reasoning model, which rejects `max_tokens` outright', () => {
+    // The source lists `max_tokens` alongside `temperature`/`top_p` in the SAME
+    // "currently unsupported with reasoning models" sentence, and states the
+    // replacement: reasoning models "will only work with the
+    // `max_completion_tokens` parameter when using the Chat Completions API".
+    // Named literally rather than driven from the set, for the same reason the
+    // sampling cases above are.
+    for (const model of ['o1', 'o3', 'o4-mini', 'gpt-5', 'gpt-5.4-mini', 'gpt-5.5']) {
+      expect(openAiUsesMaxCompletionTokens(model)).toBe(true);
+    }
+  });
+
+  it('is false for a non-reasoning model, which still takes `max_tokens`', () => {
+    // The fail direction, identical to the sampling gate: an absent row means
+    // the PRE-EXISTING wire field. Renaming here would break calls that work.
+    for (const model of ['gpt-4o', 'gpt-4.1', 'gpt-5-chat-latest', 'gpt-5.1-chat']) {
+      expect(openAiUsesMaxCompletionTokens(model)).toBe(false);
+    }
+  });
+
+  it('is false for a dated or -latest VARIANT of a reasoning id', () => {
+    // Exact-string matching, like the sampling gate. A variant falls through to
+    // `max_tokens` and the provider stays the authority.
+    expect(openAiUsesMaxCompletionTokens('o3-2025-04-16')).toBe(false);
+    expect(openAiUsesMaxCompletionTokens('codex-mini-latest')).toBe(false);
   });
 });

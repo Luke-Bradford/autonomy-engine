@@ -24,6 +24,7 @@ import type { LlmToolChoice, LlmTurn, ToolCallRequest, ToolRoundOutcome } from '
 import {
   DEFAULT_OPENAI_BASE_URL,
   isOpenAiFirstParty,
+  openAiUsesMaxCompletionTokens,
   unsupportedOpenAiParams,
 } from './openai-models.js';
 
@@ -181,6 +182,21 @@ export const openaiAdapter: ConnectorAdapter = {
       }
     }
 
+    // #739 — the RENAME half of the same defect, sharing the preflight's gate
+    // rather than re-deriving it. Reasoning models reject `max_tokens` outright
+    // and take `max_completion_tokens` instead; a gateway keeps `max_tokens`,
+    // because that field is newer than many OpenAI-compatible servers and these
+    // are facts about api.openai.com only.
+    //
+    // Resolved ONCE here, not inside `buildBody`, so the field name is computed
+    // from the same `model`/`baseUrl` the refusal above already consulted — one
+    // decision, visibly adjacent to the gate it shares. Never BOTH keys: OpenAI
+    // rejects `max_tokens` itself on this class, so sending both still 400s.
+    const maxTokensField =
+      isOpenAiFirstParty(baseUrl) && openAiUsesMaxCompletionTokens(model)
+        ? 'max_completion_tokens'
+        : 'max_tokens';
+
     // Chat Completions carries the system instruction as a LEADING `role:system`
     // message (not a top-level param). #2 L4b — a structured node appends the schema
     // directive to the system content: `response_format:json_object` REQUIRES the
@@ -212,7 +228,8 @@ export const openaiAdapter: ConnectorAdapter = {
       toolWire?: { tools: unknown[]; choice: LlmToolChoice },
     ): Record<string, unknown> => {
       const body: Record<string, unknown> = { model, messages: msgs };
-      if (sampling.maxTokens !== undefined) body.max_tokens = sampling.maxTokens;
+      // #739 — `max_tokens` or `max_completion_tokens`, resolved above.
+      if (sampling.maxTokens !== undefined) body[maxTokensField] = sampling.maxTokens;
       if (sampling.temperature !== undefined) body.temperature = sampling.temperature;
       if (sampling.topP !== undefined) body.top_p = sampling.topP;
       if (sampling.stop !== undefined) body.stop = sampling.stop;

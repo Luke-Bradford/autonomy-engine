@@ -756,3 +756,107 @@ describe('openaiAdapter unsupported-parameter preflight (#730)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * #739 — the wire-field RENAME half of the #730 defect. `buildBody` emitted
+ * `max_tokens` unconditionally, which reasoning models reject outright; the
+ * Chat Completions field for that class is `max_completion_tokens`.
+ *
+ * These are the only wire-level assertions on `maxTokens` for this adapter —
+ * before #739 the field had no dispatch coverage at all, which is why the defect
+ * survived #730's own sweep of the same source.
+ */
+describe('openaiAdapter maxTokens wire field (#739)', () => {
+  async function bodyFor(input: Record<string, unknown>, connectionConfig = {}) {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(openaiAdapter.runActivity(ctx({ input, connectionConfig }), 'sk'));
+    return JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+  }
+
+  it('sends max_completion_tokens (and NOT max_tokens) on a first-party reasoning model', async () => {
+    const body = await bodyFor({ prompt: 'p', model: 'o3', maxTokens: 256 });
+    expect(body.max_completion_tokens).toBe(256);
+    // The absence assertion is the load-bearing half: sending BOTH still 400s,
+    // because `max_tokens` is itself unsupported on this class.
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('still sends max_tokens on a first-party NON-reasoning model', async () => {
+    const body = await bodyFor({ prompt: 'p', model: 'gpt-4o', maxTokens: 256 });
+    expect(body.max_tokens).toBe(256);
+    expect(body).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('leaves max_tokens ALONE on an OpenAI-compatible gateway, even for a reasoning id', async () => {
+    // The ticket's open question, answered. `max_completion_tokens` is newer
+    // than many gateways (vLLM, LiteLLM, self-hosted proxies), and these are
+    // facts about api.openai.com only — renaming on someone else's server would
+    // manufacture a break in calls that work today. Same gate, same direction as
+    // the #730 preflight.
+    const body = await bodyFor(
+      { prompt: 'p', model: 'o3', maxTokens: 256 },
+      { baseUrl: 'https://openrouter.ai/api/v1' },
+    );
+    expect(body.max_tokens).toBe(256);
+    expect(body).not.toHaveProperty('max_completion_tokens');
+  });
+
+  it('emits neither key when the author set no maxTokens', async () => {
+    const body = await bodyFor({ prompt: 'p', model: 'o3' });
+    expect(body).not.toHaveProperty('max_tokens');
+    expect(body).not.toHaveProperty('max_completion_tokens');
+  });
+
+  // One body builder feeds all three dispatch paths (#648), but that is an
+  // implementation fact, so each path is pinned separately — a future split
+  // cannot then silently regress one of them.
+  //
+  // The first draft of these two tests was VACUOUS and both pre-PR review lenses
+  // caught it independently: it passed `structuredOutput`, which is the INTERNAL
+  // name `normalizeLlmRequest` produces, not an author input. `llmCallConfigSchema`
+  // is a non-strict `z.object`, so the unknown key was silently stripped and the
+  // "structured" case was a second copy of the text case. Both tests below now
+  // assert a path MARKER (`response_format` / `tools`) alongside the field name,
+  // so a request that quietly fell back to the text path fails here rather than
+  // passing under a misleading title.
+  it('renames on the STRUCTURED path (#2 L4b)', async () => {
+    const body = await bodyFor({
+      prompt: 'classify this ticket',
+      model: 'o3',
+      maxTokens: 256,
+      outputMode: 'structured',
+      outputSchema: {
+        type: 'object',
+        properties: { category: { type: 'string', enum: ['bug', 'feature'] } },
+      },
+    });
+    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.max_completion_tokens).toBe(256);
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
+  it('renames on the TOOLS path (#2 L10a)', async () => {
+    const body = await bodyFor({
+      prompt: 'add 1 and 2',
+      model: 'o3',
+      maxTokens: 256,
+      tools: [
+        {
+          name: 'adder',
+          description: 'Adds two numbers.',
+          parameters: {
+            type: 'object',
+            properties: { a: { type: 'number' }, b: { type: 'number' } },
+          },
+          // L10a tools are PURE local expressions; omitting this fails config
+          // validation before dispatch, which is how the first draft of this
+          // test surfaced its own malformed fixture rather than passing blind.
+          expression: '${add(tool.args.a, tool.args.b)}',
+        },
+      ],
+    });
+    expect(Array.isArray(body.tools)).toBe(true);
+    expect(body.max_completion_tokens).toBe(256);
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+});

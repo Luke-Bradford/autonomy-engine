@@ -47,9 +47,16 @@ LlmCallConfig = {
   // Model + sampling
   model?: string,                 // resolves node < connection < default (as today)
   temperature?, maxTokens?, topP?, stop?: string[], seed?: number,
-  //   ^ #727: `temperature`/`topP` are REFUSED AT DISPATCH (permanent, before any
-  //     request) on Anthropic models that removed the sampling knobs. The SCHEMA
-  //     accepts them universally; the MODEL may not.
+  //   ^ #727/#730: `temperature`/`topP` are REFUSED AT DISPATCH (permanent, before
+  //     any request) on Anthropic models that removed the sampling knobs, and on
+  //     OpenAI reasoning models. The SCHEMA accepts them universally; the MODEL
+  //     may not.
+  //   ^ #739: `maxTokens` is not refused but RENAMED on the wire — OpenAI reasoning
+  //     models take `max_completion_tokens`, which counts reasoning + visible
+  //     output, where `max_tokens` counted visible output only. So one authored
+  //     number MEANS different things per model, and a value tuned against a
+  //     non-reasoning model can be consumed entirely by invisible reasoning.
+  //     First-party OpenAI only; a gateway `baseUrl` keeps `max_tokens`.
   // Reasoning / "thinking"
   reasoningEffort?: 'low'|'medium'|'high'|'max',   // provider-mapped (extended thinking / effort)
   // Output
