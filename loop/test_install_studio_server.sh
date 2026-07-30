@@ -465,8 +465,9 @@ check "driver LaunchAgent does not pin STUDIO_QUOTA_URL" "0" \
   "$(has '<key>STUDIO_QUOTA_URL</key>' "$HERE/com.autonomy.studio-build-driver.plist")"
 
 ####################################################################
-# #773 -- the scheduled updater unit, and the guards that make an
-# unattended re-install safe.
+# #773 -- staleness, drift reporting, and the guards that make
+# re-running the installer safe. There is deliberately NO scheduled
+# updater unit: see the header of install_studio_server.sh.
 ####################################################################
 
 # A sandbox that has been through a REAL install, plus the built artifact the
@@ -672,6 +673,14 @@ mkdir -p "$sb/state/.install.lock"
 check "uninstall refuses while an install holds the lock" "1" \
   "$([ "$?" -ne 0 ] && echo 1 || echo 0)"
 check "and leaves the unit in place" "1" "$(AGENTS_DIR_N "$sb")"
+# The MESSAGE, not just the exit code. `acquire_lock` distinguishes "someone
+# else holds it" (rc=1) from "I could not create it at all" (rc=2), and this
+# branch must only claim a concurrent install for the first -- reporting a
+# permissions failure as a conflict sends the operator hunting for a process
+# that does not exist. Without this assertion the refusal text could be deleted
+# outright and the two checks above would still pass.
+check "and says an install is in progress" "1" \
+  "$(has 'not uninstalling while an install is in progress' "$sb/unlock.out")"
 
 echo "== --status reports drift without changing anything =="
 sb="$(installed_sandbox)"

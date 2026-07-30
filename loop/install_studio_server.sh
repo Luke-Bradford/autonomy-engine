@@ -522,13 +522,24 @@ main() {
   case "$MODE" in
     help)      usage; return 0 ;;
     # Under the lock when there is a state dir to lock. `uninstall_unit` removes
-    # the updater first so an uninstall cannot undo itself, but that only holds
-    # against a FUTURE slot: a run already in progress would reinstall both units
-    # straight after, and booting out a running updater mid-build would leak its
-    # lock for the full hour.
+    # Under the lock when there is a state dir to lock: a run already in progress
+    # would otherwise reinstall the unit straight after it was removed, and would
+    # be mid-`reset --hard` in the same tree while we tore it down.
+    #
+    # The rc=1 / rc=2 split is preserved here for the same reason `main` keeps
+    # it -- "someone else holds the lock" and "I could not create the lock at
+    # all" are different faults, and reporting a permissions failure as a
+    # concurrent install sends the operator looking for a process that does not
+    # exist.
     uninstall)
       [ -d "$STATE_DIR" ] || { uninstall_unit; return 0; }
-      acquire_lock || { die "not uninstalling while an install is in progress."; return 1; }
+      acquire_lock
+      al_rc=$?
+      case "$al_rc" in
+        0) : ;;
+        1) die "not uninstalling while an install is in progress."; return 1 ;;
+        *) return 1 ;;
+      esac
       uninstall_unit
       uu_rc=$?
       release_lock
@@ -596,7 +607,7 @@ main_locked() {
   # BEFORE the expensive provision so a misconfiguration fails in a second.
   owner="$(port_owner)"
   if [ -n "$owner" ]; then
-    mine="$(unit_pid "$LABEL")"
+    mine="$(unit_pid)"
     if [ "$owner" != "$mine" ]; then
       die "port $PORT is already held by pid $owner, which is not $LABEL.
   Stop that process (or choose another port with --port) and re-run. Installing
