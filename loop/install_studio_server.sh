@@ -449,11 +449,11 @@ load_unit() {
     *) say "warning: bootout exited $bo_rc (continuing)" ;;
   esac
   lu_i=0
-  while [ "$lu_i" -lt 60 ] && unit_loaded "$LABEL"; do
+  while [ "$lu_i" -lt 60 ] && unit_loaded; do
     sleep 1
     lu_i=$((lu_i + 1))
   done
-  ! unit_loaded "$LABEL" || say "warning: $LABEL still loaded after ${lu_i}s; bootstrapping anyway"
+  ! unit_loaded || say "warning: $LABEL still loaded after ${lu_i}s; bootstrapping anyway"
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" || {
     die "bootstrap failed. The plist at $PLIST_PATH is up to date but launchd did
   not accept it; the previously loaded job (if any) is still running, so the
@@ -521,7 +521,6 @@ main() {
   configure "$@" || return 1
   case "$MODE" in
     help)      usage; return 0 ;;
-    # Under the lock when there is a state dir to lock. `uninstall_unit` removes
     # Under the lock when there is a state dir to lock: a run already in progress
     # would otherwise reinstall the unit straight after it was removed, and would
     # be mid-`reset --hard` in the same tree while we tore it down.
