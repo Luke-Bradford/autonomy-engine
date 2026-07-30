@@ -41,7 +41,12 @@ case "$1" in
     else echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef$RANDOM"; fi ;;
   # BRANCH_AHEAD=<name> reports one local studio branch with commits origin/main
   # does not have — the state triage rule 2 calls "continue it to a PR".
-  for-each-ref) [ -n "${BRANCH_AHEAD:-}" ] && echo "$BRANCH_AHEAD" || true ;;
+  # BRANCH_AGE_H=<hours> ages its tip commit; the driver ignores branches whose
+  # tip is older than AHEAD_MAX_AGE, so an abandoned one cannot mask a real stall.
+  for-each-ref)
+    if [ -n "${BRANCH_AHEAD:-}" ]; then
+      echo "$BRANCH_AHEAD $(( $(date +%s) - (${BRANCH_AGE_H:-0} * 3600) ))"
+    fi ;;
   rev-list)     [ -n "${BRANCH_AHEAD:-}" ] && echo 1 || echo 0 ;;
   *) exit 0 ;;
 esac
@@ -921,6 +926,27 @@ r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/s
 check "branch ahead of main -> no stall, keeps firing" "12" "$(fires_of "$r")"
 check "no nothing-more-to-do stop is logged" "1" \
   "$(grep -q 'consecutive no-progress fires' "$(logof "$r")" && echo 0 || echo 1)"
+# The reason must be STATED, including on the first iteration — `prev_head` is
+# unset there, so a condition keyed on it logs nothing and the operator sees a
+# driver that simply never stalls with no explanation (review NITPICK).
+check "it names the branch as the reason it did not stall" "0" \
+  "$(grep -q "fix/studio-764-example' is ahead" "$(logof "$r")" && echo 0 || echo 1)"
+# ...and on the FIRST iteration too. MAX_LOOPS=1 isolates it: `prev_head` is unset
+# there, so a log line conditioned on it stays silent and a driver started with a
+# branch already ahead explains nothing. The assertion above cannot catch that on
+# its own — later iterations log it regardless — so this is the discriminating one.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 MAX_LOOPS=1 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-first-iter)"
+check "the reason is stated on the FIRST iteration as well" "0" \
+  "$(grep -q "fix/studio-first-iter' is ahead" "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 27. an ABANDONED branch must not mask a real stall (review WARNING) -----
+# The scan matches any local studio branch, so a leftover from a crashed session
+# would defeat the "nothing more to do" detector indefinitely — bounded only by
+# quota, not by the stall signal it was meant to trip. Not hypothetical: 18 stale
+# branches with deleted remotes were pruned from this repo on 2026-07-29.
+# A tip older than AHEAD_MAX_AGE is abandonment, not work in flight.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-abandoned BRANCH_AGE_H=48)"
+check "a 48h-old branch does NOT mask the stall -> stops after 3" "3" "$(fires_of "$r")"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

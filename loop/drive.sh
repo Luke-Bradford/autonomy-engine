@@ -38,7 +38,10 @@ set -uo pipefail
 INFRA="${INFRA:-/Users/lukebradford/Dev/studio-loop}"
 REPO="${REPO:-/Users/lukebradford/Dev/studio-loop-repo}"
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
-MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
+MAX_STALL="${MAX_STALL:-3}"
+AHEAD_MAX_AGE="${AHEAD_MAX_AGE:-86400}"  # a studio branch whose tip is older than this is treated as
+                                  # ABANDONED, not work in flight (#775 review): otherwise one stale
+                                  # branch from a crashed session masks the stall detector forever.       # consecutive no-progress fires = nothing more to do
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
 GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # polls before giving up on a PR gate;
                                   # GATE_WAIT_TRIES x GATE_WAIT_SLEEP = up to 30 min by default
@@ -936,16 +939,32 @@ while true; do
   #
   # Branch-ahead, not a dirty worktree: dirt could be leftovers, whereas a commit
   # origin/main lacks is unambiguous, and it is the same signal rule 2 keys on.
+  # A branch only counts while it is RECENT. Matching any studio branch would let
+  # a leftover from a crashed session defeat the stall detector permanently --
+  # bounded then only by quota, not by the signal it exists to trip. That is not
+  # hypothetical: 18 stale branches with deleted remotes were pruned from this
+  # repo on 2026-07-29. A tip untouched for AHEAD_MAX_AGE is abandonment.
+  #
+  # `while read` fed by a HERE-DOC, not a pipeline: a pipeline runs the loop in a
+  # subshell and `ahead` would not survive it.
   ahead=""
-  for sb_ref in $(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null); do
+  sb_now="$(date +%s)"
+  while IFS=' ' read -r sb_ref sb_when; do
+    [ -n "$sb_ref" ] || continue
     case "$sb_ref" in
       feat/studio*|fix/studio*|feat/loop*|fix/loop*) ;;
       *) continue ;;
     esac
+    # Non-numeric or absent date -> treat as NOT recent. Fail toward letting the
+    # stall detector work, since the alternative masks it.
+    case "$sb_when" in ''|*[!0-9]*) continue ;; esac
+    [ "$(( sb_now - sb_when ))" -gt "$AHEAD_MAX_AGE" ] && continue
     if [ "$(git rev-list --count "origin/main..$sb_ref" 2>/dev/null || echo 0)" -gt 0 ]; then
       ahead="$sb_ref"; break
     fi
-  done
+  done <<EOF
+$(git for-each-ref --format='%(refname:short) %(committerdate:unix)' refs/heads 2>/dev/null)
+EOF
   if [ -n "$prev_head" ] && [ "$head" = "$prev_head" ] && [ "${openpr:-0}" = "0" ] && [ -z "$ahead" ]; then
     stall=$((stall + 1))
     log "no progress (main unchanged, no open PR, no branch ahead) stall=$stall/$MAX_STALL"
@@ -957,8 +976,11 @@ while true; do
     # Either something moved (main advanced, or a PR is open), or a branch is
     # ahead. Say WHICH when it is the branch, so a log reader can tell "work in
     # flight" from "main advanced" without diffing anything.
-    [ -n "$ahead" ] && [ "$head" = "$prev_head" ] && [ "${openpr:-0}" = "0" ] &&
-      log "no new commit on main, but '$ahead' is ahead -- work in flight, not a stall"
+    # Keyed on `ahead` ALONE. Conditioning on `[ "$head" = "$prev_head" ]` made
+    # this silent on the FIRST iteration, where `prev_head` is unset -- so a
+    # driver started with a branch already ahead never explained why it was not
+    # stalling (#775 review NITPICK). "A branch is ahead" is true regardless.
+    [ -n "$ahead" ] && log "'$ahead' is ahead of main -- work in flight, not a stall"
     stall=0
   fi
   prev_head="$head"
