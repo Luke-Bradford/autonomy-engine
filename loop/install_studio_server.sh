@@ -29,9 +29,42 @@
 #     this machine. A wrong-but-answering server 404s, which reads as UNREADABLE
 #     forever while looking correctly configured -- #765 records exactly that.
 #
+# DRIFT (#773). The service is provisioned from a clone pinned to origin/main at
+# INSTALL time and nothing moves it forward on its own, so it drifts from main
+# indefinitely. Measured 2026-07-30: the live clone was 14 commits and ~20h
+# behind. After #410 that stops being cosmetic, because a fix to the quota reader
+# would ship to main and never reach the process the spend guard actually asks.
+#
+# What this file does about it is DELIBERATELY NOT a scheduled updater.
+# `studio/docs/2026-07-30-packaging-and-updates.md` (approved 2026-07-30) rejects
+# scheduled auto-update for this service by name, and its reasoning is not
+# abstract: a scheduled updater must not interrupt a running pipeline, so it
+# needs an interlock, which needs starvation handling, which needs a rule about
+# the loop's 03:05/21:05 windows. Measured against this repo's own driver log,
+# an interlock keyed on "a fire is running" would have starved: the driver run
+# beginning 2026-07-26T02:05Z ran for 74.7 HOURS, and roughly 2 of 15 daily slots
+# over 07-26..07-30 would have fired at all. Applying an update stays a human
+# act, and #792 phase 2 owns making that act a click.
+#
+# So the job here is to make the human act CHEAP and the drift VISIBLE:
+#
+#   * `--update` is a no-op when there is nothing to do, so it is safe to run
+#     any time rather than being a minutes-long rebuild-and-bounce every time.
+#   * `--status` reports what is actually running, so "is the guard on old code"
+#     is a command that answers rather than a git incantation you have to think
+#     to run.
+#   * STALENESS IS MEASURED FROM A BUILD STAMP, not from HEAD. `provision` does
+#     `reset --hard origin/main` BEFORE `pnpm build`, so a failed build leaves
+#     HEAD already advanced. Comparing HEAD to origin/main would then read
+#     "current" forever while the service ran old code -- a visible failure
+#     converted into an invisible permanent one. `built.sha` is written only
+#     after a build succeeds, so a failed build is retried rather than latched.
+#
 # Usage:
 #   install_studio_server.sh [--port N] [--state-dir P] [--repo-src P] [--node P]
-#   install_studio_server.sh --update      # refresh the clone to origin/main, rebuild, restart
+#   install_studio_server.sh --update      # refresh to origin/main IF STALE, rebuild, restart
+#   install_studio_server.sh --update --force   # rebuild even if the stamp says current
+#   install_studio_server.sh --status      # fetch, then report drift + unit state; change nothing
 #   install_studio_server.sh --uninstall   # remove the unit (KEEPS the state dir)
 #   install_studio_server.sh --dry-run     # print the plist that would be installed; touch nothing
 set -uo pipefail
@@ -48,7 +81,11 @@ LAUNCHD_PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 TMPL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMPL="$TMPL_DIR/$LABEL.plist.tmpl"
 
-say() { echo "[install_studio_server] $*"; }
+# Timestamped, because these lines are the drift record: an operator reading them
+# needs to know WHEN the last check ran, which is the one question a staleness
+# log has to answer. `date` is not available under `set -u` surprises here -- it
+# is a plain external call and a failure just yields an empty prefix.
+say() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ') install_studio_server] $*"; }
 die() { echo "[install_studio_server] ERROR: $*" >&2; return 1; }
 
 # --- valid_port: total, and deliberately stricter than "looks like a number".
@@ -89,6 +126,7 @@ configure() {
   REPO_SRC="$(cd "$TMPL_DIR/.." && pwd)"
   NODE_BIN=""
   DRY_RUN=0
+  FORCE=0
   MODE="install"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -100,10 +138,17 @@ configure() {
       --repo-src)  REPO_SRC="${2-}"; shift 2 || { die "--repo-src needs a value"; return 1; } ;;
       --node)      NODE_BIN="${2-}"; shift 2 || { die "--node needs a value"; return 1; } ;;
       --dry-run)   DRY_RUN=1; shift ;;
-      # An alias for a plain re-run, not a separate mode: the install path already
-      # fetches, resets to origin/main, rebuilds and reloads, so "update" IS
-      # "install again". Kept because that is not obvious from `install`.
-      --update)    shift ;;
+      # `--update` used to be a bare alias for a re-run. It is now the UNATTENDED
+      # mode (#773): same install path, but gated on a staleness check and on no
+      # fire being in flight, because the scheduled updater invokes it several
+      # times a day and a plain re-run each time would bounce the spend guard's
+      # quota source for nothing. A plain install stays unconditional -- an
+      # operator who ran the installer by hand asked for it NOW.
+      --update)    MODE="update"; shift ;;
+      # The escape hatch from the staleness check, for a human. Deliberately NOT
+      # used by the updater plist.
+      --force)     FORCE=1; shift ;;
+      --status)    MODE="status"; shift ;;
       --uninstall) MODE="uninstall"; shift ;;
       -h|--help)   MODE="help"; shift ;;
       *)           die "unknown argument: $1"; return 1 ;;
@@ -125,6 +170,10 @@ configure() {
   WORKSPACE_GIT_ROOT="$STATE_DIR/data/git"
   LOG_DIR="$STATE_DIR/logs"
   PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
+  # Written ONLY after `pnpm build` returns 0. See the header: HEAD advances
+  # before the build runs, so HEAD is not evidence that anything was built.
+  BUILT_SHA_FILE="$STATE_DIR/built.sha"
+  LOCK_DIR="$STATE_DIR/.install.lock"
 }
 
 # --- validate_install_target: preconditions that apply ONLY to installing.
@@ -215,39 +264,183 @@ port_owner() {
 provision() {
   mkdir -p "$STATE_DIR" "$LOG_DIR" "$(dirname "$DB_PATH")" "$WORKSPACE_GIT_ROOT" || return 1
   if [ ! -d "$SERVICE_ROOT/.git" ]; then
+    # A directory that exists but is not a git tree is NOT something to clone
+    # over: `git clone --local` into a non-empty path fails with a message about
+    # the destination rather than about the real problem. Self-heal covers "unit
+    # unloaded" and "never built"; it does not cover a corrupt tree, and saying
+    # so beats an opaque clone error at 12:30.
+    if [ -d "$SERVICE_ROOT" ] && [ -n "$(ls -A "$SERVICE_ROOT" 2>/dev/null)" ]; then
+      die "$SERVICE_ROOT exists but is not a git checkout. Refusing to clone over
+  it. Inspect it, then remove it and re-run to reprovision from scratch."
+      return 1
+    fi
     say "cloning the service tree from $REPO_SRC"
     git clone --local --quiet "$REPO_SRC" "$SERVICE_ROOT" || { die "clone failed"; return 1; }
     pr_url="$(git -C "$REPO_SRC" remote get-url origin 2>/dev/null)"
     [ -n "$pr_url" ] && git -C "$SERVICE_ROOT" remote set-url origin "$pr_url"
   fi
   say "pinning the service tree to origin/main"
-  # A fetch failure must NOT be papered over: silently building a stale tree is
-  # how a service ends up running code nobody can point at.
-  git -C "$SERVICE_ROOT" fetch --quiet origin main || { die "fetch origin main failed"; return 1; }
+  fetch_origin || return 1
   git -C "$SERVICE_ROOT" reset --hard --quiet origin/main || { die "reset to origin/main failed"; return 1; }
   say "installing dependencies"
   pnpm -C "$SERVICE_ROOT/studio" install --frozen-lockfile || { die "pnpm install failed"; return 1; }
   say "building (shared -> server -> web)"
   pnpm -C "$SERVICE_ROOT/studio" build || { die "pnpm build failed"; return 1; }
+  # ONLY here, and never before the build. `reset --hard` above has already moved
+  # HEAD, so if the build had failed HEAD would still say "we are on origin/main"
+  # while nothing of that commit had been compiled. Staleness measured from HEAD
+  # would then report current forever and the service would run old code with
+  # every observable agreeing it was up to date -- strictly worse than the
+  # loud-failure-every-time status quo this replaces.
+  pv_sha="$(origin_sha)"
+  [ -n "$pv_sha" ] || { die "built, but could not read origin/main to stamp it"; return 1; }
+  printf '%s\n' "$pv_sha" >"$BUILT_SHA_FILE" || return 1
+  say "built and stamped $pv_sha"
+}
+
+# --- fetch_origin: a fetch failure is UNKNOWN, never "current".
+#
+# `origin/main` inside the clone is a cached local ref, so a failed fetch leaves
+# a stale one that compares equal to the build stamp and reads as up to date. It
+# was five commits behind on 2026-07-30 with nothing in the clone able to tell.
+# Silently building (or NOT building) a stale tree is how a service ends up
+# running code nobody can point at.
+fetch_origin() {
+  git -C "$SERVICE_ROOT" fetch --quiet origin main || {
+    die "fetch origin main failed: staleness is UNKNOWN, so this run is making no
+  changes. It is NOT a report that the service is current. Check connectivity
+  and the clone at $SERVICE_ROOT, then re-run."
+    return 1
+  }
+}
+
+origin_sha() { git -C "$SERVICE_ROOT" rev-parse origin/main 2>/dev/null; }
+head_sha()   { git -C "$SERVICE_ROOT" rev-parse HEAD 2>/dev/null; }
+built_sha()  { cat "$BUILT_SHA_FILE" 2>/dev/null; }
+
+# --- service_is_current: may this run do nothing at all?
+#
+# Every clause is a reason to ACT, so the function is deliberately conservative:
+# anything unknown or missing falls through to a full install. Note the stamp, not
+# HEAD (see `provision`), and note that a MISSING stamp -- a tree that has never
+# built, or whose last build failed -- is not current.
+service_is_current() {
+  sic_built="$(built_sha)"
+  sic_origin="$(origin_sha)"
+  [ -n "$sic_built" ] && [ -n "$sic_origin" ] || return 1
+  [ "$sic_built" = "$sic_origin" ] || return 1
+  # The stamp says a build succeeded; these say its output is still there and
+  # actually being served. Together they make the check self-healing: a wiped
+  # dist or an unloaded unit reinstalls rather than reporting "current".
+  [ -f "$SERVER_DIR/dist/index.js" ] || return 1
+  [ -f "$PLIST_PATH" ] || return 1
+  unit_loaded || return 1
+  # LIVENESS, and it is load-bearing rather than belt-and-braces. Every clause
+  # above is satisfied by a service that built, bootstrapped, and then never
+  # answered: `wait_ready` is the only thing that ever asks, it runs once at the
+  # end of an install, and its failure leaves the stamp and both plists behind.
+  # `unit_loaded` cannot tell the difference either -- launchd prints `-` in the
+  # pid column for a job it is respawning every 30s exactly as it does for a
+  # healthy idle one. Without this the guard's own quota source can be down
+  # permanently while every run reports "already current".
+  #
+  # Retried, because the remedy is disproportionate to a blip: "not current"
+  # means a full `pnpm install` + build + bounce, which is minutes of work and an
+  # outage of the very source we are protecting. Three tries makes a transient
+  # non-answer cost 4 seconds instead of a rebuild, while a genuinely dead server
+  # still gets one.
+  sic_i=0
+  while [ "$sic_i" -lt 3 ]; do
+    server_answers && return 0
+    sic_i=$((sic_i + 1))
+    [ "$sic_i" -lt 3 ] && sleep 2
+  done
+  return 1
+}
+
+server_answers() { curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; }
+
+# --- report_status: the drift surface (#773 asked for the running commit to be
+# readable rather than inferred from a git incantation nobody thinks to run).
+# Read-only: it must never write, build, or touch launchd.
+report_status() {
+  # It FETCHES first, and that is the difference between a drift report and a
+  # comforting one. `origin/main` inside the clone is a cached local ref that
+  # only advances when something fetches, so a status built on it fails in the
+  # same direction as the thing it monitors: the longer nobody updates, the more
+  # confidently it reports "current". Fetching touches refs only -- the service,
+  # the working tree and the build are untouched -- so this stays read-only in
+  # every sense that matters.
+  if [ -d "$SERVICE_ROOT/.git" ]; then
+    git -C "$SERVICE_ROOT" fetch --quiet origin main 2>/dev/null \
+      || say "warning: fetch failed; origin/main below is a CACHED ref and may itself be stale"
+  fi
+  rs_built="$(built_sha)"
+  rs_origin="$(origin_sha)"
+  say "state dir:   $STATE_DIR"
+  say "built sha:   $rs_built   (the only evidence anything was COMPILED)"
+  say "HEAD sha:    $(head_sha)"
+  say "origin/main: $rs_origin"
+  say "dist built:  $([ -f "$SERVER_DIR/dist/index.js" ] && echo yes || echo no)"
+  say "$LABEL: $(unit_loaded && echo "loaded pid $(unit_pid)" || echo "NOT LOADED")"
+  say "health:      $(server_answers && echo "answers on $PORT" || echo "NO ANSWER on $PORT")"
+  # The verdict, spelled out. A reader should not have to diff two shas by eye to
+  # answer "is the guard on old code".
+  if [ -n "$rs_built" ] && [ "$rs_built" = "$rs_origin" ]; then
+    say "verdict:     CURRENT"
+  else
+    say "verdict:     STALE -- run '$0 --update' to rebuild onto origin/main"
+  fi
+  return 0
+}
+
+# --- lock: the scheduled updater and an operator can otherwise land in the same
+# tree at once -- two `reset --hard` plus two interleaved bootout/bootstrap
+# cycles is a corrupt checkout and a possibly-unloaded unit. `mkdir` is the
+# atomic primitive available on bash 3.2 macOS (no flock). A lock older than an
+# hour is treated as abandoned: a killed install must not wedge the updater
+# forever.
+# Returns 0 = held it, 1 = someone else holds it (a no-op, not a failure),
+# 2 = could not even try. The three must stay distinct: collapsing 2 into 1 told
+# the operator "another install is in progress" for an unwritable state dir and
+# exited 0, which for the scheduled unit is a silent-success loop forever with a
+# false explanation in its log.
+acquire_lock() {
+  mkdir -p "$STATE_DIR" 2>/dev/null || { die "cannot create the state dir $STATE_DIR"; return 2; }
+  take_lock && return 0
+  al_age="$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)"
+  if [ -n "$al_age" ]; then
+    say "warning: removing an abandoned lock at $LOCK_DIR (older than 60m)"
+    rm -rf "$LOCK_DIR"
+    take_lock && return 0
+  fi
+  say "another install is in progress ($LOCK_DIR); doing nothing."
+  return 1
+}
+# The owner stamp is what makes `release_lock` safe. Two runs that both see a
+# lock older than 60m can both steal it, and the second `rm -rf` would otherwise
+# delete the first's FRESH lock; without an owner check the loser then also
+# deletes the winner's lock on its way out, leaving the tree unprotected while
+# both are still working in it.
+take_lock() {
+  mkdir "$LOCK_DIR" 2>/dev/null || return 1
+  printf '%s\n' "$$" >"$LOCK_DIR/owner"
+}
+release_lock() {
+  [ "$(cat "$LOCK_DIR/owner" 2>/dev/null)" = "$$" ] || return 0
+  rm -rf "$LOCK_DIR"
 }
 
 # --- unit_pid: the launchd pid for our label, or "" if the job is not loaded.
+# NOTE this can legitimately be `-`: launchd prints a dash for a job that is
+# LOADED but not currently running. Hence `unit_loaded` as a separate question.
 unit_pid() {
   launchctl list 2>/dev/null | awk -v l="$LABEL" '$3 == l { print $1 }'
 }
 
-# --- load_unit: bootout, WAIT for the teardown, then bootstrap.
-#
-# `bootout` of a job that is not loaded exits 3 (or 113) -- that is the FIRST
-# install and must not be an error.
-#
-# The wait is not belt-and-braces. `bootout` returns as soon as it has SIGNALLED
-# the job, and this server handles SIGTERM with a graceful shutdown, so the label
-# is still registered for a moment afterwards. A `bootstrap` issued into that
-# window fails with `5: Input/output error` -- measured on the second install,
-# 2026-07-29 -- which left the NEW plist on disk while the OLD process kept
-# running: a half-applied upgrade reporting failure. Poll until the label is
-# actually gone.
+# --- unit_loaded: is the job registered with launchd at all, running or not.
+unit_loaded() { [ -n "$(unit_pid)" ]; }
+
 load_unit() {
   launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1
   bo_rc=$?
@@ -256,11 +449,11 @@ load_unit() {
     *) say "warning: bootout exited $bo_rc (continuing)" ;;
   esac
   lu_i=0
-  while [ "$lu_i" -lt 60 ] && [ -n "$(unit_pid)" ]; do
+  while [ "$lu_i" -lt 60 ] && unit_loaded "$LABEL"; do
     sleep 1
     lu_i=$((lu_i + 1))
   done
-  [ -z "$(unit_pid)" ] || say "warning: $LABEL still loaded after ${lu_i}s; bootstrapping anyway"
+  ! unit_loaded "$LABEL" || say "warning: $LABEL still loaded after ${lu_i}s; bootstrapping anyway"
   launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH" || {
     die "bootstrap failed. The plist at $PLIST_PATH is up to date but launchd did
   not accept it; the previously loaded job (if any) is still running, so the
@@ -328,23 +521,82 @@ main() {
   configure "$@" || return 1
   case "$MODE" in
     help)      usage; return 0 ;;
-    uninstall) uninstall_unit; return 0 ;;
+    # Under the lock when there is a state dir to lock. `uninstall_unit` removes
+    # the updater first so an uninstall cannot undo itself, but that only holds
+    # against a FUTURE slot: a run already in progress would reinstall both units
+    # straight after, and booting out a running updater mid-build would leak its
+    # lock for the full hour.
+    uninstall)
+      [ -d "$STATE_DIR" ] || { uninstall_unit; return 0; }
+      acquire_lock || { die "not uninstalling while an install is in progress."; return 1; }
+      uninstall_unit
+      uu_rc=$?
+      release_lock
+      return "$uu_rc" ;;
+    # Read-only, so it deliberately skips every install-only precondition and the
+    # node lookup: diagnosing a broken install must not require the install to be
+    # workable.
+    status)    report_status; return 0 ;;
   esac
 
   validate_install_target || return 1
-  resolve_node || return 1
 
   if [ "$DRY_RUN" -eq 1 ]; then
+    resolve_node || return 1
     say "--dry-run: the plist below would be written to $PLIST_PATH"
     render_plist || return 1
     return 0
   fi
 
+  acquire_lock
+  al_rc=$?
+  case "$al_rc" in
+    0) : ;;
+    # Someone else holds it: a genuine no-op, and not a failure to report.
+    1) return 0 ;;
+    # Could not even try (an unwritable or uncreatable state dir). That IS a
+    # failure, and reporting it as a no-op is how a scheduled job loops forever
+    # on a real fault while its log reads like nothing was wrong.
+    *) return 1 ;;
+  esac
+  main_locked
+  ml_rc=$?
+  release_lock
+  return "$ml_rc"
+}
+
+# The body that runs under the lock, split out so `main` has exactly one release
+# path and no `return` can leak past it.
+main_locked() {
+  # The unattended path only. `--update` runs several times a day from the
+  # scheduled unit, so it asks two questions a hand-run install must not: is
+  # there anything to do, and is now a safe moment.
+  if [ "$MODE" = "update" ] && [ "$FORCE" -eq 0 ]; then
+    # Only when there is a clone to fetch INTO. `git -C <missing dir> fetch`
+    # exits 128, which would have made `--update` die at every slot on a wiped
+    # or absent tree and never reach the path that recreates it -- while
+    # `--force`, which skips this block, provisioned it correctly. `provision`
+    # fetches again anyway, and its own "exists but is not a git checkout"
+    # refusal gives the accurate message instead of a misleading fetch error.
+    if [ -d "$SERVICE_ROOT/.git" ]; then
+      fetch_origin || return 1
+    else
+      say "no clone at $SERVICE_ROOT; provisioning from scratch"
+    fi
+    if service_is_current; then
+      say "already current at $(built_sha); nothing to do."
+      return 0
+    fi
+    say "stale: built $(built_sha) vs origin/main $(origin_sha)"
+  fi
+
+  resolve_node || return 1
+
   # Refuse rather than install a unit that will lose the port race. Checked
   # BEFORE the expensive provision so a misconfiguration fails in a second.
   owner="$(port_owner)"
   if [ -n "$owner" ]; then
-    mine="$(unit_pid)"
+    mine="$(unit_pid "$LABEL")"
     if [ "$owner" != "$mine" ]; then
       die "port $PORT is already held by pid $owner, which is not $LABEL.
   Stop that process (or choose another port with --port) and re-run. Installing
@@ -356,6 +608,7 @@ main() {
 
   provision || return 1
   mkdir -p "$HOME/Library/LaunchAgents" || return 1
+
   # Render to a sibling temp then rename, so a failed render can never leave a
   # truncated plist where launchd would find one. Clean the temp up on failure
   # rather than leaving a 0-byte `.plist.tmp` behind.
@@ -363,6 +616,7 @@ main() {
   mv "$PLIST_PATH.tmp" "$PLIST_PATH" || { rm -f "$PLIST_PATH.tmp"; return 1; }
   say "wrote $PLIST_PATH"
   load_unit || return 1
+
   wait_ready
 }
 
