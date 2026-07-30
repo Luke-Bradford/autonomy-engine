@@ -445,3 +445,110 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
   });
 });
+
+/**
+ * #788 — an edge-less doc runs as an implicit SEQUENCE, and says so.
+ *
+ * `effectiveEdges` synthesizes a success chain over node array order whenever a
+ * doc authors no edges, so deleting every edge does not remove routing — it
+ * replaces it with a line. Engine semantics are unchanged here (that was the
+ * operator's call on #788); what changes is that the canvas stops leaving the
+ * topology to be inferred from an array length.
+ */
+describe('FlowCanvas implicit-chain advisory (#788)', () => {
+  function withGraph(
+    nodeIds: string[],
+    edges: Array<{ id: string; from: string; to: string; on: string }> = [],
+    containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [],
+  ) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: nodeIds.map((id, i) => ({
+          id,
+          type: 'http_request',
+          config: {},
+          position: { x: 0, y: i * 160 },
+        })),
+        edges,
+        containers,
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container, advisory: container.querySelector('.canvas-advisory') };
+  }
+
+  it('names the synthesized run order for an edge-less graph', () => {
+    const { advisory } = withGraph(['a', 'b', 'c']);
+    expect(advisory).not.toBeNull();
+    expect(advisory!.textContent).toContain('a → b → c');
+  });
+
+  it('reports ARRAY order, not id order — that is what the chain is built from', () => {
+    const { advisory } = withGraph(['c', 'a', 'b']);
+    expect(advisory!.textContent).toContain('c → a → b');
+  });
+
+  it('is absent once the graph authors an edge — nothing is being inferred', () => {
+    const { advisory } = withGraph(
+      ['a', 'b', 'c'],
+      [{ id: 'e1', from: 'a', to: 'c', on: 'success' }],
+    );
+    expect(advisory).toBeNull();
+  });
+
+  it('is absent for a single node — there is no sequence to warn about', () => {
+    expect(withGraph(['a']).advisory).toBeNull();
+    expect(withGraph([]).advisory).toBeNull();
+  });
+
+  /**
+   * The advisory has to survive the graph it describes being large, or it stops
+   * being an advisory and becomes an occlusion — a panel listing forty ids across
+   * the canvas is worse than the silence it replaces.
+   */
+  it('truncates a long chain rather than covering the canvas with it', () => {
+    const ids = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'];
+    const { advisory } = withGraph(ids);
+    expect(advisory!.textContent).toContain('n1 → n2 → n3 → n4 → n5 → n6');
+    expect(advisory!.textContent).not.toContain('n7');
+    expect(advisory!.textContent).toContain('+2 more');
+  });
+
+  /**
+   * Reachable, and precisely the case that must NOT be hidden: `nodes` is FLAT,
+   * so the synthesized chain runs straight through container membership. The
+   * advisory therefore speaks about the node run order and does not claim the
+   * containers are what gets sequenced.
+   */
+  it('still shows for an edge-less graph that has containers', () => {
+    const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
+    expect(advisory).not.toBeNull();
+    expect(advisory!.textContent).toContain('a → b');
+  });
+
+  /**
+   * `PipelineCanvas` owns the page's ONE polite live region (the validation
+   * badges) and the refusal panel is deliberately assertive to avoid
+   * double-announcing. This advisory is neither: it is a standing description of
+   * the graph, and a third announcer firing on every edge deletion would make
+   * the canvas hostile to a screen reader.
+   */
+  it('is not a live region — the page already has exactly one', () => {
+    const { advisory } = withGraph(['a', 'b']);
+    expect(advisory!.getAttribute('aria-live')).toBeNull();
+    expect(advisory!.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+  });
+});

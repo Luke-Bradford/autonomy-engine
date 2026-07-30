@@ -22,7 +22,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { getActivity, type ContainerKind } from '@autonomy-studio/shared';
+import { getActivity, implicitChainOrder, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
@@ -168,6 +168,16 @@ const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
 const HANDLE_SIZE = 6;
 
 /**
+ * How many activity ids the #788 implicit-chain advisory spells out before it
+ * summarises the rest. An advisory that grows without bound stops being an
+ * advisory and becomes an occlusion: a panel naming forty nodes across the top
+ * of the canvas is worse than the silence it replaces. Six is enough to make the
+ * ORDER concrete (the surprising part is that there is one at all), and the
+ * count in the same sentence keeps the total honest when the list is cut.
+ */
+const IMPLICIT_CHAIN_PREVIEW = 6;
+
+/**
  * The port bounds of a derived container box, stated rather than measured.
  *
  * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
@@ -284,6 +294,24 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   // selected directly, and this component no longer re-renders on a `rebaseLoaded`
   // that changes nothing it draws.
   const containers = useStore(store, (s) => s.containers);
+
+  /**
+   * #788 — the implicit success chain, said out loud.
+   *
+   * An edge-less doc does not run as unrouted parallel roots: `effectiveEdges`
+   * synthesizes a success chain over node ARRAY order, so deleting the last edge
+   * and saving replaces the authored topology with a line. That inference is
+   * staying (the operator's call on #788 — it is in the shipped MVP and docs
+   * authored without edges rely on it), which leaves discoverability as the thing
+   * to fix: the convention was readable only as the absence of something.
+   *
+   * The order is read from `implicitChainOrder`, which derives it from
+   * `effectiveEdges` itself, so this panel cannot describe a topology the engine
+   * does not walk. Note the chain runs over the FLAT node list and ignores
+   * container membership — hence "activities", and hence listing the ids rather
+   * than claiming anything about the boxes they sit in.
+   */
+  const implicitChain = useMemo(() => implicitChainOrder({ nodes, edges }), [nodes, edges]);
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
   /**
@@ -905,6 +933,23 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
         />
         <Controls />
+        {implicitChain !== null && (
+          /* #788 — see `implicitChain` above. NOT a live region, and that is
+             deliberate: `PipelineCanvas` runs the page's one polite region for
+             the validation badges and the refusal below is assertive, so a third
+             announcer re-firing on every edge deletion would make the canvas
+             hostile to a screen reader. This is a standing description of the
+             graph, not an event. Top, so it does not fight the refusal toast at
+             bottom-center when both are up. */
+          <Panel position="top-center" className="canvas-advisory">
+            No edges authored — these {implicitChain.length} activities run in one sequence, in
+            canvas order:{' '}
+            <strong>{implicitChain.slice(0, IMPLICIT_CHAIN_PREVIEW).join(' → ')}</strong>
+            {implicitChain.length > IMPLICIT_CHAIN_PREVIEW
+              ? ` +${implicitChain.length - IMPLICIT_CHAIN_PREVIEW} more`
+              : ''}
+          </Panel>
+        )}
         {refusal !== null && (
           /* Canvas-LOCAL, via RF's own `Panel`, per the epic's z-index/portal
              policy (only global menus portal to body).

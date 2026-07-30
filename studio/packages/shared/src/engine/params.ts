@@ -3982,6 +3982,32 @@ export function effectiveEdges(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): E
   return out;
 }
 
+/**
+ * #788 — the node run-order an EDGE-LESS doc will actually be walked in, or
+ * `null` when the doc authors its own edges (nothing is inferred) or has fewer
+ * than two nodes (no sequence to speak of).
+ *
+ * Exists so an authoring surface can SHOW the synthesized chain instead of
+ * leaving it inferred from an array length. Emptying a doc's edge list does not
+ * merely remove routing, it replaces it with this sequence — a silent topology
+ * change unless something says so out loud. The operator's decision on #788 was
+ * to keep the inference and surface it, so this changes NO execution semantics;
+ * it is a read-only description of `effectiveEdges`.
+ *
+ * Derived FROM `effectiveEdges` rather than re-deriving "no edges means a chain":
+ * a surface that independently reasoned about `edges.length === 0` would keep
+ * confidently describing the OLD topology if the synthesis ever changed. Note the
+ * chain runs over the FLAT `nodes` array and so ignores container membership —
+ * a caller must describe it as the node run order, not as containers being
+ * sequenced.
+ */
+export function implicitChainOrder(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): string[] | null {
+  if (doc.edges.length > 0) return null;
+  const synth = effectiveEdges(doc);
+  if (synth.length === 0) return null;
+  return [synth[0]!.from, ...synth.map((e) => e.to)];
+}
+
 function intersect(a: Set<string>, b: Set<string>): Set<string> {
   const out = new Set<string>();
   for (const x of a) if (b.has(x)) out.add(x);
