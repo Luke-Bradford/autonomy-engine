@@ -697,13 +697,14 @@ describe('canvasStore — container membership on delete (#746)', () => {
    * The DOCUMENTED RESIDUE, pinned so the PR body's claim is not just a comment.
    *
    * An empty `loop` is refused — it re-rounds forever, resetting nothing — so
-   * emptying one still blocks the save, and the operator has no way to delete
-   * the container either. #746's trap therefore SURVIVES for a loop/foreach
-   * last-child delete; it is fixed for stages and for every non-last child.
-   * Tracked as #748, and named here rather than dressed up: the refusal now
-   * states the REAL problem ("a loop needs at least one child") instead of
-   * naming a node that no longer exists, but a better message is not an escape
-   * route.
+   * emptying one leaves the doc unsavable until the operator acts on the box
+   * itself. That was #746's surviving trap; #748 ended it with `deleteContainer`
+   * (covered by its own describe below), so this case now pins the STATE the
+   * operator is in when they reach for that action, not a dead end.
+   *
+   * The refusal states the REAL problem ("a loop needs at least one child")
+   * rather than naming a node that no longer exists — which is what makes the
+   * next step obvious once there is a next step to take.
    */
   it('a loop emptied by a delete is refused for the RIGHT reason, not for a phantom', () => {
     const s = createCanvasStore();
@@ -750,5 +751,171 @@ describe('canvasStore — container membership on delete (#746)', () => {
     // The REFERENCE error the docstring names, not merely "some error" — an
     // `issues.length > 0` would have passed on any unrelated complaint.
     expect(issues).toEqual([expect.stringContaining('exitWhen')]);
+  });
+});
+
+/**
+ * #748 — deleting a CONTAINER, the affordance that ends the one-way trap.
+ *
+ * #746 made a container able to reach `children: []`, and then the canvas had
+ * nothing that could act on one. That single gap surfaced as two failures:
+ *
+ *  - an emptied `loop`/`foreach` is REFUSED by `validatePipelineDoc` ("makes no
+ *    progress"), `canSave` gates on it, so Save was dead and the only exit was a
+ *    reload that discards every unsaved edit;
+ *  - an emptied `stage` validates CLEAN, so it saved — into an immutable version,
+ *    carried forward into every version after it, forever.
+ *
+ * `deleteNode` keeps the container deliberately (it owns edges and config no
+ * other surface can re-author), and that choice is only defensible once the
+ * operator can remove it themselves. This is that action.
+ *
+ * What it does NOT do is cascade the CHILDREN. They are real authored
+ * activities; deleting the box they sit in un-groups them, it does not destroy
+ * them. That is the whole reason the confirmation names what is lost (the
+ * container's own config and its incident edges) and what is not.
+ */
+describe('canvasStore — deleteContainer (#748)', () => {
+  /** A `stage` enclosing both seeded activities, wired in AND out. */
+  function boxed(kind: 'stage' | 'loop' = 'stage', children: string[] = ['n_a', 'n_b']) {
+    return version({
+      nodes: [
+        { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
+        { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+        { id: 'after', type: 'http_request', config: {}, position: { x: 300, y: 20 } },
+      ],
+      edges: [
+        { id: 'e_in', from: 'n_a', to: 'n_b', on: 'success' },
+        { id: 'e_out', from: 'c_1', to: 'after', on: 'success' },
+      ],
+      containers: [
+        kind === 'loop'
+          ? { id: 'c_1', kind, children, exitWhen: '${equals(1, 1)}' }
+          : { id: 'c_1', kind, children },
+      ],
+    });
+  }
+
+  it('removes the container', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed());
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().containers).toEqual([]);
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  /**
+   * The cascade, in BOTH directions.
+   *
+   * A container id is a legal edge endpoint — `from`/`to` are one string field
+   * shared with nodes, and `connect` accepts a container — so an edge left
+   * pointing at a deleted container is a DANGLING ref, exactly the class of
+   * unsavable doc #746 was filed about. Matched the same way `deleteNode` does.
+   */
+  it('cascades the edges incident to it, whichever end it was', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        edges: [
+          { id: 'e_src', from: 'c_1', to: 'n_b', on: 'success' },
+          { id: 'e_dst', from: 'n_a', to: 'c_1', on: 'success' },
+          { id: 'e_other', from: 'n_a', to: 'n_b', on: 'failure' },
+        ],
+        containers: [{ id: 'c_1', kind: 'stage', children: [] }],
+      }),
+    );
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().edges.map((e) => e.id)).toEqual(['e_other']);
+  });
+
+  /**
+   * The children SURVIVE — the property that makes this action safe to offer.
+   *
+   * They are un-grouped, not deleted: freed of the box they run at the top
+   * level. A cascade here would make the confirmation a trap of its own, since
+   * an activity's config is not recoverable either.
+   */
+  it('KEEPS the children as top-level activities', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed());
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().nodes.map((n) => n.id)).toEqual(['n_a', 'n_b', 'after']);
+    // ...and the edge BETWEEN two children is not incident to the container, so
+    // the graph they form is intact too.
+    expect(s.getState().edges.map((e) => e.id)).toEqual(['e_in']);
+  });
+
+  it('clears a selection naming an edge the cascade removed', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed());
+    s.getState().select({ kind: 'edge', id: 'e_out' });
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().selected).toBeNull();
+  });
+
+  it('leaves a selection the delete did not touch', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed());
+    s.getState().select({ kind: 'node', id: 'n_a' });
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().selected).toEqual({ kind: 'node', id: 'n_a' });
+  });
+
+  /**
+   * An unknown id is a NO-OP, not a state write.
+   *
+   * Mirrors every other action's guard (`deleteNode`, `moveNode`, `deleteEdge`).
+   * `dirty` is the assertion that matters: a store that marks itself dirty for a
+   * call that changed nothing offers the operator a Save with nothing in it.
+   */
+  it('is a no-op for an id no container holds', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed());
+    const before = s.getState().containers;
+    s.getState().deleteContainer('n_a'); // a NODE id, not a container's
+    s.getState().deleteContainer('nope');
+    expect(s.getState().containers).toBe(before);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  /**
+   * SYMPTOM A, stated as the operator experiences it: Save comes back.
+   *
+   * Asserted through `canSave`, not only `validateCanvas`, because the report is
+   * "the doc cannot be saved" — the empty issues array is the mechanism, the
+   * button is the claim. This is the escape route that did not exist: emptying a
+   * loop no longer strands every unsaved edit behind a reload.
+   */
+  it('an emptied loop can be deleted, and Save re-enables', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed('loop', ['n_a']));
+    s.getState().deleteNode('n_a');
+    const trapped = s.getState();
+    expect(validateCanvas(trapped.nodes, trapped.edges, trapped.containers, [])).toEqual([
+      expect.stringContaining('makes no progress'),
+    ]);
+
+    s.getState().deleteContainer('c_1');
+
+    const st = s.getState();
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    expect(issues).toEqual([]);
+    expect(canSave({ saving: false, ready: true, issues })).toBe(true);
+  });
+
+  /**
+   * SYMPTOM B: the empty `stage` that validated clean and so saved itself into
+   * every future version. It is now removable before the save that would have
+   * made it permanent.
+   */
+  it('an emptied stage can be removed before it is minted into a version', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(boxed('stage', ['n_a']));
+    s.getState().deleteNode('n_a');
+    expect(s.getState().containers.map((c) => c.children)).toEqual([[]]);
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().containers).toEqual([]);
+    const st = s.getState();
+    expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
   });
 });

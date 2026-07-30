@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
@@ -308,5 +308,110 @@ describe('FlowCanvas container rendering (U6c)', () => {
     const { store, container } = withContainer([{ id: 'n_a', kind: 'stage', children: ['n_b'] }]);
     fireEvent.click(nodeWrapper(container, 'n_a'));
     expect(store.getState().selected).toEqual({ kind: 'node', id: 'n_a' });
+  });
+});
+
+/**
+ * #748 — the container's own delete affordance, in its header band.
+ *
+ * WHY a button on the box rather than select-then-property-panel, which is how
+ * every other element on this canvas is edited: a container cannot be made
+ * `selectable`. React Flow writes `pointer-events: all` on the wrapper of a
+ * selectable node, and a container's wrapper spans a REGION of the canvas
+ * containing other interactive things — it would then eat every pane click aimed
+ * at the space between its children (mutation-proven in
+ * `e2e/container-rendering.spec.ts`, 'the box does not swallow gestures aimed
+ * through it'). So the box stays inert and one small control inside it opts back
+ * IN to hit-testing, exactly as the container's edge handles already do.
+ *
+ * The confirmation is asserted in BOTH directions. A destructive action gated on
+ * a dialog whose "cancel" is never tested is a coin-flip: the operator's only
+ * protection against losing a container's `exitWhen`/`items`/`maxRounds`/
+ * `timeout` (there is no undo) is that declining really does nothing.
+ */
+describe('FlowCanvas container delete (#748)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  function withBoxedGraph(kind: 'stage' | 'loop' = 'stage') {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'after', type: 'http_request', config: {}, position: { x: 400, y: 0 } },
+        ],
+        edges: [{ id: 'e_out', from: 'c_1', to: 'after', on: 'success' }],
+        containers: [
+          kind === 'loop'
+            ? { id: 'c_1', kind, children: ['n_a'], exitWhen: '${equals(1, 1)}' }
+            : { id: 'c_1', kind, children: ['n_a'] },
+        ],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    const box = container.querySelector<HTMLElement>('.react-flow__node[data-id="c_1"]');
+    expect(box, 'no rendered container c_1').not.toBeNull();
+    return { store, box: box! };
+  }
+
+  /**
+   * Named by KIND, so the accessible name says which box is going — the same
+   * word the label already shows and the same one `connectRules` refuses a
+   * boundary crossing by.
+   */
+  it('offers a delete control named for the container KIND', () => {
+    const { box } = withBoxedGraph('loop');
+    expect(within(box).getByRole('button', { name: 'Delete loop container' })).toBeTruthy();
+  });
+
+  it('deletes the container, and its incident edges, once confirmed', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const { store, box } = withBoxedGraph();
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    const st = store.getState();
+    expect(st.containers).toEqual([]);
+    expect(st.edges).toEqual([]);
+    // The child is un-grouped, NOT deleted with the box it sat in.
+    expect(st.nodes.map((n) => n.id)).toEqual(['n_a', 'after']);
+  });
+
+  it('does nothing at all when the confirmation is declined', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { store, box } = withBoxedGraph();
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    const st = store.getState();
+    expect(st.containers.map((c) => c.id)).toEqual(['c_1']);
+    expect(st.edges.map((e) => e.id)).toEqual(['e_out']);
+    expect(st.dirty).toBe(false);
+  });
+
+  /**
+   * The confirmation states what is LOST and what is KEPT.
+   *
+   * Pinned because the asymmetry is the whole safety argument for offering the
+   * action: the config goes and cannot come back, the activities stay. A dialog
+   * that said only "are you sure?" would leave the operator guessing whether
+   * they are about to delete their nodes.
+   */
+  it('warns that the config goes and the activities stay', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { box } = withBoxedGraph('loop');
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop container' }));
+    const message = confirm.mock.calls[0]![0] as string;
+    expect(message).toContain('loop');
+    expect(message).toMatch(/activities.*kept|kept.*activities/i);
+    expect(message).toMatch(/cannot be undone/i);
   });
 });

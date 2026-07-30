@@ -1085,11 +1085,18 @@ td button + button {
  *
  * Belt and braces, honestly labelled: React Flow ALREADY writes
  * `pointer-events: none` inline on the wrapper of a node that is neither
- * selectable nor draggable, and both rules here are inert while that holds.
- * They are kept because U6d makes a container selectable, which flips RF's
- * inline value to `all` and leaves these as the only thing standing. Handles opt
- * back IN below for the same reason — a container is a legal edge endpoint and
- * its ports must stay draggable once the box itself is hit-testable.
+ * selectable nor draggable, and this rule is inert while that holds.
+ *
+ * It was kept in anticipation of U6d making a container SELECTABLE, which would
+ * flip RF's inline value to `all` and leave this as the only thing standing.
+ * #748 settled that the other way: the box stays inert permanently, because
+ * `e2e/container-rendering.spec.ts` mutation-proves the swallowed-gesture bug
+ * directly against `selectable: false` in `FlowCanvas`, and a whole-region hit
+ * target is not worth a selection ring. So this rule is no longer a bet on a
+ * future flag — it is the floor, and the two things that must remain usable
+ * inside an inert box opt back IN individually below: the edge HANDLES (a
+ * container is a legal edge endpoint, so its ports stay draggable) and the
+ * DELETE button (#748 — the only edit the box itself carries).
  *
  * Dashed, and one shade off the canvas rather than a filled panel: the box has
  * to read as a REGION behind its children, not as a large node in front of them.
@@ -1116,6 +1123,49 @@ td button + button {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/*
+ * #748 — the container's delete button, and the ONLY hit-testable part of the box.
+ *
+ * `pointer-events: all` is what makes it clickable at all: the box above is
+ * `none`, and a child re-enables hit-testing for itself without giving the region
+ * back its click-swallowing reach. Same opt-back-in as `.react-flow__handle`.
+ *
+ * Pinned in the TOP-RIGHT corner deliberately. The two things it must not sit
+ * under are the KIND label (top-left, so they cannot overlap on a narrow box) and
+ * the point `e2e/container-rendering.spec.ts` probes to prove the box does not
+ * swallow gestures, which is the bottom edge at the horizontal centre. Moving
+ * this control to the bottom or the middle would put a hit target under that
+ * probe and turn a real invariant into a test that fails for the wrong reason.
+ *
+ * `--muted` at rest so an authored box does not read as a row of delete buttons;
+ * `--error` on hover/focus, where the intent is committed and the colour should
+ * say what the click does. Never colour ALONE — the accessible name is
+ * "Delete <kind> container" and the same string is the tooltip.
+ */
+.flow-container-delete {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.2;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.flow-container-delete:hover,
+.flow-container-delete:focus-visible {
+  color: var(--error);
+}
+
+.flow-container-delete:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /*
