@@ -627,8 +627,12 @@ Parser, eval, interpolation, and injection-inertness all held. The gaps are in T
     close that gap; it is **#5**'s. (`run.startedAt` folds null only for a pre-E3 log — a legacy
     shape, not a live one.)
   - **Two fixes E6's premise forced.** (1) `evalExitWhen`'s `out === 'true'` **coercion is removed**
-    — the shipped code named E6 as its owner, and the save-time check alone cannot bind because
-    `validateDoc` is advisory (#444), so a git import reaches the reducer unchecked. BREAKING and
+    — the shipped code named E6 as its owner, and the save-time check alone cannot bind. (The
+    original reason given here was that `validateDoc` is advisory and "a git import reaches the
+    reducer unchecked"; that was already false — import funnels through `createPipelineVersion`,
+    the same write gate — and is corrected in #786. The conclusion stands on a sounder reason:
+    reads never validate, so any version minted before a rule existed still reaches the reducer
+    carrying what that rule would now refuse.) BREAKING and
     deliberate: a `string`-typed "true" used to exit by accident while the same activity emitting
     "yes" burned every round and reported the misleading `capped`. **This is the first reducer
     change whose semantics DIVERGE on replay** — an old log that exited via the coercion re-folds to

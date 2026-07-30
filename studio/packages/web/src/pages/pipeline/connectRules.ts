@@ -94,10 +94,26 @@ export interface ConnectPrecheck {
   childOwner: ReadonlyMap<string, string>;
 }
 
+/**
+ * Every legal edge endpoint id: nodes UNION containers.
+ *
+ * `from`/`to` is ONE string field over a namespace the save gate keeps globally
+ * unique, so an edge may name either kind. Exported (#786) because
+ * `canvasStore.loadVersion` needs the same set to drop an edge whose endpoint
+ * resolves to nothing, and two hand-rolled copies of "what counts as an
+ * endpoint" is exactly the drift that lets one of them go stale.
+ */
+export function edgeEndpointIds(
+  nodes: readonly Node[],
+  containers: readonly Container[],
+): Set<string> {
+  return new Set([...nodes.map((n) => n.id), ...containers.map((c) => c.id)]);
+}
+
 export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
   return {
     graph,
-    endpoints: new Set([...graph.nodes.map((n) => n.id), ...graph.containers.map((c) => c.id)]),
+    endpoints: edgeEndpointIds(graph.nodes, graph.containers),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     byId: new Map(graph.nodes.map((n) => [n.id, n])),
     containerById: new Map(graph.containers.map((c) => [c.id, c])),

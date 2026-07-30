@@ -217,11 +217,13 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
        accepted a dangling endpoint, so the cascade had no backstop anywhere and
        reading the version back was the ONLY assertion that could fail. #786 has
        since closed that hole: `validatePipelineDoc` now refuses an edge naming an
-       id the doc does not contain, so removing the cascade is caught THREE times
-       over — the validation badge above (`canSave` runs the same rule), the Save
-       returning 400 instead of 'Saved v2.', and this read-back. Kept as the
-       direct assertion regardless: it names the actual property, and it is the
-       one that survives if either of the other two is ever loosened. */
+       id the doc does not contain, so removing the cascade is caught TWICE — by
+       the validation-badge assertion above (`canSave` runs the same rule), which
+       fails FIRST, and by this read-back. Not three times, and not by a 400: the
+       badge makes `canSave` false, so Save renders DISABLED and the click below
+       never issues a request. Kept as the direct assertion regardless: it names
+       the actual property, and it is the one that survives if the badge check is
+       ever loosened. */
     const v2 = (await (
       await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions/2`)
     ).json()) as { nodes: Array<{ id: string }>; edges: unknown[]; containers: unknown[] };

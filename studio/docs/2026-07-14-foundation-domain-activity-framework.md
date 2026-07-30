@@ -134,9 +134,10 @@ secureInput?, secureOutput? }`. Split across the pure/impure boundary:
   skipped}` vs business `{on:'branch', branch}`. `EdgeOnSchema` stays OPERATIONAL-ONLY (the
   canvas renders it as a dropdown); `branch` is a separate union member. Branch edges are
   **parse-safe and INERT** until #4 A0/A1/A2 ship the activities that emit a branch outcome
-  — nothing can satisfy one before then. `validateDoc` reports one, but that is **advisory,
-  not a gate**: its only caller is the canvas, which renders a badge and still permits Save,
-  and the server never validates (**#444**). The **reducer's diagnostic is the real
+  — nothing can satisfy one before then. `validateDoc` reports one, and it IS a gate — this
+  passage's "advisory, not a gate… the server never validates" was already false when #444
+  wired the write path, and is corrected in #786. What it is not is a READ-time check, so a
+  version minted before a rule existed still runs unchecked. The **reducer's diagnostic is the real
   observability**, which is why F1 put one there rather than trusting the checker.
 - **A `skipped` edge inverts its predecessor's guarantees** (`computeGraph`): a node runs on
   a skip precisely because the predecessor's own dependency was NOT met, so NOTHING upstream

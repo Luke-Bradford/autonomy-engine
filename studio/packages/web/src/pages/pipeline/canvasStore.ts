@@ -11,7 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
 import { retypeCollides, type EdgeCondition } from './edgeCondition';
-import { connectRejection, precomputeConnect } from './connectRules';
+import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -202,8 +202,10 @@ export interface CanvasState {
  * (`store.getState().addNode(...)`); the React canvas subscribes via
  * `useStore(store, selector)`. Actions are the SINGLE place the graph mutates,
  * which is what keeps the engine's global-id / no-dangling-edge invariants
- * intact: `deleteNode` cascades to incident edges and `connect` refuses a
- * self-loop or an endpoint that is not a current node.
+ * intact: `deleteNode` and `deleteContainer` (#748) both cascade to incident
+ * edges, `connect` refuses a self-loop or an endpoint that is not a current node
+ * OR container, and `loadVersion` drops an edge arriving from the server with an
+ * endpoint that resolves to neither (#786).
  */
 export function createCanvasStore(): StoreApi<CanvasState> {
   return createStore<CanvasState>((set, get) => ({
@@ -216,11 +218,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     addCount: 0,
 
     loadVersion(v) {
-      // Built ONCE rather than per edge: the two ids that share one namespace
-      // (see the edge filter below for why containers belong in here).
-      const endpointIds = new Set<string>(
-        v ? [...v.nodes.map((n) => n.id), ...v.containers.map((c) => c.id)] : [],
-      );
+      // Built ONCE rather than per edge, and from `connectRules`' own helper so
+      // the set the load filter trusts is the SAME set `connect` refuses an
+      // unknown endpoint against — see `edgeEndpointIds` for why containers
+      // belong in it.
+      const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
       set({
         // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
         // basis and the carry-forward source for the parts of the doc this slice
@@ -252,8 +254,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // dead Save over an edge they can neither see, select nor delete: exactly
         // the one-way trap #748 closed, re-created by the rule that closes the
         // hole. Not authorable from here (`connect` refuses an unknown endpoint
-        // and both delete paths cascade) — the reachable sources are the API and
-        // a git import, which the write gate now closes.
+        // and both delete paths cascade), and the API and git-import routes are
+        // now closed by that same rule — so the ONLY remaining source is a row
+        // minted BEFORE it. A closed set that shrinks to nothing over time.
+        //
+        // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
+        // its docblock: a general normalise would hide `child 'Y' is not a node
+        // in this pipeline`, a real defect report about a doc that arrived
+        // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
+        // child's error names a container the author can see and — since #748 —
+        // delete, so surfacing it leads somewhere. A dangling edge is invisible
+        // and unselectable, so surfacing it leads nowhere and only blocks Save.
+        // Repair silently where the operator has no move; report where they do.
         //
         // The resolvable set is nodes UNION containers: a container id is a legal
         // edge endpoint. Node ids alone would strip every container edge on load,

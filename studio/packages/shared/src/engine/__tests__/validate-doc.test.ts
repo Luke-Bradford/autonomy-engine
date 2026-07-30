@@ -987,10 +987,11 @@ describe('validateDoc — edge endpoints must exist (#786)', () => {
     }
   });
 
-  // The skip is keyed on the edge OBJECT, not `e.id`, because NOTHING validates
-  // edge-id uniqueness — an id-keyed set would let one dangling edge suppress a
-  // well-formed namesake's own diagnostics. This is the doc's only real design
-  // choice, so it gets the test that fails when it is undone.
+  // Suppression is decided PER EDGE by a predicate, so a shared id cannot
+  // cross-suppress. Nothing validates edge-id uniqueness, so the obvious
+  // refactor — collect the dangling edges into a `Set` keyed on `e.id` — would
+  // silently let one dangling edge take a well-formed namesake's diagnostics
+  // with it. This test is what fails if anyone reintroduces that shape.
   it('does not let a dangling edge suppress a NAMESAKE edge that is well formed', () => {
     const d = doc(
       [node('a'), node('outside')],
