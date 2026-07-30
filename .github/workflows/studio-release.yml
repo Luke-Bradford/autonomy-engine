@@ -1,0 +1,68 @@
+name: studio-release
+
+on:
+  push:
+    tags: ['studio-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11.0.6 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # NOTE: we do NOT use setup-node's `cache: pnpm`. That helper resolves the
+      # store via `pnpm store path` run from the repo ROOT, where it cannot see
+      # studio/pnpm-workspace.yaml's `storeDir: .pnpm-store` (action steps ignore
+      # `defaults.run.working-directory`), so it targets the GLOBAL store — which
+      # `pnpm install` (run in studio/) never populates. On any lockfile change
+      # the post-job cache-save then fails with "path does not exist". We cache
+      # the real store dir explicitly instead. Mirrors studio-ci.yml.
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: studio/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('studio/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install
+        working-directory: studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: studio
+        run: pnpm build
+
+      # VERSION comes from the tag and COMMIT from the checkout, so the published
+      # manifest and the one baked into the artifact are produced from the same
+      # two facts rather than derived independently.
+      - name: Write manifest
+        working-directory: studio
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#studio-v}"
+          # arch from the RUNNER, not a hardcoded literal. Phase 1 publishes no
+          # binary artifact -- the build is architecture-independent JS -- so this
+          # field is not yet load-bearing, and a fixed `x64` would have been an
+          # arbitrary claim baked permanently into release history. Reporting where
+          # the manifest was actually built is at least true. Phase 2 publishes
+          # per-arch artifacts (better-sqlite3 is a native addon) and the updater
+          # selects on this field, at which point this line becomes a real matrix.
+          node scripts/write-manifest.mjs packages/server "$VERSION" \
+            "$(git rev-parse --short HEAD)" "$(node -p process.arch)"
+          cat packages/server/manifest.json
+
+      - name: Publish the manifest to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --generate-notes studio/packages/server/manifest.json

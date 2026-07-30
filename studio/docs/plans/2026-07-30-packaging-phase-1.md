@@ -250,11 +250,17 @@ import { resolveBuildInfo } from '../build-info.js';
 
 /**
  * `manifest.json` sits NEXT TO the server build, i.e. `app/manifest.json` with
- * the code in `app/dist/`. Resolved from this module's own URL rather than
+ * the code in `app/dist/`.
+ *
+ * TWO levels up, not one: this file compiles to `dist/routes/version.js` (tsc
+ * preserves the `routes/` subdirectory), so one `..` would land inside `dist/`.
+ * Two reaches the package root in dev — where the build writes it — and the app
+ * root in a packaged install, where the Dockerfile's `WORKDIR /app` puts the
+ * code in `/app/dist`. Resolved from this module's own URL rather than
  * `process.cwd()`, because the launchd service's working directory is not
  * guaranteed to be the install root.
  */
-const MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'manifest.json');
+const MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'manifest.json');
 
 /** Read ONCE at registration: the artifact cannot change under a running process. */
 export function versionRoutes(fastify: FastifyInstance): void {
@@ -303,7 +309,9 @@ git commit -m "feat(studio): #792 phase 1 — GET /api/version reads a build man
 - Create: `studio/packages/web/src/api/version.test.ts`
 - Create: `studio/packages/web/src/shell/VersionBadge.tsx`
 - Create: `studio/packages/web/src/shell/VersionBadge.test.tsx`
-- Modify: `studio/packages/web/src/shell/AppShell.tsx` (render it in the hub rail foot)
+- Modify: `studio/packages/web/src/shell/HubRail.tsx` (render it in the rail foot beside the theme
+  toggle — the foot is in `HubRail`, NOT `AppShell`; an earlier draft of this plan named the wrong
+  file and the Task 2 implementer caught it)
 - Modify: `studio/packages/web/src/index.css` (one rule)
 
 **Interfaces:**
@@ -495,6 +503,7 @@ git commit -m "feat(studio): #792 phase 1 — show the running version in the sh
 - Modify: `studio/package.json` (a `build:manifest` script, called by `build`)
 - Create: `.github/workflows/studio-release.yml`
 - Modify: `studio/.gitignore` (ignore the generated `packages/server/manifest.json`)
+- Modify: `studio/Dockerfile` (copy the manifest into the image — see Step 5b)
 
 **Interfaces:**
 
@@ -644,6 +653,41 @@ Add to `studio/.gitignore`:
 ```gitignore
 packages/server/manifest.json
 ```
+
+- [ ] **Step 5b: Copy the manifest into the container image**
+
+Raised by the Task 1 review as "cannot verify from diff", and confirmed: the Dockerfile has no step
+that places `manifest.json` in the image, so a released CONTAINER would serve the dev placeholder —
+wrong in the ship path the architecture doc calls primary.
+
+`version.ts` resolves the manifest two levels up from `dist/routes/`, which is `/app/manifest.json`
+given the image's `WORKDIR /app`. Add a copy beside the existing ones in the runtime stage of
+`studio/Dockerfile`:
+
+```dockerfile
+COPY --from=build /app/packages/server/manifest.json ./manifest.json
+```
+
+The build stage must therefore write it before that copy — add the manifest step to the build stage
+right after the existing `pnpm --filter ... build` line:
+
+```dockerfile
+RUN node scripts/write-manifest.mjs packages/server \
+      "${STUDIO_VERSION:-0.0.0-dev}" "${STUDIO_COMMIT:-dev}" "$(node -p process.arch)"
+```
+
+Verify by building and asking the running container what it is:
+
+```bash
+cd studio && docker build -t studio-manifest-check . && \
+  docker run --rm -d --name mcheck -p 8898:8080 \
+    -e AUTONOMY_MASTER_KEY="$(python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')" \
+    studio-manifest-check && sleep 12 && \
+  curl -s http://127.0.0.1:8898/api/version; docker rm -f mcheck
+```
+
+Expected: a JSON body whose `version` is NOT `0.0.0-dev` when the build args are set, proving the
+manifest reached the image rather than the endpoint falling back.
 
 - [ ] **Step 6: Verify the workflow parses and the manifest round-trips**
 

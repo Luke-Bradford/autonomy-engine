@@ -254,6 +254,12 @@ body {
 .hub-rail__foot {
   margin-top: auto;
   display: flex;
+  /* Column, not the row this was before `VersionBadge` joined `ThemeToggle`
+     here: row-flex let the badge's text overflow the 48px rail sideways and
+     pushed the switch off-screen entirely (browser-verified). Stacked, both
+     fit the narrow rail the way the wordmark and hub icons above already do. */
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   width: 100%;
 }
@@ -265,6 +271,21 @@ body {
 .hub-rail__foot .fui-Switch {
   padding: 0;
   min-width: 0;
+}
+
+.version-badge {
+  font-size: 0.6rem;
+  color: var(--muted);
+  padding-bottom: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.update-banner {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 2rem;
+  font-size: 0.85rem;
 }
 
 /* The Home hub's signposts. There is no global anchor rule in this file — the

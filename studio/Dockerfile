@@ -2,6 +2,12 @@
 FROM node:22-slim AS build
 WORKDIR /app
 
+# Threaded through by `docker build --build-arg STUDIO_VERSION=... --build-arg
+# STUDIO_COMMIT=...` (the release path); defaulted so a plain `docker build`
+# with no args still produces a valid (if dev-labelled) manifest below.
+ARG STUDIO_VERSION=0.0.0-dev
+ARG STUDIO_COMMIT=dev
+
 RUN corepack enable && corepack prepare pnpm@11.0.6 --activate
 
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
@@ -14,10 +20,23 @@ RUN pnpm install --frozen-lockfile
 
 COPY tsconfig.base.json ./
 COPY packages ./packages
+COPY scripts ./scripts
 
 RUN pnpm --filter @autonomy-studio/shared build \
  && pnpm --filter @autonomy-studio/server build \
  && pnpm --filter @autonomy-studio/web build
+
+# Bake the build's identity into the image itself (#792) — otherwise a released
+# CONTAINER would serve the `0.0.0-dev` placeholder in what the architecture doc
+# calls the primary ship path, even though a bare `pnpm build` install carries
+# a real one.
+# No `:-` fallbacks: the ARG defaults above already supply them. The one case
+# `:-` would additionally catch is an EXPLICITLY empty `--build-arg X=`, which
+# ARG defaults do not cover -- but that lands safely anyway, because an empty
+# version fails BuildInfoSchema's `min(1)` and the reader falls back to the dev
+# placeholder rather than serving a blank version.
+RUN node scripts/write-manifest.mjs packages/server \
+      "$STUDIO_VERSION" "$STUDIO_COMMIT" "$(node -p process.arch)"
 
 # Drop dev dependencies (esbuild, vite, typescript, ...) — keep only what the
 # server needs at runtime. `--legacy`: pnpm 10+ otherwise refuses to `deploy` a
@@ -47,6 +66,7 @@ COPY --from=build /app/server-deploy/node_modules ./node_modules
 COPY --from=build /app/packages/server/dist ./dist
 COPY --from=build /app/packages/server/drizzle ./drizzle
 COPY --from=build /app/packages/server/package.json ./package.json
+COPY --from=build /app/packages/server/manifest.json ./manifest.json
 COPY --from=build /app/packages/web/dist ./web
 
 # node:22-slim ships no curl/wget; Node 22 has global fetch. Targets loopback

@@ -8,6 +8,7 @@ import { PANE_ELEMENT_ID, SecondaryPane } from './SecondaryPane';
 import { hubById } from './hubs';
 import { activeHubId, crumbsFrom } from './routeHandle';
 import { uiStore } from '../stores/uiStore';
+import { UpdateBanner } from './UpdateBanner';
 
 /** The custom property the secondary pane takes its width from. */
 const PANE_WIDTH_VAR = '--pane-width';
@@ -106,6 +107,7 @@ export function AppShell() {
             the boundary above `AppShell` would suspend the chrome those tests
             query. The fallback is deliberately empty — a spinner here would
             flash on a local-first app whose chunks load in milliseconds. */}
+        <UpdateBanner />
         <main className="content">
           <Suspense fallback={null}>
             <Outlet />
