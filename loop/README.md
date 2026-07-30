@@ -79,8 +79,11 @@ Do not re-add it.
 
 ## Runtime state is NOT tracked
 
-`loop/logs/` (one multi-MB stream-json file per fire — ~546MB and growing) and `loop/.last_quota`
-are gitignored. Nothing here should ever write into a tracked path.
+`loop/logs/` (one multi-MB stream-json file per fire — ~546MB and growing), `loop/.last_quota` (the
+last-known 7-day reading) and `loop/.last_quota_poll` (the source-2 poll memo, #777) are gitignored.
+All three are per-machine and meaningless in another checkout. Nothing here should ever write into a
+tracked path — and keep this list in step with `.gitignore`, because it is what a live-control-plane
+sync is checked against.
 
 ## Where it actually runs from — READ BEFORE CHANGING PATHS
 
@@ -150,11 +153,38 @@ Three independent bounds, checked before every fire, each with its own test in
   contrast is confounded; `drive.sh` spells this out at the `quota_pct` header. Studio last is
   what makes it free: it is polled only when both others failed, so it adds no upstream load in the
   common case and cannot starve the sampler the primary depends on. Every read logs
-  `quota source: <dashboard|loop|studio>`, which is the evidence for promoting studio. **Do not
-  reorder** until that evidence exists. What changed with #765 is *availability*: studio is now
+  `quota source: <dashboard|loop|loop-memo|studio>`, which is the evidence for promoting studio.
+  **Do not reorder** until that evidence exists. `loop-memo` (#777) means source 2 answered from its
+  poll memo rather than polling — counted separately on purpose, because a throttle that logged the
+  same string either way would hide a source-2 death the way #766 hid for its whole life. **Anchor
+  the grep** when counting real source-2 polls: `'quota source: loop ('`, since a bare
+  `'quota source: loop'` also matches `loop-memo`. What changed with #765 is *availability*: studio is now
   served by the supervised `com.autonomy.studio-server` unit on 8788 rather than by whatever
   `pnpm dev` happened to be up, so an UNREADABLE from source 3 is finally a measurement of the
   reader instead of a measurement of "no server".
+- **Source 2 is poll-throttled** (`QUOTA_POLL_MIN_INTERVAL`, 60s; #777) — it is a fresh `python3`
+  process per call, so it cannot cache in memory and nothing gave it a cross-process throttle. With
+  `quota_pct` running up to three times per iteration plus once per `AUTH_LONG_BLOCK` retry while
+  blocked, and source 1 gone after C3, it could self-inflict the very 429 that then reads as
+  UNREADABLE. It now answers from a poll memo (`.last_quota_poll`, gitignored) inside that interval,
+  **memoises failures too** (the correct response to a 429 is to poll *less* — the same reason
+  studio throttles failed reads, #770), and **drops the memo after every fire**, so a memo can only
+  ever serve reads about the fire it was taken for. 60s matches what the other two sources already
+  do. `QUOTA_POLL_MIN_INTERVAL=0` disables it; anything over the **300s ceiling is clamped**, and an
+  unparseable value falls back to the default with a `WARN` — same for `QUOTA_CACHE_MAX_AGE`, because
+  an operand `test` cannot parse returns 2, which is *neither* branch, so the age comparison used to
+  fall through and make every stamped record look fresh.
+  It is a *ceiling* on the poll rate, not a measured reduction of it — in production those three
+  reads are usually minutes apart (`ensure_auth` backs off 30→600s), so the memo mostly bites on
+  adjacent reads, a restart mid-iteration, or a manual run racing the scheduled one.
+  **The cost, because it is a change of polarity:** unlike `.last_quota` below, the memo is trusted in
+  BOTH directions — it can serve a reading up to 60s old that *permits* a fire the live figure would
+  refuse. #777 proposed serving nothing in-window for exactly that reason and **was overruled on
+  evidence**; the exposure is bounded twice instead (≤60s, and dropped at every fire) rather than
+  argued away. The argument, the flat-vs-geometric asymmetry with studio, and the **revisit trigger**
+  (source 3 answering makes the fail-safe polarity affordable again) are set out ONCE on
+  `quota_poll_memo_read` in `drive.sh` and on #777 — deliberately not restated here, because a
+  divergence rationale kept in two places is how the second copy goes stale.
 - **What cutover C3 does to that order** — parking `bin/ lib/ tests/ templates/ start` (#410)
   removes source 1 *and*, before #764, removed source 2 as well, because the reader lived in the
   engine's `lib/`. #764 relocated it to `loop/claude_usage.py`, so the surviving pair is
