@@ -317,12 +317,15 @@ quota_pct() {
     # The disable check is explicit rather than left to the age comparison: with
     # QUOTA_POLL_MIN_INTERVAL=0 an age of 0 is not GREATER than 0, so a memo written
     # in the same second would still be served and the knob would not disable
-    # anything (case 38). It also fixes the polarity if the knob is ever set to
-    # something `test` cannot parse: this `[` then returns 2, which is neither
-    # branch, so `&&` does not run, qp_memo stays empty and the poll happens. A
-    # garbage interval therefore over-polls, never over-trusts -- which matters
-    # because the age check inside quota_stamped_read fails the OTHER way (an
-    # unparseable bound leaves the record looking fresh).
+    # anything (case 38). That is now its ONLY job in the executable body, and this
+    # comment used to claim a second one it no longer has: it said an unparseable
+    # interval makes this `[` return 2, so the memo is skipped and a garbage knob
+    # "over-polls, never over-trusts". Untrue since `quota_knob_secs` normalises the
+    # knob at file scope BEFORE the first read -- an unparseable value is now the
+    # default 60 and behaves exactly like it, fresh memo included (measured). The
+    # check is kept because it still owns the =0 disable, and as defence in depth for
+    # a caller that reaches quota_pct without that normalisation (sourcing the file to
+    # unit-test its functions does exactly that).
     qp_memo=""
     [ "$QUOTA_POLL_MIN_INTERVAL" -gt 0 ] && qp_memo="$(quota_poll_memo_read)"
     if [ -n "$qp_memo" ]; then
@@ -401,7 +404,13 @@ quota_cache_write() {  # $1=pct
 quota_stamped_read() {  # $1=file $2=max_age_seconds
   qsr_file="$1"; qsr_max="$2"
   [ -f "$qsr_file" ] || return 0
-  qsr_line="$(cat "$qsr_file" 2>/dev/null)" || return 0
+  # `head -1`, not `cat`: on a TWO-line file `%% *` takes the epoch from line 1 and
+  # `##* ` takes the value from the LAST line, so a fresh stamp got paired with an
+  # unrelated old value (measured: "<now> -" + "<old> 10" was served as 10). Both
+  # writers emit exactly one line, so this is only reachable via a partial or raced
+  # write -- but the record is per-machine state a manual run can also touch, and a
+  # parser guarding spend should not depend on nobody ever appending to it.
+  qsr_line="$(head -1 "$qsr_file" 2>/dev/null)" || return 0
   # A separator is REQUIRED before splitting: with no space, `%% *` and `##* `
   # BOTH degrade to the whole string, so a single-token line was read as epoch
   # AND value. A lone recent epoch then parsed as a colossal "percent" and refused
@@ -409,6 +418,17 @@ quota_stamped_read() {  # $1=file $2=max_age_seconds
   case "$qsr_line" in *" "*) ;; *) return 0 ;; esac
   qsr_when="${qsr_line%% *}"; qsr_val="${qsr_line##* }"
   case "$qsr_when" in *[!0-9]*|"") return 0 ;; esac
+  # The EPOCH needs a LENGTH bound too, and on the memo path its absence was a
+  # fail-OPEN -- the one polarity this guard may not have. `$(( ))` wraps silently, so
+  # an epoch of 2^64+now made `qsr_age` land inside the window and the memo's value was
+  # served as though freshly polled (measured: `18446744075494925739 10` -> 10), which
+  # PERMITS a fire, suppresses the real poll and suppresses source 3. The identical
+  # line is merely fail-safe for `.last_quota` (a bogus low reading just falls through
+  # to the blind allowance), which is why the polarity only flipped once the memo
+  # started sharing this parser -- and why the review round that added `quota_sane`'s
+  # length bound to the VALUE for exactly this 64-bit reason had to be extended to its
+  # sibling field. 11 digits reaches year 5138; anything longer is not a timestamp.
+  [ "${#qsr_when}" -gt 11 ] && return 0
   # 10# forces BASE TEN. Digit-only is not enough for $(( )): it reads a leading
   # zero as octal, so a value like 018 is "value too great for base" -- fatal to
   # this subshell (and under set -u the next line then reads unbound). The caller
@@ -462,6 +482,15 @@ quota_cache_read() {
 # restart mid-iteration and to bound a manual run racing the scheduled one, but that
 # is a bonus, not the reason.
 #
+# WHY A SECOND FILE and not a "`.last_quota` may also PERMIT within 60s" rule, which
+# is the obvious cheaper alternative: that would cover the success half with no new
+# state, but it cannot hold the FAILURE sentinel -- `.last_quota` is a cache of
+# readable percentages and has no way to record "the last poll failed", which is the
+# half that actually stops a 429 storm. It would also give `.last_quota` two
+# directions of trust at two different ages, and that file's single-direction
+# refuse-only contract is the one thing keeping a 24h-old reading from authorising a
+# fire. Separate file, separate contract, separate age.
+#
 # It memoises FAILURES too ("-"), and that half is the load-bearing one: the correct
 # response to a 429 is to poll LESS, so a memo written only on success leaves the
 # storm exactly as it was. Studio throttles failed reads for the same reason (#770).
@@ -476,6 +505,15 @@ quota_cache_read() {
 # driver would spend its QUOTA_UNKNOWN_FIRES allowance and STOP with the quota
 # perfectly readable. That is the same self-DoS moved one step. Cases 33-34 pin both
 # halves against each other.
+#
+# REVISIT TRIGGER, because the argument above leans on one measurement that is still
+# pending: "studio (which has never answered)". That is what makes the in-window read
+# BLIND and so makes #777's polarity unaffordable. If source 3 starts answering, the
+# premise is gone -- an in-window UNREADABLE from source 2 would simply fall through
+# to a throttled source 3, nothing would spend the blind allowance, and #777's
+# fail-safe "serve nothing in-window" becomes affordable. At that point this
+# both-directions memo is unnecessary exposure and should be narrowed to refuse-only.
+# The evidence to watch for is a scheduled fire logging `quota source: studio`.
 #
 # The staleness is bounded on TWO sides instead:
 #   * by age, to one minute -- the same contract the other two sources already have;
@@ -543,8 +581,14 @@ quota_knob_secs() {  # $1=name $2=value $3=default $4=ceiling (0 = none)
 # block is frequently CAUSED by quota exhaustion (a cap and an expired token look
 # identical to the probe), so the re-grant path is exactly the one most likely to
 # fire into a window that has since changed. The periodic quota_pct calls inside
-# ensure_auth only warm the log and the cache; they deliberately do not decide
-# anything, because the decision belongs here where it can stop the loop.
+# ensure_auth do not decide anything themselves -- the decision belongs here, where
+# it can stop the loop. But since #777 they are no longer merely informational: an
+# in-block read WRITES the poll memo, so within QUOTA_POLL_MIN_INTERVAL the deciding
+# gate below can be answered from a reading an informational call took (case 33 pins
+# exactly that: three reads, one poll). Bounded by the same 60s, and a long block is
+# always far wider than the window so the post-block gate really does re-poll -- but
+# it is no longer true that those calls "only warm the log and the cache", and this
+# comment said so for a while.
 #
 # Mutates blind_fires (a global) rather than running in a subshell, so the blind
 # allowance is spent exactly once per authorised blind fire.
@@ -815,6 +859,14 @@ while true; do
   # re-grant just above may have handed the budget back on the strength of that
   # same block -- so this is precisely where a stale "quota ok" does the most
   # damage. Cheap (a curl and a log line), and it re-runs the identical rules.
+  #
+  # Post-C3 caveat, since this re-check exists to defeat staleness: a SHORT block
+  # (one retry, ~30-40s at BACKOFF_BASE=30) fits inside QUOTA_POLL_MIN_INTERVAL, so
+  # source 2 answers it from the memo and it re-reads the same number it was meant to
+  # replace. Inside the accepted 60s bound, and the case that matters is unaffected --
+  # the re-grant path needs AUTH_LONG_BLOCK retries, always far more than 60s, so it
+  # always re-polls for real. Worth knowing before trusting this line to have taken a
+  # fresh figure in every case.
   if [ "$auth_block_retries" -gt 0 ]; then
     log "re-checking quota: the pre-block reading is stale after $auth_block_retries auth retr(y/ies)"
     quota_gate || break
@@ -858,6 +910,9 @@ while true; do
     # operator's own interactive sessions can move the 7-day figure inside it --
     # and their headroom is the thing this guard exists to protect. Only re-check
     # when we ACTUALLY waited; a gate that was already settled changes nothing.
+    # Same post-C3 caveat as the auth-block re-check above: a single t=1 wait is
+    # GATE_WAIT_SLEEP=30s, inside the memo window, so that one re-read can be
+    # memo-served. t>=3 (90s) always re-polls.
     if [ "$t" -gt 0 ]; then
       log "re-checking quota: the pre-wait reading is stale after ${t}x${GATE_WAIT_SLEEP}s of gate wait"
       quota_gate || break

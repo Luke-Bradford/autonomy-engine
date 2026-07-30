@@ -640,6 +640,16 @@ check "three quota reads in one iteration cost ONE source-2 poll" "1" \
 check "a throttled read still SERVES the reading (never a blind fire)" "1" "$(fires_of "$r")"
 check "a throttled read is not reported as UNREADABLE" "1" \
   "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+# Folded onto this run rather than given its own (it needed byte-identical args): a
+# memo HIT must be DISTINGUISHABLE from a live poll in the log. `quota source: loop` is
+# the evidence trail that decides when studio can be promoted and the dashboard retired
+# (C3); if a memo hit logged the same string, a source-2 death would cost nothing and
+# say nothing -- exactly how #766 hid for its whole life. Reads 2 and 3 here are
+# memo-served and must say so, while read 1 keeps the live-poll string.
+check "a memo hit is logged as its own source, not as a poll" "0" \
+  "$(grep -q 'quota source: loop-memo' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and the FIRST read still logs the live-poll source string" "0" \
+  "$(grep -q 'quota source: loop (7-day utilization 10%)' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 38. ...and the reduction above is caused by the THROTTLE, nothing else ---
 # The same run with the throttle switched off must poll every time. This is the
@@ -649,17 +659,33 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK
       AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1 QUOTA_POLL_MIN_INTERVAL=0)"
 check "QUOTA_POLL_MIN_INTERVAL=0 disables the throttle -> three polls" "3" \
   "$(readerpolls "$r")"
-# ...and the interval is checked EXPLICITLY before the memo is read, not left to the
-# age comparison inside quota_stamped_read. That comparison fails OPEN on a bound
-# `test` cannot parse: `[ 42 -gt abc ]` returns 2, which is neither branch, so the
-# record falls through looking FRESH no matter how old it is. Seeded with a
-# two-hour-old refusing 97% against a live reader answering 10%: the explicit check
-# makes an unparseable interval over-POLL (fire), its absence makes it over-TRUST
-# (STOP on a memo from another era). The one polarity this guard may never have.
+# ...and case 38a above does NOT pin the explicit `-gt 0` disable check, which is easy
+# to believe it does. `auth_ok`'s `sleep 2` puts every read at least a second apart, so
+# `[ age -gt 0 ]` rejects the memo on age alone and the case stays green with the check
+# deleted (mutation-proved). The same-second memo the check actually exists for is
+# never exercised there. THIS is the discriminating case: a memo stamped NOW, so only
+# the explicit check can reject it. Removing the check serves a fresh 97% with the
+# throttle "disabled" and STOPs -> 0 fires (measured).
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      QUOTA_POLL_MIN_INTERVAL=0 "SEED_POLL_MEMO=$(date +%s) 97")"
+check "QUOTA_POLL_MIN_INTERVAL=0 truly disables it, even for a same-second memo" "1" \
+  "$(fires_of "$r")"
+
+# 38c. an unparseable interval. This case used to be labelled "over-polls, never
+# over-trusts a stale memo" and to claim it pinned the `-gt 0` check's rc=2 behaviour.
+# Both were wrong, and measurement is what settled it: since `quota_knob_secs`
+# normalises at file scope BEFORE the first read, `QUOTA_POLL_MIN_INTERVAL=abc` IS 60
+# and behaves exactly like it -- with a fresh memo it serves it (`quota source:
+# loop-memo`, 0 polls), so it does not over-poll at all. The two-hour-old memo it was
+# seeded with was rejected on ordinary age, which is why deleting the `-gt 0` check
+# left it green. So it now asserts what actually holds and what actually matters: the
+# knob is REPLACED by the default and SAID SO, and a stale memo still cannot be served.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
       QUOTA_POLL_MIN_INTERVAL=abc "SEED_POLL_MEMO=$((now - 7200)) 97")"
-check "an unparseable interval over-polls, never over-trusts a stale memo" "1" \
+check "an unparseable interval falls back to the default, so a stale memo is not served" "1" \
   "$(fires_of "$r")"
+check "...and the fallback is ANNOUNCED for the poll interval too" "0" \
+  "$(grep -q "WARN: QUOTA_POLL_MIN_INTERVAL='abc' is not a usable number" "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 35. a FAILED poll is memoised too, so a 429 cannot become a storm --------
 # The failure mode #777 is about is self-inflicted: the correct response to a 429
@@ -766,6 +792,50 @@ check "an unusable memo value never reaches the log or the >= comparison" "1" \
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
       "SEED_POLL_MEMO=$((now + 7200)) 97")"
 check "a memo stamped in the FUTURE is not served (clock skew)" "1" "$(fires_of "$r")"
+
+# --- 37c. the EPOCH needs a length bound too, and on the memo path its absence was
+# a fail-OPEN. `$(( ))` wraps silently, so an epoch of 2^64+now computes an age
+# INSIDE the window and the memo's value is served as though freshly polled -- which
+# permits a fire, suppresses the real poll AND suppresses source 3. The same line is
+# merely fail-SAFE for `.last_quota` (a bogus reading falls through to the blind
+# allowance), so the polarity only flipped when the memo started sharing this parser.
+#
+# The epoch is built without 64-bit arithmetic, because bash cannot hold 2^64: split
+# the constant 18446744073709551616 after 8 digits and add `now` to the low 12, which
+# cannot carry (7.4e10 + 1.8e9 is still 11 digits). Yields the value measured by hand.
+# A live reader at a REFUSING 97% against a memo of a permissive 10%, so rejecting the
+# epoch polls and STOPs (0 fires) while serving it fires.
+# `$(date +%s)`, NOT the run-wide `$now`: the wrapped epoch has to land INSIDE
+# QUOTA_POLL_MIN_INTERVAL or the memo is rejected on ordinary age and the length bound
+# is never reached. `$now` is stamped up at case 9, minutes of driver runs earlier --
+# which made the first version of this case pass with the bound DELETED. Same trap the
+# review round already fixed once for case 37; caught here by the mutation pass again.
+bigepoch="18446744$(printf '%012d' $((73709551616 + $(date +%s))))"
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=97 \
+      "SEED_POLL_MEMO=$bigepoch 10")"
+check "a memo epoch too long to be a timestamp is not served (64-bit wrap)" "0" \
+  "$(fires_of "$r")"
+# ...and it refuses for the RIGHT reason -- the fresh 97% poll, not an UNREADABLE stop,
+# which would also show 0 fires here.
+check "...and it refuses on the freshly polled 97%, not by going blind" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 37d. the parser reads ONE line. `cat` took the epoch from line 1 and the value
+# from the LAST line, so a fresh stamp got paired with an unrelated old value. Seeded
+# with a fresh memoised FAILURE on line 1 and a stale permissive 10% on line 2:
+# correctly, line 1 wins, "-" is UNREADABLE, and studio's 97% refuses -> 0 fires.
+# Under `cat` the split yields epoch=now + value=10 and it fires. Both writers emit
+# one line, so this needs a partial or raced write -- but it is per-machine state a
+# manual run can touch, and the failure is a PERMITTED fire, not a refused one.
+# Line 1 must be FRESH (`$(date +%s)`, not `$now`) for the same reason as 37c: a stale
+# line 1 is rejected on age under BOTH behaviours and the case proves nothing.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 STUDIO_UTIL=0.97 \
+      "SEED_POLL_MEMO=$(date +%s) -"$'\n'"$((now - 7200)) 10")"
+check "a two-line memo does not pair line 1's epoch with the last line's value" "0" \
+  "$(fires_of "$r")"
+check "...and studio is what refuses, so the memoised failure really fell through" "0" \
+  "$(grep -q 'quota source: studio (7-day utilization 97%)' "$(logof "$r")" && echo 0 || echo 1)"
+
 # NOT tested here: a memo line with NO separator. The degrade (`%% *` and `##* ` both
 # yielding the whole string) makes the value a 10-digit epoch, which `quota_sane`
 # rejects on length -- so the memo path re-polls whether or not the separator check
@@ -817,18 +887,6 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=1 \
       "SEED_CACHE=$now 18446744073709551696")"
 check "an out-of-range CACHED value is rejected, not wrapped into a fake reading" "1" \
   "$(fires_of "$r")"
-
-# --- 43. a memo HIT is distinguishable from a live poll in the log ------------
-# `quota source: loop` is the evidence trail that decides when studio can be promoted
-# and the dashboard retired (C3). If a memo hit logged the same string, a source-2
-# death would cost nothing and say nothing -- which is exactly how #766 hid for its
-# whole life. The second read here is served from the memo and must say so.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
-      AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1)"
-check "a memo hit is logged as its own source, not as a poll" "0" \
-  "$(grep -q 'quota source: loop-memo' "$(logof "$r")" && echo 0 || echo 1)"
-check "...and the FIRST read still logs the live-poll source string" "0" \
-  "$(grep -q 'quota source: loop (7-day utilization 10%)' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
