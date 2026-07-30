@@ -163,6 +163,34 @@ export function containerRects(
 }
 
 /**
+ * `containerRects`'s rect map, with view nodes the DOC no longer has removed.
+ *
+ * The canvas holds nodes TWICE — the store's domain array and React Flow's view
+ * array — and a mutation lands in the store one render before the reconcile
+ * effect rebuilds the view. For that one render the view still carries a node
+ * the doc has dropped, and every box derived from it is computed against
+ * geometry that is about to move. Harmless for a container's own box (it is
+ * sized from its children, and a deleted child is no longer a member), but NOT
+ * harmless for the empty FALLBACK, which is placed relative to the union of ALL
+ * node rects: the phantom inflates those bounds, so a container emptied by
+ * deleting the graph's rightmost node is placed far right of where it will
+ * actually settle. Anything reading that position in the same render — the
+ * `revealTransform` pan (#785) — then acts on a stale answer and is never
+ * re-run, because the correcting render produces no new transition.
+ *
+ * Filtering here rather than at the reveal fixes it once for every reader, and
+ * removes the box's visible one-frame jump as a side effect.
+ */
+export function liveNodeRects(
+  viewRects: ReadonlyMap<string, Rect>,
+  docNodeIds: ReadonlySet<string>,
+): Map<string, Rect> {
+  const live = new Map<string, Rect>();
+  for (const [id, r] of viewRects) if (docNodeIds.has(id)) live.set(id, r);
+  return live;
+}
+
+/**
  * The pan for ONE axis: how far to move so `[near, near+size)` is on screen.
  *
  * Two thresholds, and the difference between them is the point. A box that is

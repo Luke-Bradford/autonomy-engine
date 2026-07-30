@@ -27,7 +27,12 @@ import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
-import { containerRects, revealTransform, type ContainerBox } from './containerLayout';
+import {
+  containerRects,
+  liveNodeRects,
+  revealTransform,
+  type ContainerBox,
+} from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
@@ -424,21 +429,29 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     containerBoxes: Map<string, ContainerBox>;
   }>(() => {
     if (containers.length === 0) return { containerNodes: [], containerBoxes: new Map() };
+    /* `liveNodeRects` drops a view node the DOC no longer has. The store is
+       mutated one render before the reconcile effect rebuilds `flowNodes`, so
+       without it every box is derived once from bounds that still include a
+       just-deleted node — see that function for why the empty fallback, and
+       hence the reveal below, is what that breaks. */
     const rects = containerRects(
       containers,
-      new Map(
-        flowNodes.map((n) => [
-          n.id,
-          {
-            x: n.position.x,
-            y: n.position.y,
-            width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
-            height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
-          },
-        ]),
+      liveNodeRects(
+        new Map(
+          flowNodes.map((n) => [
+            n.id,
+            {
+              x: n.position.x,
+              y: n.position.y,
+              width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
+              height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
+            },
+          ]),
+        ),
+        new Set(nodes.map((n) => n.id)),
       ),
     );
-    const nodes = containers.map((c) => {
+    const boxNodes = containers.map((c) => {
       const rect = rects.get(c.id)!;
       return {
         id: c.id,
@@ -519,8 +532,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-    return { containerNodes: nodes, containerBoxes: rects };
-  }, [containers, flowNodes, confirmDeleteContainer]);
+    return { containerNodes: boxNodes, containerBoxes: rects };
+  }, [containers, nodes, flowNodes, confirmDeleteContainer]);
 
   /**
    * #785 — a container that has just become EMPTY is panned into view.
@@ -554,6 +567,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     const empty = new Set(
       [...containerBoxes].filter(([, box]) => box.childCount === 0).map(([id]) => id),
     );
+    /* Read the pane BEFORE banking the set. React Flow reports 0x0 until it has
+       measured, and "I cannot tell what is visible" must not consume the
+       transition — returning here without recording leaves the next run (the
+       measurement changes `flowNodes`, which re-runs this) to retry, rather than
+       the reveal being silently forfeited. */
+    const { transform, width, height } = reactFlowStore.getState();
+    if (width <= 0 || height <= 0) return;
+
     const known = knownEmptyContainers.current;
     knownEmptyContainers.current = empty;
     if (known === null) return;
@@ -561,7 +582,6 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     const appeared = [...empty].filter((id) => !known.has(id));
     if (appeared.length === 0) return;
 
-    const { transform, width, height } = reactFlowStore.getState();
     const boxes = appeared
       .map((id) => containerBoxes.get(id))
       .filter((box): box is ContainerBox => box !== undefined);

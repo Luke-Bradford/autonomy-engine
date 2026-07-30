@@ -7,6 +7,7 @@ import {
   EMPTY_CONTAINER_SIZE,
   REVEAL_MARGIN,
   containerRects,
+  liveNodeRects,
   revealTransform,
   type Rect,
 } from './containerLayout';
@@ -304,5 +305,65 @@ describe('revealTransform — the minimum pan that brings a box on screen', () =
   it('aligns the TOP edge to the margin when the union is taller than the viewport', () => {
     const next = revealTransform([rect(100, 900, 220, 2000)], IDENTITY, W, H);
     expect(next).toEqual({ x: 0, y: REVEAL_MARGIN - 900, zoom: 1 });
+  });
+});
+
+/**
+ * `liveNodeRects` — the canvas holds nodes twice, and one copy is a render stale.
+ *
+ * A store mutation lands one render before the reconcile effect rebuilds React
+ * Flow's view array, so for that render the view still carries a node the doc has
+ * dropped. The empty-container FALLBACK is placed relative to the union of all
+ * node rects, so a phantom in that union puts the box somewhere it will not
+ * settle — and the #785 reveal reads that position exactly once, in exactly that
+ * render, and is never re-run to correct it.
+ */
+describe('liveNodeRects — dropping a view node the doc no longer has', () => {
+  it('keeps the rects the doc still has', () => {
+    const view = new Map([
+      ['a', rect(0, 0)],
+      ['b', rect(200, 0)],
+    ]);
+    const live = liveNodeRects(view, new Set(['a', 'b']));
+    expect([...live.keys()]).toEqual(['a', 'b']);
+    expect(live.get('a')).toEqual(rect(0, 0));
+  });
+
+  it('drops a rect for a node the doc has dropped', () => {
+    const view = new Map([
+      ['a', rect(0, 0)],
+      ['gone', rect(200, 0)],
+    ]);
+    expect([...liveNodeRects(view, new Set(['a'])).keys()]).toEqual(['a']);
+  });
+
+  it('does not mutate the map it was given', () => {
+    const view = new Map([['gone', rect(0, 0)]]);
+    liveNodeRects(view, new Set());
+    expect(view.size).toBe(1);
+  });
+
+  /**
+   * The failure this exists to stop, composed end to end.
+   *
+   * `child` is the graph's rightmost node and the container's only member. The
+   * render in which it is deleted from the doc still has it in the view array, so
+   * WITHOUT the filter the emptied box is placed clear of `child`'s old position
+   * — thousands of pixels from where the next render puts it, which is where the
+   * reveal pans to and then never corrects.
+   */
+  it('places an emptied box clear of the LIVE content, not of a phantom', () => {
+    const view = new Map([
+      ['keep', rect(0, 0)],
+      ['child', rect(2000, 0)],
+    ]);
+    const doc = new Set(['keep']);
+    const box = containerRects([stage('c_1', [])], liveNodeRects(view, doc)).get('c_1')!;
+    expect(box.x).toBe(150 + CONTAINER_GAP);
+    // What the phantom would have produced, stated so the test names the defect.
+    expect(box.x).not.toBe(2000 + 150 + CONTAINER_GAP);
+    // And it is the position the NEXT render settles on, so the box never jumps.
+    const settled = containerRects([stage('c_1', [])], new Map([['keep', rect(0, 0)]])).get('c_1')!;
+    expect(box).toEqual(settled);
   });
 });
