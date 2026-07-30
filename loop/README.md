@@ -22,7 +22,7 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 | `fire_stats.sh` | Per-fire cost/turn/tool report read from the stream-json logs |
 | `reload_schedule_once.sh` | Reload helper for the launchd schedule |
 | `install_studio_server.sh` | Installs the SUPERVISED studio server LaunchAgent the quota guard reads |
-| `test_install_studio_server.sh` | Sources the real installer; asserts the plist it renders. No launchd, no network |
+| `test_install_studio_server.sh` | Sources the real installer; asserts the plist it renders and the staleness/drift predicates. No launchd, no network |
 | `com.autonomy.studio-build-*.plist` | The launchd agents |
 | `com.autonomy.studio-server.plist.tmpl` | Template for the supervised studio server unit |
 
@@ -38,18 +38,57 @@ therefore measured *no server*, not the reader.
 ```sh
 loop/install_studio_server.sh              # provision, install, load, wait for /health
 loop/install_studio_server.sh --dry-run    # print the plist it would install; touch nothing
-loop/install_studio_server.sh --update     # alias for a re-run (see below)
+loop/install_studio_server.sh --status     # fetch, then report drift + unit state; changes nothing
+loop/install_studio_server.sh --update     # refresh to origin/main IF STALE (see below)
+loop/install_studio_server.sh --update --force   # rebuild even if the stamp says current
 loop/install_studio_server.sh --uninstall  # remove the unit; KEEPS the state dir (it holds a DB)
 ```
 
-The installer is idempotent, and `--update` is an **alias for running it again**, not a separate
-mode: the install path already fetches, resets the clone to `origin/main`, rebuilds and reloads. It
-exists only because "re-run the installer to update" is not obvious. Re-running while the unit is
-live is safe — the port-conflict check recognises the service's own pid as its own.
+The installer is idempotent, and re-running while the unit is live is safe — the port-conflict check
+recognises the service's own pid as its own.
 
-`--uninstall` is scoped to the `HOME` it is run under: it unloads the job only if *this* `HOME`
-actually has the plist. Without that scoping a run with a temp `HOME` unloads the operator's live
-service while reporting success, which is exactly what happened during review of this change.
+### Drift, and why there is no scheduled updater (#773)
+
+The clone is pinned to `origin/main` at install time and **nothing moves it forward on its own**, so
+it drifts indefinitely (measured 2026-07-30: the live clone was 14 commits and ~20h behind `main`).
+That is mild now and stops being mild after #410, when a fix to the quota reader would ship to `main`
+and never reach the process the spend guard actually asks.
+
+A scheduled updater is **deliberately not the answer**.
+`studio/docs/2026-07-30-packaging-and-updates.md` (approved 2026-07-30) rejects scheduled
+auto-update for this service by name, and the reasoning holds up against this repo's own evidence: a
+scheduled updater must not interrupt a running pipeline, so it needs an interlock, which needs
+starvation handling, which needs a rule about the loop's 03:05/21:05 windows. And the interlock
+really would starve — the driver run beginning `2026-07-26T02:05Z` ran for **74.7 hours**, so an
+interlock keyed on "a fire is running" would have skipped nine consecutive slots. Applying an update
+stays a human act; **#792 phase 2** owns making that act a click.
+
+So the job here is to make the human act cheap and the drift visible.
+
+**`--update` is a no-op when there is nothing to do**, so it is safe to run any time instead of being
+a minutes-long rebuild-and-bounce every time. Four properties, each asserted by the suite:
+
+- **Staleness is measured from a build stamp, not from `HEAD`.** `provision` does
+  `reset --hard origin/main` *before* `pnpm build`, so a failed build leaves `HEAD` already advanced.
+  Comparing `HEAD` would then read "current" forever while the service ran old code — a loud failure
+  turned into a silent permanent one. `built.sha` under the state dir is written only after a build
+  succeeds, so a failed build is retried rather than latched.
+- **A failed `git fetch` is UNKNOWN, never "current".** `origin/main` inside the clone is a cached
+  local ref, so a failed fetch leaves a stale one that compares equal to the stamp.
+- **"Current" includes actually answering.** A tree that built and bootstrapped but never served
+  satisfies every other check — `launchctl` prints `-` in the pid column for a job it is respawning
+  every 30s exactly as it does for a healthy idle one — so `/health` is part of the predicate,
+  retried three times so a blip does not buy a full rebuild.
+- **Concurrent runs are serialised** by a `mkdir` lock under the state dir, stolen after 60 minutes
+  so a killed install cannot wedge the next one, and stamped with the owner pid so a run never
+  deletes a lock it does not hold.
+
+**`--status` is the drift surface.** It prints the built, `HEAD` and `origin/main` shas, whether the
+server answers, the unit's state, and a plain `CURRENT`/`STALE` verdict. It **fetches first** — that
+is the difference between a drift report and a comforting one, because a status built on the cached
+ref fails in the same direction as the thing it monitors: the longer nobody updates, the more
+confidently it would say "current". Fetching touches refs only. (An HTTP surface for the running
+commit is #792's `GET /api/version`, which landed in `521c4f2`; this is the operator-side view.)
 
 Three isolation properties are load-bearing, each asserted by the test suite:
 
