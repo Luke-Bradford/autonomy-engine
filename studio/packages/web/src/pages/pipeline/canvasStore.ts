@@ -11,7 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
 import { retypeCollides, type EdgeCondition } from './edgeCondition';
-import { connectRejection, precomputeConnect } from './connectRules';
+import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -202,8 +202,10 @@ export interface CanvasState {
  * (`store.getState().addNode(...)`); the React canvas subscribes via
  * `useStore(store, selector)`. Actions are the SINGLE place the graph mutates,
  * which is what keeps the engine's global-id / no-dangling-edge invariants
- * intact: `deleteNode` cascades to incident edges and `connect` refuses a
- * self-loop or an endpoint that is not a current node.
+ * intact: `deleteNode` and `deleteContainer` (#748) both cascade to incident
+ * edges, `connect` refuses a self-loop or an endpoint that is not a current node
+ * OR container, and `loadVersion` drops an edge arriving from the server with an
+ * endpoint that resolves to neither (#786).
  */
 export function createCanvasStore(): StoreApi<CanvasState> {
   return createStore<CanvasState>((set, get) => ({
@@ -216,6 +218,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     addCount: 0,
 
     loadVersion(v) {
+      // Built ONCE rather than per edge, and from `connectRules`' own helper so
+      // the set the load filter trusts is the SAME set `connect` refuses an
+      // unknown endpoint against — see `edgeEndpointIds` for why containers
+      // belong in it.
+      const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
       set({
         // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
         // basis and the carry-forward source for the parts of the doc this slice
@@ -237,7 +244,40 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // load-bearing after the lowering — `lowerPipelineNodes` is
         // copy-on-write and hands back an unchanged node BY REFERENCE.
         nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
-        edges: v ? v.edges.map((e) => ({ ...e })) : [],
+        // #786 — DROP an edge whose endpoint resolves to nothing, for the same
+        // reason as the lowering above: the row is immutable, so it can never be
+        // repaired in place, and loading it raw makes the canvas disagree with
+        // what Save mints. Sharper here than a display mismatch, though — the
+        // #786 write-gate rule now REFUSES such a doc, and React Flow silently
+        // drops an edge whose endpoint is missing from its lookup, so an author
+        // opening a version minted before that rule would meet a red badge and a
+        // dead Save over an edge they can neither see, select nor delete: exactly
+        // the one-way trap #748 closed, re-created by the rule that closes the
+        // hole. Not authorable from here (`connect` refuses an unknown endpoint
+        // and both delete paths cascade), and the API and git-import routes are
+        // now closed by that same rule — so the ONLY remaining source is a row
+        // minted BEFORE it. A closed set that shrinks to nothing over time.
+        //
+        // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
+        // its docblock: a general normalise would hide `child 'Y' is not a node
+        // in this pipeline`, a real defect report about a doc that arrived
+        // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
+        // child's error names a container the author can see and — since #748 —
+        // delete, so surfacing it leads somewhere. A dangling edge is invisible
+        // and unselectable, so surfacing it leads nowhere and only blocks Save.
+        // Repair silently where the operator has no move; report where they do.
+        //
+        // The resolvable set is nodes UNION containers: a container id is a legal
+        // edge endpoint. Node ids alone would strip every container edge on load,
+        // and `toVersionBody` reads `edges` from the WORKING graph, so the next
+        // Save would mint that loss. Like the lowering, this deliberately does
+        // NOT set `dirty` — a reconciliation, not an author edit — and `loaded`
+        // keeps the server's doc verbatim as the record of what was stored.
+        edges: v
+          ? v.edges
+              .filter((e) => endpointIds.has(e.from) && endpointIds.has(e.to))
+              .map((e) => ({ ...e }))
+          : [],
         // #746 — containers are seeded as WORKING state, and the copy goes one
         // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
         // into the SERVER's version object, which this store does not own and

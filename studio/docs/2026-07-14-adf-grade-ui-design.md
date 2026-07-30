@@ -1120,6 +1120,15 @@ Decisions worth not re-deriving:
 - **A container is a legal EDGE ENDPOINT, so an empty one still gets a real box** — placed
   deterministically clear of the graph. An empty `stage` is a valid doc, and a min/max over no
   children is ±Infinity, which as an RF position renders garbage.
+- **An edge whose endpoint resolves to nothing is refused at save AND dropped on load (#786).**
+  The save gate now rejects an edge naming neither a node nor a container, which closes the hole
+  that let the canvas cascades be the only thing between an operator and a corrupt immutable
+  version. But that rule alone would have re-created #748's trap on docs minted BEFORE it: RF
+  renders nothing for an unresolvable endpoint (see above), so the author would face a red badge
+  and a dead Save over an edge they can neither see nor select. `loadVersion` therefore drops such
+  edges from the working graph on load — no `dirty`, `loaded` kept verbatim — following the #526
+  `config.outputs` lowering precedent. Repair silently where the operator has no move; report
+  where they do.
 - **One edit only — DELETE (#748) — and the aria route is RF's.** The box carries a confirmed
   delete button in its header band, which is what ends the one-way trap an emptied container used
   to be (an emptied `loop` blocked every save; an emptied `stage` saved itself into an immutable

@@ -510,9 +510,11 @@ Built entirely on the precomputed `topOutgoing`/`topIncoming` (`reduce.ts:171-18
 2. **Lookups are `?? []`, never `!`.** At top scope the maps are keyed by top-level entities, but
    their *values* can name a child when a cross-boundary edge exists (`reduce.ts:177-179` pushes
    `topNode → child` into `topOutgoing`), so the recursion can address an id the map has no key for.
-   `validateDoc` forbids that edge and is **advisory** (#444) — the same reason this whole predicate
-   must be robust on an unvalidated doc. The pre-F1b code already used `?? []`; not regressing it is
-   the requirement.
+   `validateDoc` forbids that edge, and while it IS a write gate (#444 — "advisory" here was wrong,
+   corrected in #786), **reads never validate**, so a version minted before a rule existed still
+   reaches the reducer carrying what that rule would now refuse. Same conclusion, sounder reason:
+   this whole predicate must be robust on an unvalidated doc. The pre-F1b code already used `?? []`;
+   not regressing it is the requirement.
 
 ```ts
 const ran = (id) => ['success', 'failure'].includes(endpointOutcome(id, state));
@@ -791,8 +793,10 @@ expected — do not treat the intermediate state as a regression.
    always bounces (or caps) before the predicate ever sees its source sitting terminal-`failure`. The
    one shape that reaches the predicate holding a back-edge is one whose reset body can **never** go
    terminal — a body node inside a skipped container — which `validateDoc` rejects ("makes no
-   progress") but which reaches the reducer unchecked via git import or a direct POST, because
-   `validateDoc` is advisory (#444). Pre-F1b that doc reported **`success`** on a run whose node
+   progress") but which can still reach the reducer — NOT via git import or a direct POST, both of
+   which funnel through the write gate ("advisory" was wrong here too, corrected in #786), but
+   because reads never validate, so a version minted before that rule existed still runs. Pre-F1b
+   that doc reported **`success`** on a run whose node
    failed with a handler that could never run (mutation-verified in both directions). Forward-only
    absorption closes it. Both halves are pinned.
 3. **F2b + F2c together** — `retry_pending`, the `scheduleRetry`/`retryScheduled`/`retryDue` triple,

@@ -948,6 +948,143 @@ describe('validateDoc — global id uniqueness', () => {
   });
 });
 
+// ===========================================================================
+// Edge ENDPOINT EXISTENCE (#786). An edge whose `from`/`to` names nothing in
+// the doc used to validate CLEAN and mint into an immutable — therefore
+// unrepairable — version. This is the backstop UNDER the canvas cascades:
+// before this rule they were the only thing between an operator and a corrupt
+// version. REFUSED, never pruned: mirrors the dangling container-CHILD rule
+// (`child 'Y' is not a node in this pipeline`), and silently dropping an edge
+// out of a submitted doc is the fail-open direction.
+// ===========================================================================
+
+describe('validateDoc — edge endpoints must exist (#786)', () => {
+  it("refuses an edge whose 'from' names nothing", () => {
+    const d = doc([node('after')], [edge('ghost', 'after', 'success')]);
+    expect(validateDoc(d).join(' ')).toContain(
+      "edge 'ghost->after:success': from 'ghost' is not a node or container in this pipeline",
+    );
+  });
+
+  it("refuses an edge whose 'to' names nothing", () => {
+    const d = doc([node('a')], [edge('a', 'ghost', 'success')]);
+    expect(validateDoc(d).join(' ')).toContain(
+      "edge 'a->ghost:success': to 'ghost' is not a node or container in this pipeline",
+    );
+  });
+
+  it('reports BOTH endpoints of a wholly dangling edge', () => {
+    const d = doc([node('a')], [edge('ghost_a', 'ghost_b', 'success')]);
+    const errs = validateDoc(d);
+    expect(errs.some((e) => e.includes("from 'ghost_a'"))).toBe(true);
+    expect(errs.some((e) => e.includes("to 'ghost_b'"))).toBe(true);
+  });
+
+  it('refuses every operational outcome, not just success', () => {
+    for (const on of ['failure', 'completion', 'skipped'] as const) {
+      const d = doc([node('a')], [edge('a', 'ghost', on)]);
+      expect(validateDoc(d).join(' ')).toContain("to 'ghost' is not a node or container");
+    }
+  });
+
+  // Suppression is decided PER EDGE by a predicate, so a shared id cannot
+  // cross-suppress. Nothing validates edge-id uniqueness, so the obvious
+  // refactor — collect the dangling edges into a `Set` keyed on `e.id` — would
+  // silently let one dangling edge take a well-formed namesake's diagnostics
+  // with it. This test is what fails if anyone reintroduces that shape.
+  it('does not let a dangling edge suppress a NAMESAKE edge that is well formed', () => {
+    const d = doc(
+      [node('a'), node('outside')],
+      [
+        // Both carry id 'e1'. The first dangles; the second is a real
+        // container-boundary violation (a child may only leave via its container).
+        edge('ghost', 'a', 'success', { id: 'e1' }),
+        edge('a', 'outside', 'success', { id: 'e1' }),
+      ],
+      [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    );
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("from 'ghost' is not a node or container");
+    expect(errs).toContain('crosses a container boundary');
+  });
+
+  // A dangling `to` must not suppress a rule that reads only `from` — the branch
+  // edge below has TWO independent faults and the author should see both rather
+  // than pay a save round-trip per error.
+  it('reports a non-branching SOURCE alongside a dangling target', () => {
+    const d = doc([node('a')], [{ id: 'e1', from: 'a', to: 'ghost', on: 'branch', branch: 'x' }]);
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost' is not a node or container");
+    expect(errs).toContain("source 'a' is not a branching activity");
+  });
+
+  // `maxBounces` needs no id to resolve, so it is reported even when the
+  // back-edge's endpoint is absent; ancestry and no-progress are not, because
+  // both would be wrong answers about an id that is not there.
+  it('still demands maxBounces on a dangling back-edge, but not ancestry/progress', () => {
+    const d = doc([node('a')], [edge('a', 'ghost_loop', 'success', { back: true })]);
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost_loop' is not a node or container");
+    expect(errs).toContain('must declare maxBounces');
+    expect(errs).not.toContain('must be an ancestor');
+    expect(errs).not.toContain('makes no progress');
+  });
+
+  // The container-boundary rule reads BOTH endpoints, and its predicate is
+  // `owner.get(from) !== owner.get(to)` — so an absent id's very ABSENCE from the
+  // ownership map made it report a crossing into a container that does not exist.
+  it('does not report a container-boundary crossing into an id that does not exist', () => {
+    const d = doc(
+      [node('a'), node('b')],
+      [edge('a', 'ghost', 'success')],
+      [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    );
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost' is not a node or container");
+    expect(errs).not.toContain('crosses a container boundary');
+  });
+
+  // A CONTAINER id is a legal edge endpoint — `from`/`to` is one string field
+  // over the shared node/container namespace. The over-rejection guard: this
+  // rule must resolve against nodes UNION containers, never nodes alone.
+  it('accepts a container as an edge endpoint', () => {
+    const d = doc(
+      [node('a'), node('b')],
+      [edge('stage_1', 'b', 'success')],
+      [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
+    );
+    expect(validateDoc(d).join(' ')).not.toContain('is not a node or container');
+  });
+
+  // The TRUE diagnosis REPLACES the misleading derived one. A dangling branch
+  // source used to be reported as "not a branching activity" — a wrong answer
+  // about a node that does not exist.
+  it('replaces the not-a-branching-activity misdiagnosis on a dangling branch source', () => {
+    const d = doc(
+      [node('b')],
+      [{ id: 'e1', from: 'ghost_if', to: 'b', on: 'branch', branch: 'true' }],
+    );
+    const errs = validateDoc(d);
+    expect(errs.join(' ')).toContain("from 'ghost_if' is not a node or container");
+    expect(errs.join(' ')).not.toContain('is not a branching activity');
+  });
+
+  // Same for a back-edge, which otherwise emits up to THREE misdiagnoses
+  // (ancestry, no-progress, maxBounces) about an id that is simply absent.
+  it('replaces the ancestry/no-progress misdiagnoses on a dangling back-edge', () => {
+    const d = doc([node('a')], [edge('a', 'ghost_loop', 'success', { back: true, maxBounces: 2 })]);
+    const errs = validateDoc(d);
+    expect(errs.join(' ')).toContain("to 'ghost_loop' is not a node or container");
+    expect(errs.join(' ')).not.toContain('must be an ancestor');
+    expect(errs.join(' ')).not.toContain('makes no progress');
+  });
+
+  it('still validates a well-formed doc clean', () => {
+    const d = doc([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    expect(validatePipelineDoc(d)).toEqual([]);
+  });
+});
+
 describe('validateDoc — container boundary encapsulation', () => {
   it('rejects a forward edge from a child to an OUTSIDE top-level node', () => {
     // `a` is a child of stg; a -> b crosses the container boundary.

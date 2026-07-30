@@ -1622,6 +1622,8 @@ export interface ValidateDocOptions {
  * PURE structural validation of a pipeline's P2c constructs, at SAVE time
  * (complements `validateRefs`, which checks the `${}` language). Returns error
  * strings (`[]` = valid). Enforces:
+ *  - every edge endpoint EXISTS, as a node or a container (#786) — and a
+ *    dangling one suppresses the rules that would otherwise misdiagnose it;
  *  - container children exist as nodes and are DISJOINT across containers;
  *  - a loop declares an `exitWhen` (a `maxRounds` is only the round cap, never
  *    the exit condition) and has at least one child (an empty loop re-rounds
@@ -1678,6 +1680,39 @@ export function validateDoc(
           '(node and container ids share one namespace)',
       );
     } else idKind.set(c.id, 'container');
+  }
+
+  // EDGE ENDPOINT EXISTENCE (#786). `from`/`to` is ONE string field over the
+  // shared namespace built above, so an edge may legally name a node OR a
+  // container — but an edge naming NEITHER used to validate clean and mint into
+  // an immutable, therefore UNREPAIRABLE, version. This rule is the backstop
+  // under the canvas cascades (`deleteNode`/`deleteContainer`), which until now
+  // were the only thing standing between an operator and a corrupt version.
+  //
+  // REFUSED, never pruned: silently dropping an edge out of a submitted doc is
+  // the fail-open direction, and every other rule in this function refuses too
+  // — the closest analogue being the dangling container-CHILD rule below.
+  //
+  // Resolved against the AUTHORED `doc.edges` only, which is why no synthesized
+  // id needs an exemption. The `@`-suffixed per-item instance keys of a parallel
+  // foreach are minted by `instanceKey` (`instance-key.ts`) inside the REDUCER,
+  // never by anything in this file, and never reach an authored edge — `'@'` is
+  // in fact REFUSED in doc ids once `batchCount >= 2` (see below).
+  //
+  // Two PREDICATES rather than a set of dangling edges, so each rule below can
+  // say which endpoint it actually depends on. A set would have to be keyed on
+  // the edge object (nothing validates edge-id uniqueness, so an id-keyed one
+  // would let a dangling edge suppress a well-formed namesake's diagnostics) —
+  // predicates make that whole hazard unrepresentable instead of defended.
+  const fromExists = (e: Edge): boolean => idKind.has(e.from);
+  const endpointsExist = (e: Edge): boolean => idKind.has(e.from) && idKind.has(e.to);
+  for (const e of doc.edges) {
+    if (!idKind.has(e.from)) {
+      errors.push(`edge '${e.id}': from '${e.from}' is not a node or container in this pipeline`);
+    }
+    if (!idKind.has(e.to)) {
+      errors.push(`edge '${e.id}': to '${e.to}' is not a node or container in this pipeline`);
+    }
   }
 
   // A CORRUPT `config.outputs` (#1 F13a). Reported HERE as a readable
@@ -1892,6 +1927,16 @@ export function validateDoc(
   // the message below stays here, so this validator's error ARRAY is unchanged.
   for (const e of doc.edges) {
     if (e.back) continue;
+    // #786, same reason as the branch and back-edge loops — and this one is NOT
+    // self-neutralising, which a first reading assumed it was. The predicate is
+    // `owner.get(from) !== owner.get(to)`, so an absent id's very ABSENCE from
+    // `childOwner` makes the comparison unequal whenever the other endpoint is a
+    // child: `a → ghost` with `a` inside a stage reports a boundary crossing to a
+    // container that does not exist. `endpointsExist` because this rule reads
+    // BOTH endpoints. (A ghost LISTED as a container's child does get an
+    // owner — `containerMembership` is built over raw `children` — so the
+    // mirror shape misfires too.)
+    if (!endpointsExist(e)) continue;
     if (crossesContainerBoundary(childOwner, e.from, e.to)) {
       // Looked up INSIDE the branch: the owners are message material only, and
       // the overwhelmingly common edge does not cross, so the non-crossing pass
@@ -1918,6 +1963,15 @@ export function validateDoc(
   // extends `declaredBranchesOf` with the node's configured case labels + default.
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
+    // A dangling source is already reported by its true name (#786). Falling
+    // through would add "is not a branching activity" — a wrong ANSWER about a
+    // node that simply does not exist. One true error beats two, one misleading.
+    //
+    // `fromExists`, NOT `endpointsExist`: this rule reads only the source, so a
+    // dangling `to` must not suppress it. Such a branch edge has two independent
+    // faults — an absent target AND a source that cannot route — and reporting
+    // one fault per save costs the author a round trip.
+    if (!fromExists(e)) continue;
     const src = nodeById.get(e.from);
     const branches = src === undefined ? undefined : declaredBranchesOf(src);
     if (branches === undefined) {
@@ -1951,16 +2005,26 @@ export function validateDoc(
   const reach = forwardReach(doc, containers);
   for (const e of doc.edges) {
     if (!e.back) continue;
+    // `maxBounces` FIRST, before the #786 skip below: its absence needs no id to
+    // resolve, so it is independently true of a dangling endpoint and is reported
+    // either way. (An earlier draft skipped it too and documented the deferral as
+    // a conscious trade — it isn't one, it is just avoidable.)
+    if (e.maxBounces === undefined) {
+      errors.push(
+        `back-edge '${e.id}': must declare maxBounces ` + '(an unbounded back-edge loops forever)',
+      );
+    }
+    // The two rules BELOW both resolve ids, so a dangling endpoint would draw
+    // derived misdiagnoses from each (#786): ancestry, because an absent id
+    // reaches nothing, and no-progress, because a reset body cannot contain an
+    // absent source. Both would be wrong answers about an id that is simply not
+    // there, burying the one error that explains them.
+    if (!endpointsExist(e)) continue;
     const fromTarget = reach.get(e.to) ?? new Set<string>();
     if (!fromTarget.has(e.from)) {
       errors.push(
         `back-edge '${e.id}': its target '${e.to}' must be an ancestor of '${e.from}' ` +
           '(a loop/stage container or an upstream node that reaches it)',
-      );
-    }
-    if (e.maxBounces === undefined) {
-      errors.push(
-        `back-edge '${e.id}': must declare maxBounces ` + '(an unbounded back-edge loops forever)',
       );
     }
     const body = backEdgeResetBody(e, nodeIdList, descendants, containerById);
