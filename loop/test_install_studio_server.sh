@@ -692,6 +692,41 @@ check "and is not misreported as a concurrent install" "0" \
 check "and says what was actually wrong" "1" \
   "$(has 'cannot create the state dir' "$sb/nolock.out")"
 
+echo "== an OLD lock is not automatically an abandoned one =="
+# Age is not abandonment. A cold `pnpm install` plus a full build can run past an
+# hour on a slow link, and stealing that run's lock is not a recovery -- both runs
+# then race `reset --hard`, build and bootstrap in one tree, which is the exact
+# corruption the lock exists to prevent. The owner stamp makes the real question
+# answerable: is that process still there.
+sb="$(installed_sandbox)"
+mkdir -p "$sb/state/.install.lock"
+printf '%s\n' "$$" >"$sb/state/.install.lock/owner"   # a pid that IS alive: us
+touch -t 200001010000 "$sb/state/.install.lock"        # ...and an ancient mtime
+: >"$sb/pnpm.calls"
+( load_sut "$sb"; GIT_ORIGIN_SHA="newsha1" LOADED_LABELS="$LOADED" main --update \
+    --port 8788 --state-dir "$sb/state" --repo-src "$sb/src" \
+    --node /usr/bin/node ) >"$sb/livelock.out" 2>&1
+check "an old lock with a LIVE owner is not stolen" "1" \
+  "$(has 'will NOT be stolen' "$sb/livelock.out")"
+check "and the run defers instead of building" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
+check "and the lock survives" "1" \
+  "$([ -d "$sb/state/.install.lock" ] && echo 1 || echo 0)"
+
+# ...but a lock whose owner is genuinely gone must still be recoverable, or one
+# killed install wedges every later run forever.
+sb="$(installed_sandbox)"
+( exit 0 ) & dead_pid=$!; wait "$dead_pid" 2>/dev/null   # a pid that is definitely NOT alive
+mkdir -p "$sb/state/.install.lock"
+printf '%s\n' "$dead_pid" >"$sb/state/.install.lock/owner"
+touch -t 200001010000 "$sb/state/.install.lock"
+: >"$sb/pnpm.calls"
+( load_sut "$sb"; GIT_ORIGIN_SHA="newsha1" LOADED_LABELS="$LOADED" main --update \
+    --port 8788 --state-dir "$sb/state" --repo-src "$sb/src" \
+    --node /usr/bin/node ) >"$sb/deadlock.out" 2>&1
+check "an old lock with a DEAD owner is stolen" "1" \
+  "$(has 'removing an abandoned lock' "$sb/deadlock.out")"
+check "and the run proceeds" "1" "$(has ' build$' "$sb/pnpm.calls")"
+
 echo "== a lock that cannot be CREATED is not a conflict =="
 # `mkdir` reports EEXIST and "permission denied" identically, so without looking
 # at the directory itself a real failure is announced as "another install is in

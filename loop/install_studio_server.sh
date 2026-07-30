@@ -446,7 +446,24 @@ acquire_lock() {
   [ "$al_tl" -eq 2 ] && { die "cannot create the lock at $LOCK_DIR"; return 2; }
   al_age="$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)"
   if [ -n "$al_age" ]; then
-    say "warning: removing an abandoned lock at $LOCK_DIR (older than 60m)"
+    # AGE IS NOT ABANDONMENT. A cold `pnpm install` plus a full build can run
+    # past an hour on a slow link, and stealing that run's lock is not a
+    # recovery: both runs then race `reset --hard`, build and bootstrap in one
+    # tree, which is the corruption this lock exists to prevent. The owner stamp
+    # makes the real question answerable -- is that process still there.
+    #
+    # `kill -0` tests existence, not delivery, and both runs are the same user so
+    # EPERM is not in play. Pid reuse could in principle make a recycled pid look
+    # like the owner; that costs a deferred run, never a stolen lock, which is
+    # the safe direction to be wrong in.
+    al_owner="$(cat "$LOCK_DIR/owner" 2>/dev/null)"
+    if [ -n "$al_owner" ] && kill -0 "$al_owner" 2>/dev/null; then
+      say "lock at $LOCK_DIR is older than 60m but will NOT be stolen: its owner
+  (pid $al_owner) is still running, so it is not abandoned. A cold install plus
+  a full build can legitimately take this long."
+      return 1
+    fi
+    say "warning: removing an abandoned lock at $LOCK_DIR (older than 60m, owner ${al_owner:-unknown} is gone)"
     rm -rf "$LOCK_DIR"
     # Same rc split as above. Falling through unconditionally would report a
     # failed retry as "another install is in progress" even when the retry
