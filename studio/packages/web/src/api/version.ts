@@ -1,4 +1,9 @@
-import { BuildInfoSchema, type BuildInfo } from '@autonomy-studio/shared';
+import {
+  BuildInfoSchema,
+  UpdateStatusSchema,
+  type BuildInfo,
+  type UpdateStatus,
+} from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
 /**
@@ -8,4 +13,10 @@ import { apiFetch } from './client';
  */
 export function getVersion(signal?: AbortSignal): Promise<BuildInfo> {
   return apiFetch('/api/version', { schema: BuildInfoSchema, signal });
+}
+
+/** Compares the running build against the published one. See `UpdateStatusSchema`
+ * for why `latest: null` and `updateAvailable: false` are deliberately distinct. */
+export function getUpdateStatus(signal?: AbortSignal): Promise<UpdateStatus> {
+  return apiFetch('/api/update/available', { schema: UpdateStatusSchema, signal });
 }

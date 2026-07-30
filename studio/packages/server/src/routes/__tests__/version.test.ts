@@ -46,4 +46,14 @@ describe('GET /api/version', () => {
     expect(res.json()).toEqual({ ok: true });
     await app.close();
   });
+
+  it('serves an update status that names the running build', async () => {
+    const app = await buildTestApp();
+    const res = await app.inject({ method: 'GET', url: '/api/update/available' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { current: { version: string }; updateAvailable: boolean };
+    expect(typeof body.current.version).toBe('string');
+    expect(typeof body.updateAvailable).toBe('boolean');
+    await app.close();
+  });
 });

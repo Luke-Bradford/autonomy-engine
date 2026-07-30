@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { resolveBuildInfo } from '../build-info.js';
+import { checkForUpdate } from '../update/check.js';
 
 /**
  * This module compiles to `dist/routes/version.js`, so TWO levels up from its
@@ -24,4 +25,5 @@ export const MANIFEST_PATH = join(
 export function versionRoutes(fastify: FastifyInstance): void {
   const info = resolveBuildInfo(MANIFEST_PATH);
   fastify.get('/api/version', () => info);
+  fastify.get('/api/update/available', () => checkForUpdate(info));
 }

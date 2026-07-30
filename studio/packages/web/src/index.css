@@ -280,6 +280,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.update-banner {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 2rem;
+  font-size: 0.85rem;
+}
+
 /* The Home hub's signposts. There is no global anchor rule in this file — the
    MVP pages navigate with buttons — so without this the links render in the
    browser's default blue/purple, which is the one palette in the app that does
