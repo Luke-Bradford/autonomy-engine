@@ -948,6 +948,86 @@ describe('validateDoc — global id uniqueness', () => {
   });
 });
 
+// ===========================================================================
+// Edge ENDPOINT EXISTENCE (#786). An edge whose `from`/`to` names nothing in
+// the doc used to validate CLEAN and mint into an immutable — therefore
+// unrepairable — version. This is the backstop UNDER the canvas cascades:
+// before this rule they were the only thing between an operator and a corrupt
+// version. REFUSED, never pruned: mirrors the dangling container-CHILD rule
+// (`child 'Y' is not a node in this pipeline`), and silently dropping an edge
+// out of a submitted doc is the fail-open direction.
+// ===========================================================================
+
+describe('validateDoc — edge endpoints must exist (#786)', () => {
+  it("refuses an edge whose 'from' names nothing", () => {
+    const d = doc([node('after')], [edge('ghost', 'after', 'success')]);
+    expect(validateDoc(d).join(' ')).toContain(
+      "edge 'ghost->after:success': from 'ghost' is not a node or container in this pipeline",
+    );
+  });
+
+  it("refuses an edge whose 'to' names nothing", () => {
+    const d = doc([node('a')], [edge('a', 'ghost', 'success')]);
+    expect(validateDoc(d).join(' ')).toContain(
+      "edge 'a->ghost:success': to 'ghost' is not a node or container in this pipeline",
+    );
+  });
+
+  it('reports BOTH endpoints of a wholly dangling edge', () => {
+    const d = doc([node('a')], [edge('ghost_a', 'ghost_b', 'success')]);
+    const errs = validateDoc(d);
+    expect(errs.some((e) => e.includes("from 'ghost_a'"))).toBe(true);
+    expect(errs.some((e) => e.includes("to 'ghost_b'"))).toBe(true);
+  });
+
+  it('refuses every operational outcome, not just success', () => {
+    for (const on of ['failure', 'completion', 'skipped'] as const) {
+      const d = doc([node('a')], [edge('a', 'ghost', on)]);
+      expect(validateDoc(d).join(' ')).toContain("to 'ghost' is not a node or container");
+    }
+  });
+
+  // A CONTAINER id is a legal edge endpoint — `from`/`to` is one string field
+  // over the shared node/container namespace. The over-rejection guard: this
+  // rule must resolve against nodes UNION containers, never nodes alone.
+  it('accepts a container as an edge endpoint', () => {
+    const d = doc(
+      [node('a'), node('b')],
+      [edge('stage_1', 'b', 'success')],
+      [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
+    );
+    expect(validateDoc(d).join(' ')).not.toContain('is not a node or container');
+  });
+
+  // The TRUE diagnosis REPLACES the misleading derived one. A dangling branch
+  // source used to be reported as "not a branching activity" — a wrong answer
+  // about a node that does not exist.
+  it('replaces the not-a-branching-activity misdiagnosis on a dangling branch source', () => {
+    const d = doc(
+      [node('b')],
+      [{ id: 'e1', from: 'ghost_if', to: 'b', on: 'branch', branch: 'true' }],
+    );
+    const errs = validateDoc(d);
+    expect(errs.join(' ')).toContain("from 'ghost_if' is not a node or container");
+    expect(errs.join(' ')).not.toContain('is not a branching activity');
+  });
+
+  // Same for a back-edge, which otherwise emits up to THREE misdiagnoses
+  // (ancestry, no-progress, maxBounces) about an id that is simply absent.
+  it('replaces the ancestry/no-progress misdiagnoses on a dangling back-edge', () => {
+    const d = doc([node('a')], [edge('a', 'ghost_loop', 'success', { back: true, maxBounces: 2 })]);
+    const errs = validateDoc(d);
+    expect(errs.join(' ')).toContain("to 'ghost_loop' is not a node or container");
+    expect(errs.join(' ')).not.toContain('must be an ancestor');
+    expect(errs.join(' ')).not.toContain('makes no progress');
+  });
+
+  it('still validates a well-formed doc clean', () => {
+    const d = doc([node('a'), node('b')], [edge('a', 'b', 'success')]);
+    expect(validatePipelineDoc(d)).toEqual([]);
+  });
+});
+
 describe('validateDoc — container boundary encapsulation', () => {
   it('rejects a forward edge from a child to an OUTSIDE top-level node', () => {
     // `a` is a child of stg; a -> b crosses the container boundary.

@@ -71,6 +71,23 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
   });
 
+  it('REFUSES an edge naming a node that does not exist (#786)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+        edges: [{ id: 'e1', from: 'ghost', to: 'a', on: 'success' }],
+      }),
+    ).toThrow(InvalidPipelineDocError);
+    // The same refusal reasoning as the cycle case above: a dangling endpoint
+    // that got through would be frozen into an immutable row for good. This
+    // gate is the single funnel for the save route, git import and
+    // workspace-apply alike, so all three are closed by the one rule.
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+  });
+
   it("REFUSES a container's ghost child (the #487 doc)", () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });

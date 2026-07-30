@@ -208,16 +208,20 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
     /* The incident edge `loop_1 -> after`, asserted on the MINTED VERSION rather
-       than on screen — the only place the claim is observable.
-       Mutation-testing this spec is what forced the change: an on-screen check
-       (`[aria-label*="from loop_1"]` gone) and the save SUCCEEDING both stay
-       green with the cascade deleted, for two independent reasons. React Flow
-       drops an edge whose endpoint is missing from its lookup, silently, so the
-       stranded edge disappears from the DOM either way; and the write gate does
-       not refuse one either — an edge naming a container that no longer exists
-       passes `validatePipelineDoc` clean today (measured, filed as #786). So the
-       cascade has no backstop anywhere, and reading the version back is the only
-       assertion that fails when it is removed. */
+       than on screen — still the most DIRECT place the claim is observable.
+       Mutation-testing this spec is what forced that choice: an on-screen check
+       (`[aria-label*="from loop_1"]` gone) stays green with the cascade deleted,
+       because React Flow silently drops an edge whose endpoint is missing from
+       its lookup, so the stranded edge leaves the DOM either way.
+       When this was written the save succeeding stayed green too — the write gate
+       accepted a dangling endpoint, so the cascade had no backstop anywhere and
+       reading the version back was the ONLY assertion that could fail. #786 has
+       since closed that hole: `validatePipelineDoc` now refuses an edge naming an
+       id the doc does not contain, so removing the cascade is caught THREE times
+       over — the validation badge above (`canSave` runs the same rule), the Save
+       returning 400 instead of 'Saved v2.', and this read-back. Kept as the
+       direct assertion regardless: it names the actual property, and it is the
+       one that survives if either of the other two is ever loosened. */
     const v2 = (await (
       await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions/2`)
     ).json()) as { nodes: Array<{ id: string }>; edges: unknown[]; containers: unknown[] };

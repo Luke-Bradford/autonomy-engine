@@ -1680,6 +1680,38 @@ export function validateDoc(
     } else idKind.set(c.id, 'container');
   }
 
+  // EDGE ENDPOINT EXISTENCE (#786). `from`/`to` is ONE string field over the
+  // shared namespace built above, so an edge may legally name a node OR a
+  // container — but an edge naming NEITHER used to validate clean and mint into
+  // an immutable, therefore UNREPAIRABLE, version. This rule is the backstop
+  // under the canvas cascades (`deleteNode`/`deleteContainer`), which until now
+  // were the only thing standing between an operator and a corrupt version.
+  //
+  // REFUSED, never pruned: silently dropping an edge out of a submitted doc is
+  // the fail-open direction, and every other rule in this function refuses too
+  // — the closest analogue being the dangling container-CHILD rule below.
+  //
+  // Resolved against the AUTHORED `doc.edges` only. The `@`-suffixed per-item
+  // instance keys a parallel foreach uses are synthesized by `computeGraph` at
+  // RUN time and never appear in an authored edge — `'@'` is in fact REFUSED in
+  // doc ids once `batchCount >= 2` (see below) — so no exemption is needed.
+  //
+  // Keyed on the edge OBJECT, not its id: nothing validates edge-id uniqueness,
+  // so an id-keyed set would let one dangling edge suppress the downstream
+  // diagnostics of a well-formed namesake.
+  const danglingEdges = new Set<Edge>();
+  for (const e of doc.edges) {
+    for (const [side, id] of [
+      ['from', e.from],
+      ['to', e.to],
+    ] as const) {
+      if (!idKind.has(id)) {
+        errors.push(`edge '${e.id}': ${side} '${id}' is not a node or container in this pipeline`);
+        danglingEdges.add(e);
+      }
+    }
+  }
+
   // A CORRUPT `config.outputs` (#1 F13a). Reported HERE as a readable
   // diagnostic so the authoring UI can show it; `StrictNodeSchema` is what
   // actually REFUSES it on save — it runs FIRST, so this rule is unreachable
@@ -1918,6 +1950,10 @@ export function validateDoc(
   // extends `declaredBranchesOf` with the node's configured case labels + default.
   for (const e of doc.edges) {
     if (e.on !== 'branch') continue;
+    // A dangling source is already reported by its true name (#786). Falling
+    // through would add "is not a branching activity" — a wrong ANSWER about a
+    // node that simply does not exist. One true error beats two, one misleading.
+    if (danglingEdges.has(e)) continue;
     const src = nodeById.get(e.from);
     const branches = src === undefined ? undefined : declaredBranchesOf(src);
     if (branches === undefined) {
@@ -1951,6 +1987,13 @@ export function validateDoc(
   const reach = forwardReach(doc, containers);
   for (const e of doc.edges) {
     if (!e.back) continue;
+    // Same as the branch loop above (#786): a dangling endpoint would otherwise
+    // draw up to THREE derived misdiagnoses here — ancestry (an absent id
+    // reaches nothing), no-progress (its reset body cannot include an absent
+    // source), and maxBounces. `maxBounces` presence is genuinely deferred until
+    // the ref is fixed and the doc re-validated; that is the right trade against
+    // burying the one error that explains the other three.
+    if (danglingEdges.has(e)) continue;
     const fromTarget = reach.get(e.to) ?? new Set<string>();
     if (!fromTarget.has(e.from)) {
       errors.push(

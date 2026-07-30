@@ -56,6 +56,56 @@ describe('canvasStore', () => {
     expect(st.nodes).not.toBe(version().nodes);
   });
 
+  // #786 — a version minted BEFORE the endpoint-existence rule can carry an
+  // edge naming nothing. React Flow silently drops such an edge, so the author
+  // can neither see, select nor delete it; leaving it in the working graph would
+  // mean a red badge and a dead Save with no affordance — the one-way trap #748
+  // just closed, re-created by the very rule that closes the hole. Dropped on
+  // load, exactly like the #526 `config.outputs` lowering in the same function.
+  describe('loadVersion drops an unresolvable edge endpoint (#786)', () => {
+    const dangling = () =>
+      version({
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+          { id: 'e_ghost', from: 'gone', to: 'n_b', on: 'success' },
+          { id: 'e_ghost2', from: 'n_a', to: 'gone', on: 'failure' },
+        ],
+      });
+
+    it('keeps the resolvable edges and drops the dangling ones', () => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(dangling());
+      expect(s.getState().edges.map((e) => e.id)).toEqual(['e_1']);
+    });
+
+    it('does NOT mark the canvas dirty — a display reconciliation, not an author edit', () => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(dangling());
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    it('leaves `loaded` carrying the SERVER doc verbatim, as the record', () => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(dangling());
+      expect(s.getState().loaded?.edges).toHaveLength(3);
+    });
+
+    // The over-rejection guard: a CONTAINER is a legal edge endpoint, so the
+    // resolvable set is nodes UNION containers. Resolving against node ids alone
+    // would silently strip every container edge on load — and `toVersionBody`
+    // takes `edges` from the working graph, so the next Save would mint the loss.
+    it('keeps an edge whose endpoint is a CONTAINER, not a node', () => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(
+        version({
+          containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], join: 'all' }],
+          edges: [{ id: 'e_c', from: 'stage_1', to: 'n_b', on: 'success' }],
+        }),
+      );
+      expect(s.getState().edges.map((e) => e.id)).toEqual(['e_c']);
+    });
+  });
+
   it('rebaseLoaded repoints `loaded` but keeps the working graph and dirty flag', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version({ version: 1 }));
