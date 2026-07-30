@@ -1,4 +1,5 @@
 export * from './version.js';
+export * from './build-info.js';
 export * from './api-error.js';
 export * from './pagination.js';
 export * from './connection.js';

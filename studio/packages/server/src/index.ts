@@ -46,6 +46,7 @@ import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
 import { quotaRoutes } from './routes/quota.js';
+import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
   UNREADABLE_ACCOUNT_QUOTA_READER,
@@ -749,6 +750,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   });
   await fastify.register(workspaceAuditRoutes);
   await fastify.register(quotaRoutes);
+  await fastify.register(versionRoutes);
 
   fastify.get('/health', async () => ({ ok: true }));
 
