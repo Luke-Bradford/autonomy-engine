@@ -445,3 +445,142 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
   });
 });
+
+/**
+ * #788 — an edge-less doc runs as an implicit SEQUENCE, and says so.
+ *
+ * `effectiveEdges` synthesizes a success chain over node array order whenever a
+ * doc authors no edges, so deleting every edge does not remove routing — it
+ * replaces it with a line. Engine semantics are unchanged here (that was the
+ * operator's call on #788); what changes is that the canvas stops leaving the
+ * topology to be inferred from an array length.
+ */
+describe('FlowCanvas implicit-chain advisory (#788)', () => {
+  function withGraph(
+    nodeIds: string[],
+    edges: Array<{ id: string; from: string; to: string; on: string }> = [],
+    containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [],
+    /** `reversed` lays the graph out bottom-to-top, so ARRAY order and VISUAL
+     *  order disagree — see the test that uses it. */
+    layout: 'inOrder' | 'reversed' = 'inOrder',
+  ) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: nodeIds.map((id, i) => ({
+          id,
+          type: 'http_request',
+          config: {},
+          position: { x: 0, y: (layout === 'reversed' ? nodeIds.length - 1 - i : i) * 160 },
+        })),
+        edges,
+        containers,
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container, advisory: container.querySelector('.canvas-advisory') };
+  }
+
+  it('names the synthesized run order for an edge-less graph', () => {
+    const { advisory } = withGraph(['a', 'b', 'c']);
+    expect(advisory).not.toBeNull();
+    expect(advisory!.textContent).toContain('a → b → c');
+  });
+
+  /**
+   * The COST, not just the shape. The ticket is not "the canvas looks unrouted",
+   * it is that a re-save mints an inferred topology into a version that can never
+   * be edited afterwards — so the panel has to name saving, or it is describing a
+   * curiosity rather than warning about a consequence.
+   */
+  it('says what saving will do with the inferred routing', () => {
+    expect(withGraph(['a', 'b']).advisory!.textContent).toContain('Saving mints');
+  });
+
+  it('reports ARRAY order, not id order — that is what the chain is built from', () => {
+    const { advisory } = withGraph(['c', 'a', 'b']);
+    expect(advisory!.textContent).toContain('c → a → b');
+  });
+
+  /**
+   * The order is `nodes` ARRAY order, which is the order activities were added —
+   * it has nothing to do with where they sit on the canvas. Laying the graph out
+   * bottom-to-top makes the two disagree, which is the only way to catch copy
+   * that says "in canvas order" (it did, until this test): every other fixture
+   * here places nodes in array order, so the two are indistinguishable in them.
+   */
+  it('reports array order even when the LAYOUT runs the other way', () => {
+    const { advisory } = withGraph(['a', 'b', 'c'], [], [], 'reversed');
+    expect(advisory!.textContent).toContain('a → b → c');
+    expect(advisory!.textContent).toContain('the order they were added');
+    expect(advisory!.textContent).not.toContain('canvas order');
+  });
+
+  it('is absent once the graph authors an edge — nothing is being inferred', () => {
+    const { advisory } = withGraph(
+      ['a', 'b', 'c'],
+      [{ id: 'e1', from: 'a', to: 'c', on: 'success' }],
+    );
+    expect(advisory).toBeNull();
+  });
+
+  it('is absent for a single node — there is no sequence to warn about', () => {
+    expect(withGraph(['a']).advisory).toBeNull();
+    expect(withGraph([]).advisory).toBeNull();
+  });
+
+  /**
+   * The advisory has to survive the graph it describes being large, or it stops
+   * being an advisory and becomes an occlusion — a panel listing forty ids across
+   * the canvas is worse than the silence it replaces.
+   */
+  it('truncates a long chain rather than covering the canvas with it', () => {
+    const ids = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8'];
+    const { advisory } = withGraph(ids);
+    expect(advisory!.textContent).toContain('n1 → n2 → n3 → n4 → n5 → n6');
+    expect(advisory!.textContent).not.toContain('n7');
+    expect(advisory!.textContent).toContain('+2 more');
+  });
+
+  /**
+   * Reachable, and the case a naive advisory LIES about. `nodes` is flat, so the
+   * synthesized chain crosses the container boundary — and the walk then discards
+   * exactly those edges, leaving `a` and the stage as parallel roots. Measured:
+   * `topIncoming` is `{a: [], c_1: []}`. So the panel must still appear (routing
+   * IS being inferred, which is the thing worth knowing) and must NOT name an
+   * order, because the only order it could name is the wrong one.
+   */
+  it('shows for an edge-less graph with containers, WITHOUT claiming an order', () => {
+    const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
+    expect(advisory).not.toBeNull();
+    expect(advisory!.textContent).toContain('inferred');
+    expect(advisory!.textContent).toContain('Saving mints');
+    expect(advisory!.textContent).not.toContain('a → b');
+    expect(advisory!.textContent).not.toContain('run in one sequence');
+  });
+
+  /**
+   * The page already runs two polite regions (the toolbox's empty-results line
+   * and the validation badges) and one assertive one (the refusal). This advisory
+   * is none of them: it is a standing description of the graph, and yet another
+   * announcer firing on every edge deletion would make the canvas hostile to a
+   * screen reader. See the component for the cost that leaves open.
+   */
+  it('is not a live region — the page already has several', () => {
+    const { advisory } = withGraph(['a', 'b']);
+    expect(advisory!.getAttribute('aria-live')).toBeNull();
+    expect(advisory!.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
+  });
+});

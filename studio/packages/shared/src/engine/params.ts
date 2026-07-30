@@ -3982,6 +3982,53 @@ export function effectiveEdges(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): E
   return out;
 }
 
+/**
+ * #788 — what an EDGE-LESS doc's routing actually is, for a surface to SAY.
+ *
+ * `chain` carries the run order in full; `partitioned` means routing is still
+ * inferred but no single line can be claimed (see below). `null` means nothing
+ * is being inferred at all: the doc authors its own edges, or has fewer than two
+ * nodes and so has no sequence to speak of.
+ */
+export type ImplicitRouting = { kind: 'chain'; order: string[] } | { kind: 'partitioned' };
+
+/**
+ * #788 — the routing an EDGE-LESS doc gets handed, described honestly.
+ *
+ * Exists so an authoring surface can SHOW the synthesized chain instead of
+ * leaving it inferred from an array length. Emptying a doc's edge list does not
+ * merely remove routing, it replaces it — a silent topology change unless
+ * something says so out loud. The operator's decision on #788 was to keep the
+ * inference and surface it, so this changes NO execution semantics; it is a
+ * read-only description of what the engine will do.
+ *
+ * The chain comes FROM `effectiveEdges` rather than from re-deriving "no edges
+ * means a chain": a surface that independently reasoned about `edges.length === 0`
+ * would keep confidently describing the OLD topology if the synthesis changed.
+ *
+ * CONTAINERS ARE NOT A DETAIL, and this is the part that is easy to get wrong.
+ * `effectiveEdges` is the edge SET, not the walk — `partitionReadiness` re-buckets
+ * that set and DROPS any edge straddling a container boundary (a child target has
+ * no top-level bucket, #498). So for `nodes [a,b] · edges [] · containers
+ * [stage{children:[b]}]`, which `validateDoc` accepts without complaint, the
+ * synthesized `a->b` is discarded and `a` and the stage are BOTH roots — they run
+ * in PARALLEL. Reporting `[a, b]` as a sequence there would be a surface
+ * confidently stating the opposite of what runs, which is worse than the silence
+ * this ticket set out to end. Hence `partitioned`: routing is still inferred and
+ * still worth announcing, but the ORDER is not ours to claim. Describing the
+ * container case exactly would mean re-deriving the partition here, which is a
+ * bigger seam than the discoverability fix needs.
+ */
+export function implicitRouting(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
+): ImplicitRouting | null {
+  if (doc.edges.length > 0) return null;
+  const synth = effectiveEdges(doc);
+  if (synth.length === 0) return null;
+  if (doc.containers.length > 0) return { kind: 'partitioned' };
+  return { kind: 'chain', order: [synth[0]!.from, ...synth.map((e) => e.to)] };
+}
+
 function intersect(a: Set<string>, b: Set<string>): Set<string> {
   const out = new Set<string>();
   for (const x of a) if (b.has(x)) out.add(x);

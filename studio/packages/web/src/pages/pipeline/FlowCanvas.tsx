@@ -22,7 +22,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { getActivity, type ContainerKind } from '@autonomy-studio/shared';
+import { getActivity, implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
@@ -168,6 +168,16 @@ const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
 const HANDLE_SIZE = 6;
 
 /**
+ * How many activity ids the #788 implicit-chain advisory spells out before it
+ * summarises the rest. An advisory that grows without bound stops being an
+ * advisory and becomes an occlusion: a panel naming forty nodes across the top
+ * of the canvas is worse than the silence it replaces. Six is enough to make the
+ * ORDER concrete (the surprising part is that there is one at all), and the
+ * count in the same sentence keeps the total honest when the list is cut.
+ */
+const IMPLICIT_CHAIN_PREVIEW = 6;
+
+/**
  * The port bounds of a derived container box, stated rather than measured.
  *
  * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
@@ -284,6 +294,28 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   // selected directly, and this component no longer re-renders on a `rebaseLoaded`
   // that changes nothing it draws.
   const containers = useStore(store, (s) => s.containers);
+
+  /**
+   * #788 — the implicit success chain, said out loud.
+   *
+   * An edge-less doc does not run as unrouted parallel roots: `effectiveEdges`
+   * synthesizes a success chain over node ARRAY order, so deleting the last edge
+   * and saving replaces the authored topology with a line. That inference is
+   * staying (the operator's call on #788 — it is in the shipped MVP and docs
+   * authored without edges rely on it), which leaves discoverability as the thing
+   * to fix: the convention was readable only as the absence of something.
+   *
+   * `implicitRouting` owns what may be claimed, containers included: the
+   * synthesized chain crosses container boundaries and the WALK then discards
+   * those edges, so a doc with containers comes back as `partitioned` and this
+   * panel names no order for it. Getting that wrong would have had the canvas
+   * confidently state the opposite of what runs — worse than the silence the
+   * ticket set out to end — so the order is never re-derived here.
+   */
+  const routing = useMemo(
+    () => implicitRouting({ nodes, edges, containers }),
+    [nodes, edges, containers],
+  );
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
   /**
@@ -905,6 +937,49 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
         />
         <Controls />
+        {routing !== null && (
+          /* #788 — see `routing` above. NOT a live region, and that is
+             deliberate. The page already runs TWO polite regions — the toolbox's
+             empty-results line (always mounted, `ActivityToolbox.tsx`) and the
+             validation badges (mounted only while there are issues,
+             `PipelineCanvas.tsx`) — plus the assertive refusal below. A third
+             polite announcer, re-firing on every edge deletion, is how a canvas
+             becomes hostile to a screen reader; this is a standing description of
+             the graph, not an event. The honest cost, stated rather than hidden:
+             a screen-reader user who deletes the last edge is not TOLD that the
+             topology changed, only that the panel is there to be read. Giving
+             that user the announcement without spamming everyone else needs the
+             page's live-region policy sorted out, which is U-epic work, not this
+             ticket's.
+
+             Top, so it does not fight the refusal toast at bottom-center when
+             both are up. It can overlap a container the #785 reveal just panned
+             into view (both need an edge-less doc WITH containers) — visual only,
+             `pointer-events: none` keeps it non-blocking. Filed as #794.
+
+             Both copies end on what SAVING does, because that is the actual cost
+             in the ticket: the inferred routing is what gets minted into the next
+             immutable version, and a version cannot be edited afterwards. */
+          <Panel position="top-center" className="canvas-advisory">
+            {routing.kind === 'chain' ? (
+              <>
+                No edges authored — these {routing.order.length} activities run in one sequence, in
+                the order they were added:{' '}
+                <strong>{routing.order.slice(0, IMPLICIT_CHAIN_PREVIEW).join(' → ')}</strong>
+                {routing.order.length > IMPLICIT_CHAIN_PREVIEW
+                  ? ` +${routing.order.length - IMPLICIT_CHAIN_PREVIEW} more`
+                  : ''}
+                . Saving mints that as this version&rsquo;s routing.
+              </>
+            ) : (
+              <>
+                No edges authored — routing is <strong>inferred</strong> from the order activities
+                were added, and this graph&rsquo;s containers split that chain. Saving mints the
+                inferred routing as this version&rsquo;s routing.
+              </>
+            )}
+          </Panel>
+        )}
         {refusal !== null && (
           /* Canvas-LOCAL, via RF's own `Panel`, per the epic's z-index/portal
              policy (only global menus portal to body).
