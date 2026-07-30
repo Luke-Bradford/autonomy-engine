@@ -37,11 +37,19 @@ describe('UpdateBanner', () => {
   // latest=null means the check could not be made. It must look like silence,
   // NOT like "up to date" — the server already distinguishes them and the UI
   // must not collapse the distinction it was given.
+  //
+  // `updateAvailable: true` here (not `false`) is deliberate: the component's
+  // guard is `!status?.updateAvailable || status.latest === null`, an OR of
+  // two clauses. With `updateAvailable: false` the first clause alone already
+  // satisfies the guard, so the test would pass whether or not the component
+  // handles `latest === null` at all. Forcing `updateAvailable: true` makes
+  // the null-latest clause the ONLY thing that can produce the empty render,
+  // so removing that clause from the component fails this test.
   it('renders nothing when the check could not be made', async () => {
     vi.spyOn(api, 'getUpdateStatus').mockResolvedValue({
       current: build('2026.07.29'),
       latest: null,
-      updateAvailable: false,
+      updateAvailable: true,
       notes: null,
     });
     const { container } = render(<UpdateBanner />);

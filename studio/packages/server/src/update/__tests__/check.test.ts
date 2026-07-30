@@ -40,4 +40,26 @@ describe('checkForUpdate', () => {
     const res = await checkForUpdate(dev, vi.fn().mockResolvedValue(remote('2026.07.30')));
     expect(res.updateAvailable).toBe(false);
   });
+
+  // A blackholed github.com must not hold this request open for undici's 300s
+  // default — this endpoint is polled by the chrome of every page. `fetchImpl`
+  // here never settles on its own; the only way this test completes (with a
+  // short `timeoutMs`) is if `checkForUpdate` actually threads the abort signal
+  // through and treats the resulting rejection as "could not check", same as
+  // any other fetch failure.
+  it('lands in "could not check" (never hangs) when the request never settles', async () => {
+    const hangingFetch = vi.fn(
+      (_url: string, init?: { signal: AbortSignal }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    const res = await checkForUpdate(current, hangingFetch, 10);
+    expect(res.latest).toBeNull();
+    expect(res.updateAvailable).toBe(false);
+    expect(hangingFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
 });

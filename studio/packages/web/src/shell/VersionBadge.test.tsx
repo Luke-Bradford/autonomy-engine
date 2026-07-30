@@ -27,12 +27,12 @@ describe('VersionBadge', () => {
 
   // Pins the accessible name, not just the visible text. The badge is ~55px
   // of text in a 48px rail and clips visually — a `title` attribute alone (the
-  // original implementation) is not reliably exposed to screen readers and is
-  // unreachable by keyboard, so the full string must travel some other way.
-  // Querying by role + name (not `getByText`) is what actually catches a
-  // regression back to a title-only tooltip: `getByText` would keep passing
-  // even if the accessible name silently disappeared.
-  it('exposes the full version as an accessible name (role + name), not just a title tooltip', async () => {
+  // original implementation) is not reliably exposed to screen readers, so the
+  // full string must travel some other way (here, an explicit `aria-label`).
+  // Queries by accessible name via `getByLabelText` — a plain `generic` span
+  // has no ARIA role to query by, and this must still fail if the name
+  // regresses back to relying on the clipped visible text alone.
+  it('exposes the full version as an accessible name, not just a title tooltip', async () => {
     vi.spyOn(api, 'getVersion').mockResolvedValue({
       version: '2026.07.30',
       commit: 'e93ebf8',
@@ -40,8 +40,6 @@ describe('VersionBadge', () => {
       arch: 'arm64',
     });
     render(<VersionBadge />);
-    await waitFor(() =>
-      expect(screen.getByRole('status', { name: '2026.07.30' })).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByLabelText('2026.07.30')).toBeInTheDocument());
   });
 });
