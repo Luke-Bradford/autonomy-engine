@@ -34,7 +34,15 @@ EOS
 #!/bin/bash
 case "$1" in
   fetch) exit 0 ;;
-  rev-parse) echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef$RANDOM" ;;  # always "progress"
+  # STALL_HEAD=1 pins origin/main so the stall path is reachable; without it every
+  # read differs and the driver always sees progress.
+  rev-parse)
+    if [ -n "${STALL_HEAD:-}" ]; then echo "cafebabecafebabecafebabecafebabecafebabe"
+    else echo "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef$RANDOM"; fi ;;
+  # BRANCH_AHEAD=<name> reports one local studio branch with commits origin/main
+  # does not have — the state triage rule 2 calls "continue it to a PR".
+  for-each-ref) [ -n "${BRANCH_AHEAD:-}" ] && echo "$BRANCH_AHEAD" || true ;;
+  rev-list)     [ -n "${BRANCH_AHEAD:-}" ] && echo 1 || echo 0 ;;
   *) exit 0 ;;
 esac
 EOS
@@ -887,6 +895,32 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=1 \
       "SEED_CACHE=$now 18446744073709551696")"
 check "an out-of-range CACHED value is rejected, not wrapped into a fake reading" "1" \
   "$(fires_of "$r")"
+
+# --- 25. an unchanged main with NO branch in flight IS a stall ---------------
+# The baseline the next case is measured against: MAX_STALL consecutive
+# no-progress fires stop the run, so exactly MAX_STALL fires happen (the first
+# iteration has no previous head to compare).
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1)"
+check "unchanged main, no branch -> stops after MAX_STALL=3 fires" "3" "$(fires_of "$r")"
+check "and says nothing-more-to-do" "0" \
+  "$(grep -q 'STOP: 3 consecutive no-progress fires' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 26. a studio branch AHEAD of main is progress, not a stall (#775) -------
+# `prompt.md`'s triage rule 2 calls this state "continue it to a PR" — work in
+# flight. The driver counted it as no-progress because it only looked at
+# origin/main's HEAD and the open-PR count, so three fires that each ended with
+# work committed-but-unpushed would stop the run with "nothing more to do (or the
+# queue is drained)". Observed 2026-07-29: fires 8 and 9 both ended that way and
+# the counter reached 2/3 while two commits and 66 staged lines sat on
+# `fix/studio-764-relocate-quota-fallback-reader`.
+#
+# The stop is fail-safe in direction, which is why this is a correctness bug
+# rather than a spend bug: the MESSAGE is what an operator reads to decide the
+# queue is empty, and it is the one stop reason that files no alert.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-764-example)"
+check "branch ahead of main -> no stall, keeps firing" "12" "$(fires_of "$r")"
+check "no nothing-more-to-do stop is logged" "1" \
+  "$(grep -q 'consecutive no-progress fires' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

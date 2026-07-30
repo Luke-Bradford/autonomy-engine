@@ -922,14 +922,43 @@ while true; do
   # --- progress / stall accounting (the ONLY "nothing more to do" detector) ---
   head="$(git rev-parse origin/main 2>/dev/null || echo unknown)"
   openpr="$(gh pr list --state open --json number -q 'length' 2>/dev/null || echo 0)"
-  if [ -n "$prev_head" ] && [ "$head" = "$prev_head" ] && [ "${openpr:-0}" = "0" ]; then
+  # A local studio branch with commits origin/main does not have is WORK IN
+  # FLIGHT, not a stall. prompt.md's triage rule 2 says exactly that ("a studio
+  # feature branch ahead of main -> continue it to a PR"), so without this the
+  # driver's notion of progress contradicts the rule the fires actually follow.
+  #
+  # Measured 2026-07-29 (#775): fires 8 and 9 each ended with work committed but
+  # unpushed, the counter reached 2/3, and a third would have stopped the run
+  # saying "nothing more to do (or the queue is drained)" while two commits and 66
+  # staged lines sat on a branch. The stop is fail-safe in direction; the harm is
+  # the MESSAGE, which is what an operator reads to decide the queue is empty --
+  # and it is the one stop reason that files no alert.
+  #
+  # Branch-ahead, not a dirty worktree: dirt could be leftovers, whereas a commit
+  # origin/main lacks is unambiguous, and it is the same signal rule 2 keys on.
+  ahead=""
+  for sb_ref in $(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null); do
+    case "$sb_ref" in
+      feat/studio*|fix/studio*|feat/loop*|fix/loop*) ;;
+      *) continue ;;
+    esac
+    if [ "$(git rev-list --count "origin/main..$sb_ref" 2>/dev/null || echo 0)" -gt 0 ]; then
+      ahead="$sb_ref"; break
+    fi
+  done
+  if [ -n "$prev_head" ] && [ "$head" = "$prev_head" ] && [ "${openpr:-0}" = "0" ] && [ -z "$ahead" ]; then
     stall=$((stall + 1))
-    log "no progress (main unchanged, no open PR) stall=$stall/$MAX_STALL"
+    log "no progress (main unchanged, no open PR, no branch ahead) stall=$stall/$MAX_STALL"
     if [ "$stall" -ge "$MAX_STALL" ]; then
       log "STOP: $stall consecutive no-progress fires -- nothing more to do (or the queue is drained)"
       break
     fi
   else
+    # Either something moved (main advanced, or a PR is open), or a branch is
+    # ahead. Say WHICH when it is the branch, so a log reader can tell "work in
+    # flight" from "main advanced" without diffing anything.
+    [ -n "$ahead" ] && [ "$head" = "$prev_head" ] && [ "${openpr:-0}" = "0" ] &&
+      log "no new commit on main, but '$ahead' is ahead -- work in flight, not a stall"
     stall=0
   fi
   prev_head="$head"
