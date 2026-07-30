@@ -50,7 +50,15 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#studio-v}"
-          node scripts/write-manifest.mjs packages/server "$VERSION" "$(git rev-parse --short HEAD)" x64
+          # arch from the RUNNER, not a hardcoded literal. Phase 1 publishes no
+          # binary artifact -- the build is architecture-independent JS -- so this
+          # field is not yet load-bearing, and a fixed `x64` would have been an
+          # arbitrary claim baked permanently into release history. Reporting where
+          # the manifest was actually built is at least true. Phase 2 publishes
+          # per-arch artifacts (better-sqlite3 is a native addon) and the updater
+          # selects on this field, at which point this line becomes a real matrix.
+          node scripts/write-manifest.mjs packages/server "$VERSION" \
+            "$(git rev-parse --short HEAD)" "$(node -p process.arch)"
           cat packages/server/manifest.json
 
       - name: Publish the manifest to the release
