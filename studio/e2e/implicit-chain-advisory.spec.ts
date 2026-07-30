@@ -59,6 +59,9 @@ test.describe('implicit-chain advisory (#788)', () => {
     const advisory = page.locator(ADVISORY);
     await expect(advisory).toContainText('run in one sequence');
     await expect(advisory).toContainText('a → b → c');
+    // And what it COSTS: the inferred routing is what the next Save mints into a
+    // version that cannot be edited afterwards.
+    await expect(advisory).toContainText('Saving mints');
 
     await expectQuiet(page, problems);
   });

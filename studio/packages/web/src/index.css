@@ -1319,6 +1319,39 @@ td button + button {
   transform: none;
 }
 
+/*
+ * #788 — the implicit-routing advisory. Shares `.canvas-refusal`'s panel surface
+ * below deliberately (same shape, same metrics), and diverges only in TONE: a
+ * refusal answers a gesture the operator just made and takes `--error`, while
+ * this is a standing description of a graph that is not wrong, only easy to
+ * misread — so it takes the neutral border and muted text.
+ *
+ * `pointer-events: none` is load-bearing for exactly the reason spelled out
+ * under `.canvas-refusal` below: U5's drop guard treats ANY `.react-flow__panel`
+ * as canvas chrome that must not accept a toolbox drop, so an opaque strip
+ * across the top of the canvas would silently swallow a dropped activity. Worse
+ * here than there, because this panel is up precisely when the operator has just
+ * removed the routing and is about to re-author it. Nothing opts back in — unlike
+ * the refusal, this carries no control.
+ */
+.canvas-advisory {
+  pointer-events: none;
+  max-width: 46rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.canvas-advisory strong {
+  /* The sequence itself is the payload — the surrounding sentence is framing. */
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* The refused-connection message. Sits in an RF `Panel`, so it is already
    positioned; this only styles the surface. `max-width` keeps a long reason
    (which names both endpoints) from spanning a wide canvas.
@@ -1330,33 +1363,6 @@ td button + button {
  * silently swallow a dropped activity. That is a second "the gesture quietly did
  * nothing" surface inside the feature built to remove the first. Made
  * transparent to hit-testing instead, with the dismiss button opted back in. */
-/*
- * #788 — the implicit-chain advisory. Deliberately QUIETER than `.canvas-refusal`
- * below: a refusal answers a gesture the operator just made, this one is a
- * standing description of a graph that is not wrong, only easy to misread. So it
- * borrows the same plain-markup panel shape but takes the neutral border rather
- * than `--error`. Fully `pointer-events: none` — unlike the refusal it carries no
- * control, so nothing needs to opt back into hit-testing, and it must never eat a
- * click aimed at the canvas underneath it.
- */
-.canvas-advisory {
-  pointer-events: none;
-  max-width: 46rem;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-2);
-  color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.35;
-}
-
-.canvas-advisory strong {
-  /* The sequence itself is the payload — the surrounding sentence is framing. */
-  color: var(--text);
-  font-weight: 600;
-}
-
 .canvas-refusal {
   pointer-events: none;
   display: flex;

@@ -5,12 +5,12 @@
  * a doc authors no edges, so an edge list going from non-empty to empty does not
  * merely remove routing — it REPLACES it with a sequential topology. The engine
  * semantics are unchanged (operator decision on #788: keep the inference, surface
- * it); `implicitChainOrder` is the surfacing seam, and its whole job is to be
- * incapable of disagreeing with what the engine will actually walk.
+ * it); `implicitRouting` is the surfacing seam, and its whole job is to be
+ * incapable of telling a surface something the engine will not do.
  */
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, EdgeOn, Node, PipelineVersion } from '../types.js';
-import { effectiveEdges, implicitChainOrder } from '../params.js';
+import { effectiveEdges, implicitRouting, partitionReadiness, validateDoc } from '../params.js';
 
 let nodeSeq = 0;
 function node(id: string): Node {
@@ -30,63 +30,113 @@ function doc(
   return { nodes, edges, containers };
 }
 
-describe('implicitChainOrder (#788)', () => {
+describe('implicitRouting (#788)', () => {
   it('reports the synthesized run order for an edge-less doc', () => {
-    expect(implicitChainOrder(doc([node('a'), node('b'), node('c')], []))).toEqual(['a', 'b', 'c']);
+    expect(implicitRouting(doc([node('a'), node('b'), node('c')], []))).toEqual({
+      kind: 'chain',
+      order: ['a', 'b', 'c'],
+    });
   });
 
   it('follows node ARRAY order, not id order — that is what the chain is built from', () => {
-    expect(implicitChainOrder(doc([node('c'), node('a'), node('b')], []))).toEqual(['c', 'a', 'b']);
+    expect(implicitRouting(doc([node('c'), node('a'), node('b')], []))).toEqual({
+      kind: 'chain',
+      order: ['c', 'a', 'b'],
+    });
   });
 
   it('is null once the doc authors ANY edge — nothing is inferred, nothing to surface', () => {
     const d = doc([node('a'), node('b'), node('c')], [edge('a', 'c')]);
-    expect(implicitChainOrder(d)).toBeNull();
+    expect(implicitRouting(d)).toBeNull();
   });
 
   it('is null for a single-edge doc even when that edge is a failure/back edge', () => {
-    expect(implicitChainOrder(doc([node('a'), node('b')], [edge('a', 'b', 'failure')]))).toBeNull();
+    expect(implicitRouting(doc([node('a'), node('b')], [edge('a', 'b', 'failure')]))).toBeNull();
   });
 
   it('is null below two nodes — there is no sequence to warn about', () => {
-    expect(implicitChainOrder(doc([], []))).toBeNull();
-    expect(implicitChainOrder(doc([node('a')], []))).toBeNull();
+    expect(implicitRouting(doc([], []))).toBeNull();
+    expect(implicitRouting(doc([node('a')], []))).toBeNull();
   });
 
   /**
-   * The container case is REACHABLE (nothing refuses an edge-less doc that has
-   * containers) and it is exactly the case the advisory must not hide: `nodes`
-   * is FLAT, so the synthesized chain runs straight through container
-   * membership. The surfacing reports what the engine will do — which is the
-   * point — so the caller's wording must be about the NODE run order, not about
-   * containers being sequenced.
+   * The container case is REACHABLE — nothing refuses an edge-less doc that has
+   * containers (asserted below) — and it is where a naive surface lies. `nodes`
+   * is FLAT, so the synthesized chain crosses container boundaries; the walk then
+   * DROPS those edges. Routing is still inferred and still worth announcing, so
+   * this is `partitioned` rather than `null`, but the order is deliberately
+   * withheld because it would be wrong.
    */
-  it('still reports the chain when the doc has containers — the chain ignores membership', () => {
-    const d = doc(
-      [node('a'), node('b'), node('c')],
-      [],
-      [{ id: 'loop1', kind: 'loop', children: ['b'] }],
-    );
-    expect(implicitChainOrder(d)).toEqual(['a', 'b', 'c']);
+  it('withholds the order when containers are present — the chain is not the walk', () => {
+    const d = doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: ['b'] }]);
+    // Reachability, not a hypothetical: the write gate accepts this doc as-is.
+    expect(validateDoc({ ...d, params: [] })).toEqual([]);
+    expect(implicitRouting(d)).toEqual({ kind: 'partitioned' });
   });
 
   /**
-   * ANTI-DRIFT. The whole reason this lives beside `effectiveEdges` rather than
-   * being re-derived in the web layer: if someone changes how the chain is
-   * synthesized, a surface that independently reasoned about `edges.length === 0`
-   * would keep confidently describing the OLD topology. This asserts the reported
-   * order IS the walk of the synthesized edges.
+   * ANTI-DRIFT, and the assertion that catches the bug an `effectiveEdges`-only
+   * comparison cannot: `effectiveEdges` is the edge SET, `partitionReadiness` is
+   * the WALK. Whenever a `chain` is claimed, the engine's own readiness buckets
+   * must actually show that chain — each node after the first fed by exactly its
+   * predecessor. Any doc for which that is false must not come back as `chain`.
+   *
+   * Measured before this guard existed: `nodes [a,b] · containers [stage[b]]`
+   * validates clean, yet `topIncoming` is `{a: [], stage: []}` — two parallel
+   * roots — while the synthesized set still says `a->b`.
    */
-  it('matches the from/to walk of effectiveEdges for the same doc', () => {
-    for (const ids of [
-      ['a', 'b'],
-      ['a', 'b', 'c'],
-      ['n1', 'n2', 'n3', 'n4', 'n5'],
-    ]) {
-      const d = doc(ids.map(node), []);
-      const synth = effectiveEdges(d);
-      const walked = [synth[0]!.from, ...synth.map((e) => e.to)];
-      expect(implicitChainOrder(d)).toEqual(walked);
+  it('never claims a chain the readiness partition does not walk', () => {
+    const shapes = [
+      doc([node('a'), node('b')], []),
+      doc([node('a'), node('b'), node('c')], []),
+      doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: ['b'] }]),
+      doc(
+        [node('a'), node('b'), node('c')],
+        [],
+        [{ id: 'c1', kind: 'stage', children: ['a', 'b'] }],
+      ),
+    ];
+
+    let chains = 0;
+    for (const d of shapes) {
+      const routing = implicitRouting(d);
+      if (routing?.kind !== 'chain') continue;
+      chains += 1;
+
+      const childToContainer = new Map<string, string>();
+      for (const c of d.containers)
+        for (const child of c.children) childToContainer.set(child, c.id);
+      const { topIncoming } = partitionReadiness(d, d.containers, childToContainer);
+
+      routing.order.forEach((id, i) => {
+        const incoming = (topIncoming.get(id) ?? []).map((e) => e.from);
+        expect(incoming, `incoming for '${id}'`).toEqual(i === 0 ? [] : [routing.order[i - 1]]);
+      });
+    }
+    // Or the loop above asserted nothing at all.
+    expect(chains).toBeGreaterThan(0);
+  });
+
+  /**
+   * WHICH docs get a synthesized chain at all — the one thing `effectiveEdges` is
+   * still authority for. Deliberately not re-computing the order from `synth`
+   * here: that would just restate the implementation character-for-character and
+   * discriminate nothing, since the order is already pinned literally above and
+   * checked against the real walk by the test before this one.
+   */
+  it('claims routing for exactly the docs effectiveEdges synthesizes edges for', () => {
+    const shapes = [
+      doc([], []),
+      doc([node('a')], []),
+      doc([node('a'), node('b')], []),
+      doc([node('a'), node('b'), node('c')], []),
+      doc([node('a'), node('b')], [edge('a', 'b')]),
+    ];
+    for (const d of shapes) {
+      const synthesized = d.edges.length === 0 && effectiveEdges(d).length > 0;
+      expect(implicitRouting(d) !== null, JSON.stringify(d.nodes.map((n) => n.id))).toBe(
+        synthesized,
+      );
     }
   });
 });

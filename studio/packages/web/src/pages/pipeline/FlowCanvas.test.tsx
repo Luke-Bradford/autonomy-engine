@@ -460,6 +460,9 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     nodeIds: string[],
     edges: Array<{ id: string; from: string; to: string; on: string }> = [],
     containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [],
+    /** `reversed` lays the graph out bottom-to-top, so ARRAY order and VISUAL
+     *  order disagree — see the test that uses it. */
+    layout: 'inOrder' | 'reversed' = 'inOrder',
   ) {
     const store = createCanvasStore();
     store.getState().loadVersion(
@@ -474,7 +477,7 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
           id,
           type: 'http_request',
           config: {},
-          position: { x: 0, y: i * 160 },
+          position: { x: 0, y: (layout === 'reversed' ? nodeIds.length - 1 - i : i) * 160 },
         })),
         edges,
         containers,
@@ -496,9 +499,33 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     expect(advisory!.textContent).toContain('a → b → c');
   });
 
+  /**
+   * The COST, not just the shape. The ticket is not "the canvas looks unrouted",
+   * it is that a re-save mints an inferred topology into a version that can never
+   * be edited afterwards — so the panel has to name saving, or it is describing a
+   * curiosity rather than warning about a consequence.
+   */
+  it('says what saving will do with the inferred routing', () => {
+    expect(withGraph(['a', 'b']).advisory!.textContent).toContain('Saving mints');
+  });
+
   it('reports ARRAY order, not id order — that is what the chain is built from', () => {
     const { advisory } = withGraph(['c', 'a', 'b']);
     expect(advisory!.textContent).toContain('c → a → b');
+  });
+
+  /**
+   * The order is `nodes` ARRAY order, which is the order activities were added —
+   * it has nothing to do with where they sit on the canvas. Laying the graph out
+   * bottom-to-top makes the two disagree, which is the only way to catch copy
+   * that says "in canvas order" (it did, until this test): every other fixture
+   * here places nodes in array order, so the two are indistinguishable in them.
+   */
+  it('reports array order even when the LAYOUT runs the other way', () => {
+    const { advisory } = withGraph(['a', 'b', 'c'], [], [], 'reversed');
+    expect(advisory!.textContent).toContain('a → b → c');
+    expect(advisory!.textContent).toContain('the order they were added');
+    expect(advisory!.textContent).not.toContain('canvas order');
   });
 
   it('is absent once the graph authors an edge — nothing is being inferred', () => {
@@ -528,25 +555,30 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
   });
 
   /**
-   * Reachable, and precisely the case that must NOT be hidden: `nodes` is FLAT,
-   * so the synthesized chain runs straight through container membership. The
-   * advisory therefore speaks about the node run order and does not claim the
-   * containers are what gets sequenced.
+   * Reachable, and the case a naive advisory LIES about. `nodes` is flat, so the
+   * synthesized chain crosses the container boundary — and the walk then discards
+   * exactly those edges, leaving `a` and the stage as parallel roots. Measured:
+   * `topIncoming` is `{a: [], c_1: []}`. So the panel must still appear (routing
+   * IS being inferred, which is the thing worth knowing) and must NOT name an
+   * order, because the only order it could name is the wrong one.
    */
-  it('still shows for an edge-less graph that has containers', () => {
+  it('shows for an edge-less graph with containers, WITHOUT claiming an order', () => {
     const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
     expect(advisory).not.toBeNull();
-    expect(advisory!.textContent).toContain('a → b');
+    expect(advisory!.textContent).toContain('inferred');
+    expect(advisory!.textContent).toContain('Saving mints');
+    expect(advisory!.textContent).not.toContain('a → b');
+    expect(advisory!.textContent).not.toContain('run in one sequence');
   });
 
   /**
-   * `PipelineCanvas` owns the page's ONE polite live region (the validation
-   * badges) and the refusal panel is deliberately assertive to avoid
-   * double-announcing. This advisory is neither: it is a standing description of
-   * the graph, and a third announcer firing on every edge deletion would make
-   * the canvas hostile to a screen reader.
+   * The page already runs two polite regions (the toolbox's empty-results line
+   * and the validation badges) and one assertive one (the refusal). This advisory
+   * is none of them: it is a standing description of the graph, and yet another
+   * announcer firing on every edge deletion would make the canvas hostile to a
+   * screen reader. See the component for the cost that leaves open.
    */
-  it('is not a live region — the page already has exactly one', () => {
+  it('is not a live region — the page already has several', () => {
     const { advisory } = withGraph(['a', 'b']);
     expect(advisory!.getAttribute('aria-live')).toBeNull();
     expect(advisory!.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
