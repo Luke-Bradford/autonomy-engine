@@ -415,7 +415,15 @@ acquire_lock() {
   if [ -n "$al_age" ]; then
     say "warning: removing an abandoned lock at $LOCK_DIR (older than 60m)"
     rm -rf "$LOCK_DIR"
-    take_lock && return 0
+    # Same rc split as above. Falling through unconditionally would report a
+    # failed retry as "another install is in progress" even when the retry
+    # failed for a reason that has no other install in it. Defensive rather
+    # than reachable: a permissions fault here would already have stopped the
+    # `rm`, so only a race between the `rm` and the `mkdir` gets you rc=2.
+    take_lock
+    al_tl=$?
+    [ "$al_tl" -eq 0 ] && return 0
+    [ "$al_tl" -eq 2 ] && { die "cannot create the lock at $LOCK_DIR"; return 2; }
   fi
   say "another install is in progress ($LOCK_DIR); doing nothing."
   return 1
