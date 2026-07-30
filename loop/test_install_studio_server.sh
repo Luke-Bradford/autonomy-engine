@@ -654,8 +654,8 @@ check "release_lock releases its own" "1" "$(has 'RELEASED' "$sb/rel2.out")"
 
 # A lock that cannot be CREATED is a different thing from a lock someone else
 # holds, and collapsing them reported "another install is in progress" for an
-# unwritable state dir and exited 0 -- for the scheduled unit, a silent-success
-# loop forever with a false explanation in its log.
+# unwritable state dir and exited 0 -- a real fault reported as a tidy no-op,
+# with a false explanation attached.
 sb="$(new_sandbox)"
 ( load_sut "$sb"; main --update --port 8788 --state-dir /dev/null/nope/state \
     --repo-src "$sb/src" --node /usr/bin/node ) >"$sb/nolock.out" 2>&1

@@ -138,15 +138,15 @@ configure() {
       --repo-src)  REPO_SRC="${2-}"; shift 2 || { die "--repo-src needs a value"; return 1; } ;;
       --node)      NODE_BIN="${2-}"; shift 2 || { die "--node needs a value"; return 1; } ;;
       --dry-run)   DRY_RUN=1; shift ;;
-      # `--update` used to be a bare alias for a re-run. It is now the UNATTENDED
-      # mode (#773): same install path, but gated on a staleness check and on no
-      # fire being in flight, because the scheduled updater invokes it several
-      # times a day and a plain re-run each time would bounce the spend guard's
-      # quota source for nothing. A plain install stays unconditional -- an
+      # `--update` used to be a bare alias for a re-run. It is now the same
+      # install path GATED ON A STALENESS CHECK (#773), so it costs a fetch and
+      # a comparison when there is nothing to do rather than a full rebuild and
+      # a bounce of the spend guard's quota source. That is the whole point: an
+      # update you can run freely. A plain install stays unconditional -- an
       # operator who ran the installer by hand asked for it NOW.
       --update)    MODE="update"; shift ;;
-      # The escape hatch from the staleness check, for a human. Deliberately NOT
-      # used by the updater plist.
+      # The escape hatch from the staleness check, for a human who wants the
+      # rebuild anyway.
       --force)     FORCE=1; shift ;;
       --status)    MODE="status"; shift ;;
       --uninstall) MODE="uninstall"; shift ;;
@@ -398,13 +398,13 @@ report_status() {
 # tree at once -- two `reset --hard` plus two interleaved bootout/bootstrap
 # cycles is a corrupt checkout and a possibly-unloaded unit. `mkdir` is the
 # atomic primitive available on bash 3.2 macOS (no flock). A lock older than an
-# hour is treated as abandoned: a killed install must not wedge the updater
+# hour is treated as abandoned: a killed install must not wedge the next one
 # forever.
+#
 # Returns 0 = held it, 1 = someone else holds it (a no-op, not a failure),
 # 2 = could not even try. The three must stay distinct: collapsing 2 into 1 told
 # the operator "another install is in progress" for an unwritable state dir and
-# exited 0, which for the scheduled unit is a silent-success loop forever with a
-# false explanation in its log.
+# exited 0 -- a real fault reported as a tidy no-op, with a false explanation.
 acquire_lock() {
   mkdir -p "$STATE_DIR" 2>/dev/null || { die "cannot create the state dir $STATE_DIR"; return 2; }
   take_lock
@@ -600,9 +600,12 @@ main() {
 # The body that runs under the lock, split out so `main` has exactly one release
 # path and no `return` can leak past it.
 main_locked() {
-  # The unattended path only. `--update` runs several times a day from the
-  # scheduled unit, so it asks two questions a hand-run install must not: is
-  # there anything to do, and is now a safe moment.
+  # `--update` asks the one question a hand-run install does not: is there
+  # anything to do. Nothing here defers to a running fire -- there is no
+  # interlock in this file, deliberately (see the header: a scheduled updater
+  # with an interlock is what the approved packaging design rejects, and what
+  # the driver log shows would starve). An update is a human act, so the human
+  # picks the moment.
   if [ "$MODE" = "update" ] && [ "$FORCE" -eq 0 ]; then
     # Only when there is a clone to fetch INTO. `git -C <missing dir> fetch`
     # exits 128, which would have made `--update` die at every slot on a wiped
