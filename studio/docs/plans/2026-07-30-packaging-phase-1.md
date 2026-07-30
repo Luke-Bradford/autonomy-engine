@@ -309,7 +309,9 @@ git commit -m "feat(studio): #792 phase 1 — GET /api/version reads a build man
 - Create: `studio/packages/web/src/api/version.test.ts`
 - Create: `studio/packages/web/src/shell/VersionBadge.tsx`
 - Create: `studio/packages/web/src/shell/VersionBadge.test.tsx`
-- Modify: `studio/packages/web/src/shell/AppShell.tsx` (render it in the hub rail foot)
+- Modify: `studio/packages/web/src/shell/HubRail.tsx` (render it in the rail foot beside the theme
+  toggle — the foot is in `HubRail`, NOT `AppShell`; an earlier draft of this plan named the wrong
+  file and the Task 2 implementer caught it)
 - Modify: `studio/packages/web/src/index.css` (one rule)
 
 **Interfaces:**
