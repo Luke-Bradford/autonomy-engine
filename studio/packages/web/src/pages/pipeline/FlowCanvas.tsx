@@ -572,11 +572,23 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const knownEmptyContainers = useRef<Set<string> | null>(null);
   useEffect(() => {
     const empty = emptyContainerIds(containerBoxes);
-    /* Read the pane BEFORE banking the set. React Flow reports 0x0 until it has
-       measured, and "I cannot tell what is visible" must not consume the
-       transition — returning here without recording leaves the next run (the
-       measurement changes `flowNodes`, which re-runs this) to retry, rather than
-       the reveal being silently forfeited. */
+    /* Read the pane BEFORE banking the set: React Flow reports 0x0 until it has
+       measured, and a run that cannot tell what is visible must not consume a
+       transition it could not act on.
+
+       Which of two things that leaves depends on WHEN the pane was unmeasured,
+       and both are correct:
+        - the pane had been measured and went to 0 (a collapsed or hidden panel).
+          The ref is already a set, so the transition is still an `appeared` on
+          the run after the pane comes back, and it is revealed then. This is the
+          retry case.
+        - the pane has NEVER been measured. The ref is still null, so the first
+          measured run records and reports nothing — it looks like the mount case
+          because it IS the mount case: the `fitView` prop has not fired yet
+          either (it waits for initialised nodes AND dimensions), and it fits
+          every rendered node including the empty box. Handing that framing to
+          `fitView` rather than panning to it is the same division of labour as on
+          any other load, so nothing is lost by not retrying here. */
     const { transform, width, height } = reactFlowStore.getState();
     if (width <= 0 || height <= 0) return;
 
