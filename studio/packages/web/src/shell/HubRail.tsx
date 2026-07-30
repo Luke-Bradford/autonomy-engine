@@ -2,6 +2,7 @@ import { Tooltip } from '@fluentui/react-components';
 import { NavLink } from 'react-router';
 import { HUBS } from './hubs';
 import { ThemeToggle } from '../theme/ThemeToggle';
+import { VersionBadge } from './VersionBadge';
 import type { UiStore } from '../stores/uiStore';
 
 interface HubRailProps {
@@ -12,6 +13,10 @@ interface HubRailProps {
 /**
  * The 48px hub rail — the shell's primary navigation (spec: Home / Author /
  * Monitor / Manage, active highlight, theme at the foot).
+ *
+ * The foot also carries `VersionBadge` (the running build, from Task 2 of the
+ * packaging phase 1 plan): purely informational chrome that renders nothing on
+ * failure, so it sits beside the theme switch without a seam of its own.
  *
  * Active state is signalled on THREE independent channels, because the spec's
  * accessibility criteria forbid a colour-only status:
@@ -71,6 +76,7 @@ export function HubRail({ store }: HubRailProps) {
         ))}
       </ul>
       <div className="hub-rail__foot">
+        <VersionBadge />
         <ThemeToggle store={store} />
       </div>
     </nav>
