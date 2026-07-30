@@ -1,13 +1,28 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HubRail } from './HubRail';
 import { HUBS } from './hubs';
 import { createUiStore } from '../stores/uiStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
+import * as versionApi from '../api/version';
+
+// `HubRail` now also mounts `VersionBadge`, which fires a real `getVersion()`
+// (and thus `fetch('/api/version')`) on every render. None of the cases below
+// are about the version badge — mocked here so the suite stays a deterministic
+// unit test rather than an unmocked network attempt in jsdom on every render.
+beforeEach(() => {
+  vi.spyOn(versionApi, 'getVersion').mockResolvedValue({
+    version: '2026.07.30',
+    commit: 'e93ebf8',
+    builtAt: '2026-07-30T09:12:44.000Z',
+    arch: 'arm64',
+  });
+});
 
 afterEach(() => {
   document.documentElement.style.colorScheme = '';
+  vi.restoreAllMocks();
 });
 
 function renderRail(path: string) {
