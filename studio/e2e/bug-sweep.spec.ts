@@ -121,7 +121,7 @@ test.describe('#698 route-level code-splitting', () => {
     const name = `sweep-canvas-${Date.now()}`;
     await page.getByRole('textbox', { name: 'Name' }).fill(name);
     await page.getByRole('button', { name: 'Create pipeline' }).click();
-    await page.getByRole('link', { name: `Open ${name}` }).click();
+    await page.getByRole('link', { name: `Open ${name}`, exact: true }).click();
 
     // The lazily-loaded canvas actually arrives.
     await expect(page.locator('.react-flow')).toBeVisible();
