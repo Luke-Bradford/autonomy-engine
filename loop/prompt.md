@@ -162,6 +162,28 @@ Board mirror (close each on phase completion via `gh issue close`, never a PR-bo
 2. Read the owning spec's ticket + its spike/codex-hardened block. Spec briefly in the PR body: what/why, security model, tradeoffs.
 3. **PLANNING GATE — plan + scrutinise BEFORE any code (fix-then-proceed).** Write a short plan: the ticket(s) this fire closes, files to create/touch, the reducer/event-union/schema/Zod changes, the test list, and how each maps to the spec's spike/codex-hardened decisions + the WORK ORDER deps. Self-scrutinise it first: gaps vs the spec, does it honour the dependency order, and — before adding anything — `grep`/read `studio/` for prior art so you REUSE existing schema/helpers/reducer branches instead of reinventing them. Then dispatch a fresh thinking-tier subagent to adversarially review the PLAN across four lenses: (a) **gaps** — missed spec requirement / spike-hardened decision / edge or branch case; (b) **reuse** — does `studio/` already have this (schema, util, reducer path) — don't duplicate; (c) **better approach** — a simpler/safer design the plan missed; (d) **on-plan** — matches the work-order deps + the owning spec's ticket, no scope creep. Address every real finding before writing a line of code. If review surfaces an irreducible design fork NOT settled in a spec, open an `[operator-decision]` and STOP the fire — a wrong plan wastes the whole fire, this gate is cheap.
 4. **TDD**: failing test first, see it fail, implement, see it pass.
+
+4b. **COMMIT BEFORE ANY LONG WAIT.** Before you start something that takes minutes and that you do
+    not control — a full test suite, a mutation pass, an e2e run, a review-gate poll, a subagent
+    dispatch — `git add` + `git commit` what you have first. A WIP commit is fine; you can amend or
+    squash it later.
+
+    Why this is a rule and not a preference. A fire is bounded, and three fires (1, 8 and 9 on
+    2026-07-30) have now ended *while waiting* rather than while working. Fires 1 and 8 had committed
+    first, so the next fire's triage found a branch ahead of main, continued it, and lost only a
+    context rebuild. **Fire 9 had not** — 258 lines across three files sat uncommitted with zero
+    commits, so `git log origin/main..HEAD` was empty, the driver's stall detector correctly reported
+    "no branch ahead", and a 76-minute fire counted as no progress. Three of those in a row stop the
+    run with "nothing more to do" while the work is still sitting there.
+
+    Uncommitted work is also the only thing the destructive-git hook cannot fully protect: it blocks
+    `checkout --`/`restore`/`stash`/`reset --hard`/`clean -f`, but a committed change needs no
+    protecting in the first place.
+
+    This extends the existing rule about committing before dispatching review subagents (a lens that
+    restores its own mutation with `git checkout --` reverts to HEAD and wipes your uncommitted
+    edits) to every long wait, for the same underlying reason: **anything you have not committed is
+    work only this fire knows about.**
 5. Build in `studio/`. Match studio conventions (TS strict ESM · Zod shared FE/BE · vitest · eslint flat + prettier · pnpm workspaces · React+React Flow+zustand · Fastify · Drizzle+better-sqlite3; the PURE reducer + `run_events` append log = source of truth; runs bind an IMMUTABLE version).
 6. **PRE-PR REVIEW GATE — two lenses, fix-then-proceed.** `pnpm -C studio lint && pnpm -C studio typecheck && pnpm -C studio test` GREEN. Self-review the diff against your PLAN from step 3 first. Then dispatch TWO fresh subagent reviews of the diff: (a) **CORRECTNESS** — termination/concurrency/event-sourcing/reducer-purity/immutable-version/failure-`kind` semantics; (b) **FIT** — gaps vs the plan+spec, code reuse/duplication (did you reinvent an existing helper?), a simpler/better approach, dead scope-creep, and "is this still on the plan". Resolve EVERY real finding — FIXED `<sha>` / DEFERRED `<reason>` / REBUTTED `<reason>`, nothing silently dropped — before `gh pr create`. Unresolvable design fork → `[operator-decision]`, stop clean. (No codex CLI in this headless loop — a codex hang would stall an unattended fire; the two subagent lenses + the PR review-bot are your gate.) **The review bot NOW REVIEWS `studio/` FOR REAL** (#469, its charter was engine-only until 2026-07-15 and it was emitting arbitrary verdicts on studio diffs — every studio APPROVE before `aa4ece6` certified nothing). So: its findings are real signal, act on them; a `REQUEST CHANGES` means a genuine BLOCKING finding, not a mis-scope; and you should NOT see "out of scope for the stated charter" on a studio diff — if you ever do, that is a regression in `lib/review_prompt.py`, so raise `[loop-blocked]` rather than merging past it.
 7. **UI tickets — MANDATORY verify gate, via the E2E HARNESS not a hand-driven browser** (supersedes the old "drive the Playwright MCP" rule, which cost $45-58/fire in round-trips): `pnpm -C studio test:e2e` GREEN with a spec that covers your change. That script does `pnpm build` first — **never run bare `playwright test`, it tests a STALE `dist`** and has produced false PASS readings. Dark mode included. A live browser is for DIAGNOSING a failing spec, or ONE final smoke check — not for the verification itself; if you open one, batch every assertion into a SINGLE `browser_evaluate` and report how many browser calls you used. A UI PR with no e2e coverage is NOT done. (Ports if you do boot the app: server :8080, web on the next free port — eBull owns :5173, never kill it.)
