@@ -30,8 +30,13 @@ RUN pnpm --filter @autonomy-studio/shared build \
 # CONTAINER would serve the `0.0.0-dev` placeholder in what the architecture doc
 # calls the primary ship path, even though a bare `pnpm build` install carries
 # a real one.
+# No `:-` fallbacks: the ARG defaults above already supply them. The one case
+# `:-` would additionally catch is an EXPLICITLY empty `--build-arg X=`, which
+# ARG defaults do not cover -- but that lands safely anyway, because an empty
+# version fails BuildInfoSchema's `min(1)` and the reader falls back to the dev
+# placeholder rather than serving a blank version.
 RUN node scripts/write-manifest.mjs packages/server \
-      "${STUDIO_VERSION:-0.0.0-dev}" "${STUDIO_COMMIT:-dev}" "$(node -p process.arch)"
+      "$STUDIO_VERSION" "$STUDIO_COMMIT" "$(node -p process.arch)"
 
 # Drop dev dependencies (esbuild, vite, typescript, ...) — keep only what the
 # server needs at runtime. `--legacy`: pnpm 10+ otherwise refuses to `deploy` a
