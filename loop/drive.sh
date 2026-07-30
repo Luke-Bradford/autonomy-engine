@@ -751,6 +751,112 @@ Driver log: \`studio-loop/logs/driver.log\`."
   done
 }
 
+# --- THE FIRE OUTCOME FACTS (#774) -------------------------------------------
+# Echo a compact one-line fact string describing how the last fire TERMINATED,
+# for the LIMIT-vs-CRASH classifier below to match markers against.
+#
+# WHY THIS EXISTS. The classifier used to grep the ENTIRE fire log. A fire log is
+# a full transcript -- every file read, every diff, every word the agent wrote --
+# so when the fire's TICKET is about rate limiting, the markers are all over it
+# for entirely innocent reasons (measured on a real 2026-07-29 log: `quota` 1337
+# times, `429` 166, `rate limit` 41). The classifier then matched
+# unconditionally, so a GENUINE crash -- a broken script, a bad merge, a hung
+# tool -- was excused as a limit: `crash` never incremented, MAX_CRASH never
+# tripped, no `[loop-blocked]` was ever filed, and the driver backed off and
+# retried the same broken fire indefinitely while the `[loop-paused] limit` alert
+# told the operator "NEEDS NO ACTION". Fail-open in the one direction the crash
+# detector exists to cover.
+#
+# The haystack is the LAST `{"type":"result"}` object and nothing else:
+#   - Scanned for, not `tail -1`'d: a fire log is a MIXED stream (wrapper lines
+#     plus stream-json from `run.sh`'s `--output-format stream-json`), and its
+#     literal last line is usually a driver footer -- 276 of the 277 real logs
+#     with a result object. Not ALL of them, which is the point: the one exception
+#     is a crash whose wrapper died before writing a footer, leaving the result
+#     object itself last. So neither "the last line is the result" nor "a footer
+#     is always there" holds, and scanning is the only shape-independent read.
+#   - The LAST such object, because a log can hold several when run.sh invokes the
+#     CLI more than once: 88 of those 277 hold more than one, up to SIX. The
+#     terminal one is the outcome; an earlier one only describes a turn that was
+#     followed by more work.
+#
+# Two exit codes distinguish the non-classifiable cases, because they mean
+# different things to an operator reading the driver log and both must land on
+# CRASH rather than silently on the no-action path:
+#   1 = no log, no terminal result object, or unparseable -- the outcome is
+#       UNREADABLE (killed by OOM/launchd before emitting one, say).
+#       KNOWN CONSEQUENCE, accepted deliberately: this catches a real LIMIT that
+#       terminates before any stream-json turn starts (a 429 refused at connection
+#       or auth time), which the old whole-log grep would have called a limit off
+#       its raw stderr. Such a fire now counts toward MAX_CRASH. That is the
+#       fail-SAFE direction and it is bounded -- MAX_CRASH consecutive failures
+#       file one visible `[loop-blocked]`, and any clean fire resets the counter --
+#       whereas the LIMIT path retries forever and tells nobody, which is the whole
+#       defect. `ensure_auth` at the loop top independently pauses on an auth/limit
+#       block, so the common shapes are caught before the fire path repeats.
+#   2 = the model turn did NOT error, so a non-zero rc came from the WRAPPER.
+#       Here the `result` text is the agent's own prose summary, markers and all,
+#       so consulting it would reopen this very bug at one-message scale. It is
+#       excluded BY THE GATE, not by hoping prose stays clean.
+# When the turn DID error, `result` carries the provider's error string instead
+# ("API Error: 529 Overloaded", "You've hit your weekly limit") and is the only
+# place a status-less limit is visible at all. Every real limit observed so far
+# (two 429s, one 529) DID carry `api_error_status`, so the text is not what
+# classifies those -- but real logs also show `is_error:true` with a NULL status
+# (an expired-OAuth case and a connection-closed one), so "a limit that arrives
+# without a status" is a shape this log format genuinely produces, and the text is
+# the only signal left when it does. Case 28c pins that shape and fails without it.
+fire_result_facts() { # $1=fire log path -> facts on stdout; 1=unreadable, 2=no turn error
+  [ -n "${1:-}" ] && [ -f "$1" ] || return 1
+  python3 -c '
+import json, sys
+
+last = None
+try:
+    fh = open(sys.argv[1], errors="replace")
+except IOError:
+    sys.exit(1)
+with fh:
+    for line in fh:
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "result":
+            last = obj
+if last is None:
+    sys.exit(1)
+# Strictly `is True`: a MISSING is_error must not read as "the turn errored", and
+# a truthy-but-non-bool must not either.
+if last.get("is_error") is not True:
+    sys.exit(2)
+# Capped and whitespace-flattened: this string goes into the driver log, so an
+# unbounded error body would dominate it.
+#
+# The cap is a real (if remote) risk and therefore MEASURED, not guessed: a marker
+# sitting past the cut would be truncated out of the haystack and the limit would
+# misclassify as a CRASH. Across the 277 real logs the longest terminal result text
+# on an ERRORED turn -- the only case reached here at all, since a non-errored turn
+# exits 2 above -- is 158 chars. 2000 is ~12x that. (Successful fires do run to
+# 4130, carrying the whole closing summary from the agent, but those exit 0 and
+# never reach the classifier.) Raise this rather than trim it if errors grow.
+#
+# NOTE no apostrophes in this block: it lives inside `python3 -c` single quotes,
+# where one would terminate the shell string. shellcheck catches it.
+text = " ".join(str(last.get("result") or "").split())[:2000]
+print("status=%s subtype=%s terminal=%s stop=%s text=%s" % (
+    last.get("api_error_status"),
+    last.get("subtype"),
+    last.get("terminal_reason"),
+    last.get("stop_reason"),
+    text,
+))
+' "$1" 2>/dev/null
+}
+
 # --- executable body ---------------------------------------------------------
 # Everything above is configuration + function definitions; everything below runs
 # the loop. The guard is the repo convention, and it matters MORE here than most:
@@ -1005,8 +1111,17 @@ EOF
     # LIMIT vs BREAK: a usage/rate limit is a PAUSE (back off, retry -- never a
     # stop); a non-limit failure with auth good is a real BREAK (count it).
     lastlog="$(ls -t "$INFRA"/logs/fire.*.log 2>/dev/null | head -1)"
-    if [ -n "$lastlog" ] && grep -qiE 'usage limit|rate limit|rate_limit|429|overloaded|resource_exhausted|quota|too many requests' "$lastlog" 2>/dev/null; then
-      log "fire $fires hit a LIMIT -- pausing + backing off (NOT a crash)"
+    # #774 -- the marker list is unchanged; only its INPUT is narrowed, from the
+    # whole transcript to the terminal result facts. See `fire_result_facts`.
+    fire_facts="$(fire_result_facts "$lastlog")"
+    facts_rc=$?
+    case "$facts_rc" in
+      0) crash_why="terminal result carried no limit marker [$fire_facts]" ;;
+      2) crash_why="the model turn did NOT error, so the non-zero rc came from the wrapper (agent prose is never consulted)" ;;
+      *) crash_why="fire outcome UNREADABLE (no log, no terminal result, or unparseable) -- failing safe to CRASH" ;;
+    esac
+    if [ "$facts_rc" = "0" ] && printf '%s' "$fire_facts" | grep -qiE 'usage limit|rate limit|rate_limit|429|overloaded|resource_exhausted|quota|too many requests'; then
+      log "fire $fires hit a LIMIT -- pausing + backing off (NOT a crash) [$fire_facts]"
       paused_open limit "usage/rate limit hit; loop PAUSED, backing off" \
 "A fire hit a usage/rate limit. The driver is backing off and retries automatically when the limit clears (auto-closes on recovery). No fires wasted, no action needed."
       backoff_sleep $(( crash + 3 ))
@@ -1015,10 +1130,15 @@ EOF
     # Auth can also die MID-fire; ensure_auth at the loop top will catch+pause it
     # next iteration. Here, treat a non-limit failure as a real break.
     crash=$((crash + 1))
-    log "fire $fires exited NON-ZERO, not a limit (crash=$crash/$MAX_CRASH)"
+    log "fire $fires exited NON-ZERO, not a limit (crash=$crash/$MAX_CRASH): $crash_why"
     if [ "$crash" -ge "$MAX_CRASH" ]; then
       signal_blocked "run.sh crash-looped ($crash consecutive non-limit failures, auth OK)" \
-"The studio build driver stopped: \`run.sh\` failed **$crash times in a row** with auth confirmed good and no usage/rate-limit marker in the fire logs. This is a genuine BREAK (a bug in the fire path), not a limit -- so it needs you, not a backoff.
+"The studio build driver stopped: \`run.sh\` failed **$crash times in a row** with auth confirmed good and no usage/rate-limit marker in how the last fire TERMINATED. This is a genuine BREAK (a bug in the fire path), not a limit -- so it needs you, not a backoff.
+
+Why the last one was not a limit:
+\`\`\`
+$crash_why
+\`\`\`
 
 Most recent fire log:
 \`\`\`

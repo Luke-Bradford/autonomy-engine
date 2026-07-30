@@ -212,7 +212,59 @@ EOS
       SEED_POLL_MEMO=*) printf '%s\n' "${rc_a#SEED_POLL_MEMO=}" >"$tmp/infra/.last_quota_poll" ;;
     esac
   done
-  printf '#!/bin/bash\necho fired >>"%s/fires.txt"\nexit 0\n' "$tmp" >"$tmp/infra/run.sh"
+  # run.sh stub. RUN_RC=<n> makes the fire FAIL, and FIRE_RESULT=<kind> leaves a
+  # synthetic fire log behind (#774) -- the LIMIT-vs-CRASH classifier reads the
+  # newest `$INFRA/logs/fire.*.log`, so a case about classification has to leave
+  # one exactly as a real fire does. Both arrive through the same `env` as every
+  # other knob: drive.sh's environment is inherited by the run.sh it spawns.
+  #
+  # Every kind writes the SAME transcript body first: the pollution #774 is
+  # about. A fire whose TICKET is rate limiting reads and writes those markers
+  # for entirely innocent reasons, and the old whole-log grep matched them, so
+  # the body is what makes the crash cases discriminating -- restore the whole-log
+  # grep and every one of them flips to LIMIT.
+  cat >"$tmp/infra/run.sh" <<'EOS'
+#!/bin/bash
+echo fired >>"$REPO/fires.txt"
+if [ -n "${FIRE_RESULT:-}" ]; then
+  mkdir -p "$INFRA/logs"
+  fl="$INFRA/logs/fire.$(date +%Y%m%d-%H%M%S).$$.log"
+  # Interleaved non-JSON lines are deliberate: a real fire log is a MIXED stream
+  # (wrapper lines + stream-json), and its literal last line is a driver footer,
+  # so an extractor that reads only `tail -1` would find nothing here either.
+  {
+    echo "=== studio-build-loop fire START ==="
+    echo '{"type":"assistant","message":{"content":[{"type":"text","text":"reading the quota guard: rate limit, rate_limit, 429, quota, usage limit, overloaded, too many requests, resource_exhausted"}]}}'
+    echo '{"type":"user","message":{"content":"the quota endpoint answered 429 Too Many Requests"}}'
+  } >"$fl"
+  case "$FIRE_RESULT" in
+    # A GENUINE crash (a hung tool aborted the stream) inside a quota-ticket fire.
+    crash_polluted)
+      echo '{"type":"result","is_error":true,"subtype":"error_during_execution","api_error_status":null,"terminal_reason":"aborted_streaming","stop_reason":"tool_use","result":""}' >>"$fl" ;;
+    # A REAL limit. Note the text says "weekly limit", which matches NO marker --
+    # so this case passes only if the status field itself is in the haystack.
+    limit_429)
+      echo '{"type":"result","is_error":true,"subtype":"success","api_error_status":429,"terminal_reason":"api_error","stop_reason":"stop_sequence","result":"weekly limit reached - resets Jul 22 at 3am"}' >>"$fl" ;;
+    # A 529 whose status was NOT captured -- classifiable ONLY from the result
+    # TEXT, which is what makes including that text non-vacuous. SYNTHETIC on
+    # purpose: the real 529 (2026-07-29) did carry `api_error_status=529`. What is
+    # real is the SHAPE -- other logs show `is_error:true` with a null status (an
+    # expired-OAuth case, a connection-closed one), so a limit arriving without one
+    # is not hypothetical, and the text is the only signal left when it happens.
+    limit_529_text)
+      echo '{"type":"result","is_error":true,"subtype":"success","api_error_status":null,"terminal_reason":"api_error","stop_reason":"stop_sequence","result":"API Error: 529 Overloaded. This is a server-side issue, usually temporary"}' >>"$fl" ;;
+    # The model turn SUCCEEDED and the non-zero rc came from the wrapper. Here the
+    # result text IS the agent's own prose, markers and all -- it must never be
+    # consulted, or #774 returns through the narrowed haystack.
+    wrapper_fail)
+      echo '{"type":"result","is_error":false,"subtype":"success","api_error_status":null,"terminal_reason":"completed","stop_reason":"end_turn","result":"Landed the quota guard fix: rate limit handling, 429 backoff, usage limit markers, resource_exhausted mapping"}' >>"$fl" ;;
+    # Killed before any terminal result was emitted (OOM, launchd kill).
+    no_result) : ;;
+  esac
+  echo "=== studio-build-loop fire END ===" >>"$fl"
+fi
+exit "${RUN_RC:-0}"
+EOS
   chmod +x "$tmp/infra/run.sh"
   cp "$HERE/drive.sh" "$tmp/infra/drive.sh"
 
@@ -947,6 +999,57 @@ check "the reason is stated on the FIRST iteration as well" "0" \
 # A tip older than AHEAD_MAX_AGE is abandonment, not work in flight.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-abandoned BRANCH_AGE_H=48)"
 check "a 48h-old branch does NOT mask the stall -> stops after 3" "3" "$(fires_of "$r")"
+
+# --- 28. #774 classify a failed fire from its TERMINAL RESULT, not the log ---
+# The classifier grepped the ENTIRE fire log for limit markers. A fire log is a
+# full transcript, so during any quota/rate-limit TICKET the markers are all over
+# it innocently (measured: `quota` x1337 in one real log) -- and a GENUINE crash
+# was then excused as a limit, `crash` never incremented, MAX_CRASH never tripped,
+# and the driver retried a broken fire forever while the operator was told
+# "NEEDS NO ACTION". Fail-open in the one direction the crash detector exists for.
+#
+# Every case below leaves a transcript body FULL of markers, so the old behaviour
+# is what makes them discriminating rather than an extra assertion.
+
+# 28a. THE HEADLINE: a real crash inside a quota-ticket fire is counted.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=crash_polluted)"
+check "a crash whose TRANSCRIPT is full of quota prose counts as a CRASH" "0" \
+  "$(grep -q 'not a limit (crash=1/1)' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and is NOT excused as a limit" "1" \
+  "$(grep -q 'hit a LIMIT' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and reaches [loop-blocked] instead of retrying forever" "0" \
+  "$(grep -q 'STOP: crash-looped' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28b. NO REGRESSION: a real 429 is still a limit -- from the status FIELD, since
+# this result's text ("weekly limit") matches no marker in the list.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=limit_429)"
+check "a real 429 is still a LIMIT (classified from api_error_status)" "0" \
+  "$(grep -q 'hit a LIMIT' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and never touches the crash counter" "1" \
+  "$(grep -q 'not a limit (crash=' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28c. The result TEXT is load-bearing too: a 529 arrives with NO status, so
+# dropping the text from the haystack would misclassify a genuine overload.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=limit_529_text)"
+check "a 529 with no status is a LIMIT (classified from the result text)" "0" \
+  "$(grep -q 'hit a LIMIT' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28d. FAIL-SAFE: an unreadable outcome must never take the no-action path. Same
+# shape as the engine's "a gh API failure is NEVER CI-green".
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=no_result)"
+check "a fire with NO terminal result is a CRASH, not a limit" "0" \
+  "$(grep -q 'not a limit (crash=1/1)' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and says the outcome was UNREADABLE rather than inventing one" "0" \
+  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 28e. The agent's OWN PROSE is never the haystack. When the model turn did not
+# error, a non-zero rc came from the wrapper -- and this result's text is a fire
+# summary stuffed with markers, so consulting it would reopen #774 at one message.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=wrapper_fail)"
+check "a non-erroring turn with marker-laden PROSE is a CRASH" "0" \
+  "$(grep -q 'not a limit (crash=1/1)' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and is not excused by its own prose" "1" \
+  "$(grep -q 'hit a LIMIT' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
