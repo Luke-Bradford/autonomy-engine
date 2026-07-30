@@ -665,6 +665,28 @@ check "and is not misreported as a concurrent install" "0" \
 check "and says what was actually wrong" "1" \
   "$(has 'cannot create the state dir' "$sb/nolock.out")"
 
+echo "== a lock that cannot be CREATED is not a conflict =="
+# `mkdir` reports EEXIST and "permission denied" identically, so without looking
+# at the directory itself a real failure is announced as "another install is in
+# progress" -- the same misreport the STATE_DIR mkdir already avoids one level
+# up. Here the state dir exists (so `mkdir -p` succeeds) but is not writable.
+sb="$(new_sandbox)"
+mkdir -p "$sb/state"
+if [ "$(id -u)" = "0" ]; then
+  echo "ok   - (skipped as root: mode bits cannot block root's mkdir)"
+else
+  chmod 500 "$sb/state"
+  ( load_sut "$sb"; main --update --port 8788 --state-dir "$sb/state" \
+      --repo-src "$sb/src" --node /usr/bin/node ) >"$sb/rolock.out" 2>&1
+  rolock_rc=$?
+  chmod 700 "$sb/state"    # or the sandbox cleanup cannot remove it
+  check "an uncreatable lock FAILS" "1" "$([ "$rolock_rc" -ne 0 ] && echo 1 || echo 0)"
+  check "and is not called a concurrent install" "0" \
+    "$(has 'another install is in progress' "$sb/rolock.out")"
+  check "and says the lock could not be created" "1" \
+    "$(has 'cannot create the lock' "$sb/rolock.out")"
+fi
+
 echo "== uninstall does not race a live install =="
 sb="$(installed_sandbox)"
 mkdir -p "$sb/state/.install.lock"

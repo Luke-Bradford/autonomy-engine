@@ -407,7 +407,10 @@ report_status() {
 # false explanation in its log.
 acquire_lock() {
   mkdir -p "$STATE_DIR" 2>/dev/null || { die "cannot create the state dir $STATE_DIR"; return 2; }
-  take_lock && return 0
+  take_lock
+  al_tl=$?
+  [ "$al_tl" -eq 0 ] && return 0
+  [ "$al_tl" -eq 2 ] && { die "cannot create the lock at $LOCK_DIR"; return 2; }
   al_age="$(find "$LOCK_DIR" -maxdepth 0 -mmin +60 2>/dev/null)"
   if [ -n "$al_age" ]; then
     say "warning: removing an abandoned lock at $LOCK_DIR (older than 60m)"
@@ -422,9 +425,20 @@ acquire_lock() {
 # delete the first's FRESH lock; without an owner check the loser then also
 # deletes the winner's lock on its way out, leaving the tree unprotected while
 # both are still working in it.
+#
+# Returns 0 = took it, 1 = EEXIST (somebody holds it), 2 = could not create it at
+# all. `mkdir` reports every failure the same way, so the directory itself is the
+# evidence: if it is there, the failure was a conflict; if it is not, the mkdir
+# failed for a real reason (permissions, ENOSPC) and calling that "another
+# install is in progress" is the same misreport the STATE_DIR mkdir already
+# avoids one level up.
 take_lock() {
-  mkdir "$LOCK_DIR" 2>/dev/null || return 1
-  printf '%s\n' "$$" >"$LOCK_DIR/owner"
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    printf '%s\n' "$$" >"$LOCK_DIR/owner"
+    return 0
+  fi
+  [ -d "$LOCK_DIR" ] || return 2
+  return 1
 }
 release_lock() {
   [ "$(cat "$LOCK_DIR/owner" 2>/dev/null)" = "$$" ] || return 0
