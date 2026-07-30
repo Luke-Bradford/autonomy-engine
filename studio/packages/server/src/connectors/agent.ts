@@ -91,8 +91,10 @@ const agentConnectionConfigSchema = z.object({
   /** Default working directory; the activity `cwd` overrides it. */
   cwd: z.string().optional(),
   /**
-   * #2 L14b — the default model this CLI connection reports for an `llm_call`
-   * (node `config.model` < this < the `cli` fallback). Purely a metering LABEL:
+   * #2 L14b — the default model this CLI connection reports for any metered
+   * invocation (node `config.model` < this < the `cli` fallback). An `agent_task`
+   * has no node-level leg — `agentTaskConfigSchema` declares no `model` — so for
+   * that shape this IS the label (#797). Purely a metering LABEL:
    * an `unpriced` subscription call has no price to resolve, and the operator
    * configures any real `--model` flag statically via `args`; this only names
    * the model for observability/audit.
@@ -151,14 +153,49 @@ function isCompilableRegex(pattern: string): boolean {
 
 type AgentConnectionConfig = z.infer<typeof agentConnectionConfigSchema>;
 
-/** The `provider` field on an `llm_call` CLI response's metering fact — the
- * Connection kind, per the `activity.metered` contract. Derived from the shared
- * kind constant so the metering label cannot drift from the adapter's `kind`. */
+/** The `provider` field on an `agent_cli` metering fact (BOTH invocation shapes
+ * since #797) — the Connection kind, per the `activity.metered` contract.
+ * Derived from the shared kind constant so the metering label cannot drift from
+ * the adapter's `kind`. */
 const AGENT_CLI_PROVIDER: string = AGENT_CLI_CONNECTION_KIND;
 
 /** The metering model LABEL when neither the node nor the connection names one.
  * An `unpriced` call has no price to resolve, so this is descriptive only. */
 const CLI_MODEL_FALLBACK = 'cli';
+
+/**
+ * #2 L14 / #797 — the metering FACT for one `agent_cli` invocation: `unpriced`
+ * with NO token counts, because a subscription CLI has no per-response dollar
+ * price BY DESIGN and reports no usage. `run-cost` folds it into the `unpriced`
+ * bucket, which (unlike `unknown`) never flips a run's cost to INCOMPLETE.
+ *
+ * Emitted for a subprocess that RAN, whether or not it produced a completion —
+ * a tree-killed CLI burned the subscription's quota just the same, and that is
+ * the only spend signal there is on this transport. The two call sites do NOT
+ * apply an identical predicate; see each for the exclusions it can enforce.
+ *
+ * The rule deliberately DIVERGES from the HTTP adapters' (#725 `spendFact`),
+ * which leave a timeout unmarked because a timeout cannot distinguish a slow
+ * generation from a dropped SYN. Two things differ here and both point the same
+ * way: (1) their fact would be `costUnknown`, which flips a run permanently
+ * INCOMPLETE, so over-marking is expensive — ours is `unpriced`, so over-marking
+ * costs one extra `responseCount` and nothing else; (2) a SPAWNED process is at
+ * least SOME evidence the call was issued, which `llmPost` has no per-request
+ * channel to establish at all. Leg (2) is deliberately weak and (1) carries the
+ * design on its own: a spawn proves a PROCESS started, not that a request
+ * reached the provider — a CLI that hangs on DNS and is killed at the ceiling
+ * burned nothing. (`types.ts` states the same caveat as "WEAKER evidence than
+ * the rule below — a spawned subprocess, not a returned response".) Note the
+ * evidence is the SPAWN, not stdout: a single-shot CLI flushes its completion at
+ * the END, so gating on stdout would miss precisely the longest, most expensive
+ * run — the one killed at the ceiling.
+ */
+function cliSpendFact(model: string): Extract<ActivityEvent, { type: 'metered' }> {
+  return {
+    type: 'metered',
+    usage: { provider: AGENT_CLI_PROVIDER, model, meteringStatus: 'unpriced' },
+  };
+}
 
 /** Bound on the CLI diagnostic excerpt folded into a non-zero-exit failure
  * message, so a verbose CLI cannot bloat the durable `node.failed` event. Over
@@ -401,6 +438,40 @@ async function* runAgentTask(
       ...(output.length > 0 ? { outputHash: sha256Hex(output) } : {}),
     },
   };
+  // #797 — meter the invocation BEFORE any terminal (the slot the `metered` fact
+  // holds on every other adapter), so it lands on the FAILURE paths too. Sited
+  // ahead of the terminal branch so it covers all three outcomes uniformly: a
+  // completed run, a structured-mode block that fails validation after a clean
+  // exit, and an abnormal termination.
+  //
+  // `spawnFailed` is the ONE exclusion: no subprocess ever started, so nothing
+  // was billed and marking it would manufacture spend. The pre-spawn config
+  // failures return earlier still and never reach here.
+  //
+  // NOT the same predicate as `llm_call`'s, which ALSO excludes a quota
+  // exhaustion. This shape cannot make that check and does not pretend to: it
+  // discards stderr (`spawnAndCollect` above destructures only `result`/`stdout`)
+  // and it never classifies a quota refusal at all — an `agent_task` maps every
+  // exit code to a COMPLETED run, so there is no `rate_limit` reclassification
+  // here to hang the exclusion off. Consequence, stated plainly rather than
+  // papered over: on a connection with `quota.exhaustionPattern` configured, an
+  // `agent_task` refused for quota IS metered, where the `llm_call` on the same
+  // connection is not. It over-marks by exactly the accepted cost (one
+  // `unpriced` response, which can never flip a run's cost to INCOMPLETE). The
+  // missing quota classification for this shape is a pre-existing L14c gap
+  // tracked in #799 — widening it here would mean re-plumbing stderr collection
+  // for a case that costs nothing.
+  //
+  // NOTE the `responseCount` this increments is per INVOCATION, not per provider
+  // response: one `agent_task` drives an agent that may make many model calls
+  // internally, and the CLI reports none of them. It is a floor, not a census.
+  //
+  // Every observed exit code is a COMPLETED run here — `agent_task` succeeds on a
+  // non-zero exit (the code is data the pipeline branches on), so there is no
+  // exit-code case to reason about separately, as there is on the other shape.
+  if (classification.summary !== 'spawnFailed') {
+    yield cliSpendFact(config.model ?? CLI_MODEL_FALLBACK);
+  }
   if ('failed' in classification.terminal) {
     yield classification.terminal.failed;
     return;
@@ -444,10 +515,14 @@ async function* runAgentTask(
  * single-shot subprocess whose stdout is the `text` completion. The response is
  * metered `unpriced` (emitted BEFORE the terminal, mirroring the API adapters);
  * a non-zero exit is a `permanent` failure (an opaque CLI/model error the LLM
- * contract cannot express as a completion, and not one to hot-loop). NO metering
- * fact is emitted on ANY failure — we cannot know whether a billable response
- * occurred (a spawn failure definitely did not), and fabricating one would
- * misreport spend.
+ * contract cannot express as a completion, and not one to hot-loop). Since #797
+ * an ABANDONED invocation is metered too — a tree-killed or cancelled CLI burned
+ * the subscription's quota just the same. The rule is simply "a subprocess that
+ * RAN spent quota", with two exclusions that each positively establish no
+ * exchange was served: a spawn failure (no subprocess ran at all) and a quota
+ * EXHAUSTION (the service refused the call). Marking either would misreport
+ * spend. A plain non-zero exit is NOT excluded — see the metering site below for
+ * why the HTTP adapters' unmarked-non-2xx rule does not carry over to it.
  *
  * SHAPE LIMITS (a CLI single-shot cannot carry the full `llm_call` config, so the
  * operator drives these via the connection's static `args`, NOT the node config):
@@ -519,25 +594,71 @@ async function* runLlmCall(
     secret,
     ctx.signal,
   );
-  const { terminal } = classifyCliOutcome(result, config.command, 'llm_call');
+  const classification = classifyCliOutcome(result, config.command, 'llm_call');
+  const { terminal } = classification;
+  // A COMPLETED subprocess that exited non-zero — the only outcome that can
+  // carry a diagnostic or a quota verdict. Hoisted to a name because BOTH the
+  // metering decision below and the failure branch further down key off it.
+  const exitedNonZero = !('failed' in terminal) && terminal.exitCode !== 0;
+  // The combined stderr+stdout diagnostic: stderr first (the conventional error
+  // channel), matched PRE-redaction for detection accuracy. Built HERE rather
+  // than inside the non-zero-exit branch because the metering decision below
+  // needs the quota match — but built LAZILY (`''` otherwise), so the success
+  // path does not pay to join a whole completion it will never read.
+  const diagnostic = exitedNonZero
+    ? [stderr.join('\n'), stdout.join('\n')]
+        .map((s) => s.trim())
+        .filter((s) => s !== '')
+        .join('\n')
+    : '';
+  // #2 L14c — the matched quota hint, or `undefined` when this outcome is not a
+  // quota exhaustion. The pattern is boundary-validated compilable at the config
+  // boundary (`agentConnectionConfigSchema`, re-parsed on every dispatch), so
+  // `new RegExp` cannot throw.
+  const quotaHit =
+    exitedNonZero &&
+    config.quota !== undefined &&
+    new RegExp(config.quota.exhaustionPattern).test(diagnostic)
+      ? config.quota
+      : undefined;
+  // #797 — meter BEFORE any terminal, so an abnormal termination is accounted for
+  // rather than silently free. The rule: a subprocess that RAN spent the
+  // subscription's quota. Two exclusions:
+  //  - `spawnFailed` — no subprocess ran at all, so nothing was billed.
+  //  - a quota EXHAUSTION — the service refused the call, which is the one CLI
+  //    outcome that positively establishes no exchange was served. Note the
+  //    narrowness: `quotaHit` requires a COMPLETED non-zero exit, so a CLI that
+  //    printed its quota refusal and then hung until the wall-clock kill is
+  //    still metered. That is correct-by-policy (over-marking costs one
+  //    `unpriced` response), not a hole the exclusion was meant to cover.
+  // `agent_task`'s predicate is NOT identical — it cannot enforce the second
+  // exclusion; see the metering site there.
+  // Note a plain non-zero EXIT is NOT excluded, deliberately. It is tempting to
+  // read it as the HTTP adapters' unmarked non-2xx, but the analogy breaks: a
+  // non-2xx is the PROVIDER stating it did not serve the request, whereas an exit
+  // code is the client wrapper's verdict on its whole job — routinely non-zero
+  // AFTER a completed generation (a post-hoc parse/hook failure, a broken pipe on
+  // write). Under-marking those loses real spend; over-marking an exit-1 that never
+  // reached the model costs one `unpriced` response and cannot flip `complete`.
+  // Held to the same slot on success (`metered` then `succeeded`), so the ordering
+  // the API adapters guarantee holds on every `agent_cli` path.
+  if (classification.summary !== 'spawnFailed' && quotaHit === undefined) {
+    yield cliSpendFact(model);
+  }
   if ('failed' in terminal) {
     yield terminal.failed;
     return;
   }
   if (terminal.exitCode !== 0) {
-    // Some CLIs (e.g. `codex exec`) print their error/diagnostic to STDOUT, not
-    // stderr — fold BOTH into the detail so a failure is never a bare "exited N"
-    // with no context. stderr first (the conventional error channel).
+    // `diagnostic` folds BOTH channels (built above, since the metering decision
+    // needed it): some CLIs (e.g. `codex exec`) print their error to STDOUT, not
+    // stderr, so a failure is never a bare "exited N" with no context.
     // REDACT the resolved secret out of that text BEFORE it lands in the durable
     // `node.failed` event — a CLI commonly echoes the injected key in an
     // auth/quota error, and this string is persisted to `run_events` and served
     // over the API. Redact the FULL text first, then truncate, so a secret
     // straddling the truncation boundary is still fully scrubbed. Same never-leak
     // discipline every sibling adapter upholds (http/llm-shared → `redactSecrets`).
-    const diagnostic = [stderr.join('\n'), stdout.join('\n')]
-      .map((s) => s.trim())
-      .filter((s) => s !== '')
-      .join('\n');
     const raw = redactSecrets(diagnostic, [secret]);
     // Keep BOTH ends when over the cap: a CLI may print the real error EARLY (then
     // trail off in progress noise) OR summarise it at the END, so preserving only
@@ -547,23 +668,22 @@ async function* runLlmCall(
       raw.length > MAX_STDERR_DETAIL_CHARS ? `${raw.slice(0, half)}…${raw.slice(-half)}` : raw;
     // #2 L14c — a subscription-quota exhaustion is a THROTTLE, not a permanent
     // error. Match the connection's `quota.exhaustionPattern` against the
-    // PRE-redaction diagnostic (detection accuracy; the emitted `error` stays the
-    // redacted+truncated `detail`). On a hit, emit `rate_limit` (→ engine transient
+    // PRE-redaction diagnostic (evaluated above as `quotaHit`, because it is
+    // also the one non-zero-exit outcome that is NOT metered — a refused call was
+    // never served). On a hit, emit `rate_limit` (→ engine transient
     // + `code:'rate_limit'`) carrying the reset window as the L7 `retryAfterSeconds`
     // so the existing retry-alarm path waits out the window instead of hot-looping.
-    // The pattern is boundary-validated compilable, so `new RegExp` cannot throw.
     // NOTE: whether an alarm actually ARMS is the reducer's call — a `rate_limit`
     // (transient) failure only schedules a retry when the node carries a
     // `policy.retry` budget. With no retry policy the node settles to a plain
     // terminal failure (now merely tagged `code:'rate_limit'`) — correct: there is
     // nothing to retry against, so there is no hot-loop to wait out.
-    const quota = config.quota;
-    if (quota !== undefined && new RegExp(quota.exhaustionPattern).test(diagnostic)) {
+    if (quotaHit !== undefined) {
       yield {
         type: 'failed',
         kind: 'rate_limit',
         error: `llm_call CLI exited ${terminal.exitCode} (quota exhausted)${detail !== '' ? `: ${detail}` : ''}`,
-        retryAfterSeconds: quota.resetWindowSeconds,
+        retryAfterSeconds: quotaHit.resetWindowSeconds,
       };
       return;
     }
@@ -574,13 +694,9 @@ async function* runLlmCall(
     };
     return;
   }
-  // A billable (subscription-covered) response occurred: meter it `unpriced` with
-  // NO tokens (a CLI gives none) — the executor keeps ALL price fields absent, and
-  // L6 folds it into the run-cost's `unpriced` bucket (not the incompleteness gap).
-  yield {
-    type: 'metered',
-    usage: { provider: AGENT_CLI_PROVIDER, model, meteringStatus: 'unpriced' },
-  };
+  // The `metered` fact for this exchange was emitted above, before the terminal
+  // branches (#797) — it is no longer reachable only from the success path.
+  //
   // A present-but-empty completion (exit 0, empty stdout) is a real result — like
   // an API adapter's explicit `content:''` — so it succeeds with `text:''`. There
   // is no provider stop-reason for a CLI, so `coerceStopReason(undefined)` stamps
