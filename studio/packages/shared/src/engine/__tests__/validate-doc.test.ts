@@ -987,6 +987,62 @@ describe('validateDoc — edge endpoints must exist (#786)', () => {
     }
   });
 
+  // The skip is keyed on the edge OBJECT, not `e.id`, because NOTHING validates
+  // edge-id uniqueness — an id-keyed set would let one dangling edge suppress a
+  // well-formed namesake's own diagnostics. This is the doc's only real design
+  // choice, so it gets the test that fails when it is undone.
+  it('does not let a dangling edge suppress a NAMESAKE edge that is well formed', () => {
+    const d = doc(
+      [node('a'), node('outside')],
+      [
+        // Both carry id 'e1'. The first dangles; the second is a real
+        // container-boundary violation (a child may only leave via its container).
+        edge('ghost', 'a', 'success', { id: 'e1' }),
+        edge('a', 'outside', 'success', { id: 'e1' }),
+      ],
+      [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    );
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("from 'ghost' is not a node or container");
+    expect(errs).toContain('crosses a container boundary');
+  });
+
+  // A dangling `to` must not suppress a rule that reads only `from` — the branch
+  // edge below has TWO independent faults and the author should see both rather
+  // than pay a save round-trip per error.
+  it('reports a non-branching SOURCE alongside a dangling target', () => {
+    const d = doc([node('a')], [{ id: 'e1', from: 'a', to: 'ghost', on: 'branch', branch: 'x' }]);
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost' is not a node or container");
+    expect(errs).toContain("source 'a' is not a branching activity");
+  });
+
+  // `maxBounces` needs no id to resolve, so it is reported even when the
+  // back-edge's endpoint is absent; ancestry and no-progress are not, because
+  // both would be wrong answers about an id that is not there.
+  it('still demands maxBounces on a dangling back-edge, but not ancestry/progress', () => {
+    const d = doc([node('a')], [edge('a', 'ghost_loop', 'success', { back: true })]);
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost_loop' is not a node or container");
+    expect(errs).toContain('must declare maxBounces');
+    expect(errs).not.toContain('must be an ancestor');
+    expect(errs).not.toContain('makes no progress');
+  });
+
+  // The container-boundary rule reads BOTH endpoints, and its predicate is
+  // `owner.get(from) !== owner.get(to)` — so an absent id's very ABSENCE from the
+  // ownership map made it report a crossing into a container that does not exist.
+  it('does not report a container-boundary crossing into an id that does not exist', () => {
+    const d = doc(
+      [node('a'), node('b')],
+      [edge('a', 'ghost', 'success')],
+      [{ id: 'stg', kind: 'stage', children: ['a'] }],
+    );
+    const errs = validateDoc(d).join(' ');
+    expect(errs).toContain("to 'ghost' is not a node or container");
+    expect(errs).not.toContain('crosses a container boundary');
+  });
+
   // A CONTAINER id is a legal edge endpoint — `from`/`to` is one string field
   // over the shared node/container namespace. The over-rejection guard: this
   // rule must resolve against nodes UNION containers, never nodes alone.

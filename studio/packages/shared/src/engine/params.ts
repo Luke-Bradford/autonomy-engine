@@ -1924,6 +1924,16 @@ export function validateDoc(
   // the message below stays here, so this validator's error ARRAY is unchanged.
   for (const e of doc.edges) {
     if (e.back) continue;
+    // #786, same reason as the branch and back-edge loops — and this one is NOT
+    // self-neutralising, which a first reading assumed it was. The predicate is
+    // `owner.get(from) !== owner.get(to)`, so an absent id's very ABSENCE from
+    // `childOwner` makes the comparison unequal whenever the other endpoint is a
+    // child: `a → ghost` with `a` inside a stage reports a boundary crossing to a
+    // container that does not exist. Keyed on the whole edge because this rule
+    // reads BOTH endpoints. (A ghost LISTED as a container's child does get an
+    // owner — `containerMembership` is built over raw `children` — so the
+    // mirror shape misfires too.)
+    if (danglingEdges.has(e)) continue;
     if (crossesContainerBoundary(childOwner, e.from, e.to)) {
       // Looked up INSIDE the branch: the owners are message material only, and
       // the overwhelmingly common edge does not cross, so the non-crossing pass
@@ -1953,7 +1963,12 @@ export function validateDoc(
     // A dangling source is already reported by its true name (#786). Falling
     // through would add "is not a branching activity" — a wrong ANSWER about a
     // node that simply does not exist. One true error beats two, one misleading.
-    if (danglingEdges.has(e)) continue;
+    //
+    // Keyed on `e.from` specifically, NOT on `danglingEdges`: this rule reads
+    // only the source, so a dangling `to` must not suppress it. That branch
+    // edge has two independent faults — an absent target AND a source that
+    // cannot route — and reporting one per save costs the author a round trip.
+    if (!idKind.has(e.from)) continue;
     const src = nodeById.get(e.from);
     const branches = src === undefined ? undefined : declaredBranchesOf(src);
     if (branches === undefined) {
@@ -1987,23 +2002,26 @@ export function validateDoc(
   const reach = forwardReach(doc, containers);
   for (const e of doc.edges) {
     if (!e.back) continue;
-    // Same as the branch loop above (#786): a dangling endpoint would otherwise
-    // draw up to THREE derived misdiagnoses here — ancestry (an absent id
-    // reaches nothing), no-progress (its reset body cannot include an absent
-    // source), and maxBounces. `maxBounces` presence is genuinely deferred until
-    // the ref is fixed and the doc re-validated; that is the right trade against
-    // burying the one error that explains the other three.
+    // `maxBounces` FIRST, before the #786 skip below: its absence needs no id to
+    // resolve, so it is independently true of a dangling endpoint and is reported
+    // either way. (An earlier draft skipped it too and documented the deferral as
+    // a conscious trade — it isn't one, it is just avoidable.)
+    if (e.maxBounces === undefined) {
+      errors.push(
+        `back-edge '${e.id}': must declare maxBounces ` + '(an unbounded back-edge loops forever)',
+      );
+    }
+    // The two rules BELOW both resolve ids, so a dangling endpoint would draw
+    // derived misdiagnoses from each (#786): ancestry, because an absent id
+    // reaches nothing, and no-progress, because a reset body cannot contain an
+    // absent source. Both would be wrong answers about an id that is simply not
+    // there, burying the one error that explains them.
     if (danglingEdges.has(e)) continue;
     const fromTarget = reach.get(e.to) ?? new Set<string>();
     if (!fromTarget.has(e.from)) {
       errors.push(
         `back-edge '${e.id}': its target '${e.to}' must be an ancestor of '${e.from}' ` +
           '(a loop/stage container or an upstream node that reaches it)',
-      );
-    }
-    if (e.maxBounces === undefined) {
-      errors.push(
-        `back-edge '${e.id}': must declare maxBounces ` + '(an unbounded back-edge loops forever)',
       );
     }
     const body = backEdgeResetBody(e, nodeIdList, descendants, containerById);
