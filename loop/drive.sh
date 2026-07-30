@@ -38,10 +38,10 @@ set -uo pipefail
 INFRA="${INFRA:-/Users/lukebradford/Dev/studio-loop}"
 REPO="${REPO:-/Users/lukebradford/Dev/studio-loop-repo}"
 DLOG="${DLOG:-$INFRA/logs/driver.log}"
-MAX_STALL="${MAX_STALL:-3}"
+MAX_STALL="${MAX_STALL:-3}"       # consecutive no-progress fires = nothing more to do
 AHEAD_MAX_AGE="${AHEAD_MAX_AGE:-86400}"  # a studio branch whose tip is older than this is treated as
                                   # ABANDONED, not work in flight (#775 review): otherwise one stale
-                                  # branch from a crashed session masks the stall detector forever.       # consecutive no-progress fires = nothing more to do
+                                  # branch from a crashed session masks the stall detector forever.
 MAX_CRASH="${MAX_CRASH:-5}"       # consecutive REAL (non-limit) crashes = broken, needs operator
 GATE_WAIT_TRIES="${GATE_WAIT_TRIES:-60}"   # polls before giving up on a PR gate;
                                   # GATE_WAIT_TRIES x GATE_WAIT_SLEEP = up to 30 min by default
