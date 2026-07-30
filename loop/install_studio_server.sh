@@ -127,6 +127,7 @@ configure() {
   NODE_BIN=""
   DRY_RUN=0
   FORCE=0
+  FETCHED=0
   MODE="install"
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -306,12 +307,19 @@ provision() {
 # Silently building (or NOT building) a stale tree is how a service ends up
 # running code nobody can point at.
 fetch_origin() {
+  # Memoised: `main_locked` fetches to answer the staleness question and
+  # `provision` fetches before pinning, so a stale `--update` otherwise pays two
+  # round-trips a few seconds apart to learn the same thing. A plain install (or
+  # `--force`) never reaches the first call, so `provision` still fetches for
+  # real there.
+  [ "${FETCHED:-0}" -eq 1 ] && return 0
   git -C "$SERVICE_ROOT" fetch --quiet origin main || {
     die "fetch origin main failed: staleness is UNKNOWN, so this run is making no
   changes. It is NOT a report that the service is current. Check connectivity
   and the clone at $SERVICE_ROOT, then re-run."
     return 1
   }
+  FETCHED=1
 }
 
 origin_sha() { git -C "$SERVICE_ROOT" rev-parse origin/main 2>/dev/null; }
@@ -380,9 +388,9 @@ report_status() {
   # confidently it reports "current". Fetching touches refs only -- the service,
   # the working tree and the build are untouched -- so this stays read-only in
   # every sense that matters.
+  rs_fetched=yes
   if [ -d "$SERVICE_ROOT/.git" ]; then
-    git -C "$SERVICE_ROOT" fetch --quiet origin main 2>/dev/null \
-      || say "warning: fetch failed; origin/main below is a CACHED ref and may itself be stale"
+    git -C "$SERVICE_ROOT" fetch --quiet origin main 2>/dev/null || rs_fetched=no
   fi
   # Every fact is gathered ONCE, then printed, then judged. That ordering is the
   # point: the verdict is derived from exactly the lines above it, so it cannot
@@ -406,7 +414,7 @@ report_status() {
   say "state dir:   $STATE_DIR"
   say "built sha:   $rs_built   (the only evidence anything was COMPILED)"
   say "HEAD sha:    $(head_sha)"
-  say "origin/main: $rs_origin"
+  say "origin/main: $rs_origin$([ "$rs_fetched" = no ] && echo "   (CACHED -- the fetch failed)")"
   say "dist built:  $rs_dist"
   say "LaunchAgent: $rs_plist ($PLIST_PATH)"
   say "$LABEL: $([ "$rs_loaded" = yes ] && echo "loaded pid $(unit_pid)" || echo "NOT LOADED")"
@@ -418,8 +426,13 @@ report_status() {
   # underneath `health: NO ANSWER`: a drift surface calling a demonstrably dead
   # service current, which is precisely the failure mode this command exists to
   # remove. Every one of these is repaired by `--update`.
+  # The fetch is judged FIRST. Without it the verdict is computed from a cached
+  # ref that a failed fetch has just left unrefreshed, so `--status` could print
+  # CURRENT precisely when it has the least right to -- the same
+  # UNKNOWN-is-never-current rule `fetch_origin` enforces on the `--update` path.
   rs_why=""
-  if   [ -z "$rs_built" ];                 then rs_why="nothing has been built yet"
+  if   [ "$rs_fetched" = no ];             then rs_why="origin/main could not be refreshed, so staleness is UNKNOWN"
+  elif [ -z "$rs_built" ];                 then rs_why="nothing has been built yet"
   elif [ -z "$rs_origin" ];                then rs_why="origin/main could not be read"
   elif [ "$rs_built" != "$rs_origin" ];    then rs_why="the code is behind origin/main"
   elif [ "$rs_dist" != yes ];              then rs_why="the build output is missing"
@@ -429,6 +442,8 @@ report_status() {
   fi
   if [ -z "$rs_why" ]; then
     say "verdict:     CURRENT"
+  elif [ "$rs_fetched" = no ]; then
+    say "verdict:     UNKNOWN -- $rs_why"
   else
     say "verdict:     NEEDS UPDATE -- $rs_why; run this script with --update"
   fi

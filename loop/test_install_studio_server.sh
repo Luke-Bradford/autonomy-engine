@@ -531,12 +531,17 @@ check "and never bounces the server" "0" \
 
 echo "== --update acts when the service is stale =="
 sb="$(installed_sandbox)"
-: >"$sb/pnpm.calls"
+: >"$sb/pnpm.calls"; : >"$sb/git.calls"   # drop the install's own traffic
 ( load_sut "$sb"; GIT_ORIGIN_SHA="newsha1" LOADED_LABELS="$LOADED" \
     main --update --port 8788 --state-dir "$sb/state" --repo-src "$sb/src" \
     --node /usr/bin/node ) >"$sb/stale.out" 2>&1
 check "a stale update exits 0" "0" "$?"
 check "and rebuilds" "1" "$(has ' build$' "$sb/pnpm.calls")"
+# `main_locked` fetches to answer the staleness question and `provision` fetches
+# before pinning; without memoisation a stale update pays two round-trips a few
+# seconds apart to learn the same thing.
+check "and fetches once, not twice" "1" \
+  "$(grep -c 'fetch --quiet origin main' "$sb/git.calls" | tr -d ' ')"
 check "and re-stamps the new sha" "newsha1" "$(cat "$sb/state/built.sha")"
 
 echo "== staleness is measured from the BUILD, not from HEAD =="
@@ -792,6 +797,20 @@ check "status fetches before it compares" "1" "$(has 'fetch .*origin main' "$sb/
 check "and calls a drifted service NEEDS UPDATE" "1" \
   "$(has 'verdict: *NEEDS UPDATE .* behind origin/main' "$sb/statusfetch.out")"
 check "status still builds nothing" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
+
+# The fetch-first fix only helps when the fetch SUCCEEDS. If it fails, the
+# comparison falls back to a cached ref that was just left unrefreshed, so the
+# verdict could print CURRENT precisely when it has least right to -- the same
+# UNKNOWN-is-never-current rule the `--update` path already enforces.
+sb="$(installed_sandbox)"
+( load_sut "$sb"; GIT_FETCH_RC=1 LOADED_LABELS="$LOADED" main --status \
+    --state-dir "$sb/state" ) >"$sb/statusnofetch.out" 2>&1
+check "a failed fetch does not yield a CURRENT verdict" "0" \
+  "$(has 'verdict: *CURRENT' "$sb/statusnofetch.out")"
+check "it says the staleness is UNKNOWN" "1" \
+  "$(has 'verdict: *UNKNOWN' "$sb/statusnofetch.out")"
+check "and it flags the ref it printed as cached" "1" \
+  "$(has 'CACHED .* the fetch failed' "$sb/statusnofetch.out")"
 check "status loads nothing" "0" "$(has '^bootstrap' "$sb/launchctl.calls")"
 # Asserting the lock dir is absent afterwards only catches a LEAKED lock, not an
 # acquired-and-released one -- with that assertion alone, wrapping `--status` in
