@@ -165,37 +165,47 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 
+    /* Same reader as the no-pan test below: the viewport's own inline transform,
+       the thing that actually moves. */
+    const transform = () =>
+      page.evaluate(
+        () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
+      );
+    const beforeDelete = await transform();
+
     await deleteActivity(page, 'only');
 
     // The trap, as the operator meets it: the doc is refused, Save is dead.
     expect((await validationIssues(page)).join('\n')).toContain('makes no progress');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    /* The emptied box is NOT on screen at this point, and that is a real residue
-       rather than a quirk of this test — measured here, filed as #785.
-       `containerRects` places a container it cannot derive a size from to the
-       RIGHT of all remaining content, and `onlyRenderVisibleElements` then culls
-       it: after the delete above, `document.querySelectorAll('.react-flow__node')`
-       returns `['after']` — the container is not in the DOM at all. Because a
-       fitted viewport ends flush with the content bounds, "just outside them" is
-       reliably just off-screen, so this is systematic, not occasional.
-
-       So the escape route is real but two-step: bring the box into view, then use
-       it. Fit-view is the honest stand-in for the panning an operator would do
-       (the badge tells them a CONTAINER is the problem, so they know what they
-       are looking for).
-
-       ASSERTED, not just described. A bare fit-view click would leave the spec
-       passing whether or not the residue exists, and "documented in a comment"
-       is not the same as pinned — so the absence is a real assertion, and #785's
-       acceptance is that BOTH lines below come out together and the rest of this
-       test still passes. */
+    /* #785 — the emptied box is ON SCREEN, with no gesture in between.
+       `containerRects` places a container it cannot size from its children
+       OUTSIDE the content bounds, and `onlyRenderVisibleElements` then culls it,
+       so before the fix this box was not in the DOM at all: the assertion here
+       was `toHaveCount(0)` followed by a `.react-flow__controls-fitview` click to
+       bring it back. Because a fitted viewport ends flush with the content
+       bounds, "just outside them" was reliably just off-screen — systematic, not
+       occasional. The escape from the trap was therefore real but invisible.
+       The geometry is unchanged (a box moved INSIDE the bounds would be drawn
+       over activities it does not contain); the VIEWPORT moves instead, and this
+       count is the assertion that pins it — revert the reveal effect in
+       `FlowCanvas` and it goes red. */
     await expect(
       nodeById(page, 'loop_1'),
-      'the emptied box is on screen — #785 fixed?',
-    ).toHaveCount(0);
-    await page.locator('.react-flow__controls-fitview').click();
-    await expect(nodeById(page, 'loop_1')).toHaveCount(1);
+      'the emptied box was not revealed — #785 regressed?',
+    ).toHaveCount(1);
+
+    /* It PANNED — it did not refit. A `fitView()` would also have put the box on
+       screen and satisfied the count above, while throwing away the scale the
+       operator chose and re-framing the whole graph around one box. So the zoom
+       is asserted UNCHANGED and the translation asserted to have moved: together
+       they say "the minimum pan", which the count alone cannot. */
+    const afterDelete = await transform();
+    const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
+    expect(afterDelete).not.toBe(beforeDelete);
+    expect(scale(afterDelete)).toBe(scale(beforeDelete));
+    expect(scale(afterDelete), 'no scale in the transform — reader broken?').toBeDefined();
 
     // The way out — the box's own control, inside a box that is otherwise inert.
     await nodeById(page, 'loop_1').getByRole('button', { name: 'Delete loop container' }).click();

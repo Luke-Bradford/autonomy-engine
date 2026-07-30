@@ -67,6 +67,9 @@ export const CONTAINER_GAP = 40;
 /** The size of a container that has nothing to derive a size from. */
 export const EMPTY_CONTAINER_SIZE = { width: 220, height: 120 };
 
+/** Screen px kept between a box `revealTransform` pans into view and the edge. */
+export const REVEAL_MARGIN = 24;
+
 function union(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
@@ -113,7 +116,16 @@ export function containerRects(
      it has to be drawn somewhere real — not rendering it would silently drop its
      edges, which is the defect U6c exists to fix. The placement is deterministic
      rather than clever: any layout that reads the box back would otherwise move
-     it on every render. */
+     it on every render.
+
+     It is OUTSIDE the content bounds on purpose, and it stays that way (#785).
+     Inside them the box would be drawn over activities it does NOT contain —
+     the "asserts a membership the doc does not have" failure named above, only
+     manufactured deliberately. The cost is that a fitted viewport ends flush
+     with those bounds, so a box that appears here is reliably just off-screen
+     and `onlyRenderVisibleElements` culls it out of the DOM. What fixes the
+     REACHABILITY is `revealTransform` below, driven from the canvas: the
+     viewport moves to the box rather than the box moving into the graph. */
   const content = [...nodeRects.values()].reduce<Rect | null>(
     (acc, r) => (acc === null ? r : union(acc, r)),
     null,
@@ -148,4 +160,67 @@ export function containerRects(
     });
   }
   return rects;
+}
+
+/**
+ * The pan for ONE axis: how far to move so `[near, near+size)` is on screen.
+ *
+ * Two thresholds, and the difference between them is the point. A box that is
+ * ALREADY fully visible is left alone even if it sits flush against the edge —
+ * the reveal exists to un-hide a box, not to tidy the viewport, and a cosmetic
+ * nudge on an operator's canvas is exactly the gratuitous movement to avoid.
+ * Once a pan is warranted, the box lands `REVEAL_MARGIN` clear of the edge so it
+ * is not left half under a control or a scrollbar.
+ *
+ * The ORDER of the last two lines decides the over-sized case: bring the FAR
+ * edge in, then let the NEAR edge override. A box bigger than the viewport
+ * cannot satisfy both, and NEAR wins — for a container box the near edges are
+ * the left and the top, and the top is where the header band carrying the delete
+ * control lives. Clipping the bottom loses nothing; clipping the top would hide
+ * the one control the reveal is for.
+ */
+function axisPan(near: number, size: number, extent: number): number {
+  const far = near + size;
+  if (near >= 0 && far <= extent) return 0;
+  const pan = far > extent - REVEAL_MARGIN ? extent - REVEAL_MARGIN - far : 0;
+  return near + pan < REVEAL_MARGIN ? REVEAL_MARGIN - near : pan;
+}
+
+/**
+ * The minimum pan that brings every rect in `boxes` on screen — or `null` if
+ * they are already visible, so "nothing to do" is a distinct answer and the
+ * caller issues no viewport write at all.
+ *
+ * `transform` is React Flow's `[x, y, zoom]` and the result is a `Viewport`
+ * object, because those are the shapes the two consumers use: the store hands
+ * out the tuple, `setViewport` takes the object. The asymmetry saves an adapter
+ * in the only caller.
+ *
+ * ZOOM IS NEVER CHANGED. A refit would also work and would be less code, but it
+ * throws away the scale the operator chose, and re-framing a whole graph to
+ * surface one box loses their place on the canvas. Panning keeps both.
+ *
+ * Pure, like the rest of this module: the boxes come from `containerRects`, the
+ * transform and the viewport size come from React Flow, and the arithmetic is
+ * testable without mounting a canvas.
+ */
+export function revealTransform(
+  boxes: readonly Rect[],
+  transform: readonly [number, number, number],
+  width: number,
+  height: number,
+): { x: number; y: number; zoom: number } | null {
+  // An unmeasured viewport (React Flow reports 0×0 until it has measured the
+  // pane) cannot say what is visible. Refuse rather than pan against a 0×0 box:
+  // the caller's effect re-runs when the measurement lands.
+  if (width <= 0 || height <= 0) return null;
+
+  const target = boxes.reduce<Rect | null>((acc, r) => (acc === null ? r : union(acc, r)), null);
+  if (target === null) return null;
+
+  const [tx, ty, zoom] = transform;
+  const dx = axisPan(target.x * zoom + tx, target.width * zoom, width);
+  const dy = axisPan(target.y * zoom + ty, target.height * zoom, height);
+  if (dx === 0 && dy === 0) return null;
+  return { x: tx + dx, y: ty + dy, zoom };
 }

@@ -5,7 +5,9 @@ import {
   CONTAINER_HEADER_HEIGHT,
   CONTAINER_PADDING,
   EMPTY_CONTAINER_SIZE,
+  REVEAL_MARGIN,
   containerRects,
+  revealTransform,
   type Rect,
 } from './containerLayout';
 
@@ -172,5 +174,135 @@ describe('containerRects — the box a container is drawn as', () => {
       // 't' lists two children and draws one: 'a' belongs to 's'.
       expect(boxes.get('t')!.childCount).toBe(1);
     });
+  });
+});
+
+/**
+ * #785 — the pan that makes an emptied box reachable.
+ *
+ * `containerRects` puts a box it cannot derive a size from OUTSIDE the content
+ * bounds, and a fitted viewport ends flush WITH those bounds, so the box lands
+ * reliably just off-screen and `onlyRenderVisibleElements` culls it out of the
+ * DOM entirely. Since the box carries the container's only delete control, the
+ * escape from an emptied container was unreachable without a pan the operator
+ * was never told to make.
+ *
+ * The geometry stays where it is — moving the fallback INSIDE the content bounds
+ * would draw the box over activities it does not contain, which is exactly the
+ * lie this module's header comment exists to avoid. The viewport moves instead.
+ */
+describe('revealTransform — the minimum pan that brings a box on screen', () => {
+  const W = 1000;
+  const H = 600;
+  /** Flow (0,0) at screen (0,0), unscaled: screen coords == flow coords. */
+  const IDENTITY = [0, 0, 1] as const;
+
+  it('returns null when the box is already fully inside the viewport', () => {
+    expect(revealTransform([rect(100, 100)], IDENTITY, W, H)).toBeNull();
+  });
+
+  it('returns null for no boxes at all', () => {
+    expect(revealTransform([], IDENTITY, W, H)).toBeNull();
+  });
+
+  /**
+   * Visible is visible. The margin governs where a box LANDS once a pan is
+   * warranted, not whether one is warranted — a box flush against the edge is
+   * readable and clickable, so nudging it would be movement the operator did not
+   * ask for and cannot explain.
+   */
+  it('returns null for a box flush against the edge, rather than nudging it clear', () => {
+    expect(revealTransform([rect(0, 0, W, H)], IDENTITY, W, H)).toBeNull();
+  });
+
+  /**
+   * React Flow reports 0x0 until it has measured the pane. "Nothing is visible"
+   * and "I cannot tell what is visible" are different answers, and panning
+   * against an unmeasured viewport would fling the canvas somewhere arbitrary on
+   * first paint. The caller's effect re-runs when the measurement lands.
+   */
+  it('refuses to pan against an unmeasured viewport', () => {
+    const off = [rect(9000, 9000, 220, 120)];
+    expect(revealTransform(off, IDENTITY, 0, 0)).toBeNull();
+    expect(revealTransform(off, IDENTITY, W, 0)).toBeNull();
+  });
+
+  it('pans LEFT by exactly the right-edge overflow plus the margin', () => {
+    const next = revealTransform([rect(1200, 100, 220, 120)], IDENTITY, W, H);
+    // right edge 1420 has to reach 1000 - 24 = 976, so dx = -444.
+    expect(next).toEqual({ x: W - REVEAL_MARGIN - 1420, y: 0, zoom: 1 });
+  });
+
+  it('pans RIGHT until the left edge reaches the margin', () => {
+    const next = revealTransform([rect(-300, 100, 220, 120)], IDENTITY, W, H);
+    expect(next).toEqual({ x: REVEAL_MARGIN + 300, y: 0, zoom: 1 });
+  });
+
+  it('pans UP by exactly the bottom-edge overflow plus the margin', () => {
+    const next = revealTransform([rect(100, 800, 220, 120)], IDENTITY, W, H);
+    // bottom edge 920 has to reach 600 - 24 = 576, so dy = -344.
+    expect(next).toEqual({ x: 0, y: H - REVEAL_MARGIN - 920, zoom: 1 });
+  });
+
+  it('pans DOWN until the top edge reaches the margin', () => {
+    const next = revealTransform([rect(100, -100, 220, 120)], IDENTITY, W, H);
+    expect(next).toEqual({ x: 0, y: REVEAL_MARGIN + 100, zoom: 1 });
+  });
+
+  it('pans on BOTH axes at once', () => {
+    const next = revealTransform([rect(1200, 800, 220, 120)], IDENTITY, W, H);
+    expect(next).toEqual({
+      x: W - REVEAL_MARGIN - 1420,
+      y: H - REVEAL_MARGIN - 920,
+      zoom: 1,
+    });
+  });
+
+  it('adds to the CURRENT transform rather than replacing it', () => {
+    // Already panned: flow x=1200 is at screen 700, which is in view; flow
+    // y=800 is at screen 600, which is not.
+    const next = revealTransform([rect(1200, 800, 220, 120)], [-500, -200, 1], W, H);
+    expect(next).toEqual({ x: -500, y: -200 + (H - REVEAL_MARGIN - 720), zoom: 1 });
+  });
+
+  it('measures the box in SCREEN space, so zoom scales both position and size', () => {
+    const next = revealTransform([rect(600, 100, 220, 120)], [0, 0, 2], W, H);
+    // At zoom 2 the box occupies screen 1200..1640. Getting 1640 to 976 needs
+    // dx = -664 — a value only reachable if BOTH the position and the size were
+    // scaled. Ignoring either gives -64 or -444.
+    expect(next).toEqual({ x: -664, y: 0, zoom: 2 });
+  });
+
+  it('never changes the zoom, only the translation', () => {
+    const next = revealTransform([rect(1200, 100, 220, 120)], [0, 0, 1.75], W, H);
+    expect(next!.zoom).toBe(1.75);
+  });
+
+  it('reveals the UNION when several boxes appear at once', () => {
+    const next = revealTransform(
+      [rect(1200, 100, 220, 120), rect(1400, 300, 220, 120)],
+      IDENTITY,
+      W,
+      H,
+    );
+    // The union's right edge is 1620, not the first box's 1420.
+    expect(next).toEqual({ x: W - REVEAL_MARGIN - 1620, y: 0, zoom: 1 });
+  });
+
+  /**
+   * The over-sized cases decide WHICH edge wins, and the answer is the same on
+   * both axes: the TOP-LEFT corner. The header band carries the delete control
+   * (`CONTAINER_HEADER_HEIGHT` is added to the TOP padding only), so a box too
+   * tall to fit must be clipped at the BOTTOM — clipping the top would hide the
+   * very control the reveal exists to expose.
+   */
+  it('aligns the LEFT edge to the margin when the union is wider than the viewport', () => {
+    const next = revealTransform([rect(1200, 100, 2000, 120)], IDENTITY, W, H);
+    expect(next).toEqual({ x: REVEAL_MARGIN - 1200, y: 0, zoom: 1 });
+  });
+
+  it('aligns the TOP edge to the margin when the union is taller than the viewport', () => {
+    const next = revealTransform([rect(100, 900, 220, 2000)], IDENTITY, W, H);
+    expect(next).toEqual({ x: 0, y: REVEAL_MARGIN - 900, zoom: 1 });
   });
 });

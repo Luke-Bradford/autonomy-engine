@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useStore } from 'zustand';
 import {
   Background,
@@ -10,6 +10,7 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
+  useStoreApi as useReactFlowStoreApi,
   type Connection,
   type Edge as FlowEdge,
   type EdgeChange,
@@ -26,7 +27,7 @@ import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
-import { containerRects } from './containerLayout';
+import { containerRects, revealTransform, type ContainerBox } from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
@@ -290,7 +291,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const [attempted, setAttempted] = useState<{ from: string; to: string } | null>(null);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
-  const { screenToFlowPosition } = useReactFlow();
+  // `setViewport` is the reveal below; it is the only imperative viewport write
+  // on this canvas.
+  const { screenToFlowPosition, setViewport } = useReactFlow();
+  /* React Flow's OWN store, read imperatively via `getState()` and never
+     subscribed to. The reveal needs the live transform and the pane size, and a
+     `useStore((s) => s.transform)` selector would re-render this component on
+     every frame of every pan and zoom — on a canvas that runs
+     `onlyRenderVisibleElements` precisely because render cost matters. Aliased
+     because the bare `useStore` in this file is ZUSTAND's, over the app store. */
+  const reactFlowStore = useReactFlowStoreApi();
 
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
@@ -405,8 +415,15 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [store],
   );
 
-  const containerNodes: FlowNode[] = useMemo(() => {
-    if (containers.length === 0) return [];
+  /* Both outputs come from ONE `containerRects` call: the nodes to render, and
+     the raw boxes the reveal effect below needs (it has to know which boxes are
+     EMPTY, which is `childCount`, and the rendered node keeps only the aria
+     label derived from it). Returning a pair beats calling the layout twice. */
+  const { containerNodes, containerBoxes } = useMemo<{
+    containerNodes: FlowNode[];
+    containerBoxes: Map<string, ContainerBox>;
+  }>(() => {
+    if (containers.length === 0) return { containerNodes: [], containerBoxes: new Map() };
     const rects = containerRects(
       containers,
       new Map(
@@ -421,7 +438,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         ]),
       ),
     );
-    return containers.map((c) => {
+    const nodes = containers.map((c) => {
       const rect = rects.get(c.id)!;
       return {
         id: c.id,
@@ -502,7 +519,57 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
+    return { containerNodes: nodes, containerBoxes: rects };
   }, [containers, flowNodes, confirmDeleteContainer]);
+
+  /**
+   * #785 — a container that has just become EMPTY is panned into view.
+   *
+   * `containerRects` puts a box it cannot size from its children OUTSIDE the
+   * content bounds (deliberately — see its comment), and a fitted viewport ends
+   * flush WITH those bounds, so such a box lands reliably just off-screen and
+   * `onlyRenderVisibleElements` culls it out of the DOM altogether. Since #748
+   * the box carries the container's ONLY delete control, and an emptied
+   * container also disables Save ("makes no progress"), so the operator was left
+   * with a dead Save whose fix was on an element they could not see.
+   *
+   * Driven off a SET DIFF, not off the delete action, because emptying is not one
+   * event: `deleteNode` empties a container by removing its last child, and
+   * `loadVersion` can arrive already-empty. `deleteContainer` — the one action
+   * that sounds like the trigger — REMOVES the box and is never the emptying.
+   * The diff also keeps `setViewport` out of the store, which is deliberately
+   * React-Flow-free.
+   *
+   * The first run only RECORDS. A container that is empty from load is framed by
+   * the `fitView` prop, which fits the bounding box of every rendered node and so
+   * already includes it; revealing on mount would pan the canvas on every page
+   * load for no reason. This effect owns the TRANSITION into emptiness only.
+   *
+   * Re-running is cheap and idempotent: the set is invariant under pan and
+   * measurement (membership does not depend on either), so the identity churn in
+   * `containerBoxes` as React Flow measures produces no `appeared` and no write.
+   */
+  const knownEmptyContainers = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const empty = new Set(
+      [...containerBoxes].filter(([, box]) => box.childCount === 0).map(([id]) => id),
+    );
+    const known = knownEmptyContainers.current;
+    knownEmptyContainers.current = empty;
+    if (known === null) return;
+
+    const appeared = [...empty].filter((id) => !known.has(id));
+    if (appeared.length === 0) return;
+
+    const { transform, width, height } = reactFlowStore.getState();
+    const boxes = appeared
+      .map((id) => containerBoxes.get(id))
+      .filter((box): box is ContainerBox => box !== undefined);
+    // `null` = already visible. Not writing at all is the point: a box the
+    // operator can already see must not have their viewport moved under them.
+    const next = revealTransform(boxes, transform, width, height);
+    if (next !== null) void setViewport(next);
+  }, [containerBoxes, reactFlowStore, setViewport]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(
