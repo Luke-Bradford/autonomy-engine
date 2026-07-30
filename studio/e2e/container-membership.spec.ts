@@ -3,6 +3,26 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
 /**
+ * The viewport's own inline transform — the thing that actually moves. Read here
+ * rather than from a class attribute or a screenshot: it is the computed value,
+ * and it is what both the reveal (#785) and the no-pan guard assert on.
+ */
+function viewportTransform(page: Page): Promise<string> {
+  return page.evaluate(
+    () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
+  );
+}
+
+/** React Flow writes `translate(Xpx,Ypx) scale(Z)`. */
+function scaleOf(transform: string): string | undefined {
+  return /scale\(([^)]+)\)/.exec(transform)?.[1];
+}
+function translateOf(transform: string): { x: string | undefined; y: string | undefined } {
+  const m = /translate\(([^,]+),\s*([^)]+)\)/.exec(transform);
+  return { x: m?.[1], y: m?.[2] };
+}
+
+/**
  * #746 — deleting an ENCLOSED activity, end to end.
  *
  * The unit suites pin the prune and the validator's verdict. Neither can pin
@@ -165,37 +185,47 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 
+    const beforeDelete = await viewportTransform(page);
+
     await deleteActivity(page, 'only');
 
     // The trap, as the operator meets it: the doc is refused, Save is dead.
     expect((await validationIssues(page)).join('\n')).toContain('makes no progress');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    /* The emptied box is NOT on screen at this point, and that is a real residue
-       rather than a quirk of this test — measured here, filed as #785.
-       `containerRects` places a container it cannot derive a size from to the
-       RIGHT of all remaining content, and `onlyRenderVisibleElements` then culls
-       it: after the delete above, `document.querySelectorAll('.react-flow__node')`
-       returns `['after']` — the container is not in the DOM at all. Because a
-       fitted viewport ends flush with the content bounds, "just outside them" is
-       reliably just off-screen, so this is systematic, not occasional.
-
-       So the escape route is real but two-step: bring the box into view, then use
-       it. Fit-view is the honest stand-in for the panning an operator would do
-       (the badge tells them a CONTAINER is the problem, so they know what they
-       are looking for).
-
-       ASSERTED, not just described. A bare fit-view click would leave the spec
-       passing whether or not the residue exists, and "documented in a comment"
-       is not the same as pinned — so the absence is a real assertion, and #785's
-       acceptance is that BOTH lines below come out together and the rest of this
-       test still passes. */
+    /* #785 — the emptied box is ON SCREEN, with no gesture in between.
+       `containerRects` places a container it cannot size from its children
+       OUTSIDE the content bounds, and `onlyRenderVisibleElements` then culls it,
+       so before the fix this box was not in the DOM at all: the assertion here
+       was `toHaveCount(0)` followed by a `.react-flow__controls-fitview` click to
+       bring it back. Because a fitted viewport ends flush with the content
+       bounds, "just outside them" was reliably just off-screen — systematic, not
+       occasional. The escape from the trap was therefore real but invisible.
+       The geometry is unchanged (a box moved INSIDE the bounds would be drawn
+       over activities it does not contain); the VIEWPORT moves instead, and this
+       count is the assertion that pins it — revert the reveal effect in
+       `FlowCanvas` and it goes red. */
     await expect(
       nodeById(page, 'loop_1'),
-      'the emptied box is on screen — #785 fixed?',
-    ).toHaveCount(0);
-    await page.locator('.react-flow__controls-fitview').click();
-    await expect(nodeById(page, 'loop_1')).toHaveCount(1);
+      'the emptied box was not revealed — #785 regressed?',
+    ).toHaveCount(1);
+
+    /* It PANNED MINIMALLY — it did not refit and it did not re-centre.
+       Three assertions, because each excludes a different plausible shortcut:
+        - the zoom is UNCHANGED, which excludes a bare `fitView()` (it re-frames
+          the graph around one box and throws away the operator's scale);
+        - the box was off the RIGHT edge only, so the translation moved on X and
+          NOT on Y. That is what excludes the two zoom-preserving shortcuts —
+          `setCenter(cx, cy, {zoom})` and `fitView({nodes, minZoom: z, maxZoom:
+          z})` — which both keep `scale(...)` identical and would satisfy a
+          "something moved" assertion while moving BOTH axes;
+        - and the translation did move, so the reveal is not a no-op. */
+    const afterDelete = await viewportTransform(page);
+    expect(afterDelete).not.toBe(beforeDelete);
+    expect(scaleOf(afterDelete), 'no scale in the transform — reader broken?').toBeDefined();
+    expect(scaleOf(afterDelete)).toBe(scaleOf(beforeDelete));
+    expect(translateOf(afterDelete).y).toBe(translateOf(beforeDelete).y);
+    expect(translateOf(afterDelete).x).not.toBe(translateOf(beforeDelete).x);
 
     // The way out — the box's own control, inside a box that is otherwise inert.
     await nodeById(page, 'loop_1').getByRole('button', { name: 'Delete loop container' }).click();
@@ -288,11 +318,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'container-nopan', stageDoc());
 
-    const transform = () =>
-      page.evaluate(
-        () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
-      );
-    const before = await transform();
+    const before = await viewportTransform(page);
 
     const button = nodeById(page, 'stage_1').getByRole('button', {
       name: 'Delete stage container',
@@ -304,7 +330,9 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     await page.mouse.move(cx + 90, cy + 70, { steps: 10 });
     await page.mouse.up();
 
-    expect(await transform(), 'pressing the delete button panned the canvas').toBe(before);
+    expect(await viewportTransform(page), 'pressing the delete button panned the canvas').toBe(
+      before,
+    );
     // And nothing was deleted: the pointer left the button before release, so no
     // click fired — which is what makes the transform the only thing under test.
     await expect(nodeById(page, 'stage_1')).toHaveCount(1);

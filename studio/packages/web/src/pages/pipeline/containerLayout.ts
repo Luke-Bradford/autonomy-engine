@@ -67,6 +67,45 @@ export const CONTAINER_GAP = 40;
 /** The size of a container that has nothing to derive a size from. */
 export const EMPTY_CONTAINER_SIZE = { width: 220, height: 120 };
 
+/** Screen px kept between a box `revealTransform` pans into view and the edge. */
+export const REVEAL_MARGIN = 24;
+
+/**
+ * How much of the pane's right and bottom edges the reveal must NOT land a box
+ * against, because canvas chrome is drawn there INSIDE the pane.
+ *
+ * `<MiniMap>` sits bottom-right in a `.react-flow__panel` with `pointer-events:
+ * all`, at React Flow's default 200x150 plus the stylesheet's 15px panel margin,
+ * so it owns roughly the last 215 x 165 of the pane; `<Controls>` occupies the
+ * same bottom band on the left. A box landed flush against those edges can have
+ * its delete control — which is at the box's TOP-RIGHT — underneath the minimap:
+ * revealed, and still unclickable. That is #785's trap intact, so the reveal
+ * treats the covered strips as not-usable rather than as viewport.
+ *
+ * Deliberately conservative and deliberately a BAND, not the corner rect the
+ * chrome actually occupies: the arithmetic stays one subtraction per axis, and
+ * over-insetting only ever pans a little further than strictly needed. It must
+ * be revisited if the MiniMap is ever given an explicit size.
+ */
+export const CANVAS_CHROME_INSET = { right: 215, bottom: 165 };
+
+/**
+ * The pane extent the reveal may land a box in: the measured pane, less the
+ * strips `CANVAS_CHROME_INSET` covers.
+ *
+ * Floored at half the pane on each axis. On a pane narrow enough that the chrome
+ * covers most of it, avoiding the chrome perfectly would leave a usable box too
+ * small to contain the container at all, and `revealTransform` would then decline
+ * to pan (or pan somewhere useless) — an invisible box is a worse outcome than a
+ * partly-covered one, so the inset yields rather than the reveal.
+ */
+export function usableExtent(width: number, height: number): { width: number; height: number } {
+  return {
+    width: Math.max(width - CANVAS_CHROME_INSET.right, Math.ceil(width / 2)),
+    height: Math.max(height - CANVAS_CHROME_INSET.bottom, Math.ceil(height / 2)),
+  };
+}
+
 function union(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
@@ -113,7 +152,16 @@ export function containerRects(
      it has to be drawn somewhere real — not rendering it would silently drop its
      edges, which is the defect U6c exists to fix. The placement is deterministic
      rather than clever: any layout that reads the box back would otherwise move
-     it on every render. */
+     it on every render.
+
+     It is OUTSIDE the content bounds on purpose, and it stays that way (#785).
+     Inside them the box would be drawn over activities it does NOT contain —
+     the "asserts a membership the doc does not have" failure named above, only
+     manufactured deliberately. The cost is that a fitted viewport ends flush
+     with those bounds, so a box that appears here is reliably just off-screen
+     and `onlyRenderVisibleElements` culls it out of the DOM. What fixes the
+     REACHABILITY is `revealTransform` below, driven from the canvas: the
+     viewport moves to the box rather than the box moving into the graph. */
   const content = [...nodeRects.values()].reduce<Rect | null>(
     (acc, r) => (acc === null ? r : union(acc, r)),
     null,
@@ -148,4 +196,127 @@ export function containerRects(
     });
   }
   return rects;
+}
+
+/**
+ * `containerRects`'s rect map, with view nodes the DOC no longer has removed.
+ *
+ * The canvas holds nodes TWICE — the store's domain array and React Flow's view
+ * array — and a mutation lands in the store one render before the reconcile
+ * effect rebuilds the view. For that one render the view still carries a node
+ * the doc has dropped, and every box derived from it is computed against
+ * geometry that is about to move. Harmless for a container's own box (it is
+ * sized from its children, and a deleted child is no longer a member), but NOT
+ * harmless for the empty FALLBACK, which is placed relative to the union of ALL
+ * node rects: the phantom inflates those bounds, so a container emptied by
+ * deleting the graph's rightmost node is placed far right of where it will
+ * actually settle. Anything reading that position in the same render — the
+ * `revealTransform` pan (#785) — then acts on a stale answer and is never
+ * re-run, because the correcting render produces no new transition.
+ *
+ * Filtering here rather than at the reveal fixes it once for every reader, and
+ * removes the box's visible one-frame jump as a side effect.
+ */
+export function liveNodeRects(
+  viewRects: ReadonlyMap<string, Rect>,
+  docNodeIds: ReadonlySet<string>,
+): Map<string, Rect> {
+  const live = new Map<string, Rect>();
+  for (const [id, r] of viewRects) if (docNodeIds.has(id)) live.set(id, r);
+  return live;
+}
+
+/**
+ * The pan for ONE axis: how far to move so `[near, near+size)` is on screen.
+ *
+ * Two thresholds, and the difference between them is the point. A box that is
+ * ALREADY fully visible is left alone even if it sits flush against the edge —
+ * the reveal exists to un-hide a box, not to tidy the viewport, and a cosmetic
+ * nudge on an operator's canvas is exactly the gratuitous movement to avoid.
+ * Once a pan is warranted, the box lands `REVEAL_MARGIN` clear of the edge so it
+ * is not left half under a control or a scrollbar.
+ *
+ * The ORDER of the last two lines decides the over-sized case: bring the FAR
+ * edge in, then let the NEAR edge override. A box bigger than the viewport
+ * cannot satisfy both, and NEAR wins. VERTICALLY that is the substantive
+ * choice: a container box's header band is at the top, so clipping the bottom
+ * loses nothing while clipping the top would hide the delete control the reveal
+ * exists to expose. HORIZONTALLY the control is at the box's RIGHT edge, so
+ * top-left alignment is the consistent answer rather than the protective one —
+ * an empty box is 220 flow-px and React Flow's default `maxZoom` is 2, so a box
+ * too wide for a real pane is not reachable through this caller, and the axes
+ * are kept symmetrical rather than special-cased for a case that cannot happen.
+ */
+function axisPan(near: number, size: number, extent: number): number {
+  const far = near + size;
+  if (near >= 0 && far <= extent) return 0;
+  const pan = far > extent - REVEAL_MARGIN ? extent - REVEAL_MARGIN - far : 0;
+  return near + pan < REVEAL_MARGIN ? REVEAL_MARGIN - near : pan;
+}
+
+/**
+ * Which containers are drawn as the EMPTY fallback box.
+ *
+ * `childCount` and not `children.length`, for the same reason the box announces
+ * that count: a container whose every listed child is a phantom draws the
+ * fallback and IS empty on screen, whatever its array still says.
+ */
+export function emptyContainerIds(boxes: ReadonlyMap<string, ContainerBox>): Set<string> {
+  const empty = new Set<string>();
+  for (const [id, box] of boxes) if (box.childCount === 0) empty.add(id);
+  return empty;
+}
+
+/**
+ * The ids that have JUST become empty — `now` minus `known`, in `now`'s order.
+ *
+ * `known === null` means nothing has been recorded yet, i.e. this is the first
+ * observation, and the answer is deliberately EMPTY: a container that is empty
+ * from the start was framed by React Flow's `fitView`, and treating that as an
+ * appearance would pan the canvas on every page load. An id that LEAVES the set
+ * (the container was deleted, or gained a child) is not an appearance either —
+ * only the transition into emptiness is.
+ */
+export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<string>): string[] {
+  if (known === null) return [];
+  return [...now].filter((id) => !known.has(id));
+}
+
+/**
+ * The minimum pan that brings every rect in `boxes` on screen — or `null` if
+ * they are already visible, so "nothing to do" is a distinct answer and the
+ * caller issues no viewport write at all.
+ *
+ * `transform` is React Flow's `[x, y, zoom]` and the result is a `Viewport`
+ * object, because those are the shapes the two consumers use: the store hands
+ * out the tuple, `setViewport` takes the object. The asymmetry saves an adapter
+ * in the only caller.
+ *
+ * ZOOM IS NEVER CHANGED. A refit would also work and would be less code, but it
+ * throws away the scale the operator chose, and re-framing a whole graph to
+ * surface one box loses their place on the canvas. Panning keeps both.
+ *
+ * Pure, like the rest of this module: the boxes come from `containerRects`, the
+ * transform and the viewport size come from React Flow, and the arithmetic is
+ * testable without mounting a canvas.
+ */
+export function revealTransform(
+  boxes: readonly Rect[],
+  transform: readonly [number, number, number],
+  width: number,
+  height: number,
+): { x: number; y: number; zoom: number } | null {
+  // An unmeasured viewport (React Flow reports 0×0 until it has measured the
+  // pane) cannot say what is visible. Refuse rather than pan against a 0×0 box:
+  // the caller's effect re-runs when the measurement lands.
+  if (width <= 0 || height <= 0) return null;
+
+  const target = boxes.reduce<Rect | null>((acc, r) => (acc === null ? r : union(acc, r)), null);
+  if (target === null) return null;
+
+  const [tx, ty, zoom] = transform;
+  const dx = axisPan(target.x * zoom + tx, target.width * zoom, width);
+  const dy = axisPan(target.y * zoom + ty, target.height * zoom, height);
+  if (dx === 0 && dy === 0) return null;
+  return { x: tx + dx, y: ty + dy, zoom };
 }

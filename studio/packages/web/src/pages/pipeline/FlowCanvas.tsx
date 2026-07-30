@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useStore } from 'zustand';
 import {
   Background,
@@ -10,6 +10,8 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
+  useStore as useReactFlowStore,
+  useStoreApi as useReactFlowStoreApi,
   type Connection,
   type Edge as FlowEdge,
   type EdgeChange,
@@ -26,7 +28,15 @@ import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
-import { containerRects } from './containerLayout';
+import {
+  appearedIds,
+  containerRects,
+  emptyContainerIds,
+  liveNodeRects,
+  revealTransform,
+  usableExtent,
+  type ContainerBox,
+} from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import { nextSelection, type CanvasState, type Selection } from './canvasStore';
 
@@ -290,7 +300,28 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const [attempted, setAttempted] = useState<{ from: string; to: string } | null>(null);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
-  const { screenToFlowPosition } = useReactFlow();
+  // `setViewport` is the reveal below; it is the only imperative viewport write
+  // on this canvas.
+  const { screenToFlowPosition, setViewport } = useReactFlow();
+  /* React Flow's OWN store, read imperatively via `getState()` and never
+     subscribed to. The reveal needs the live transform and the pane size, and a
+     `useStore((s) => s.transform)` selector would re-render this component on
+     every frame of every pan and zoom — on a canvas that runs
+     `onlyRenderVisibleElements` precisely because render cost matters. Aliased
+     because the bare `useStore` in this file is ZUSTAND's, over the app store. */
+  const reactFlowStore = useReactFlowStoreApi();
+  /* The pane SIZE, subscribed — unlike the transform, which is read imperatively.
+     These change when the pane is resized (a splitter drag, a window resize, a
+     panel collapsing to zero and back), never per pan or zoom frame, so the
+     re-render cost is the same as any other layout change. Subscribed rather
+     than read because the reveal effect must RE-RUN when a pane that was 0x0
+     comes back: nothing else in its dependencies changes on a pure resize, so
+     without these a container emptied while the pane was collapsed would have
+     its reveal dropped unless some unrelated node or container change happened
+     to follow. Two scalar selectors, not one object — an object selector would
+     return a fresh identity every render and never settle. */
+  const paneWidth = useReactFlowStore((s) => s.width);
+  const paneHeight = useReactFlowStore((s) => s.height);
 
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
@@ -405,24 +436,42 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [store],
   );
 
-  const containerNodes: FlowNode[] = useMemo(() => {
-    if (containers.length === 0) return [];
+  /* The BOXES are their own memo, separate from the nodes rendered from them.
+     The reveal effect below needs `childCount`, which the rendered node keeps
+     only as an aria label, and splitting keeps this identity a function of
+     GEOMETRY alone — folded into the node memo it would also change whenever
+     `confirmDeleteContainer` did, re-running the reveal for a reason that has
+     nothing to do with where anything is. */
+  const containerBoxes = useMemo<Map<string, ContainerBox>>(() => {
+    if (containers.length === 0) return new Map();
+    /* `liveNodeRects` drops a view node the DOC no longer has. The store is
+       mutated one render before the reconcile effect rebuilds `flowNodes`, so
+       without it every box is derived once from bounds that still include a
+       just-deleted node — see that function for why the empty fallback, and
+       hence the reveal below, is what that breaks. */
     const rects = containerRects(
       containers,
-      new Map(
-        flowNodes.map((n) => [
-          n.id,
-          {
-            x: n.position.x,
-            y: n.position.y,
-            width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
-            height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
-          },
-        ]),
+      liveNodeRects(
+        new Map(
+          flowNodes.map((n) => [
+            n.id,
+            {
+              x: n.position.x,
+              y: n.position.y,
+              width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
+              height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
+            },
+          ]),
+        ),
+        new Set(nodes.map((n) => n.id)),
       ),
     );
+    return rects;
+  }, [containers, nodes, flowNodes]);
+
+  const containerNodes: FlowNode[] = useMemo(() => {
     return containers.map((c) => {
-      const rect = rects.get(c.id)!;
+      const rect = containerBoxes.get(c.id)!;
       return {
         id: c.id,
         type: 'container',
@@ -502,7 +551,79 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-  }, [containers, flowNodes, confirmDeleteContainer]);
+  }, [containers, containerBoxes, confirmDeleteContainer]);
+
+  /**
+   * #785 — a container that has just become EMPTY is panned into view.
+   *
+   * `containerRects` puts a box it cannot size from its children OUTSIDE the
+   * content bounds (deliberately — see its comment), and a fitted viewport ends
+   * flush WITH those bounds, so such a box lands reliably just off-screen and
+   * `onlyRenderVisibleElements` culls it out of the DOM altogether. Since #748
+   * the box carries the container's ONLY delete control. An emptied `loop` or
+   * `foreach` also disables Save ("makes no progress"), so the operator was left
+   * with a dead Save whose fix was on an element they could not see — and an
+   * emptied `stage` is WORSE, not better: it validates clean and saves silently,
+   * so there is not even a badge pointing at the container that vanished.
+   *
+   * Driven off a SET DIFF, not off the delete action, because emptying is not one
+   * event: `deleteNode` empties a container by removing its last child, and
+   * `loadVersion` can arrive already-empty. `deleteContainer` — the one action
+   * that sounds like the trigger — REMOVES the box and is never the emptying.
+   * The diff also keeps `setViewport` out of the store, which is deliberately
+   * React-Flow-free.
+   *
+   * The first run only RECORDS. A container that is empty from load is framed by
+   * the `fitView` prop, which fits the bounding box of every rendered node and so
+   * already includes it; revealing on mount would pan the canvas on every page
+   * load for no reason. This effect owns the TRANSITION into emptiness only.
+   *
+   * Re-running is cheap and idempotent: the set is invariant under pan and
+   * measurement (membership does not depend on either), so the identity churn in
+   * `containerBoxes` as React Flow measures produces no `appeared` and no write.
+   */
+  const knownEmptyContainers = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const empty = emptyContainerIds(containerBoxes);
+    /* Read the pane BEFORE banking the set: React Flow reports 0x0 until it has
+       measured, and a run that cannot tell what is visible must not consume a
+       transition it could not act on.
+
+       Which of two things that leaves depends on WHEN the pane was unmeasured,
+       and both are correct:
+        - the pane had been measured and went to 0 (a collapsed or hidden panel).
+          The ref is already a set, so the transition is still an `appeared` on
+          the run after the pane comes back, and it is revealed then. This is the
+          retry case, and it is why the pane size is a DEPENDENCY of this effect:
+          a pane returning is otherwise invisible to it.
+        - the pane has NEVER been measured. The ref is still null, so the first
+          measured run records and reports nothing — it looks like the mount case
+          because it IS the mount case: the `fitView` prop has not fired yet
+          either (it waits for initialised nodes AND dimensions), and it fits
+          every rendered node including the empty box. Handing that framing to
+          `fitView` rather than panning to it is the same division of labour as on
+          any other load, so nothing is lost by not retrying here. */
+    const { transform } = reactFlowStore.getState();
+    if (paneWidth <= 0 || paneHeight <= 0) return;
+
+    const known = knownEmptyContainers.current;
+    knownEmptyContainers.current = empty;
+    const appeared = appearedIds(known, empty);
+    if (appeared.length === 0) return;
+
+    const boxes = appeared
+      .map((id) => containerBoxes.get(id))
+      .filter((box): box is ContainerBox => box !== undefined);
+    /* `usableExtent`, not the raw pane: the MiniMap and Controls are drawn INSIDE
+       it with `pointer-events: all`, and a box landed flush against the
+       bottom-right edge can have its delete control underneath them — revealed
+       and still unclickable, which is the trap unfixed.
+       `null` = already visible. Not writing at all is the point: a box the
+       operator can already see must not have their viewport moved under them. */
+    const usable = usableExtent(paneWidth, paneHeight);
+    const next = revealTransform(boxes, transform, usable.width, usable.height);
+    if (next !== null) void setViewport(next);
+  }, [containerBoxes, paneWidth, paneHeight, reactFlowStore, setViewport]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(
