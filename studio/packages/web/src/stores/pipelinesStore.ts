@@ -52,26 +52,28 @@ export interface PipelinesState {
   error: string | null;
   /**
    * The MOUNT-TIME entry point, for every consumer: bring the list up to date,
-   * unless doing so would be wasteful or harmful.
+   * unless doing so would be wasteful or harmful. WHICH statuses load is the
+   * matrix above; what follows is only WHY its two non-obvious cells read as
+   * they do.
    *
-   * - `idle` / `ready` → load. Loading from `ready` is what keeps a re-entered
-   *   hub honest: a pipeline created by the CLI, by an import, or in another
-   *   tab is otherwise invisible until a browser reload. (An earlier cut only
-   *   loaded from `idle`, which silently made the list fetch-once-per-page-load
-   *   — a freshness regression against the per-mount fetch it replaced.)
-   * - `loading` → skip (see the matrix above).
-   * - `error` → skip, so a broken server cannot be hammered by remounts. A
-   *   REMOUNT is not a retry: this is a deliberate contract, pinned by name in
-   *   `pipelinesStore.test.ts`, and #761 did NOT relax it. Recovery is the
-   *   explicit Retry control that BOTH consumers offer, or `retryIfFailed` below
-   *   when the user has navigated.
+   * `ready` → LOAD keeps a re-entered hub honest: a pipeline created by the
+   * CLI, by an import, or in another tab is otherwise invisible until a browser
+   * reload. (An earlier cut only loaded from `idle`, which silently made the
+   * list fetch-once-per-page-load — a freshness regression against the
+   * per-mount fetch it replaced.)
    *
-   *   Scope that honestly: this is a STORE-level property, and since #761 it is
-   *   no longer an app-level one. Both consumers call `retryIfFailed` on mount
-   *   (a mount is indistinguishable from a route entry), so at the app level a
-   *   remount IS now a retry from `error`. The tradeoff is priced on
-   *   `retryIfFailed` below; what survives here is that `ensureFresh` itself
-   *   never retries, so a consumer that wants the old behaviour still has it.
+   * `error` → SKIP so a broken server cannot be hammered by remounts. A REMOUNT
+   * IS NOT A RETRY: a deliberate contract, pinned by name in
+   * `pipelinesStore.test.ts`, which #761 did NOT relax. Recovery is the explicit
+   * Retry control that BOTH consumers offer, or `retryIfFailed` below when the
+   * user has navigated.
+   *
+   * Scope that honestly: this is a STORE-level property, and since #761 it is
+   * no longer an app-level one. Both consumers call `retryIfFailed` on mount (a
+   * mount is indistinguishable from a route entry), so at the app level a
+   * remount IS now a retry from `error`. The tradeoff is priced on
+   * `retryIfFailed` below; what survives here is that `ensureFresh` itself never
+   * retries, so a consumer that wants the old behaviour still has it.
    */
   ensureFresh: () => void;
   /**
