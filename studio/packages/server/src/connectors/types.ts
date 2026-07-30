@@ -184,11 +184,12 @@ export type ActivityEvent =
        * failed-but-billed calls" (`llm-shared.ts`) hold on the failure paths of the
        * three HTTP LLM adapters.
        *
-       * It does NOT yet hold for `agent_cli`: a killed or non-zero-exit `agent_task`
-       * burned subscription quota and still emits nothing (`agent.ts` meters on exit
-       * 0 only). Cost-harmless — it would be `unpriced`, which never flips
-       * `complete` — but `responseCount` undercounts. That door is #797, and it can
-       * reuse this field.
+       * `agent_cli` upholds the FAILURE-PATH half of it as of #797, but WITHOUT
+       * this field: that adapter is itself a generator, so it yields its `metered`
+       * fact directly before the terminal rather than riding one. It also marks on
+       * weaker evidence than the rule below — a spawned subprocess, not a returned
+       * response — and at INVOCATION rather than per-response granularity. See
+       * `cliSpendFact` in `agent.ts` for both arguments in full.
        *
        * It exists because the two doors below cannot yield the event themselves:
        * `postJsonAndParse` is a plain function, and the parsed-but-no-completion

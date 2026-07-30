@@ -55,9 +55,18 @@ export interface RunCost {
    * where the engine retries, EACH attempt adds another response here — the
    * intended reading, since the money was spent each time.
    *
-   * A timed-out call is deliberately NOT counted, even though it may well have been
-   * billed: a timeout cannot distinguish a long generation from a request that never
-   * reached the provider, so counting it would invent spend. See `llmPost` and #725.
+   * A timed-out HTTP call is deliberately NOT counted, even though it may well have
+   * been billed: a timeout cannot distinguish a long generation from a request that
+   * never reached the provider, so counting it would invent spend. See `llmPost`
+   * and #725.
+   *
+   * `agent_cli` is the deliberate CARVE-OUT (#797): a subprocess that RAN is counted
+   * whether or not it produced a completion — its fact is `unpriced`, which can
+   * never flip `complete`, so an over-count is cheap where losing a subscription
+   * CLI's only spend signal is not (`cliSpendFact` in `agent.ts` argues it in full).
+   * That count is per INVOCATION, not per provider response: one `agent_task` may
+   * drive many model calls internally and the CLI reports none of them, so for
+   * those nodes this number is a floor, not a census.
    */
   responseCount: number;
   /** Responses carrying a `costEstimate` (price resolved AND both token counts present). */
