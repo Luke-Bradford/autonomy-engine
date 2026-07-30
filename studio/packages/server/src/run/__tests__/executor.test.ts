@@ -549,11 +549,15 @@ describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => 
     const connId = await seedConnection(db, 'http', {}, null);
     const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
     const run = seedRun(db, pvId);
+    // A SYNTHETIC shape: `spendFact` lives on the shared `failed` ActivityEvent, so
+    // any adapter can set it, but no real `http` adapter reports an anthropic model.
+    // That is deliberate here — this test exercises the executor's plumbing, which is
+    // adapter-agnostic; the real per-adapter shapes are pinned in the connector tests.
     const adapters = fakeHttpAdapter(async function* () {
       yield {
         type: 'failed',
-        kind: 'transient',
-        error: 'llm request timed out after 120000ms',
+        kind: 'permanent',
+        error: 'provider returned a non-JSON response body',
         spendFact: {
           provider: 'anthropic_api',
           model: 'claude-opus-4-8',
@@ -563,6 +567,9 @@ describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => 
     });
     await startRun(deps(db, { adapters }), run);
     const types = loadEngineEvents(db, run.id).map((e) => e.type);
+    // Both assertions are needed and neither is redundant: `toContain` proves the
+    // event exists (without it the `indexOf` compare is vacuously true at -1 < n),
+    // and the compare proves the ORDER. Do not "simplify" the pair to one line.
     expect(types).toContain('activity.metered');
     expect(types.indexOf('activity.metered')).toBeLessThan(types.indexOf('node.failed'));
     const metered = loadEngineEvents(db, run.id).find(

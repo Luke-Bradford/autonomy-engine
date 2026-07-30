@@ -206,10 +206,10 @@ describe('anthropicAdapter.runActivity', () => {
   //
   // Too HIGH and it outruns this connector's own 120s non-streaming timeout
   // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path bills tokens it can never count, and
-  // classifies `transient`, so the engine retries and buys another one. Since #725
-  // that spend is at least VISIBLE (the failure carries a `spendFact`, so the run
-  // reads cost-INCOMPLETE rather than silently short) — but visible is not free, so
-  // this bound still holds.
+  // classifies `transient`, so the engine retries and buys another one. #725 did NOT
+  // close that door — a timeout cannot prove a request was ever dispatched, so it
+  // mints no metering event rather than invent spend — which makes THIS BOUND the
+  // only thing holding it shut.
   //
   // So this is an upper AND lower bound, not a preference. Anyone moving it
   // should read the `DEFAULT_MAX_TOKENS` block and #725 first.
@@ -391,16 +391,14 @@ describe('anthropicAdapter.runActivity', () => {
     );
     expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
     expect(JSON.stringify(events)).toContain('timed out');
-    // #725 — the abort happened AFTER the request was dispatched, so the provider
-    // may well have generated (and billed) tokens we can never count: the response
-    // body is gone with the abort. The failure carries the metering FACT so the
-    // executor can mint an `activity.metered{unknown}` and the spend reads as a
-    // cost GAP rather than as a silent zero.
-    expect(failed(events).spendFact).toEqual({
-      provider: 'anthropic_api',
-      model: 'claude-opus-5',
-      meteringStatus: 'unknown',
-    });
+    // #725 — a timeout is deliberately NOT marked as billed, and this pins that
+    // decision so nobody "completes" the ticket by flipping it without the evidence.
+    // A timeout cannot distinguish a >120s generation (billed) from a dropped SYN
+    // (nothing billed) — measured against real undici in `llmPost`'s comment — and
+    // since DEFAULT_MAX_TOKENS is pinned so a full generation FITS in the timeout,
+    // the connect-phase case dominates. Marking would flip an unreachable provider's
+    // pipeline cost to permanently INCOMPLETE for spend that never happened.
+    expect(failed(events).spendFact).toBeUndefined();
   });
 
   // #725 — the NEGATIVES. These are the subtlest half of the fix: a marker on a
@@ -1135,6 +1133,58 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     // not as an opaque provider 400 on a '' tool_use_id.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+    // #725 — this 2xx BILLED (usage is right there in the body) and the exchange is
+    // discarded, so the terminal carries the full metering fact. It also pins the
+    // VERBATIM RELAY the whole design rests on: this terminal is built inside a
+    // `runTextWithTools` `doCall` closure, and the driver must pass it through
+    // unchanged. A refactor that rebuilds the terminal drops the spend fact silently,
+    // and the only record of a billed exchange with it.
+    if (last.type === 'failed')
+      expect(last.spendFact).toEqual({
+        provider: 'anthropic_api',
+        model: 'claude-opus-5',
+        meteringStatus: 'metered',
+        inputTokens: 3,
+        outputTokens: 2,
+      });
+  });
+
+  // #725 — the tool-loop no-completion door, with REAL counts. The plain-text
+  // equivalent is covered above; this is the same fact reaching the executor through
+  // a different driver (`runTextWithTools` rather than the adapter's own generator).
+  it('records a FULLY METERED spend fact for a tool-round 2xx with no completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 9, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'metered',
+      inputTokens: 9,
+      outputTokens: 4096,
+    });
+  });
+
+  // #725 — the unparseable-2xx door reaching the executor through the STRUCTURED
+  // driver (`runStructuredWithRepair`), which relays a `terminal` outcome verbatim.
+  // A non-JSON body is not a structured-conformance problem, so it terminates rather
+  // than repairing — and the fact must survive that relay too.
+  it('relays an unknown spend fact through the structured-repair driver', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json'));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'unknown',
+    });
   });
 
   it('fails permanent when the model requests a second tool round-trip', async () => {

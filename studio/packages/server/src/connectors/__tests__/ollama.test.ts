@@ -500,11 +500,11 @@ describe('ollamaAdapter — local tools (#2 L10a)', () => {
 });
 
 // #725 — the timeout door. As with openai, `ollama.test.ts` carried no timeout
-// coverage before this ticket. NOTE for a LOCAL provider the fact means "an
-// exchange we cannot account for", NOT dollars: `ollama` is deliberately absent
-// from the built-in price table, so no cost is ever stamped for it either way.
-describe('ollamaAdapter timeout → spend fact (#725)', () => {
-  it('records an unknown spend fact when a hung provider is aborted by the timeout', async () => {
+// coverage before this ticket. A timeout is deliberately not counted as billed
+// spend; for a LOCAL provider that is doubly true, since ollama is absent from the
+// built-in price table and bills no money at all.
+describe('ollamaAdapter timeout → NO spend fact (#725)', () => {
+  it('bounds a hung provider and records NO spend fact (a timeout cannot prove billing)', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, init) =>
         new Promise((_resolve, reject) => {
@@ -517,10 +517,8 @@ describe('ollamaAdapter timeout → spend fact (#725)', () => {
       ollamaAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), null),
     );
     expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
-    expect(failed(events).spendFact).toEqual({
-      provider: 'ollama',
-      model: 'llama3',
-      meteringStatus: 'unknown',
-    });
+    // #725 — a timeout is deliberately UNMARKED: it cannot tell a >120s generation
+    // from a dropped SYN. See `llmPost` for the measurement.
+    expect(failed(events).spendFact).toBeUndefined();
   });
 });

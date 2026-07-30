@@ -203,18 +203,7 @@ export function normalizeModelId(model: string): string {
  */
 export type LlmFetchResult =
   | { type: 'response'; status: number; bodyText: string; retryAfterHeader: string | null }
-  | {
-      type: 'failed';
-      event: Extract<ActivityEvent, { type: 'failed' }>;
-      /**
-       * #725 — the request WAS dispatched and then abandoned mid-exchange, so the
-       * provider may have generated (and billed) tokens this process can never
-       * count. `postJsonAndParse` turns it into the failure's `spendFact`. Absent
-       * ⇒ nothing was billed; see the branches in `llmPost` for why only the
-       * timeout sets it.
-       */
-      spendUnaccounted?: true;
-    };
+  | { type: 'failed'; event: Extract<ActivityEvent, { type: 'failed' }> };
 
 /**
  * Perform one JSON POST bounded by a whole-exchange timeout, mirroring the
@@ -262,30 +251,46 @@ export async function llmPost(
   } catch (err) {
     // The run's own cancel wins over a coincident timeout.
     //
-    // #725 — deliberately NOT marked `spendUnaccounted`, though a cancel can abort
-    // a dispatched call. This branch is also reached when the run signal was
-    // ALREADY aborted at entry (the guard above aborts the controller BEFORE
-    // `fetch`, so no request leaves the process — the path
-    // `runStructuredWithRepair` relies on to stop repairing after a cancel), and
-    // the two are indistinguishable here. Marking would manufacture a cost gap for
-    // a call that never dispatched, so a deliberately-cancelled run keeps reading
-    // complete. The residual — a cancel that truly did abort a billed generation —
-    // is stated on #725 rather than papered over.
+    // #725 — deliberately NOT marked as billed, though a cancel can abort a
+    // dispatched call. This branch is also reached when the run signal was ALREADY
+    // aborted at entry (the guard above aborts the controller BEFORE `fetch`, so no
+    // request leaves the process — the path `runStructuredWithRepair` relies on to
+    // stop repairing after a cancel), and the two are indistinguishable here.
+    // Measured: a pre-aborted signal reaches this branch with the server observing
+    // ZERO requests. Same reasoning as the timeout branch below.
     if (ctx.signal.aborted) {
       return {
         type: 'failed',
         event: { type: 'failed', kind: 'cancelled', error: 'llm request aborted' },
       };
     }
-    // #725 — the one branch that is SAFE BY CONSTRUCTION: `timedOut` can only be
-    // set by the `setTimeout` armed after the `fetch` call above, so reaching here
-    // proves the request was dispatched and then abandoned. The provider may have
-    // generated and billed tokens; the body went with the abort, so the counts are
-    // unrecoverable and the fact can only be `unknown`.
+    // #725 — DELIBERATELY NOT marked as billed-but-uncounted, though this is the
+    // ticket's headline case and the plumbing to mark it is right here. A timeout
+    // cannot distinguish "the provider generated for >120s" (billed) from "the SYN
+    // was dropped and nothing reached the provider" (not billed) — both land here.
+    // Measured against real undici, watching `undici:client:sendHeaders`:
+    //
+    //   hung server, headers on the wire    → send observed  (billed)
+    //   blackholed host, SYN dropped        → NO send        (nothing billed)
+    //   unresolvable host                   → NO send, and a `TypeError` anyway
+    //
+    // So the discriminator exists — but that channel is PROCESS-GLOBAL while the
+    // executor runs adapters concurrently, so a blackholed call would observe a
+    // CONCURRENT call's send and be marked anyway. Correlating a send to one
+    // in-flight request needs a seam this layer does not have.
+    //
+    // Guessing is worse than the gap here, and `DEFAULT_MAX_TOKENS` is why: it is
+    // pinned at 4096 precisely so a full-budget generation FITS inside this
+    // timeout, which means the timeout population is dominated by connect-phase
+    // failures rather than by generation overrun. Marking unconditionally would
+    // flip a provider-unreachable pipeline's cost to permanently INCOMPLETE for
+    // spend that never happened — the same fail direction the network branch below
+    // refuses, and the mirror image of the hole #725 exists to close. Knowing
+    // whether generation started is what options (1) streaming / (2) a token-scaled
+    // timeout buy; tracked there, not faked here.
     if (timedOut) {
       return {
         type: 'failed',
-        spendUnaccounted: true,
         event: {
           type: 'failed',
           kind: 'transient',
@@ -959,8 +964,12 @@ export type ToolRoundOutcome<C> =
  * #605's structured-capture plumbing, not silently hashed wrong here.
  *
  * Metering mirrors the plain text path: every completed-2xx outcome (`text`/
- * `toolUse`) is metered; a `terminal` outcome is not (the text path's existing
- * posture for failed exchanges).
+ * `toolUse`) is metered HERE. A `terminal` outcome yields no `metered` event from
+ * this loop — but since #725 a terminal whose exchange WAS billed (a 2xx that
+ * parsed with no usable completion, or an unparseable one) carries the fact on its
+ * failure as `spendFact`, and the executor mints the `activity.metered` from that.
+ * So "one metered event per billed exchange" holds across both outcomes; only the
+ * emitter differs.
  */
 export async function* runTextWithTools<C>(
   provider: LlmConnectionKind,
@@ -1134,20 +1143,7 @@ export async function postJsonAndParse(
   const started = Date.now();
   const res = await llmPost(ctx, url, headers, body, timeoutMs);
   const latencyMs = Date.now() - started;
-  // #725 — the metering fact for an exchange that was billed but cannot be
-  // counted. `meterUsage` with both counts absent is THE definition of an
-  // `unknown` status (it is the single completeness decision for all three
-  // adapters); building the shape by hand here would be a second decision on the
-  // same axis.
-  const unaccounted = (): Extract<ActivityEvent, { type: 'failed' }>['spendFact'] =>
-    meterUsage(provider, model, undefined, undefined);
-  if (res.type === 'failed') {
-    return {
-      ok: false,
-      event: res.spendUnaccounted ? { ...res.event, spendFact: unaccounted() } : res.event,
-      latencyMs,
-    };
-  }
+  if (res.type === 'failed') return { ok: false, event: res.event, latencyMs };
   if (res.status < 200 || res.status >= 300) {
     // A non-2xx produced no completion — nothing to account for. Marking it would
     // manufacture a cost gap (see `ActivityEvent.failed.spendFact`).
@@ -1164,11 +1160,23 @@ export async function postJsonAndParse(
     };
   }
   const parsed = parseJsonBody(res.bodyText);
-  // #725 — a 2xx is the UNAMBIGUOUS billed case: the provider produced and billed a
-  // completion, and only our read of it failed. The counts are inside the body we
-  // could not parse, so the fact can only be `unknown` — but it is certain.
+  // #725 — a 2xx body ARRIVED, so an exchange completed and was almost certainly
+  // billed; only our read of it failed. The counts are inside the body we could not
+  // parse, so the fact can only be `unknown`. "Almost": a gateway or proxy answering
+  // 200 with a non-provider body (an HTML interstitial) bills nothing. Marked anyway
+  // — for a configured LLM endpoint a non-JSON 200 is overwhelmingly a provider or
+  // response-shape problem, and unlike the timeout branch this at least proves a
+  // response came back from something.
+  //
+  // `meterUsage` with both counts absent is THE definition of an `unknown` status —
+  // it is the single completeness decision for all three adapters, so building the
+  // shape by hand here would be a second decision on the same axis.
   if (!parsed.ok) {
-    return { ok: false, event: { ...parsed.event, spendFact: unaccounted() }, latencyMs };
+    return {
+      ok: false,
+      event: { ...parsed.event, spendFact: meterUsage(provider, model, undefined, undefined) },
+      latencyMs,
+    };
   }
   return { ok: true, json: parsed.json, latencyMs };
 }

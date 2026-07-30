@@ -74,11 +74,14 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * count, and the failure is classified `transient`, which is retry-eligible, so
  * the engine re-issues the whole call and buys another generation.
  *
- * #725 made that spend VISIBLE rather than silent: the timeout failure now carries
- * a `spendFact`, so the executor mints an `activity.metered{unknown}` and L6 reads
- * the run's cost as INCOMPLETE instead of summing a total that quietly omits the
- * call. The bound below is still an upper bound, though — visible unaccounted
- * spend is a diagnosis, not a fix, and each retry adds another one.
+ * #725 did NOT close that door, and this bound is the only thing holding it shut. A
+ * timeout cannot distinguish a >120s generation (billed) from a request that never
+ * reached the provider (not billed), so it mints no metering event rather than invent
+ * one — meaning a genuine generation overrun is still spend this process never sees.
+ * What #725 did fix is the neighbouring door: a 2xx that parses with no usable
+ * completion — i.e. this budget being EXHAUSTED by thinking — now reports its real
+ * token counts instead of discarding them. So exceeding the budget is still worse
+ * than truncating; truncating is merely no longer free of charge.
  *
  * 4096 is the largest round budget that finishes inside 120s even pessimistically
  * (~40 tok/s → ~102s), while being 4x the old cap so adaptive thinking has room

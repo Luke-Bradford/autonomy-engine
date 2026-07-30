@@ -629,13 +629,14 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // retryable non-2xx) onto the durable event; the reducer feeds it to the
           // retry alarm. Omitted when absent → the driver uses the policy interval.
           //
-          // #725 — a failure that ABANDONED or DISCARDED a billed provider exchange
-          // carries its metering fact, and it is stamped BEFORE the terminal, so a
-          // timed-out or truncated call's spend reads as a cost GAP (or, where the
-          // body parsed, its real token counts) instead of vanishing. Without this
-          // the provider billed, `usageOf` was never reached, and L6 summed a run
-          // cost that silently omitted the call — the same silent-loss shape #708
-          // closed at the price-table door.
+          // #725 — a failure that DISCARDED a billed provider exchange carries its
+          // metering fact, and it is stamped BEFORE the terminal (which matters: the
+          // metered event folds inert, so it cannot terminalize the run and get the
+          // failure dropped, whereas the reverse order could lose the cost). A
+          // truncated 2xx contributes its REAL counts; an unparseable one a
+          // `costUnknown` gap. Without this the provider billed, `usageOf` was never
+          // reached, and L6 summed a run cost that silently omitted the exchange —
+          // the same silent-loss shape #708 closed at the price-table door.
           if (ev.spendFact !== undefined) events.push(meteredEvent(ev.spendFact));
           events.push(
             nodeFailed(runId, nodeId, attemptId, {

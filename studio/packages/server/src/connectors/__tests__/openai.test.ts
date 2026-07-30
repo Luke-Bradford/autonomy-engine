@@ -863,10 +863,11 @@ describe('openaiAdapter maxTokens wire field (#739)', () => {
 });
 
 // #725 — the timeout door. `openai.test.ts` had NO timeout coverage at all before
-// this ticket, so this is the first assertion that the adapter bounds a hung
-// provider — and that the abandoned exchange's spend is recorded rather than lost.
-describe('openaiAdapter timeout → spend fact (#725)', () => {
-  it('records an unknown spend fact when a hung provider is aborted by the timeout', async () => {
+// this ticket. It bounds a hung provider AND pins that the abort is deliberately
+// not counted as billed spend (see `llmPost`: a timeout cannot distinguish a long
+// generation from a dropped SYN, so marking it would invent a cost gap).
+describe('openaiAdapter timeout → NO spend fact (#725)', () => {
+  it('bounds a hung provider and records NO spend fact (a timeout cannot prove billing)', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, init) =>
         new Promise((_resolve, reject) => {
@@ -879,11 +880,9 @@ describe('openaiAdapter timeout → spend fact (#725)', () => {
       openaiAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), 'sk'),
     );
     expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
-    expect(failed(events).spendFact).toEqual({
-      provider: 'openai_api',
-      model: 'gpt-4o',
-      meteringStatus: 'unknown',
-    });
+    // #725 — a timeout is deliberately UNMARKED: it cannot tell a >120s generation
+    // from a dropped SYN. See `llmPost` for the measurement.
+    expect(failed(events).spendFact).toBeUndefined();
   });
 
   it('does NOT record a spend fact for a 401 (nothing was generated)', async () => {
