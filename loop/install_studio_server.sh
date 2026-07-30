@@ -394,9 +394,11 @@ report_status() {
   return 0
 }
 
-# --- lock: the scheduled updater and an operator can otherwise land in the same
-# tree at once -- two `reset --hard` plus two interleaved bootout/bootstrap
-# cycles is a corrupt checkout and a possibly-unloaded unit. `mkdir` is the
+# --- lock: two runs can otherwise land in the same tree at once -- an operator
+# re-running the installer while an earlier one is still building, or a future
+# on-demand updater (#792 phase 2) alongside a hand run. Two `reset --hard` plus
+# two interleaved bootout/bootstrap cycles is a corrupt checkout and a
+# possibly-unloaded unit. `mkdir` is the
 # atomic primitive available on bash 3.2 macOS (no flock). A lock older than an
 # hour is treated as abandoned: a killed install must not wedge the next one
 # forever.
@@ -587,8 +589,8 @@ main() {
     # Someone else holds it: a genuine no-op, and not a failure to report.
     1) return 0 ;;
     # Could not even try (an unwritable or uncreatable state dir). That IS a
-    # failure, and reporting it as a no-op is how a scheduled job loops forever
-    # on a real fault while its log reads like nothing was wrong.
+    # failure, and reporting it as a no-op is how a real fault ends up looking
+    # like nothing was wrong.
     *) return 1 ;;
   esac
   main_locked
@@ -602,14 +604,14 @@ main() {
 main_locked() {
   # `--update` asks the one question a hand-run install does not: is there
   # anything to do. Nothing here defers to a running fire -- there is no
-  # interlock in this file, deliberately (see the header: a scheduled updater
-  # with an interlock is what the approved packaging design rejects, and what
+  # interlock in this file, deliberately (see the header: an interlocked
+  # scheduled updater is what the approved packaging design rejects, and what
   # the driver log shows would starve). An update is a human act, so the human
   # picks the moment.
   if [ "$MODE" = "update" ] && [ "$FORCE" -eq 0 ]; then
     # Only when there is a clone to fetch INTO. `git -C <missing dir> fetch`
-    # exits 128, which would have made `--update` die at every slot on a wiped
-    # or absent tree and never reach the path that recreates it -- while
+    # exits 128, which would have made `--update` die on a wiped or absent tree
+    # and never reach the path that recreates it -- while
     # `--force`, which skips this block, provisioned it correctly. `provision`
     # fetches again anyway, and its own "exists but is not a git checkout"
     # refusal gives the accurate message instead of a misleading fetch error.

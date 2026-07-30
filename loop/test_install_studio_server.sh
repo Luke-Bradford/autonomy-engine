@@ -558,7 +558,7 @@ echo "== a service that does not ANSWER is not current =="
 # never answered leaves a satisfied stamp, a present dist, both plists and both
 # units "loaded" -- launchd prints `-` in the pid column for a job it respawns
 # every 30s exactly as it does for a healthy idle one. Without a liveness probe
-# the spend guard's own source can be down permanently while every slot reports
+# the spend guard's own source can be down permanently while every run reports
 # "already current". `wait_ready` cannot cover this: it runs once, at the end of
 # an install, and its failure leaves all of the above behind.
 sb="$(installed_sandbox)"
@@ -608,9 +608,11 @@ sb="$(installed_sandbox)"
 check "--force rebuilds a current service" "1" "$(has ' build$' "$sb/pnpm.calls")"
 
 echo "== concurrent runs are serialised =="
-# The scheduled updater and an operator can otherwise land in the same tree at
-# once: two `reset --hard` plus two interleaved bootout/bootstrap cycles is a
-# corrupt checkout and a possibly-unloaded unit.
+# Two runs can otherwise land in the same tree at once -- an operator re-running
+# the installer while an earlier one is still building, or a future on-demand
+# updater (#792 phase 2) alongside a hand run. Two `reset --hard` plus two
+# interleaved bootout/bootstrap cycles is a corrupt checkout and a
+# possibly-unloaded unit.
 sb="$(installed_sandbox)"
 mkdir -p "$sb/state/.install.lock"
 : >"$sb/pnpm.calls"
