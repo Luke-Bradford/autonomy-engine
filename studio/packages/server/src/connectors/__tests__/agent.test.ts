@@ -42,6 +42,14 @@ function llmCtx(over: Partial<ActivityContext> = {}): ActivityContext {
   });
 }
 
+/** The `metered` fact every `agent_cli` invocation emits when no model is named
+ * — one literal, so a drift in the provider/status labels fails every assertion
+ * at once rather than only the ones a change happened to touch (#797). */
+const UNPRICED_CLI = {
+  type: 'metered',
+  usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
+};
+
 /** A fake Supervisor that replays fixed line events + a fixed result. */
 function fakeSupervisor(
   lines: OutputLineEvent[],
@@ -108,10 +116,7 @@ describe('createAgentAdapter().runActivity', () => {
     expect(events[0]).not.toHaveProperty('telemetry.signal');
     // #797 — the `unpriced` metering fact sits between the telemetry and the
     // terminal (the slot `metered` holds on every other adapter).
-    expect(events[1]).toEqual({
-      type: 'metered',
-      usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-    });
+    expect(events[1]).toEqual(UNPRICED_CLI);
     expect(events[2]).toEqual({
       type: 'succeeded',
       outputs: { output: 'working...\ndone', exitCode: 0 },
@@ -153,10 +158,7 @@ describe('createAgentAdapter().runActivity', () => {
       telemetry: { summary: 'completed', exitCode: 2, outputChars: 'partial'.length },
     });
     // #797 — a non-zero exit is a COMPLETED agent_task, so it is metered.
-    expect(events[1]).toEqual({
-      type: 'metered',
-      usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-    });
+    expect(events[1]).toEqual(UNPRICED_CLI);
     expect(events[2]).toEqual({ type: 'succeeded', outputs: { output: 'partial', exitCode: 2 } });
     expect(events).toHaveLength(3);
   });
@@ -386,10 +388,7 @@ describe('createAgentAdapter().runActivity', () => {
       );
       // Telemetry STILL precedes the terminal (exit code stays observable there).
       expect(events[0]).toMatchObject({ type: 'agentTelemetry', telemetry: { exitCode: 0 } });
-      expect(events[1]).toEqual({
-        type: 'metered',
-        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-      });
+      expect(events[1]).toEqual(UNPRICED_CLI);
       expect(events[2]).toEqual({ type: 'succeeded', outputs: { verdict: 'pass', score: 9 } });
       expect(events).toHaveLength(3);
       // The structured instruction (naming the sentinels) is appended to the task argv.
@@ -580,10 +579,7 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
 
     // metered (unpriced) is ordered BEFORE the terminal, mirroring the API adapters.
     expect(events).toEqual([
-      {
-        type: 'metered',
-        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-      },
+      UNPRICED_CLI,
       { type: 'succeeded', outputs: { text: 'Hi there', stopReason: 'unknown' } },
     ]);
     // The prompt is the final argv element (never argv-leaked flags).
@@ -602,10 +598,7 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     const metered = events.find((e) => e.type === 'metered');
     expect(metered).toBeDefined();
     // usage is a fact but a CLI gives none; ALL price/token fields stay absent.
-    expect(metered).toEqual({
-      type: 'metered',
-      usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-    });
+    expect(metered).toEqual(UNPRICED_CLI);
   });
 
   it('resolves the metered model node < connection < the `cli` fallback', async () => {
@@ -641,10 +634,7 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
     const { supervisor } = fakeSupervisor([], { exitCode: 0 });
     const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
     expect(events).toEqual([
-      {
-        type: 'metered',
-        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-      },
+      UNPRICED_CLI,
       { type: 'succeeded', outputs: { text: '', stopReason: 'unknown' } },
     ]);
   });
@@ -675,8 +665,9 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       { exitCode: 3 },
     );
     const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
-    expect(events[1]).toMatchObject({ type: 'failed', kind: 'permanent' });
-    expect((events[1] as { error: string }).error).toContain('error: model overloaded, try later');
+    const failure = events.find((e) => e.type === 'failed');
+    expect(failure).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect((failure as { error: string }).error).toContain('error: model overloaded, try later');
   });
 
   it('keeps BOTH the head and tail of an over-long CLI diagnostic (error may be early or late)', async () => {
@@ -687,7 +678,7 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       exitCode: 1,
     });
     const events = await drain(createAgentAdapter(supervisor).runActivity(llmCtx(), null));
-    const error = (events[1] as { error: string }).error;
+    const error = (events.find((e) => e.type === 'failed') as { error: string }).error;
     expect(error).toContain(early); // head preserved
     expect(error).toContain(late); // tail preserved
     expect(error).toContain('…'); // middle elided
@@ -707,8 +698,9 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
         'sk-leaky-secret',
       ),
     );
-    expect(events[1]).toMatchObject({ type: 'failed', kind: 'permanent' });
-    const error = (events[1] as { error: string }).error;
+    const failure = events.find((e) => e.type === 'failed');
+    expect(failure).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const error = (failure as { error: string }).error;
     expect(error).not.toContain('sk-leaky-secret');
     expect(error).toContain('***'); // the secret substring is replaced, not the whole message
   });
@@ -1068,11 +1060,6 @@ describe('renderCliPrompt', () => {
 // process that ran — but only a little: a spawn is not proof a request reached
 // the provider, so the asymmetric fail direction is what carries the rule.
 describe('agent_cli subscription metering on abnormal termination (#797)', () => {
-  const UNPRICED_CLI = {
-    type: 'metered',
-    usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
-  };
-
   describe('agent_task', () => {
     it('meters a timed-out agent_task, ordered AFTER the telemetry and BEFORE the failure', async () => {
       const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'started work' }], {
@@ -1180,6 +1167,48 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
         type: 'metered',
         usage: { provider: 'agent_cli', model: 'opus-5', meteringStatus: 'unpriced' },
       });
+    });
+
+    it('treats an EMPTY connection model as absent, exactly as the llm_call shape does', async () => {
+      // The schema allows `model: ''` (`z.string().optional()`, no `.min(1)`), and
+      // a bare `??` would take it — labelling one connection's `agent_task` facts
+      // `''` while its `llm_call` facts (which route through `resolveModel`) say
+      // `cli`. One precedence rule, one label, whichever shape ran.
+      const { supervisor } = fakeSupervisor([], { exitCode: null, timedOut: true, killed: true });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({ connectionConfig: { command: 'claude', model: '' } }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'metered')).toEqual(UNPRICED_CLI);
+    });
+
+    it('METERS a quota-refused agent_task — the documented divergence from llm_call', async () => {
+      // Deliberate asymmetry, pinned so it cannot be silently "harmonised": this
+      // shape discards stderr and maps every exit code to a COMPLETED run, so it
+      // never classifies a quota refusal and cannot apply llm_call's second
+      // exclusion. Same connection, same refusal, opposite metering outcome. The
+      // missing classification is the pre-existing L14c gap tracked in #799; the
+      // over-mark it causes costs exactly one `unpriced` response.
+      const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
+        exitCode: 1,
+      });
+      const events = await drain(
+        createAgentAdapter(supervisor).runActivity(
+          ctx({
+            connectionConfig: {
+              command: 'claude',
+              quota: { exhaustionPattern: 'usage limit reached', resetWindowSeconds: 3600 },
+            },
+          }),
+          null,
+        ),
+      );
+      expect(events.find((e) => e.type === 'metered')).toEqual(UNPRICED_CLI);
+      // …and it is still a SUCCESS here, which is why there is no refusal verdict
+      // to hang an exclusion off in the first place.
+      expect(events.find((e) => e.type === 'succeeded')).toBeDefined();
     });
   });
 

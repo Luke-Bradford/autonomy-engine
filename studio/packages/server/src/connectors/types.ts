@@ -184,18 +184,12 @@ export type ActivityEvent =
        * failed-but-billed calls" (`llm-shared.ts`) hold on the failure paths of the
        * three HTTP LLM adapters.
        *
-       * `agent_cli` upholds the FAILURE-PATH half of it as of #797 — but at
-       * INVOCATION granularity, not per response: one `agent_task` drives an agent
-       * that may make many model calls internally and the CLI reports none of them,
-       * so its `responseCount` contribution is a floor, not a census (see the note
-       * at `cliSpendFact`'s call site). It also does it WITHOUT this field: that
-       * adapter is itself a generator, so it yields its `metered` fact directly
-       * before the terminal rather than riding one. It marks on WEAKER evidence
-       * than the
-       * rule below — a spawned subprocess, not a returned response — because its
-       * fact is `unpriced` (never flips `complete`) rather than `costUnknown`, so
-       * the cost of over-marking is one `responseCount`, not a permanently
-       * INCOMPLETE run. See `cliSpendFact` in `agent.ts` for that argument in full.
+       * `agent_cli` upholds the FAILURE-PATH half of it as of #797, but WITHOUT
+       * this field: that adapter is itself a generator, so it yields its `metered`
+       * fact directly before the terminal rather than riding one. It also marks on
+       * weaker evidence than the rule below — a spawned subprocess, not a returned
+       * response — and at INVOCATION rather than per-response granularity. See
+       * `cliSpendFact` in `agent.ts` for both arguments in full.
        *
        * It exists because the two doors below cannot yield the event themselves:
        * `postJsonAndParse` is a plain function, and the parsed-but-no-completion

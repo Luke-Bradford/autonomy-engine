@@ -588,6 +588,54 @@ describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => 
     expect(metered).not.toHaveProperty('costEstimate');
   });
 
+  // #797 — the OTHER metering door on a failure path. `agent_cli` is itself a
+  // generator, so it yields a standalone `metered` event before its terminal
+  // rather than riding the `failed.spendFact` field above. The connector tests pin
+  // that the adapter yields it; this pins the half that the ticket's acceptance
+  // actually names — that it survives into the DURABLE run log, still ordered
+  // before `node.failed`. Both doors must land the same way round, since L6 sums
+  // the log and an event after the terminal may never be attributed to its attempt.
+  it('mints activity.metered from an adapter-yielded metered event, ordered BEFORE node.failed', async () => {
+    const { db } = freshDb();
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    // The `agent_cli` sequence, on the executor's adapter-agnostic plumbing: an
+    // `unpriced` fact (no tokens, no price BY DESIGN) and then a transient failure
+    // — a subprocess tree-killed at the timeout ceiling.
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'metered',
+        usage: { provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' },
+      } satisfies ActivityEvent;
+      yield {
+        type: 'failed',
+        kind: 'transient',
+        error: 'agent_cli: claude timed out after 120000ms',
+      } satisfies ActivityEvent;
+    });
+    await startRun(deps(db, { adapters }), run);
+    const types = loadEngineEvents(db, run.id).map((e) => e.type);
+    // As above: `toContain` proves existence (else the `indexOf` compare is
+    // vacuously true at -1 < n), the compare proves ORDER. Keep both.
+    expect(types).toContain('activity.metered');
+    expect(types.indexOf('activity.metered')).toBeLessThan(types.indexOf('node.failed'));
+    const metered = loadEngineEvents(db, run.id).find(
+      (e) => e.type === 'activity.metered',
+    ) as unknown as Record<string, unknown>;
+    expect(metered).toMatchObject({
+      provider: 'agent_cli',
+      model: 'cli',
+      meteringStatus: 'unpriced',
+    });
+    // `unpriced` means there is no price to resolve, so the executor must suppress
+    // every price field rather than stamping a zero — this is what keeps the fact
+    // out of the run-cost INCOMPLETE gap that an `unknown` fact would open.
+    expect(metered).not.toHaveProperty('costEstimate');
+    expect(metered).not.toHaveProperty('inUnitPrice');
+    expect(metered).not.toHaveProperty('outUnitPrice');
+  });
+
   // #725 — the negative twin: an ordinary failure with no spend fact mints NO
   // metering event. Without this, marking every failure would look identical.
   it('mints NO metered event for a failure carrying no spendFact', async () => {

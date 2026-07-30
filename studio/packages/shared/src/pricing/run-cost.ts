@@ -61,12 +61,12 @@ export interface RunCost {
    * and #725.
    *
    * `agent_cli` is the deliberate CARVE-OUT (#797): a subprocess that RAN is counted
-   * whether or not it produced a completion, because its fact is `unpriced` rather
-   * than `unknown` — it can never flip `complete`, so over-counting costs one
-   * response here and nothing else, while under-counting loses the only spend signal
-   * a subscription CLI emits. Its count is also per INVOCATION, not per provider
-   * response: one `agent_task` may drive many model calls internally and the CLI
-   * reports none of them, so for those nodes this number is a floor, not a census.
+   * whether or not it produced a completion — its fact is `unpriced`, which can
+   * never flip `complete`, so an over-count is cheap where losing a subscription
+   * CLI's only spend signal is not (`cliSpendFact` in `agent.ts` argues it in full).
+   * That count is per INVOCATION, not per provider response: one `agent_task` may
+   * drive many model calls internally and the CLI reports none of them, so for
+   * those nodes this number is a floor, not a census.
    */
   responseCount: number;
   /** Responses carrying a `costEstimate` (price resolved AND both token counts present). */

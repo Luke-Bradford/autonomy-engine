@@ -38,12 +38,14 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * - `llm_call` (#2 L14b) — a CLI/subscription SINGLE-SHOT (`claude -p`/
  *   `codex exec` → stdout): the `llm_call` config's prompt is folded into one
  *   string, appended as the final argv element, and the process stdout is the
- *   `text` completion. The response is metered `unpriced` — a flat/covered seat
- *   pays for it, so there is NO per-token dollar price BY DESIGN (the executor
- *   suppresses all price fields on `unpriced`; L6 counts it as a known
- *   zero-marginal, not a measurement gap). A non-zero exit is a `permanent`
- *   failure here (unlike `agent_task`): the LLM shape's contract is a completion,
- *   and an opaque CLI error is not something to hot-loop a retry on.
+ *   `text` completion. A non-zero exit is a `permanent` failure here (unlike
+ *   `agent_task`): the LLM shape's contract is a completion, and an opaque CLI
+ *   error is not something to hot-loop a retry on.
+ *
+ * BOTH shapes meter (#797), on success AND on the failure paths — a subprocess
+ * that RAN burned the subscription's quota either way. The fact is `unpriced`
+ * with no tokens; `cliSpendFact` below carries the full argument, and each call
+ * site states the exclusions it can enforce.
  *
  * The `agent_task` activity supplies the `task`
  * (and an optional `cwd`); the Connection's non-secret `config` supplies the
@@ -184,11 +186,14 @@ const CLI_MODEL_FALLBACK = 'cli';
  * channel to establish at all. Leg (2) is deliberately weak and (1) carries the
  * design on its own: a spawn proves a PROCESS started, not that a request
  * reached the provider — a CLI that hangs on DNS and is killed at the ceiling
- * burned nothing. (`types.ts` states the same caveat as "WEAKER evidence than
- * the rule below — a spawned subprocess, not a returned response".) Note the
+ * burned nothing. Note the
  * evidence is the SPAWN, not stdout: a single-shot CLI flushes its completion at
  * the END, so gating on stdout would miss precisely the longest, most expensive
  * run — the one killed at the ceiling.
+ *
+ * The `responseCount` this feeds is per INVOCATION, not per provider response:
+ * one `agent_task` drives an agent that may make many model calls internally and
+ * the CLI reports none of them, so the number is a floor, not a census.
  */
 function cliSpendFact(model: string): Extract<ActivityEvent, { type: 'metered' }> {
   return {
@@ -438,39 +443,29 @@ async function* runAgentTask(
       ...(output.length > 0 ? { outputHash: sha256Hex(output) } : {}),
     },
   };
-  // #797 — meter the invocation BEFORE any terminal (the slot the `metered` fact
-  // holds on every other adapter), so it lands on the FAILURE paths too. Sited
-  // ahead of the terminal branch so it covers all three outcomes uniformly: a
-  // completed run, a structured-mode block that fails validation after a clean
-  // exit, and an abnormal termination.
+  // #797 — meter the invocation BEFORE any terminal (see `cliSpendFact` for why
+  // a subprocess that merely RAN is marked). Sited ahead of the terminal branch
+  // so it covers every outcome uniformly: a completed run, a structured-mode
+  // block that fails validation after a clean exit, and an abnormal termination.
   //
-  // `spawnFailed` is the ONE exclusion: no subprocess ever started, so nothing
-  // was billed and marking it would manufacture spend. The pre-spawn config
-  // failures return earlier still and never reach here.
+  // THIS SHAPE'S PREDICATE — `spawnFailed` is the ONE exclusion: no subprocess
+  // ever started, so nothing was billed and marking it would manufacture spend
+  // (the pre-spawn config failures return earlier still and never reach here).
+  // It is NOT `llm_call`'s predicate, which also excludes a quota refusal: this
+  // shape discards stderr (`spawnAndCollect` above destructures only
+  // `result`/`stdout`) and never classifies a quota refusal at all, since it maps
+  // every exit code to a COMPLETED run. Consequence, stated rather than papered
+  // over: on a connection with `quota.exhaustionPattern` set, an `agent_task`
+  // refused for quota IS metered where the `llm_call` beside it is not — an
+  // over-mark of exactly one `unpriced` response. That missing classification is
+  // a pre-existing L14c gap tracked in #799; widening it here would mean
+  // re-plumbing stderr collection for a case that costs nothing.
   //
-  // NOT the same predicate as `llm_call`'s, which ALSO excludes a quota
-  // exhaustion. This shape cannot make that check and does not pretend to: it
-  // discards stderr (`spawnAndCollect` above destructures only `result`/`stdout`)
-  // and it never classifies a quota refusal at all — an `agent_task` maps every
-  // exit code to a COMPLETED run, so there is no `rate_limit` reclassification
-  // here to hang the exclusion off. Consequence, stated plainly rather than
-  // papered over: on a connection with `quota.exhaustionPattern` configured, an
-  // `agent_task` refused for quota IS metered, where the `llm_call` on the same
-  // connection is not. It over-marks by exactly the accepted cost (one
-  // `unpriced` response, which can never flip a run's cost to INCOMPLETE). The
-  // missing quota classification for this shape is a pre-existing L14c gap
-  // tracked in #799 — widening it here would mean re-plumbing stderr collection
-  // for a case that costs nothing.
-  //
-  // NOTE the `responseCount` this increments is per INVOCATION, not per provider
-  // response: one `agent_task` drives an agent that may make many model calls
-  // internally, and the CLI reports none of them. It is a floor, not a census.
-  //
-  // Every observed exit code is a COMPLETED run here — `agent_task` succeeds on a
-  // non-zero exit (the code is data the pipeline branches on), so there is no
-  // exit-code case to reason about separately, as there is on the other shape.
+  // `resolveModel` (not `??`) so an empty-string connection `model` resolves to
+  // the fallback exactly as it does on the `llm_call` path — one precedence rule,
+  // one label, whichever shape ran. `agent_task` has no node-level model leg.
   if (classification.summary !== 'spawnFailed') {
-    yield cliSpendFact(config.model ?? CLI_MODEL_FALLBACK);
+    yield cliSpendFact(resolveModel({}, config, CLI_MODEL_FALLBACK) ?? CLI_MODEL_FALLBACK);
   }
   if ('failed' in classification.terminal) {
     yield classification.terminal.failed;
@@ -622,26 +617,20 @@ async function* runLlmCall(
       ? config.quota
       : undefined;
   // #797 — meter BEFORE any terminal, so an abnormal termination is accounted for
-  // rather than silently free. The rule: a subprocess that RAN spent the
-  // subscription's quota. Two exclusions:
+  // rather than silently free (rationale: `cliSpendFact`).
+  //
+  // THIS SHAPE'S PREDICATE — two exclusions, one more than `agent_task` can make:
   //  - `spawnFailed` — no subprocess ran at all, so nothing was billed.
-  //  - a quota EXHAUSTION — the service refused the call, which is the one CLI
-  //    outcome that positively establishes no exchange was served. Note the
-  //    narrowness: `quotaHit` requires a COMPLETED non-zero exit, so a CLI that
-  //    printed its quota refusal and then hung until the wall-clock kill is
-  //    still metered. That is correct-by-policy (over-marking costs one
-  //    `unpriced` response), not a hole the exclusion was meant to cover.
-  // `agent_task`'s predicate is NOT identical — it cannot enforce the second
-  // exclusion; see the metering site there.
-  // Note a plain non-zero EXIT is NOT excluded, deliberately. It is tempting to
-  // read it as the HTTP adapters' unmarked non-2xx, but the analogy breaks: a
-  // non-2xx is the PROVIDER stating it did not serve the request, whereas an exit
-  // code is the client wrapper's verdict on its whole job — routinely non-zero
-  // AFTER a completed generation (a post-hoc parse/hook failure, a broken pipe on
-  // write). Under-marking those loses real spend; over-marking an exit-1 that never
-  // reached the model costs one `unpriced` response and cannot flip `complete`.
-  // Held to the same slot on success (`metered` then `succeeded`), so the ordering
-  // the API adapters guarantee holds on every `agent_cli` path.
+  //  - a quota EXHAUSTION — the service refused the call, the one CLI outcome
+  //    that positively establishes no exchange was served. Note its narrowness:
+  //    `quotaHit` requires a COMPLETED non-zero exit, so a CLI that prints its
+  //    quota refusal and then hangs until the wall-clock kill is still metered —
+  //    correct-by-policy (an over-mark costs one `unpriced` response), not a hole.
+  // A plain non-zero EXIT is deliberately NOT excluded. It is tempting to read it
+  // as the HTTP adapters' unmarked non-2xx, but the analogy breaks: a non-2xx is
+  // the PROVIDER stating it did not serve the request, whereas an exit code is the
+  // client wrapper's verdict on its whole job — routinely non-zero AFTER a
+  // completed generation (a post-hoc parse/hook failure, a broken pipe on write).
   if (classification.summary !== 'spawnFailed' && quotaHit === undefined) {
     yield cliSpendFact(model);
   }
