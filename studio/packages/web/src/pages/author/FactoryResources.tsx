@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useMatch, useNavigate } from 'react-router';
+import { NavLink, useLocation, useMatch, useNavigate } from 'react-router';
 import { useStore } from 'zustand';
 import {
   Menu,
@@ -89,12 +89,14 @@ interface FactoryResourcesProps {
  */
 export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourcesProps) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const editing = useMatch(CANVAS_ROUTE)?.params.pipelineId;
 
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
+  const recoverIfFailed = useStore(store, (s) => s.recoverIfFailed);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [query, setQuery] = useState('');
@@ -146,6 +148,31 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   useEffect(() => {
     ensureFresh();
   }, [ensureFresh]);
+
+  /**
+   * #761 — a NAVIGATION is a recovery opportunity.
+   *
+   * The effect above is mount-only (`ensureFresh` is a stable store fn), and
+   * this pane does not unmount while the user moves around WITHIN Author — it
+   * lives beside the `<Outlet/>`, not inside it. So a single transient 5xx used
+   * to leave the banner up and the tree empty for the rest of the page's life:
+   * `ensureFresh` deliberately refuses to retry a failure, and nothing else ran.
+   * The pane is the hub's primary navigation surface, so that reads as "the app
+   * is broken" rather than "one request failed".
+   *
+   * Keyed on `pathname` ALONE, deliberately. Adding `status` would make this a
+   * hammer: a failed recovery changes `status`, which would re-run the effect,
+   * which would retry again — precisely the remount-storm the store's `error`
+   * guard exists to prevent. The status test therefore lives INSIDE
+   * `recoverIfFailed`, which is inert unless there is a failure to recover from,
+   * so navigating around a healthy server costs nothing.
+   *
+   * NOT `key={pathname}` on the pane: remounting it would recover the list by
+   * throwing away the operator's `query`, `expanded` and any open `draft`.
+   */
+  useEffect(() => {
+    recoverIfFailed();
+  }, [pathname, recoverIfFailed]);
 
   /**
    * The section the tree hangs beneath.

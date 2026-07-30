@@ -29,15 +29,30 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
+  const recoverIfFailed = useStore(store, (s) => s.recoverIfFailed);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
 
+  /**
+   * #761 — this page is sticky for the same reason the Author pane was, by a
+   * different route. It DOES remount on navigation, but `ensureFresh` refuses to
+   * retry a failure, so the fresh mount was defeated on its own and the banner
+   * survived every return to the page.
+   *
+   * For a route ELEMENT, a mount IS a route entry — React cannot distinguish a
+   * first mount from a navigated-back one — so both calls belong in the one
+   * effect. They cannot double-fetch: from `error`, `ensureFresh` stands down and
+   * `recoverIfFailed` loads; from `idle`/`ready`, `ensureFresh` loads and sets
+   * `status:'loading'` synchronously, so `recoverIfFailed` stands down. Exactly
+   * one request either way.
+   */
   useEffect(() => {
     ensureFresh();
-  }, [ensureFresh]);
+    recoverIfFailed();
+  }, [ensureFresh, recoverIfFailed]);
 
   const onCreate = useCallback(
     async (e: React.FormEvent) => {

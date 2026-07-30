@@ -142,4 +142,32 @@ describe('PipelinesPage', () => {
     await screen.findByRole('alert');
     expect(screen.queryByText(/No pipelines yet/i)).not.toBeInTheDocument();
   });
+
+  /**
+   * #761 — re-entering the page retries a load that failed.
+   *
+   * This page DOES unmount on navigation, unlike the Author pane, so it looks
+   * like it should recover for free. It did not: `ensureFresh` skips a failed
+   * load by design, which defeated the fresh mount on its own and left the
+   * banner up on every return until Retry or a browser reload.
+   *
+   * Both renders share ONE store deliberately — `renderPage`'s fresh-store-per-
+   * case isolation is what a re-entry must NOT have, since the whole defect
+   * lives in the state carried across the unmount.
+   */
+  it('retries a FAILED load when the page is re-entered', async () => {
+    const store = createPipelinesStore();
+    listMock.mockRejectedValueOnce(new Error('boom'));
+
+    const first = renderWithRouter(<PipelinesPage store={store} />, '/author/pipelines');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/boom/i);
+    first.unmount();
+
+    listMock.mockResolvedValueOnce([pipeline()]);
+    renderWithRouter(<PipelinesPage store={store} />, '/author/pipelines');
+
+    expect(await screen.findByText('My pipeline')).toBeInTheDocument();
+    expect(listMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

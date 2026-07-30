@@ -5,6 +5,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { LEGACY_REDIRECTS, ROUTES } from './routes';
 import { HUBS } from './shell/hubs';
 import { PANE_ELEMENT_ID } from './shell/SecondaryPane';
+import { pipelinesStore } from './stores/pipelinesStore';
 import { PANE_DEFAULT_WIDTH, uiStore } from './stores/uiStore';
 
 // The pages behind these routes talk to the network / a WebSocket. Stub both so
@@ -113,6 +114,12 @@ afterEach(() => {
   // or collapses it would otherwise hand its state to the next one.
   uiStore.getState().setPaneWidth(PANE_DEFAULT_WIDTH);
   uiStore.getState().setPaneCollapsed(false);
+  // Same hazard, second singleton: both Author surfaces read the list from
+  // `pipelinesStore`, and `ROUTES` offers no injection seam for it. A case that
+  // leaves it in `error` (or holding a list) would otherwise hand that state to
+  // every later case in this file — `ensureFresh` skips a failed load, so the
+  // leak would present as a silently missing fetch rather than as a failure.
+  pipelinesStore.setState({ status: 'idle', pipelines: [], error: null });
 });
 
 describe('route tree', () => {
@@ -209,6 +216,67 @@ describe('route tree', () => {
 
     expect(await page().findByRole('heading', { name: 'Pipeline B' })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('pl_a exploded')).not.toBeInTheDocument());
+  });
+
+  /**
+   * #761 — a failed list load must not outlive the failure it describes.
+   *
+   * This case lives HERE, against the real `ROUTES`, for a specific reason: the
+   * defect is that the Author pane does NOT unmount as the user moves around the
+   * hub, and every hand-built two-route fixture unmounts it. A test that mounts
+   * `<FactoryResources/>` as the element of two routes would be satisfied by a
+   * mount-time recovery and so could not tell the fix from the bug. The real
+   * shell is the only place the pane's persistence is genuinely exercised: it
+   * renders beside the `<Outlet/>`, not inside it.
+   *
+   * Navigation is driven through the router rather than by clicking, because a
+   * failed FIRST load leaves the tree empty — the only link left is the group
+   * header pointing at the path we are already on, which would not change
+   * `pathname` at all.
+   */
+  it('recovers a FAILED pipelines load when the route changes under the persistent pane', async () => {
+    const listPipelines = vi.mocked((await import('./api/pipelines')).listPipelines);
+    listPipelines.mockRejectedValueOnce(new Error('request failed (502)'));
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/author/pipelines'] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(listPipelines).toHaveBeenCalledTimes(1));
+    expect(await screen.findAllByText('request failed (502)')).not.toHaveLength(0);
+
+    // Same hub, so the pane stays MOUNTED across this navigation — the whole
+    // point of the case. The list page unmounts with the `<Outlet/>`, which is
+    // why the banner assertion below is unambiguous afterwards.
+    await router.navigate('/author/pipelines/pl_1');
+
+    await waitFor(() => expect(listPipelines).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('request failed (502)')).not.toBeInTheDocument());
+  });
+
+  /**
+   * The other half of the guard: recovery is inert while the server is healthy,
+   * so wiring it to every route entry does not turn navigation into request
+   * volume. Without this, `recoverIfFailed` could be `refresh` and #761's test
+   * above would still pass.
+   */
+  it('does NOT refetch the pipelines list on navigation when the last load succeeded', async () => {
+    const api = await import('./api/pipelines');
+    const listPipelines = vi.mocked(api.listPipelines);
+    /* Self-contained on purpose: the canvas case above installs a
+       `getPipeline.mockImplementation`, and `vi.clearAllMocks()` clears CALLS but
+       not implementations — so without this, `pl_1` resolves under that case's
+       stub and this one's heading assertion depends on test order. */
+    vi.mocked(api.getPipeline).mockImplementation((id: string) =>
+      Promise.resolve({ id, name: `Pipeline ${id}` } as never),
+    );
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/author/pipelines'] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(listPipelines).toHaveBeenCalledTimes(1));
+
+    await router.navigate('/author/pipelines/pl_1');
+    await page().findByRole('heading', { name: 'Pipeline pl_1' });
+
+    expect(listPipelines).toHaveBeenCalledTimes(1);
   });
 
   /**

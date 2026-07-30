@@ -303,4 +303,87 @@ test.describe('U4 Factory Resources pane', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /**
+   * #761 — a failed list load must not outlive the failure it describes.
+   *
+   * What only a real browser proves here: that a CLIENT-SIDE navigation (a hash
+   * change, no document load) is what clears the banner. In jsdom the whole
+   * question is unaskable — `location.reload()`, the remedy this defect used to
+   * require, is exactly what a unit test cannot distinguish from a re-render.
+   *
+   * The failure is injected at the network, not faked in the app, so this also
+   * pins the real `?limit=` list URL: the glob MUST be `**\/api\/pipelines*`.
+   * A bare `**\/api\/pipelines` matches nothing, because `listPipelines` always
+   * sends `?limit=100` — the spec would then pass having never failed a request.
+   * (It correctly does NOT match `/api/pipelines/:id`, so the canvas's own fetch
+   * below is untouched.)
+   *
+   * The navigation at the end is WITHIN Author, and that is the whole design of
+   * this case. A cross-hub round trip would unmount and remount the list PAGE,
+   * whose own recovery would clear the banner — measured: with the pane's effect
+   * deleted, a cross-hub version of this spec still passed. Going list → canvas
+   * keeps the pane mounted and UNMOUNTS the page, so the pane is the only thing
+   * that can possibly recover.
+   */
+  test('recovers a failed pipelines load on navigation, without a reload', async ({ page }) => {
+    const problems = collectPageProblems(page);
+
+    let listRequests = 0;
+    let failNextList = false;
+    await page.route('**/api/pipelines*', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      listRequests += 1;
+      if (!failNextList) return route.fallback();
+      failNextList = false;
+      await route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    });
+
+    // A row has to exist to navigate INTO, so the first load must succeed.
+    await gotoAuthor(page);
+    const name = 'e2e u4 recovers';
+    await createInPane(page, name);
+
+    /* Now break the next list load, and provoke one. The cross-hub round trip is
+       how it is provoked rather than what is being tested: remounting the page
+       calls `ensureFresh`, which loads from `ready` and gets the 502. The store
+       keeps the last good list through a failed REFRESH, so the row stays
+       clickable underneath the banner — which is what the final step needs. */
+    failNextList = true;
+    await page.evaluate(() => {
+      window.location.hash = '#/monitor/runs';
+    });
+    await page.getByRole('heading', { name: 'Runs' }).waitFor();
+    await page.evaluate(() => {
+      window.location.hash = '#/author/pipelines';
+    });
+    const banner = pane(page).locator('.factory-resources__error');
+    await expect(banner).toBeVisible();
+
+    const before = listRequests;
+    // A client-side route change with no document load — `location.reload()` was
+    // the remedy this defect used to require, so a reload here would prove
+    // nothing. The page unmounts with the `<Outlet/>`; the pane does not.
+    await tree(page).getByRole('link', { name, exact: true }).click();
+    await page.locator('.react-flow__renderer').waitFor();
+
+    /* The banner clearing IS the recovery: the store nulls `error` when a load
+       STARTS, so an empty pane here means a fresh request went out. Before the
+       fix nothing re-fetched and this banner stayed up for the life of the tab. */
+    await expect(banner).toHaveCount(0);
+    /* And a real request went out, counted at the network. Deliberately NOT
+       "the tree is visible": these specs share one SQLite file, so on an empty
+       DB the tree is an empty `<ul>` that Playwright reports as hidden — an
+       assertion that would pass or fail on which specs ran before it. */
+    expect(listRequests).toBeGreaterThan(before);
+
+    /* The deliberate 502 makes Chromium emit its own browser-level "Failed to
+       load resource" console entry, which `expectQuiet` would count as a
+       problem. Filter that ONE expected entry — and assert it was PRESENT, so
+       the filter can never quietly hide a genuine regression instead. */
+    await page.waitForTimeout(150);
+    const expected = problems.filter((p) => /Failed to load resource|502/.test(p));
+    expect(expected).not.toHaveLength(0);
+    expect(problems.filter((p) => !/Failed to load resource|502/.test(p))).toEqual([]);
+  });
 });
