@@ -250,11 +250,17 @@ import { resolveBuildInfo } from '../build-info.js';
 
 /**
  * `manifest.json` sits NEXT TO the server build, i.e. `app/manifest.json` with
- * the code in `app/dist/`. Resolved from this module's own URL rather than
+ * the code in `app/dist/`.
+ *
+ * TWO levels up, not one: this file compiles to `dist/routes/version.js` (tsc
+ * preserves the `routes/` subdirectory), so one `..` would land inside `dist/`.
+ * Two reaches the package root in dev — where the build writes it — and the app
+ * root in a packaged install, where the Dockerfile's `WORKDIR /app` puts the
+ * code in `/app/dist`. Resolved from this module's own URL rather than
  * `process.cwd()`, because the launchd service's working directory is not
  * guaranteed to be the install root.
  */
-const MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'manifest.json');
+const MANIFEST_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'manifest.json');
 
 /** Read ONCE at registration: the artifact cannot change under a running process. */
 export function versionRoutes(fastify: FastifyInstance): void {
