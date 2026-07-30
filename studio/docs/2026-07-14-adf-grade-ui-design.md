@@ -1120,7 +1120,17 @@ Decisions worth not re-deriving:
 - **A container is a legal EDGE ENDPOINT, so an empty one still gets a real box** — placed
   deterministically clear of the graph. An empty `stage` is a valid doc, and a min/max over no
   children is ±Infinity, which as an RF position renders garbage.
-- **Read-only, and the aria route is RF's.** Authoring is **U6d**/**U23**; container changes are
+- **One edit only — DELETE (#748) — and the aria route is RF's.** The box carries a confirmed
+  delete button in its header band, which is what ends the one-way trap an emptied container used
+  to be (an emptied `loop` blocked every save; an emptied `stage` saved itself into an immutable
+  version forever). It is a button on the box rather than a selection plus a property panel because
+  a container **cannot** be made `selectable`: RF writes `pointer-events: all` on a selectable
+  node's wrapper, and a container's wrapper spans a REGION of the canvas, so the box would eat the
+  pane clicks aimed between its children (mutation-proven against `selectable: false` in
+  `e2e/container-rendering.spec.ts`). The button opts back into hit-testing on its own, as the edge
+  handles do. Everything ELSE stays read-only — creating a container, editing its config, and
+  dragging nodes in and out are **U6d**/**#425**/**U23**, and undo does not exist. Container changes
+  other than that one click are still
   filtered at the change seam so the domain store never sees one — by container ids MINUS activity
   ids, because the two share one namespace and RF's Map-keyed lookup keeps the ACTIVITY on a
   collision (filtering by id alone made that node undraggable, unselectable and undeletable). The

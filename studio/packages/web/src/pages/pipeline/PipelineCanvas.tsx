@@ -85,11 +85,16 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     const savedNodes = store.getState().nodes;
     const savedEdges = store.getState().edges;
     // #746 — containers ride along in the snapshot and the race check below.
-    // Redundant TODAY, stated plainly rather than dressed up as a fix: EVERY
-    // writer of `containers` (`deleteNode` and `loadVersion`) also writes
-    // `nodes`, so the node check already implies this one. It is here so the
-    // first U6d mutator that touches membership WITHOUT touching nodes cannot
-    // slip past the race check silently.
+    // Still redundant today, but no longer for the reason first written here,
+    // and the update is the point: that comment said EVERY writer of
+    // `containers` also writes `nodes`, and named the two that then existed
+    // (`deleteNode`, `loadVersion`). #748's `deleteContainer` is the third, and
+    // it does NOT write `nodes` — the case the line was added in anticipation of
+    // has arrived. What keeps it redundant now is `edges`: `deleteContainer`
+    // filters that array unconditionally, so it always hands back a fresh
+    // reference and the edge check catches the race first. A future
+    // container-ONLY mutator would leave this the only check standing, which is
+    // why it stays.
     const savedContainers = store.getState().containers;
     try {
       const created = await createPipelineVersion(

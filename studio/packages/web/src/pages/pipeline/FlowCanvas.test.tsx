@@ -332,7 +332,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
 describe('FlowCanvas container delete (#748)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  function withBoxedGraph(kind: 'stage' | 'loop' = 'stage') {
+  function withBoxedGraph(kind: 'stage' | 'loop' | 'foreach' = 'stage') {
     const store = createCanvasStore();
     store.getState().loadVersion(
       PipelineVersionSchema.parse({
@@ -350,7 +350,9 @@ describe('FlowCanvas container delete (#748)', () => {
         containers: [
           kind === 'loop'
             ? { id: 'c_1', kind, children: ['n_a'], exitWhen: '${equals(1, 1)}' }
-            : { id: 'c_1', kind, children: ['n_a'] },
+            : kind === 'foreach'
+              ? { id: 'c_1', kind, children: ['n_a'], items: '${json("[1,2]")}' }
+              : { id: 'c_1', kind, children: ['n_a'] },
         ],
         catalogVersion: 1,
         createdAt: 1,
@@ -413,5 +415,33 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(message).toContain('loop');
     expect(message).toMatch(/activities.*kept|kept.*activities/i);
     expect(message).toMatch(/cannot be undone/i);
+  });
+
+  /**
+   * A `foreach` is warned about SPECIFICALLY, because for that kind "the
+   * activities are kept" is true but misleading.
+   *
+   * `${item}` is scoped by MEMBERSHIP — only nodes inside a `foreach` have it in
+   * scope — so un-grouping a child that references it turns every reference into
+   * a validation error and the doc stops saving (pinned end-to-end in
+   * `canvasStore.test.ts`, 'deleting a foreach strands its children's ${item}').
+   * That is the same shape of trap this ticket exists to end, so springing it
+   * silently would be the fix re-introducing the bug in a new place.
+   *
+   * The `loop`/`stage` half of the assertion is what stops the warning becoming
+   * boilerplate on every kind, which would make it invisible.
+   */
+  it('warns that a foreach un-groups its children out of ${item} scope', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { box } = withBoxedGraph('foreach');
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete foreach container' }));
+    expect(confirm.mock.calls[0]![0] as string).toContain('${item}');
+  });
+
+  it('does NOT warn about ${item} for a kind that never scoped it', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { box } = withBoxedGraph('loop');
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop container' }));
+    expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
   });
 });

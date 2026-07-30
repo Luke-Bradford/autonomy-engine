@@ -122,8 +122,9 @@ test.describe('#746 container membership follows a delete', () => {
  * #748 — the ESCAPE ROUTE, walked end to end.
  *
  * This is the half a unit test cannot reach, and the reason it is worth a real
- * browser: the delete control is the ONLY hit-testable thing inside a box whose
- * stylesheet sets `pointer-events: none`, and jsdom loads no stylesheet at all.
+ * browser: the delete control is hit-testable only because the stylesheet opts it
+ * back in (the box itself is `pointer-events: none`), and jsdom loads no
+ * stylesheet at all.
  * A unit test clicking that button passes whether or not the rule that makes it
  * clickable exists. Here, a click that does not land simply does not delete.
  *
@@ -182,9 +183,17 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
        So the escape route is real but two-step: bring the box into view, then use
        it. Fit-view is the honest stand-in for the panning an operator would do
        (the badge tells them a CONTAINER is the problem, so they know what they
-       are looking for). Pinned as an explicit step so the residue is visible in
-       the spec instead of hidden inside a helper — when #785 lands, this click
-       should be deletable and the test should still pass. */
+       are looking for).
+
+       ASSERTED, not just described. A bare fit-view click would leave the spec
+       passing whether or not the residue exists, and "documented in a comment"
+       is not the same as pinned — so the absence is a real assertion, and #785's
+       acceptance is that BOTH lines below come out together and the rest of this
+       test still passes. */
+    await expect(
+      nodeById(page, 'loop_1'),
+      'the emptied box is on screen — #785 fixed?',
+    ).toHaveCount(0);
     await page.locator('.react-flow__controls-fitview').click();
     await expect(nodeById(page, 'loop_1')).toHaveCount(1);
 
@@ -248,6 +257,51 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     expect(v2.containers).toEqual([]);
     // Un-grouped, not deleted — and still there in the doc that was minted.
     expect(v2.nodes.map((n) => n.id).sort()).toEqual(['a', 'after', 'b']);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * Pressing the button does not PAN the canvas.
+   *
+   * Hit-testable is not the same as exempt from the pane's gesture filter, and
+   * the two are easy to conflate — this button re-enables `pointer-events`, but
+   * React Flow's pan filter bails only on `.nopan` ancestry, so without
+   * `nodrag nopan` a press-and-twitch on the × drags the whole viewport. An
+   * ACTIVITY node is immune for a reason that does not apply here: it is
+   * `draggable`, so d3-drag intercepts the mousedown. A container is
+   * `draggable: false`, so nothing would.
+   *
+   * Only a real browser can answer this — it is React Flow's own d3-zoom
+   * behaviour reading a class off a DOM ancestor chain, not anything jsdom
+   * models. Asserted on the viewport TRANSFORM, the thing that actually moves,
+   * rather than on the class attribute, which would pass with the behaviour
+   * broken and only restate the source.
+   */
+  test('pressing the delete button does not pan the canvas', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'container-nopan', stageDoc());
+
+    const transform = () =>
+      page.evaluate(
+        () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
+      );
+    const before = await transform();
+
+    const button = nodeById(page, 'stage_1').getByRole('button', {
+      name: 'Delete stage container',
+    });
+    const box = (await button.boundingBox())!;
+    const [cx, cy] = [box.x + box.width / 2, box.y + box.height / 2];
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.mouse.move(cx + 90, cy + 70, { steps: 10 });
+    await page.mouse.up();
+
+    expect(await transform(), 'pressing the delete button panned the canvas').toBe(before);
+    // And nothing was deleted: the pointer left the button before release, so no
+    // click fired — which is what makes the transform the only thing under test.
+    await expect(nodeById(page, 'stage_1')).toHaveCount(1);
 
     await expectQuiet(page, problems);
   });

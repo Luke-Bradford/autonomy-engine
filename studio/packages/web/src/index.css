@@ -1126,11 +1126,16 @@ td button + button {
 }
 
 /*
- * #748 — the container's delete button, and the ONLY hit-testable part of the box.
+ * #748 — the container's delete button: the second of the box's two opt-ins,
+ * alongside the edge handles above.
  *
  * `pointer-events: all` is what makes it clickable at all: the box above is
  * `none`, and a child re-enables hit-testing for itself without giving the region
- * back its click-swallowing reach. Same opt-back-in as `.react-flow__handle`.
+ * back its click-swallowing reach. Same opt-back-in as `.react-flow__handle` —
+ * which is also why the button carries `nodrag nopan` in the markup, exactly as
+ * RF's own `Handle` does: hit-testable is not the same as exempt from the pane's
+ * pan filter, and without those a press-and-twitch on this button would drag the
+ * whole viewport.
  *
  * Pinned in the TOP-RIGHT corner deliberately. The two things it must not sit
  * under are the KIND label (top-left, so they cannot overlap on a narrow box) and
@@ -1148,12 +1153,22 @@ td button + button {
   position: absolute;
   top: 2px;
   right: 4px;
-  padding: 0 4px;
+  /* A 22px target, not the ~16px the glyph alone would give. The operator may
+     have had to hunt for this box (#785), and the header band is 26px tall and
+     guaranteed child-free — `CONTAINER_HEADER_HEIGHT` is added to the TOP padding
+     only — so the room is already there. Still clear of the bottom-centre point
+     `emptyPointInsideBox` probes. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
   border: 0;
   background: none;
   color: var(--muted);
-  font-size: 0.95rem;
-  line-height: 1.2;
+  font-size: 0.85rem;
+  line-height: 1;
   cursor: pointer;
   pointer-events: all;
 }

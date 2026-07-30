@@ -88,23 +88,31 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
     <div className="flow-container">
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.kind}</span>
-      {/* #748 — the ONLY hit-testable part of the box, and the reason the box
-          itself can stay inert. A container cannot be made `selectable` (RF would
-          write `pointer-events: all` on a wrapper spanning a whole region of the
-          canvas, which then eats the pane clicks aimed between its children), so
-          the delete affordance lives here instead of behind a selection and a
-          property panel. `pointer-events` is re-enabled for this one control in
-          the stylesheet, the same opt-back-in the container's edge handles use.
+      {/* #748 — the box's own chrome is inert, and this is the one part of it
+          that is not. (The edge HANDLES above are hit-testable too, and predate
+          this: two opt-ins, not one.) A container cannot be made `selectable` —
+          RF would write `pointer-events: all` on a wrapper spanning a whole
+          region of the canvas, which then eats the pane clicks aimed between its
+          children — so the delete affordance lives here instead of behind a
+          selection and a property panel. `pointer-events` is re-enabled for this
+          control in the stylesheet, the same opt-back-in the handles use.
           The id comes from React Flow's own node prop, so nothing about WHICH
-          container this is has to be carried in `data`. */}
+          container this is has to be carried in `data`.
+
+          `nodrag nopan` completes that parity — RF's own `Handle` sets both, and
+          without them this button is hit-testable but NOT exempt from the pane's
+          gesture filter, which bails only on `.nopan` ancestry. An activity node
+          escapes that by being `draggable`, so d3-drag stops the mousedown; a
+          container is `draggable: false`, so nothing would intercept and pressing
+          the × then twitching the mouse would pan the whole canvas. */}
       <button
         type="button"
-        className="flow-container-delete"
+        className="flow-container-delete nodrag nopan"
         aria-label={`Delete ${d.kind} container`}
         title={`Delete ${d.kind} container`}
         onClick={() => d.onDelete(id, d.kind)}
       >
-        ×
+        ✕
       </button>
       <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
     </div>
@@ -360,13 +368,36 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * The message states BOTH halves — what goes and what stays. "Are you sure?"
    * would leave the operator guessing whether their activities are about to go
    * with the box, which is the one thing this action deliberately does not do.
+   *
+   * A `foreach` gets a THIRD sentence, because for that kind "the activities are
+   * kept" is true but misleading. `${item}` is scoped BY MEMBERSHIP — only nodes
+   * inside a `foreach` get `item` in scope (`params.ts` builds `foreachChildIds`
+   * from exactly those containers) — so un-grouping a child that references it
+   * turns every such reference into a validation error and the doc stops saving.
+   * That is the same shape of trap this ticket exists to end, so it must not be
+   * sprung silently. It IS recoverable, unlike the container's own config: the
+   * freed children are still selectable and their config is editable in
+   * `NodePanel`, so the operator can edit the references out. Saying so is what
+   * makes the difference between a recoverable state and a mystery.
+   *
+   * Stated for EVERY `foreach` rather than only when a child really references
+   * `${item}`. A detector would have to find expressions anywhere in a child's
+   * config, and the ways to miss one (`${ item }`, `${item.field}`, an expression
+   * nested in a field this code does not know about) all fail in the direction of
+   * a silent trap. Over-warning on a `foreach` with no references is the harmless
+   * direction, and is nearly hypothetical anyway — iterating without using the
+   * item is what a `foreach` is for.
    */
   const confirmDeleteContainer = useCallback(
     (id: string, kind: ContainerKind) => {
       const confirmed = window.confirm(
         `Delete this ${kind} container?\n\n` +
           'Its settings and the edges connected to it are removed, and this cannot be undone. ' +
-          'The activities inside are kept — they move out to the top level.',
+          'The activities inside are kept — they move out to the top level.' +
+          (kind === 'foreach'
+            ? ' Any ${item} they reference will no longer resolve, and must be edited' +
+              ' before the pipeline can be saved.'
+            : ''),
       );
       if (!confirmed) return;
       store.getState().deleteContainer(id);
@@ -456,10 +487,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            a group is U23's. */
         selectable: false,
         draggable: false,
-        /* `deletable: false` keeps RF's Backspace path away from a container: a
-           `remove` change would reach `deleteNode` (containers are filtered at
-           the seam anyway), bypassing the confirmation that is this action's only
-           protection against an unrecoverable mis-key. */
+        /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
+           rather than dressed up as load-bearing: RF's Backspace path only
+           targets a SELECTED node and a container cannot be selected, container
+           ids are filtered at the change seam before any branch runs, and a
+           `remove` that somehow reached `deleteNode(<container id>)` would find
+           no node and no-op. Nothing can reach `deleteContainer` except the
+           confirmed button. Kept because all three of those are properties of
+           OTHER lines that a later change could flip. */
         deletable: false,
         focusable: false,
         // Behind its children. Both the explicit z-index and the array order

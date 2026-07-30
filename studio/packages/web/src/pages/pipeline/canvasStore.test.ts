@@ -904,6 +904,50 @@ describe('canvasStore — deleteContainer (#748)', () => {
   });
 
   /**
+   * The COST of keeping the children, pinned rather than claimed away.
+   *
+   * `${item}` is scoped BY MEMBERSHIP — `validatePipelineDoc` binds `item` only
+   * for nodes inside a `foreach` — so a freed child that referenced it now fails
+   * validation and the doc stops saving. Deleting a populated `foreach` can
+   * therefore leave the operator in the shape this ticket exists to end.
+   *
+   * Not fixed by cascading the children (that destroys authored activities, a
+   * strictly worse trade) and not fixed by refusing the delete (that restores the
+   * one-way trap). It is surfaced instead: the canvas warns for a `foreach`
+   * before the confirm, and unlike the container's own config this IS
+   * recoverable — the freed children are selectable and their config is editable
+   * in `NodePanel`. Pinned here so the warning has something behind it, and so a
+   * future change to `${item}` scoping fails a test rather than a user.
+   */
+  it("deleting a foreach strands its children's ${item}, and the doc stops saving", () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { url: '${item}' },
+            position: { x: 10, y: 20 },
+          },
+        ],
+        edges: [],
+        containers: [{ id: 'c_1', kind: 'foreach', children: ['n_a'], items: '${json("[1]")}' }],
+      }),
+    );
+    expect(validateCanvas(s.getState().nodes, [], s.getState().containers, [])).toEqual([]);
+
+    s.getState().deleteContainer('c_1');
+
+    const st = s.getState();
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, []);
+    // The activity itself SURVIVED — this is a scoping consequence, not a delete.
+    expect(st.nodes.map((n) => n.id)).toEqual(['n_a']);
+    expect(issues).toEqual([expect.stringContaining("'item' is only bound inside")]);
+    expect(canSave({ saving: false, ready: true, issues })).toBe(false);
+  });
+
+  /**
    * SYMPTOM B: the empty `stage` that validated clean and so saved itself into
    * every future version. It is now removable before the save that would have
    * made it permanent.

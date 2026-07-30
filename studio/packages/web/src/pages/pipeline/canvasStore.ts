@@ -90,7 +90,7 @@ function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
  * back BY REFERENCE, and so does the whole array when no container listed it.
  * Stated honestly, because the first version of this comment named two
  * consumers that turned out not to depend on it: NOTHING relies on this today.
- * `FlowCanvas` memoises the boxes on `[containers, flowNodes]`, and a delete
+ * `FlowCanvas` memoises the boxes on `[containers, flowNodes, …]`, and a delete
  * always rebuilds `flowNodes` into a fresh array, so the boxes re-derive either
  * way; `PipelineCanvas`'s save-race check tests `nodes` first, which a delete
  * always changes too. It is the reducer's own idiom (`reduce.ts`'s children
