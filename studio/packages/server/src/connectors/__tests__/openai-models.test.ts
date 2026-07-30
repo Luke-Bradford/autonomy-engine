@@ -6,6 +6,7 @@ import {
   openAiUsesMaxCompletionTokens,
   unsupportedOpenAiParams,
 } from '../openai-models.js';
+import { normalizeModelId } from '../llm-shared.js';
 
 const NONE = { hasTemperature: false, hasTopP: false };
 
@@ -155,5 +156,15 @@ describe('openAiUsesMaxCompletionTokens (#739)', () => {
 
   it('is still false for a -latest pointer', () => {
     expect(openAiUsesMaxCompletionTokens('codex-mini-latest')).toBe(false);
+  });
+
+  it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
+    // Same invariant as the anthropic module's, pinned per-set because this set
+    // is maintained separately: lookups normalise first, so a member that is not
+    // a fixed point is unreachable. It would fire if a dated snapshot
+    // (`o3-2025-04-16`) were ever added to the set instead of its alias.
+    for (const model of MODELS_REJECTING_SAMPLING_PARAMS) {
+      expect(normalizeModelId(model)).toBe(model);
+    }
   });
 });

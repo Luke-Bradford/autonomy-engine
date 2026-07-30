@@ -1048,11 +1048,9 @@ describe('normalizeModelId (#751)', () => {
     // the FULL ID of the same model, so the capability fact transfers by
     // documented identity rather than by inference.
     ['an anthropic dated full id', 'claude-opus-4-1-20250805', 'claude-opus-4-1'],
-    ['a vertex @-separated snapshot', 'claude-opus-4-5@20251101', 'claude-opus-4-5'],
+    ['a dated haiku full id', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5'],
     // OpenAI dates are dash-separated rather than compact.
     ['an openai dated snapshot', 'o3-2025-04-16', 'o3'],
-    ['a bracketed context variant', 'claude-opus-4-8[1m]', 'claude-opus-4-8'],
-    ['a bracketed AND dated id', 'claude-opus-4-1-20250805[1m]', 'claude-opus-4-1'],
   ])('reduces %s to its base id', (_label, input, expected) => {
     expect(normalizeModelId(input)).toBe(expected);
   });
@@ -1069,6 +1067,14 @@ describe('normalizeModelId (#751)', () => {
     ['a plain alias', 'claude-opus-4-8'],
     ['an unknown id', 'gpt-4o'],
     ['the empty string', ''],
+    // A Vertex `@`-snapshot and a bracketed variant are BOTH left alone — see the
+    // docblock. The `@` form exists only on a non-first-party endpoint, and the
+    // anthropic preflight has no first-party gate, so normalising it would aim
+    // its whole effect at a surface this module claims no facts about; a `[1m]`
+    // context variant is an inference rather than a published identity and #751
+    // scoped itself to the date form.
+    ['a vertex @-separated snapshot', 'claude-opus-4-5@20251101'],
+    ['a bracketed context variant', 'claude-opus-4-8[1m]'],
     // A proxied Bedrock id keeps its `anthropic.` prefix DELIBERATELY: those are
     // reachable only through a proxied baseUrl, the anthropic preflight has no
     // first-party gate, and `anthropic.ts` records that the preflight is not the
@@ -1087,4 +1093,25 @@ describe('normalizeModelId (#751)', () => {
     // real id. Pinned so #729's known-gap ids stay permitted either way.
     expect(normalizeModelId('claude-3-haiku-20240307')).toBe('claude-3-haiku');
   });
+
+  it.each([
+    ['claude-opus-4-20250514', 'claude-opus-4', 'claude-opus-4-0'],
+    ['claude-sonnet-4-20250514', 'claude-sonnet-4', 'claude-sonnet-4-0'],
+  ])(
+    'does NOT reach the alias for the Claude 4.0 family: %s',
+    (full, normalised, publishedAlias) => {
+      // The one family where a date strip misses its own alias, because the alias
+      // carries a `-0` the dated id does not. Documented on the helper; pinned
+      // here so it is enforced rather than merely written down.
+      //
+      // Harmless today (both aliases are #729 known-gap NON-members, so this is
+      // one non-member reducing to another), but it means a future #729 entry for
+      // either alias MUST list both spellings or it will not be found for the
+      // dated form — the exact spelling-dependent divergence #751 exists to
+      // remove. This assertion fails the day someone "fixes" the normaliser into
+      // guessing the `-0` back on, which would be a fabricated mapping.
+      expect(normalizeModelId(full)).toBe(normalised);
+      expect(normalizeModelId(full)).not.toBe(publishedAlias);
+    },
+  );
 });

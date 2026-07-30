@@ -51,9 +51,10 @@ import type { UnsupportedParam } from './llm-shared.js';
  * BUT THE PROXY CASE INVERTS, and that is why this module is not a copy of its
  * sibling. `anthropic-models.ts` can lean on id matching to let a proxied
  * `baseUrl` fall through, because a gateway rarely serves models under
- * Anthropic's own ids — and per #751 the one proxied form it WOULD see, a
- * Bedrock `anthropic.`-prefixed id, is deliberately left unnormalised so it keeps
- * falling through. The OpenAI-COMPATIBLE ecosystem is the opposite: its
+ * Anthropic's own ids — and per #751 the proxied spellings it WOULD see (a
+ * Bedrock `anthropic.`-prefixed id, a Vertex `@`-separated snapshot) are
+ * deliberately left unnormalised so they keep falling through. The
+ * OpenAI-COMPATIBLE ecosystem is the opposite: its
  * whole point is reusing OpenAI's exact model names, and such a gateway may
  * well accept (or silently ignore) `temperature` on a model called `gpt-5`.
  * Refusing there would be precisely the manufactured refusal the rule above

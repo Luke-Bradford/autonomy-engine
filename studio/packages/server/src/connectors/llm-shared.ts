@@ -130,47 +130,64 @@ export function resolveModel(
  * whether a capability fact applied depended on which spelling the author
  * happened to type. This normalises the spelling; it does not add facts.
  *
- * WHY THIS IS NOT A GUESS, which matters because these modules hold "an absent
+ * WHY A DATE IS NOT A GUESS, which matters because these modules hold "an absent
  * fact is not a refusal" and set a deliberately high bar for ADDING a refusal:
  * the dated string is not a similar model, it is the SAME model. Anthropic's
  * model tables publish the pair as `Alias` and `Full ID` of one row
- * (`claude-opus-4-1` ⇄ `claude-opus-4-1-20250805`), and Vertex spells that same
- * snapshot with an `@` separator. Transferring a capability across a documented
- * alias/full-id identity is not inference, so it does not spend the bar that
- * essay is protecting. Only forms with that property are stripped.
+ * (`claude-opus-4-1` ⇄ `claude-opus-4-1-20250805`), so transferring a capability
+ * across that identity is not inference and does not spend the bar that essay is
+ * protecting.
  *
- * WHAT IS DELIBERATELY *NOT* STRIPPED is the whole safety of this helper, since
- * the failure mode is a FALSE MERGE onto a member that is a different model:
+ * ONE FAMILY BREAKS THAT, and it is stated here rather than left as a surprise
+ * because it is the ONLY case where stripping a date does not land on the alias.
+ * The Claude 4.0 aliases carry a `-0` their dated ids do not:
+ * `claude-opus-4-0` ⇄ `claude-opus-4-20250514` (likewise `claude-sonnet-4-0`).
+ * So `claude-opus-4-20250514` reduces to `claude-opus-4` — neither the alias nor
+ * an id any provider serves. Harmless TODAY, because both aliases are #729
+ * known-gap non-members and a non-member normalising to a different non-member
+ * changes nothing. It stops being harmless the moment #729 lands: an entry added
+ * for `claude-opus-4-0` would NOT be found for its own dated form, which is the
+ * exact spelling-dependent divergence this helper exists to remove. **A set entry
+ * for either 4.0 alias must therefore list both spellings.** Pinned by test so
+ * that instruction is enforced rather than merely written down. Not repaired with
+ * an alias map here: that would be dead data today, and a guessed mapping is
+ * precisely what these modules refuse.
+ *
+ * WHAT IS DELIBERATELY *NOT* STRIPPED is the rest of the safety, since the
+ * failure mode is a FALSE MERGE onto a member that is a different model:
  *  - **Arbitrary trailing tokens.** OpenAI's set holds `o3` AND `o3-mini`,
  *    `gpt-5` AND `gpt-5-mini`/`-nano`/`-pro`/`-codex` as separate members, so a
  *    "strip after the last dash" rule would refuse sampling params on a sibling
  *    model that accepts them — a manufactured failure of a working call.
  *  - **`-latest` pointers** (`codex-mini-latest`). Not a date, and the id it
  *    points at is not published, so there is nothing to transfer from.
- *  - **A Bedrock `anthropic.` / `us.anthropic.` prefix.** Those ids are
- *    reachable ONLY through a proxied `baseUrl`, the anthropic preflight (unlike
- *    the OpenAI one) has no first-party gate, and `anthropic.ts` records as
- *    settled that Bedrock's request surface genuinely differs and "the preflight
- *    is not the remedy — a Bedrock-aware connection kind would be". Stripping
- *    the prefix would aim 100% of its effect at exactly the surface these
- *    modules decline to claim facts about.
- *
- * A bracketed suffix (`claude-opus-4-8[1m]`, the 1M-context flavour) IS stripped.
- * Weaker than the alias/full-id case — a context-window variant is an inference
- * rather than an identity — but sound for the only two dimensions these sets
- * cover: a longer context window does not restore a sampling knob or an
- * adaptive-thinking surface to a model that lacks it.
+ *  - **A Bedrock `anthropic.` / `us.anthropic.` prefix**, and **a Vertex
+ *    `@`-separated snapshot** (`claude-opus-4-5@20251101`). Both spellings exist
+ *    ONLY on a non-first-party endpoint, reachable only through a proxied
+ *    `baseUrl` — and unlike the OpenAI preflight, the anthropic one has no
+ *    first-party gate, so a rule for either would aim 100% of its effect at a
+ *    surface these modules decline to claim facts about. `anthropic.ts` records
+ *    as settled that Bedrock's request surface genuinely differs there. An
+ *    earlier draft of this helper stripped `@` while excluding the prefix on that
+ *    reasoning, which cannot be right both ways; the `@` rule was dropped rather
+ *    than the argument weakened.
+ *  - **A bracketed variant** (`claude-opus-4-8[1m]`, the 1M-context flavour). A
+ *    context-window variant is an inference rather than a published identity, and
+ *    #751 scoped itself to the date form. Left permitted, which costs at most the
+ *    pre-existing provider 400 — the direction this module errs in.
  *
  * Case-sensitive, like `isOpenAiFirstParty`: lowercasing would widen matching on
  * a dimension no source has been checked against.
+ *
+ * INVARIANT, pinned by test: every member of every capability set must be its own
+ * normal form. A member that is not a fixed point could never be matched, since
+ * lookups normalise first — a dead entry that reads as a live fact.
  */
 export function normalizeModelId(model: string): string {
   return (
     model
-      // Bracketed variant first, so a `[1m]` suffix cannot hide a date behind it.
-      .replace(/\[[^\]]*\]$/, '')
-      // Anthropic compact `-20250805` and Vertex `@20251101`.
-      .replace(/[-@]\d{8}$/, '')
+      // Anthropic compact `-20250805`.
+      .replace(/-\d{8}$/, '')
       // OpenAI dash-separated `-2025-04-16`.
       .replace(/-\d{4}-\d{2}-\d{2}$/, '')
   );

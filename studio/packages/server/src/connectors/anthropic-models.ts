@@ -22,21 +22,26 @@ import type { UnsupportedParam } from './llm-shared.js';
  * facts mean opposite things.
  *
  * Matching is on the NORMALISED id (#751), not the exact string as it once was.
- * A dated full id or bracketed variant (`claude-opus-4-1-20250805`,
- * `claude-opus-4-8[1m]`) is reduced to the alias it is a spelling of, so one
- * model no longer gets two different answers depending on how the author typed
- * it. `BUILTIN_PRICES` still matches EXACT-STRING and deliberately was not
- * changed with it — a capability is a property of the model (so it transfers
- * across an alias/full-id identity), whereas a price is a property of a
- * PUBLISHED ROW, and merging a dated id onto an alias there could silently
- * mis-price a snapshot that is billed differently. Same-looking helper, opposite
- * fail direction; do not reuse `normalizeModelId` in pricing.
+ * A DATED full id (`claude-opus-4-1-20250805`) is reduced to the alias published
+ * for that same row, so one model no longer gets two different answers depending
+ * on how the author typed it. Dates only — every other variant spelling is left
+ * alone, and `normalizeModelId` gives the reason for each. Note the one family
+ * where a date strip does NOT reach the alias (`claude-opus-4-0` ⇄
+ * `claude-opus-4-20250514`) before adding any 4.0 entry to a set below.
+ *
+ * `BUILTIN_PRICES` still matches EXACT-STRING and deliberately was not changed
+ * with it — a capability is a property of the model (so it transfers across an
+ * alias/full-id identity), whereas a price is a property of a PUBLISHED ROW, and
+ * merging a dated id onto an alias there could silently mis-price a snapshot that
+ * is billed differently. Same-looking helper, opposite fail direction; do not
+ * reuse `normalizeModelId` in pricing.
  *
  * Still falling through to permitted, and still with the provider as the
  * authority: any id the sets do not name, and any model served by a proxy /
- * self-hosted `baseUrl` — including a Bedrock `anthropic.`-prefixed id, which
- * #751 pointedly does NOT normalise (see `normalizeModelId`, and `anthropic.ts`
- * on why the preflight is not Bedrock's remedy).
+ * self-hosted `baseUrl` — including a Bedrock `anthropic.`-prefixed id and a
+ * Vertex `@`-separated snapshot, which #751 pointedly does NOT normalise (see
+ * `normalizeModelId`, and `anthropic.ts` on why the preflight is not Bedrock's
+ * remedy).
  *
  * WHY SERVER-SIDE and not `packages/shared` alongside the price table: the only
  * consumer is the dispatch path, and the sets are `anthropic_api`-specific
@@ -206,9 +211,9 @@ export function unsupportedAnthropicParams(
 ): readonly UnsupportedParam[] {
   const unsupported: UnsupportedParam[] = [];
   // #751 — match on the BASE id, so a dated full id (`claude-opus-4-1-20250805`)
-  // or a bracketed variant classifies like the alias it is a spelling of. Only
-  // alias/full-id-identical forms are reduced; a Bedrock prefix and every
-  // sibling-token form are deliberately left alone. See `normalizeModelId`.
+  // classifies like the alias published for the same row. Dates only: a Bedrock
+  // prefix, a Vertex `@`-snapshot, a bracketed variant and every sibling-token
+  // form are deliberately left alone. See `normalizeModelId`.
   const id = normalizeModelId(model);
   // Sampling knobs EXISTED and were taken away → `removed`.
   if (MODELS_REJECTING_SAMPLING_PARAMS.has(id)) {
