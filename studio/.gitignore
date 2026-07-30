@@ -19,3 +19,8 @@ test-results/
 playwright-report/
 blob-report/
 
+# Build identity (#792) — written by scripts/write-manifest.mjs at build time,
+# never authored by hand or committed; a dev build's version/commit/arch would
+# otherwise vary machine to machine and collide across worktrees.
+packages/server/manifest.json
+

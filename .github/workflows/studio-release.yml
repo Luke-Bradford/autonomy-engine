@@ -1,0 +1,44 @@
+name: studio-release
+
+on:
+  push:
+    tags: ['studio-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 11.0.6 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm, cache-dependency-path: studio/pnpm-lock.yaml }
+
+      - name: Install
+        working-directory: studio
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: studio
+        run: pnpm build
+
+      # VERSION comes from the tag and COMMIT from the checkout, so the published
+      # manifest and the one baked into the artifact are produced from the same
+      # two facts rather than derived independently.
+      - name: Write manifest
+        working-directory: studio
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#studio-v}"
+          node scripts/write-manifest.mjs packages/server "$VERSION" "$(git rev-parse --short HEAD)" x64
+          cat packages/server/manifest.json
+
+      - name: Publish the manifest to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --generate-notes studio/packages/server/manifest.json
