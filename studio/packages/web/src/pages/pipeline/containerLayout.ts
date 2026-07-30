@@ -70,6 +70,42 @@ export const EMPTY_CONTAINER_SIZE = { width: 220, height: 120 };
 /** Screen px kept between a box `revealTransform` pans into view and the edge. */
 export const REVEAL_MARGIN = 24;
 
+/**
+ * How much of the pane's right and bottom edges the reveal must NOT land a box
+ * against, because canvas chrome is drawn there INSIDE the pane.
+ *
+ * `<MiniMap>` sits bottom-right in a `.react-flow__panel` with `pointer-events:
+ * all`, at React Flow's default 200x150 plus the stylesheet's 15px panel margin,
+ * so it owns roughly the last 215 x 165 of the pane; `<Controls>` occupies the
+ * same bottom band on the left. A box landed flush against those edges can have
+ * its delete control — which is at the box's TOP-RIGHT — underneath the minimap:
+ * revealed, and still unclickable. That is #785's trap intact, so the reveal
+ * treats the covered strips as not-usable rather than as viewport.
+ *
+ * Deliberately conservative and deliberately a BAND, not the corner rect the
+ * chrome actually occupies: the arithmetic stays one subtraction per axis, and
+ * over-insetting only ever pans a little further than strictly needed. It must
+ * be revisited if the MiniMap is ever given an explicit size.
+ */
+export const CANVAS_CHROME_INSET = { right: 215, bottom: 165 };
+
+/**
+ * The pane extent the reveal may land a box in: the measured pane, less the
+ * strips `CANVAS_CHROME_INSET` covers.
+ *
+ * Floored at half the pane on each axis. On a pane narrow enough that the chrome
+ * covers most of it, avoiding the chrome perfectly would leave a usable box too
+ * small to contain the container at all, and `revealTransform` would then decline
+ * to pan (or pan somewhere useless) — an invisible box is a worse outcome than a
+ * partly-covered one, so the inset yields rather than the reveal.
+ */
+export function usableExtent(width: number, height: number): { width: number; height: number } {
+  return {
+    width: Math.max(width - CANVAS_CHROME_INSET.right, Math.ceil(width / 2)),
+    height: Math.max(height - CANVAS_CHROME_INSET.bottom, Math.ceil(height / 2)),
+  };
+}
+
 function union(a: Rect, b: Rect): Rect {
   const x = Math.min(a.x, b.x);
   const y = Math.min(a.y, b.y);
@@ -202,16 +238,48 @@ export function liveNodeRects(
  *
  * The ORDER of the last two lines decides the over-sized case: bring the FAR
  * edge in, then let the NEAR edge override. A box bigger than the viewport
- * cannot satisfy both, and NEAR wins — for a container box the near edges are
- * the left and the top, and the top is where the header band carrying the delete
- * control lives. Clipping the bottom loses nothing; clipping the top would hide
- * the one control the reveal is for.
+ * cannot satisfy both, and NEAR wins. VERTICALLY that is the substantive
+ * choice: a container box's header band is at the top, so clipping the bottom
+ * loses nothing while clipping the top would hide the delete control the reveal
+ * exists to expose. HORIZONTALLY the control is at the box's RIGHT edge, so
+ * top-left alignment is the consistent answer rather than the protective one —
+ * an empty box is 220 flow-px and React Flow's default `maxZoom` is 2, so a box
+ * too wide for a real pane is not reachable through this caller, and the axes
+ * are kept symmetrical rather than special-cased for a case that cannot happen.
  */
 function axisPan(near: number, size: number, extent: number): number {
   const far = near + size;
   if (near >= 0 && far <= extent) return 0;
   const pan = far > extent - REVEAL_MARGIN ? extent - REVEAL_MARGIN - far : 0;
   return near + pan < REVEAL_MARGIN ? REVEAL_MARGIN - near : pan;
+}
+
+/**
+ * Which containers are drawn as the EMPTY fallback box.
+ *
+ * `childCount` and not `children.length`, for the same reason the box announces
+ * that count: a container whose every listed child is a phantom draws the
+ * fallback and IS empty on screen, whatever its array still says.
+ */
+export function emptyContainerIds(boxes: ReadonlyMap<string, ContainerBox>): Set<string> {
+  const empty = new Set<string>();
+  for (const [id, box] of boxes) if (box.childCount === 0) empty.add(id);
+  return empty;
+}
+
+/**
+ * The ids that have JUST become empty — `now` minus `known`, in `now`'s order.
+ *
+ * `known === null` means nothing has been recorded yet, i.e. this is the first
+ * observation, and the answer is deliberately EMPTY: a container that is empty
+ * from the start was framed by React Flow's `fitView`, and treating that as an
+ * appearance would pan the canvas on every page load. An id that LEAVES the set
+ * (the container was deleted, or gained a child) is not an appearance either —
+ * only the transition into emptiness is.
+ */
+export function appearedIds(known: ReadonlySet<string> | null, now: ReadonlySet<string>): string[] {
+  if (known === null) return [];
+  return [...now].filter((id) => !known.has(id));
 }
 
 /**

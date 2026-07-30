@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { Container } from '@autonomy-studio/shared';
 import {
+  CANVAS_CHROME_INSET,
   CONTAINER_GAP,
   CONTAINER_HEADER_HEIGHT,
   CONTAINER_PADDING,
   EMPTY_CONTAINER_SIZE,
   REVEAL_MARGIN,
+  appearedIds,
   containerRects,
+  emptyContainerIds,
   liveNodeRects,
   revealTransform,
+  usableExtent,
   type Rect,
 } from './containerLayout';
 
@@ -365,5 +369,87 @@ describe('liveNodeRects — dropping a view node the doc no longer has', () => {
     // And it is the position the NEXT render settles on, so the box never jumps.
     const settled = containerRects([stage('c_1', [])], new Map([['keep', rect(0, 0)]])).get('c_1')!;
     expect(box).toEqual(settled);
+  });
+});
+
+/**
+ * The reveal's TRIGGER, extracted from the effect so it can be tested.
+ *
+ * Both bugs the pre-PR review caught were in that effect, and jsdom cannot help:
+ * React Flow reports a 0x0 pane until its ResizeObserver runs, so a mounted "did
+ * it pan" test would be vacuous by construction. Keeping the decisions pure moves
+ * them somewhere a test can reach.
+ */
+describe('the reveal trigger', () => {
+  function box(childCount: number) {
+    return { x: 0, y: 0, width: 220, height: 120, childCount };
+  }
+
+  describe('emptyContainerIds', () => {
+    it('names the containers drawn as the empty fallback, and only those', () => {
+      const boxes = new Map([
+        ['full', box(2)],
+        ['empty', box(0)],
+        ['one', box(1)],
+      ]);
+      expect([...emptyContainerIds(boxes)]).toEqual(['empty']);
+    });
+
+    it('is empty when there are no containers at all', () => {
+      expect(emptyContainerIds(new Map()).size).toBe(0);
+    });
+  });
+
+  describe('appearedIds', () => {
+    /* The mount case. A container empty from LOAD was framed by React Flow's
+       `fitView`, which fits every rendered node including the box; calling that
+       an appearance would pan the canvas on every page load. */
+    it('reports NOTHING on the first observation, however many are empty', () => {
+      expect(appearedIds(null, new Set(['a', 'b']))).toEqual([]);
+    });
+
+    it('reports an id that has just become empty', () => {
+      expect(appearedIds(new Set(['a']), new Set(['a', 'b']))).toEqual(['b']);
+    });
+
+    it('reports nothing when the set has not changed', () => {
+      expect(appearedIds(new Set(['a']), new Set(['a']))).toEqual([]);
+    });
+
+    /* A container that was deleted, or that gained a child, LEFT the set. That is
+       not a transition into emptiness and must not pan anything. */
+    it('ignores an id that has left the set', () => {
+      expect(appearedIds(new Set(['a', 'b']), new Set(['a']))).toEqual([]);
+    });
+
+    it('reports several at once when one delete empties more than one', () => {
+      expect(appearedIds(new Set(), new Set(['a', 'b']))).toEqual(['a', 'b']);
+    });
+  });
+
+  describe('usableExtent', () => {
+    /* The MiniMap and Controls are drawn INSIDE the pane with `pointer-events:
+       all`. A box landed flush against the bottom-right would be revealed with
+       its delete control — top-right of the box — underneath the minimap: still
+       unclickable, which is #785's trap intact. */
+    it('excludes the strips canvas chrome is drawn over', () => {
+      expect(usableExtent(1400, 900)).toEqual({
+        width: 1400 - CANVAS_CHROME_INSET.right,
+        height: 900 - CANVAS_CHROME_INSET.bottom,
+      });
+    });
+
+    it('yields to the reveal on a pane too small to inset, keeping half of each axis', () => {
+      // 300 - 215 = 85px of usable width could not hold a 220px box at all, and
+      // `revealTransform` would then pan it somewhere useless. A partly-covered
+      // box beats an invisible one.
+      expect(usableExtent(300, 200)).toEqual({ width: 150, height: 100 });
+    });
+
+    it('never returns a negative extent, even for a pane smaller than the chrome', () => {
+      const { width, height } = usableExtent(40, 30);
+      expect(width).toBeGreaterThan(0);
+      expect(height).toBeGreaterThan(0);
+    });
   });
 });

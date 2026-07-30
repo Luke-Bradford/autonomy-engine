@@ -28,9 +28,12 @@ import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from '.
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
 import {
+  appearedIds,
   containerRects,
+  emptyContainerIds,
   liveNodeRects,
   revealTransform,
+  usableExtent,
   type ContainerBox,
 } from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
@@ -420,15 +423,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [store],
   );
 
-  /* Both outputs come from ONE `containerRects` call: the nodes to render, and
-     the raw boxes the reveal effect below needs (it has to know which boxes are
-     EMPTY, which is `childCount`, and the rendered node keeps only the aria
-     label derived from it). Returning a pair beats calling the layout twice. */
-  const { containerNodes, containerBoxes } = useMemo<{
-    containerNodes: FlowNode[];
-    containerBoxes: Map<string, ContainerBox>;
-  }>(() => {
-    if (containers.length === 0) return { containerNodes: [], containerBoxes: new Map() };
+  /* The BOXES are their own memo, separate from the nodes rendered from them.
+     The reveal effect below needs `childCount`, which the rendered node keeps
+     only as an aria label, and splitting keeps this identity a function of
+     GEOMETRY alone — folded into the node memo it would also change whenever
+     `confirmDeleteContainer` did, re-running the reveal for a reason that has
+     nothing to do with where anything is. */
+  const containerBoxes = useMemo<Map<string, ContainerBox>>(() => {
+    if (containers.length === 0) return new Map();
     /* `liveNodeRects` drops a view node the DOC no longer has. The store is
        mutated one render before the reconcile effect rebuilds `flowNodes`, so
        without it every box is derived once from bounds that still include a
@@ -451,8 +453,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         new Set(nodes.map((n) => n.id)),
       ),
     );
-    const boxNodes = containers.map((c) => {
-      const rect = rects.get(c.id)!;
+    return rects;
+  }, [containers, nodes, flowNodes]);
+
+  const containerNodes: FlowNode[] = useMemo(() => {
+    return containers.map((c) => {
+      const rect = containerBoxes.get(c.id)!;
       return {
         id: c.id,
         type: 'container',
@@ -532,8 +538,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-    return { containerNodes: boxNodes, containerBoxes: rects };
-  }, [containers, nodes, flowNodes, confirmDeleteContainer]);
+  }, [containers, containerBoxes, confirmDeleteContainer]);
 
   /**
    * #785 — a container that has just become EMPTY is panned into view.
@@ -542,9 +547,11 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * content bounds (deliberately — see its comment), and a fitted viewport ends
    * flush WITH those bounds, so such a box lands reliably just off-screen and
    * `onlyRenderVisibleElements` culls it out of the DOM altogether. Since #748
-   * the box carries the container's ONLY delete control, and an emptied
-   * container also disables Save ("makes no progress"), so the operator was left
-   * with a dead Save whose fix was on an element they could not see.
+   * the box carries the container's ONLY delete control. An emptied `loop` or
+   * `foreach` also disables Save ("makes no progress"), so the operator was left
+   * with a dead Save whose fix was on an element they could not see — and an
+   * emptied `stage` is WORSE, not better: it validates clean and saves silently,
+   * so there is not even a badge pointing at the container that vanished.
    *
    * Driven off a SET DIFF, not off the delete action, because emptying is not one
    * event: `deleteNode` empties a container by removing its last child, and
@@ -564,9 +571,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    */
   const knownEmptyContainers = useRef<Set<string> | null>(null);
   useEffect(() => {
-    const empty = new Set(
-      [...containerBoxes].filter(([, box]) => box.childCount === 0).map(([id]) => id),
-    );
+    const empty = emptyContainerIds(containerBoxes);
     /* Read the pane BEFORE banking the set. React Flow reports 0x0 until it has
        measured, and "I cannot tell what is visible" must not consume the
        transition — returning here without recording leaves the next run (the
@@ -577,17 +582,20 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
 
     const known = knownEmptyContainers.current;
     knownEmptyContainers.current = empty;
-    if (known === null) return;
-
-    const appeared = [...empty].filter((id) => !known.has(id));
+    const appeared = appearedIds(known, empty);
     if (appeared.length === 0) return;
 
     const boxes = appeared
       .map((id) => containerBoxes.get(id))
       .filter((box): box is ContainerBox => box !== undefined);
-    // `null` = already visible. Not writing at all is the point: a box the
-    // operator can already see must not have their viewport moved under them.
-    const next = revealTransform(boxes, transform, width, height);
+    /* `usableExtent`, not the raw pane: the MiniMap and Controls are drawn INSIDE
+       it with `pointer-events: all`, and a box landed flush against the
+       bottom-right edge can have its delete control underneath them — revealed
+       and still unclickable, which is the trap unfixed.
+       `null` = already visible. Not writing at all is the point: a box the
+       operator can already see must not have their viewport moved under them. */
+    const usable = usableExtent(width, height);
+    const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
   }, [containerBoxes, reactFlowStore, setViewport]);
 

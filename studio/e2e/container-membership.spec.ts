@@ -3,6 +3,26 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { nodeById, openSeededCanvas, type SeedDoc } from './support/seedDoc';
 
 /**
+ * The viewport's own inline transform — the thing that actually moves. Read here
+ * rather than from a class attribute or a screenshot: it is the computed value,
+ * and it is what both the reveal (#785) and the no-pan guard assert on.
+ */
+function viewportTransform(page: Page): Promise<string> {
+  return page.evaluate(
+    () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
+  );
+}
+
+/** React Flow writes `translate(Xpx,Ypx) scale(Z)`. */
+function scaleOf(transform: string): string | undefined {
+  return /scale\(([^)]+)\)/.exec(transform)?.[1];
+}
+function translateOf(transform: string): { x: string | undefined; y: string | undefined } {
+  const m = /translate\(([^,]+),\s*([^)]+)\)/.exec(transform);
+  return { x: m?.[1], y: m?.[2] };
+}
+
+/**
  * #746 — deleting an ENCLOSED activity, end to end.
  *
  * The unit suites pin the prune and the validator's verdict. Neither can pin
@@ -165,13 +185,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 
-    /* Same reader as the no-pan test below: the viewport's own inline transform,
-       the thing that actually moves. */
-    const transform = () =>
-      page.evaluate(
-        () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
-      );
-    const beforeDelete = await transform();
+    const beforeDelete = await viewportTransform(page);
 
     await deleteActivity(page, 'only');
 
@@ -196,16 +210,22 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
       'the emptied box was not revealed — #785 regressed?',
     ).toHaveCount(1);
 
-    /* It PANNED — it did not refit. A `fitView()` would also have put the box on
-       screen and satisfied the count above, while throwing away the scale the
-       operator chose and re-framing the whole graph around one box. So the zoom
-       is asserted UNCHANGED and the translation asserted to have moved: together
-       they say "the minimum pan", which the count alone cannot. */
-    const afterDelete = await transform();
-    const scale = (t: string) => /scale\(([^)]+)\)/.exec(t)?.[1];
+    /* It PANNED MINIMALLY — it did not refit and it did not re-centre.
+       Three assertions, because each excludes a different plausible shortcut:
+        - the zoom is UNCHANGED, which excludes a bare `fitView()` (it re-frames
+          the graph around one box and throws away the operator's scale);
+        - the box was off the RIGHT edge only, so the translation moved on X and
+          NOT on Y. That is what excludes the two zoom-preserving shortcuts —
+          `setCenter(cx, cy, {zoom})` and `fitView({nodes, minZoom: z, maxZoom:
+          z})` — which both keep `scale(...)` identical and would satisfy a
+          "something moved" assertion while moving BOTH axes;
+        - and the translation did move, so the reveal is not a no-op. */
+    const afterDelete = await viewportTransform(page);
     expect(afterDelete).not.toBe(beforeDelete);
-    expect(scale(afterDelete)).toBe(scale(beforeDelete));
-    expect(scale(afterDelete), 'no scale in the transform — reader broken?').toBeDefined();
+    expect(scaleOf(afterDelete), 'no scale in the transform — reader broken?').toBeDefined();
+    expect(scaleOf(afterDelete)).toBe(scaleOf(beforeDelete));
+    expect(translateOf(afterDelete).y).toBe(translateOf(beforeDelete).y);
+    expect(translateOf(afterDelete).x).not.toBe(translateOf(beforeDelete).x);
 
     // The way out — the box's own control, inside a box that is otherwise inert.
     await nodeById(page, 'loop_1').getByRole('button', { name: 'Delete loop container' }).click();
@@ -298,11 +318,7 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'container-nopan', stageDoc());
 
-    const transform = () =>
-      page.evaluate(
-        () => (document.querySelector('.react-flow__viewport') as HTMLElement).style.transform,
-      );
-    const before = await transform();
+    const before = await viewportTransform(page);
 
     const button = nodeById(page, 'stage_1').getByRole('button', {
       name: 'Delete stage container',
@@ -314,7 +330,9 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     await page.mouse.move(cx + 90, cy + 70, { steps: 10 });
     await page.mouse.up();
 
-    expect(await transform(), 'pressing the delete button panned the canvas').toBe(before);
+    expect(await viewportTransform(page), 'pressing the delete button panned the canvas').toBe(
+      before,
+    );
     // And nothing was deleted: the pointer left the button before release, so no
     // click fired — which is what makes the transform the only thing under test.
     await expect(nodeById(page, 'stage_1')).toHaveCount(1);
