@@ -10,6 +10,7 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
+  useStore as useReactFlowStore,
   useStoreApi as useReactFlowStoreApi,
   type Connection,
   type Edge as FlowEdge,
@@ -309,6 +310,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
      `onlyRenderVisibleElements` precisely because render cost matters. Aliased
      because the bare `useStore` in this file is ZUSTAND's, over the app store. */
   const reactFlowStore = useReactFlowStoreApi();
+  /* The pane SIZE, subscribed — unlike the transform, which is read imperatively.
+     These change when the pane is resized (a splitter drag, a window resize, a
+     panel collapsing to zero and back), never per pan or zoom frame, so the
+     re-render cost is the same as any other layout change. Subscribed rather
+     than read because the reveal effect must RE-RUN when a pane that was 0x0
+     comes back: nothing else in its dependencies changes on a pure resize, so
+     without these a container emptied while the pane was collapsed would have
+     its reveal dropped unless some unrelated node or container change happened
+     to follow. Two scalar selectors, not one object — an object selector would
+     return a fresh identity every render and never settle. */
+  const paneWidth = useReactFlowStore((s) => s.width);
+  const paneHeight = useReactFlowStore((s) => s.height);
 
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
@@ -581,7 +594,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         - the pane had been measured and went to 0 (a collapsed or hidden panel).
           The ref is already a set, so the transition is still an `appeared` on
           the run after the pane comes back, and it is revealed then. This is the
-          retry case.
+          retry case, and it is why the pane size is a DEPENDENCY of this effect:
+          a pane returning is otherwise invisible to it.
         - the pane has NEVER been measured. The ref is still null, so the first
           measured run records and reports nothing — it looks like the mount case
           because it IS the mount case: the `fitView` prop has not fired yet
@@ -589,8 +603,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           every rendered node including the empty box. Handing that framing to
           `fitView` rather than panning to it is the same division of labour as on
           any other load, so nothing is lost by not retrying here. */
-    const { transform, width, height } = reactFlowStore.getState();
-    if (width <= 0 || height <= 0) return;
+    const { transform } = reactFlowStore.getState();
+    if (paneWidth <= 0 || paneHeight <= 0) return;
 
     const known = knownEmptyContainers.current;
     knownEmptyContainers.current = empty;
@@ -606,10 +620,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
        and still unclickable, which is the trap unfixed.
        `null` = already visible. Not writing at all is the point: a box the
        operator can already see must not have their viewport moved under them. */
-    const usable = usableExtent(width, height);
+    const usable = usableExtent(paneWidth, paneHeight);
     const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
-  }, [containerBoxes, reactFlowStore, setViewport]);
+  }, [containerBoxes, paneWidth, paneHeight, reactFlowStore, setViewport]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(
