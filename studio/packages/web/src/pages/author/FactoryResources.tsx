@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { NavLink, useMatch, useNavigate } from 'react-router';
+import { NavLink, useLocation, useMatch, useNavigate } from 'react-router';
 import { useStore } from 'zustand';
 import {
   Menu,
@@ -89,12 +89,14 @@ interface FactoryResourcesProps {
  */
 export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourcesProps) {
   const navigate = useNavigate();
+  const { key: locationKey } = useLocation();
   const editing = useMatch(CANVAS_ROUTE)?.params.pipelineId;
 
   const status = useStore(store, (s) => s.status);
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
+  const retryIfFailed = useStore(store, (s) => s.retryIfFailed);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [query, setQuery] = useState('');
@@ -146,6 +148,38 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
   useEffect(() => {
     ensureFresh();
   }, [ensureFresh]);
+
+  /**
+   * #761 — a NAVIGATION is a recovery opportunity.
+   *
+   * The effect above is mount-only (`ensureFresh` is a stable store fn), and
+   * this pane does not unmount while the user moves around WITHIN Author — it
+   * lives beside the `<Outlet/>`, not inside it. So a single transient 5xx used
+   * to leave the banner up and the tree empty for the rest of the visit:
+   * `ensureFresh` deliberately refuses to retry a failure, and nothing else ran.
+   * The pane is the hub's primary navigation surface, so that reads as "the app
+   * is broken" rather than "one request failed".
+   *
+   * Keyed on `location.key`, NOT on `pathname`. `key` is fresh for every history
+   * entry, so it also catches a navigation to the path already showing — which is
+   * the case the bug report actually described, and the one a user hits FIRST:
+   * when the load that failed was the first one, the tree is empty, so the
+   * group header (pointing at the active path) is the only link left in the pane.
+   * Under a `pathname` key that click was inert and the pane stayed broken.
+   *
+   * NOT keyed on `status`. That would make this a hammer: a failed retry changes
+   * `status`, which would re-run the effect, which would retry again — precisely
+   * the storm the store's `error` guard exists to prevent. The status test
+   * therefore lives INSIDE `retryIfFailed`, which is inert unless there is a
+   * failure to retry, so navigating around a healthy server costs nothing.
+   *
+   * NOT `key={locationKey}` on the pane either: remounting it would refresh the
+   * list by throwing away the operator's `query`, `expanded` and any open
+   * `draft`.
+   */
+  useEffect(() => {
+    retryIfFailed();
+  }, [locationKey, retryIfFailed]);
 
   /**
    * The section the tree hangs beneath.

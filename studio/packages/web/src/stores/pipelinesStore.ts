@@ -13,6 +13,38 @@ import { listPipelines } from '../api/pipelines';
  */
 export type PipelinesStatus = 'idle' | 'loading' | 'ready' | 'error';
 
+/**
+ * The list, and the three ways a consumer asks for it.
+ *
+ * ── The three entry points, as ONE guard matrix ───────────────────────────────
+ *
+ * Three actions each carrying their own near-identical status guard is a trap
+ * for the next reader, so the whole decision table lives here once — on the
+ * interface, where a hover actually surfaces it:
+ *
+ * | status    | `ensureFresh` | `retryIfFailed` | `refresh` |
+ * |-----------|---------------|-----------------|-----------|
+ * | `idle`    | load          | —               | load      |
+ * | `loading` | —             | —               | load      |
+ * | `ready`   | load          | —               | load      |
+ * | `error`   | —             | **load**        | load      |
+ *
+ * The single cell that distinguishes `ensureFresh` from `retryIfFailed` is
+ * `error`, and it is the whole of #761: see each doc below for why that cell has
+ * to be answered differently depending on WHY the caller is asking.
+ *
+ * **A route-entry consumer calls BOTH** (`PipelinesPage` is the worked example).
+ * That is the one way to misuse this surface: a new consumer wiring up only
+ * `ensureFresh` re-acquires #761, and nothing fails to tell it so.
+ *
+ * `loading` → skip is shared by both, and it is what makes the request count
+ * DETERMINISTIC while the Author hub mounts two consumers in one commit: the
+ * first to run starts the load, the second sees `loading` and stands down.
+ * `load` sets `status:'loading'` SYNCHRONOUSLY before its await, so this holds
+ * whatever order React runs their effects in. Note it bounds requests per
+ * mount/navigation, NOT in-flight loads: a superseded older request can still be
+ * pending when a newer one settles (see `latestLoad`).
+ */
 export interface PipelinesState {
   status: PipelinesStatus;
   pipelines: Pipeline[];
@@ -20,21 +52,61 @@ export interface PipelinesState {
   error: string | null;
   /**
    * The MOUNT-TIME entry point, for every consumer: bring the list up to date,
-   * unless doing so would be wasteful or harmful.
+   * unless doing so would be wasteful or harmful. WHICH statuses load is the
+   * matrix above; what follows is only WHY its two non-obvious cells read as
+   * they do.
    *
-   * - `idle` / `ready` → load. Loading from `ready` is what keeps a re-entered
-   *   hub honest: a pipeline created by the CLI, by an import, or in another
-   *   tab is otherwise invisible until a browser reload. (An earlier cut only
-   *   loaded from `idle`, which silently made the list fetch-once-per-page-load
-   *   — a freshness regression against the per-mount fetch it replaced.)
-   * - `loading` → skip. This is what makes the count DETERMINISTIC while the
-   *   Author hub mounts two consumers in one commit: the first to run starts
-   *   the load, the second sees `loading` and stands down. Exactly one request,
-   *   whichever order React runs their effects in.
-   * - `error` → skip, so a broken server cannot be hammered by remounts.
-   *   Recovery is the explicit Retry control, which BOTH consumers offer.
+   * `ready` → LOAD keeps a re-entered hub honest: a pipeline created by the
+   * CLI, by an import, or in another tab is otherwise invisible until a browser
+   * reload. (An earlier cut only loaded from `idle`, which silently made the
+   * list fetch-once-per-page-load — a freshness regression against the
+   * per-mount fetch it replaced.)
+   *
+   * `error` → SKIP so a broken server cannot be hammered by remounts. A REMOUNT
+   * IS NOT A RETRY: a deliberate contract, pinned by name in
+   * `pipelinesStore.test.ts`, which #761 did NOT relax. Recovery is the explicit
+   * Retry control that BOTH consumers offer, or `retryIfFailed` below when the
+   * user has navigated.
+   *
+   * Scope that honestly: this is a STORE-level property, and since #761 it is
+   * no longer an app-level one. Both consumers call `retryIfFailed` on mount (a
+   * mount is indistinguishable from a route entry), so at the app level a
+   * remount IS now a retry from `error`. The tradeoff is priced on
+   * `retryIfFailed` below; what survives here is that `ensureFresh` itself never
+   * retries, so a consumer that wants the old behaviour still has it.
    */
   ensureFresh: () => void;
+  /**
+   * #761 — the ROUTE-ENTRY entry point: retry a load that FAILED, and otherwise
+   * do nothing at all.
+   *
+   * Why this cannot just be `ensureFresh`: the Author pane
+   * (`pages/author/FactoryResources.tsx`) does not unmount while the user moves
+   * around WITHIN the hub, so its mount-time `ensureFresh` runs once per entry
+   * into the Author hub — not once per navigation. Combined with `error → skip`
+   * above, a single transient 5xx left the pane's banner up and its tree empty
+   * for the rest of the visit — reading as "the app is broken" on the hub's
+   * primary navigation surface — until the user found Retry or reloaded the
+   * browser. `PipelinesPage` is sticky the same way: it DOES remount, but
+   * `error → skip` defeats the fresh mount on its own.
+   *
+   * Why this cannot just be `refresh`: `refresh` loads unconditionally, so
+   * calling it on every navigation would add a request per navigation against a
+   * perfectly healthy server. This one is inert unless there is a failure to
+   * retry, which is what makes it safe to wire to route entry.
+   *
+   * It adds no new hammering class. `ensureFresh` ALREADY issues one request per
+   * mount from `ready`, so a pathological remount loop can hammer today; this
+   * makes the `error` path behave like the `ready` path, bounded at one request
+   * per mount/navigation — ordinary per-mount-fetch semantics, and bounded by
+   * user action rather than by render count.
+   *
+   * The other list surfaces (Connections, Triggers, Runs) need no equivalent:
+   * they hold their load error in component-local state and unmount on
+   * navigation, so it dies with the component. A surface that MOVES its error
+   * into a store inherits #761 and must wire this up.
+   */
+  retryIfFailed: () => void;
   /**
    * Refetch unconditionally. Every mutation (create/rename/duplicate/delete)
    * ends in one of these, which is the whole reason this store exists: the pane
@@ -110,6 +182,14 @@ export function createPipelinesStore(fetchList = listPipelines): PipelinesStore 
       ensureFresh: () => {
         const status = get().status;
         if (status === 'loading' || status === 'error') return;
+        void load();
+      },
+      /* Only from `error` — see the guard matrix on `PipelinesState`. `idle` is
+         `ensureFresh`'s cell (nothing has been attempted, so there is nothing to
+         recover), and `ready` staying inert is what lets this be wired to every
+         route entry without adding request volume to a healthy server. */
+      retryIfFailed: () => {
+        if (get().status !== 'error') return;
         void load();
       },
       refresh: load,

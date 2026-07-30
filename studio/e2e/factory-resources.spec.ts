@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { openRowMenu, pane, tree } from './support/authorPane';
+import { loadBanner, openRowMenu, pane, tree } from './support/authorPane';
 
 /**
  * U4 — the Factory Resources pane.
@@ -34,6 +34,10 @@ async function createInPane(page: Page, name: string): Promise<void> {
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(tree(page).getByRole('link', { name, exact: true })).toBeVisible();
 }
+
+/** Chromium's OWN network-failure entry for the 502 the recovery spec injects. */
+const BROWSER_502 =
+  /^console\.error: Failed to load resource: the server responded with a status of 502\b/;
 
 test.describe('U4 Factory Resources pane', () => {
   test('creates a pipeline in the pane and opens it on the canvas by URL', async ({ page }) => {
@@ -302,5 +306,90 @@ test.describe('U4 Factory Resources pane', () => {
     await expect(page.getByRole('heading', { name: shorter, exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
+  });
+
+  /**
+   * #761 — a failed list load must not outlive the failure it describes.
+   *
+   * What only a real browser proves here: that a CLIENT-SIDE navigation (a hash
+   * change, no document load) is what clears the banner. In jsdom the whole
+   * question is unaskable — `location.reload()`, the remedy this defect used to
+   * require, is exactly what a unit test cannot distinguish from a re-render.
+   *
+   * The failure is injected at the network, not faked in the app, so this also
+   * pins the real `?limit=` list URL: the glob MUST be `**\/api\/pipelines*`.
+   * A bare `**\/api\/pipelines` matches nothing, because `listPipelines` always
+   * sends `?limit=100` — the spec would then pass having never failed a request.
+   * (It correctly does NOT match `/api/pipelines/:id`, so the canvas's own fetch
+   * below is untouched.)
+   *
+   * The navigation at the end is WITHIN Author, and that is the whole design of
+   * this case. A cross-hub round trip would unmount and remount the list PAGE,
+   * whose own recovery would clear the banner — measured: with the pane's effect
+   * deleted, a cross-hub version of this spec still passed. Going list → canvas
+   * keeps the pane mounted and UNMOUNTS the page, so the pane is the only thing
+   * that can possibly recover.
+   */
+  test('recovers a failed pipelines load on navigation, without a reload', async ({ page }) => {
+    const problems = collectPageProblems(page);
+
+    let listRequests = 0;
+    let failNextList = false;
+    await page.route('**/api/pipelines*', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      listRequests += 1;
+      if (!failNextList) return route.fallback();
+      failNextList = false;
+      await route.fulfill({ status: 502, contentType: 'application/json', body: '{}' });
+    });
+
+    // A row has to exist to navigate INTO, so the first load must succeed.
+    await gotoAuthor(page);
+    const name = 'e2e u4 recovers';
+    await createInPane(page, name);
+
+    /* Now break the next list load, and provoke one. The cross-hub round trip is
+       how it is provoked rather than what is being tested: remounting the page
+       calls `ensureFresh`, which loads from `ready` and gets the 502. The store
+       keeps the last good list through a failed REFRESH, so the row stays
+       clickable underneath the banner — which is what the final step needs. */
+    failNextList = true;
+    await page.evaluate(() => {
+      window.location.hash = '#/monitor/runs';
+    });
+    await page.getByRole('heading', { name: 'Runs' }).waitFor();
+    await page.evaluate(() => {
+      window.location.hash = '#/author/pipelines';
+    });
+    const banner = loadBanner(page);
+    await expect(banner).toBeVisible();
+
+    const before = listRequests;
+    // A client-side route change with no document load — `location.reload()` was
+    // the remedy this defect used to require, so a reload here would prove
+    // nothing. The page unmounts with the `<Outlet/>`; the pane does not.
+    await tree(page).getByRole('link', { name, exact: true }).click();
+    await page.locator('.react-flow__renderer').waitFor();
+
+    /* The banner clearing IS the recovery: the store nulls `error` when a load
+       STARTS, so an empty pane here means a fresh request went out. Before the
+       fix nothing re-fetched and this banner stayed up for the life of the tab. */
+    await expect(banner).toHaveCount(0);
+    /* And a real request went out, counted at the network. Deliberately NOT
+       "the tree is visible": these specs share one SQLite file, so on an empty
+       DB the tree is an empty `<ul>` that Playwright reports as hidden — an
+       assertion that would pass or fail on which specs ran before it. */
+    /* Polled, not read: `listRequests` increments in the NODE process when the
+       route handler fires, while the assertion above becomes true in the BROWSER
+       when the load STARTS — which is before the request reaches Node. */
+    await expect.poll(() => listRequests).toBeGreaterThan(before);
+
+    /* The deliberate 502 makes Chromium emit its own browser-level "Failed to
+       load resource" entry, so this spec allows exactly that ONE shape and holds
+       everything else to silence. Anchored on the BROWSER's wording rather than a
+       loose `/502/`, because the app's own message for this fault is literally
+       `request failed (502)` — a loose pattern would swallow an app-level error
+       too, and `expectQuiet` documents the measurement that proved it. */
+    await expectQuiet(page, problems, [BROWSER_502]);
   });
 });

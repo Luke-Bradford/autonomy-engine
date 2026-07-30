@@ -96,6 +96,89 @@ describe('pipelinesStore', () => {
   });
 
   /**
+   * #761 — the route-entry counterpart to the test above. A REMOUNT is not a
+   * retry (that is the contract above, and it still holds); a user-initiated
+   * ENTRY is. Without this the pane's banner outlived the failure it described:
+   * the Author pane never unmounts within the hub, so its mount-time
+   * `ensureFresh` never ran again and `ensureFresh` skips a failed load by
+   * design — the error was permanent until Retry or a full reload.
+   */
+  it('retryIfFailed retries a FAILED load', async () => {
+    const list = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([pipeline()]);
+    const store = createPipelinesStore(list);
+
+    store.getState().ensureFresh();
+    await vi.waitFor(() => expect(store.getState().status).toBe('error'));
+
+    store.getState().retryIfFailed();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(store.getState()).toMatchObject({ pipelines: [pipeline()], error: null });
+  });
+
+  /**
+   * The property that makes it safe to call on EVERY navigation: while the
+   * server is healthy it is inert, so moving around the app adds no request
+   * volume. Freshness on entry is `ensureFresh`'s job, not this one's.
+   */
+  it('retryIfFailed does nothing once ready', async () => {
+    const list = vi.fn().mockResolvedValue([pipeline()]);
+    const store = createPipelinesStore(list);
+
+    store.getState().ensureFresh();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().retryIfFailed();
+    store.getState().retryIfFailed();
+
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Two consumers can enter in ONE commit (the pane and the page). `load` sets
+   * `status:'loading'` synchronously before its await, so whichever runs first
+   * starts the request and the second stands down — one request, whatever order
+   * React runs their effects in, exactly as `ensureFresh` guarantees.
+   */
+  it('retryIfFailed stands down while a load is already in flight', async () => {
+    const pending = deferred<Pipeline[]>();
+    const list = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockReturnValueOnce(pending.promise);
+    const store = createPipelinesStore(list);
+
+    store.getState().ensureFresh();
+    await vi.waitFor(() => expect(store.getState().status).toBe('error'));
+
+    store.getState().retryIfFailed();
+    expect(store.getState().status).toBe('loading');
+    store.getState().retryIfFailed();
+
+    expect(list).toHaveBeenCalledTimes(2);
+    pending.resolve([]);
+  });
+
+  /**
+   * `idle` means nothing has been attempted, so there is no failure to recover
+   * from — loading here would duplicate `ensureFresh` and give a mount two
+   * entry points into the same request.
+   */
+  it('retryIfFailed does nothing from idle', () => {
+    const list = vi.fn().mockResolvedValue([pipeline()]);
+    const store = createPipelinesStore(list);
+
+    store.getState().retryIfFailed();
+
+    expect(list).not.toHaveBeenCalled();
+    expect(store.getState().status).toBe('idle');
+  });
+
+  /**
    * The Retry path. A banner describing the PREVIOUS attempt, sitting over an
    * in-flight retry — with the Retry button (gated on `status === 'error'`)
    * vanishing under the cursor — describes a request that is no longer current.
