@@ -122,6 +122,61 @@ export function resolveModel(
 }
 
 /**
+ * #751 — reduce a model id to the base id the capability sets are keyed on.
+ *
+ * The two `*-models.ts` modules match membership by EXACT STRING. That reads a
+ * provider's alias (`claude-opus-4-1`, `o3`) but misses the very same model
+ * named by its dated full id (`claude-opus-4-1-20250805`, `o3-2025-04-16`), so
+ * whether a capability fact applied depended on which spelling the author
+ * happened to type. This normalises the spelling; it does not add facts.
+ *
+ * WHY THIS IS NOT A GUESS, which matters because these modules hold "an absent
+ * fact is not a refusal" and set a deliberately high bar for ADDING a refusal:
+ * the dated string is not a similar model, it is the SAME model. Anthropic's
+ * model tables publish the pair as `Alias` and `Full ID` of one row
+ * (`claude-opus-4-1` ⇄ `claude-opus-4-1-20250805`), and Vertex spells that same
+ * snapshot with an `@` separator. Transferring a capability across a documented
+ * alias/full-id identity is not inference, so it does not spend the bar that
+ * essay is protecting. Only forms with that property are stripped.
+ *
+ * WHAT IS DELIBERATELY *NOT* STRIPPED is the whole safety of this helper, since
+ * the failure mode is a FALSE MERGE onto a member that is a different model:
+ *  - **Arbitrary trailing tokens.** OpenAI's set holds `o3` AND `o3-mini`,
+ *    `gpt-5` AND `gpt-5-mini`/`-nano`/`-pro`/`-codex` as separate members, so a
+ *    "strip after the last dash" rule would refuse sampling params on a sibling
+ *    model that accepts them — a manufactured failure of a working call.
+ *  - **`-latest` pointers** (`codex-mini-latest`). Not a date, and the id it
+ *    points at is not published, so there is nothing to transfer from.
+ *  - **A Bedrock `anthropic.` / `us.anthropic.` prefix.** Those ids are
+ *    reachable ONLY through a proxied `baseUrl`, the anthropic preflight (unlike
+ *    the OpenAI one) has no first-party gate, and `anthropic.ts` records as
+ *    settled that Bedrock's request surface genuinely differs and "the preflight
+ *    is not the remedy — a Bedrock-aware connection kind would be". Stripping
+ *    the prefix would aim 100% of its effect at exactly the surface these
+ *    modules decline to claim facts about.
+ *
+ * A bracketed suffix (`claude-opus-4-8[1m]`, the 1M-context flavour) IS stripped.
+ * Weaker than the alias/full-id case — a context-window variant is an inference
+ * rather than an identity — but sound for the only two dimensions these sets
+ * cover: a longer context window does not restore a sampling knob or an
+ * adaptive-thinking surface to a model that lacks it.
+ *
+ * Case-sensitive, like `isOpenAiFirstParty`: lowercasing would widen matching on
+ * a dimension no source has been checked against.
+ */
+export function normalizeModelId(model: string): string {
+  return (
+    model
+      // Bracketed variant first, so a `[1m]` suffix cannot hide a date behind it.
+      .replace(/\[[^\]]*\]$/, '')
+      // Anthropic compact `-20250805` and Vertex `@20251101`.
+      .replace(/[-@]\d{8}$/, '')
+      // OpenAI dash-separated `-2025-04-16`.
+      .replace(/-\d{4}-\d{2}-\d{2}$/, '')
+  );
+}
+
+/**
  * A completed HTTP exchange (any status) OR a terminal failure event.
  *
  * #2 L7 — the `response` variant surfaces the raw `Retry-After` header (or

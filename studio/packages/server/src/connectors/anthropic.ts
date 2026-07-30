@@ -402,10 +402,16 @@ export const anthropicAdapter: ConnectorAdapter = {
     // The premise holds on the FIRST-PARTY Messages API, which is the qualifier
     // that matters: on Amazon Bedrock, Claude Sonnet 5 with a forced `tool_choice`
     // does require `thinking:{type:'disabled'}`. Reachable only via a proxied
-    // `baseUrl`, and the exact-string capability sets could not cover it anyway
-    // (Bedrock ids carry an `anthropic.` prefix), so the preflight is not the
-    // remedy — a Bedrock-aware connection kind would be. Noted so the premise
-    // reads as scoped rather than universal.
+    // `baseUrl`, and the capability sets could not cover it anyway (Bedrock ids
+    // carry an `anthropic.` prefix), so the preflight is not the remedy — a
+    // Bedrock-aware connection kind would be. Noted so the premise reads as
+    // scoped rather than universal.
+    //
+    // #751 made this load-bearing rather than merely descriptive: when id
+    // normalisation was added, stripping that prefix was considered and
+    // REJECTED on the strength of this paragraph. This preflight has no
+    // first-party gate, so a prefix strip would aim its entire effect at the one
+    // surface named here as out of scope.
     //
     // Safe against the API's thinking-REPLAY rule (thinking blocks must come back
     // intact alongside a replayed `tool_use`, and a rebuilt message 400s): this

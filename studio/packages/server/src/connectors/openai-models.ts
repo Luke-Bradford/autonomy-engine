@@ -1,3 +1,4 @@
+import { normalizeModelId } from './llm-shared.js';
 import type { UnsupportedParam } from './llm-shared.js';
 
 /**
@@ -48,9 +49,11 @@ import type { UnsupportedParam } from './llm-shared.js';
  * pre-existing provider 400.
  *
  * BUT THE PROXY CASE INVERTS, and that is why this module is not a copy of its
- * sibling. `anthropic-models.ts` can lean on exact-string matching to let a
- * proxied `baseUrl` fall through, because a gateway rarely serves models under
- * Anthropic's exact ids. The OpenAI-COMPATIBLE ecosystem is the opposite: its
+ * sibling. `anthropic-models.ts` can lean on id matching to let a proxied
+ * `baseUrl` fall through, because a gateway rarely serves models under
+ * Anthropic's own ids — and per #751 the one proxied form it WOULD see, a
+ * Bedrock `anthropic.`-prefixed id, is deliberately left unnormalised so it keeps
+ * falling through. The OpenAI-COMPATIBLE ecosystem is the opposite: its
  * whole point is reusing OpenAI's exact model names, and such a gateway may
  * well accept (or silently ignore) `temperature` on a model called `gpt-5`.
  * Refusing there would be precisely the manufactured refusal the rule above
@@ -58,9 +61,14 @@ import type { UnsupportedParam } from './llm-shared.js';
  * are facts about OpenAI's own API, and a custom `baseUrl` is someone else's
  * server whose request surface we have no facts about. See `isOpenAiFirstParty`.
  *
- * Matching is EXACT-STRING, like `BUILTIN_PRICES`. A dated or `-latest` variant
- * therefore falls through to permitted and the provider stays the authority —
- * the pre-existing behaviour, merely no longer the only behaviour.
+ * Matching is on the NORMALISED id (#751): a dated snapshot (`o3-2025-04-16`)
+ * classifies like the alias it is a snapshot of. A `-latest` pointer is NOT
+ * normalised (it names no published id to transfer a fact from) and still falls
+ * through to permitted, as does every id the set does not name — the provider
+ * stays the authority there. Sibling ids are never merged: `o3` and `o3-mini`
+ * are separate members and only a date-shaped suffix is stripped, so no model
+ * inherits a refusal from a differently-named relative. `BUILTIN_PRICES` keeps
+ * exact-string matching for the reason given in `anthropic-models.ts`.
  *
  * `ollama` was checked in the same pass (#730 asked for a confirmation rather
  * than an assumption) and needs no equivalent: it targets Ollama's NATIVE
@@ -195,7 +203,8 @@ export function isOpenAiFirstParty(baseUrl: string): boolean {
  * re-open of #461 and is filed as #750.
  */
 export function openAiUsesMaxCompletionTokens(model: string): boolean {
-  return MODELS_REJECTING_SAMPLING_PARAMS.has(model);
+  // #751 — on the BASE id, so `o3-2025-04-16` takes the same field name as `o3`.
+  return MODELS_REJECTING_SAMPLING_PARAMS.has(normalizeModelId(model));
 }
 
 /** The author-facing `llm_call` config fields this preflight can refuse. */
@@ -226,7 +235,11 @@ export function unsupportedOpenAiParams(
   model: string,
   requested: OpenAiRequestedParams,
 ): readonly UnsupportedParam[] {
-  if (!MODELS_REJECTING_SAMPLING_PARAMS.has(model)) return [];
+  // #751 — on the BASE id: a dated snapshot rejects sampling exactly as its
+  // alias does. Sibling ids (`o3-mini` vs `o3`) are NOT merged; see
+  // `normalizeModelId`. Reached only behind the caller's `isOpenAiFirstParty`
+  // gate, so this never widens refusals onto an OpenAI-compatible gateway.
+  if (!MODELS_REJECTING_SAMPLING_PARAMS.has(normalizeModelId(model))) return [];
   const unsupported: UnsupportedParam[] = [];
   if (requested.hasTemperature) unsupported.push({ name: 'temperature', cause: 'removed' });
   if (requested.hasTopP) unsupported.push({ name: 'topP', cause: 'removed' });

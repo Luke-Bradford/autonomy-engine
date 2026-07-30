@@ -11,6 +11,7 @@ import {
   httpStatusFailure,
   meterUsage,
   noCompletionFailure,
+  normalizeModelId,
   openAiReasoningEffort,
   parseRetryAfter,
   postJsonAndParse,
@@ -1038,5 +1039,52 @@ describe('toolCallTelemetry (#2 L10b — fail-closed shape rules)', () => {
     expect(t.toolName).toBe('');
     expect(t.callId).toBe('x');
     expect(t.isError).toBe(true);
+  });
+});
+
+describe('normalizeModelId (#751)', () => {
+  it.each([
+    // Anthropic: the docs list the bare id as the ALIAS and the dated string as
+    // the FULL ID of the same model, so the capability fact transfers by
+    // documented identity rather than by inference.
+    ['an anthropic dated full id', 'claude-opus-4-1-20250805', 'claude-opus-4-1'],
+    ['a vertex @-separated snapshot', 'claude-opus-4-5@20251101', 'claude-opus-4-5'],
+    // OpenAI dates are dash-separated rather than compact.
+    ['an openai dated snapshot', 'o3-2025-04-16', 'o3'],
+    ['a bracketed context variant', 'claude-opus-4-8[1m]', 'claude-opus-4-8'],
+    ['a bracketed AND dated id', 'claude-opus-4-1-20250805[1m]', 'claude-opus-4-1'],
+  ])('reduces %s to its base id', (_label, input, expected) => {
+    expect(normalizeModelId(input)).toBe(expected);
+  });
+
+  it.each([
+    // The whole risk of this helper is a FALSE MERGE onto a set member that is a
+    // DIFFERENT model. OpenAI's set holds `o3` and `o3-mini` as separate
+    // members, so a rule that stripped any trailing token would silently refuse
+    // sampling params on the wrong model. Nothing but a date or a bracket is
+    // stripped, and these pin that.
+    ['a sibling -mini id', 'o3-mini'],
+    ['a codex sibling', 'gpt-5.1-codex-mini'],
+    ['a -latest pointer', 'codex-mini-latest'],
+    ['a plain alias', 'claude-opus-4-8'],
+    ['an unknown id', 'gpt-4o'],
+    ['the empty string', ''],
+    // A proxied Bedrock id keeps its `anthropic.` prefix DELIBERATELY: those are
+    // reachable only through a proxied baseUrl, the anthropic preflight has no
+    // first-party gate, and `anthropic.ts` records that the preflight is not the
+    // remedy for Bedrock. Stripping it would manufacture a refusal on exactly
+    // the surface this module declines to claim facts about.
+    ['a bedrock-prefixed id', 'anthropic.claude-opus-4-8'],
+    ['a cross-region bedrock id', 'us.anthropic.claude-opus-4-8'],
+  ])('leaves %s untouched', (_label, input) => {
+    expect(normalizeModelId(input)).toBe(input);
+  });
+
+  it('does not strip a date that is part of the published id itself', () => {
+    // `claude-3-haiku-20240307` has no dated/undated alias pair — the date IS
+    // the id. Normalising yields a string no provider serves, which is harmless
+    // for set lookup (neither form is a member) but must not be mistaken for a
+    // real id. Pinned so #729's known-gap ids stay permitted either way.
+    expect(normalizeModelId('claude-3-haiku-20240307')).toBe('claude-3-haiku');
   });
 });
