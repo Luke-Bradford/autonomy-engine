@@ -4,7 +4,7 @@ import {
   MODELS_REJECTING_SAMPLING_PARAMS,
   unsupportedAnthropicParams,
 } from '../anthropic-models.js';
-import { unsupportedParamFailure } from '../llm-shared.js';
+import { normalizeModelId, unsupportedParamFailure } from '../llm-shared.js';
 
 const NONE = { hasTemperature: false, hasTopP: false, hasReasoningEffort: false };
 
@@ -76,15 +76,25 @@ describe('unsupportedAnthropicParams (#727)', () => {
 
   it.each([
     ['an unknown id', 'gpt-4o'],
-    ['a dated variant of a rejecting model', 'claude-opus-5-20260101'],
-    ['a bracketed variant', 'claude-opus-4-8[1m]'],
     ['a model verified to still ACCEPT them', 'claude-opus-4-6'],
     ['the empty string', ''],
+    // #751 — a Bedrock id keeps its prefix and stays permitted. Deliberate, and
+    // the one variant form NOT normalised: these are reachable only via a
+    // proxied `baseUrl`, this preflight has no first-party gate (unlike the
+    // OpenAI one), and `anthropic.ts` records that Bedrock's request surface
+    // genuinely differs and the preflight is not the remedy. Refusing here would
+    // manufacture a local failure on exactly the surface this module declines to
+    // claim facts about.
+    ['a proxied Bedrock id', 'anthropic.claude-opus-5'],
+    ['a cross-region Bedrock id', 'us.anthropic.claude-opus-5'],
+    // Same reason, same surface: a Vertex `@`-snapshot is non-first-party only.
+    // A `[1m]` bracketed variant is out of #751's scope (date forms only).
+    ['a Vertex @-separated snapshot', 'claude-opus-5@20260101'],
+    ['a bracketed context variant', 'claude-opus-5[1m]'],
   ])('permits everything on %s (an absent fact is never a refusal)', (_label, model) => {
-    // Matching is exact-string, and absence means "not KNOWN to reject" — the
-    // inverse of price-table.ts's fail-closed default, for the reason given in
-    // the module note. A dated id or a proxied model must not be refused on a
-    // guess; the provider stays the authority there.
+    // Absence means "not KNOWN to reject" — the inverse of price-table.ts's
+    // fail-closed default, for the reason given in the module note. A proxied
+    // model must not be refused on a guess; the provider stays the authority.
     expect(
       unsupportedAnthropicParams(model, {
         hasTemperature: true,
@@ -92,6 +102,21 @@ describe('unsupportedAnthropicParams (#727)', () => {
         hasReasoningEffort: true,
       }),
     ).toEqual([]);
+  });
+
+  it('DOES refuse sampling on the dated full id of a rejecting model (#751)', () => {
+    // INVERTED by #751. The old pin permitted this on the grounds that a dated id
+    // "must not be refused on a guess" — but transferring a fact from an alias to
+    // its own published full id is identity, not a guess, so the guess objection
+    // does not reach this form. What the old behaviour actually bought was that
+    // one model got two different answers depending on spelling.
+    //
+    // Scoped to the DATE form only: the `@`-separated Vertex spelling and the
+    // `[1m]` bracketed variant stay permitted (pinned above) — see
+    // `normalizeModelId` for why each is deliberately left alone.
+    expect(
+      unsupportedAnthropicParams('claude-opus-5-20260101', { ...NONE, hasTemperature: true }),
+    ).toEqual([{ name: 'temperature', cause: 'removed' }]);
   });
 
   it('keeps the two sets disjoint from each other', () => {
@@ -228,13 +253,52 @@ describe('adaptive-thinking classification of legacy ids (#729)', () => {
     ).toEqual([]);
   });
 
-  it('does NOT refuse the DATED form of a member id', () => {
-    // Exact-string matching (documented on the module). `claude-opus-4-1` is an
-    // alias that resolves to `claude-opus-4-1-20250805`, and pre-4.6 aliases are
-    // convenience pointers, so BOTH strings reach the wire — but only the alias
-    // is in the set. Costs the pre-existing 400, which is the safe direction;
-    // pinned here so the hole is a known one rather than a surprise, and tracked
-    // for a uniform decision across every member rather than a one-off.
-    expect(unsupportedAnthropicParams('claude-opus-4-1-20250805', EFFORT)).toEqual([]);
+  it('DOES refuse the DATED form of a member id (#751)', () => {
+    // INVERTED by #751 — this was the hole the ticket was filed about, and it is
+    // the cleanest case for normalising: the docs publish `claude-opus-4-1` and
+    // `claude-opus-4-1-20250805` as the alias and full id of ONE model, both
+    // strings reach the wire, and the adaptive-thinking fact settled for the
+    // alias is therefore already settled for the dated form. The old pin let the
+    // author's choice of spelling decide whether they got a local diagnostic or a
+    // provider 400.
+    expect(unsupportedAnthropicParams('claude-opus-4-1-20250805', EFFORT)).toEqual([
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('leaves the #729 known-gap ids permitted — including their DATED forms', () => {
+    // #751 must not quietly settle #729. The dated forms are the point of this
+    // test: the bare aliases contain no date, so on their own they never reach
+    // the new code path at all and would pin nothing (an earlier version of this
+    // test listed only those three and was vacuous — it passed under an identity
+    // normaliser AND under an over-stripping one).
+    //
+    // `claude-3-haiku-20240307` carries its date as part of the published id, and
+    // the two 4.0 full ids miss their own `-0` alias when the date is stripped
+    // (see `normalizeModelId`). Every one of these lands on a NON-member either
+    // way, so #729's deliberate omission survives this change untouched.
+    for (const model of [
+      'claude-opus-4-0',
+      'claude-sonnet-4-0',
+      'claude-3-haiku-20240307',
+      'claude-opus-4-20250514',
+      'claude-sonnet-4-20250514',
+    ]) {
+      expect(unsupportedAnthropicParams(model, EFFORT)).toEqual([]);
+    }
+  });
+
+  it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
+    // The invariant that makes membership and normalisation safe to combine:
+    // lookups normalise first, so a member that is not a fixed point could never
+    // be matched by any input — it would read as a live capability fact while
+    // being unreachable code. Guards both sets at once, and is the test that
+    // fires if a future #729 pass adds a DATED id (e.g. `claude-opus-4-20250514`)
+    // instead of the alias, or adds it without also adding the alias.
+    for (const set of [MODELS_REJECTING_SAMPLING_PARAMS, MODELS_REJECTING_ADAPTIVE_THINKING]) {
+      for (const model of set) {
+        expect(normalizeModelId(model)).toBe(model);
+      }
+    }
   });
 });

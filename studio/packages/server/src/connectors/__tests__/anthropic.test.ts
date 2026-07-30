@@ -1174,19 +1174,40 @@ describe('anthropicAdapter.runActivity — unsupported-parameter preflight (#727
     expect(sentBody(spy).temperature).toBe(0.2);
   });
 
-  it('does NOT refuse on an unknown / dated model id (absent fact is never a refusal)', async () => {
-    // Exact-string matching only. A dated or proxied id is NOT asserted to
-    // reject anything, so it falls through to the pre-existing behaviour (the
-    // provider decides). The inverse of `price-table.ts`'s fail-closed default,
-    // and deliberately so — see the module note.
+  it('DOES refuse on the DATED form of a rejecting id, end to end (#751)', async () => {
+    // INVERTED by #751, and this is the test that proves normalisation actually
+    // reaches the wire rather than only the pure helper: a dated full id is the
+    // same model as its alias, so `temperature` is refused locally instead of
+    // being sent to a provider guaranteed to 400 on it.
     const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
-    await drain(
+    const events = await drain(
       anthropicAdapter.runActivity(
         ctx({ input: { prompt: 'hi', model: 'claude-opus-5-20260101', temperature: 0.2 } }),
         'sk',
       ),
     );
-    expect(sentBody(spy).temperature).toBe(0.2);
+    expect(spy).not.toHaveBeenCalled();
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).error).toContain('temperature');
+  });
+
+  it('still does NOT refuse on an unknown or proxied id (absent fact is never a refusal)', async () => {
+    // The half of the old pin that SURVIVES, kept separate so the two rules stay
+    // visibly distinct. An id the sets do not name — including a Bedrock
+    // `anthropic.`-prefixed one, which #751 deliberately leaves unnormalised —
+    // is not asserted to reject anything and falls through to the provider. The
+    // inverse of `price-table.ts`'s fail-closed default, deliberately so.
+    for (const model of ['some-proxied-model', 'anthropic.claude-opus-5']) {
+      const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+      await drain(
+        anthropicAdapter.runActivity(
+          ctx({ input: { prompt: 'hi', model, temperature: 0.2 } }),
+          'sk',
+        ),
+      );
+      expect(sentBody(spy).temperature).toBe(0.2);
+      spy.mockRestore();
+    }
   });
 
   it('refuses reasoningEffort on a model with no adaptive-thinking surface', async () => {

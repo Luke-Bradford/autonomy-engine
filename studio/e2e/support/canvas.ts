@@ -32,7 +32,16 @@ export async function openCanvas(page: Page, name: string): Promise<void> {
   await page.getByRole('button', { name: 'Create pipeline' }).click();
   // U4 turned Open into a LINK to the pipeline's own route — the canvas used to
   // be local state with no address at all.
-  await page.getByRole('link', { name: `Open ${name}` }).click();
+  //
+  // `exact` for the SAME reason as the fill above, which this line originally
+  // missed: `Open e2e u5 collapse` is a substring of `Open e2e u5 collapse
+  // search`, a pipeline an EARLIER spec in that file leaves behind. Worse than a
+  // plain break — it was a RACE. The old link is on the page before the new one
+  // renders, so whichever evaluation won decided the outcome: click early and
+  // the helper silently opened the WRONG pipeline and the spec passed anyway;
+  // click late and Playwright's strict mode saw two matches and failed. Green on
+  // main, red on the next PR, with nothing between them to explain it.
+  await page.getByRole('link', { name: `Open ${name}`, exact: true }).click();
   // The RF viewport, not just the wrapper — the chrome is its child.
   await page.locator('.react-flow__renderer').waitFor();
 }

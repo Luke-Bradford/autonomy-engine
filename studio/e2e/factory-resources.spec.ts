@@ -45,7 +45,9 @@ test.describe('U4 Factory Resources pane', () => {
 
     // The pane's create must ALSO reach the page's list — they are two views of
     // one store, and the whole reason that store exists.
-    await expect(page.getByRole('main').getByRole('link', { name: `Open ${name}` })).toBeVisible();
+    await expect(
+      page.getByRole('main').getByRole('link', { name: `Open ${name}`, exact: true }),
+    ).toBeVisible();
 
     await tree(page).getByRole('link', { name, exact: true }).click();
 
@@ -123,7 +125,9 @@ test.describe('U4 Factory Resources pane', () => {
     await expect(tree(page).getByRole('link', { name: after, exact: true })).toBeVisible();
     await expect(tree(page).getByRole('link', { name: before, exact: true })).toHaveCount(0);
     // ...and the page's own list agrees, through the shared store.
-    await expect(page.getByRole('main').getByRole('link', { name: `Open ${after}` })).toBeVisible();
+    await expect(
+      page.getByRole('main').getByRole('link', { name: `Open ${after}`, exact: true }),
+    ).toBeVisible();
 
     await expectQuiet(page, problems);
   });
@@ -269,6 +273,33 @@ test.describe('U4 Factory Resources pane', () => {
     await expect(page.getByRole('button', { name: 'Rename', exact: true })).toBeDisabled();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('textbox', { name: 'Pipeline name' })).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('a pipeline whose name PREFIXES another still opens its own canvas', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await gotoAuthor(page);
+
+    // An accessible name is only useful if it identifies ONE thing. `Open <p>`
+    // is a substring of `Open <p> …` for every longer sibling, so a list holding
+    // both offers two links a name-based lookup cannot tell apart — which is
+    // what a screen-reader user hears, and what broke `support/canvas.ts`.
+    // Longer one FIRST, so the shorter one is created into a page that already
+    // carries a link its name is a substring of.
+    const longer = 'e2e u4 prefix guard longer';
+    const shorter = 'e2e u4 prefix guard';
+    await createInPane(page, longer);
+    await createInPane(page, shorter);
+
+    const list = page.getByRole('main');
+    await expect(list.getByRole('link', { name: `Open ${shorter}`, exact: true })).toHaveCount(1);
+    await list.getByRole('link', { name: `Open ${shorter}`, exact: true }).click();
+
+    await page.locator('.react-flow__renderer').waitFor();
+    // The canvas that opened is the SHORTER pipeline's, not its longer sibling's
+    // — the failure mode here is silent, since either one mounts a valid canvas.
+    await expect(page.getByRole('heading', { name: shorter, exact: true })).toBeVisible();
 
     await expectQuiet(page, problems);
   });

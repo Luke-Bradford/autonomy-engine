@@ -6,6 +6,7 @@ import {
   openAiUsesMaxCompletionTokens,
   unsupportedOpenAiParams,
 } from '../openai-models.js';
+import { normalizeModelId } from '../llm-shared.js';
 
 const NONE = { hasTemperature: false, hasTopP: false };
 
@@ -47,13 +48,22 @@ describe('unsupportedOpenAiParams (#730)', () => {
     }
   });
 
-  it('does NOT refuse a dated or -latest VARIANT of a rejecting id', () => {
-    // Exact-string matching, like `BUILTIN_PRICES`. A variant falls through to
-    // permitted and the provider stays the authority — the pre-existing
-    // behaviour, which is the safe direction to be wrong in.
+  it('DOES refuse the dated snapshot of a rejecting id (#751)', () => {
+    // INVERTED by #751. The old pin let the same model be refused or permitted
+    // depending on which spelling the author typed, which is not a safe
+    // direction so much as an arbitrary one: `o3-2025-04-16` IS `o3` — the
+    // provider publishes them as one row's snapshot and alias — so it rejects
+    // `temperature` identically, and permitting it just moved the failure to a
+    // provider 400 with a worse diagnostic.
     expect(
       unsupportedOpenAiParams('o3-2025-04-16', { hasTemperature: true, hasTopP: false }),
-    ).toEqual([]);
+    ).toEqual([{ name: 'temperature', cause: 'removed' }]);
+  });
+
+  it('still does NOT refuse a -latest pointer (not a date — nothing to transfer)', () => {
+    // `codex-mini-latest` is deliberately untouched: `-latest` is not a dated
+    // snapshot, the id it resolves to is not published, and `codex-mini` is not
+    // a set member anyway. The absent fact stays absent.
     expect(
       unsupportedOpenAiParams('codex-mini-latest', { hasTemperature: true, hasTopP: false }),
     ).toEqual([]);
@@ -136,10 +146,25 @@ describe('openAiUsesMaxCompletionTokens (#739)', () => {
     }
   });
 
-  it('is false for a dated or -latest VARIANT of a reasoning id', () => {
-    // Exact-string matching, like the sampling gate. A variant falls through to
-    // `max_tokens` and the provider stays the authority.
-    expect(openAiUsesMaxCompletionTokens('o3-2025-04-16')).toBe(false);
+  it('is TRUE for the dated snapshot of a reasoning id (#751)', () => {
+    // INVERTED by #751, and this half is a plain bug fix rather than a judgement
+    // call: `o3-2025-04-16` is a reasoning model, so it takes
+    // `max_completion_tokens`. Sending `max_tokens` was a guaranteed 400 that the
+    // old exact-string match made depend on the spelling.
+    expect(openAiUsesMaxCompletionTokens('o3-2025-04-16')).toBe(true);
+  });
+
+  it('is still false for a -latest pointer', () => {
     expect(openAiUsesMaxCompletionTokens('codex-mini-latest')).toBe(false);
+  });
+
+  it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
+    // Same invariant as the anthropic module's, pinned per-set because this set
+    // is maintained separately: lookups normalise first, so a member that is not
+    // a fixed point is unreachable. It would fire if a dated snapshot
+    // (`o3-2025-04-16`) were ever added to the set instead of its alias.
+    for (const model of MODELS_REJECTING_SAMPLING_PARAMS) {
+      expect(normalizeModelId(model)).toBe(model);
+    }
   });
 });
