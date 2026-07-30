@@ -90,7 +90,7 @@ function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
  * back BY REFERENCE, and so does the whole array when no container listed it.
  * Stated honestly, because the first version of this comment named two
  * consumers that turned out not to depend on it: NOTHING relies on this today.
- * `FlowCanvas` memoises the boxes on `[containers, flowNodes]`, and a delete
+ * `FlowCanvas` memoises the boxes on `[containers, flowNodes, …]`, and a delete
  * always rebuilds `flowNodes` into a fresh array, so the boxes re-derive either
  * way; `PipelineCanvas`'s save-race check tests `nodes` first, which a delete
  * always changes too. It is the reducer's own idiom (`reduce.ts`'s children
@@ -164,6 +164,16 @@ export interface CanvasState {
   addNode(type: string, position?: Position): void;
   moveNode(id: string, position: Position): void;
   deleteNode(id: string): void;
+  /**
+   * Remove a container, cascading the edges incident to it — and KEEPING its
+   * children, which are un-grouped rather than deleted (#748).
+   *
+   * The affordance `deleteNode`'s "keep the container" choice depends on: a
+   * container that reaches `children: []` is otherwise permanent, either
+   * blocking every save (`loop`/`foreach`) or minting itself into an immutable
+   * version forever (`stage`).
+   */
+  deleteContainer(id: string): void;
   /**
    * Append an edge from `from` to `to` carrying `condition`. Refuses (no-op) a
    * candidate `connectRejection` rejects — a self-loop, an endpoint that is not
@@ -314,20 +324,58 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // re-authorable on the canvas until U6d/#425 — so a cascade destroys
           // authored structure the operator cannot get back.
           //
-          // That reasoning is SYMMETRIC and the choice is not a clean win, which
-          // is worth saying rather than only stating the side that favours it
-          // (#748): keeping the container is also unrecoverable, just quieter. An
-          // empty `stage` validates clean, so it SAVES — into an immutable
-          // version, carried forward forever, with no affordance to remove it.
-          // An empty `loop`/`foreach` is still refused, so emptying one still
-          // blocks the save; the refusal at least names the real problem ("a
-          // loop needs at least one child") instead of naming a node the
-          // operator just deleted, but a better message is not an escape route.
-          // Neither branch is right while the canvas offers NO container
-          // affordance at all — the fix is the affordance (#748), not a better
-          // default here.
+          // That reasoning is SYMMETRIC, which is why keeping the container was
+          // only half an answer: an emptied container was ALSO unrecoverable,
+          // just quieter — an empty `stage` validates clean and saved itself into
+          // an immutable version forever, and an empty `loop`/`foreach` blocked
+          // every save with no way out but a reload.
+          //
+          // #748 closed that: `deleteContainer` is the affordance, so keeping the
+          // container here is now a genuine choice (the operator decides whether
+          // the box goes) rather than the only thing the canvas could do. The
+          // fix was the affordance, not a better default here — this default is
+          // unchanged.
           containers: pruneContainerChild(s.containers, id),
           selected,
+          dirty: true,
+        };
+      });
+    },
+
+    /**
+     * #748 — remove a container.
+     *
+     * Deliberately NOT symmetric with `deleteNode`'s membership prune, in the one
+     * way that matters: the CHILDREN survive. A container's children are real
+     * authored activities that merely sit inside it, so removing the box
+     * un-groups them (they run at the top level, which the reducer already
+     * handles — nothing assumes universal container membership). Cascading them
+     * would make this action a worse trap than the one it exists to end, since an
+     * activity's config is no more re-authorable than a container's.
+     *
+     * What IS cascaded is the incident edges, matched exactly as `deleteNode`
+     * matches them: a container id is a legal `from`/`to` (one string field
+     * shared with nodes), so an edge left naming a deleted container is a
+     * dangling ref — the same unsavable doc, with nothing on screen able to
+     * repair it, that #746 was filed about.
+     *
+     * The container's own `exitWhen`/`items`/`maxRounds`/`timeout` IS lost, and
+     * there is no undo. That is why the canvas confirms before calling this, and
+     * why the confirmation names what goes and what stays.
+     */
+    deleteContainer(id) {
+      if (!get().containers.some((c) => c.id === id)) return;
+      set((s) => {
+        const removedEdgeIds = new Set(
+          s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
+        );
+        return {
+          containers: s.containers.filter((c) => c.id !== id),
+          edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+          // A container is not a `Selection` kind — nothing can select one — so
+          // only a selected EDGE the cascade just removed can be stranded.
+          selected:
+            s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id) ? null : s.selected,
           dirty: true,
         };
       });
