@@ -46,6 +46,15 @@ the guard's:
   * the 5-hour window                -- `QUOTA_STOP_PCT` is a 7-day threshold.
   * the module cache + lock          -- there is no request thread to protect;
                                         each read is a fresh short-lived process.
+                                        That argues only that an IN-MEMORY cache
+                                        is impossible, NOT that no rate bound is
+                                        needed -- and unbounded direct polling of
+                                        `/api/oauth/usage` self-inflicts a 429
+                                        (#777). The cross-process bound lives in
+                                        `drive.sh`'s poll memo, because that is
+                                        where the call rate is decided. ANY new
+                                        caller of this module needs its own; this
+                                        module has none and cannot have one.
   * `refresh_live_quota`/`live_quota` -- that writer/getter split is exactly what
                                         broke the fallback for its whole life
                                         (#766: drive.sh called the WRITER, which

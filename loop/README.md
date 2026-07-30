@@ -163,9 +163,25 @@ Three independent bounds, checked before every fire, each with its own test in
   **memoises failures too** (the correct response to a 429 is to poll *less* — the same reason
   studio throttles failed reads, #770), and **drops the memo after every fire**, so a memo can only
   ever serve reads about the fire it was taken for. 60s matches what the other two sources already
-  do. `QUOTA_POLL_MIN_INTERVAL=0` disables it. This is a *poll* throttle, not a fallback reading:
-  the long-window `.last_quota` cache below is still the only sanctioned use of an old reading, and
-  is still refuse-only.
+  do. `QUOTA_POLL_MIN_INTERVAL=0` disables it; anything over the **300s ceiling is clamped**, and an
+  unparseable value falls back to the default with a `WARN` — same for `QUOTA_CACHE_MAX_AGE`, because
+  an operand `test` cannot parse returns 2, which is *neither* branch, so the age comparison used to
+  fall through and make every stamped record look fresh.
+  **What it does and does not buy:** it is a *ceiling* on the poll rate, not a measured reduction of
+  it. In production those three reads per iteration are usually minutes or hours apart (`ensure_auth`
+  backs off 30→600s), so the memo mostly bites on adjacent reads, a restart mid-iteration, or a
+  manual run racing the scheduled one; the floor is one real poll per fire regardless, because the
+  fire clears the memo. Source 2's bound is a **flat** 60s and does not widen, unlike studio's
+  geometric back-off — if the post-C3 logs show source 2 sitting in a 429, widening on a failed poll
+  is the next move.
+  **Be clear about the cost, because it is a change of polarity:** unlike `.last_quota` below, the
+  memo is trusted in BOTH directions — it can serve a reading up to 60s old that *permits* a fire the
+  live figure would refuse. #777 proposed serving nothing in-window for exactly that reason and was
+  overruled on evidence: post-C3 that makes the post-block read of every iteration blind, spends the
+  `QUOTA_UNKNOWN_FIRES` allowance and **stops the driver with the quota perfectly readable** — the
+  same self-DoS one step downstream. So the exposure is bounded twice instead (≤60s, and dropped at
+  every fire, which is the only thing that spends) rather than argued away. `drive.sh`'s
+  `quota_poll_memo_read` header carries the full argument.
 - **What cutover C3 does to that order** — parking `bin/ lib/ tests/ templates/ start` (#410)
   removes source 1 *and*, before #764, removed source 2 as well, because the reader lived in the
   engine's `lib/`. #764 relocated it to `loop/claude_usage.py`, so the surviving pair is

@@ -164,8 +164,13 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # inflict the very 429 that then reads as UNREADABLE. FIXED by #777: it now answers
 # from a poll memo inside QUOTA_POLL_MIN_INTERVAL, memoises failures too, and drops
 # the memo after every fire -- see `quota_poll_memo_read` for the whole argument.
-# Both surviving sources are therefore rate-bounded now (studio via
-# `claude-quota.ts`'s 60s TTL and its geometric ~8min back-off on a 429).
+# Both surviving sources are therefore rate-bounded now, but NOT symmetrically: studio
+# widens geometrically to ~8min once it sees a 429 (`claude-quota.ts`), whereas source
+# 2's bound is a FLAT 60s and does not widen, so under a sustained 429 it keeps
+# knocking once a minute where studio retreats. Deliberate for now -- 1/min is three
+# orders off the measured failure (eight polls in 12s) and the memo makes the rate
+# knowable -- but if the post-C3 logs show source 2 sitting in a 429, widening its
+# interval on a failed poll is the next move, not shortening it.
 #
 # That has a consequence for C3 worth stating BEFORE anyone acts on it: removing
 # the dashboard does not merely remove the best source, it also stops the
@@ -210,10 +215,15 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # EXCLUSIVITY reading is too strong and is not what #770 measured: it also outlaws
 # the prototype dashboard's own sampler, which is the sanctioned poller, and it would
 # make source 2 illegal for its entire life rather than merely unthrottled. What
-# actually protects a shared rate-limited budget is a RATE bound -- N pollers each
-# capped at one poll per window ON DEMAND draw strictly less than one poller sampling
-# every window unconditionally forever. So the invariant is narrower than stated, and
-# reads: at most ONE process may hold a STANDING (unconditional, background) sample
+# actually protects a shared rate-limited budget is a RATE bound. Not because N
+# on-demand pollers are always cheaper than one standing sampler -- two pollers at
+# 1/60s is 2 per window while the driver is active, i.e. MORE than the sampler they
+# replace; that only comes out ahead integrated over the idle time, which is most of
+# it. The reason is that a rate bound is what the 429 actually responds to: the
+# measured failure was eight polls in 12s, and an unconditional sampler cannot be
+# asked to poll less when it starts failing, whereas a bounded on-demand poller can.
+# So the invariant is narrower than stated, and reads:
+# at most ONE process may hold a STANDING (unconditional, background) sample
 # -- today the dashboard, tomorrow nobody -- and every other direct poller must be
 # rate-bounded AND must throttle its FAILED reads too. Studio satisfies that via
 # `claude-quota.ts`; source 2 satisfies it via the #777 poll memo; a second standing
@@ -268,6 +278,7 @@ except Exception:
 
 quota_pct() {
   qp_src=""
+  qp_memo_hit=0      # set -u: must exist before the source-2 branch reads it
   qp_out="$(quota_read_url "$DASH_URL")"
   [ -n "$qp_out" ] && qp_src="dashboard"
   # NOTE the single exit point below: BOTH sources must feed the cache. An early
@@ -317,6 +328,12 @@ quota_pct() {
     if [ -n "$qp_memo" ]; then
       [ "$qp_memo" = "-" ] && qp_memo=""
       qp_out="$qp_memo"
+      # Named DISTINCTLY from a live poll. `quota source: loop` is the evidence trail
+      # for the C3 promotion decision, and a throttle that made "the reader answered"
+      # indistinguishable from "the reader was not asked" would hide a source-2 death
+      # the way #766 hid for its entire life. Only the memo branch is relabelled --
+      # the fresh-poll string other cases assert on is untouched.
+      qp_memo_hit=1
     else
       qp_out="$(quota_sane "$(python3 "$LOOP_LIB/claude_usage.py" 2>/dev/null)")"
       # The SANITISED value is what gets memoised, so an out-of-range or malformed
@@ -324,7 +341,9 @@ quota_pct() {
       # fail-open guard has to hold on the memo path too).
       quota_poll_memo_write "$qp_out"
     fi
-    [ -n "$qp_out" ] && qp_src="loop"
+    if [ -n "$qp_out" ]; then
+      if [ "$qp_memo_hit" = "1" ]; then qp_src="loop-memo"; else qp_src="loop"; fi
+    fi
   fi
   # THIRD: studio (#440 C1), now served by the supervised `com.autonomy.studio-server`
   # unit on 8788 (#765 Defect 2) rather than by whatever `pnpm dev` happened to be
@@ -359,7 +378,12 @@ quota_pct() {
 # fires may have run since. The cache is therefore trusted in ONE direction only:
 # it may REFUSE a fire, never permit one. Fail-safe, same polarity as ci_check.
 quota_cache_write() {  # $1=pct
-  printf '%s %s\n' "$(date +%s)" "$1" >"$QUOTA_CACHE" 2>/dev/null || true
+  # `2>/dev/null` FIRST: redirections apply left to right, so with the file open
+  # written first the shell reports its failure on the still-open stderr -- which on
+  # an unwritable $INFRA meant a "No such file or directory" line in the launchd
+  # stderr log on every single gate. Behaviour was always fail-safe (no cache => the
+  # blind path), only the noise was wrong.
+  printf '%s %s\n' "$(date +%s)" "$1" 2>/dev/null >"$QUOTA_CACHE" || true
 }
 # --- quota_stamped_read: the ONE parser for this file's "<epoch> <value>" state
 # files -- the last-known-quota cache and the source-2 poll memo (#777). Echoes the
@@ -401,9 +425,16 @@ quota_stamped_read() {  # $1=file $2=max_age_seconds
 quota_cache_read() {
   qc_pct="$(quota_stamped_read "$QUOTA_CACHE" "$QUOTA_CACHE_MAX_AGE")"
   # The VALUE's own domain check, which the shared parser deliberately leaves to the
-  # caller. `10#` for the same octal reason the epoch needs it (a cached `018`), and
-  # the digit check has to come first because `$(( ))` on a non-number is fatal here.
-  case "$qc_pct" in *[!0-9]*|"") return 0 ;; esac
+  # caller -- via `quota_sane`, the SAME guard the two live sources use, not a
+  # hand-rolled character class. Digit-only was not enough and this is the third place
+  # that has bitten: `$(( 10# ))` on a 20-digit value WRAPS silently (measured: 10^19
+  # becomes -8446744073709551616), so an over-range cache line fabricated a
+  # last-known reading out of nothing -- and a value that wraps to >=QUOTA_STOP_PCT
+  # would then REFUSE every fire on a number that was never reported. `quota_sane`'s
+  # length bound is what makes that unrepresentable. Found by review, pre-existing.
+  qc_pct="$(quota_sane "$qc_pct")"
+  [ -z "$qc_pct" ] && return 0
+  # `10#` for the same octal reason the epoch needs it (a cached `018`).
   echo $(( 10#$qc_pct ))
 }
 
@@ -419,6 +450,17 @@ quota_cache_read() {
 #
 # So the memo records the OUTCOME of the last poll and, inside
 # QUOTA_POLL_MIN_INTERVAL, source 2 answers from it instead of polling again.
+#
+# WHY A FILE and not a shell variable, which would need no gitignore entry, no
+# sentinel and no parse: every read goes through `qg_pct="$(quota_pct)"` -- a COMMAND
+# SUBSTITUTION, i.e. a subshell -- so a variable assigned in there is discarded when
+# it exits. Every one of the reads this throttle exists to bound is in that position
+# (`quota_gate` twice or three times, and the per-retry read inside `ensure_auth`), so
+# an in-shell memo would be written and thrown away on every single call and throttle
+# nothing. Making it work would mean changing how `quota_pct` returns, which is the
+# convention the whole guard is built on. A file also happens to survive a driver
+# restart mid-iteration and to bound a manual run racing the scheduled one, but that
+# is a bonus, not the reason.
 #
 # It memoises FAILURES too ("-"), and that half is the load-bearing one: the correct
 # response to a 429 is to poll LESS, so a memo written only on success leaves the
@@ -452,9 +494,44 @@ quota_poll_memo_read() {   # echoes "<pct>" | "-" (last poll FAILED) | "" (no me
   quota_sane "$qpm_v"
 }
 quota_poll_memo_write() {  # $1=pct, or "" for a poll that failed
-  printf '%s %s\n' "$(date +%s)" "${1:--}" >"$QUOTA_POLL_MEMO" 2>/dev/null || true
+  printf '%s %s\n' "$(date +%s)" "${1:--}" 2>/dev/null >"$QUOTA_POLL_MEMO" || true
 }
 quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
+
+# --- quota_knob_secs: normalise a "how old may a reading be" knob, because BOTH of
+# them are fed straight to `test` and an operand `test` cannot parse returns 2 --
+# NEITHER branch -- so `[ age -gt bound ]` falls through and EVERY record looks fresh
+# forever. `QUOTA_CACHE_MAX_AGE=24h` (a plausible typo) was enough to do it, and for
+# the 24h cache that is worse than a fail-open: nothing ever clears that file, so an
+# ancient reading at/above QUOTA_STOP_PCT would refuse every blind fire permanently.
+# The memo path was already closed by its own `-gt 0` check; this closes the sibling.
+# An unusable value is REPLACED by the default and ANNOUNCED -- never obeyed, and
+# never silently swapped either (a misconfigured spend guard the operator cannot see
+# is the shape this file exists to avoid).
+#
+# The CEILING argument differs per knob, which is why it is a parameter:
+#   * the poll interval bounds how stale a reading may be when it PERMITS a fire, so
+#     an over-wide value is a fail-open and is clamped toward the shorter, safer end.
+#     (Measured by review: QUOTA_POLL_MIN_INTERVAL=86400 served a 12-hour-old reading
+#     to the gate with zero polls.)
+#   * QUOTA_CACHE_MAX_AGE bounds a REFUSE-ONLY cache, so a large valid value can only
+#     ever over-refuse. No ceiling; it just has to be a number.
+quota_knob_secs() {  # $1=name $2=value $3=default $4=ceiling (0 = none)
+  qk_v="$2"
+  case "$qk_v" in ""|*[!0-9]*) qk_v="" ;; esac
+  # 9 digits is ~31 years in seconds. Past that it is a typo, and it is also where
+  # `test` starts approaching the signed-64 range that already burned this file once.
+  [ "${#qk_v}" -gt 9 ] && qk_v=""
+  if [ -z "$qk_v" ]; then
+    log "WARN: $1='$2' is not a usable number of seconds -- using the default $3 instead (an unparseable bound makes every stamped record look fresh, which is the one polarity this guard may not have)"
+    qk_v="$3"
+  fi
+  if [ "$4" -gt 0 ] && [ "$qk_v" -gt "$4" ]; then
+    log "WARN: $1=$qk_v exceeds the ${4}s ceiling -- clamping to $4. A wider window lets an OLDER reading authorise a fire, so this clamps toward the safer end."
+    qk_v="$4"
+  fi
+  echo "$qk_v"
+}
 
 # --- quota_gate: the spend guard. Returns 1 to STOP the driver, 0 to proceed.
 #
@@ -657,6 +734,11 @@ budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGR
 blind_fires=0             # fires spent while quota was UNREADABLE; bounded by QUOTA_UNKNOWN_FIRES
 gate_blind=0              # last quota_gate decision was blind (set -u: must exist)
 prev_head=""
+
+# Normalised HERE and not at declaration, because complaining needs `log` and the log
+# directory. Nothing reads a quota before the loop below, so this is in time.
+QUOTA_POLL_MIN_INTERVAL="$(quota_knob_secs QUOTA_POLL_MIN_INTERVAL "$QUOTA_POLL_MIN_INTERVAL" 60 300)"
+QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE" 86400 0)"
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
