@@ -129,6 +129,7 @@ describe('ollamaAdapter.runActivity', () => {
       type: 'failed',
       kind: 'permanent',
       error: `ollama returned a 2xx response with no completion (${reason})`,
+      spendFact: { provider: 'ollama', model: 'llama3', meteringStatus: 'unknown' },
     });
     expect(captured(events).capture.completion).toBeUndefined();
   });
@@ -495,5 +496,31 @@ describe('ollamaAdapter — local tools (#2 L10a)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(ollamaAdapter.runActivity(toolCtx({ toolChoice: 'none' }), null));
     expect(requestBody(fetchSpy, 0)).not.toHaveProperty('tools');
+  });
+});
+
+// #725 — the timeout door. As with openai, `ollama.test.ts` carried no timeout
+// coverage before this ticket. NOTE for a LOCAL provider the fact means "an
+// exchange we cannot account for", NOT dollars: `ollama` is deliberately absent
+// from the built-in price table, so no cost is ever stamped for it either way.
+describe('ollamaAdapter timeout → spend fact (#725)', () => {
+  it('records an unknown spend fact when a hung provider is aborted by the timeout', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          (init as RequestInit).signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), null),
+    );
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
+    expect(failed(events).spendFact).toEqual({
+      provider: 'ollama',
+      model: 'llama3',
+      meteringStatus: 'unknown',
+    });
   });
 });

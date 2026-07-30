@@ -148,6 +148,11 @@ export interface ToolCallTelemetry {
  * engine events (`node.output` / `activity.metered` / `activity.captured` /
  * `activity.agentTelemetry` / `activity.toolCalled` / `node.succeeded` /
  * `node.failed`).
+ *
+ * ONE terminal can mint TWO engine events (#725): a `failed` carrying a
+ * `spendFact` yields an `activity.metered` BEFORE its `node.failed`, because a
+ * failure that abandoned a billed exchange is itself a metering fact and the
+ * paths that discover it cannot yield an event of their own.
  */
 export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
@@ -169,6 +174,38 @@ export type ActivityEvent =
        * for any failure the engine will not retry.
        */
       retryAfterSeconds?: number;
+      /**
+       * #2 L2 / #725 — the metering FACT for a provider exchange this failure
+       * ABANDONED or DISCARDED. The executor mints an `activity.metered` from it,
+       * ordered before the `node.failed` — the same position the success path's
+       * `metered` event holds, so "an `activity.metered` per provider response,
+       * including failed-but-billed calls" (`llm-shared.ts`) finally holds on the
+       * failure paths too.
+       *
+       * It exists because the two doors below cannot yield the event themselves:
+       * `postJsonAndParse` is a plain function, and the parsed-but-no-completion
+       * terminals are built by `noCompletionFailure` inside driver closures whose
+       * outcome type carries only the event. Riding the failure means every driver
+       * (`runStructuredWithRepair`, `runTextWithTools`, the plain text paths)
+       * relays it VERBATIM with no change of its own — the same reason
+       * `ToolRoundOutcome.terminal.capture` rides its terminal.
+       *
+       * SET ONLY WHERE THE PROVIDER PLAUSIBLY BILLED:
+       * - a TIMEOUT abort — dispatched, then abandoned mid-exchange. Counts are
+       *   unrecoverable (the body went with the abort) → `meteringStatus:'unknown'`.
+       * - an unparseable 2xx — the provider certainly produced and billed a
+       *   completion; we could not read it → `unknown`.
+       * - a 2xx that PARSED but carried no usable completion (truncation) — the
+       *   counts are right there in the body → a FULL `metered` fact.
+       *
+       * ABSENT means "nothing was billed", and that is load-bearing: a 4xx, a
+       * malformed-request `TypeError`, a pre-dispatch cancel and a connect-level
+       * network error all produced nothing, and marking them would manufacture a
+       * cost GAP for spend that never happened — the mirror image of the hole this
+       * closes. See `llmPost` for why the generic network branch is deliberately
+       * unmarked despite a mid-generation reset being billable.
+       */
+      spendFact?: LlmUsage;
     };
 
 export interface ConnectorAdapter {

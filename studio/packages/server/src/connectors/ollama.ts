@@ -165,6 +165,7 @@ export const ollamaAdapter: ConnectorAdapter = {
         const res = await postJsonAndParse(
           ctx,
           'ollama',
+          model,
           url,
           headers,
           buildBody(wireMessages(msgTurns)),
@@ -214,6 +215,7 @@ export const ollamaAdapter: ConnectorAdapter = {
           const res = await postJsonAndParse(
             ctx,
             'ollama',
+            model,
             url,
             headers,
             buildBody(conv, wireTools),
@@ -266,7 +268,7 @@ export const ollamaAdapter: ConnectorAdapter = {
           if (typeof message !== 'object' || message === null) {
             return {
               type: 'terminal',
-              event: noCompletionFailure('ollama', 'absent_content'),
+              event: { ...noCompletionFailure('ollama', 'absent_content'), spendFact: usage },
               capture: captureOf(),
             };
           }
@@ -274,7 +276,7 @@ export const ollamaAdapter: ConnectorAdapter = {
           if (typeof text !== 'string') {
             return {
               type: 'terminal',
-              event: noCompletionFailure('ollama', 'malformed_block'),
+              event: { ...noCompletionFailure('ollama', 'malformed_block'), spendFact: usage },
               capture: captureOf(),
             };
           }
@@ -304,6 +306,7 @@ export const ollamaAdapter: ConnectorAdapter = {
     const result = await postJsonAndParse(
       ctx,
       'ollama',
+      model,
       url,
       headers,
       buildBody(wireMessages(turns)),
@@ -336,13 +339,16 @@ export const ollamaAdapter: ConnectorAdapter = {
     const message = (result.json as { message?: { content?: unknown } }).message;
     if (typeof message !== 'object' || message === null) {
       yield captureOf();
-      yield noCompletionFailure('ollama', 'absent_content');
+      yield { ...noCompletionFailure('ollama', 'absent_content'), spendFact: usageOf(result.json) };
       return;
     }
     const text = message.content;
     if (typeof text !== 'string') {
       yield captureOf();
-      yield noCompletionFailure('ollama', 'malformed_block');
+      yield {
+        ...noCompletionFailure('ollama', 'malformed_block'),
+        spendFact: usageOf(result.json),
+      };
       return;
     }
     // #2 L2 — capture the metering fact before the terminal event.

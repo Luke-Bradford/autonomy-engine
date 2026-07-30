@@ -46,7 +46,17 @@ export interface RunCost {
    * `costUnknownResponseCount`, never summed as 0.
    */
   totalCostEstimate: number;
-  /** Total `activity.metered` events (billed provider responses) folded. */
+  /**
+   * Total `activity.metered` events folded — BILLED PROVIDER EXCHANGES, not
+   * successful responses. Since #725 a failure that abandoned or discarded a billed
+   * exchange (a timeout abort, an unparseable 2xx, a truncated completion) mints one
+   * too, so this counts attempts the provider charged for whether or not a usable
+   * response came back. Consequences worth knowing: a timed-out call permanently
+   * flips its run — and any rollup over it — to `complete:false`, and because a
+   * timeout stays `transient` and retry-eligible, EACH retry adds another response
+   * to this count. That is the intended reading (the money was spent each time),
+   * but it does mean `responseCount` is not a count of completions.
+   */
   responseCount: number;
   /** Responses carrying a `costEstimate` (price resolved AND both token counts present). */
   pricedResponseCount: number;

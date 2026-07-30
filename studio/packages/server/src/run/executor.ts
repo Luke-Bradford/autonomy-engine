@@ -27,7 +27,7 @@ import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connector
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
-import type { ActivityContext, ConnectorAdapter } from '../connectors/types.js';
+import type { ActivityContext, ConnectorAdapter, LlmUsage } from '../connectors/types.js';
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
 
 /**
@@ -487,66 +487,70 @@ export function createExecutor(deps: ExecutorDeps): Executor {
     // (fail-safe: a malformed override → null → the built-in table is used, and
     // a bad price config never fails the node — pricing is best-effort).
     const priceOverride = parseConnectionPriceTable(ctx.connectionConfig);
+    /**
+     * #2 L2 — a per-response metering FACT (non-terminal, like `output`): stamp the
+     * captured usage into the durable log as `activity.metered`, ordered BEFORE the
+     * terminal. The reducer folds it inert; L6 SUMS these events for the run-cost
+     * projection. Optional token fields are omitted (not sent as `undefined`) so the
+     * stored event matches the schema's `.optional()` shape exactly.
+     *
+     * #2 L5 — resolve the unit price for (provider, model) against the price table
+     * (override ⊕ built-in) and stamp it AT capture. FAIL-CLOSED: an unpriced model
+     * leaves ALL price fields absent (never a zero), and `costEstimate` is stamped
+     * ONLY when both token counts are present — equivalently
+     * `meteringStatus === 'metered'` (meterUsage sets that iff both counts are
+     * valid) — so its presence ⟺ a trustworthy full cost.
+     *
+     * #725 — SHARED by both doors: the adapter's own `metered` event AND a terminal
+     * `failed.spendFact` (an exchange that was billed but failed). One builder, so
+     * the fail-closed price rules cannot drift apart between the success and
+     * failure paths.
+     */
+    const meteredEvent = (usage: LlmUsage): EngineEvent => {
+      // #2 L14 — a subscription/CLI response (`meteringStatus:'unpriced'`) has NO
+      // per-token dollar price BY DESIGN (a flat/covered seat pays for it).
+      // Suppress price resolution entirely so ALL four price fields stay absent —
+      // even if the (provider, model) WOULD match a priced built-in entry. Stamping
+      // a manufactured per-token cost onto a subscription call would misreport spend
+      // (the same fail-open shape #473 / the merge-gate forbid). The usage counts are
+      // still stamped below (usage is a fact); only the price is withheld, and L6
+      // folds `unpriced` into its own non-gap bucket.
+      const price =
+        usage.meteringStatus === 'unpriced'
+          ? null
+          : resolvePrice(usage.provider, usage.model, priceOverride);
+      const priceFields =
+        price === null
+          ? {}
+          : {
+              inUnitPrice: price.inUnitPrice,
+              outUnitPrice: price.outUnitPrice,
+              priceTableVersion: price.priceTableVersion,
+              ...(usage.inputTokens !== undefined && usage.outputTokens !== undefined
+                ? {
+                    costEstimate: computeCostEstimate(usage.inputTokens, usage.outputTokens, price),
+                  }
+                : {}),
+            };
+      return {
+        type: 'activity.metered',
+        runId,
+        nodeId,
+        attemptId,
+        provider: usage.provider,
+        model: usage.model,
+        meteringStatus: usage.meteringStatus,
+        ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+        ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
+        ...priceFields,
+      };
+    };
     try {
       for await (const ev of adapter.runActivity(ctx, secret, secretFields)) {
         if (ev.type === 'output') {
           events.push({ type: 'node.output', runId, nodeId, name: ev.name, value: ev.value });
         } else if (ev.type === 'metered') {
-          // #2 L2 — a per-response metering FACT (non-terminal, like `output`):
-          // stamp the captured usage into the durable log as `activity.metered`,
-          // ordered BEFORE the terminal `succeeded`. The reducer folds it inert;
-          // L6 SUMS these events for the run-cost projection. Optional token fields
-          // are omitted (not sent as `undefined`) so the stored event matches the
-          // schema's `.optional()` shape exactly.
-          //
-          // #2 L5 — resolve the unit price for (provider, model) against the
-          // price table (override ⊕ built-in) and stamp it AT capture. FAIL-CLOSED:
-          // an unpriced model leaves ALL price fields absent (never a zero), and
-          // `costEstimate` is stamped ONLY when both token counts are present —
-          // equivalently `meteringStatus === 'metered'` (meterUsage sets that iff
-          // both counts are valid) — so its presence ⟺ a trustworthy full cost.
-          const { usage } = ev;
-          // #2 L14 — a subscription/CLI response (`meteringStatus:'unpriced'`) has
-          // NO per-token dollar price BY DESIGN (a flat/covered seat pays for it).
-          // Suppress price resolution entirely so ALL four price fields stay absent
-          // — even if the (provider, model) WOULD match a priced built-in entry.
-          // Stamping a manufactured per-token cost onto a subscription call would
-          // misreport spend (the same fail-open shape #473 / the merge-gate forbid).
-          // The usage counts are still stamped below (usage is a fact); only the
-          // price is withheld, and L6 folds `unpriced` into its own non-gap bucket.
-          const price =
-            usage.meteringStatus === 'unpriced'
-              ? null
-              : resolvePrice(usage.provider, usage.model, priceOverride);
-          const priceFields =
-            price === null
-              ? {}
-              : {
-                  inUnitPrice: price.inUnitPrice,
-                  outUnitPrice: price.outUnitPrice,
-                  priceTableVersion: price.priceTableVersion,
-                  ...(usage.inputTokens !== undefined && usage.outputTokens !== undefined
-                    ? {
-                        costEstimate: computeCostEstimate(
-                          usage.inputTokens,
-                          usage.outputTokens,
-                          price,
-                        ),
-                      }
-                    : {}),
-                };
-          events.push({
-            type: 'activity.metered',
-            runId,
-            nodeId,
-            attemptId,
-            provider: usage.provider,
-            model: usage.model,
-            meteringStatus: usage.meteringStatus,
-            ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
-            ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
-            ...priceFields,
-          });
+          events.push(meteredEvent(ev.usage));
         } else if (ev.type === 'captured') {
           // #2 L9a — a per-response prompt/completion CAPTURE fact (non-terminal,
           // like `metered`): stamp the shape + latency into the durable log as
@@ -624,6 +628,15 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // #2 L7: plumb a `Retry-After` hint (LLM adapters set it only on a
           // retryable non-2xx) onto the durable event; the reducer feeds it to the
           // retry alarm. Omitted when absent → the driver uses the policy interval.
+          //
+          // #725 — a failure that ABANDONED or DISCARDED a billed provider exchange
+          // carries its metering fact, and it is stamped BEFORE the terminal, so a
+          // timed-out or truncated call's spend reads as a cost GAP (or, where the
+          // body parsed, its real token counts) instead of vanishing. Without this
+          // the provider billed, `usageOf` was never reached, and L6 summed a run
+          // cost that silently omitted the call — the same silent-loss shape #708
+          // closed at the price-table door.
+          if (ev.spendFact !== undefined) events.push(meteredEvent(ev.spendFact));
           events.push(
             nodeFailed(runId, nodeId, attemptId, {
               error: ev.error,

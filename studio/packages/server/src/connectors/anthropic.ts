@@ -70,12 +70,15 @@ const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
  * fit inside it: 16000 output tokens at any plausible Opus-5 standard-speed rate
  * is 2-6 minutes of generation. Exceeding the budget is far worse than
  * truncating, because `llmPost` aborts and `usageOf` is only ever reached after
- * a 2xx parse — so the provider generates and BILLS the tokens while no
- * `activity.metered` event is emitted at all, and the failure is classified
- * `transient`, which is retry-eligible, so the engine re-issues the whole call
- * and buys another unmetered generation. That is precisely the silent loss of
- * cost telemetry this ticket set out to remove, re-entering through the timeout
- * door instead of the price-table door.
+ * a 2xx parse — so the provider generates and BILLS tokens this process can never
+ * count, and the failure is classified `transient`, which is retry-eligible, so
+ * the engine re-issues the whole call and buys another generation.
+ *
+ * #725 made that spend VISIBLE rather than silent: the timeout failure now carries
+ * a `spendFact`, so the executor mints an `activity.metered{unknown}` and L6 reads
+ * the run's cost as INCOMPLETE instead of summing a total that quietly omits the
+ * call. The bound below is still an upper bound, though — visible unaccounted
+ * spend is a diagnosis, not a fix, and each retry adds another one.
  *
  * 4096 is the largest round budget that finishes inside 120s even pessimistically
  * (~40 tok/s → ~102s), while being 4x the old cap so adaptive thinking has room
@@ -440,6 +443,7 @@ export const anthropicAdapter: ConnectorAdapter = {
         const res = await postJsonAndParse(
           ctx,
           'anthropic_api',
+          model,
           url,
           headers,
           buildBody(turns, { toolWire: structuredWire }),
@@ -549,6 +553,7 @@ export const anthropicAdapter: ConnectorAdapter = {
           const res = await postJsonAndParse(
             ctx,
             'anthropic_api',
+            model,
             url,
             headers,
             buildBody(conv, {
@@ -594,6 +599,7 @@ export const anthropicAdapter: ConnectorAdapter = {
                   error:
                     'anthropic_api returned a tool_use block without a string id — ' +
                     'malformed tool-call response',
+                  spendFact: usage,
                 },
                 capture: captureOf(),
               };
@@ -624,7 +630,10 @@ export const anthropicAdapter: ConnectorAdapter = {
           if ('reason' in extracted) {
             return {
               type: 'terminal',
-              event: noCompletionFailure('anthropic_api', extracted.reason),
+              event: {
+                ...noCompletionFailure('anthropic_api', extracted.reason),
+                spendFact: usage,
+              },
               capture: captureOf(),
             };
           }
@@ -655,6 +664,7 @@ export const anthropicAdapter: ConnectorAdapter = {
     const result = await postJsonAndParse(
       ctx,
       'anthropic_api',
+      model,
       url,
       headers,
       buildBody(messages),
@@ -683,7 +693,10 @@ export const anthropicAdapter: ConnectorAdapter = {
     const extracted = extractText(result.json);
     if ('reason' in extracted) {
       yield captureOf();
-      yield noCompletionFailure('anthropic_api', extracted.reason);
+      yield {
+        ...noCompletionFailure('anthropic_api', extracted.reason),
+        spendFact: usageOf(result.json),
+      };
       return;
     }
     // #2 L2 — capture the metering fact before the terminal event.

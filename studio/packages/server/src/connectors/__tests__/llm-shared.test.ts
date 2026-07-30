@@ -488,7 +488,15 @@ describe('postJsonAndParse (#648)', () => {
 
   it('returns the parsed json + a numeric latency on a 2xx JSON body', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, '{"a":1}'));
-    const res = await postJsonAndParse(pctx(), 'openai_api', 'http://x/y', {}, { m: 1 }, 1000);
+    const res = await postJsonAndParse(
+      pctx(),
+      'openai_api',
+      'gpt-test',
+      'http://x/y',
+      {},
+      { m: 1 },
+      1000,
+    );
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.json).toEqual({ a: 1 });
@@ -499,7 +507,7 @@ describe('postJsonAndParse (#648)', () => {
 
   it('passes a transport failure event through (network error → transient)', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('socket hang up'));
-    const res = await postJsonAndParse(pctx(), 'ollama', 'http://x/y', {}, {}, 1000);
+    const res = await postJsonAndParse(pctx(), 'ollama', 'llama-test', 'http://x/y', {}, {}, 1000);
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.event).toMatchObject({ type: 'failed', kind: 'transient' });
@@ -511,7 +519,15 @@ describe('postJsonAndParse (#648)', () => {
 
   it('maps a non-2xx through httpStatusFailure, retry-after hint included', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(429, '{"err":"slow"}', '7'));
-    const res = await postJsonAndParse(pctx(), 'anthropic_api', 'http://x/y', {}, {}, 1000);
+    const res = await postJsonAndParse(
+      pctx(),
+      'anthropic_api',
+      'claude-test',
+      'http://x/y',
+      {},
+      {},
+      1000,
+    );
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.event).toMatchObject({
@@ -525,7 +541,15 @@ describe('postJsonAndParse (#648)', () => {
 
   it('maps a plain 4xx to a permanent adapter-named failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(400, 'bad request'));
-    const res = await postJsonAndParse(pctx(), 'openai_api', 'http://x/y', {}, {}, 1000);
+    const res = await postJsonAndParse(
+      pctx(),
+      'openai_api',
+      'gpt-test',
+      'http://x/y',
+      {},
+      {},
+      1000,
+    );
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.event).toMatchObject({ type: 'failed', kind: 'permanent' });
@@ -535,7 +559,7 @@ describe('postJsonAndParse (#648)', () => {
 
   it('rejects a 2xx non-JSON body as a permanent parse failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json'));
-    const res = await postJsonAndParse(pctx(), 'ollama', 'http://x/y', {}, {}, 1000);
+    const res = await postJsonAndParse(pctx(), 'ollama', 'llama-test', 'http://x/y', {}, {}, 1000);
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.event).toMatchObject({

@@ -203,7 +203,18 @@ export function normalizeModelId(model: string): string {
  */
 export type LlmFetchResult =
   | { type: 'response'; status: number; bodyText: string; retryAfterHeader: string | null }
-  | { type: 'failed'; event: Extract<ActivityEvent, { type: 'failed' }> };
+  | {
+      type: 'failed';
+      event: Extract<ActivityEvent, { type: 'failed' }>;
+      /**
+       * #725 — the request WAS dispatched and then abandoned mid-exchange, so the
+       * provider may have generated (and billed) tokens this process can never
+       * count. `postJsonAndParse` turns it into the failure's `spendFact`. Absent
+       * ⇒ nothing was billed; see the branches in `llmPost` for why only the
+       * timeout sets it.
+       */
+      spendUnaccounted?: true;
+    };
 
 /**
  * Perform one JSON POST bounded by a whole-exchange timeout, mirroring the
@@ -250,15 +261,31 @@ export async function llmPost(
     };
   } catch (err) {
     // The run's own cancel wins over a coincident timeout.
+    //
+    // #725 — deliberately NOT marked `spendUnaccounted`, though a cancel can abort
+    // a dispatched call. This branch is also reached when the run signal was
+    // ALREADY aborted at entry (the guard above aborts the controller BEFORE
+    // `fetch`, so no request leaves the process — the path
+    // `runStructuredWithRepair` relies on to stop repairing after a cancel), and
+    // the two are indistinguishable here. Marking would manufacture a cost gap for
+    // a call that never dispatched, so a deliberately-cancelled run keeps reading
+    // complete. The residual — a cancel that truly did abort a billed generation —
+    // is stated on #725 rather than papered over.
     if (ctx.signal.aborted) {
       return {
         type: 'failed',
         event: { type: 'failed', kind: 'cancelled', error: 'llm request aborted' },
       };
     }
+    // #725 — the one branch that is SAFE BY CONSTRUCTION: `timedOut` can only be
+    // set by the `setTimeout` armed after the `fetch` call above, so reaching here
+    // proves the request was dispatched and then abandoned. The provider may have
+    // generated and billed tokens; the body went with the abort, so the counts are
+    // unrecoverable and the fact can only be `unknown`.
     if (timedOut) {
       return {
         type: 'failed',
+        spendUnaccounted: true,
         event: {
           type: 'failed',
           kind: 'transient',
@@ -277,6 +304,13 @@ export async function llmPost(
         },
       };
     }
+    // #725 — the generic network branch is deliberately UNMARKED, and it is the
+    // one genuinely lossy call here. A connection reset mid-generation IS billed,
+    // but it is indistinguishable at this layer from DNS failure / connection
+    // refused, where no exchange occurred at all. Marking every one would flip a
+    // provider-unreachable run's cost to INCOMPLETE, which is a worse lie than the
+    // gap it closes (the common case by far is "never reached the provider").
+    // Recorded as a known residual on #725.
     return {
       type: 'failed',
       event: {
@@ -1091,6 +1125,7 @@ export type LlmExchangeResult =
 export async function postJsonAndParse(
   ctx: ActivityContext,
   provider: LlmConnectionKind,
+  model: string,
   url: string,
   headers: Record<string, string>,
   body: unknown,
@@ -1099,8 +1134,23 @@ export async function postJsonAndParse(
   const started = Date.now();
   const res = await llmPost(ctx, url, headers, body, timeoutMs);
   const latencyMs = Date.now() - started;
-  if (res.type === 'failed') return { ok: false, event: res.event, latencyMs };
+  // #725 — the metering fact for an exchange that was billed but cannot be
+  // counted. `meterUsage` with both counts absent is THE definition of an
+  // `unknown` status (it is the single completeness decision for all three
+  // adapters); building the shape by hand here would be a second decision on the
+  // same axis.
+  const unaccounted = (): Extract<ActivityEvent, { type: 'failed' }>['spendFact'] =>
+    meterUsage(provider, model, undefined, undefined);
+  if (res.type === 'failed') {
+    return {
+      ok: false,
+      event: res.spendUnaccounted ? { ...res.event, spendFact: unaccounted() } : res.event,
+      latencyMs,
+    };
+  }
   if (res.status < 200 || res.status >= 300) {
+    // A non-2xx produced no completion — nothing to account for. Marking it would
+    // manufacture a cost gap (see `ActivityEvent.failed.spendFact`).
     return {
       ok: false,
       event: httpStatusFailure(
@@ -1114,7 +1164,12 @@ export async function postJsonAndParse(
     };
   }
   const parsed = parseJsonBody(res.bodyText);
-  if (!parsed.ok) return { ok: false, event: parsed.event, latencyMs };
+  // #725 — a 2xx is the UNAMBIGUOUS billed case: the provider produced and billed a
+  // completion, and only our read of it failed. The counts are inside the body we
+  // could not parse, so the fact can only be `unknown` — but it is certain.
+  if (!parsed.ok) {
+    return { ok: false, event: { ...parsed.event, spendFact: unaccounted() }, latencyMs };
+  }
   return { ok: true, json: parsed.json, latencyMs };
 }
 

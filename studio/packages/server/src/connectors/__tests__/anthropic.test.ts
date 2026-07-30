@@ -114,10 +114,21 @@ describe('anthropicAdapter.runActivity', () => {
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
     // #2 L9a — a capture (completion ABSENT) precedes the terminal failure.
     expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    // #725 — a 2xx BILLED, so the failure carries the metering fact even though the
+    // response was unusable. These fixtures omit `usage` entirely, so the fact is
+    // `unknown` (no counts to keep); the truncation case below, which reports real
+    // counts, keeps them. Asserted with `toEqual` on purpose: the exact shape of a
+    // failure event is the contract, and a spend fact appearing/vanishing silently
+    // is precisely the regression this ticket is about.
     expect(failed(events)).toEqual({
       type: 'failed',
       kind: 'permanent',
       error: `anthropic_api returned a 2xx response with no completion (${reason})`,
+      spendFact: {
+        provider: 'anthropic_api',
+        model: 'claude-opus-5',
+        meteringStatus: 'unknown',
+      },
     });
     expect(captured(events).capture.completion).toBeUndefined();
   });
@@ -194,10 +205,11 @@ describe('anthropicAdapter.runActivity', () => {
   // `empty_completion_set` failure.
   //
   // Too HIGH and it outruns this connector's own 120s non-streaming timeout
-  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path emits NO `activity.metered` event
-  // even though the provider generated and billed the tokens, and classifies
-  // `transient`, so the engine retries and buys another unmetered generation.
-  // That is the very telemetry hole this ticket closed, via a different door.
+  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path bills tokens it can never count, and
+  // classifies `transient`, so the engine retries and buys another one. Since #725
+  // that spend is at least VISIBLE (the failure carries a `spendFact`, so the run
+  // reads cost-INCOMPLETE rather than silently short) — but visible is not free, so
+  // this bound still holds.
   //
   // So this is an upper AND lower bound, not a preference. Anyone moving it
   // should read the `DEFAULT_MAX_TOKENS` block and #725 first.
@@ -379,6 +391,77 @@ describe('anthropicAdapter.runActivity', () => {
     );
     expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
     expect(JSON.stringify(events)).toContain('timed out');
+    // #725 — the abort happened AFTER the request was dispatched, so the provider
+    // may well have generated (and billed) tokens we can never count: the response
+    // body is gone with the abort. The failure carries the metering FACT so the
+    // executor can mint an `activity.metered{unknown}` and the spend reads as a
+    // cost GAP rather than as a silent zero.
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'unknown',
+    });
+  });
+
+  // #725 — the NEGATIVES. These are the subtlest half of the fix: a marker on a
+  // call that never reached the provider would manufacture a cost gap for spend
+  // that provably did not happen — the mirror image of the hole being closed, and
+  // the same fail direction `meterUsage`/the price table already hold to.
+  it('does NOT record a spend fact for a bad-URL TypeError (never dispatched)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Invalid URL'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  it('does NOT record a spend fact for a network error (no exchange occurred)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('transient');
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  it('does NOT record a spend fact for a 401 (the provider produced nothing)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(401, { error: 'bad key' }));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  // #725 — the UNAMBIGUOUS billed case: a 2xx means the provider produced and
+  // billed a completion. We simply could not parse it, so the counts are lost but
+  // the spend is certain.
+  it('records an unknown spend fact for an unparseable 2xx body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json at all'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'unknown',
+    });
+  });
+
+  // #725 — the HIGHEST-fidelity door, and the likelier one: a 2xx that PARSED but
+  // carried no usable completion (the `max_tokens`/thinking-truncation case the
+  // DEFAULT_MAX_TOKENS bound exists for). Here the token counts are right there in
+  // the body and were being thrown away — so this fact is fully `metered`, not
+  // `unknown`.
+  it('records a FULLY METERED spend fact when a 2xx parses but carries no completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 11, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'metered',
+      inputTokens: 11,
+      outputTokens: 4096,
+    });
   });
 });
 
