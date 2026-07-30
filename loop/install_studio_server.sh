@@ -475,7 +475,12 @@ acquire_lock() {
 # avoids one level up.
 take_lock() {
   if mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s\n' "$$" >"$LOCK_DIR/owner"
+    # The owner stamp is what makes `release_lock` safe, so a lock we could not
+    # stamp is not a lock we may hold: an unwritten owner file never matches
+    # `$$`, so `release_lock` would decline to remove it and it would leak until
+    # the 60-minute steal window. Give it back and report a real failure, the
+    # same way the `built.sha` stamp refuses to proceed on an unchecked write.
+    printf '%s\n' "$$" >"$LOCK_DIR/owner" || { rm -rf "$LOCK_DIR"; return 2; }
     return 0
   fi
   [ -d "$LOCK_DIR" ] || return 2
