@@ -155,6 +155,17 @@ Three independent bounds, checked before every fire, each with its own test in
   served by the supervised `com.autonomy.studio-server` unit on 8788 rather than by whatever
   `pnpm dev` happened to be up, so an UNREADABLE from source 3 is finally a measurement of the
   reader instead of a measurement of "no server".
+- **Source 2 is poll-throttled** (`QUOTA_POLL_MIN_INTERVAL`, 60s; #777) — it is a fresh `python3`
+  process per call, so it cannot cache in memory and nothing gave it a cross-process throttle. With
+  `quota_pct` running up to three times per iteration plus once per `AUTH_LONG_BLOCK` retry while
+  blocked, and source 1 gone after C3, it could self-inflict the very 429 that then reads as
+  UNREADABLE. It now answers from a poll memo (`.last_quota_poll`, gitignored) inside that interval,
+  **memoises failures too** (the correct response to a 429 is to poll *less* — the same reason
+  studio throttles failed reads, #770), and **drops the memo after every fire**, so a memo can only
+  ever serve reads about the fire it was taken for. 60s matches what the other two sources already
+  do. `QUOTA_POLL_MIN_INTERVAL=0` disables it. This is a *poll* throttle, not a fallback reading:
+  the long-window `.last_quota` cache below is still the only sanctioned use of an old reading, and
+  is still refuse-only.
 - **What cutover C3 does to that order** — parking `bin/ lib/ tests/ templates/ start` (#410)
   removes source 1 *and*, before #764, removed source 2 as well, because the reader lived in the
   engine's `lib/`. #764 relocated it to `loop/claude_usage.py`, so the surviving pair is

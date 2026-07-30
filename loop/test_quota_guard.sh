@@ -151,12 +151,33 @@ EOS
   # CANNOT satisfy it: this is a script with no importable reader function at all.
   # That mirrors the care the previous stub took for the same reason -- a stub a
   # broken caller can still satisfy lets the break look correct (#766).
+  # Both reader stubs APPEND one line to $READER_CALLS per invocation, which makes
+  # "how often was source 2 actually POLLED" an observable. It has to be, because
+  # #777's whole subject is the POLL RATE: every source-2 property up to now was
+  # about the VALUE, so the suite could not distinguish one poll from ten and the
+  # throttle would have been untestable (and its absence, which is what #777
+  # reported, was likewise invisible).
+  #
+  # Optional FALLBACK_UTIL_AFTER=<percent> makes the reader answer differently from
+  # its SECOND call on, i.e. "the window moved while a fire was running". Mirrors
+  # the dashboard arm's CURL_UTIL_AFTER/CURL_SWITCH_CALLS rather than inventing a
+  # second idiom; the counter is the call log itself, so there is one piece of
+  # state, not two.
   for rc_a in "$@"; do
     case "$rc_a" in
       FALLBACK_UTIL=*)
         cat >"$tmp/infra/claude_usage.py" <<EOS
-import sys
-print(${rc_a#FALLBACK_UTIL=})
+import os, sys
+p = os.environ["READER_CALLS"]
+try:
+    with open(p) as f:
+        n = sum(1 for _ in f)
+except IOError:
+    n = 0
+with open(p, "a") as f:
+    f.write("1\n")
+after = os.environ.get("FALLBACK_UTIL_AFTER", "")
+print(int(after) if after and n >= 1 else ${rc_a#FALLBACK_UTIL=})
 sys.exit(0)
 EOS
         ;;
@@ -165,11 +186,17 @@ EOS
         # reader that printed 0 here would silently disarm the guard, so the
         # distinction has to be exercisable.
         cat >"$tmp/infra/claude_usage.py" <<'EOS'
-import sys
+import os, sys
+with open(os.environ["READER_CALLS"], "a") as f:
+    f.write("1\n")
 sys.stderr.write("claude_usage: 7-day utilization unreadable\n")
 sys.exit(1)
 EOS
         ;;
+      # Optional SEED_POLL_MEMO=<file contents> pre-seeds the source-2 poll memo
+      # (#777), so "a memo that is stale / malformed / from the future" is reachable
+      # without a clock stub -- the same trick SEED_CACHE uses for .last_quota.
+      SEED_POLL_MEMO=*) printf '%s\n' "${rc_a#SEED_POLL_MEMO=}" >"$tmp/infra/.last_quota_poll" ;;
     esac
   done
   printf '#!/bin/bash\necho fired >>"%s/fires.txt"\nexit 0\n' "$tmp" >"$tmp/infra/run.sh"
@@ -193,7 +220,7 @@ EOS
   # broke. Cases that do NOT set FALLBACK_UTIL write no reader at all, so they
   # still exercise "no fallback available".
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
-    STUDIO_POLL_MARKER="$tmp/studio_polled" \
+    STUDIO_POLL_MARKER="$tmp/studio_polled" READER_CALLS="$tmp/readercalls" \
     BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
@@ -202,6 +229,13 @@ EOS
 }
 fires_of()  { echo "${1%%|*}"; }
 logof()     { echo "${1##*|}"; }
+# How many times source 2 (the loop's own reader) was actually POLLED in that run.
+# $1 = the log path, whose dirname is the run's tmp dir (same trick the studio poll
+# marker and the cache assertions use).
+readerpolls() {
+  rp_f="$(dirname "$1")/readercalls"
+  if [ -f "$rp_f" ]; then wc -l <"$rp_f" | tr -d ' '; else echo 0; fi
+}
 
 # --- 1. over the threshold: refuse to fire AT ALL ----------------------------
 r="$(run_case 0.97 QUOTA_STOP_PCT=80)"
@@ -559,6 +593,135 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 \
 check "an out-of-range reading from the LOOP READER -> zero fires" "0" "$(fires_of "$r")"
 check "an out-of-range reader value is UNREADABLE, never 'quota ok'" "1" \
   "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 33-34. the SOURCE-2 POLL THROTTLE (#777) --------------------------------
+# Source 2 is a fresh `python3` process per call, so it has no in-memory cache and
+# nothing gave it a cross-process one. `quota_pct` is called up to three times per
+# iteration (pre-auth gate, post-block gate, post-gate-wait gate) plus once per
+# AUTH_LONG_BLOCK retry while blocked -- and post-cutover-C3 the dashboard is gone,
+# so EVERY one of those becomes a direct poll of a shared, rate-limited upstream
+# that 429s under exactly that treatment. The guard could exhaust its own budget
+# and then be unable to read the number it exists to read.
+#
+# ONE run pins BOTH halves of the fix, and they pull in opposite directions -- which
+# is why neither is provable alone:
+#   * the throttle must REDUCE the polls (33), and
+#   * a throttled read must still SERVE the memoised reading (34).
+# `QUOTA_UNKNOWN_FIRES=0` is what makes (34) observable: if a throttled read served
+# "" (UNREADABLE) instead of the memo -- which is what #777's own suggested fix
+# said to do -- the post-block gate would go blind, the refuse-only cache would not
+# refuse a 10% reading, the blind allowance is 0, and the driver would STOP with
+# zero fires. So "serve nothing in-window" scores 0 fires here and the memo scores 1.
+#
+# The auth block is not decoration: with no block there is exactly ONE gate per
+# iteration, so the poll count cannot tell a throttle from its absence. Six failures
+# (= AUTH_LONG_BLOCK) give this iteration three quota_pct calls: the pre-auth gate,
+# the in-block reading at retry 6, and the post-block re-check.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1)"
+check "three quota reads in one iteration cost ONE source-2 poll" "1" \
+  "$(readerpolls "$(logof "$r")")"
+check "a throttled read still SERVES the reading (never a blind fire)" "1" "$(fires_of "$r")"
+check "a throttled read is not reported as UNREADABLE" "1" \
+  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 38. ...and the reduction above is caused by the THROTTLE, nothing else ---
+# The same run with the throttle switched off must poll every time. This is the
+# in-suite mutation check for case 33: without it, "1 poll" could be some unrelated
+# short-circuit and the assertion would pass with no throttle in the code at all.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1 QUOTA_POLL_MIN_INTERVAL=0)"
+check "QUOTA_POLL_MIN_INTERVAL=0 disables the throttle -> three polls" "3" \
+  "$(readerpolls "$(logof "$r")")"
+# ...and the interval is checked EXPLICITLY before the memo is read, not left to the
+# age comparison inside quota_stamped_read. That comparison fails OPEN on a bound
+# `test` cannot parse: `[ 42 -gt abc ]` returns 2, which is neither branch, so the
+# record falls through looking FRESH no matter how old it is. Seeded with a
+# two-hour-old refusing 97% against a live reader answering 10%: the explicit check
+# makes an unparseable interval over-POLL (fire), its absence makes it over-TRUST
+# (STOP on a memo from another era). The one polarity this guard may never have.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      QUOTA_POLL_MIN_INTERVAL=abc "SEED_POLL_MEMO=$((now - 7200)) 97")"
+check "an unparseable interval over-polls, never over-trusts a stale memo" "1" \
+  "$(fires_of "$r")"
+
+# --- 35. a FAILED poll is memoised too, so a 429 cannot become a storm --------
+# The failure mode #777 is about is self-inflicted: the correct response to a 429
+# is to poll LESS, so remembering "that failed" is the load-bearing half. Studio
+# throttles failed reads for the same reason (#770). A memo written only on success
+# leaves the storm intact -- three polls here instead of one.
+#
+# The fallthrough must survive it: source 2 saying "unreadable from memory" has to
+# reach studio exactly as a live failure does, or the throttle would silently delete
+# source 3.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UNREADABLE=1 \
+      AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1)"
+check "a FAILED poll is remembered -> one poll, not three" "1" "$(readerpolls "$(logof "$r")")"
+check "a memoised FAILURE still falls through to studio" "0" \
+  "$([ -f "$(dirname "$(logof "$r")")/studio_polled" ] && echo 0 || echo 1)"
+
+# --- 39. the memo is DROPPED after a fire, so every fire is gated on a FRESH read
+# The one real cost of memoising a reading is that a stale LOW figure could permit a
+# fire the live figure would refuse, and fires are where the spend actually happens.
+# Bounding it by age alone would be an argument; dropping the memo when a fire ends
+# makes it structural: within an iteration nothing spends, so the memo can only ever
+# serve reads about the SAME fire.
+#
+# The reader answers 10% first and 97% afterwards -- the window moving during fire 1,
+# which is precisely what MAX_FIRES=3 exists to keep spending into. Correct: fire 1,
+# memo dropped, fresh poll reads 97, STOP -- one fire. A memo that survived the fire:
+# three fires on a reading taken before the first one.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=3 QUOTA_UNKNOWN_FIRES=0 \
+      FALLBACK_UTIL=10 FALLBACK_UTIL_AFTER=97)"
+check "the memo does not outlive a fire -> the moved window stops fire 2" "1" \
+  "$(fires_of "$r")"
+check "the post-fire read is a REAL poll, and it refuses" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 36. an EXPIRED memo is re-polled ----------------------------------------
+# A memo is a poll THROTTLE, not the last-known-quota cache: `.last_quota` is
+# trusted for 24h in the refuse-only direction, a memo for QUOTA_POLL_MIN_INTERVAL
+# in both. Seeded with a refusing 97% at an epoch well outside the window against a
+# live reader answering 10%: if age is not checked the run STOPs on a memo from
+# another era, which is the "stale-but-plausible reading" fail-open the relocated
+# reader deliberately has no grace window for.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      "SEED_POLL_MEMO=$((now - 7200)) 97")"
+check "an expired memo is re-polled, not served" "1" "$(fires_of "$r")"
+check "the fresh poll is what reaches the log" "0" \
+  "$(grep -q 'quota source: loop (7-day utilization 10%)' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 37. a MALFORMED memo is not a reading -----------------------------------
+# The memo file is external state on disk, so its parse is a boundary, and it shares
+# `quota_stamped_read` with `.last_quota` -- deliberately, because each rejection here
+# was a REAL bug in the sibling parser and two copies of that parse would drift.
+#
+# Both cases seed a memo of 97 against a live reader answering 10 and STOP_PCT=80, so
+# the two outcomes are opposite: rejecting the memo polls and FIRES; serving it (or
+# serving something `test` cannot compare) does not.
+#
+# The value case is the fail-OPEN one, and its shape is case 32's: on bash 3.2
+# `[ abc -ge 80 ]` returns 2, which is NEITHER branch, so `quota_gate`'s `if` takes
+# the else, logs "quota ok" and FIRES. So the assertion is inverted from what it
+# looks like -- 1 fire is the BUG here and 0 is correct, which is why the refusing
+# 97 is what the fresh poll must produce. Mutation-checked: dropping `quota_sane`
+# from quota_poll_memo_read flips both assertions.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=97 \
+      "SEED_POLL_MEMO=$now abc")"
+check "a memo whose value is not a percent is not served" "0" "$(fires_of "$r")"
+check "an unusable memo value never reaches the >= comparison as 'quota ok'" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UTIL=10 \
+      "SEED_POLL_MEMO=$((now + 7200)) 97")"
+check "a memo stamped in the FUTURE is not served (clock skew)" "1" "$(fires_of "$r")"
+# NOT tested here: a memo line with NO separator. The degrade (`%% *` and `##* ` both
+# yielding the whole string) makes the value a 10-digit epoch, which `quota_sane`
+# rejects on length -- so the memo path re-polls whether or not the separator check
+# exists, and an assertion on it would have been vacuous. It is pinned where it IS
+# observable: case 20, on `.last_quota`, whose value domain accepts any digits. That
+# is the same `quota_stamped_read` line now, so the property is covered once rather
+# than asserted twice and proved once. (Verified by mutation: deleting the separator
+# check leaves these cases green and turns case 20 red.)
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

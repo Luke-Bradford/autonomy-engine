@@ -19,10 +19,13 @@ __pycache__/
 
 # Loop control-plane RUNTIME state. The scripts in loop/ are tracked; what they
 # WRITE is not. logs/ alone is ~546MB of per-fire stream-json (one file per fire,
-# multi-MB each) and .last_quota is a per-machine cache of the last readable
-# 7-day utilization reading. Anchored to the repo root.
+# multi-MB each), .last_quota is a per-machine cache of the last readable
+# 7-day utilization reading, and .last_quota_poll is the source-2 poll throttle's
+# memo (#777) -- both per-machine, both meaningless in another checkout.
+# Anchored to the repo root.
 /loop/logs/
 /loop/.last_quota
+/loop/.last_quota_poll
 
 # Page snapshots / traces the playwright MCP server writes into its launch CWD.
 # Unattended this is git-VISIBLE dirt: the supervisor's "tree clean on
