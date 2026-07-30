@@ -107,6 +107,7 @@ describe('openaiAdapter.runActivity', () => {
       type: 'failed',
       kind: 'permanent',
       error: `openai_api returned a 2xx response with no completion (${reason})`,
+      spendFact: { provider: 'openai_api', model: 'gpt-4o', meteringStatus: 'unknown' },
     });
     expect(captured(events).capture.completion).toBeUndefined();
   });
@@ -858,5 +859,35 @@ describe('openaiAdapter maxTokens wire field (#739)', () => {
     expect(Array.isArray(body.tools)).toBe(true);
     expect(body.max_completion_tokens).toBe(256);
     expect(body).not.toHaveProperty('max_tokens');
+  });
+});
+
+// #725 — the timeout door. `openai.test.ts` had NO timeout coverage at all before
+// this ticket. It bounds a hung provider AND pins that the abort is deliberately
+// not counted as billed spend (see `llmPost`: a timeout cannot distinguish a long
+// generation from a dropped SYN, so marking it would invent a cost gap).
+describe('openaiAdapter timeout → NO spend fact (#725)', () => {
+  it('bounds a hung provider and records NO spend fact (a timeout cannot prove billing)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          (init as RequestInit).signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+    const events = await drain(
+      openaiAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), 'sk'),
+    );
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
+    // #725 — a timeout is deliberately UNMARKED: it cannot tell a >120s generation
+    // from a dropped SYN. See `llmPost` for the measurement.
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  it('does NOT record a spend fact for a 401 (nothing was generated)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(401, { error: 'nope' }));
+    const events = await drain(openaiAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).spendFact).toBeUndefined();
   });
 });

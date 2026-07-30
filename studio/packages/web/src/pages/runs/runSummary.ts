@@ -50,8 +50,14 @@ export function runStreamUrl(
  * doc-free. A call node is in fact the one park this status CANNOT show: the
  * engine parks it via a `startChild` COMMAND and appends no event until
  * `call.returned`, so there is nothing in the log to fold and the node stays
- * absent from the table for the whole child run (#735 — it needs a new engine
+ * absent from the table for the whole child run (#796 — it needs a new engine
  * event, not a projection change).
+ *
+ * That window is one synchronous step TODAY, not a real blind spot: `call_pipeline`
+ * does not execute yet (the executor's `startChild` branch yields an immediate
+ * `call.returned{failure}` — P3b), so there is no child run to be blind to. #796
+ * owns the spawn seam AND the `call.started` append it then owes; #735, which
+ * reported the blind spot alone, closed into it.
  *
  * Both are healthy, in-progress states. They are deliberately distinct from
  * `running`: `running` means the node is executing, and a held/parked node is

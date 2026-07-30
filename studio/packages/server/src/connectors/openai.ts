@@ -272,6 +272,7 @@ export const openaiAdapter: ConnectorAdapter = {
         const res = await postJsonAndParse(
           ctx,
           'openai_api',
+          model,
           url,
           headers,
           buildBody(wireMessages(msgTurns)),
@@ -334,6 +335,7 @@ export const openaiAdapter: ConnectorAdapter = {
           const res = await postJsonAndParse(
             ctx,
             'openai_api',
+            model,
             url,
             headers,
             buildBody(conv, { tools: wireTools, choice }),
@@ -379,6 +381,7 @@ export const openaiAdapter: ConnectorAdapter = {
                   error:
                     'openai_api returned a tool call without a string id — ' +
                     'malformed tool-call response',
+                  spendFact: usage,
                 },
                 capture: captureOf(),
               };
@@ -404,14 +407,17 @@ export const openaiAdapter: ConnectorAdapter = {
           if (!Array.isArray(choices)) {
             return {
               type: 'terminal',
-              event: noCompletionFailure('openai_api', 'absent_content'),
+              event: { ...noCompletionFailure('openai_api', 'absent_content'), spendFact: usage },
               capture: captureOf(),
             };
           }
           if (choices.length === 0) {
             return {
               type: 'terminal',
-              event: noCompletionFailure('openai_api', 'empty_completion_set'),
+              event: {
+                ...noCompletionFailure('openai_api', 'empty_completion_set'),
+                spendFact: usage,
+              },
               capture: captureOf(),
             };
           }
@@ -419,7 +425,7 @@ export const openaiAdapter: ConnectorAdapter = {
           if (typeof text !== 'string') {
             return {
               type: 'terminal',
-              event: noCompletionFailure('openai_api', 'malformed_block'),
+              event: { ...noCompletionFailure('openai_api', 'malformed_block'), spendFact: usage },
               capture: captureOf(),
             };
           }
@@ -446,6 +452,7 @@ export const openaiAdapter: ConnectorAdapter = {
     const result = await postJsonAndParse(
       ctx,
       'openai_api',
+      model,
       url,
       headers,
       buildBody(wireMessages(turns)),
@@ -478,19 +485,28 @@ export const openaiAdapter: ConnectorAdapter = {
     const choices = (result.json as { choices?: unknown }).choices;
     if (!Array.isArray(choices)) {
       yield captureOf();
-      yield noCompletionFailure('openai_api', 'absent_content');
+      yield {
+        ...noCompletionFailure('openai_api', 'absent_content'),
+        spendFact: usageOf(result.json),
+      };
       return;
     }
     if (choices.length === 0) {
       yield captureOf();
-      yield noCompletionFailure('openai_api', 'empty_completion_set');
+      yield {
+        ...noCompletionFailure('openai_api', 'empty_completion_set'),
+        spendFact: usageOf(result.json),
+      };
       return;
     }
     const first = choices[0];
     const text = (first as { message?: { content?: unknown } } | undefined)?.message?.content;
     if (typeof text !== 'string') {
       yield captureOf();
-      yield noCompletionFailure('openai_api', 'malformed_block');
+      yield {
+        ...noCompletionFailure('openai_api', 'malformed_block'),
+        spendFact: usageOf(result.json),
+      };
       return;
     }
     // #2 L2 — capture the metering fact before the terminal event.

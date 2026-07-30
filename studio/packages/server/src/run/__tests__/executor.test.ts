@@ -539,6 +539,69 @@ describe('createExecutor — activity.metered price fields (#2 L5 cost)', () => 
     ) as unknown as Record<string, unknown>;
   }
 
+  // #725 — a failure that abandoned or discarded a BILLED exchange mints an
+  // `activity.metered` of its own, ordered BEFORE the terminal `node.failed`. The
+  // ORDER is the assertion that matters: `activity.metered` is folded inert and L6
+  // sums the log, so an event landing after the terminal is a cost the projection
+  // may never attribute to the attempt that incurred it.
+  it('mints activity.metered from a failure spendFact, ordered BEFORE node.failed', async () => {
+    const { db } = freshDb();
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    // A SYNTHETIC shape: `spendFact` lives on the shared `failed` ActivityEvent, so
+    // any adapter can set it, but no real `http` adapter reports an anthropic model.
+    // That is deliberate here — this test exercises the executor's plumbing, which is
+    // adapter-agnostic; the real per-adapter shapes are pinned in the connector tests.
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'failed',
+        kind: 'permanent',
+        error: 'provider returned a non-JSON response body',
+        spendFact: {
+          provider: 'anthropic_api',
+          model: 'claude-opus-4-8',
+          meteringStatus: 'unknown',
+        },
+      } satisfies ActivityEvent;
+    });
+    await startRun(deps(db, { adapters }), run);
+    const types = loadEngineEvents(db, run.id).map((e) => e.type);
+    // Both assertions are needed and neither is redundant: `toContain` proves the
+    // event exists (without it the `indexOf` compare is vacuously true at -1 < n),
+    // and the compare proves the ORDER. Do not "simplify" the pair to one line.
+    expect(types).toContain('activity.metered');
+    expect(types.indexOf('activity.metered')).toBeLessThan(types.indexOf('node.failed'));
+    const metered = loadEngineEvents(db, run.id).find(
+      (e) => e.type === 'activity.metered',
+    ) as unknown as Record<string, unknown>;
+    // The (provider, model) is priced, so the UNIT prices land — but with no token
+    // counts recoverable from an aborted exchange there is no trustworthy total, so
+    // `costEstimate` stays absent (never a manufactured zero).
+    expect(metered).toMatchObject({
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'unknown',
+      inUnitPrice: 5,
+      outUnitPrice: 25,
+    });
+    expect(metered).not.toHaveProperty('costEstimate');
+  });
+
+  // #725 — the negative twin: an ordinary failure with no spend fact mints NO
+  // metering event. Without this, marking every failure would look identical.
+  it('mints NO metered event for a failure carrying no spendFact', async () => {
+    const { db } = freshDb();
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield { type: 'failed', kind: 'permanent', error: 'HTTP 401' } satisfies ActivityEvent;
+    });
+    await startRun(deps(db, { adapters }), run);
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('activity.metered');
+  });
+
   it('stamps unit prices + costEstimate for a priced model with a metered token pair', async () => {
     const metered = await meteredOf(
       freshDb().db,

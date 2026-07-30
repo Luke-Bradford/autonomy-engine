@@ -148,6 +148,11 @@ export interface ToolCallTelemetry {
  * engine events (`node.output` / `activity.metered` / `activity.captured` /
  * `activity.agentTelemetry` / `activity.toolCalled` / `node.succeeded` /
  * `node.failed`).
+ *
+ * ONE terminal can mint TWO engine events (#725): a `failed` carrying a
+ * `spendFact` yields an `activity.metered` BEFORE its `node.failed`, because a
+ * failure that abandoned a billed exchange is itself a metering fact and the
+ * paths that discover it cannot yield an event of their own.
  */
 export type ActivityEvent =
   | { type: 'output'; name: string; value: unknown }
@@ -169,6 +174,49 @@ export type ActivityEvent =
        * for any failure the engine will not retry.
        */
       retryAfterSeconds?: number;
+      /**
+       * #2 L2 / #725 — the metering FACT for a provider exchange this failure
+       * DISCARDED. The executor mints an `activity.metered` from it, ordered before
+       * the `node.failed` (the same slot relative to the TERMINAL that the success
+       * path's `metered` holds; on the text/tool paths a `captured` event sits
+       * between them, so it is not the same slot relative to `captured`). This is
+       * what makes "an `activity.metered` per provider response, including
+       * failed-but-billed calls" (`llm-shared.ts`) hold on the failure paths of the
+       * three HTTP LLM adapters.
+       *
+       * It does NOT yet hold for `agent_cli`: a killed or non-zero-exit `agent_task`
+       * burned subscription quota and still emits nothing (`agent.ts` meters on exit
+       * 0 only). Cost-harmless — it would be `unpriced`, which never flips
+       * `complete` — but `responseCount` undercounts. That door is #797, and it can
+       * reuse this field.
+       *
+       * It exists because the two doors below cannot yield the event themselves:
+       * `postJsonAndParse` is a plain function, and the parsed-but-no-completion
+       * terminals are built by `noCompletionFailure` inside driver closures whose
+       * outcome type carries only the event. Riding the failure means every driver
+       * (`runStructuredWithRepair`, `runTextWithTools`, the plain text paths)
+       * relays it VERBATIM with no change of its own — the same reason
+       * `ToolRoundOutcome.terminal.capture` rides its terminal.
+       *
+       * SET ONLY WHERE A RESPONSE DEMONSTRABLY CAME BACK — i.e. an exchange
+       * completed, so the provider billed for it:
+       * - a 2xx that PARSED but carried no usable completion (the truncation case
+       *   `DEFAULT_MAX_TOKENS` is pinned against) — the token counts are right there
+       *   in the body and were being thrown away → a FULL `metered` fact.
+       * - an unparseable 2xx — a body arrived but we could not read it, so the
+       *   counts are lost → `meteringStatus:'unknown'`.
+       *
+       * ABSENT means "we cannot show that anything was billed", and that is
+       * load-bearing rather than lazy: marking a call that never reached the
+       * provider manufactures a cost GAP for spend that never happened, which is the
+       * mirror image of the hole this closes. So a 4xx, a malformed-request
+       * `TypeError`, a cancel, a connect-level network error — and, deliberately, a
+       * TIMEOUT — are all unmarked. The timeout is #725's headline case and the one
+       * that hurts to leave: see `llmPost` for the measurement showing a timeout
+       * cannot distinguish a >120s generation from a dropped SYN, and why guessing
+       * is worse than the gap.
+       */
+      spendFact?: LlmUsage;
     };
 
 export interface ConnectorAdapter {

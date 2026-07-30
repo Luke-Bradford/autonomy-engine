@@ -114,10 +114,21 @@ describe('anthropicAdapter.runActivity', () => {
     const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk-ant-key'));
     // #2 L9a — a capture (completion ABSENT) precedes the terminal failure.
     expect(events.map((e) => e.type)).toEqual(['captured', 'failed']);
+    // #725 — a 2xx BILLED, so the failure carries the metering fact even though the
+    // response was unusable. These fixtures omit `usage` entirely, so the fact is
+    // `unknown` (no counts to keep); the truncation case below, which reports real
+    // counts, keeps them. Asserted with `toEqual` on purpose: the exact shape of a
+    // failure event is the contract, and a spend fact appearing/vanishing silently
+    // is precisely the regression this ticket is about.
     expect(failed(events)).toEqual({
       type: 'failed',
       kind: 'permanent',
       error: `anthropic_api returned a 2xx response with no completion (${reason})`,
+      spendFact: {
+        provider: 'anthropic_api',
+        model: 'claude-opus-5',
+        meteringStatus: 'unknown',
+      },
     });
     expect(captured(events).capture.completion).toBeUndefined();
   });
@@ -194,10 +205,11 @@ describe('anthropicAdapter.runActivity', () => {
   // `empty_completion_set` failure.
   //
   // Too HIGH and it outruns this connector's own 120s non-streaming timeout
-  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path emits NO `activity.metered` event
-  // even though the provider generated and billed the tokens, and classifies
-  // `transient`, so the engine retries and buys another unmetered generation.
-  // That is the very telemetry hole this ticket closed, via a different door.
+  // (`DEFAULT_LLM_TIMEOUT_MS`): the abort path bills tokens it can never count, and
+  // classifies `transient`, so the engine retries and buys another one. #725 did NOT
+  // close that door — a timeout cannot prove a request was ever dispatched, so it
+  // mints no metering event rather than invent spend — which makes THIS BOUND the
+  // only thing holding it shut.
   //
   // So this is an upper AND lower bound, not a preference. Anyone moving it
   // should read the `DEFAULT_MAX_TOKENS` block and #725 first.
@@ -379,6 +391,75 @@ describe('anthropicAdapter.runActivity', () => {
     );
     expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
     expect(JSON.stringify(events)).toContain('timed out');
+    // #725 — a timeout is deliberately NOT marked as billed, and this pins that
+    // decision so nobody "completes" the ticket by flipping it without the evidence.
+    // A timeout cannot distinguish a >120s generation (billed) from a dropped SYN
+    // (nothing billed) — measured against real undici in `llmPost`'s comment — and
+    // since DEFAULT_MAX_TOKENS is pinned so a full generation FITS in the timeout,
+    // the connect-phase case dominates. Marking would flip an unreachable provider's
+    // pipeline cost to permanently INCOMPLETE for spend that never happened.
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  // #725 — the NEGATIVES. These are the subtlest half of the fix: a marker on a
+  // call that never reached the provider would manufacture a cost gap for spend
+  // that provably did not happen — the mirror image of the hole being closed, and
+  // the same fail direction `meterUsage`/the price table already hold to.
+  it('does NOT record a spend fact for a bad-URL TypeError (never dispatched)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Invalid URL'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  it('does NOT record a spend fact for a network error (no exchange occurred)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('transient');
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  it('does NOT record a spend fact for a 401 (the provider produced nothing)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(401, { error: 'bad key' }));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).spendFact).toBeUndefined();
+  });
+
+  // #725 — the UNAMBIGUOUS billed case: a 2xx means the provider produced and
+  // billed a completion. We simply could not parse it, so the counts are lost but
+  // the spend is certain.
+  it('records an unknown spend fact for an unparseable 2xx body', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json at all'));
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'unknown',
+    });
+  });
+
+  // #725 — the HIGHEST-fidelity door, and the likelier one: a 2xx that PARSED but
+  // carried no usable completion (the `max_tokens`/thinking-truncation case the
+  // DEFAULT_MAX_TOKENS bound exists for). Here the token counts are right there in
+  // the body and were being thrown away — so this fact is fully `metered`, not
+  // `unknown`.
+  it('records a FULLY METERED spend fact when a 2xx parses but carries no completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 11, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(ctx(), 'sk'));
+    expect(failed(events).kind).toBe('permanent');
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'metered',
+      inputTokens: 11,
+      outputTokens: 4096,
+    });
   });
 });
 
@@ -1052,6 +1133,58 @@ describe('anthropicAdapter — local tools (#2 L10a)', () => {
     // not as an opaque provider 400 on a '' tool_use_id.
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(events.filter((e) => e.type === 'captured')).toHaveLength(1);
+    // #725 — this 2xx BILLED (usage is right there in the body) and the exchange is
+    // discarded, so the terminal carries the full metering fact. It also pins the
+    // VERBATIM RELAY the whole design rests on: this terminal is built inside a
+    // `runTextWithTools` `doCall` closure, and the driver must pass it through
+    // unchanged. A refactor that rebuilds the terminal drops the spend fact silently,
+    // and the only record of a billed exchange with it.
+    if (last.type === 'failed')
+      expect(last.spendFact).toEqual({
+        provider: 'anthropic_api',
+        model: 'claude-opus-5',
+        meteringStatus: 'metered',
+        inputTokens: 3,
+        outputTokens: 2,
+      });
+  });
+
+  // #725 — the tool-loop no-completion door, with REAL counts. The plain-text
+  // equivalent is covered above; this is the same fact reaching the executor through
+  // a different driver (`runTextWithTools` rather than the adapter's own generator).
+  it('records a FULLY METERED spend fact for a tool-round 2xx with no completion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      fakeResponse(200, {
+        content: [],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 9, output_tokens: 4096 },
+      }),
+    );
+    const events = await drain(anthropicAdapter.runActivity(toolCtx(), 'sk'));
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'metered',
+      inputTokens: 9,
+      outputTokens: 4096,
+    });
+  });
+
+  // #725 — the unparseable-2xx door reaching the executor through the STRUCTURED
+  // driver (`runStructuredWithRepair`), which relays a `terminal` outcome verbatim.
+  // A non-JSON body is not a structured-conformance problem, so it terminates rather
+  // than repairing — and the fact must survive that relay too.
+  it('relays an unknown spend fact through the structured-repair driver', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, 'not json'));
+    const events = await drain(
+      anthropicAdapter.runActivity(ctx({ input: STRUCTURED_INPUT }), 'sk'),
+    );
+    expect(failed(events).spendFact).toEqual({
+      provider: 'anthropic_api',
+      model: 'claude-opus-5',
+      meteringStatus: 'unknown',
+    });
   });
 
   it('fails permanent when the model requests a second tool round-trip', async () => {

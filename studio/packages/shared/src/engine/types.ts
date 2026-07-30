@@ -868,9 +868,15 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
      * #2 L2 — a metering FACT captured PER provider response: the token usage of
      * one `llm_call` (anthropic/openai/ollama) dispatch, stamped into the log at
      * dispatch time and NEVER recomputed (replay folds the fact, it does not re-
-     * call the model — spec #2's replay invariant). Emitted by the adapter as a
-     * non-terminal `metered` ActivityEvent (mirroring `node.output`) which the
-     * executor maps here, ordered BEFORE the terminal `node.succeeded`.
+     * call the model — spec #2's replay invariant). Reaches the log by TWO doors,
+     * both mapped by the executor and both ordered BEFORE the terminal
+     * (`node.succeeded` or `node.failed`):
+     *   1. the adapter's own non-terminal `metered` ActivityEvent (mirroring
+     *      `node.output`) — the completed-response door;
+     *   2. #725 — a terminal `failed.spendFact`, for an exchange the provider
+     *      billed but the adapter had to discard (a 2xx that parsed with no usable
+     *      completion, carrying its REAL counts; or an unparseable 2xx, `unknown`).
+     * So this event counts BILLED EXCHANGES, not successful responses.
      *
      * OBSERVABILITY ONLY — the reducer folds it INERT (like `node.output`): usage
      * is telemetry, not a typed `${}`-addressable output, so it never enters

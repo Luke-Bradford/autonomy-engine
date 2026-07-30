@@ -129,6 +129,7 @@ describe('ollamaAdapter.runActivity', () => {
       type: 'failed',
       kind: 'permanent',
       error: `ollama returned a 2xx response with no completion (${reason})`,
+      spendFact: { provider: 'ollama', model: 'llama3', meteringStatus: 'unknown' },
     });
     expect(captured(events).capture.completion).toBeUndefined();
   });
@@ -495,5 +496,29 @@ describe('ollamaAdapter — local tools (#2 L10a)', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
     await drain(ollamaAdapter.runActivity(toolCtx({ toolChoice: 'none' }), null));
     expect(requestBody(fetchSpy, 0)).not.toHaveProperty('tools');
+  });
+});
+
+// #725 — the timeout door. As with openai, `ollama.test.ts` carried no timeout
+// coverage before this ticket. A timeout is deliberately not counted as billed
+// spend; for a LOCAL provider that is doubly true, since ollama is absent from the
+// built-in price table and bills no money at all.
+describe('ollamaAdapter timeout → NO spend fact (#725)', () => {
+  it('bounds a hung provider and records NO spend fact (a timeout cannot prove billing)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          (init as RequestInit).signal?.addEventListener('abort', () => {
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+        }),
+    );
+    const events = await drain(
+      ollamaAdapter.runActivity(ctx({ connectionConfig: { timeoutMs: 10 } }), null),
+    );
+    expect(failed(events)).toMatchObject({ type: 'failed', kind: 'transient' });
+    // #725 — a timeout is deliberately UNMARKED: it cannot tell a >120s generation
+    // from a dropped SYN. See `llmPost` for the measurement.
+    expect(failed(events).spendFact).toBeUndefined();
   });
 });

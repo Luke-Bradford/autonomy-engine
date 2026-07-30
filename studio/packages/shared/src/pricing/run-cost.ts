@@ -46,7 +46,19 @@ export interface RunCost {
    * `costUnknownResponseCount`, never summed as 0.
    */
   totalCostEstimate: number;
-  /** Total `activity.metered` events (billed provider responses) folded. */
+  /**
+   * Total `activity.metered` events folded — BILLED EXCHANGES, not successful
+   * responses. Since #725 a FAILURE that discarded a billed exchange mints one too:
+   * a 2xx that parsed with no usable completion (a truncated response — full real
+   * counts, so the run stays cost-`complete`), and an unparseable 2xx (`unknown`,
+   * which flips `complete:false`). Both are retry-eligible or fail permanently, and
+   * where the engine retries, EACH attempt adds another response here — the
+   * intended reading, since the money was spent each time.
+   *
+   * A timed-out call is deliberately NOT counted, even though it may well have been
+   * billed: a timeout cannot distinguish a long generation from a request that never
+   * reached the provider, so counting it would invent spend. See `llmPost` and #725.
+   */
   responseCount: number;
   /** Responses carrying a `costEstimate` (price resolved AND both token counts present). */
   pricedResponseCount: number;
@@ -103,7 +115,11 @@ export interface PipelineCostAggregates {
   runCount: number;
   /** Runs with at least one cost-unknown metered response. */
   incompleteRunCount: number;
-  /** Total `activity.metered` responses folded. */
+  /**
+   * Total `activity.metered` events folded — BILLED EXCHANGES, not completions.
+   * The SQL twin of `RunCost.responseCount`; see its doc for why #725 makes a
+   * discarded-but-billed exchange count too.
+   */
   responseCount: number;
   /** Responses carrying a `costEstimate` (present — a genuine `0` counts, an absent key does not). */
   pricedResponseCount: number;
