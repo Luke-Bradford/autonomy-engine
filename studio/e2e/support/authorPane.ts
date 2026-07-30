@@ -21,6 +21,20 @@ export function tree(page: Page) {
   return pane(page).getByRole('list', { name: 'Pipelines' });
 }
 
+/**
+ * The pane's LOAD-failure banner — the one with a Retry beside it.
+ *
+ * Scoped by `:not([role=alert])` deliberately: `.factory-resources__error` is
+ * worn by TWO elements, this one and the ACTION error (a failed create/rename/
+ * delete), which is an `alert`. An unscoped locator is a strict-mode violation
+ * the moment both are up, and — worse for a recovery assertion — a
+ * `toHaveCount(0)` on it would mean "no error of either kind", so an unrelated
+ * failed mutation could sink an assertion about the LOAD having recovered.
+ */
+export function loadBanner(page: Page) {
+  return pane(page).locator('.factory-resources__error:not([role="alert"])');
+}
+
 /** Open a row's `⋯` menu. It is revealed on hover, so hover first. */
 export async function openRowMenu(page: Page, name: string): Promise<void> {
   const row = tree(page).getByRole('listitem').filter({ hasText: name }).first();

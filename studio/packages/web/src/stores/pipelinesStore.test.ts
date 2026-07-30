@@ -103,7 +103,7 @@ describe('pipelinesStore', () => {
    * `ensureFresh` never ran again and `ensureFresh` skips a failed load by
    * design — the error was permanent until Retry or a full reload.
    */
-  it('recoverIfFailed retries a FAILED load', async () => {
+  it('retryIfFailed retries a FAILED load', async () => {
     const list = vi
       .fn()
       .mockRejectedValueOnce(new Error('offline'))
@@ -113,7 +113,7 @@ describe('pipelinesStore', () => {
     store.getState().ensureFresh();
     await vi.waitFor(() => expect(store.getState().status).toBe('error'));
 
-    store.getState().recoverIfFailed();
+    store.getState().retryIfFailed();
     await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
 
     expect(list).toHaveBeenCalledTimes(2);
@@ -125,15 +125,15 @@ describe('pipelinesStore', () => {
    * server is healthy it is inert, so moving around the app adds no request
    * volume. Freshness on entry is `ensureFresh`'s job, not this one's.
    */
-  it('recoverIfFailed does nothing once ready', async () => {
+  it('retryIfFailed does nothing once ready', async () => {
     const list = vi.fn().mockResolvedValue([pipeline()]);
     const store = createPipelinesStore(list);
 
     store.getState().ensureFresh();
     await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
 
-    store.getState().recoverIfFailed();
-    store.getState().recoverIfFailed();
+    store.getState().retryIfFailed();
+    store.getState().retryIfFailed();
 
     expect(list).toHaveBeenCalledTimes(1);
   });
@@ -144,7 +144,7 @@ describe('pipelinesStore', () => {
    * starts the request and the second stands down — one request, whatever order
    * React runs their effects in, exactly as `ensureFresh` guarantees.
    */
-  it('recoverIfFailed stands down while a load is already in flight', async () => {
+  it('retryIfFailed stands down while a load is already in flight', async () => {
     const pending = deferred<Pipeline[]>();
     const list = vi
       .fn()
@@ -155,9 +155,9 @@ describe('pipelinesStore', () => {
     store.getState().ensureFresh();
     await vi.waitFor(() => expect(store.getState().status).toBe('error'));
 
-    store.getState().recoverIfFailed();
+    store.getState().retryIfFailed();
     expect(store.getState().status).toBe('loading');
-    store.getState().recoverIfFailed();
+    store.getState().retryIfFailed();
 
     expect(list).toHaveBeenCalledTimes(2);
     pending.resolve([]);
@@ -168,11 +168,11 @@ describe('pipelinesStore', () => {
    * from — loading here would duplicate `ensureFresh` and give a mount two
    * entry points into the same request.
    */
-  it('recoverIfFailed does nothing from idle', () => {
+  it('retryIfFailed does nothing from idle', () => {
     const list = vi.fn().mockResolvedValue([pipeline()]);
     const store = createPipelinesStore(list);
 
-    store.getState().recoverIfFailed();
+    store.getState().retryIfFailed();
 
     expect(list).not.toHaveBeenCalled();
     expect(store.getState().status).toBe('idle');

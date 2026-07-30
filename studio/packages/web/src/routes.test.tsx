@@ -106,6 +106,17 @@ function initialMatches(initialPath: string) {
 
 beforeEach(() => {
   uiStore.getState().setThemeMode('dark');
+  // Same hazard, second singleton: both Author surfaces read the list from
+  // `pipelinesStore`, and `ROUTES` offers no injection seam for it. A case that
+  // leaves it in `error` (or holding a list) would otherwise hand that state to
+  // every later case in this file — `ensureFresh` skips a failed load, so the
+  // leak would present as a silently missing fetch rather than as a failure.
+  //
+  // `beforeEach`, not `afterEach`: with vitest's default `sequence.hooks:'stack'`
+  // an `afterEach` here runs BEFORE RTL's `cleanup()`, so it would write to a
+  // store that still-mounted components are subscribed to — a React update
+  // outside `act`.
+  pipelinesStore.setState({ status: 'idle', pipelines: [], error: null });
 });
 afterEach(() => {
   vi.clearAllMocks();
@@ -114,12 +125,6 @@ afterEach(() => {
   // or collapses it would otherwise hand its state to the next one.
   uiStore.getState().setPaneWidth(PANE_DEFAULT_WIDTH);
   uiStore.getState().setPaneCollapsed(false);
-  // Same hazard, second singleton: both Author surfaces read the list from
-  // `pipelinesStore`, and `ROUTES` offers no injection seam for it. A case that
-  // leaves it in `error` (or holding a list) would otherwise hand that state to
-  // every later case in this file — `ensureFresh` skips a failed load, so the
-  // leak would present as a silently missing fetch rather than as a failure.
-  pipelinesStore.setState({ status: 'idle', pipelines: [], error: null });
 });
 
 describe('route tree', () => {
@@ -221,18 +226,17 @@ describe('route tree', () => {
   /**
    * #761 — a failed list load must not outlive the failure it describes.
    *
-   * This case lives HERE, against the real `ROUTES`, for a specific reason: the
-   * defect is that the Author pane does NOT unmount as the user moves around the
-   * hub, and every hand-built two-route fixture unmounts it. A test that mounts
-   * `<FactoryResources/>` as the element of two routes would be satisfied by a
-   * mount-time recovery and so could not tell the fix from the bug. The real
-   * shell is the only place the pane's persistence is genuinely exercised: it
-   * renders beside the `<Outlet/>`, not inside it.
+   * This case lives HERE, against the real `ROUTES`, because the premise it rests
+   * on is a fact about the SHELL: the pane renders beside the `<Outlet/>`, not
+   * inside it, so it survives a navigation the routed page does not. A fixture
+   * could reproduce that shape — a layout route with the pane in the parent
+   * element — but then the shape being relied on is the fixture's rather than the
+   * app's. Note the SIBLING-routes shape, which is what
+   * `FactoryResources.test.tsx` already uses, would NOT do: it remounts the pane,
+   * so a mount-time retry satisfies it and it cannot tell the fix from the bug.
    *
    * Navigation is driven through the router rather than by clicking, because a
-   * failed FIRST load leaves the tree empty — the only link left is the group
-   * header pointing at the path we are already on, which would not change
-   * `pathname` at all.
+   * failed FIRST load leaves the tree empty, so there is no row to click.
    */
   it('recovers a FAILED pipelines load when the route changes under the persistent pane', async () => {
     const listPipelines = vi.mocked((await import('./api/pipelines')).listPipelines);
@@ -253,9 +257,36 @@ describe('route tree', () => {
   });
 
   /**
+   * #761 — and the SAME-PATH case, which is the one the bug report described
+   * ("two client-side navigations to the same route did not clear it") and the
+   * one a user hits first: after a failed FIRST load the tree is empty, so the
+   * pane's group header — which points at the path already showing — is the only
+   * link left to click.
+   *
+   * This is why the pane's effect is keyed on `location.key` rather than
+   * `pathname`: a fresh history entry for the same path changes the former and
+   * not the latter. Keyed on `pathname`, that click was inert and the pane stayed
+   * broken with its most obvious affordance doing nothing.
+   */
+  it('recovers a FAILED pipelines load when re-navigating to the SAME path', async () => {
+    const listPipelines = vi.mocked((await import('./api/pipelines')).listPipelines);
+    listPipelines.mockRejectedValueOnce(new Error('request failed (502)'));
+
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/author/pipelines'] });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(listPipelines).toHaveBeenCalledTimes(1));
+    expect(await screen.findAllByText('request failed (502)')).not.toHaveLength(0);
+
+    await router.navigate('/author/pipelines');
+
+    expect(router.state.location.pathname).toBe('/author/pipelines');
+    await waitFor(() => expect(listPipelines).toHaveBeenCalledTimes(2));
+  });
+
+  /**
    * The other half of the guard: recovery is inert while the server is healthy,
    * so wiring it to every route entry does not turn navigation into request
-   * volume. Without this, `recoverIfFailed` could be `refresh` and #761's test
+   * volume. Without this, `retryIfFailed` could be `refresh` and #761's test
    * above would still pass.
    */
   it('does NOT refetch the pipelines list on navigation when the last load succeeded', async () => {

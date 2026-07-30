@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { fluentRootReady } from './support/theme';
-import { openRowMenu, pane, tree } from './support/authorPane';
+import { loadBanner, openRowMenu, pane, tree } from './support/authorPane';
 
 /**
  * U4 — the Factory Resources pane.
@@ -34,6 +34,10 @@ async function createInPane(page: Page, name: string): Promise<void> {
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(tree(page).getByRole('link', { name, exact: true })).toBeVisible();
 }
+
+/** Chromium's OWN network-failure entry for the 502 the recovery spec injects. */
+const BROWSER_502 =
+  /^console\.error: Failed to load resource: the server responded with a status of 502\b/;
 
 test.describe('U4 Factory Resources pane', () => {
   test('creates a pipeline in the pane and opens it on the canvas by URL', async ({ page }) => {
@@ -357,7 +361,7 @@ test.describe('U4 Factory Resources pane', () => {
     await page.evaluate(() => {
       window.location.hash = '#/author/pipelines';
     });
-    const banner = pane(page).locator('.factory-resources__error');
+    const banner = loadBanner(page);
     await expect(banner).toBeVisible();
 
     const before = listRequests;
@@ -375,15 +379,17 @@ test.describe('U4 Factory Resources pane', () => {
        "the tree is visible": these specs share one SQLite file, so on an empty
        DB the tree is an empty `<ul>` that Playwright reports as hidden — an
        assertion that would pass or fail on which specs ran before it. */
-    expect(listRequests).toBeGreaterThan(before);
+    /* Polled, not read: `listRequests` increments in the NODE process when the
+       route handler fires, while the assertion above becomes true in the BROWSER
+       when the load STARTS — which is before the request reaches Node. */
+    await expect.poll(() => listRequests).toBeGreaterThan(before);
 
     /* The deliberate 502 makes Chromium emit its own browser-level "Failed to
-       load resource" console entry, which `expectQuiet` would count as a
-       problem. Filter that ONE expected entry — and assert it was PRESENT, so
-       the filter can never quietly hide a genuine regression instead. */
-    await page.waitForTimeout(150);
-    const expected = problems.filter((p) => /Failed to load resource|502/.test(p));
-    expect(expected).not.toHaveLength(0);
-    expect(problems.filter((p) => !/Failed to load resource|502/.test(p))).toEqual([]);
+       load resource" entry, so this spec allows exactly that ONE shape and holds
+       everything else to silence. Anchored on the BROWSER's wording rather than a
+       loose `/502/`, because the app's own message for this fault is literally
+       `request failed (502)` — a loose pattern would swallow an app-level error
+       too, and `expectQuiet` documents the measurement that proved it. */
+    await expectQuiet(page, problems, [BROWSER_502]);
   });
 });

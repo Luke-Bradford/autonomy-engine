@@ -29,7 +29,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const pipelines = useStore(store, (s) => s.pipelines);
   const loadError = useStore(store, (s) => s.error);
   const ensureFresh = useStore(store, (s) => s.ensureFresh);
-  const recoverIfFailed = useStore(store, (s) => s.recoverIfFailed);
+  const retryIfFailed = useStore(store, (s) => s.retryIfFailed);
   const refresh = useStore(store, (s) => s.refresh);
 
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -45,14 +45,14 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    * For a route ELEMENT, a mount IS a route entry — React cannot distinguish a
    * first mount from a navigated-back one — so both calls belong in the one
    * effect. They cannot double-fetch: from `error`, `ensureFresh` stands down and
-   * `recoverIfFailed` loads; from `idle`/`ready`, `ensureFresh` loads and sets
-   * `status:'loading'` synchronously, so `recoverIfFailed` stands down. Exactly
+   * `retryIfFailed` loads; from `idle`/`ready`, `ensureFresh` loads and sets
+   * `status:'loading'` synchronously, so `retryIfFailed` stands down. Exactly
    * one request either way.
    */
   useEffect(() => {
     ensureFresh();
-    recoverIfFailed();
-  }, [ensureFresh, recoverIfFailed]);
+    retryIfFailed();
+  }, [ensureFresh, retryIfFailed]);
 
   const onCreate = useCallback(
     async (e: React.FormEvent) => {

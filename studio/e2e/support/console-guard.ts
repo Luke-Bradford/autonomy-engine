@@ -32,8 +32,30 @@ export function collectPageProblems(page: Page): string[] {
  * emitted a tick later — a rejected promise from an effect, a background fetch
  * failing after the assertion. That is a "passes while broken" hole, which is
  * the one failure mode this suite must not have.
+ *
+ * `allow` is for a spec that PROVOKES a failure on purpose — injecting a 502, say
+ * — where the browser's own network entry is expected output rather than a
+ * regression. Two rules keep it from becoming the hole it looks like:
+ *
+ *  - every pattern must MATCH something. An allow-list entry that matches
+ *    nothing cannot be doing anything except hiding a future regression, so an
+ *    unused one FAILS rather than passing quietly.
+ *  - anchor each pattern on the browser-level text, not on a substring the APP
+ *    might also emit. `/502/` would swallow the app's own `request failed (502)`
+ *    (`packages/web/src/api/client.ts`) — measured: a deliberate `console.error`
+ *    carrying that text passed straight through a loose filter.
  */
-export async function expectQuiet(page: Page, problems: string[]): Promise<void> {
+export async function expectQuiet(
+  page: Page,
+  problems: string[],
+  allow: RegExp[] = [],
+): Promise<void> {
   await page.waitForTimeout(150);
-  expect(problems).toEqual([]);
+  for (const pattern of allow) {
+    expect(
+      problems.filter((p) => pattern.test(p)),
+      `allowed console pattern ${String(pattern)} matched nothing — it can only hide a regression`,
+    ).not.toHaveLength(0);
+  }
+  expect(problems.filter((p) => !allow.some((pattern) => pattern.test(p)))).toEqual([]);
 }
