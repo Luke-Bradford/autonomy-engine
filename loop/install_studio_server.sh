@@ -392,7 +392,17 @@ report_status() {
   rs_dist=no;   [ -f "$SERVER_DIR/dist/index.js" ] && rs_dist=yes
   rs_plist=no;  [ -f "$PLIST_PATH" ] && rs_plist=yes
   rs_loaded=no; unit_loaded && rs_loaded=yes
-  rs_health=no; server_healthy && rs_health=yes
+  # The retry exists so a blip cannot buy a full rebuild. When the unit is not
+  # even loaded the verdict already fails on that clause, so retrying cannot
+  # change the outcome -- it would just make a `--status` against a down service
+  # take ~21s (3x5s curl plus 2x2s sleeps) for a command meant to be a cheap
+  # drift check. Probe once in that case.
+  rs_health=no
+  if [ "$rs_loaded" = yes ]; then
+    server_healthy && rs_health=yes
+  else
+    server_answers && rs_health=yes
+  fi
   say "state dir:   $STATE_DIR"
   say "built sha:   $rs_built   (the only evidence anything was COMPILED)"
   say "HEAD sha:    $(head_sha)"

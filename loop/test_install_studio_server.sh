@@ -818,6 +818,17 @@ check "and the verdict does NOT say CURRENT" "0" \
 check "and it names the reason" "1" \
   "$(has 'does not answer /health' "$sb/statusdead.out")"
 
+# A `--status` against a service that is not even loaded must stay CHEAP. The
+# retry exists so a blip cannot buy a full rebuild; with the unit unloaded the
+# verdict has already failed on that clause, so retrying only costs ~21s.
+sb="$(installed_sandbox)"
+: >"$sb/curl.calls"
+( load_sut "$sb"; CURL_RC=7 main --status --state-dir "$sb/state" ) >"$sb/statusdown.out" 2>&1
+check "an unloaded unit is probed once, not three times" "1" \
+  "$(grep -c '/health' "$sb/curl.calls" | tr -d ' ')"
+check "and the verdict names the unloaded unit" "1" \
+  "$(has 'unit is not loaded' "$sb/statusdown.out")"
+
 # ...but a BLIP is not a dead server. `--status` and `--update` must share one
 # definition of "up": if status probed once while `service_is_current` retries
 # three times, the two would disagree about the same server and status would cry
