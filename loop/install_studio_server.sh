@@ -344,21 +344,30 @@ service_is_current() {
   # healthy idle one. Without this the guard's own quota source can be down
   # permanently while every run reports "already current".
   #
-  # Retried, because the remedy is disproportionate to a blip: "not current"
-  # means a full `pnpm install` + build + bounce, which is minutes of work and an
-  # outage of the very source we are protecting. Three tries makes a transient
-  # non-answer cost 4 seconds instead of a rebuild, while a genuinely dead server
-  # still gets one.
-  sic_i=0
-  while [ "$sic_i" -lt 3 ]; do
-    server_answers && return 0
-    sic_i=$((sic_i + 1))
-    [ "$sic_i" -lt 3 ] && sleep 2
-  done
-  return 1
+  server_healthy
 }
 
 server_answers() { curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; }
+
+# --- server_healthy: the RETRIED probe, and the single definition of "is it
+# up" that both `service_is_current` and `report_status` use.
+#
+# Retried because the remedy is disproportionate to a blip: "not current" means a
+# full `pnpm install` + build + bounce, which is minutes of work and an outage of
+# the very source we are protecting. Three tries makes a transient non-answer
+# cost 4 seconds instead of a rebuild, while a genuinely dead server still gets
+# one. Shared rather than copied so `--status` cannot report NEEDS UPDATE on a
+# blip that `--update` would tolerate -- two probes with different patience would
+# disagree about the same server.
+server_healthy() {
+  sh_i=0
+  while [ "$sh_i" -lt 3 ]; do
+    server_answers && return 0
+    sh_i=$((sh_i + 1))
+    [ "$sh_i" -lt 3 ] && sleep 2
+  done
+  return 1
+}
 
 # --- report_status: the drift surface (#773 asked for the running commit to be
 # readable rather than inferred from a git incantation nobody thinks to run).
@@ -383,7 +392,7 @@ report_status() {
   rs_dist=no;   [ -f "$SERVER_DIR/dist/index.js" ] && rs_dist=yes
   rs_plist=no;  [ -f "$PLIST_PATH" ] && rs_plist=yes
   rs_loaded=no; unit_loaded && rs_loaded=yes
-  rs_health=no; server_answers && rs_health=yes
+  rs_health=no; server_healthy && rs_health=yes
   say "state dir:   $STATE_DIR"
   say "built sha:   $rs_built   (the only evidence anything was COMPILED)"
   say "HEAD sha:    $(head_sha)"

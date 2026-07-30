@@ -91,9 +91,21 @@ case "$*" in
 esac
 exit 0
 EOS
+  # `CURL_RC` fails every call; `CURL_FAIL_TIMES` fails only the first N /health
+  # probes and then recovers, which is what makes the RETRY testable -- a stub
+  # that always fails cannot tell a retried probe from a single-shot one.
   cat >"$ns_root/bin/curl" <<'EOS'
 #!/bin/bash
 echo "$*" >>"$CURL_CALLS"
+case "$*" in
+  *"/health"*)
+    if [ -n "${CURL_FAIL_TIMES:-}" ]; then
+      cf="$CURL_CALLS.health"
+      n=$(cat "$cf" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" >"$cf"
+      [ "$n" -le "$CURL_FAIL_TIMES" ] && exit 7
+      exit 0
+    fi ;;
+esac
 exit "${CURL_RC:-0}"
 EOS
   # `lsof` MUST be stubbed. Without it `port_owner` ran the real one, so every
@@ -569,6 +581,19 @@ check "a server that does not answer is not current" "0" \
   "$(has 'already current' "$sb/dead.out")"
 check "so the update rebuilds it" "1" "$(has ' build$' "$sb/pnpm.calls")"
 
+# ...but a BLIP must not buy a rebuild. "Not current" costs a full `pnpm install`
+# + build + bounce -- minutes of work and an outage of the very source being
+# protected -- so the probe is retried, and that retry needs its own case: with a
+# stub that always fails, a retried probe and a single-shot one are
+# indistinguishable.
+sb="$(installed_sandbox)"
+rm -f "$sb/curl.calls.health"       # the install's own /health probe
+: >"$sb/pnpm.calls"
+( load_sut "$sb"; CURL_FAIL_TIMES=2 LOADED_LABELS="$LOADED" main --update --port 8788 \
+    --state-dir "$sb/state" --repo-src "$sb/src" --node /usr/bin/node ) >"$sb/blip.out" 2>&1
+check "a transient non-answer is ridden out" "1" "$(has 'already current' "$sb/blip.out")"
+check "and buys no rebuild" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
+
 echo "== --update self-heals a wiped dist or an unloaded unit =="
 sb="$(installed_sandbox)"
 rm -f "$sb/state/repo/studio/packages/server/dist/index.js"
@@ -757,6 +782,18 @@ check "and the verdict does NOT say CURRENT" "0" \
   "$(has 'verdict: *CURRENT' "$sb/statusdead.out")"
 check "and it names the reason" "1" \
   "$(has 'does not answer /health' "$sb/statusdead.out")"
+
+# ...but a BLIP is not a dead server. `--status` and `--update` must share one
+# definition of "up": if status probed once while `service_is_current` retries
+# three times, the two would disagree about the same server and status would cry
+# NEEDS UPDATE on something `--update` correctly calls current.
+sb="$(installed_sandbox)"
+rm -f "$sb/curl.calls.health"       # the install's own /health probe
+( load_sut "$sb"; CURL_FAIL_TIMES=2 LOADED_LABELS="$LOADED" main --status \
+    --state-dir "$sb/state" ) >"$sb/statusblip.out" 2>&1
+check "status rides out a transient non-answer" "1" \
+  "$(has 'health: *answers on' "$sb/statusblip.out")"
+check "and still calls it CURRENT" "1" "$(has 'verdict: *CURRENT' "$sb/statusblip.out")"
 # Diagnosing a broken install must not require the install to be workable.
 sb="$(installed_sandbox)"
 (
