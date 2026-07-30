@@ -717,6 +717,7 @@ check "status reports the unit" "1" \
   "$(has 'com\.autonomy\.studio-server: loaded' "$sb/status.out")"
 # The verdict, not two shas to diff by eye.
 check "status states a verdict" "1" "$(has 'verdict: *CURRENT' "$sb/status.out")"
+
 check "status runs no pnpm" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
 
 # THE property that makes it a drift report rather than a comforting one.
@@ -728,7 +729,8 @@ sb="$(installed_sandbox)"
 ( load_sut "$sb"; GIT_ORIGIN_SHA="newsha1" LOADED_LABELS="$LOADED" main --status \
     --state-dir "$sb/state" ) >"$sb/statusfetch.out" 2>&1
 check "status fetches before it compares" "1" "$(has 'fetch .*origin main' "$sb/git.calls")"
-check "and calls a drifted service STALE" "1" "$(has 'verdict: *STALE' "$sb/statusfetch.out")"
+check "and calls a drifted service NEEDS UPDATE" "1" \
+  "$(has 'verdict: *NEEDS UPDATE .* behind origin/main' "$sb/statusfetch.out")"
 check "status still builds nothing" "0" "$(wc -l <"$sb/pnpm.calls" | tr -d ' ')"
 check "status loads nothing" "0" "$(has '^bootstrap' "$sb/launchctl.calls")"
 # Asserting the lock dir is absent afterwards only catches a LEAKED lock, not an
@@ -741,6 +743,20 @@ sb="$(new_sandbox)"
 check "status exits 0 with nothing installed" "0" "$?"
 check "status creates no state dir (so it took no lock)" "0" \
   "$([ -d "$sb/never-existed" ] && echo 1 || echo 0)"
+
+# The verdict must test the SAME clauses as `service_is_current`, or it can print
+# CURRENT directly underneath `health: NO ANSWER` -- a drift surface calling a
+# demonstrably dead service current, which is the failure this command exists to
+# remove. Everything here is current EXCEPT that the server does not answer.
+sb="$(installed_sandbox)"
+( load_sut "$sb"; CURL_RC=7 LOADED_LABELS="$LOADED" main --status \
+    --state-dir "$sb/state" ) >"$sb/statusdead.out" 2>&1
+check "a dead server is reported dead" "1" \
+  "$(has 'health: *NO ANSWER' "$sb/statusdead.out")"
+check "and the verdict does NOT say CURRENT" "0" \
+  "$(has 'verdict: *CURRENT' "$sb/statusdead.out")"
+check "and it names the reason" "1" \
+  "$(has 'does not answer /health' "$sb/statusdead.out")"
 # Diagnosing a broken install must not require the install to be workable.
 sb="$(installed_sandbox)"
 (

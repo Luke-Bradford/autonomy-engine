@@ -375,21 +375,43 @@ report_status() {
     git -C "$SERVICE_ROOT" fetch --quiet origin main 2>/dev/null \
       || say "warning: fetch failed; origin/main below is a CACHED ref and may itself be stale"
   fi
+  # Every fact is gathered ONCE, then printed, then judged. That ordering is the
+  # point: the verdict is derived from exactly the lines above it, so it cannot
+  # contradict them.
   rs_built="$(built_sha)"
   rs_origin="$(origin_sha)"
+  rs_dist=no;   [ -f "$SERVER_DIR/dist/index.js" ] && rs_dist=yes
+  rs_plist=no;  [ -f "$PLIST_PATH" ] && rs_plist=yes
+  rs_loaded=no; unit_loaded && rs_loaded=yes
+  rs_health=no; server_answers && rs_health=yes
   say "state dir:   $STATE_DIR"
   say "built sha:   $rs_built   (the only evidence anything was COMPILED)"
   say "HEAD sha:    $(head_sha)"
   say "origin/main: $rs_origin"
-  say "dist built:  $([ -f "$SERVER_DIR/dist/index.js" ] && echo yes || echo no)"
-  say "$LABEL: $(unit_loaded && echo "loaded pid $(unit_pid)" || echo "NOT LOADED")"
-  say "health:      $(server_answers && echo "answers on $PORT" || echo "NO ANSWER on $PORT")"
-  # The verdict, spelled out. A reader should not have to diff two shas by eye to
-  # answer "is the guard on old code".
-  if [ -n "$rs_built" ] && [ "$rs_built" = "$rs_origin" ]; then
+  say "dist built:  $rs_dist"
+  say "LaunchAgent: $rs_plist ($PLIST_PATH)"
+  say "$LABEL: $([ "$rs_loaded" = yes ] && echo "loaded pid $(unit_pid)" || echo "NOT LOADED")"
+  say "health:      $([ "$rs_health" = yes ] && echo "answers on $PORT" || echo "NO ANSWER on $PORT")"
+  # The verdict must answer the question the operator actually has -- "is the
+  # spend guard's source serving current code" -- so it tests the SAME clauses as
+  # `service_is_current`, in the same order, and reports the first that fails.
+  # Comparing only the two shas would let it print `verdict: CURRENT` directly
+  # underneath `health: NO ANSWER`: a drift surface calling a demonstrably dead
+  # service current, which is precisely the failure mode this command exists to
+  # remove. Every one of these is repaired by `--update`.
+  rs_why=""
+  if   [ -z "$rs_built" ];                 then rs_why="nothing has been built yet"
+  elif [ -z "$rs_origin" ];                then rs_why="origin/main could not be read"
+  elif [ "$rs_built" != "$rs_origin" ];    then rs_why="the code is behind origin/main"
+  elif [ "$rs_dist" != yes ];              then rs_why="the build output is missing"
+  elif [ "$rs_plist" != yes ];             then rs_why="the LaunchAgent is not installed"
+  elif [ "$rs_loaded" != yes ];            then rs_why="the unit is not loaded"
+  elif [ "$rs_health" != yes ];            then rs_why="the server does not answer /health"
+  fi
+  if [ -z "$rs_why" ]; then
     say "verdict:     CURRENT"
   else
-    say "verdict:     STALE -- run '$0 --update' to rebuild onto origin/main"
+    say "verdict:     NEEDS UPDATE -- $rs_why; run this script with --update"
   fi
   return 0
 }
