@@ -461,35 +461,95 @@ quota_pct() {
 # fires may have run since. The cache is therefore trusted in ONE direction only:
 # it may REFUSE a fire, never permit one. Fail-safe, same polarity as ci_check.
 quota_cache_write() {  # $1=pct
-  # `2>/dev/null` FIRST: redirections apply left to right, so with the file open
-  # written first the shell reports its failure on the still-open stderr -- which on
-  # an unwritable $INFRA meant a "No such file or directory" line in the launchd
-  # stderr log on every single gate. Behaviour was always fail-safe (no cache => the
-  # blind path), only the noise was wrong.
-  printf '%s %s\n' "$(date +%s)" "$1" 2>/dev/null >"$QUOTA_CACHE" || true
+  # Fail-safe, so the status is deliberately discarded: no cache entry means the
+  # guard takes the blind path, which is the same place a missing file lands.
+  quota_stamped_write "$QUOTA_CACHE" "$1" || true
+}
+# --- quota_stamped_write: the ONE writer for the "<epoch> <value>" state files,
+# and `quota_stamped_read`'s counterpart (#806). Three sites hand-rolled this
+# format -- the cache, the source-2 poll memo and the #765 shadow stamp -- which
+# was two problems:
+#
+#   1. FORMAT DRIFT. The reader has accumulated real hardening (separator
+#      handling, leading zeros, a 64-bit length bound, future-stamp rejection)
+#      and every bug in this shape has lived there. Three independent writers is
+#      three chances to emit something that one hardened reader then has to cope
+#      with. One owner on each side, or the format has no owner at all.
+#   2. NON-ATOMICITY. `>` truncates BEFORE writing, so a concurrent reader (a
+#      second driver, or an attended run racing the scheduled one) could `head -1`
+#      an empty file, see no separator, and read a live record as "no record".
+#
+# Hence write-to-temp-then-rename: `mv` within a directory is a rename(2), so a
+# reader sees either the old record or the new one and never a half-written or
+# emptied file. Prior art in this tree: `loop/install_studio_server.sh` uses the
+# same shape for the plist. Two deliberate deltas from it -- `$$` in the temp
+# name (that file has one writer; #806 names a SECOND driver racing this one, and
+# a shared `.tmp` name lets two of them rename each other's half-written temp),
+# and `mv -f` (nothing here may ever block on a prompt).
+#
+# THE CONTRACT IS "RETURN 0 MEANS THE SHARED READER WILL ACCEPT WHAT IS ON DISK",
+# which is why the EPOCH is validated and not merely interpolated. A `date +%s`
+# that yields empty (fork failure, broken PATH) writes " <value>", which
+# `quota_stamped_read` correctly rejects as having no epoch -- fail-safe for the
+# cache and memo, but NOT for `quota_shadow_probe`, whose whole throttle rests on
+# a successful write meaning a readable stamp exists. A `return 0` over an
+# unreadable record would silently disarm it and poll studio on every call, which
+# is the exact failure case 29g exists to prevent. So a bad epoch is a failure.
+#
+# The VALUE is checked for FORMAT ONLY (non-empty, no whitespace) -- a value
+# carrying a space or newline would split into a second token or a second line
+# and be mis-parsed by the reader. Its DOMAIN is still the caller's business, as
+# on the read side: the callers' domains differ (a percent; a percent-or-"-"
+# sentinel; the constant `probe`). No current caller can trip this check -- all
+# three pass a `quota_sane`-sanitised digit string or a literal -- it exists so a
+# future one cannot corrupt the format silently.
+#
+# Not fully dirt-free: a process killed between create and rename leaks one
+# `<file>.tmp.<pid>`, which nothing sweeps. Bounded (one per file per driver PID)
+# and invisible to #808's drift checks, which enumerate from `git ls-tree`.
+quota_stamped_write() {  # $1=file $2=value -> 0 written, non-zero nothing written
+  qsw_file="$1"; qsw_val="$2"
+  case "$qsw_val" in ""|*[[:space:]]*) return 1 ;; esac
+  qsw_now="$(date +%s 2>/dev/null)"
+  case "$qsw_now" in ""|*[!0-9]*) return 1 ;; esac
+  qsw_tmp="$qsw_file.tmp.$$"
+  # `2>/dev/null` FIRST on both: redirections apply left to right, so with the
+  # file open written first the shell reports its failure on the still-open
+  # stderr -- which on an unwritable $INFRA meant a "No such file or directory"
+  # line in the launchd stderr log on every single gate. The `mv` needs the same
+  # muzzle for the same reason: a rename that fails where the create succeeded
+  # (an immutable or foreign-owned destination) would otherwise print per gate.
+  printf '%s %s\n' "$qsw_now" "$qsw_val" 2>/dev/null >"$qsw_tmp" || {
+    rm -f "$qsw_tmp" 2>/dev/null || true; return 1
+  }
+  mv -f "$qsw_tmp" "$qsw_file" 2>/dev/null || {
+    rm -f "$qsw_tmp" 2>/dev/null || true; return 1
+  }
+  return 0
 }
 # --- quota_stamped_read: the ONE parser for this file's "<epoch> <value>" state
-# files -- the last-known-quota cache and the source-2 poll memo (#777). Echoes the
-# VALUE token if the record is well-formed and no older than $2 seconds; echoes
-# nothing otherwise.
+# files -- the last-known-quota cache, the source-2 poll memo (#777) and the #765
+# shadow stamp. Echoes the VALUE token if the record is well-formed and no older
+# than $2 seconds; echoes nothing otherwise.
 #
 # Shared rather than copied because every bug this shape has had lived in the EPOCH
 # handling, and each is now a test case (20: a line with no separator; 14: a
 # leading-zero epoch; 11: a stale reading). Two copies of that parse would drift,
 # and the copy that drifted would be the one guarding spend.
 #
-# The VALUE is returned UNVALIDATED: the two callers have different value domains (a
-# percent here; a percent-or-"-" sentinel there), so validating it belongs to them.
-# What is shared is exactly what is identical.
+# The VALUE is returned UNVALIDATED: the callers have different value domains (a
+# percent here; a percent-or-"-" sentinel there; a constant on the shadow stamp),
+# so validating it belongs to them. What is shared is exactly what is identical.
 quota_stamped_read() {  # $1=file $2=max_age_seconds
   qsr_file="$1"; qsr_max="$2"
   [ -f "$qsr_file" ] || return 0
   # `head -1`, not `cat`: on a TWO-line file `%% *` takes the epoch from line 1 and
   # `##* ` takes the value from the LAST line, so a fresh stamp got paired with an
-  # unrelated old value (measured: "<now> -" + "<old> 10" was served as 10). Both
-  # writers emit exactly one line, so this is only reachable via a partial or raced
-  # write -- but the record is per-machine state a manual run can also touch, and a
-  # parser guarding spend should not depend on nobody ever appending to it.
+  # unrelated old value (measured: "<now> -" + "<old> 10" was served as 10).
+  # `quota_stamped_write` emits exactly one line and installs it by rename, so a
+  # partial or raced write can no longer produce this -- but the record is
+  # per-machine state a manual run can also touch, and a parser guarding spend
+  # should not depend on nobody ever appending to it.
   qsr_line="$(head -1 "$qsr_file" 2>/dev/null)" || return 0
   # A separator is REQUIRED before splitting: with no space, `%% *` and `##* `
   # BOTH degrade to the whole string, so a single-token line was read as epoch
@@ -617,7 +677,11 @@ quota_poll_memo_read() {   # echoes "<pct>" | "-" (last poll FAILED) | "" (no me
   quota_sane "$qpm_v"
 }
 quota_poll_memo_write() {  # $1=pct, or "" for a poll that failed
-  printf '%s %s\n' "$(date +%s)" "${1:--}" 2>/dev/null >"$QUOTA_POLL_MEMO" || true
+  # The ""->"-" mapping stays HERE, not in `quota_stamped_write`: "a failed poll
+  # is remembered as a sentinel" is this memo's semantics, not the format's. The
+  # writer owns the record shape; the caller owns what the value means.
+  # Status discarded -- a lost memo just means source 2 is re-polled next call.
+  quota_stamped_write "$QUOTA_POLL_MEMO" "${1:--}" || true
 }
 quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
 
@@ -723,9 +787,18 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   # empty forever, so the throttle is silently gone and the probe polls on EVERY
   # `quota_pct` call. A diagnostic that cannot record when it last ran has no
   # business running: skip, say so, and let the next call try again. Case 29g pins
-  # it. `>` truncates before writing, so a partial/emptied stamp reads as "no stamp"
-  # and lands here too rather than being trusted.
-  if ! printf '%s probe\n' "$(date +%s)" >"$QUOTA_SHADOW_STAMP" 2>/dev/null; then
+  # it. Since #806 the write is atomic (temp + rename), so there is no truncation
+  # window that could leave a partial stamp behind for a racing reader -- and
+  # `quota_stamped_write`'s contract is that a 0 return means a record the shared
+  # reader will ACCEPT, which is what this branch actually needs to distinguish.
+  #
+  # NOTE the permission dependency this moved: a rename needs write on the
+  # DIRECTORY, where `>` needed write on the FILE. So a read-only $INFRA holding
+  # a writable stamp now skips (it did not before), and a writable $INFRA holding
+  # an immutable stamp now succeeds (it did not before). Both directions still
+  # end somewhere safe -- skip, or a fresh readable stamp -- and case 45f pins
+  # the first, which is the one that changed toward refusing.
+  if ! quota_stamped_write "$QUOTA_SHADOW_STAMP" probe; then
     log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP is unwritable (#765)"
     return 0
   fi
