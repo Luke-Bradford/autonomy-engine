@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EngineEventSchema } from '../types.js';
 import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 import { BUILTIN_PRICE_TABLE_VERSION } from '../../pricing/price-table.js';
@@ -1481,5 +1482,69 @@ describe('activity.agentTelemetry is inert (#2 L11a)', () => {
     expect(r.state).toEqual(before);
     expect(r.commands).toEqual([]);
     expect(r.state.status).toBe('running');
+  });
+});
+
+// ===========================================================================
+// #750 — activity.warned is an inert ADVISORY fact
+// ===========================================================================
+
+describe('activity.warned is inert (#750)', () => {
+  it('folding activity.warned changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const r = eng.reduce(s, {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'empty_truncated_completion',
+      reason: 'the model returned no text and the provider reported truncation',
+    });
+    // Inert like activity.toolCalled: identical state, no commands, node in flight.
+    // This is the load-bearing property of the whole channel — a warning that
+    // could move the fold would be a failure wearing a softer word.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+
+  it('does not downgrade a node that then SUCCEEDS — the run still finishes green', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'empty_truncated_completion',
+      reason: 'truncated',
+    }).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), {}));
+    expect(r.state.nodes['a']?.status).toBe('success');
+    expect(r.state.status).toBe('success');
+  });
+
+  it('an UNRECOGNISED code still folds — `code` is open by durability contract', () => {
+    // The back-compat property that keeps a retired warning code from making
+    // every run that emitted it unreplayable: the schema must accept it, and the
+    // reducer must not branch on it.
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = s;
+    const event = {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'a_code_no_build_has_ever_minted',
+      reason: 'from the future',
+    };
+    expect(EngineEventSchema.safeParse(event).success).toBe(true);
+    expect(eng.reduce(s, EngineEventSchema.parse(event)).state).toEqual(before);
   });
 });
