@@ -429,8 +429,9 @@ function diagnoseCliExit(
   // shapes, so an untouched config behaves exactly as it did under #799. Note
   // the `diagnostic` is still built and returned: scoping decides whether a
   // failure carries a QUOTA VERDICT, never what a failure is allowed to SAY.
-  if (quota === undefined || !(quota.classifyActivityTypes ?? [shape]).includes(shape))
-    return { diagnostic, quotaHit: undefined };
+  if (quota === undefined) return { diagnostic, quotaHit: undefined };
+  const scope = quota.classifyActivityTypes;
+  if (scope !== undefined && !scope.includes(shape)) return { diagnostic, quotaHit: undefined };
   // Match against a BOUNDED excerpt (`MAX_CLI_MATCH_CHARS`) — an `agent_task`
   // transcript can be megabytes and this `test` is synchronous. The FULL
   // `diagnostic` is still returned: the excerpt bounds what the pattern scans,
