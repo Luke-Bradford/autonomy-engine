@@ -446,7 +446,7 @@ function ParamRow({
         </label>
       )}
       {error ? (
-        <p className="form-error" role="alert">
+        <p className="error" role="alert">
           {error}
         </p>
       ) : null}
@@ -474,7 +474,6 @@ function ParamRow({
       </label>
       <button
         type="button"
-        className="danger"
         aria-label={`remove param ${index + 1}`}
         onClick={() => store.getState().removeParam(index)}
       >
@@ -561,7 +560,6 @@ function OutputRow({
       </label>
       <button
         type="button"
-        className="danger"
         aria-label={`remove output ${index + 1}`}
         onClick={() => store.getState().removeOutput(index)}
       >

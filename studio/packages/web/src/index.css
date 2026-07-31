@@ -1059,6 +1059,42 @@ td button + button {
   padding: 0 0.3rem;
 }
 
+/* U16 — the pipeline's typed params/outputs contract, in the nothing-selected
+   property panel. `.property-panel` is already a flex column, so a section only
+   needs the separation that says where one declaration ends and the next
+   begins; the row border is what stops five stacked inputs reading as one
+   undifferentiated form. */
+.contract-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.contract-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+}
+
+/* A checkbox is the one control here that reads ACROSS rather than down, so it
+   opts out of `.property-panel label`'s column direction. */
+.property-panel .contract-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* The advisory is a WARNING about a default the server will accept and the run
+   will reject — deliberately not `.error`, which is reserved for something that
+   actually blocked an action. */
+.contract-advisory {
+  color: var(--warning);
+}
+
 .property-panel input,
 .property-panel select,
 .property-panel textarea {

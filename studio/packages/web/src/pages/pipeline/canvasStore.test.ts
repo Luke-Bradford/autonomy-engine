@@ -1221,3 +1221,164 @@ describe('canvasStore — container membership (U6d)', () => {
     });
   });
 });
+
+describe('canvasStore — params/outputs as WORKING state (U16)', () => {
+  it('seeds both from the loaded version', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        params: [{ name: 'topic', type: 'string', required: true }],
+        outputs: [{ name: 'result', type: 'string' }],
+      }),
+    );
+    expect(s.getState().params).toEqual([{ name: 'topic', type: 'string', required: true }]);
+    expect(s.getState().outputs).toEqual([{ name: 'result', type: 'string' }]);
+  });
+
+  it('loadVersion(null) leaves both empty', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    expect(s.getState().params).toEqual([]);
+    expect(s.getState().outputs).toEqual([]);
+  });
+
+  /**
+   * The store must never write through into the SERVER's version object.
+   *
+   * A param's `default` is `z.unknown()`, so a `json` param's can nest
+   * arbitrarily — which makes this a DEEPER copy than the containers seed needs
+   * (`children` is a flat string array, so one level covers it). A `{ ...p }`
+   * spread would leave `default` aliased and this test red.
+   */
+  it('deep-copies a nested default rather than aliasing the loaded version', () => {
+    const s = createCanvasStore();
+    const v = version({
+      params: [{ name: 'cfg', type: 'json', required: false, default: { nested: { n: 1 } } }],
+    });
+    s.getState().loadVersion(v);
+
+    const stored = s.getState().params[0].default as { nested: { n: number } };
+    stored.nested.n = 99;
+
+    const original = v.params[0].default as { nested: { n: number } };
+    expect(original.nested.n).toBe(1);
+  });
+
+  it('addParam appends a uniquely-named optional row and marks the canvas dirty', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    expect(s.getState().dirty).toBe(false);
+
+    s.getState().addParam();
+    s.getState().addParam();
+
+    const names = s.getState().params.map((p) => p.name);
+    expect(new Set(names).size).toBe(2);
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  it('updateParam replaces the row AT THAT INDEX and leaves its siblings alone', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        params: [
+          { name: 'a', type: 'string', required: false },
+          { name: 'b', type: 'string', required: false },
+        ],
+      }),
+    );
+    s.getState().updateParam(1, { name: 'renamed', type: 'number', required: true });
+
+    expect(s.getState().params.map((p) => p.name)).toEqual(['a', 'renamed']);
+    expect(s.getState().params[1].type).toBe('number');
+  });
+
+  it('updateParam can REMOVE the default key, not merely blank it', () => {
+    // `resolveRunParams` reads the default with `hasOwnProperty`, so
+    // `default: undefined` means "the default is undefined" rather than "there
+    // is no default". A whole-row replacement is what makes the key removable.
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({ params: [{ name: 'a', type: 'string', required: false, default: 'x' }] }),
+    );
+    s.getState().updateParam(0, { name: 'a', type: 'string', required: false });
+    expect('default' in s.getState().params[0]).toBe(false);
+  });
+
+  it('removeParam drops exactly one row', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        params: [
+          { name: 'a', type: 'string', required: false },
+          { name: 'b', type: 'string', required: false },
+          { name: 'c', type: 'string', required: false },
+        ],
+      }),
+    );
+    s.getState().removeParam(1);
+    expect(s.getState().params.map((p) => p.name)).toEqual(['a', 'c']);
+  });
+
+  it('outputs get the same add/update/remove treatment', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+
+    s.getState().addOutput();
+    expect(s.getState().outputs).toHaveLength(1);
+
+    s.getState().updateOutput(0, { name: 'result', type: 'json', optional: true });
+    expect(s.getState().outputs[0]).toEqual({ name: 'result', type: 'json', optional: true });
+
+    s.getState().removeOutput(0);
+    expect(s.getState().outputs).toEqual([]);
+  });
+
+  it('every contract action marks the canvas dirty', () => {
+    const acts: ((s: ReturnType<typeof createCanvasStore>) => void)[] = [
+      (s) => s.getState().addParam(),
+      (s) => s.getState().updateParam(0, { name: 'z', type: 'string', required: false }),
+      (s) => s.getState().removeParam(0),
+      (s) => s.getState().addOutput(),
+      (s) => s.getState().updateOutput(0, { name: 'z', type: 'string' }),
+      (s) => s.getState().removeOutput(0),
+    ];
+    for (const act of acts) {
+      const s = createCanvasStore();
+      s.getState().loadVersion(
+        version({
+          params: [{ name: 'a', type: 'string', required: false }],
+          outputs: [{ name: 'o', type: 'string' }],
+        }),
+      );
+      expect(s.getState().dirty).toBe(false);
+      act(s);
+      expect(s.getState().dirty).toBe(true);
+    }
+  });
+
+  it('loadVersion RESETS working contract edits — a reload discards them', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().addParam();
+    s.getState().addOutput();
+
+    s.getState().loadVersion(version());
+    expect(s.getState().params).toEqual([]);
+    expect(s.getState().outputs).toEqual([]);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('rebaseLoaded does NOT clobber contract edits made during an in-flight save', () => {
+    // The counterpart of the save-race check in `PipelineCanvas`: a rebase
+    // repoints `loaded` and must leave the working contract exactly as the
+    // operator left it.
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().addParam();
+    const edited = s.getState().params;
+
+    s.getState().rebaseLoaded(version({ version: 2, params: [] }));
+    expect(s.getState().params).toBe(edited);
+  });
+});
