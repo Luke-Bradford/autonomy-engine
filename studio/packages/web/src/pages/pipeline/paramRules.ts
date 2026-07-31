@@ -1,4 +1,9 @@
-import type { Output, Param, ParamType } from '@autonomy-studio/shared';
+import {
+  NewPipelineVersionSchema,
+  type Output,
+  type Param,
+  type ParamType,
+} from '@autonomy-studio/shared';
 
 /**
  * The pure rules behind the pipeline-level params/outputs editor (U16).
@@ -63,25 +68,46 @@ export function blankOutput(existing: readonly Output[]): Output {
   return { name: freshName('output', existing), type: 'string' };
 }
 
-function duplicateIssues(label: string, items: readonly { name: string }[]): string[] {
-  const seen = new Set<string>();
+/**
+ * Run one declaration list through the SERVER'S OWN write-schema field, and
+ * report what it refuses.
+ *
+ * Parsing `NewPipelineVersionSchema.shape.<field>` rather than re-implementing
+ * its rules is the whole point: an earlier draft of this module copied
+ * `refuseDuplicateNames`' message string, and nothing could have caught the two
+ * drifting apart — the web test pinned the web copy, so a change to the shared
+ * wording would have left both suites green and the same rejection speaking two
+ * vocabularies. Here the duplicate message IS the server's, by construction.
+ *
+ * Two deliberate departures, both narrowing to a friendlier message rather than
+ * to a different VERDICT:
+ *  - an empty name is reported by POSITION, since there is no name to quote and
+ *    zod's `Too small` says nothing to an operator;
+ *  - a WHITESPACE-ONLY name is refused, which `z.string().min(1)` accepts. That
+ *    makes this gate stricter than the server in exactly one case. It is safe
+ *    for the reason the whole gate is safe — the row is repairable in the editor
+ *    that shows it — but it is a real divergence, so it is stated rather than
+ *    buried.
+ */
+function schemaNameIssues(label: 'param' | 'output', items: readonly { name: string }[]): string[] {
+  const field =
+    label === 'param'
+      ? NewPipelineVersionSchema.shape.params
+      : NewPipelineVersionSchema.shape.outputs;
   const out: string[] = [];
+
   items.forEach((item, i) => {
-    if (!item.name.trim()) {
-      // No name to quote, so report the POSITION. 1-based: it addresses a row
-      // the operator is looking at, not an array index.
-      out.push(`${label} #${i + 1} has no name`);
-      return;
-    }
-    if (seen.has(item.name)) {
-      // Verbatim `refuseDuplicateNames` (schemas/pipeline.ts). One rejection
-      // should not have two vocabularies depending on which gate caught it.
-      out.push(
-        `duplicate ${label} name '${item.name}' (${label} names must be unique within the pipeline)`,
-      );
-    }
-    seen.add(item.name);
+    if (!item.name.trim()) out.push(`${label} #${i + 1} has no name`);
   });
+
+  const parsed = field.safeParse(items);
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      // The empty-name refusals are already reported above, in better words.
+      if (issue.code === 'too_small') continue;
+      out.push(issue.message);
+    }
+  }
   return out;
 }
 
@@ -99,7 +125,7 @@ function duplicateIssues(label: string, items: readonly { name: string }[]): str
  * at the call site rather than smuggled inside a function that promises one SSOT.
  */
 export function nameIssues(params: readonly Param[], outputs: readonly Output[]): string[] {
-  return [...duplicateIssues('param', params), ...duplicateIssues('output', outputs)];
+  return [...schemaNameIssues('param', params), ...schemaNameIssues('output', outputs)];
 }
 
 /**
@@ -108,12 +134,19 @@ export function nameIssues(params: readonly Param[], outputs: readonly Output[])
  * The predicate mirrors run-time `coerce` (`engine/params.ts`), NOT the stricter
  * `matchesType` used for node outputs. That difference is deliberate and easy to
  * get wrong: `coerce` accepts the STRING `'5'` for a `number` param, so warning
- * about it would be a false alarm about a default that runs perfectly.
+ * about it would be a false alarm about a default that runs perfectly. The
+ * agreement is not asserted in prose — `paramRules.test.ts` runs both this and
+ * `resolveRunParams` over the same table and requires the verdicts to match.
+ *
+ * `required` is NOT an early-out, and that is the correction of a wrong belief
+ * rather than an omission. `resolveRunParams` tests
+ * `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a required
+ * param that carries a default resolves FROM that default and never demands an
+ * override — the precedence is override > default > required-throw. A required
+ * param with a bad default therefore fails at run exactly like an optional one,
+ * and skipping the check here would have stayed silent about it.
  */
 export function defaultAdvisory(p: Param): string | null {
-  // A required param's default is never read (`resolveRunParams` demands an
-  // override), so there is nothing to warn about even if one is stored.
-  if (p.required) return null;
   if (!('default' in p)) return null;
   const v = p.default;
 

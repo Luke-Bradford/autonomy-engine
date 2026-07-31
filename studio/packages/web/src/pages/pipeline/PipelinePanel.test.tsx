@@ -68,6 +68,84 @@ describe('PipelinePanel (U16) — params', () => {
     });
   });
 
+  it('SHOWS a required param’s stored default instead of claiming a run must supply it', () => {
+    // W1. `resolveRunParams` reads `hasOwnProperty(p,'default')` before
+    // `p.required`, so this param resolves from its default and is never asked
+    // for a value. Hiding the field made an API-minted default invisible and
+    // un-editable while the panel asserted the opposite of what the engine does.
+    mount(
+      version({ params: [{ name: 'x', type: 'number', required: true, default: 'not a number' }] }),
+    );
+    expect(screen.getByLabelText('param 1 default')).toHaveValue('not a number');
+    expect(screen.queryByText('A run must supply this param.')).toBeNull();
+    expect(screen.getByText(/stored default already satisfies it/)).toBeInTheDocument();
+    // ...and the advisory reaches it, which the old early-out suppressed.
+    expect(screen.getByText(/not a finite number/)).toBeInTheDocument();
+  });
+
+  it('still says a run must supply a required param that has NO default', () => {
+    mount(version({ params: [{ name: 'x', type: 'string', required: true }] }));
+    expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('param 1 default')).toBeNull();
+  });
+
+  it('a blur that changed nothing does not write — no spurious dirty, no data loss', () => {
+    // N1. Tabbing THROUGH the field would otherwise mark an untouched doc dirty,
+    // and would DELETE a stored default of '' (legal, and reachable by import)
+    // because `coerceDefaultInput` reads blank as "no default".
+    const store = mount(
+      version({ params: [{ name: 'x', type: 'string', required: false, default: '' }] }),
+    );
+    fireEvent.blur(screen.getByLabelText('param 1 default'), { target: { value: '' } });
+
+    expect(store.getState().dirty).toBe(false);
+    expect('default' in store.getState().params[0]!).toBe(true);
+    expect(store.getState().params[0]!.default).toBe('');
+  });
+
+  it('a FAILED commit does not follow a removal onto a different param', () => {
+    // W2. Rows are index-keyed. With two params whose defaults FORMAT alike, a
+    // compare of the formatted string saw no change when a removal shifted the
+    // second param into row 1 — so the first param's rejected draft stayed on
+    // screen and the next successful blur wrote it onto a param the operator
+    // never edited. Identity of the param object is what actually changed.
+    const store = mount(
+      version({
+        params: [
+          { name: 'a', type: 'number', required: false, default: 1 },
+          { name: 'b', type: 'number', required: false, default: 1 },
+        ],
+      }),
+    );
+
+    const field = screen.getByLabelText('param 1 default');
+    fireEvent.change(field, { target: { value: '9x' } });
+    fireEvent.blur(field, { target: { value: '9x' } });
+    expect(screen.getByRole('alert')).toBeInTheDocument(); // rejected, nothing stored
+
+    fireEvent.click(screen.getByRole('button', { name: 'remove param 1' }));
+
+    // Row 1 is now `b`, and it shows B's default — not `a`'s abandoned draft.
+    expect(screen.getByLabelText('param 1 name')).toHaveValue('b');
+    expect(screen.getByLabelText('param 1 default')).toHaveValue('1');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().params[0]!.default).toBe(1);
+  });
+
+  it('clearing a param description removes the key rather than storing an empty string', () => {
+    const store = mount(
+      version({ params: [{ name: 'x', type: 'string', required: false, description: 'why' }] }),
+    );
+    fireEvent.change(screen.getByLabelText('param 1 description'), { target: { value: '' } });
+    expect('description' in store.getState().params[0]!).toBe(false);
+  });
+
+  it('setting a param description stores it', () => {
+    const store = mount(version({ params: [{ name: 'x', type: 'string', required: false }] }));
+    fireEvent.change(screen.getByLabelText('param 1 description'), { target: { value: 'why' } });
+    expect(store.getState().params[0]!.description).toBe('why');
+  });
+
   it('ticking Required removes the default field AND the stored default', () => {
     const store = mount(
       version({ params: [{ name: 'a', type: 'string', required: false, default: 'x' }] }),

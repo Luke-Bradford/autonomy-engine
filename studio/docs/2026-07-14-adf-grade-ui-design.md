@@ -158,7 +158,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U14b | Schedule/recurrence builder + webhook | Manage |
 | U14c | Run-windows + concurrency policy | Manage |
 | U15 | Home hub + Settings | Manage |
-| **U16** | **Params/Variables/Outputs/Globals AUTHORING** (T14) — the bottom-pane tab to *define* what the `${}` flyout references; routed through `toVersionBody` (currently discards them) | Author |
+| **U16** | **Params/Variables/Outputs/Globals AUTHORING** (T14) — the bottom-pane tab to *define* what the `${}` flyout references; routed through `toVersionBody` (currently discards them) | Author | — PARAMS + OUTPUTS **AS BUILT** below (in the property panel, not a bottom pane); variables/globals have no doc schema and stay deferred |
 | **U17** | **Undo/redo** (T14) — reversible-command store; land EARLY (before U6*) | Author |
 | **U18** | **Save-vs-Publish reconciliation** (T14) — command-bar states: DB-only `Save→v` vs git-connected `Save/Commit→branch` + `Publish→active` + CAS-stale "pull first"; Manage **Git** section | Author/Manage |
 | **U19** | **Outcome-by-source-handle** (T14) — colored/labeled handles per ActivityDefinition (operational success/failure/completion/skipped; control `true/false`/case), NOT the retro dropdown. **Its three inherited #1 F1 debts were DISCHARGED by U6a** (2026-07-25), which landed first: `skipped` is authorable, a persisted value the source does not offer renders as a disabled `<option>` instead of silently showing another, and a branch edge is labelled by its routing key rather than the literal `"branch"`. What remains for U19 is the shape change itself — retiring the dropdown for per-outcome SOURCE HANDLES — plus the one open question U6a deliberately left it: whether `declaredBranchesOf` moves from `engine/params.ts` onto `ActivityDefinition` (it cannot be a plain data field — a `switch`'s labels derive from `node.config.cases`). | Author |
@@ -1292,3 +1292,59 @@ discipline for UI tickets. Each ticket = one fire (branch→TDD→review→PR→
 - Gantt: split U12a (approx) / U12b (true, deferred). ✔
 - U6/U8 sizing: split into U6a–e, U8a/U8b. ✔
 - Verification: Playwright mandatory; protect P5c canvas invariant. ✔
+
+## U16 — pipeline params + outputs AUTHORING (AS BUILT, 2026-07-31)
+
+A pipeline's typed contract could be declared only through the API. `toVersionBody` carried
+`params`/`outputs` forward from the version the canvas was opened on, for want of an editor — so a
+pipeline authored on the canvas could never have a param at all: `${params.x}` had nothing to
+resolve and a trigger had nothing typed to bind its values to. Closed here for PARAMS and OUTPUTS.
+
+| Piece | Lives in |
+|---|---|
+| Name gate, default advisory, field parse/format, `withRequired` | `pages/pipeline/paramRules.ts` |
+| `params`/`outputs` working state + add/update/remove actions | `pages/pipeline/canvasStore.ts` |
+| `PipelinePanel` / `ParamRow` / `OutputRow` | `pages/pipeline/PipelineCanvas.tsx` |
+| Card + checkbox + advisory styling | `index.css` — `.contract-section`, `.contract-row`, `.contract-check`, `.contract-advisory` |
+| Browser coverage | `e2e/params-authoring.spec.ts` |
+
+Decisions worth not re-deriving:
+
+- **It lives in the property panel's NOTHING-SELECTED slot, not the bottom-pane tab the row above
+  names.** That pane does not exist yet, and building one is shell work this ticket does not own.
+  Clicking the canvas background to edit the pipeline itself is the ADF pattern and needs no new
+  chrome. Move it when the bottom pane lands.
+- **Variables/globals are deferred because there is nothing to author.** `PipelineVersionSchema` has
+  no `variables` or `globals` field; adding one is a doc-model change, not a UI ticket.
+- **`toVersionBody` no longer reads `loaded` at all.** Every field of the save body now comes from
+  the store. This is the third field to make that move (`containers` was #746) and the failure is
+  identical each time: a carry-forward that outlives its "no UI yet" premise silently DISCARDS the
+  operator's edit at the moment they save it.
+- **The save gate and the advisory are deliberately different things.** Duplicate/empty names GATE
+  Save, and the rules come from parsing `NewPipelineVersionSchema.shape.params/outputs` — the
+  server's own field — so the message IS the server's and the two cannot drift. A type-mismatched
+  `default` only ADVISES: the write path accepts any `default` (`z.unknown().optional()`), so gating
+  on it would leave an imported pipeline that already holds one permanently unsaveable — the exact
+  one-way trap #748 closed, re-created by the check meant to help. Tell the truth; do not bar the exit.
+- **A REQUIRED param's default IS read at run time.** `resolveRunParams` tests
+  `hasOwnProperty(p, 'default')` BEFORE `p.required`, so the precedence is
+  override > default > required-throw, and a required param carrying a default is never asked for a
+  value. The panel therefore shows the default field whenever a default EXISTS, required or not.
+  Hiding it (on the opposite belief) made an API-minted default invisible, un-editable and immune to
+  the advisory, while the panel asserted the reverse of what the engine does. `paramRules.test.ts`
+  now cross-checks every advisory verdict against `resolveRunParams` itself rather than against a
+  comment.
+- **`default` and `optional` are ABSENT-means-something fields.** Ticking Required DELETES the
+  stored default (`withRequired`); blanking the field REMOVES the key rather than writing
+  `undefined`, which `hasOwnProperty` would read as "the default is undefined". Same for an output's
+  `optional`, where absent means required.
+- **Rows are index-keyed, so the default draft resyncs on param IDENTITY, not on its formatted
+  text.** A removal shifts later params up into a row that still holds the departed row's draft; with
+  two defaults that format alike, a string compare misses it and the next blur writes onto a param
+  the operator never edited. `map`/`filter` preserve element identity for untouched rows, so a new
+  object arrives exactly when the row's param is replaced.
+
+Deferred, with tickets rather than silence: a `json` param whose default is a string gets no
+advisory (runtime accepts any value for `json`, so it is a UX heuristic, not a defect);
+pipeline-level `outputs` get NO static validation at all, because `validatePipelineDoc`'s `Pick`
+excludes them; and the write path has no type-vs-default consistency check.

@@ -127,11 +127,16 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     // why it stays.
     const savedContainers = store.getState().containers;
     // U16 — the typed contract rides in the same snapshot, and in the same race
-    // check. Unlike `containers` this is NOT redundant with the `nodes`/`edges`
-    // checks: every param and output action writes `params`/`outputs` and
-    // NOTHING else, so an edit made during the in-flight POST is invisible to
-    // all three of the checks above it. This is the first genuinely independent
-    // writer the race check has had.
+    // check. Every param and output action writes `params`/`outputs` and nothing
+    // else, so an edit made during the in-flight POST would be invisible to all
+    // three of the checks above it.
+    //
+    // It is NOT the first such writer, though an earlier draft of this comment
+    // claimed so: `createContainer` and `setNodeContainer` both write
+    // `containers` alone. What the five checks together now assert is the
+    // property that actually matters — they cover every doc field the store
+    // owns, and every action mints a fresh array reference, so no concurrent
+    // edit can be silently overwritten by the rebase.
     const savedParams = store.getState().params;
     const savedOutputs = store.getState().outputs;
     try {
@@ -196,8 +201,12 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
               stored versions would just read as "yours is unfixable". */}
           <strong>{issues.length} validation issue(s)</strong> — fix these to save.
           <ul>
-            {issues.map((msg) => (
-              <li key={msg}>{msg}</li>
+            {issues.map((msg, i) => (
+              // Indexed, because the messages are NOT unique: three params sharing
+              // a name emit the identical duplicate-name string twice, and a bare
+              // `key={msg}` makes that a React duplicate-key warning — which the
+              // e2e console guard treats as a failure.
+              <li key={`${String(i)}-${msg}`}>{msg}</li>
             ))}
           </ul>
         </div>
@@ -238,12 +247,15 @@ function PropertyPanel({
 
   if (selected.kind === 'edge') {
     const edge = edges.find((e) => e.id === selected.id);
-    if (!edge) return <EmptyPanel store={store} />;
+    // A selection pointing at an element that no longer exists is, from the
+    // operator's side, indistinguishable from having nothing selected — so it
+    // gets the same pipeline-level panel as the `!selected` branch above.
+    if (!edge) return <PipelinePanel store={store} />;
     return <EdgePanel store={store} edge={edge} nodes={nodes} edges={edges} />;
   }
 
   const node = nodes.find((n) => n.id === selected.id);
-  if (!node) return <EmptyPanel store={store} />;
+  if (!node) return <PipelinePanel store={store} />;
   return (
     <NodePanel
       key={node.id}
@@ -255,18 +267,6 @@ function PropertyPanel({
       connectionId={node.connectionId}
     />
   );
-}
-
-/**
- * The fallback for a selection that points at an element which no longer exists.
- *
- * Renders the SAME pipeline-level panel as the nothing-selected branch: a
- * dangling selection is, from the operator's side, indistinguishable from having
- * nothing selected, so showing them different panels would be a distinction
- * about the store's internals rather than about anything on screen.
- */
-function EmptyPanel({ store }: { store: ReturnType<typeof createCanvasStore> }) {
-  return <PipelinePanel store={store} />;
 }
 
 /**
@@ -345,25 +345,46 @@ function ParamRow({
   // blur; every other control writes straight through to the store.
   const stored = formatDefaultInput(param.default);
   const [draft, setDraft] = useState(stored);
-  const [syncedFrom, setSyncedFrom] = useState(stored);
+  const [syncedParam, setSyncedParam] = useState(param);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-sync when the STORED text changes underneath this row — a commit, a type
-  // change, a load, or (the one that actually bites) a removal shifting a
-  // different param into this index. Comparing the formatted STRING rather than
-  // the raw value is what makes this safe: a `json` default is a fresh object on
-  // every write, so an identity check would resync on every render and eat the
-  // operator's typing. This is the standard derived-from-props reset, done in
-  // render rather than in an effect so no frame ever shows the stale draft.
-  if (syncedFrom !== stored) {
-    setSyncedFrom(stored);
-    setDraft(stored);
+  // Re-sync whenever a DIFFERENT param object arrives at this index.
+  //
+  // The identity check is the load-bearing choice, and it replaces a compare of
+  // the formatted default STRING that was wrong in a way worth recording. The
+  // rows are keyed by array index, so a removal SHIFTS the params after it into
+  // a row that already holds draft text for the one that left. A string compare
+  // misses that whenever the two defaults happen to format alike: with two
+  // number params both defaulting to `1`, typing `9x` into row 1, blurring (the
+  // commit fails, so nothing is written), then removing row 1 leaves row 1
+  // rendering the SECOND param while still showing the first one's draft and
+  // error — and the next successful blur writes that value onto a param the
+  // operator never edited.
+  //
+  // The reason first given for the string compare — that a `json` default is a
+  // fresh object every render, so identity would resync constantly — was simply
+  // false. `map`/`filter` in the store preserve element identity for untouched
+  // rows, so a new object arrives exactly when this row's param is REPLACED.
+  //
+  // It costs nothing in practice: every other control in this row takes focus to
+  // reach, which blurs the default field and commits it first, so an
+  // uncommitted draft cannot survive an edit to a sibling field anyway.
+  if (syncedParam !== param) {
+    setSyncedParam(param);
+    setDraft(formatDefaultInput(param.default));
     setError(null);
   }
 
   const advisory = defaultAdvisory(param);
 
   function commitDefault(text: string) {
+    // A blur that changed nothing must not write. Tabbing THROUGH the field
+    // would otherwise mark the canvas dirty on an untouched doc — the same
+    // no-op-write hazard `setNodeContainer` avoids — and, worse, would DELETE a
+    // stored default of `''` or whitespace, which `coerceDefaultInput` reads as
+    // "no default". An imported doc can legitimately hold one.
+    if (text === stored) return;
+
     const parsed = coerceDefaultInput(param.type, text);
     if (!parsed.ok) {
       // Keep the operator's text on screen and say why it was not stored. The
@@ -426,12 +447,19 @@ function ParamRow({
         />
         Required
       </label>
-      {param.required ? (
-        // A required param's default is never read (`resolveRunParams` demands
-        // an override), so offering the field would be offering a control with
-        // no effect.
+      {param.required && !('default' in param) ? (
         <p className="page-hint">A run must supply this param.</p>
       ) : (
+        // The field is shown whenever a default EXISTS, required or not.
+        //
+        // Hiding it for a required param — on the belief that a required param's
+        // default is never read — was wrong, and silently so. `resolveRunParams`
+        // tests `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a
+        // required param carrying a default resolves from that default and is
+        // never asked for a value. A doc minted through the API can hold one (the
+        // write path accepts any `default`), and hiding the field made that value
+        // invisible, un-editable, and immune to the advisory below — while the
+        // panel asserted the opposite of what the engine does.
         <label>
           Default
           <input
@@ -444,7 +472,11 @@ function ParamRow({
             }}
             onBlur={(e) => commitDefault(e.target.value)}
           />
-          <span className="page-hint">Leave blank for no default.</span>
+          <span className="page-hint">
+            {param.required
+              ? 'Required, but this stored default already satisfies it — a run is never asked for a value. Blank the field to make the param truly required.'
+              : 'Leave blank for no default.'}
+          </span>
         </label>
       )}
       {error ? (

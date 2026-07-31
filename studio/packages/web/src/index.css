@@ -1043,7 +1043,8 @@ td button + button {
    the membership `<select>` wants, so only this fieldset needs a rule: it is what
    visually separates "which container is this activity in" from "make a new
    one", two different acts reached through one control. */
-.container-create {
+.container-create,
+.contract-row {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -1069,15 +1070,6 @@ td button + button {
   flex-direction: column;
   gap: 0.5rem;
   margin-top: 0.75rem;
-}
-
-.contract-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.6rem;
 }
 
 /* A checkbox is the one control here that reads ACROSS rather than down, so it
