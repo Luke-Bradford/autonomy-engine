@@ -1216,14 +1216,22 @@ drift_report_driver_code() {
 # globally). A bounded fetch that FAILS reads UNKNOWN, which is the safe
 # direction; an unbounded one that hangs reads as nothing at all.
 #
-# SHARED RATHER THAN COPIED, and that is not tidiness (#832 review, closing
-# #834). The copy had ALREADY diverged inside the PR that made it: the bounds
+# SHARED RATHER THAN COPIED, and that is not tidiness (#832 review). The copy
+# had ALREADY diverged inside the PR that made it: the bounds
 # above were added to the plane half while the studio-server half -- added by
 # that same PR, on the same pre-fire path, under a comment claiming "same
 # discipline and same reason as the plane half" -- kept an unbounded fetch. Two
 # call sites, one of them the newer, is exactly how a hardening misses the thing
 # it was written for. Independently callable and testable is preserved; each
 # half still calls this itself rather than depending on a sibling having run.
+#
+# SO THIS DOES NOT CLOSE #834, and must not be read as doing so. That ticket is
+# about the NUMBER of fetches per iteration (top-of-loop, plane half, this half
+# -- still three); what is shared here is the mechanism, not the fetch. Its
+# stated remedy is a per-`drift_report` memo, which is a different change with a
+# different risk, and its own acceptance test ("a direct call with no flag set
+# must still fetch"). Leaving one helper for it to memoise makes that change
+# smaller; it does not make it done.
 drift_fetch_origin() {
   GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.lowSpeedLimit=1000 \
     -c http.lowSpeedTime=20 fetch --quiet origin main 2>/dev/null
@@ -1385,8 +1393,11 @@ except Exception:
 # attribution is worse than none -- it is the same confident-but-unfounded
 # reading this whole ticket exists to stop.
 #
-# (The other deferral, sharing one `origin/main` fetch with the plane half
-# (#834), is CLOSED rather than deferred -- see `drift_fetch_origin` above.)
+# (The other deferral, collapsing the per-iteration `origin/main` fetches into
+# one (#834), is STILL OPEN. `drift_fetch_origin` above gave the two halves one
+# shared, bounded implementation -- which fixed a real divergence and is where a
+# memo would go -- but each half still fetches, so the count #834 is about is
+# unchanged.)
 
 drift_report_studio_server() {
   if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
