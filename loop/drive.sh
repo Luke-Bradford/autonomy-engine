@@ -1578,6 +1578,17 @@ drift_report_studio_server() {
       # the honest line says the attribution is unavailable rather than quoting
       # a number that contradicts the verdict it is attached to. Same refusal as
       # `ds_behind` above: an unmeasurable thing never renders as a clean 0.
+      #
+      # THE TWO HALVES OF THIS GUARD ARE NOT ALIKE, and saying so is the point.
+      # The EMPTY half is live -- `rev-list` can fail, and it is the same failure
+      # `ds_behind` already degrades for. The `0` half is UNREACHABLE as the code
+      # stands, and provably so: ancestry is established above, and
+      # `--full-history` counts every commit in the range not TREESAME to ALL its
+      # parents, so if no such commit existed the two studio/ trees would be
+      # equal by induction along the path -- which is the branch we are not in.
+      # It is kept as defence-in-depth against a future edit dropping
+      # `--full-history`, exactly the edit that produced this finding; the
+      # mutation run recorded in the PR is what demonstrates it engages.
       case "$ds_behind_studio" in
         ''|0)
           ds_studio_clause="though commit-level attribution cannot say which of them changed it"
