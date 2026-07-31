@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stableEdgeKey, type Edge, type Node } from '@autonomy-studio/shared';
+import { MaxBouncesSchema, stableEdgeKey, type Edge, type Node } from '@autonomy-studio/shared';
 import {
   branchOptionsFor,
   conditionOf,
@@ -8,6 +8,7 @@ import {
   edgeLabel,
   edgeVariantClass,
   encodeCondition,
+  isMaxBounces,
   OPERATIONAL_CONDITIONS,
   authoringEdgeKey,
   takenConditions,
@@ -245,5 +246,90 @@ describe('branchOptionsFor', () => {
    * endpoint), has no `Node` to ask — degrade, never throw. */
   it('returns null for an absent source node', () => {
     expect(branchOptionsFor(undefined)).toBeNull();
+  });
+});
+
+/**
+ * U6e — a back-edge is the one edge whose DIRECTION contradicts its arrowhead:
+ * it points at a step that already ran. Both labels have to say so, because the
+ * canvas encodes it in no other channel (no hue, no dash — see `FlowCanvas`).
+ */
+describe('back-edge labelling', () => {
+  const back = (extra: Partial<Edge> = {}): Edge =>
+    ({ id: 'e', from: 'b', to: 'a', on: 'success', back: true, maxBounces: 3, ...extra }) as Edge;
+
+  it('marks back-ness and the cap in the visual label', () => {
+    expect(edgeLabel(back())).toBe('↺ success ×3');
+  });
+
+  it('keeps the branch key as the label for a back-edge off a branching node', () => {
+    expect(edgeLabel(back({ on: 'branch', branch: 'retry' }))).toBe('↺ retry ×3');
+  });
+
+  it('leaves a forward edge untouched', () => {
+    expect(edgeLabel({ id: 'e', from: 'a', to: 'b', on: 'success' } as Edge)).toBe('success');
+  });
+
+  /**
+   * The `↺ … ×N` glyph is not readable text, and RF does not expose the SVG
+   * label under its own role anyway — so the aria-label is the ONLY place a
+   * screen reader learns this edge loops, and how far.
+   */
+  it('spells back-ness and the cap in the aria-label', () => {
+    expect(edgeAriaLabel(back())).toBe('Edge from b to a, back-edge on success, up to 3 bounces');
+  });
+
+  it.each([
+    [0, true],
+    [1, true],
+    [10_000, true],
+    [-1, false],
+    [1.5, false],
+    [Number.NaN, false],
+    [Number.POSITIVE_INFINITY, false],
+    // Beyond zod's safe-integer ceiling: accepted by a hand-rolled
+    // `Number.isInteger(n) && n >= 0`, refused by the schema.
+    [1e16, false],
+  ])('isMaxBounces(%p) is %p, mirroring EdgeSchema', (n, expected) => {
+    expect(isMaxBounces(n)).toBe(expected);
+  });
+});
+
+/**
+ * A back-edge with NO cap — reachable only for an imported or API-authored doc,
+ * since the canvas always sets one, and refused by the save gate. Both labels
+ * must report it as missing rather than inventing a value: `0` is a real and
+ * DIFFERENT behaviour (an edge that never bounces), so defaulting to it would
+ * state a specific cap for a doc that declares none — and would tell a screen
+ * reader something the canvas does not show.
+ */
+describe('a back-edge with no declared cap', () => {
+  const capless = { id: 'e', from: 'b', to: 'a', on: 'success', back: true } as Edge;
+
+  it('shows the cap as unknown rather than as zero', () => {
+    expect(edgeLabel(capless)).toBe('↺ success ×?');
+  });
+
+  it('says so in the aria-label, in the same terms', () => {
+    expect(edgeAriaLabel(capless)).toBe(
+      'Edge from b to a, back-edge on success, no bounce cap declared',
+    );
+  });
+
+  it('a declared cap of ZERO is reported as the real value it is', () => {
+    const zero = { ...capless, maxBounces: 0 } as Edge;
+    expect(edgeLabel(zero)).toBe('↺ success ×0');
+    expect(edgeAriaLabel(zero)).toBe('Edge from b to a, back-edge on success, up to 0 bounces');
+  });
+
+  /**
+   * The SSOT tie: `isMaxBounces` delegates to the schema rather than restating
+   * it, so a tightening of the format cannot leave this editor accepting a
+   * value the write gate refuses.
+   */
+  it('isMaxBounces IS MaxBouncesSchema, not a second opinion about it', () => {
+    for (const n of [0, 1, 3.5, -1, 10_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(isMaxBounces(n)).toBe(MaxBouncesSchema.safeParse(n).success);
+    }
   });
 });

@@ -220,23 +220,31 @@ export function connectByIdBackwards(page: Page, from: string, to: string): Prom
 }
 
 /**
- * Select the one edge by clicking the MIDPOINT of its rendered path.
+ * Select an edge by clicking the MIDPOINT of its rendered path — the first by
+ * default, or the one at `index` in DOM order.
+ *
+ * The index addresses `.react-flow__edge-path` in render order, which is fine
+ * for the small authored graphs these specs build but is NOT a stable identity:
+ * `onlyRenderVisibleElements` is on, so a culled edge is absent from the DOM
+ * entirely. A spec that can name its edge should prefer a selector.
  *
  * Not `edgeGroup(page).click()`: that targets the `<g>`'s bounding-box centre,
  * which for a bezier need not lie on the curve — it can land on a node behind
  * it and select THAT, leaving a spec asserting against the node property panel
  * while reporting an edge failure.
  */
-export async function selectEdge(page: Page): Promise<void> {
-  const point = await page.evaluate(() => {
-    const path = document.querySelector('.react-flow__edge-path') as SVGPathElement | null;
-    if (!path) throw new Error('no edge path on the canvas');
+export async function selectEdge(page: Page, index = 0): Promise<void> {
+  const point = await page.evaluate((i) => {
+    const paths = document.querySelectorAll('.react-flow__edge-path');
+    const path = paths[i] as SVGPathElement | undefined;
+    if (!path)
+      throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
     const mid = path.getPointAtLength(path.getTotalLength() / 2);
     const ctm = path.getScreenCTM();
     if (!ctm) throw new Error('the edge path has no screen transform');
     const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
     return { x: p.x, y: p.y };
-  });
+  }, index);
   await page.mouse.click(point.x, point.y);
   await expect(firesOn(page)).toBeVisible();
 }

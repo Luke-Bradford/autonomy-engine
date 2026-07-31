@@ -203,3 +203,150 @@ describe('EdgePanel — a condition another edge already holds', () => {
     );
   });
 });
+
+/**
+ * U6e — the bounce cap.
+ *
+ * The one number that decides whether an authored loop terminates: a back-edge
+ * with no `maxBounces` is refused by the save gate, and one with the wrong cap
+ * silently either loops too long or fails as `capped`.
+ */
+describe('EdgePanel — a back-edge bounce cap', () => {
+  const NODES = [node('a', 'http_request'), node('b', 'llm_call')];
+  const back = (maxBounces = 10): Edge =>
+    ({ id: 'e_back', from: 'b', to: 'a', on: 'success', back: true, maxBounces }) as Edge;
+
+  function mountBack(edge = back()) {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: NODES,
+        edges: [{ id: 'e_fwd', from: 'a', to: 'b', on: 'success' }, edge],
+        containers: [],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    render(<EdgePanel store={store} edge={edge} nodes={NODES} edges={[edge]} />);
+    return { store, field: screen.getByLabelText(/Bounce cap/) as HTMLInputElement };
+  }
+
+  it('names the element a back-edge and shows the stored cap', () => {
+    const { field } = mountBack(back(4));
+    expect(screen.getByRole('heading').textContent).toBe('Back-edge');
+    expect(field.value).toBe('4');
+  });
+
+  it('is absent for a forward edge, which has no cap to set', () => {
+    mount({ id: 'e_1', from: 'a', to: 'b', on: 'success' } as Edge, NODES);
+    expect(screen.getByRole('heading').textContent).toBe('Edge');
+    expect(screen.queryByLabelText(/Bounce cap/)).toBeNull();
+  });
+
+  it('commits a new cap on blur', () => {
+    const { store, field } = mountBack();
+    fireEvent.change(field, { target: { value: '3' } });
+    fireEvent.blur(field, { target: { value: '3' } });
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(3);
+  });
+
+  it('accepts 0 — a back-edge that never bounces is a savable doc', () => {
+    const { store, field } = mountBack();
+    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.blur(field, { target: { value: '0' } });
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(0);
+  });
+
+  /**
+   * The refusal has to be VISIBLE and has to KEEP the operator's text. Silently
+   * reverting the field is the defect class U6a fixed in the condition picker:
+   * a control that appears to accept a value and does nothing.
+   */
+  it.each([
+    ['1.5', 'a fraction'],
+    ['-2', 'a negative'],
+    ['', 'an emptied field'],
+  ])('refuses %s (%s) out loud, without reverting or writing', (typed) => {
+    const { store, field } = mountBack(back(6));
+    fireEvent.change(field, { target: { value: typed } });
+    fireEvent.blur(field, { target: { value: typed } });
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
+    expect(field.value).toBe(typed);
+    expect(screen.getByRole('alert').textContent).toMatch(/whole number/);
+  });
+
+  /**
+   * `Number('')` is 0, so an emptied field would commit a cap of ZERO — a legal
+   * value with entirely different behaviour — if the blank were not caught
+   * before the numeric test. Pinned separately from the refusal above because
+   * this is the one bad value that would have been stored SILENTLY.
+   */
+  it.each([
+    ['', 'cleared to retype'],
+    ['abc', 'non-numeric text, which a number input reports as blank'],
+  ])('does not read a blank field (%s) as a cap of zero', (typed) => {
+    const { store, field } = mountBack(back(6));
+    fireEvent.change(field, { target: { value: typed } });
+    fireEvent.blur(field, { target: { value: typed } });
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
+    expect(screen.getByRole('alert')).toBeTruthy();
+  });
+
+  /**
+   * Reverting to the STORED value after a refusal must clear the banner.
+   *
+   * The no-op-blur guard returns before the write, and used to return before
+   * the error was cleared too — so typing `1.5`, blurring, then retyping the
+   * original cap and blurring left the banner asserting "not a whole number"
+   * over a field showing a valid, unchanged value. The write is what a no-op
+   * blur skips; the acknowledgement is not.
+   */
+  it('clears a standing error when the field is put back to the stored value', () => {
+    const { store, field } = mountBack(back(6));
+    fireEvent.change(field, { target: { value: '1.5' } });
+    fireEvent.blur(field, { target: { value: '1.5' } });
+    expect(screen.getByRole('alert')).toBeTruthy();
+
+    fireEvent.change(field, { target: { value: '6' } });
+    fireEvent.blur(field, { target: { value: '6' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
+  });
+
+  /**
+   * A back-edge that declares NO cap — the imported / pre-#444 doc this feature
+   * keeps invoking. The field must not show `10` for it: that states a cap the
+   * doc does not hold (against the canvas' own `×?` and the aria-label's "no
+   * bounce cap declared"), and because `commit` early-returns on
+   * `text === stored` it made the field a DEAD END — the operator sees `10`,
+   * types `10`, nothing is written, and the doc stays unsavable.
+   */
+  describe('a back-edge with no declared cap', () => {
+    const capless = { id: 'e_back', from: 'b', to: 'a', on: 'success', back: true } as Edge;
+
+    it('renders empty rather than inventing the default', () => {
+      const { field } = mountBack(capless);
+      expect(field.value).toBe('');
+    });
+
+    it('accepts the default typed in — the field is not a dead end', () => {
+      const { store, field } = mountBack(capless);
+      fireEvent.change(field, { target: { value: '10' } });
+      fireEvent.blur(field, { target: { value: '10' } });
+      expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(10);
+    });
+  });
+
+  it('a blur that changed nothing does not dirty the doc', () => {
+    const { store, field } = mountBack(back(6));
+    store.setState({ dirty: false });
+    fireEvent.blur(field, { target: { value: '6' } });
+    expect(store.getState().dirty).toBe(false);
+  });
+});

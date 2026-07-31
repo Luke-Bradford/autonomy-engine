@@ -1465,6 +1465,26 @@ td button + button {
 }
 
 /*
+ * U6e — the back-edge OFFER, which is an action rather than the dismiss glyph
+ * the rule above styles. It reads as a button (border, full-contrast text) so
+ * the panel does not present its one constructive control as decoration.
+ * `pointer-events: auto` is inherited from `.canvas-refusal button`.
+ */
+.canvas-refusal-action {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.canvas-refusal-action:hover {
+  border-color: var(--accent);
+}
+
+/*
  * A SELECTED edge keeps its variant hue, and says "selected" by getting
  * heavier instead.
  *

@@ -1,6 +1,7 @@
 import {
   declaredBranchesOf,
   EdgeOnSchema,
+  MaxBouncesSchema,
   stableEdgeKey,
   type Edge,
   type EdgeOn,
@@ -42,7 +43,16 @@ export function conditionOf(e: Edge): EdgeCondition {
  * information (`true`/`false`/case) that says where each arm goes.
  */
 export function edgeLabel(e: Edge): string {
-  return e.on === 'branch' ? e.branch : e.on;
+  const base = e.on === 'branch' ? e.branch : e.on;
+  // U6e — a back-edge is the one edge whose DIRECTION is not what the arrowhead
+  // says: it points at a step that already ran. Marking it in the label rather
+  // than with a colour is what keeps it composable with U19's five hues (a
+  // back-edge carries an ordinary condition and gets its ordinary colour) and
+  // off the one visual channel already spent — `skipped` owns the dash, and a
+  // back-edge may legally BE `skipped`. It also puts the bounce cap on the
+  // canvas without needing the edge selected, which is the number that decides
+  // whether the loop terminates.
+  return e.back === true ? `↺ ${base} ×${e.maxBounces ?? '?'}` : base;
 }
 
 /**
@@ -112,7 +122,48 @@ export function edgeArrowMarkerId(e: Pick<Edge, 'on'>): string {
  */
 export function edgeAriaLabel(e: Edge): string {
   const where = `Edge from ${e.from} to ${e.to}`;
-  return e.on === 'branch' ? `${where}, on branch '${e.branch}'` : `${where}, on ${e.on}`;
+  const on = e.on === 'branch' ? `on branch '${e.branch}'` : `on ${e.on}`;
+  // The `↺ … ×N` glyph in `edgeLabel` is not readable text, and the SVG <text>
+  // label is not exposed under RF's own role anyway — so back-ness and the cap
+  // have to be SPELLED here or they are colour-and-symbol only.
+  if (e.back !== true) return `${where}, ${on}`;
+  /* A MISSING cap is reported as missing, in the same words the visual label's
+     `×?` stands for — not as `0`. Zero is a real and DIFFERENT value (an edge
+     that never bounces), so defaulting to it would state a specific behaviour
+     for a doc that declares none, and would state a different one to a screen
+     reader than the canvas shows. Reachable only for an imported or API-authored
+     doc — the canvas always sets a cap — and that doc is refused by the save
+     gate, which is a fact worth being able to hear rather than one to paper over. */
+  return e.maxBounces === undefined
+    ? `${where}, back-edge ${on}, no bounce cap declared`
+    : `${where}, back-edge ${on}, up to ${e.maxBounces} bounces`;
+}
+
+/**
+ * The bounce cap a NEWLY drawn back-edge carries (U6e).
+ *
+ * A back-edge with no `maxBounces` is refused by the save gate — an unbounded
+ * loop never terminates — so authoring one without a cap would mint an edge the
+ * operator cannot save and, on an IMMUTABLE version, cannot repair later. Ten
+ * is a working retry budget rather than a claim about the right number; the
+ * `EdgePanel` field exists precisely because the right number is per-pipeline.
+ *
+ * Well under `fireBackEdges`' `DEFENSIVE_BOUNCE_CAP` (10 000), which silently
+ * clamps anything above it.
+ */
+export const DEFAULT_MAX_BOUNCES = 10;
+
+/**
+ * Whether `n` is a value `maxBounces` can hold.
+ *
+ * Delegates to `MaxBouncesSchema` rather than restating its constraints, so a
+ * tightening of the format propagates to this editor instead of leaving the
+ * canvas accepting a value the write gate refuses — on an IMMUTABLE doc, where
+ * that is unrepairable. Zero is legal, and an editor that refused it would be
+ * an editor that cannot accept back a value the format persists.
+ */
+export function isMaxBounces(n: number): boolean {
+  return MaxBouncesSchema.safeParse(n).success;
 }
 
 /**

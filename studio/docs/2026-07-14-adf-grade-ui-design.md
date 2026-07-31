@@ -143,6 +143,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U6d | Container create/edit/drag-membership | Author |
 | | **AS BUILT (2026-07-31):** CREATE + membership only, through one `<select>` on the NODE (a container cannot be RF-`selectable`). Config editing and drag-membership are U23's. This ticket WARNS rather than refuses — refusing a boundary-crossing edit would make containerising an already-wired `a → b` impossible, and a membership edit is reversible by the same control. | |
 | U6e | Back-edge rendering/editing + bounce config | Author |
+| | **AS BUILT (2026-07-31):** AUTHORING + bounce config; RENDERING deliberately deferred. The refusal panel now OFFERS "Make it a back-edge" where the back shape is legal, and `EdgePanel` edits `maxBounces`. A back-edge still PAINTS like a forward one: the two free channels were both spent or reserved — `skipped` owns the dash and a back-edge may legally BE `skipped`, and a sixth `edge-variant-*` would break `EDGE_VARIANTS`' `Edge['on']` typing, its marker defs and `palette.test.ts`'s exact-match guard. Back-ness is carried in the LABEL (`↺ success ×10`) + aria-label, plus a style-less `.edge-back` hook for U19 to paint through. Two further deferrals: `backEdgeDefect` is a second reader of `validateDoc`'s three rules rather than its SSOT (inverting that dependency rewrites the save gate's error strings — **#847**); container membership edits are still not back-edge aware (**#848**); and the offer's gate answers about the EDGE's topology only, so authoring the first back-edge can still invalidate an unrelated `${nodes.x.status}` ref via the `canReRunNodes` flip — warned by the validation badge, reversible by deleting the edge, per U6d's reversible-consequence rule. | |
 | U7 | Node properties panel (tabbed, per-activity, conn picker) | Author |
 | U8a | Expression insert flyout + whole-doc validation + node issue list | Author |
 | U8b | Structured per-token diagnostics + badges (gated on R3) | Author |
@@ -932,8 +933,9 @@ Bundle, measured with and without the diff: entry CSS 3.09 → 3.25 kB gzip, the
 110.08 kB gzip, `fluent` vendor UNCHANGED at 71.03 kB gzip.
 
 NOT in U6a, with owners: back-edge rendering — a `back: true` edge paints identically to a forward
-one, and it is the one edge whose apparent direction is a lie (**U6e**, which owns back-edge
-rendering + bounce config); typed ports / multi-handle / connect-time validation (**U6b**); the
+one, and it is the one edge whose apparent direction is a lie (**U6e** built the AUTHORING and the
+bounce config and left the PAINTING alone: back-ness is labelled `↺ success ×10`, not hued or
+dashed, because both channels collide — see U6e's AS BUILT row; the hue is **U19**'s); typed ports / multi-handle / connect-time validation (**U6b**); the
 `skipped`-edge scope cliff (a node behind an `on:'skipped'` edge inherits nothing from its
 predecessor's guarantees — `computeGraph` INVERTS them across a skip — so an upstream
 `${nodes.X.output}` ref behind one stops resolving. This is correct engine behaviour and it is
@@ -981,8 +983,10 @@ Decisions worth not re-deriving:
   a cycle they did not draw.
 - **A back-edge is exempt by CONSTRUCTION**, not by a special case: it is not in the forward graph.
   The refusal text names the back-edge + `maxBounces` remedy in the engine's own words, so it does
-  not read as "this tool cannot express a loop" while **U6e** is still unbuilt. When U6e lands,
-  this refusal is the natural place to OFFER a back-edge instead of just describing one.
+  not read as "this tool cannot express a loop". **U6e (2026-07-31) took exactly that step**: the
+  refusal panel now carries a "Make it a back-edge" action, shown only where the back shape passes
+  the full back-edge rule set — cycle-closure implies ancestry but NOT progress, so gating on the
+  refusal's reason alone would have authored a doc the save gate refuses.
 - **Refusal messages name the ACTIVITY, never the node id.** Found in the browser: ids come from
   `newLocalId`, so the first draft read *"'n_7c44a16f-…' → 'n_9c4bb103-…' would close a
   forward cycle"* with every unit spec green — the fixtures used ids a human would pick (`'a'`),
@@ -1051,7 +1055,7 @@ pass: the refusal panel re-themes, survives a selection change plus ~2.5s of tic
 clears it; zero console errors or warnings across the session.
 
 NOT in U6b, with owners: one source port per OUTCOME + retiring the condition dropdown (**U19**);
-back-edge authoring, which is the remedy the cycle refusal names (**U6e**); the container-BOUNDARY
+back-edge authoring, which is the remedy the cycle refusal names (**U6e**, BUILT 2026-07-31); the container-BOUNDARY
 connect rule — real, and refused by the save gate, but container membership is not rendered yet, so
 a refusal's cause would be invisible (**U6c**/**U6d**); undo of a connection (**U17**).
 
@@ -1169,7 +1173,7 @@ the rule deleted — a gesture covers it instead) and FIRST-wins resolution of a
 
 NOT in U6c, with owners: creating/editing a container and dragging membership (**U6d**); RF
 `parentId` subflows, which would make a container draggable as a group and enclosure authoritative
-(**U23**); back-edge authoring (**U6e**); pruning a deleted node from `containers[].children`
+(**U23**); back-edge authoring (**U6e**, BUILT 2026-07-31); pruning a deleted node from `containers[].children`
 (**#746**, U6d's path).
 
 ## U6d — container CREATE + membership (AS BUILT, 2026-07-31)

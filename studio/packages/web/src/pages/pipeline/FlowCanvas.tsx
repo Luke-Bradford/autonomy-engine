@@ -704,7 +704,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     sourceHandle: SOURCE_PORT_ID,
     targetHandle: TARGET_PORT_ID,
     label: edgeLabel(e),
-    className: edgeVariantClass(e),
+    /* U6e — `edge-back` is ADDITIVE, and deliberately carries no style of its
+       own. A back-edge holds an ordinary condition, so it keeps that
+       condition's hue; the two channels that could have encoded it are both
+       spent or reserved — `skipped` owns the dash (`index.css`) and a back-edge
+       may legally BE `skipped`, and a sixth `edge-variant-*` would break
+       `EDGE_VARIANTS`' `Edge['on']` typing, its marker defs and the exact-match
+       palette guard. Back-ness is stated in the LABEL and the aria-label
+       instead. This is a semantic hook: a stable selector for the e2e spec, and
+       the seam U19 can style through without re-deriving the fact. */
+    className: `${edgeVariantClass(e)}${e.back === true ? ' edge-back' : ''}`,
     // U6b — the arrowhead, so direction is on screen rather than inferred from
     // which side the endpoints happen to sit on. A STRING marker id references
     // one of `EdgeMarkers`' own defs (RF's object form would need a literal
@@ -813,6 +822,54 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     }
     return connectRejection(connectPre, drawnCandidate(attempted.from, attempted.to));
   }, [attempted, connectPre, drawnCandidate]);
+
+  /**
+   * U6e — whether the refusal on screen can be answered with a BACK-EDGE.
+   *
+   * The refusal message for a cycle-closer has always ended *"a loop is
+   * expressed as a back-edge with a maxBounces cap"*, and there was no way to
+   * make one: the engine has run back-edges since P2c and the save gate has
+   * validated them just as long, but the canvas could only ever refuse the
+   * gesture that means one. This turns that sentence into a control.
+   *
+   * OFFERED, not applied silently. Promoting the drag on drop would change what
+   * an existing gesture means — a mis-drag of `b → a` for `a → b` would become a
+   * loop instead of a clear refusal — and, more decisively, TWO different
+   * refusals can be answered this way (a forward cycle, and a child crossing out
+   * to its enclosing container), so a silent promotion would have to guess which
+   * of two meanings the operator had.
+   *
+   * Gated on the whole BACK-EDGE rule set for the edge that would actually be
+   * authored, not on the refusal's REASON: cycle-closure implies the ancestry
+   * rule but not the PROGRESS rule (the reset body is computed over a node-only
+   * adjacency, so a cycle running through a container endpoint leaves the source
+   * out of its own body). An offer shown on reason alone would author a doc the
+   * save gate refuses on topology.
+   *
+   * That gate is NOT a guarantee the resulting doc SAVES, and the distinction is
+   * stated because the first version of this comment claimed otherwise.
+   * `backEdgeDefect` answers about the EDGE; a back-edge also has a doc-wide
+   * consequence it cannot see — the first `back: true` edge flips
+   * `canReRunNodes`, which disables `settled`, so every `${nodes.x.status}` ref
+   * in the doc newly fails `validateRefs`. Reproduced: `a → b → c` with `c`'s
+   * config holding `${nodes.a.status}` accepts the offer and then badges invalid.
+   *
+   * The offer is still shown, and that is U6d's rule rather than a concession: a
+   * consequence REVERSIBLE BY THE SAME CONTROL is warned about, not refused.
+   * Deleting the edge fully repairs it, the validation badge names the exact
+   * ref, and Save is already gated on the badge — so nothing is destroyed and
+   * nothing is silent. Refusing instead would make a legitimate loop
+   * unauthorable because of an expression in an unrelated node, which is the
+   * "control that silently does nothing" defect this panel exists to fix. The
+   * #748/U16 traps this feature guards against are the ones with NO way back;
+   * this is not one of them.
+   */
+  const backOffer: { from: string; to: string } | null = useMemo(() => {
+    if (attempted === null || refusal === null) return null;
+    const candidate = { ...drawnCandidate(attempted.from, attempted.to), back: true };
+    if (connectRejection(connectPre, candidate) !== null) return null;
+    return { from: attempted.from, to: attempted.to };
+  }, [attempted, refusal, connectPre, drawnCandidate]);
 
   /**
    * Whether React Flow should allow this connection at all.
@@ -996,6 +1053,24 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
              own badge list is the same idiom. */
           <Panel position="bottom-center" className="canvas-refusal">
             <span role="alert">{refusal.message}</span>
+            {backOffer !== null && (
+              <button
+                type="button"
+                className="canvas-refusal-action"
+                onClick={() => {
+                  store
+                    .getState()
+                    .connect(backOffer.from, backOffer.to, DRAWN_EDGE_CONDITION, { back: true });
+                  // Clear the attempt, or the assertive live region keeps
+                  // announcing a refusal for an edge that now EXISTS —
+                  // `refusal` is recomputed from the forward candidate, which
+                  // is still refused, and always will be.
+                  setAttempted(null);
+                }}
+              >
+                Make it a back-edge
+              </button>
+            )}
             <button type="button" onClick={() => setAttempted(null)} aria-label="Dismiss">
               ✕
             </button>

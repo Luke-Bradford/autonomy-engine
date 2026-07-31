@@ -2777,6 +2777,100 @@ export function closesForwardCycle(
   );
 }
 
+/** Why a candidate BACK-EDGE would be refused by the save gate. */
+export type BackEdgeDefect = 'ancestry' | 'no-progress' | 'parallel-body';
+
+/**
+ * `backEdgeDefect` — the CONNECT-TIME half of the back-edge rules (U6e), the
+ * counterpart to `closesForwardCycle` above.
+ *
+ * The canvas OFFERS to turn a refused connection into a back-edge, and has to
+ * decide whether that offer is legal before the edge exists. Answering it here,
+ * from the same helpers `validateDoc`'s back-edge block reads, is what keeps the
+ * connect-time answer and the #444 write gate from drifting apart.
+ *
+ * SCOPE, stated because the first draft of this comment overclaimed it: this
+ * answers about the EDGE's TOPOLOGY — `validateDoc`'s three back-edge rules and
+ * nothing else. A `null` here does NOT mean the resulting doc validates. The
+ * first `back: true` edge in a doc flips `canReRunNodes`, which disables
+ * `settled`, so every `${nodes.x.status}` ref in that doc newly fails
+ * `validateRefs` — a doc-wide consequence no per-candidate predicate can see.
+ * The canvas leaves that one to its validation badge, since deleting the edge
+ * reverses it.
+ *
+ * PRECONDITIONS the caller owns, both of which `connectRejection` checks first:
+ * the endpoints must EXIST, and the pair must not already hold this edge.
+ * `validateDoc` SKIPS the ancestry and progress rules for a dangling endpoint so
+ * it can report the dangling id instead (#786); here an absent id simply reaches
+ * nothing and comes back `'ancestry'`, which is a derived misdiagnosis if a
+ * direct caller has not checked.
+ *
+ * The probe is built with `on: 'success'`, and no rule reads `on` today. A
+ * future rule that DID (a `skipped` back-edge, say) would silently be answered
+ * about a `success` one — at which point this needs the condition passed in.
+ *
+ * The three arms are `validateDoc`'s own three back-edge refusals, in the order
+ * that explains the most first:
+ *  - `parallel-body` — a container-level fact independent of reachability
+ *    (`batchCount >= 2`), so it is decided without a traversal;
+ *  - `ancestry` — `to` must forward-reach `from`, containment included;
+ *  - `no-progress` — the reset body must contain `from`, else a bounce resets
+ *    nothing and `fireBackEdges` re-sees the same satisfied edge forever.
+ *
+ * `maxBounces` is NOT an arm: it is a property of the edge the caller authors,
+ * not of the graph, and the canvas supplies a default so a drawn back-edge is
+ * savable from the moment it exists.
+ *
+ * A DELTA, judged against `[...doc.edges, candidate]` rather than against
+ * `doc.edges` — but that difference is currently UNOBSERVABLE, and the comment
+ * says so rather than claiming a guard it does not provide (both mutants
+ * survive: `back-edge-delta.test.ts` cannot tell `withProbe` from `doc`). The
+ * hazard it is written against is real — the reset body reads `effectiveEdges`,
+ * which SYNTHESIZES a success-chain over node order when a doc declares NO
+ * edges, so an implicit chain can flatter a candidate that destroys it — but
+ * two facts close that path already: the probe carries `back: true`, which
+ * `forwardReach` skips, and the ancestry arm runs FIRST and needs a real
+ * forward edge, so an edge-less doc is refused before the reset body is ever
+ * computed. What actually catches the edge-less case is that `forwardReach`
+ * reads `doc.edges` RAW and never synthesizes.
+ * The probe is kept because it states honestly what is being judged, and
+ * because the two facts above are the kind that quietly stop holding.
+ *
+ * PUBLISHED API: `engine/index.ts` re-exports this module with `export *`.
+ */
+export function backEdgeDefect(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: Container[],
+  from: string,
+  to: string,
+): BackEdgeDefect | null {
+  const probe: Edge = { id: '__probe__', from, to, on: 'success', back: true, maxBounces: 1 };
+  const withProbe = { nodes: doc.nodes, edges: [...doc.edges, probe] };
+
+  // Read from the same `(batchCount ?? 1) >= 2` shape the save gate uses, so a
+  // change to what counts as parallel cannot leave the two disagreeing.
+  for (const c of containers) {
+    if ((c.batchCount ?? 1) < 2) continue;
+    const body = new Set(c.children);
+    if (body.has(from) || body.has(to) || to === c.id) return 'parallel-body';
+  }
+
+  const reach = forwardReach(withProbe, containers);
+  if (!(reach.get(to)?.has(from) ?? false)) return 'ancestry';
+
+  const nodeIdList = withProbe.nodes.map((n) => n.id);
+  const nodeAdj = nodeForwardAdjacency(withProbe);
+  const descendants = new Map<string, Set<string>>();
+  for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
+  const resetBody = backEdgeResetBody(
+    probe,
+    nodeIdList,
+    descendants,
+    new Map(containers.map((c) => [c.id, c])),
+  );
+  return resetBody.length === 0 || !resetBody.includes(from) ? 'no-progress' : null;
+}
+
 /**
  * Forward reachability over the doc's forward edges (node OR container
  * endpoints), PLUS containment: a container reaches (encloses) its own

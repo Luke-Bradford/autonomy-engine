@@ -14,9 +14,24 @@ import {
   type Position,
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
-import { retypeCollides, type EdgeCondition } from './edgeCondition';
+import {
+  DEFAULT_MAX_BOUNCES,
+  isMaxBounces,
+  retypeCollides,
+  type EdgeCondition,
+} from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
+
+/** How a connection differs from an ordinary forward edge (U6e). */
+export interface ConnectOptions {
+  /**
+   * Author a BACK-EDGE: a loop traversal edge that is not part of the forward
+   * graph. Set only by the canvas's back-edge OFFER — never by a drag, which
+   * always proposes a forward edge.
+   */
+  back?: boolean;
+}
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -315,8 +330,16 @@ export interface CanvasState {
    * half an edge (the label is the routing key), so the looser signature could
    * author an edge `EdgeSchema` does not accept.
    */
-  connect(from: string, to: string, condition: EdgeCondition): void;
+  connect(from: string, to: string, condition: EdgeCondition, options?: ConnectOptions): void;
   deleteEdge(id: string): void;
+  /**
+   * U6e — set a back-edge's bounce cap.
+   *
+   * Refuses (no-op) a value `EdgeSchema` would reject and an edge that is not a
+   * back-edge: `maxBounces` on a forward edge is a field the reducer never
+   * reads, so writing one would persist a lie about how the edge behaves.
+   */
+  updateEdgeBounces(id: string, maxBounces: number): void;
   /**
    * Retype an edge to a new condition. Refuses (no-op) a retype that would make
    * the edge a DUPLICATE of another — see `retypeCollides`.
@@ -635,15 +658,52 @@ export function createCanvasStore(): StoreApi<CanvasState> {
      * edge endpoints in the doc model, so refusing them was the narrower rule; no
      * current caller passes one (React Flow's ports are on nodes).
      */
-    connect(from, to, condition) {
+    connect(from, to, condition, options) {
+      const back = options?.back === true;
       const graph = {
         nodes: get().nodes,
         edges: get().edges,
         containers: get().containers,
       };
-      if (connectRejection(precomputeConnect(graph), { from, to, condition }) !== null) return;
-      const edge = { id: newLocalId('e'), from, to, ...condition } as Edge;
+      /* The candidate is judged WITH its back-ness, so the rules that decide the
+         answer are the ones that apply to the edge actually being authored — a
+         back-edge is exempt from the boundary and DAG rules and subject to its
+         own three (`backEdgeDefect`). Judging the forward shape and authoring
+         the back one is the mismatch `DRAWN_EDGE_CONDITION`'s docblock warns
+         about, in its other axis. */
+      if (connectRejection(precomputeConnect(graph), { from, to, condition, back }) !== null) {
+        return;
+      }
+      /* `maxBounces` is authored HERE rather than left for the panel: the save
+         gate refuses a back-edge without one, so a capless edge would be
+         unsavable from the instant it appeared, with the operator's only clue a
+         validation badge about an edge they just drew. The panel EDITS the cap;
+         it does not have to supply it. */
+      const edge = {
+        id: newLocalId('e'),
+        from,
+        to,
+        ...condition,
+        ...(back ? { back: true, maxBounces: DEFAULT_MAX_BOUNCES } : {}),
+      } as Edge;
       set((s) => ({ edges: [...s.edges, edge], dirty: true }));
+    },
+
+    updateEdgeBounces(id, maxBounces) {
+      if (!isMaxBounces(maxBounces)) return;
+      const current = get().edges.find((e) => e.id === id);
+      if (current === undefined || current.back !== true) return;
+      // Re-committing the cap it already holds must not mark the canvas dirty —
+      // `setNodeContainer`'s rule, for its reason: an unchanged graph that
+      // reports itself as edited is how a "you have unsaved changes" prompt
+      // loses the operator's trust. The panel's own guard is a STRING compare
+      // (`text === stored`), so `10.0`, ` 10` and `+10` over a stored `10` all
+      // reach here as a numerically identical write.
+      if (current.maxBounces === maxBounces) return;
+      set((s) => ({
+        edges: s.edges.map((e) => (e.id === id ? { ...e, maxBounces } : e)),
+        dirty: true,
+      }));
     },
 
     deleteEdge(id) {

@@ -145,6 +145,13 @@ test.describe('U6b connect-time validation', () => {
     await expect(refusal).toContainText("'Write File' → 'HTTP Request'");
     await expect(refusal).not.toContainText('n_');
 
+    /* U6e — the refusal now also OFFERS the remedy it names. Asserted here, not
+       only in `back-edge-authoring.spec.ts`, because this is the spec that owns
+       "what the operator sees when a cycle is refused" — leaving it silent
+       would let the offer disappear without a red test. Dismissing is still the
+       other way out, and taking the offer is covered by that file. */
+    await expect(refusal.getByRole('button', { name: 'Make it a back-edge' })).toBeVisible();
+
     // Dismissable, and gone on the next attempt either way.
     await refusal.getByRole('button', { name: 'Dismiss' }).click();
     await expect(refusal).toHaveCount(0);
