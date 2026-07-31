@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { computeRunCost } from '@autonomy-studio/shared';
-import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
+import { computeRunCost, type RunDetail } from '@autonomy-studio/shared';
+import {
+  getPipelineVersion,
+  getRun,
+  listRunDiagnostics,
+  listRunEvents,
+  listRuns,
+} from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { requireOwned } from './util.js';
@@ -44,6 +50,47 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
     return requireOwned(getRun(db, request.params.id), request.principal, 'run', request.params.id);
+  });
+
+  /**
+   * R1 — the run-detail read-model: the run PLUS the immutable version doc it is
+   * bound to, resolved server-side in one call (`RunDetailSchema`).
+   *
+   * U11's node-state overlay folds `createEngine(doc).projectRunState(events)`,
+   * which needs `nodes`/`edges`/`containers`. A `Run` carries only
+   * `pipelineVersionId`, and every version route is pipeline-SCOPED, so the page
+   * had no way to reach the doc at all.
+   *
+   * SECURITY — the ownership proof is the RUN's, and it is transitive by
+   * construction, not by assumption: a version is reachable here ONLY via a run
+   * that `requireOwned` has already cleared, and `runs.pipelineVersionId` is a
+   * foreign key, so the version returned is necessarily the one this run is
+   * bound to. `getPipelineVersion` itself takes no owner filter (a
+   * `PipelineVersion` row has no `ownerId` — owner scoping rides the pipeline
+   * FK), which is exactly why this route must never accept a version id from the
+   * caller. That is the second reason R1 is a run-detail read-model rather than
+   * the `GET /api/pipeline-versions/:id` the ticket first sketched.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/detail', async (request) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    const pipelineVersion = getPipelineVersion(db, run.pipelineVersionId);
+    if (!pipelineVersion) {
+      // NOT a 404. `runs.pipelineVersionId` is `onDelete: 'restrict'` and
+      // `PRAGMA foreign_keys` is ON per connection, so a surviving run pins its
+      // version row: this state is unreachable while the run exists. Reaching it
+      // means a violated DB invariant, and answering "no such run" would launder
+      // that into the same response an ownership refusal gives — a 500 says the
+      // server is broken, which is the truth.
+      throw new Error(
+        `run ${run.id} is bound to pipeline version ${run.pipelineVersionId}, which does not exist`,
+      );
+    }
+    return { run, pipelineVersion } satisfies RunDetail;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {

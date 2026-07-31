@@ -12,6 +12,7 @@ export * from './trigger.js';
 export * from './trigger-context.js';
 export * from './fire-result.js';
 export * from './run.js';
+export * from './run-detail.js';
 export * from './external-wait.js';
 export * from './run-stream.js';
 export * from './secret.js';
