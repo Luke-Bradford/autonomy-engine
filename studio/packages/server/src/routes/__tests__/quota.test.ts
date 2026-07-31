@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../../quota/claude-quota.js';
 import {
+  ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
   AccountQuotaStateSchema,
   type AccountQuotaUnavailableReason,
   type ClaudeAccountQuota,
@@ -34,10 +35,16 @@ const apps: FastifyInstance[] = [];
 
 async function appReading(
   claude: ClaudeAccountQuota | null,
-  unavailable: AccountQuotaUnavailableReason | null = claude === null ? 'provider_error' : null,
+  unavailable: AccountQuotaUnavailableReason = 'provider_error',
 ): Promise<FastifyInstance> {
+  // Constructed as the discriminated union it is, so the fixture cannot express
+  // a pairing the reader could not produce.
+  const reading =
+    claude === null
+      ? ({ value: null, unavailable } as const)
+      : ({ value: claude, unavailable: null } as const);
   const { app } = await buildTestAppWithContext({
-    claudeAccountQuotaReader: { read: async () => ({ value: claude, unavailable }) },
+    claudeAccountQuotaReader: { read: async () => reading },
   });
   apps.push(app);
   return app;
@@ -176,20 +183,20 @@ describe('GET /api/quota — UNREADABLE attribution', () => {
     expect(body).not.toHaveProperty('unavailable');
   });
 
-  it.each([
-    'disabled',
-    'no_credential',
-    'rate_limited',
-    'provider_error',
-    'unrecognized_payload',
-    'reader_error',
-  ] as const)('reports `%s` alongside the null reading', async (reason) => {
-    const body = (
-      await (await appReading(null, reason)).inject({ method: 'GET', url: '/api/quota' })
-    ).json();
-    expect(body.account.claude).toBeNull();
-    expect(body.unavailable.claude).toBe(reason);
-  });
+  // Driven off the exported enum, not a copy of it: the route is value-agnostic,
+  // so no single row can fail alone — what this table is actually worth is being
+  // EXHAUSTIVE, and a hand-written copy stops being exhaustive the day someone
+  // adds a seventh reason.
+  it.each(ACCOUNT_QUOTA_UNAVAILABLE_REASONS)(
+    'reports `%s` alongside the null reading',
+    async (reason) => {
+      const body = (
+        await (await appReading(null, reason)).inject({ method: 'GET', url: '/api/quota' })
+      ).json();
+      expect(body.account.claude).toBeNull();
+      expect(body.unavailable.claude).toBe(reason);
+    },
+  );
 
   it('leaves the guard parse yielding UNREADABLE — a reason is never a number', async () => {
     // The failure this whole field must not cause: an advisory string leaking
@@ -209,6 +216,22 @@ describe('GET /api/quota — UNREADABLE attribution', () => {
       const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
       expect(AccountQuotaStateSchema.safeParse(body).success).toBe(true);
     }
+  });
+
+  it.each([
+    [
+      'a reading that also explains its own absence',
+      { account: { claude: READING }, unavailable: { claude: 'rate_limited' } },
+    ],
+    ['an UNREADABLE with the reason dropped', { account: { claude: null } }],
+  ])('the schema REJECTS %s', (_label, partial) => {
+    // The iff, enforced rather than asserted in prose. Without the superRefine
+    // both of these parse: the first is a number carrying a failure's
+    // explanation, the second a silent reversion to the unattributed UNREADABLE
+    // this field exists to remove. `.optional()` alone admits both.
+    expect(
+      AccountQuotaStateSchema.safeParse({ generated_at: 1_785_495_913, ...partial }).success,
+    ).toBe(false);
   });
 
   it('reports `disabled` — not a provider fault — when the surface is switched off', async () => {

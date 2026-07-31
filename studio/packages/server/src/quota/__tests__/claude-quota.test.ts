@@ -898,8 +898,9 @@ describe('#825 — unavailable reason', () => {
 
   it('serves the CACHED sample its own reason, not a later one', async () => {
     // The reason must belong to the sample that produced the served value.
-    // A getter read separately from the value could pair a cached reading with
-    // a fresher failure's cause; stamping both together is what forbids it.
+    // The regression this actually bites on: a cache hit that returns the
+    // stamped value but recomputes (or forgets) the reason — here, serving the
+    // cached `null` with `unavailable: null`, an unattributed UNREADABLE.
     let payload: unknown = RATE_LIMITED;
     let clock = 0;
     const reader = createClaudeAccountQuotaReader({
@@ -939,8 +940,9 @@ describe('#825 — unavailable reason', () => {
   });
 
   it('never lets a reason accompany a reading', async () => {
-    // The one thing this field must never do. Exhaustive over the reader's
-    // outcomes rather than spot-checked: every shape a sample can take.
+    // The one thing this field must never do, over every PAYLOAD shape the
+    // fetcher can return. (Not every reason: `no_credential`, `reader_error`
+    // and `disabled` are reached by the cases above, not by varying a payload.)
     for (const payload of [LIVE_PAYLOAD, RATE_LIMITED, null, { five_hour: {} }, undefined]) {
       const { reader } = readerWith(payload);
       const got = await reader.read();
