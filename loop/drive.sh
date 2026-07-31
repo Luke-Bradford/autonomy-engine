@@ -132,8 +132,14 @@ STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
 # chaining them onto the default would also strip and re-suffix an EXPLICIT
 # override, turning `STUDIO_VERSION_URL=http://host/v` into `http://host/v/api/version`.
 if [ -z "${STUDIO_VERSION_URL:-}" ]; then
-  STUDIO_VERSION_BASE="${STUDIO_QUOTA_URL%/}"
-  STUDIO_VERSION_URL="${STUDIO_VERSION_BASE%/api/quota}/api/version"
+  # The two strips happen in a SUBSHELL so the intermediate needs no name in this
+  # scope: a leftover `STUDIO_VERSION_BASE` global would outlive the one line
+  # that needs it and read like configuration, which is exactly what this
+  # section is. Not `set --` for the same scratch space -- this is top-level, so
+  # that would clobber the script's own positional parameters.
+  STUDIO_VERSION_URL="$(
+    svu="${STUDIO_QUOTA_URL%/}"; printf '%s' "${svu%/api/quota}"
+  )/api/version"
 fi
 QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
                                   # last SHADOW poll ATTEMPT. Its own file, its own age, its own
@@ -367,6 +373,13 @@ quota_sane() {  # $1=candidate; echoes it if usable as a percent, "" otherwise
 }
 
 # --- quota_fetch_url: $1=url; echoes the raw response body, "" on any failure.
+# EXIT STATUS IS PART OF THE CONTRACT, not just stdout: rc=0 iff the transfer
+# succeeded, non-zero when nothing answered. `drift_report_studio_server` keys on
+# it to tell a LIFECYCLE fault (the unit is down / on another port) apart from a
+# service that answered with a body it could not use -- two states with two
+# different remedies. Anything that wraps this call must preserve the rc; a
+# `|| true` or a retry shim that swallows it collapses those two into one and
+# re-creates the mis-attribution below.
 #
 # Split from the parse (#825) so ONE body can be read TWICE -- for the percent
 # and, when there is no percent, for studio's advisory reason. Two curls would be
@@ -1186,6 +1199,36 @@ drift_report_driver_code() {
   return 0
 }
 
+# --- drift_fetch_origin: refresh origin/main for a drift half. rc=0 on success.
+#
+# ONE owner for the fetch both halves below need, because `origin/main` inside
+# $REPO is a cached local ref: a drift verdict built on an unrefreshed one
+# compares against whatever was current the last time anything fetched, and then
+# reads "in sync" forever. Each caller logs its OWN half's UNKNOWN message on a
+# failure -- the vocabulary stays per-half, only the mechanism is shared.
+#
+# BOUNDED, because nothing else here is. `auth_ok` already records this file's
+# rule -- macOS has no `timeout`, and a hung probe must never wedge the driver
+# -- and this runs BEFORE every stop condition, the quota gate and the fire,
+# with no log line while it hangs. `GIT_TERMINAL_PROMPT=0` stops a credential
+# helper blocking on a prompt nobody can answer; the `http.*` knobs abort a
+# stalled transfer (the remote is HTTPS, and `http.lowSpeedLimit` is unset
+# globally). A bounded fetch that FAILS reads UNKNOWN, which is the safe
+# direction; an unbounded one that hangs reads as nothing at all.
+#
+# SHARED RATHER THAN COPIED, and that is not tidiness (#832 review, closing
+# #834). The copy had ALREADY diverged inside the PR that made it: the bounds
+# above were added to the plane half while the studio-server half -- added by
+# that same PR, on the same pre-fire path, under a comment claiming "same
+# discipline and same reason as the plane half" -- kept an unbounded fetch. Two
+# call sites, one of them the newer, is exactly how a hardening misses the thing
+# it was written for. Independently callable and testable is preserved; each
+# half still calls this itself rather than depending on a sibling having run.
+drift_fetch_origin() {
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.lowSpeedLimit=1000 \
+    -c http.lowSpeedTime=20 fetch --quiet origin main 2>/dev/null
+}
+
 # --- drift_report_plane: does the live plane match what is on origin/main?
 #
 # FETCHES FIRST, and that is the difference between a drift report and a
@@ -1214,16 +1257,7 @@ drift_report_plane() {
     log "plane drift: UNKNOWN -- $REPO is not a git checkout to compare against (#808)"
     return 0
   fi
-  # BOUNDED, because nothing else here is. `auth_ok` already records this file's
-  # rule -- macOS has no `timeout`, and a hung probe must never wedge the driver
-  # -- and this fetch runs BEFORE every stop condition, the quota gate and the
-  # fire, with no log line while it hangs. `GIT_TERMINAL_PROMPT=0` stops a
-  # credential helper blocking on a prompt nobody can answer; the `http.*` knobs
-  # abort a stalled transfer (the remote is HTTPS, and `http.lowSpeedLimit` is
-  # unset globally). A bounded fetch that FAILS reads UNKNOWN, which is the safe
-  # direction; an unbounded one that hangs reads as nothing at all.
-  if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.lowSpeedLimit=1000 \
-       -c http.lowSpeedTime=20 fetch --quiet origin main 2>/dev/null; then
+  if ! drift_fetch_origin; then
     log "plane drift: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the live plane is current (#808)"
     return 0
   fi
@@ -1339,25 +1373,31 @@ except Exception:
 # while the install looks perfect -- is the same silent-never-runs shape
 # `drift_report_plane` had to be rewritten out of.
 #
-# TWO THINGS THIS DELIBERATELY DOES NOT DO, both deferred with reasons:
-#   * stamp the served build onto each `quota shadow: studio` line instead of
-#     emitting a separate one (#833). Strictly better attribution -- it survives
-#     log rotation and `DRIFT_REPORT=0` -- but it needs a freshness contract,
-#     because `quota_shadow_probe` can run BEFORE this in an iteration and a
-#     stamp that is silently one iteration stale is worse than none.
-#   * share one `origin/main` fetch with the plane half (#834). Both halves
-#     fetch for themselves so both stay independently callable and testable.
+# ONE THING THIS DELIBERATELY DOES NOT DO, deferred with a reason: stamp the
+# served build onto each `quota shadow: studio` line instead of emitting a
+# separate one (#833). Strictly better attribution -- it survives log rotation
+# and `DRIFT_REPORT=0` -- but it needs a freshness contract. Not because of
+# ordering WITHIN an iteration (`drift_report` runs first there, before
+# `quota_gate` and every later probe), but because the two run on different
+# clocks: this half reports every iteration, while `quota_shadow_probe` is
+# throttled to roughly one per hour. A stamp read from a drift measurement taken
+# an unknown number of iterations earlier is silently stale, and a stale
+# attribution is worse than none -- it is the same confident-but-unfounded
+# reading this whole ticket exists to stop.
+#
+# (The other deferral, sharing one `origin/main` fetch with the plane half
+# (#834), is CLOSED rather than deferred -- see `drift_fetch_origin` above.)
 
 drift_report_studio_server() {
   if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     log "studio server: UNKNOWN -- $REPO is not a git checkout to compare against (#832)"
     return 0
   fi
-  # FETCH FIRST, same discipline and same reason as the plane half: `origin/main`
-  # is a cached local ref, so a report built on an unrefreshed one compares the
-  # service against whatever was current the last time anything fetched and says
-  # "in sync" forever. A failed fetch is UNKNOWN, never in sync.
-  if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
+  # FETCH FIRST, through the same bounded helper the plane half uses: a report
+  # built on an unrefreshed `origin/main` compares the service against whatever
+  # was current the last time anything fetched and says "in sync" forever. A
+  # failed fetch is UNKNOWN, never in sync.
+  if ! drift_fetch_origin; then
     log "studio server: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the quota source is current (#832)"
     return 0
   fi
