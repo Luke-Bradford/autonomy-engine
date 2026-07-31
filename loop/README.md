@@ -190,24 +190,41 @@ launchctl kickstart -k gui/$(id -u)/com.autonomy.studio-build-driver   # -k: res
 
 `-k` terminates the current process, so do it between fires, not during one.
 
-**The driver now measures both gaps itself** (#808), once per loop iteration, right after the
+**The driver now measures these gaps itself** (#808, extended by #832), once per loop iteration, right after the
 iteration's `git fetch` and *ahead of every stop condition* — a run that never fires because the
 quota gate, an operator signal or `MAX_STALL` stopped it is exactly a run that might be stopping
 because it is executing superseded code, so reporting only alongside a fire would go quiet in the
-case that matters most. Two independent verdicts, because the 2026-07-31 incident is exactly the
-case where one of them reads healthy and the other does not:
+case that matters most. Three independent verdicts, because the 2026-07-31 incidents are exactly the
+cases where one of them reads healthy and another does not:
 
 | log line | question | how to read it |
 | --- | --- | --- |
 | `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
+| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `current` = identical, **or behind only by commits that leave its `studio/` tree byte-identical to main's** (the trees are compared directly, not the commits between them). `STALE` ⇒ `--update`. |
 
-Both are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure path
-reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must not be
-indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
+All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
+path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
+not be indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
 `plane drift` naming files is information, not an alarm; `driver code: STALE` is the one that means
-a merged fix is inert. `DRIFT_REPORT=0` silences both — and *only* the literal `0` does, so a typo
-such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
+a merged fix is inert. `DRIFT_REPORT=0` silences all three — and *only* the literal `0` does, so a
+typo such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
+
+`studio server` is the third half because the spend guard's source 3 is a third *program*, and
+nothing moved it forward or said that it had not (#832). Its verdict is about **`studio/`**, not
+about sha equality: this service is built from `studio/` alone, so a `loop/` or `docs/` merge cannot
+change a byte it serves, and calling it stale for one would make it red most of the day — a monitor
+whose red state is the normal state is a monitor nobody reads. So `current` means *the served build's
+`studio/` tree object is identical to `origin/main`'s* — compared directly rather than inferred from
+a count of commits touching the path, which git's default history simplification can report as 0
+while the two trees genuinely differ — and the line still discloses the distance it is discounting.
+It is a claim about the served CODE, not about the unit: a plist change (port, node path, env) is
+outside that pathspec, so `--status` remains the authority on whether the installer's own
+configuration is current.
+`drift_report_studio_server`'s header in `drive.sh` is the canonical account of why it exists, why it
+reads the running service rather than the installer's build stamp, and why it stays detection-only;
+the remedy is `install_studio_server.sh --update`, a human act by design (see the drift section
+above), and #792 phase 2 owns making that act a click.
 
 `driver code` reads `UNKNOWN` for the whole of any run started before #808 landed, because that
 process recorded no boot hash — which is the honest answer, not a gap.
@@ -298,7 +315,11 @@ Three independent bounds, checked before every fire, each with its own test in
   `source` means the guard USED studio, `shadow` means studio COULD have answered. When it cannot,
   the line names the CAUSE — `quota shadow: studio UNREADABLE (rate_limited)` (#825) — because a
   bare UNREADABLE conflates a broken reader with a merely contended account, and only the first is
-  evidence about studio. The cause is studio's own `unavailable.claude`, checked against the known
+  evidence about studio. **A shadow line is evidence about `main` only if the `studio server:` line
+  in the same iteration reads `current`** (#832) — the service is deployed separately and drifted 16
+  commits behind once already, voiding three readings that named no cause because they came from a
+  build predating the cause channel. Read the two interleaved and in order; a `sort | uniq -c` tally
+  destroys the pairing and mixes every build the service has ever run into one number. The cause is studio's own `unavailable.claude`, checked against the known
   enum, except `unreachable`, which this driver derives from curl's exit status when nothing
   answered at all. An unrecognised or absent cause degrades to the bare line. It decides
   nothing (it parses a body it fetched itself, so there is no code path from it to the quota cache or

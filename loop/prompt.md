@@ -106,13 +106,70 @@ Bucket them:
   `(disabled)` — **these ARE evidence against studio**, and a run of any of them means C3 is NOT
   ready. They say the reader could not do its job on a call the provider was willing to serve.
 - A bare `UNREADABLE` with no cause — an old studio, or something that is not studio, on the port.
-  Investigate rather than count.
+  Investigate rather than count. **This was measured and resolved on 2026-07-31 (#832): the
+  supervised service was SIXTEEN commits behind main (`ce88319..fcca7b3`), SIX of them touching
+  `studio/` — #773's drift, never reported at fire time. (#832's own body says eleven; that figure
+  was wrong, and under the `studio/`-tree rule below it is the six that decide the verdict.) So
+  it predated #825 and served no cause field at all. The three bare lines it produced (`10:53:51Z`, `12:45:12Z`, `14:25:20Z`) are VOID — they
+  measure a build from before the code they were meant to attest. Do not count them on either side.**
+
+**CHECK WHICH BUILD ANSWERED BEFORE YOU COUNT ANYTHING.** Every drift-report iteration now logs a
+`studio server:` line beside the shadow lines (#832). Read it first:
+
+- **`studio server: current`** — either identical to `origin/main`, or behind it while its `studio/`
+  tree is still byte-identical to main's. Either way the served build carries every `studio/` change
+  on main, so the shadow lines beside it are evidence about the code on main. **Count them.** (The
+  service is built from `studio/` alone, which is why a `loop/`-only merge does not disqualify it.)
+- `studio server: STALE` — its `studio/` tree differs from main's, or it has diverged from
+  main. Those shadow lines are evidence about THAT build, not about main: do not count them for or
+  against C3. Refresh with `loop/install_studio_server.sh --update` (a human act by design, #773)
+  and start collecting again. (The `not an ancestor` wording also covers a build *ahead* of the
+  checkout's `origin/main` — only reachable in the seconds between the drift fetch and a merge, and
+  harmless: `--update` just resets it to `origin/main`. Unlike `plane drift`, being ahead is not a
+  normal state here, because the installer only ever builds from `origin/main`.)
+- `studio server: UNKNOWN` — the line names the cause, and TWO of them demand action rather than a
+  shrug:
+  - **`served no usable build identity`** — something answered and it could not name itself. Do not
+    count its shadow lines, and **diagnose before acting**, because this one string covers four
+    different states and they have different remedies: a service predating `/api/version` (#792,
+    `521c4f2`) — at LEAST that stale, so `--update`; a *modern* build serving `commit: "dev"`
+    because it was built with no release manifest — also `--update`, but nothing was stale; a
+    non-JSON or empty body; or **something that is not studio at all owning the port** — where
+    `--update` is the wrong move entirely and `install_studio_server.sh --status` is where to look.
+    `curl -s http://127.0.0.1:8788/api/version` tells you which in one call (the log line names the
+    URL it used — use that one if it differs).
+  - **`has no studio/ tree`** — said of `origin/main`, the directory was renamed and the verdict is
+    unavailable until this half is taught the new path; said of *the served build*, that build
+    predates `studio/` existing (or was built from a tree without it), which is itself a reason to
+    `--update`. Either way nothing can be compared.
+  - `nothing answered` is a lifecycle fault to go fix (`loop/install_studio_server.sh`). The
+    remaining causes ("is not a git checkout to compare against", "could not be refreshed", "not a
+    commit this checkout knows", "could not be resolved in") mean the comparison could not be made
+    — no finding about studio, but no evidence either.
+- **No `studio server:` line at all** — unattributed, so **do not count it either way**. That is what
+  voids the three lines above. **Apply this STRUCTURALLY, never by date: "any shadow line with no
+  `studio server:` line above it in the same iteration."** A merge is not a deploy (#808) — a driver
+  still executing a pre-#832 `drive.sh` keeps logging bare shadow lines for as long as it runs, and
+  the 2026-07-26 run lasted 74.7 hours. So "logged after #832 merged" does NOT imply attributed, and
+  reading the rule by timestamp reintroduces exactly the mis-attribution it exists to stop. Also
+  covers any fire run with `DRIFT_REPORT=0`.
 
 So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
-reading**, with **no run of reader-fault causes** against them (a `quota source: studio` line is
-better still if one ever occurs). Count both sides with
-`grep 'quota shadow: studio' loop/logs/driver.log | sort | uniq -c` — and remember only
-`logs/driver.log` counts; agent transcripts are full of false hits.
+reading while the `studio server:` line for that same fire read `current`**, with **no run of
+reader-fault causes** against them (a `quota source: studio` line is better still if one ever
+occurs).
+
+**Read the two interleaved, in order — never as two separate tallies.** The attribution is
+per-fire, and `sort | uniq -c` destroys exactly the ordering it depends on, mixing every build the
+service has ever run into one number (which is the un-attributed count this whole ticket exists to
+prevent). Use:
+
+```sh
+grep -nE 'studio server:|quota shadow: studio' loop/logs/driver.log | tail -40
+```
+
+and read each shadow line against the `studio server:` line above it. Only `logs/driver.log`
+counts; agent transcripts are full of false hits.
 Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
 `loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
 polls of one shared, rate-limited budget, sharing one Keychain credential and one macOS-only

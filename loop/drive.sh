@@ -118,6 +118,29 @@ DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
 # copy is `DEFAULT_PORT` in `install_studio_server.sh`, and
 # `test_install_studio_server.sh` asserts the two agree.
 STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
+# DERIVED from the quota URL rather than written out again (#832). The port
+# above already has exactly one other copy, guarded by a test; a third one
+# spelled out here is how the stale 8080 pin survived its own reason, and this
+# URL points at the SAME server by construction -- which is the property the
+# drift half depends on, since a version served by one process says nothing
+# about the build another process is running.
+# The trailing-slash strip runs FIRST: without it a quota URL written
+# `.../api/quota/` fails to match the suffix and derives `.../api/quota//api/version`,
+# which degrades to UNKNOWN -- the safe direction, but silently, and the whole
+# point here is that the two URLs address the SAME process.
+# An `if` rather than a one-line `${VAR:-...}`: the derivation is two strips, and
+# chaining them onto the default would also strip and re-suffix an EXPLICIT
+# override, turning `STUDIO_VERSION_URL=http://host/v` into `http://host/v/api/version`.
+if [ -z "${STUDIO_VERSION_URL:-}" ]; then
+  # Two strips, both onto the destination itself, so the intermediate needs no
+  # name in this scope: a leftover `STUDIO_VERSION_BASE` global would outlive the
+  # lines that need it and read like configuration, which is exactly what this
+  # section is. Deliberately NOT `set --` for scratch space -- this file is
+  # SOURCED (by every test, and by anything reusing its helpers), and `set --` at
+  # top level destroys the sourcing context's own positional parameters.
+  STUDIO_VERSION_URL="${STUDIO_QUOTA_URL%/}"
+  STUDIO_VERSION_URL="${STUDIO_VERSION_URL%/api/quota}/api/version"
+fi
 QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
                                   # last SHADOW poll ATTEMPT. Its own file, its own age, its own
                                   # contract -- see quota_shadow_probe (#765).
@@ -350,6 +373,13 @@ quota_sane() {  # $1=candidate; echoes it if usable as a percent, "" otherwise
 }
 
 # --- quota_fetch_url: $1=url; echoes the raw response body, "" on any failure.
+# EXIT STATUS IS PART OF THE CONTRACT, not just stdout: rc=0 iff the transfer
+# succeeded, non-zero when nothing answered. `drift_report_studio_server` keys on
+# it to tell a LIFECYCLE fault (the unit is down / on another port) apart from a
+# service that answered with a body it could not use -- two states with two
+# different remedies. Anything that wraps this call must preserve the rc; a
+# `|| true` or a retry shim that swallows it collapses those two into one and
+# re-creates the mis-attribution below.
 #
 # Split from the parse (#825) so ONE body can be read TWICE -- for the percent
 # and, when there is no percent, for studio's advisory reason. Two curls would be
@@ -1169,6 +1199,60 @@ drift_report_driver_code() {
   return 0
 }
 
+# --- drift_fetch_origin: refresh origin/main for a drift half. rc=0 on success.
+#
+# ONE owner for the fetch both halves below need, because `origin/main` inside
+# $REPO is a cached local ref: a drift verdict built on an unrefreshed one
+# compares against whatever was current the last time anything fetched, and then
+# reads "in sync" forever. Each caller logs its OWN half's UNKNOWN message on a
+# failure -- the vocabulary stays per-half, only the mechanism is shared.
+#
+# BOUNDED, because nothing else here is. `auth_ok` already records this file's
+# rule -- macOS has no `timeout`, and a hung probe must never wedge the driver
+# -- and this runs BEFORE every stop condition, the quota gate and the fire,
+# with no log line while it hangs. `GIT_TERMINAL_PROMPT=0` stops a credential
+# helper blocking on a prompt nobody can answer; the `http.*` knobs abort a
+# stalled transfer (the remote is HTTPS, and none of these are set globally --
+# verified). A bounded fetch that FAILS reads UNKNOWN, which is the safe
+# direction; an unbounded one that hangs reads as nothing at all.
+#
+# `http.connectTimeout` IS PART OF THE BOUND, not belt-and-braces (#832 pre-PR
+# review). `lowSpeedLimit`/`lowSpeedTime` only arm once bytes are flowing, and
+# git sets no connect timeout of its own, so the pair bounds a STALLED transfer
+# and not a connect that never completes. Measured against a black-holed address
+# with exactly the two knobs above: rc=128 after 75s, 3.7x the intended bound,
+# and twice per iteration because each half fetches for itself. NXDOMAIN returns
+# at once; it is a black-holed resolver or route that hangs.
+#
+# TWO OTHER FETCHES ON THIS PATH ARE STILL UNBOUNDED and are NOT fixed here --
+# the top-of-loop `git fetch origin` a few lines above `drift_report`, and
+# `install_studio_server.sh`'s `report_status`. Both pre-date this ticket, and
+# the first is on the core loop path where changing failure behaviour deserves
+# its own change rather than a ride-along. Filed as #836. Until it lands, this
+# helper bounds ITS OWN stall and no more -- read the claim above that narrowly.
+#
+# SHARED RATHER THAN COPIED, and that is not tidiness (#832 review). The copy
+# had ALREADY diverged inside the PR that made it: the bounds
+# above were added to the plane half while the studio-server half -- added by
+# that same PR, on the same pre-fire path, under a comment claiming "same
+# discipline and same reason as the plane half" -- kept an unbounded fetch. Two
+# call sites, one of them the newer, is exactly how a hardening misses the thing
+# it was written for. Independently callable and testable is preserved; each
+# half still calls this itself rather than depending on a sibling having run.
+#
+# SO THIS DOES NOT CLOSE #834, and must not be read as doing so. That ticket is
+# about the NUMBER of fetches per iteration (top-of-loop, plane half, this half
+# -- still three); what is shared here is the mechanism, not the fetch. Its
+# stated remedy is a per-`drift_report` memo, which is a different change with a
+# different risk, and its own acceptance test ("a direct call with no flag set
+# must still fetch"). Leaving one helper for it to memoise makes that change
+# smaller; it does not make it done.
+drift_fetch_origin() {
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.connectTimeout=10 \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
+    fetch --quiet origin main 2>/dev/null
+}
+
 # --- drift_report_plane: does the live plane match what is on origin/main?
 #
 # FETCHES FIRST, and that is the difference between a drift report and a
@@ -1180,6 +1264,15 @@ drift_report_driver_code() {
 # discipline, not the code: the subject there is a git clone, here it is a
 # hand-copied directory, and a shared abstraction over the two would be a
 # coupling that buys nothing.
+#
+# ITS FETCH IS NOW BOUNDED (#832 -- it goes through `drift_fetch_origin`, which
+# see). That is a behaviour change to THIS half and worth stating plainly: a
+# link that cannot connect within 10s, or that delivers under 1 KB/s for 20s,
+# now reads `UNKNOWN` where it previously succeeded slowly. Deliberate, and the
+# safe direction -- an unmeasured plane must never be indistinguishable from a
+# current one, and this runs ahead of every stop condition where a stall is
+# invisible -- but a `UNKNOWN -- origin/main could not be refreshed` on a slow
+# link is now an expected reading rather than a broken remote.
 #
 # Enumerates from `git ls-tree origin/main loop/` -- the set of files that are ON
 # MAIN -- rather than from what happens to exist in both places. A file on main
@@ -1197,7 +1290,7 @@ drift_report_plane() {
     log "plane drift: UNKNOWN -- $REPO is not a git checkout to compare against (#808)"
     return 0
   fi
-  if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
+  if ! drift_fetch_origin; then
     log "plane drift: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the live plane is current (#808)"
     return 0
   fi
@@ -1249,8 +1342,269 @@ drift_report_plane() {
   return 0
 }
 
-# --- drift_report: both halves, once per loop iteration. Advisory; always 0.
-# Named for the pair, not for either half -- the driver-code half is the
+# --- studio_version_commit: stdin=an /api/version body; echoes a commit or "".
+#
+# Total by construction, like every other parser here: absent, unparseable,
+# wrong-type and wrong-shape all print "".
+#
+# THE HEX GUARD IS THE POINT, not a tidiness. `build-info.ts` serves
+# `commit: "dev"` whenever there is no release manifest, and that string is a
+# perfectly good argument to `git rev-parse` -- a checkout with a branch named
+# `dev` resolves it and the half then announces a confident verdict about a
+# build whose identity it never actually learned. Anything that is not a plain
+# abbreviated sha is NOT an identity, and the safe answer to "I do not know what
+# is running" is to say so. The lower bound is git's own 7-character minimum
+# abbreviation; the upper is a full sha.
+studio_version_commit() {
+  python3 -c "
+import sys, json, re
+try:
+    c = json.load(sys.stdin)['commit']
+    print(c if isinstance(c, str) and re.fullmatch(r'[0-9a-f]{7,40}', c) else '')
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+# --- drift_report_studio_server: is the QUOTA SOURCE running merged code?
+#
+# The third process in the same question. The two halves above ask it of this
+# driver's file and of this driver's process; the spend guard's source 3 is a
+# THIRD program -- the supervised `com.autonomy.studio-server` unit, running
+# from an isolated clone under its own state dir -- and nothing moved it forward
+# or said that it had not.
+#
+# WHAT THAT COST, measured 2026-07-31 (#832 -- and re-measured during its
+# pre-PR review, which is where the figure below was corrected). The service sat
+# SIXTEEN commits behind origin/main (`ce88319..fcca7b3`), SIX of them touching
+# `studio/` -- and it is the six that matter under the tree comparison below,
+# since the other ten could not change a byte it serves. The ticket body says
+# eleven; that number was wrong. It predated #825 and served no `unavailable` field at
+# all. Every layer below then behaved exactly as specified: `quota_parse_reason`
+# found no reason, and `quota_shadow_probe` logged a bare UNREADABLE. Three of
+# those lines accumulated as C3 evidence -- and they were not weak evidence,
+# they were VOID, measuring a build from before the code they were supposed to
+# attest. Nothing anywhere said so, so the standing rule ("read an UNREADABLE by
+# its cause") would have read three unattributed lines as a finding about
+# studio's reader. `docs/review-prevention-log.md` #28: a signal must measure
+# the actor it governs.
+#
+# DETECTION-ONLY, AND DELIBERATELY SO. `install_studio_server.sh` (#773) rejects
+# a scheduled updater by name, citing an approved design
+# (`studio/docs/2026-07-30-packaging-and-updates.md`) and measured evidence: an
+# updater interlocked on "a fire is running" would have starved, since the
+# driver run beginning 2026-07-26T02:05Z ran for 74.7 hours. That stands, and
+# this half does not reopen it -- it never fetches into, builds, or restarts the
+# service. #773's own stated goal was to make the drift VISIBLE; what shipped
+# put the visibility in `--status`, a command someone has to think to run, and
+# not in the log that is read every fire and that carries the C3 evidence
+# itself. This is that missing half, and nothing more.
+#
+# IDENTITY COMES FROM THE RUNNING PROCESS, not from the installer's `built.sha`.
+# The stamp answers "what did the installer last compile", which is one
+# indirection away from the question and can read current while the loaded unit
+# still serves an older `dist`. `GET /api/version` is answered BY the unit the
+# guard polls, from a manifest read once at registration, so it cannot disagree
+# with itself. It also avoids hardcoding a second copy of the service state-dir
+# path here, whose failure mode -- an absent stamp reporting UNKNOWN forever
+# while the install looks perfect -- is the same silent-never-runs shape
+# `drift_report_plane` had to be rewritten out of.
+#
+# ONE THING THIS DELIBERATELY DOES NOT DO, deferred with a reason: stamp the
+# served build onto each `quota shadow: studio` line instead of emitting a
+# separate one (#833). Strictly better attribution -- it survives log rotation
+# and `DRIFT_REPORT=0` -- but it needs a freshness contract. Not because of
+# ordering WITHIN an iteration (`drift_report` runs first there, before
+# `quota_gate` and every later probe), but because the two run on different
+# clocks: this half reports every iteration, while `quota_shadow_probe` is
+# throttled to roughly one per hour. A stamp read from a drift measurement taken
+# an unknown number of iterations earlier is silently stale, and a stale
+# attribution is worse than none -- it is the same confident-but-unfounded
+# reading this whole ticket exists to stop.
+#
+# (The other deferral, collapsing the per-iteration `origin/main` fetches into
+# one (#834), is STILL OPEN. `drift_fetch_origin` above gave the two halves one
+# shared, bounded implementation -- which fixed a real divergence and is where a
+# memo would go -- but each half still fetches, so the count #834 is about is
+# unchanged.)
+
+drift_report_studio_server() {
+  if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    log "studio server: UNKNOWN -- $REPO is not a git checkout to compare against (#832)"
+    return 0
+  fi
+  # FETCH FIRST, through the same bounded helper the plane half uses: a report
+  # built on an unrefreshed `origin/main` compares the service against whatever
+  # was current the last time anything fetched and says "in sync" forever. A
+  # failed fetch is UNKNOWN, never in sync.
+  if ! drift_fetch_origin; then
+    log "studio server: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the quota source is current (#832)"
+    return 0
+  fi
+  ds_body="$(quota_fetch_url "$STUDIO_VERSION_URL")"
+  ds_rc=$?
+  if [ "$ds_rc" -ne 0 ]; then
+    # A LIFECYCLE fault, and named as one: nothing answered on the port. That is
+    # `install_studio_server.sh`'s territory (the unit is down, or is on another
+    # port), not a statement about which code it would have been running -- and
+    # reporting it as drift would send the operator to rebuild a service that
+    # was never up. The shadow probe reports the same outage from its own side.
+    #
+    # "OR TOO SLOWLY" IS NOT PADDING (#832 pre-PR review). `quota_fetch_url` is
+    # `curl --max-time 8`, so this branch also catches a unit that IS loaded and
+    # simply took longer than eight seconds -- curl 28, and likewise 52/56 for a
+    # connection dropped mid-answer. Safe in direction either way (never a
+    # currency claim), but a message saying flatly "nothing answered" sends the
+    # operator to check whether the unit is loaded when it demonstrably is. The
+    # remedy differs, so the message has to admit both.
+    log "studio server: UNKNOWN -- nothing answered at $STUDIO_VERSION_URL within curl's 8s bound, so which build the quota source is running is unmeasured. That is a LIFECYCLE fault (is com.autonomy.studio-server loaded, and answering promptly?), not drift (#832)"
+    return 0
+  fi
+  ds_commit="$(printf '%s' "$ds_body" | studio_version_commit)"
+  if [ -z "$ds_commit" ]; then
+    # Something answered and it was not a studio that knows its own identity: an
+    # older build predating the #792 manifest, or any other service on the port.
+    # #765 records a wrong-but-answering server 404ing and reading as healthy
+    # forever, which is why this is UNKNOWN rather than silence.
+    log "studio server: UNKNOWN -- $STUDIO_VERSION_URL served no usable build identity, so this is either a studio predating the release manifest or something else on the port (#832)"
+    return 0
+  fi
+  # EMPTY IS NOT A MATCH. `rev-parse` prints nothing on failure and so does the
+  # parser above, so a bare `[ "$a" = "$b" ]` reads two failures as agreement --
+  # the fail-open this file has now been bitten by in three separate places
+  # (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob ids, and the
+  # quota cache's UNREADABLE-vs-0). Both sides are checked before comparing.
+  ds_have="$(git -C "$REPO" rev-parse --quiet --verify "${ds_commit}^{commit}" 2>/dev/null)"
+  # THE HEX GUARD CONSTRAINS SHAPE, NOT MEANING. `rev-parse` prefers a REF, so a
+  # branch whose name happens to be hex ("bbbbbbb") resolves here and the half
+  # then reports a confident verdict having never resolved an abbreviated sha at
+  # all. Demanding that the resolved commit ACTUALLY BE ABBREVIATED BY the
+  # served value is what closes that: a real short sha is always a prefix of the
+  # full one, and a ref that is not cannot masquerade as one.
+  case "$ds_have" in "$ds_commit"*) : ;; *) ds_have="" ;; esac
+  ds_main="$(git -C "$REPO" rev-parse --quiet --verify "origin/main^{commit}" 2>/dev/null)"
+  if [ -z "$ds_have" ]; then
+    log "studio server: UNKNOWN -- the service reports commit $ds_commit, which is not a commit this checkout knows, so it cannot be placed against origin/main (#832)"
+  elif [ -z "$ds_main" ]; then
+    log "studio server: UNKNOWN -- origin/main could not be resolved in $REPO, so drift is unmeasured (#832)"
+  elif [ "$ds_have" = "$ds_main" ]; then
+    # Both countable verdicts open with `studio server: current`, so the C3
+    # evidence rule in prompt.md is one grep rather than a list of spellings.
+    log "studio server: current -- serving $ds_commit, identical to origin/main"
+  else
+    # The abbreviation is computed BEFORE the message and falls back to the full
+    # sha, rather than being substituted inline. An inline `$(...)` that fails
+    # renders "origin/main is ." -- a gap in the one line someone is reading at
+    # the moment they need it, and one that reads as if there were no such
+    # commit rather than as if `rev-parse` had failed.
+    ds_short="$(git -C "$REPO" rev-parse --short "$ds_main" 2>/dev/null)"
+    [ -n "$ds_short" ] || ds_short="$ds_main"
+    # THE VERDICT IS ABOUT `studio/`, NOT ABOUT SHA EQUALITY, and that is the
+    # difference between a monitor that is read and one that is skipped. This
+    # service is built from `studio/` alone (`pnpm -C <clone>/studio build`), so
+    # a `loop/` or `docs/` merge cannot change a single byte it serves. Measured
+    # on this repo (2026-07-31, tip fcca7b3): 8 of the 20 commits landing on
+    # main in the preceding 24h touched `studio/`,
+    # against a probe throttled to one per hour -- so a sha-equality verdict
+    # would have read STALE for most of the day while the served reader was
+    # perfectly current, and `prompt.md`'s rule ("do not count a STALE build's
+    # evidence") would then have discarded almost every reading. A gate nothing
+    # can satisfy is the failure this whole cutover has already hit once (the
+    # original C3 entry gate), and it is not worth repeating for tidiness.
+    #
+    # ANCESTRY IS CHECKED BEFORE ANY COUNT. `rev-list A..B` on a commit that is
+    # not an ancestor counts the commits B has that A lacks, which for a
+    # force-pushed or rebased-out build is a number with no meaning -- and a
+    # meaningless number stated confidently is worse than no number. main is
+    # branch-protected so this is unlikely, not impossible.
+    if ! git -C "$REPO" merge-base --is-ancestor "$ds_have" "$ds_main" 2>/dev/null; then
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is not an ancestor of origin/main ($ds_short), so how far behind it is cannot be stated. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      return 0
+    fi
+    # THE VERDICT IS A TREE COMPARISON, NOT A COMMIT COUNT (#832 pre-PR review).
+    # The first draft asked `rev-list --count A..B -- studio/` and called 0
+    # "current". That count applies git's default history simplification, which
+    # can return 0 while `A:studio` and `B:studio` genuinely DIFFER: an evil
+    # merge on main -- one whose resolution puts studio/ back to an older state
+    # -- is not counted as a commit touching studio/. Reproduced on a scratch
+    # repo: the plain count says 0, `--full-history` says 1, and the two trees
+    # are different objects. The half would then attest a build whose studio/
+    # bytes are NOT main's, which is precisely the "an unmeasurable thing
+    # silently becomes 0" fail-open the lines below refuse. Latent rather than
+    # live today -- main is squash-merged, with 0 merge commits in the last 200 --
+    # and fixed anyway, because a currency claim this guard rests on has to be
+    # MEASURED, not inferred from a proxy that is usually equivalent.
+    #
+    # Comparing the tree objects is exact, and it SUBSUMES the pathspec-exists
+    # check it replaces: a renamed or absent studio/ yields an empty id, which is
+    # refused below rather than read as a match. `cat-file -t` additionally
+    # rejects a `studio` that is a BLOB rather than a directory -- `:studio`
+    # resolves fine in that case, and the old pathspec count would have read 0
+    # forever while looking perfectly installed.
+    ds_tree_have="$(git -C "$REPO" rev-parse --quiet --verify "$ds_have:studio" 2>/dev/null)"
+    ds_tree_main="$(git -C "$REPO" rev-parse --quiet --verify "$ds_main:studio" 2>/dev/null)"
+    ds_type_main="$(git -C "$REPO" cat-file -t "$ds_main:studio" 2>/dev/null)"
+    if [ -z "$ds_tree_main" ] || [ "$ds_type_main" != "tree" ]; then
+      log "studio server: UNKNOWN -- origin/main ($ds_short) has no studio/ tree, so the served build's studio/ cannot be compared against it and no currency verdict is possible. Has the directory been renamed? (#832)"
+      return 0
+    fi
+    if [ -z "$ds_tree_have" ]; then
+      log "studio server: UNKNOWN -- the served build $ds_commit has no studio/ tree to compare against origin/main ($ds_short), so whether it carries every studio/ change is unmeasured (#832)"
+      return 0
+    fi
+    # DISCLOSURE ONLY, never the verdict. Both counts are for the operator
+    # reading the line; an unmeasurable one degrades to "an unknown number of"
+    # rather than to 0, because a failed count must not read as a clean bill of
+    # health even in prose.
+    ds_behind="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" 2>/dev/null)"
+    [ -n "$ds_behind" ] || ds_behind="an unknown number of"
+    if [ "$ds_tree_have" = "$ds_tree_main" ]; then
+      # Behind, but by nothing that changed a byte it serves. The distance is
+      # still reported: "current" is a claim about `studio/`, and an operator
+      # reading it is entitled to see what it is discounting.
+      log "studio server: current for studio/ -- serving $ds_commit, behind origin/main ($ds_short) by $ds_behind commit(s), none of which changed studio/"
+    else
+      # `--full-history` IS LOAD-BEARING HERE, not a tidier spelling (#832
+      # review). The default simplification is precisely what the tree
+      # comparison above exists to distrust, so a plain `-- studio/` count in
+      # THIS arm renders the evil-merge case as "whose studio/ tree differs from
+      # origin/main's ...; 0 of them touching studio/" -- the one scenario the
+      # half was built to catch, described in prose that argues against its own
+      # verdict, at the moment an operator is deciding whether to believe it.
+      # Measured on a scratch repo: plain 0, `--full-history` 1, trees differ.
+      ds_behind_studio="$(git -C "$REPO" rev-list --count --full-history "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
+      # ...and the count is still only a PROXY; the tree is the fact. If the
+      # proxy comes back 0 or unmeasurable while the trees demonstrably differ,
+      # the honest line says the attribution is unavailable rather than quoting
+      # a number that contradicts the verdict it is attached to. Same refusal as
+      # `ds_behind` above: an unmeasurable thing never renders as a clean 0.
+      #
+      # THE TWO HALVES OF THIS GUARD ARE NOT ALIKE, and saying so is the point.
+      # The EMPTY half is live -- `rev-list` can fail, and it is the same failure
+      # `ds_behind` already degrades for. The `0` half is UNREACHABLE as the code
+      # stands, and provably so: ancestry is established above, and
+      # `--full-history` counts every commit in the range not TREESAME to ALL its
+      # parents, so if no such commit existed the two studio/ trees would be
+      # equal by induction along the path -- which is the branch we are not in.
+      # It is kept as defence-in-depth against a future edit dropping
+      # `--full-history`, exactly the edit that produced this finding; the
+      # mutation run recorded in the PR is what demonstrates it engages.
+      case "$ds_behind_studio" in
+        ''|0)
+          ds_studio_clause="though commit-level attribution cannot say which of them changed it"
+          ;;
+        *)
+          ds_studio_clause="$ds_behind_studio of them touching studio/"
+          ;;
+      esac
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+    fi
+  fi
+  return 0
+}
+
+# --- drift_report: all three halves, once per loop iteration. Advisory; always 0.
+# Named for the set, not for any one of them -- the driver-code half is the
 # load-bearing one and is not plane drift at all.
 drift_report() {
   # ONLY the documented value disables. `= "1"` would have let `DRIFT_REPORT=no`
@@ -1259,6 +1613,7 @@ drift_report() {
   [ "$DRIFT_REPORT" = "0" ] && return 0
   drift_report_driver_code
   drift_report_plane
+  drift_report_studio_server
   return 0
 }
 

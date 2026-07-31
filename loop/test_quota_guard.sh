@@ -162,6 +162,22 @@ case "$*" in
       echo '{"account":{"claude":null}}'
     fi
     exit 0 ;;
+  # #832: the drift report asks the SAME service for its build identity once per
+  # loop iteration. This arm exists so that call cannot fall through to the
+  # dashboard arm below, which counts calls -- an untracked poll silently
+  # consumes `CURL_READABLE_CALLS` and shifts every scripted response after it,
+  # so the fires a case is asserting on stop being the fires it set up. (It did:
+  # adding the drift half turned a 4-fire case into 3.) Returns early and never
+  # touches `curlcalls`, exactly as the studio arm above does.
+  #
+  # Serves the `dev` PLACEHOLDER -- what a checkout with no release manifest
+  # serves -- so the drift half reads UNKNOWN and the pre-existing cases stay
+  # tests of what they were written to test. No knob to vary it: case 44c drives
+  # every verdict directly against a real git fixture, and an unused knob here
+  # would be a second, weaker way to do the same thing.
+  */api/version*)
+    echo '{"version":"0.0.0-dev","commit":"dev"}'
+    exit 0 ;;
 esac
 EOS
   # --- the dashboard (/api/state) arm: EMPTY utilization => unreadable path.
@@ -1883,9 +1899,482 @@ while [ "$ks_i" -lt 15 ]; do kill -0 "$ks_pid" 2>/dev/null || break; sleep 1; ks
 kill -9 "$ks_pid" 2>/dev/null || true
 check "DRIFT_REPORT=0 silences the report entirely" "1" \
   "$([ -s "$pdtmp/infra/off.log" ] && echo 0 || echo 1)"
-check "...but an undocumented value still REPORTS rather than silently disabling" "2" \
-  "$(grep -cE 'driver code:|plane drift:' "$pdtmp/infra/typo.log" 2>/dev/null || echo 0)"
+check "...but an undocumented value still REPORTS rather than silently disabling" "3" \
+  "$(grep -cE 'driver code:|plane drift:|studio server:' "$pdtmp/infra/typo.log" 2>/dev/null || echo 0)"
 rm -rf "$pdtmp"
+
+# --- 44c. #832 STUDIO-SERVER drift: is the QUOTA SOURCE running merged code? --
+# The THIRD half of the same question, about the third process in it. WHY it
+# exists, why identity comes from the running service rather than the
+# installer's build stamp, and why it is detection-only rather than an updater:
+# `drift_report_studio_server`'s header in drive.sh is the canonical statement
+# and this file does not restate it (#776).
+#
+# A REAL git repo (the comparison under test is a git one; stubbing git would
+# assert on the mock) plus a stubbed curl (the served body has to be controlled
+# exactly, including the shapes a live server will not produce on demand).
+sstmp="$(mk_tmp)"
+git init -q --bare "$sstmp/origin" 2>/dev/null
+mkdir -p "$sstmp/src/studio" "$sstmp/src/loop" "$sstmp/bin" "$sstmp/infra"
+git init -q "$sstmp/src" 2>/dev/null
+git -C "$sstmp/src" checkout -q -b main 2>/dev/null
+sscommit() { # $1=path $2=content -> commits and echoes the short sha
+  printf '%s\n' "$2" >"$sstmp/src/$1"
+  git -C "$sstmp/src" add -A >/dev/null 2>&1
+  git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm "$1" >/dev/null 2>&1
+  git -C "$sstmp/src" rev-parse --short HEAD
+}
+# THREE commits, and the ORDER is the case: a `studio/` change in the middle and
+# a `loop/`-only change at the tip. That is what makes "behind, but by nothing
+# that could have changed what it serves" reachable -- the verdict this half
+# turns on, and the one a sha-equality check cannot express.
+ss_old="$(sscommit studio/x old)"
+# A BRANCH LITERALLY NAMED `dev`. `build-info.ts` serves `commit: 'dev'` as its
+# no-manifest placeholder, and a reader that hands that straight to `rev-parse`
+# resolves it against this ref and reports a confident verdict about a build
+# whose identity it never learned. The hex guard is what stops that, and this
+# ref is what makes the case able to fail.
+git -C "$sstmp/src" branch dev >/dev/null 2>&1
+ss_studio="$(sscommit studio/x new)"
+ss_tip="$(sscommit loop/y touched)"
+# A commit that DIVERGES from main rather than trailing it. `rev-list A..B` on a
+# non-ancestor counts what B has that A lacks, which for a rebased-out or
+# force-pushed build is a number with no meaning -- and a meaningless number
+# stated confidently is worse than none. main is branch-protected, so this is
+# unlikely rather than impossible, and the guard is only real if something
+# reaches it.
+git -C "$sstmp/src" checkout -q dev 2>/dev/null
+ss_diverged="$(sscommit studio/z sidebranch)"
+git -C "$sstmp/src" checkout -q main 2>/dev/null
+# A BRANCH WHOSE NAME IS HEX. `rev-parse` prefers a ref over an abbreviated sha,
+# so a served "bbbbbbb" resolves to whatever this points at and the half would
+# report a confident verdict without ever having resolved a sha. The hex guard
+# constrains SHAPE and cannot catch this; the prefix check is what does.
+git -C "$sstmp/src" branch bbbbbbb main >/dev/null 2>&1
+git -C "$sstmp/src" remote add origin "$sstmp/origin" 2>/dev/null
+git -C "$sstmp/src" push -q origin main dev bbbbbbb 2>/dev/null
+# Worktree-shaped, because production is: `~/Dev/studio-loop-repo/.git` is a
+# FILE holding a gitdir pointer, and case 44 records what gating on `[ -d .git ]`
+# cost when the fixture was shaped differently from the thing it stands in for.
+git -C "$sstmp/src" worktree add -q --detach "$sstmp/repo" main >/dev/null 2>&1
+ss_tipsha="$(git -C "$sstmp/repo" rev-parse --short origin/main 2>/dev/null)"
+ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
+  {
+    echo '#!/bin/bash'
+    echo 'cat <<'\''BODY'\'''
+    echo "$1"
+    echo 'BODY'
+    # A curl that failed must still exit non-zero: "nothing answered on the
+    # port" is a LIFECYCLE fault, and reporting it as a drift verdict would
+    # blame the wrong thing entirely.
+    echo "exit ${2:-0}"
+  } >"$sstmp/bin/curl"
+  chmod +x "$sstmp/bin/curl"
+  rm -f "$sstmp/infra/driver.log" "$sstmp/out" "$sstmp/err"
+  (
+    set -uo pipefail
+    export INFRA="$sstmp/infra"
+    export REPO="${SS_REPO:-$sstmp/repo}"
+    export DLOG="$sstmp/infra/driver.log"
+    export PATH="$sstmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    drift_report_studio_server
+  ) >"$sstmp/out" 2>"$sstmp/err" &
+  ss_pid=$!
+  ss_i=0
+  while [ "$ss_i" -lt 20 ]; do kill -0 "$ss_pid" 2>/dev/null || break; sleep 1; ss_i=$((ss_i + 1)); done
+  kill -9 "$ss_pid" 2>/dev/null || true
+  sed -n 's/.*\(studio server: .*\)/\1/p' "$sstmp/infra/driver.log" 2>/dev/null | tail -1
+}
+# BODIES ARE BUILT ONCE, BY CONCATENATION, AND NEVER INLINE IN A `check`.
+# `check "..." "$(ssrun "{\"commit\":\"$x\"}" | grep ...)"` nests an escaped
+# double quote inside a command substitution inside a double-quoted argument,
+# and bash delivers a MANGLED body from that -- which parses as no JSON at all,
+# which every UNKNOWN case below then passes on VACUOUSLY while asserting
+# nothing. (It did: the in-sync case was the only one that could notice, and it
+# was the only one that failed.) One quoting level, one body, asserted below.
+ss_body_tip='{"version":"0.0.0-dev","commit":"'"$ss_tipsha"'"}'
+ss_body_studio='{"version":"0.0.0-dev","commit":"'"$ss_studio"'"}'
+ss_body_old='{"version":"0.0.0-dev","commit":"'"$ss_old"'"}'
+ss_body_div='{"version":"0.0.0-dev","commit":"'"$ss_diverged"'"}'
+# The anti-vacuity gate for the whole case: python, not the parser under test,
+# confirming the fixture's own bodies are well formed and carry the commits the
+# assertions below believe they carry. Without this, a fixture typo turns every
+# UNKNOWN assertion green.
+ss_wellformed() { # $1=body $2=expected commit -> "ok" or a diagnostic
+  printf '%s' "$1" | python3 -c "
+import sys, json
+try:
+    print('ok' if json.load(sys.stdin).get('commit') == '$2' else 'wrong-commit')
+except Exception as e:
+    print('unparseable: %s' % e)
+" 2>/dev/null
+}
+check "the fixture REPO is worktree-shaped (.git is a FILE, as in production)" "0" \
+  "$([ -f "$sstmp/repo/.git" ] && [ ! -d "$sstmp/repo/.git" ] && echo 0 || echo 1)"
+check "the fixture's three commits are distinct (the case is not vacuous)" "1" \
+  "$([ -n "$ss_old" ] && [ -n "$ss_studio" ] && [ -n "$ss_tipsha" ] &&
+     [ "$ss_old" != "$ss_studio" ] && [ "$ss_studio" != "$ss_tipsha" ] && echo 1 || echo 0)"
+check "the fixture tip is the loop/-only commit (so 'behind but current' is reachable)" "1" \
+  "$([ "$ss_tipsha" = "$ss_tip" ] && echo 1 || echo 0)"
+check "the tip fixture body is well formed and carries origin/main's commit" "ok" \
+  "$(ss_wellformed "$ss_body_tip" "$ss_tipsha")"
+check "the studio-commit fixture body is well formed" "ok" \
+  "$(ss_wellformed "$ss_body_studio" "$ss_studio")"
+check "the oldest fixture body is well formed" "ok" \
+  "$(ss_wellformed "$ss_body_old" "$ss_old")"
+check "the diverged fixture body is well formed" "ok" \
+  "$(ss_wellformed "$ss_body_div" "$ss_diverged")"
+check "the diverged commit really is NOT an ancestor of main (not vacuous)" "1" \
+  "$(git -C "$sstmp/repo" merge-base --is-ancestor "$ss_diverged" origin/main 2>/dev/null && echo 0 || echo 1)"
+# (a) the running service serves origin/main's commit -> current, identical.
+ss_sync="$(ssrun "$ss_body_tip")"
+check "a service serving origin/main's commit reads current" "0" \
+  "$(printf '%s' "$ss_sync" | grep -q 'studio server: current' && echo 0 || echo 1)"
+check "...naming the commit it is serving, so the line is evidence on its own" "0" \
+  "$(printf '%s' "$ss_sync" | grep -q "$ss_tipsha" && echo 0 || echo 1)"
+check "...and the in-sync path emits NOTHING on stdout" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+# (b) BEHIND, but only by a loop/-only commit -> still CURRENT for what it
+#     serves. This service is built from `studio/` alone, and a sha-equality
+#     verdict would call it stale here -- which, with prompt.md's rule that a
+#     stale build's evidence does not count, would discard readings from a
+#     perfectly current reader. Measured on this repo: 8 of 19 commits in 24h
+#     touched studio/, against a probe throttled to one an hour.
+ss_near="$(ssrun "$ss_body_studio")"
+check "a service behind by a loop/-only commit still reads current for studio/" "0" \
+  "$(printf '%s' "$ss_near" | grep -q 'studio server: current for studio/' && echo 0 || echo 1)"
+check "...and is NOT called STALE" "1" \
+  "$(printf '%s' "$ss_near" | grep -q 'STALE' && echo 0 || echo 1)"
+check "...while still disclosing the distance it is discounting" "0" \
+  "$(printf '%s' "$ss_near" | grep -q 'by 1 commit(s), none of which changed studio/' && echo 0 || echo 1)"
+# (c) behind by a commit that DOES touch studio/ -> STALE, naming the counts and
+#     the remedy. This is the 2026-07-31 state, and the point of the half.
+ss_stale="$(ssrun "$ss_body_old")"
+check "a service behind by a studio/ commit reads STALE" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...naming the commit it is actually serving" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q "$ss_old" && echo 0 || echo 1)"
+check "...and how many of the commits behind touch studio/" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q '2 commit(s) behind' && printf '%s' "$ss_stale" | grep -q '1 of them touching studio/' && echo 0 || echo 1)"
+check "...and the remedy, so the line is actionable where it is read" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'install_studio_server.sh --update' && echo 0 || echo 1)"
+check "...and saying the C3 evidence it produced is about that build" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'shadow readings it produced' && echo 0 || echo 1)"
+# ...but WITHOUT spelling the token the evidence procedure counts (#832 pre-PR
+# review). The first version of this line said "treat the 'quota shadow: studio'
+# lines it produced", which put a false hit for `grep 'quota shadow: studio'`
+# into driver.log once per iteration -- and precisely while the service is
+# stale, i.e. exactly when the real readings are void. An operator or a prior
+# session note still counting the old way would over-count in the stale
+# direction: the mis-attribution this whole ticket exists to end, reintroduced
+# through the fix's own log text. The assertion above pins that the line still
+# SAYS it; this one pins that it does not say it in the countable spelling.
+check "...without planting a false hit for the evidence grep" "1" \
+  "$(printf '%s' "$ss_stale" | grep -q 'quota shadow' && echo 0 || echo 1)"
+check "...and is never also reported as current" "1" \
+  "$(printf '%s' "$ss_stale" | grep -q 'current' && echo 0 || echo 1)"
+check "...and the STALE path emits NOTHING on stdout" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+# (c2) a DIVERGED build -> STALE, but with no count offered. The remedy is the
+#      same; the distance is not a thing that can be stated.
+ss_div="$(ssrun "$ss_body_div")"
+check "a diverged build reads STALE" "0" \
+  "$(printf '%s' "$ss_div" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...saying it is not an ancestor, rather than inventing a distance" "0" \
+  "$(printf '%s' "$ss_div" | grep -q 'not an ancestor' && echo 0 || echo 1)"
+check "...and quotes no commit count at all" "1" \
+  "$(printf '%s' "$ss_div" | grep -q 'commit(s) behind' && echo 0 || echo 1)"
+# (c3) a HEX-NAMED REF is not an identity. `bbbbbbb` passes the hex guard and
+#      resolves -- to origin/main itself here, so an unguarded half reports the
+#      strongest possible verdict ("current, identical") about a build it never
+#      identified. The strongest wrong answer is the one worth a case.
+ss_refname="$(ssrun '{"version":"1.0.0","commit":"bbbbbbb"}')"
+check "a hex-NAMED ref is not accepted as a build identity" "0" \
+  "$(printf '%s' "$ss_refname" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never reads as current, which is what it resolves to" "1" \
+  "$(printf '%s' "$ss_refname" | grep -q 'current' && echo 0 || echo 1)"
+# (c4) origin/main resolvable no longer -> UNKNOWN, and NOT the STALE arm with an
+#      empty sha rendered into it. Reached by dropping the remote-tracking ref
+#      and narrowing the refspec so the fetch still SUCCEEDS without recreating
+#      it -- a fetch failure is a different branch, already covered by (i).
+git -C "$sstmp/repo" config remote.origin.fetch '+refs/heads/nothing:refs/remotes/origin/nothing' 2>/dev/null
+git -C "$sstmp/repo" update-ref -d refs/remotes/origin/main 2>/dev/null
+ss_nomain="$(ssrun "$ss_body_tip")"
+check "an unresolvable origin/main reads UNKNOWN after a SUCCESSFUL fetch" "0" \
+  "$(printf '%s' "$ss_nomain" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never renders a verdict with an empty sha in it" "1" \
+  "$(printf '%s' "$ss_nomain" | grep -qE 'ancestor of origin/main \(\)|behind origin/main \(\)' && echo 0 || echo 1)"
+git -C "$sstmp/repo" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null
+git -C "$sstmp/repo" fetch -q origin main 2>/dev/null
+# (c5) main with NO studio/ tree -> UNKNOWN, never a free "none touching
+#      studio/". `rev-list --count -- <path>` returns 0 with rc=0 for a pathspec
+#      that matches nothing, so a renamed directory would otherwise read as
+#      permanently current -- green forever, measuring nothing.
+mkdir -p "$sstmp/nostudio-src/loop"
+git init -q --bare "$sstmp/nostudio-origin" 2>/dev/null
+git init -q "$sstmp/nostudio-src" 2>/dev/null
+git -C "$sstmp/nostudio-src" checkout -q -b main 2>/dev/null
+# TWO commits, and the served one is the OLDER: an identical build short-circuits
+# to "current" before any count, so only a build that is BEHIND reaches the
+# pathspec at all. A one-commit fixture here passes vacuously.
+printf 'x\n' >"$sstmp/nostudio-src/loop/y"
+git -C "$sstmp/nostudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" -c user.email=t@t -c user.name=t commit -qm nostudio1 >/dev/null 2>&1
+ss_nostudio_sha="$(git -C "$sstmp/nostudio-src" rev-parse --short HEAD)"
+printf 'z\n' >"$sstmp/nostudio-src/loop/z"
+git -C "$sstmp/nostudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" -c user.email=t@t -c user.name=t commit -qm nostudio2 >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" remote add origin "$sstmp/nostudio-origin" 2>/dev/null
+git -C "$sstmp/nostudio-src" push -q origin main 2>/dev/null
+git -C "$sstmp/nostudio-src" worktree add -q --detach "$sstmp/nostudio" main >/dev/null 2>&1
+check "the no-studio fixture really has no studio/ tree (not vacuous)" "1" \
+  "$(git -C "$sstmp/nostudio" rev-parse --quiet --verify 'origin/main:studio' >/dev/null 2>&1 && echo 0 || echo 1)"
+check "...and the served build really is BEHIND it (else the count is never reached)" "1" \
+  "$([ "$(git -C "$sstmp/nostudio" rev-list --count "$ss_nostudio_sha..origin/main" 2>/dev/null)" = "1" ] && echo 1 || echo 0)"
+ss_nost="$(SS_REPO="$sstmp/nostudio" ssrun '{"version":"1.0.0","commit":"'"$ss_nostudio_sha"'"}')"
+check "a main with no studio/ tree reads UNKNOWN, not a free 'none touching'" "0" \
+  "$(printf '%s' "$ss_nost" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never claims currency for a path it could not count" "1" \
+  "$(printf '%s' "$ss_nost" | grep -q 'current' && echo 0 || echo 1)"
+# (c5b) `studio` is a FILE, not a directory -> UNKNOWN. Pins the `cat-file -t`
+#       half of the guard above, which survived mutation in #832's pre-PR review:
+#       deleting the type check left the whole suite green. `rev-parse
+#       <sha>:studio` resolves a BLOB perfectly happily, so with `studio` as a
+#       file of the same content in both commits the two ids are EQUAL and the
+#       half reports "current for studio/" for a build with no studio directory
+#       at all -- a currency claim about a tree that does not exist. Same shape
+#       as (c5): the id being comparable is exactly what makes it dangerous.
+#       Two commits again, the served one OLDER, so an identical build cannot
+#       short-circuit before the comparison is reached.
+mkdir -p "$sstmp/blobstudio-src/loop"
+git init -q --bare "$sstmp/blobstudio-origin" 2>/dev/null
+git init -q "$sstmp/blobstudio-src" 2>/dev/null
+git -C "$sstmp/blobstudio-src" checkout -q -b main 2>/dev/null
+printf 'not a directory\n' >"$sstmp/blobstudio-src/studio"
+printf 'x\n' >"$sstmp/blobstudio-src/loop/y"
+git -C "$sstmp/blobstudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" -c user.email=t@t -c user.name=t commit -qm blob1 >/dev/null 2>&1
+ss_blob_sha="$(git -C "$sstmp/blobstudio-src" rev-parse --short HEAD)"
+printf 'z\n' >"$sstmp/blobstudio-src/loop/z"
+git -C "$sstmp/blobstudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" -c user.email=t@t -c user.name=t commit -qm blob2 >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" remote add origin "$sstmp/blobstudio-origin" 2>/dev/null
+git -C "$sstmp/blobstudio-src" push -q origin main 2>/dev/null
+git -C "$sstmp/blobstudio-src" worktree add -q --detach "$sstmp/blobstudio" main >/dev/null 2>&1
+check "the blob fixture really has studio as a BLOB (not vacuous)" "blob" \
+  "$(git -C "$sstmp/blobstudio" cat-file -t 'origin/main:studio' 2>/dev/null)"
+check "...and the served build's studio id EQUALS main's (so -z alone cannot save it)" "0" \
+  "$([ "$(git -C "$sstmp/blobstudio" rev-parse --quiet --verify "$ss_blob_sha:studio" 2>/dev/null)" \
+     = "$(git -C "$sstmp/blobstudio" rev-parse --quiet --verify 'origin/main:studio' 2>/dev/null)" ] \
+     && echo 0 || echo 1)"
+check "...and the served build really is BEHIND it (else the compare is never reached)" "1" \
+  "$([ "$(git -C "$sstmp/blobstudio" rev-list --count "$ss_blob_sha..origin/main" 2>/dev/null)" = "1" ] && echo 1 || echo 0)"
+ss_blob="$(SS_REPO="$sstmp/blobstudio" ssrun '{"version":"1.0.0","commit":"'"$ss_blob_sha"'"}')"
+check "a studio/ that is a FILE reads UNKNOWN, not 'current for studio/'" "0" \
+  "$(printf '%s' "$ss_blob" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never claims currency for a tree that does not exist" "1" \
+  "$(printf '%s' "$ss_blob" | grep -q 'current' && echo 0 || echo 1)"
+# (c6) THE EVIL MERGE (#832 pre-PR review). `rev-list --count A..B -- studio/`
+#      applies git's default history simplification, so a merge whose RESOLUTION
+#      changes studio/ is not counted as a commit touching studio/. The count
+#      says 0 -- "none of which changed studio/", the CURRENT verdict -- while
+#      the two studio/ trees are genuinely different objects, i.e. the served
+#      build's studio/ bytes are not main's. That is the "an unmeasurable thing
+#      silently becomes 0" fail-open the half exists to refuse, so the verdict is
+#      a TREE COMPARISON and this fixture is what pins it.
+#
+#      Latent on this repo today (main is squash-merged, no merge commits), which
+#      is exactly why it needs a constructed fixture rather than a real one.
+mkdir -p "$sstmp/evil-src/studio" "$sstmp/evil-src/loop"
+git init -q --bare "$sstmp/evil-origin" 2>/dev/null
+git init -q "$sstmp/evil-src" 2>/dev/null
+git -C "$sstmp/evil-src" checkout -q -b main 2>/dev/null
+printf 'v1\n' >"$sstmp/evil-src/studio/x"
+printf 'y\n' >"$sstmp/evil-src/loop/y"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm base >/dev/null 2>&1
+# The SERVED build: studio/x moves to v2 on a side branch.
+git -C "$sstmp/evil-src" checkout -q -b side 2>/dev/null
+printf 'v2\n' >"$sstmp/evil-src/studio/x"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm served >/dev/null 2>&1
+ss_evil_sha="$(git -C "$sstmp/evil-src" rev-parse --short HEAD)"
+# main moves on independently, then merges side and RESOLVES studio/x back to v1.
+git -C "$sstmp/evil-src" checkout -q main 2>/dev/null
+printf 'r\n' >"$sstmp/evil-src/loop/readme"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm mainside >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t merge --no-ff --no-commit side >/dev/null 2>&1
+printf 'v1\n' >"$sstmp/evil-src/studio/x"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm evilmerge >/dev/null 2>&1
+git -C "$sstmp/evil-src" remote add origin "$sstmp/evil-origin" 2>/dev/null
+git -C "$sstmp/evil-src" push -q origin main 2>/dev/null
+git -C "$sstmp/evil-src" worktree add -q --detach "$sstmp/evil" main >/dev/null 2>&1
+# THE FIXTURE MUST REPRODUCE THE TRAP, or the assertion below passes for the
+# wrong reason. Both halves are pinned: the served build IS an ancestor (so the
+# not-an-ancestor branch is not what produces STALE), and the pathspec count IS
+# 0 (so the old implementation really would have said "current for studio/").
+check "the evil-merge fixture's served build really is an ancestor of main" "0" \
+  "$(git -C "$sstmp/evil" merge-base --is-ancestor "$ss_evil_sha" origin/main 2>/dev/null && echo 0 || echo 1)"
+check "...and the pathspec count really is 0 (the trap the old verdict fell into)" "0" \
+  "$(git -C "$sstmp/evil" rev-list --count "$ss_evil_sha..origin/main" -- studio/ 2>/dev/null)"
+check "...while the two studio/ trees genuinely DIFFER (not vacuous)" "1" \
+  "$([ "$(git -C "$sstmp/evil" rev-parse --quiet --verify "$ss_evil_sha:studio" 2>/dev/null)" \
+     = "$(git -C "$sstmp/evil" rev-parse --quiet --verify 'origin/main:studio' 2>/dev/null)" ] && echo 0 || echo 1)"
+ss_evil="$(SS_REPO="$sstmp/evil" ssrun '{"version":"1.0.0","commit":"'"$ss_evil_sha"'"}')"
+check "a build whose studio/ tree differs reads STALE, though 0 commits 'touch' studio/" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...and is never called current for studio/" "1" \
+  "$(printf '%s' "$ss_evil" | grep -q 'current' && echo 0 || echo 1)"
+check "...saying the TREE differs, rather than quoting a count that says 0" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q 'studio/ tree differs' && echo 0 || echo 1)"
+# ...and the DISCLOSED COUNT must not argue against that verdict (#832 review).
+# The STALE arm quotes a per-path count for the operator's benefit; computed the
+# default way it returns 0 on exactly this fixture, so the line would have read
+# "whose studio/ tree differs from origin/main's ...; 0 of them touching
+# studio/" -- self-refuting, in the one case the half exists to catch. Pinned
+# from BOTH sides: `--full-history` counts the evil merge (measured: plain 0,
+# full-history 1), and the "0 of them" spelling must never appear.
+check "...and never quotes a per-path count that refutes its own verdict" "1" \
+  "$(printf '%s' "$ss_evil" | grep -qE '(^| )0 of them touching studio/' && echo 0 || echo 1)"
+check "...crediting the evil merge itself, which --full-history is what counts" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q '1 of them touching studio/' && echo 0 || echo 1)"
+# The unmeasurable/zero degradation is a real arm, so prove it renders prose and
+# not a bare number. `--full-history` says 1 here, so this asserts the OTHER arm
+# stays unreachable on this fixture rather than asserting the arm itself.
+check "...and does not fall back to the attribution-unavailable wording here" "1" \
+  "$(printf '%s' "$ss_evil" | grep -q 'attribution cannot say' && echo 0 || echo 1)"
+# (d) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
+#     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
+#     announces a verdict about a build it cannot identify.
+ss_dev="$(ssrun '{"version":"0.0.0-dev","commit":"dev"}')"
+check "the 'dev' placeholder reads UNKNOWN, not a verdict" "0" \
+  "$(printf '%s' "$ss_dev" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and is NOT resolved against a branch that happens to be named dev" "1" \
+  "$(printf '%s' "$ss_dev" | grep -qE 'current|STALE' && echo 0 || echo 1)"
+# (d2) the HEX GUARD ITSELF, asserted directly on the parser (#832 pre-PR
+#      review). Case (d) above claims to pin it and does NOT: "dev" contains a
+#      `v`, so the PREFIX guard (`case "$ds_have" in "$ds_commit"*`) rejects it
+#      whatever the parser returns, and (d) still passes with the `fullmatch`
+#      relaxed to anything. Every other 44c case is the same -- none of them can
+#      tell hex-guard-present from hex-guard-absent, which makes the guard's own
+#      coverage vacuous while looking thorough.
+#
+#      So assert the contract at the function, where nothing downstream can mask
+#      it: the parser's job is that ONLY a plain abbreviated sha is an identity.
+#      These flip red if `re.fullmatch(r'[0-9a-f]{7,40}', c)` is relaxed.
+#      drive.sh is sourced in a SUBSHELL here, as everywhere else in this file --
+#      it is a script, not a library, and sourcing it into the harness's own
+#      scope would leak its config globals over the fixtures below.
+svc() {  # $1 = an /api/version body -> what studio_version_commit makes of it
+  (
+    set -uo pipefail
+    export INFRA="$sstmp/infra"
+    export REPO="$sstmp/repo"
+    export DLOG="$sstmp/infra/driver.log"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    printf '%s' "$1" | studio_version_commit
+  ) 2>/dev/null
+}
+check "the parser accepts a 7-char short sha (the lower bound git itself uses)" "abc1234" \
+  "$(svc '{"commit":"abc1234"}')"
+check "...and a full 40-char sha" "0123456789abcdef0123456789abcdef01234567" \
+  "$(svc '{"commit":"0123456789abcdef0123456789abcdef01234567"}')"
+check "the parser REFUSES 'dev', which rev-parse would happily resolve" "" \
+  "$(svc '{"commit":"dev"}')"
+check "...refuses a 6-char value, one short of an abbreviation" "" \
+  "$(svc '{"commit":"abc123"}')"
+check "...refuses 41 chars, one past a full sha" "" \
+  "$(svc '{"commit":"0123456789abcdef0123456789abcdef012345678"}')"
+check "...refuses UPPERCASE hex, which is not how git abbreviates" "" \
+  "$(svc '{"commit":"ABC1234"}')"
+check "...refuses a version-shaped string containing hex" "" \
+  "$(svc '{"commit":"0.0.0-dev"}')"
+check "...refuses a ref name that is entirely hex-ish but too short" "" \
+  "$(svc '{"commit":"beef"}')"
+check "...refuses a non-string commit rather than crashing" "" \
+  "$(svc '{"commit":1234567}')"
+check "...refuses trailing whitespace rather than trimming it into a sha" "" \
+  "$(svc '{"commit":"abc1234 "}')"
+# (e) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
+ss_unk="$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}')"
+check "a commit this checkout does not know reads UNKNOWN" "0" \
+  "$(printf '%s' "$ss_unk" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and is not guessed at as STALE" "1" \
+  "$(printf '%s' "$ss_unk" | grep -q 'STALE' && echo 0 || echo 1)"
+# (f) nothing answered on the port -> UNKNOWN, and never current. An empty body
+#     and an empty `rev-parse` are both "", so a bare equality test reads a DOWN
+#     SERVER as a healthy one -- the fail-open this file keeps rediscovering
+#     (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob ids). It is
+#     also named as a LIFECYCLE fault rather than as drift, because rebuilding a
+#     service that was never up fixes nothing.
+ss_down="$(ssrun '' 7)"
+check "an unreachable service reads UNKNOWN" "0" \
+  "$(printf '%s' "$ss_down" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...blaming the LIFECYCLE, not the build it never learned" "0" \
+  "$(printf '%s' "$ss_down" | grep -q 'LIFECYCLE' && echo 0 || echo 1)"
+check "...and is never reported as current" "1" \
+  "$(printf '%s' "$ss_down" | grep -q 'current' && echo 0 || echo 1)"
+# (g) something answered, but not with a version -- an older studio, or any
+#     other service on the port. #765 records a wrong-but-answering server 404ing
+#     and reading as healthy forever.
+check "a body carrying no commit reads UNKNOWN" "0" \
+  "$(printf '%s' "$(ssrun '{"version":"0.0.0-dev"}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "a non-JSON body reads UNKNOWN rather than crashing" "0" \
+  "$(printf '%s' "$(ssrun '<html>404 not found</html>')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (h) an EMPTY commit -- the other half of the empty-equals-empty trap, this one
+#     reachable from a served body rather than from a dead port.
+check "an empty commit string reads UNKNOWN, never current" "0" \
+  "$(printf '%s' "$(ssrun '{"version":"1.0.0","commit":""}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (i) origin/main could not be refreshed -> UNKNOWN. `origin/main` is a CACHED
+#     ref: a failed fetch leaves the last one in place, which compares equal to
+#     whatever was current then and reads healthy forever. Same discipline as
+#     drift_report_plane, and the reason both halves fetch for themselves.
+mv "$sstmp/origin" "$sstmp/origin-moved"
+ss_nofetch="$(ssrun "$ss_body_tip")"
+check "an unfetchable origin/main reads UNKNOWN, never current" "0" \
+  "$(printf '%s' "$ss_nofetch" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and says so about the REFRESH, not about the service" "0" \
+  "$(printf '%s' "$ss_nofetch" | grep -q 'could not be refreshed' && echo 0 || echo 1)"
+mv "$sstmp/origin-moved" "$sstmp/origin"
+# (j) REPO is not a git checkout at all -> UNKNOWN, not a crash.
+check "a REPO that is not a git checkout reads UNKNOWN" "0" \
+  "$(SS_REPO="$sstmp/not-a-repo" ssrun "$ss_body_tip" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and that path emits NOTHING on stdout either" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+rm -rf "$sstmp"
+
+# --- 44d. #832 the version URL is DERIVED, so the port keeps one owner --------
+# The service port already has exactly two copies (`STUDIO_QUOTA_URL` here,
+# `DEFAULT_PORT` in install_studio_server.sh) and a test asserting they agree.
+# A third, spelled out for /api/version, is how the stale 8080 pin outlived its
+# own reason -- and the failure would be quiet in the worst way: the drift half
+# would ask a DIFFERENT process than the guard polls and report a build nobody
+# was running. These assert the derivation is real, not that a literal is typed
+# correctly.
+vurl() { # $1 = STUDIO_QUOTA_URL override ("" = default) -> the derived version URL
+  ( set -uo pipefail
+    [ -n "$1" ] && export STUDIO_QUOTA_URL="$1"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    printf '%s' "$STUDIO_VERSION_URL" )
+}
+check "the default version URL sits on the quota URL's own host and port" "0" \
+  "$([ "$(vurl '')" = "http://127.0.0.1:8788/api/version" ] && echo 0 || echo 1)"
+# The load-bearing one: move the quota URL and the version URL MUST follow. A
+# hardcoded literal passes the case above and fails this one.
+check "a moved quota URL carries the version URL with it" "0" \
+  "$([ "$(vurl 'http://127.0.0.1:9999/api/quota')" = "http://127.0.0.1:9999/api/version" ] && echo 0 || echo 1)"
+check "an explicit STUDIO_VERSION_URL still wins" "0" \
+  "$( ( set -uo pipefail
+        export STUDIO_VERSION_URL="http://elsewhere/v"
+        # shellcheck source=/dev/null
+        . "$HERE/drive.sh"
+        [ "$STUDIO_VERSION_URL" = "http://elsewhere/v" ] && echo 0 || echo 1 ) )"
 
 # --- 45. #806 quota_stamped_write: ONE owner for the "<epoch> <value>" format --
 # The reader was shared; the writer was hand-rolled at three sites, each with `>`.
