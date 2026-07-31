@@ -203,9 +203,21 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
         ? { ok: true, value }
         : { ok: false, reason: 'not one of the permitted values' };
     case 'stringList':
-      return Array.isArray(value) && value.every((v) => typeof v === 'string')
+      if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+        return { ok: false, reason: 'not a list of strings' };
+      }
+      // A one-per-line control cannot round-trip every string array, and saying
+      // it can is worse than admitting it cannot. Reading back splits on newlines
+      // and trims, so an element holding a newline SPLITS IN TWO, one with
+      // significant leading/trailing space is silently trimmed, and an empty one
+      // disappears — on an apply that only touched a different field. These are
+      // not hypothetical shapes: an `llm_call.stop` sequence of `"Human: "` turns
+      // into `"Human:"`, which stops matching. Refusing here routes the node to
+      // the JSON editor, which is exactly what this module's contract says to do
+      // with a value its control cannot represent.
+      return value.every((v) => v === v.trim() && v !== '' && !v.includes('\n'))
         ? { ok: true, value: value.join('\n') }
-        : { ok: false, reason: 'not a list of strings' };
+        : { ok: false, reason: 'holds an entry a one-per-line control would alter' };
     case 'json': {
       const text = JSON.stringify(value, null, 2);
       // `undefined` back from stringify means the value has no JSON form at all.
@@ -214,6 +226,27 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
         : { ok: false, reason: 'not JSON' };
     }
   }
+}
+
+/**
+ * Seed one control value per field from a stored config.
+ *
+ * A field whose value cannot be rendered seeds EMPTY rather than throwing — the
+ * caller is expected to have consulted `unrepresentableFields` and put the whole
+ * node in the JSON editor, so these seeds are never the surface being edited. The
+ * empty fallback exists so a partially-unrenderable config cannot crash the
+ * panel, leaving the author with no way to repair it at all.
+ */
+export function seedFieldInputs(
+  fields: readonly ConfigField[] | null,
+  config: Record<string, unknown>,
+): Record<string, string | boolean> {
+  const seeded: Record<string, string | boolean> = {};
+  for (const field of fields ?? []) {
+    const rendered = formatFieldValue(field, config[field.name]);
+    seeded[field.name] = rendered.ok ? rendered.value : '';
+  }
+  return seeded;
 }
 
 /**
@@ -230,28 +263,63 @@ export function unrepresentableFields(
   return fields.filter((f) => !formatFieldValue(f, config[f.name]).ok).map((f) => f.name);
 }
 
-/** Numeric text this form accepts — decimal only, so `1e` and `0x10` are refused, not coerced. */
+/**
+ * Numeric text this form accepts. Decimal or exponent, so `1e` and `0x10` are
+ * REFUSED rather than coerced (`Number('0x10')` is 16, which no author typing
+ * into a `maxTokens` box meant).
+ *
+ * Deliberately NOT shared with `paramRules.ts`'s `NUMERIC_TEXT`, which is
+ * stricter (no exponent), even though both judge numeric text in this same panel.
+ * They answer different questions and have different owners: that one MIRRORS
+ * `engine/params.ts`'s run-time `coerce`, so widening it would start accepting
+ * param defaults the engine then rejects at run — the mirror is the whole point.
+ * This one feeds a `z.number()` config field, where any JS number literal is
+ * valid. Merging them would silently re-point one rule at the other's authority.
+ */
 const NUMERIC_INPUT = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 /** Read one control's input back out as a config value. */
 export function parseFieldInput(field: ConfigField, raw: string | boolean): FieldParse {
   if (field.kind === 'boolean') {
     if (typeof raw !== 'boolean') return { ok: false, message: 'expected a checkbox value' };
-    // An UNCHECKED optional box omits the key rather than writing `false`, so
-    // "absent" and "explicitly false" stay distinguishable — `catalog/lower.ts`
-    // reads exactly that difference on `emitMessages`.
+    // An UNCHECKED optional box omits the key rather than writing `false`: a box
+    // nobody ticked is "not set", and writing `false` on every apply would make
+    // every node explicit about a choice its author never made.
+    //
+    // A stored, explicit `false` is NOT lost to this — `assembleConfig` keeps a
+    // value that was already empty when the panel opened. (An earlier version of
+    // this comment justified the rule by claiming `catalog/lower.ts` distinguishes
+    // absent from `false` on `emitMessages`. It does not: it tests `=== true`.
+    // The rule is right, that reason was not.)
     if (!raw && field.optional) return { ok: true, omit: true };
     return { ok: true, omit: false, value: raw };
   }
 
-  if (typeof raw !== 'boolean' && raw.trim() === '') {
-    // One uniform rule: empty means "not set". Writing `''` or `null` instead
-    // would turn "the author left this alone" into an explicit value the engine
-    // has to interpret. A REQUIRED key omitted is not refused here — the
-    // activity's own schema reports it missing, in its own words.
+  if (typeof raw === 'boolean') return { ok: false, message: 'expected a text value' };
+
+  if (raw.trim() === '') {
+    // For an OPTIONAL key, empty means "not set": writing `''` or `null` would
+    // turn "the author left this alone" into an explicit value the engine then
+    // has to interpret.
+    if (field.optional) return { ok: true, omit: true };
+
+    // For a REQUIRED key it must not, and this is a one-way trap if it does.
+    // `file_write.content` is a bare `z.string()` — no `.min(1)` — so `''` is a
+    // config the SERVER accepts and an author can legitimately want (write an
+    // empty file). Omitting the key instead makes every apply fail with
+    // "expected string, received undefined" until they invent content, on a node
+    // they may only have opened to change the path. The form must never refuse
+    // what the server accepts. So the empty text is written VERBATIM, and a
+    // schema that genuinely requires content (`url`'s `.min(1)`) reports that
+    // itself, in its own words — a refusal the server would also have made.
+    //
+    // `number`/`enum`/`json` fall through to omit below: there is no "empty
+    // number", so no value could be written, and the schema reporting the key as
+    // missing is the honest outcome rather than a trap.
+    if (field.kind === 'text') return { ok: true, omit: false, value: raw };
+    if (field.kind === 'stringList') return { ok: true, omit: false, value: [] };
     return { ok: true, omit: true };
   }
-  if (typeof raw === 'boolean') return { ok: false, message: 'expected a text value' };
 
   switch (field.kind) {
     case 'text':
@@ -306,10 +374,33 @@ export function assembleConfig(
   const owned: Record<string, unknown> = {};
 
   for (const field of fields) {
-    const raw = inputs[field.name] ?? (field.kind === 'boolean' ? false : '');
+    const emptyControl: string | boolean = field.kind === 'boolean' ? false : '';
+    const raw = inputs[field.name] ?? emptyControl;
     const parsed = parseFieldInput(field, raw);
     if (!parsed.ok) return { ok: false, message: `${field.name}: ${parsed.message}` };
     if (parsed.omit) {
+      // Deleting is for a CLEARING GESTURE, not for a control that was already
+      // empty when the panel opened. An explicit `false`, an empty array or an
+      // empty string are values an author can have meant, and every one of them
+      // renders as an empty control — so a plain delete would erase them on an
+      // apply that touched a completely different field. Compare against what the
+      // stored value RENDERS to: if the control still shows what it was seeded
+      // with, nothing was cleared, and the stored value is kept verbatim.
+      //
+      // This keeps the rule activity-agnostic. The alternative — arguing that
+      // dropping `emitMessages: false` is harmless because `catalog/lower.ts`
+      // tests `=== true` — is true today and reasons about ONE reader of ONE key;
+      // it would silently stop holding for the next optional boolean whose absent
+      // and false differ.
+      const stored = original[field.name];
+      if (stored !== undefined && raw === emptyControl) {
+        const rendered = formatFieldValue(field, stored);
+        if (rendered.ok && rendered.value === emptyControl) {
+          config[field.name] = stored;
+          owned[field.name] = stored;
+          continue;
+        }
+      }
       delete config[field.name];
       continue;
     }

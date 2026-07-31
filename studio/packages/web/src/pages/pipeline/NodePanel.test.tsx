@@ -1,27 +1,43 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { isStructuralCallActivity, type Node } from '@autonomy-studio/shared';
+import { getActivity, isStructuralCallActivity, type Node } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
+import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
+import { deriveConfigFields } from './configForm';
 
 /**
  * Mount the panel over a store holding ONE node, and hand back a reader for that
  * node's stored config — so every assertion below is about what an apply actually
  * WROTE to the doc, never about what the form displayed.
+ *
+ * The panel's props are read FROM THE STORE on every render, because that is how
+ * `PipelineCanvas` feeds it (`useStore(store, s => s.nodes)`, then the selected
+ * node's fields). A harness that passed a frozen `config` captured at mount would
+ * be a strictly easier problem than the real one: the panel re-seeds its drafts
+ * when a new `config` object arrives, and a prop that can never change would
+ * quietly certify that re-seed without ever exercising it.
  */
 function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['connections'] = []) {
   const store = createCanvasStore();
   store.setState({ nodes: [target] });
-  render(
-    <NodePanel
-      store={store}
-      connections={connections}
-      nodeId={target.id}
-      nodeType={target.type}
-      config={target.config}
-      connectionId={target.connectionId}
-    />,
-  );
+
+  function Harness() {
+    const node = useStore(store, (s) => s.nodes.find((n) => n.id === target.id));
+    if (!node) return null;
+    return (
+      <NodePanel
+        store={store}
+        connections={connections}
+        nodeId={node.id}
+        nodeType={node.type}
+        config={node.config}
+        connectionId={node.connectionId}
+      />
+    );
+  }
+
+  render(<Harness />);
   return {
     store,
     storedConfig: () => store.getState().nodes[0]?.config ?? {},
@@ -199,11 +215,73 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(panel.storedConfig()).toMatchObject({ url: 'https://hatch' });
   });
 
+  it('does not let one editor revert the other', () => {
+    // The two editors hold independent drafts of the same doc. Before the
+    // re-seed, applying in JSON mode and then applying the FORM wrote the form's
+    // mount-time values back over the JSON edit — the author's work silently
+    // undone, with no message and nothing on screen having looked wrong.
+    const panel = mountOver(httpNode({ url: 'https://x' }));
+
+    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://from-json","method":"POST"}' },
+    });
+    panel.apply();
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://from-json', method: 'POST' });
+
+    // Back to the form: it must now show what JSON just wrote, and applying
+    // unchanged must be a no-op rather than a revert.
+    fireEvent.click(screen.getByLabelText('Edit as JSON'));
+    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://from-json');
+    expect((screen.getByLabelText('method (optional)') as HTMLTextAreaElement).value).toBe('POST');
+
+    panel.apply();
+    expect(panel.storedConfig()).toMatchObject({ url: 'https://from-json', method: 'POST' });
+  });
+
+  it('hands the form back once an unrenderable value is repaired', () => {
+    // The advisory names a field the author can no longer see, so it has to stop
+    // naming it the moment they fix it — and the form it was blocking has to
+    // become available. Both were stuck when this was computed once at mount.
+    const panel = mountOver(httpNode({ url: { was: 'authored elsewhere' } }));
+
+    fireEvent.change(screen.getByLabelText('Config (JSON)'), {
+      target: { value: '{"url":"https://repaired"}' },
+    });
+    panel.apply();
+
+    expect(screen.queryByText(/Saved settings this form cannot show/)).toBeNull();
+    expect(screen.getByLabelText('Edit as JSON')).toBeTruthy();
+    expect((screen.getByLabelText('url') as HTMLTextAreaElement).value).toBe('https://repaired');
+  });
+
+  it('does not silently drop a stored empty value on an unrelated edit', () => {
+    // `file_write.content` is a bare `z.string()` — `''` is a config the SERVER
+    // accepts (write an empty file). Opening the panel to change the PATH must not
+    // delete it, and must not leave the author unable to apply at all.
+    const panel = mountOver(node('n_fw', 'file_write', { path: '/tmp/a', content: '' }));
+
+    fireEvent.change(screen.getByLabelText('path'), { target: { value: '/tmp/b' } });
+    panel.apply();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(panel.storedConfig()).toEqual({ path: '/tmp/b', content: '' });
+  });
+
   it('renders an enum as a select over exactly its permitted values', () => {
     mountOver(node('n_llm', 'llm_call', {}));
 
+    // Derived from the SCHEMA, not spelled out here. Writing the five effort
+    // levels into this file would duplicate a list the catalog owns, and would
+    // then quietly certify the old set on the day one is added — the failure mode
+    // where a test enumerates what a component renders and goes stale.
+    const derived = deriveConfigFields(getActivity('llm_call')!.configSchema);
+    const permitted = derived?.find((f) => f.name === 'reasoningEffort')?.enumOptions;
+    expect(permitted?.length, 'reasoningEffort is still an enum').toBeGreaterThan(0);
+
     const select = screen.getByLabelText('reasoningEffort (optional)') as HTMLSelectElement;
-    expect([...select.options].map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'max']);
+    // The blank leads: an optional enum must offer "not set" as a reachable state.
+    expect([...select.options].map((o) => o.value)).toEqual(['', ...permitted!]);
   });
 
   it('distinguishes an unchecked optional box from an explicit false', () => {

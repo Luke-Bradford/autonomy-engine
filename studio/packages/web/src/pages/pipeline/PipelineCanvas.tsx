@@ -26,12 +26,12 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
+import { ConfigFieldControl } from './ConfigFieldControl';
 import {
   assembleConfig,
   deriveConfigFields,
-  formatFieldValue,
+  seedFieldInputs,
   unrepresentableFields,
-  type ConfigField,
 } from './configForm';
 import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
 import {
@@ -1019,13 +1019,23 @@ function ContainerSection({
 }
 
 /**
- * Editor for one activity node. Config is edited as JSON (minus the internal
- * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
- * since #526 — and which this slice does not surface);
- * Apply parses the JSON and validates it against the activity's `configSchema`
- * before committing, so an invalid blob never reaches the store. The connection
- * dropdown is filtered to the kinds this activity accepts. Container membership
- * (U6d) is `ContainerSection` above.
+ * Editor for one activity node.
+ *
+ * Settings are authored through a FORM derived from the activity's own
+ * `configSchema` (U7 — `configForm.ts` owns the derivation and the apply
+ * semantics). The whole-config JSON editor it replaced remains reachable two
+ * ways: as an opt-in toggle, and as the automatic surface when a value already
+ * saved cannot round-trip through its control. Either path validates against
+ * `configSchema` before committing, so an invalid blob never reaches the store —
+ * a UX pre-check only; `validateDoc` on the server remains the gate.
+ *
+ * The internal `outputs` contract — seeded by `lowerPipelineNodes` on creation
+ * AND on load since #526 — is not surfaced by either editor, and is preserved
+ * across an apply by the same rule that preserves every other key no derived
+ * field owns.
+ *
+ * The connection dropdown is filtered to the kinds this activity accepts.
+ * Container membership (U6d) is `ContainerSection` above.
  */
 export function NodePanel({
   store,
@@ -1045,33 +1055,50 @@ export function NodePanel({
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
   const { outputs, ...editable } = config;
-  const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
-  const [error, setError] = useState<string | null>(null);
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
   // source). `null` when the schema is not object-rooted.
   const fields = useMemo(() => (entry ? deriveConfigFields(entry.configSchema) : null), [entry]);
-  // A stored value whose type disagrees with its schema-derived control cannot
-  // round-trip through that control, so the whole node falls back to the JSON
-  // editor rather than corrupting the doc on an apply the author thinks touched
-  // one other field. Computed from the config as MOUNTED (the panel is keyed by
-  // node id), so it cannot flip mid-edit.
-  const unrenderable = useMemo(
-    () => (fields ? unrepresentableFields(fields, editable) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- seeded once per node; the panel is keyed by node id
-    [fields],
-  );
+
+  // Recomputed every render from the CURRENT config, deliberately: a value whose
+  // type disagrees with its control cannot round-trip, so the node falls back to
+  // the JSON editor rather than corrupting the doc on an apply the author thinks
+  // touched one other field — but the moment they REPAIR it there, the form must
+  // become available and this advisory must stop naming a field that is now fine.
+  // Memoising it on mount left both stuck saying otherwise.
+  const unrenderable = fields ? unrepresentableFields(fields, editable) : [];
   const formAvailable = fields !== null && unrenderable.length === 0;
-  const [jsonMode, setJsonMode] = useState(!formAvailable);
-  const [inputs, setInputs] = useState<Record<string, string | boolean>>(() => {
-    const seeded: Record<string, string | boolean> = {};
-    for (const field of fields ?? []) {
-      const rendered = formatFieldValue(field, editable[field.name]);
-      seeded[field.name] = rendered.ok ? rendered.value : '';
-    }
-    return seeded;
-  });
+
+  const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
+  const [inputs, setInputs] = useState(() => seedFieldInputs(fields, editable));
+  const [error, setError] = useState<string | null>(null);
+  // The author's PREFERENCE, not the mode: the mode is this OR forced. Kept
+  // apart so that repairing an unrenderable value hands the form back, instead of
+  // leaving the author in an editor they never chose.
+  const [jsonPreferred, setJsonPreferred] = useState(false);
+  const jsonMode = jsonPreferred || !formAvailable;
+
+  // Re-seed both editors whenever a DIFFERENT config object arrives.
+  //
+  // The two editors hold independent drafts of the same doc, so without this they
+  // desync the moment one of them commits: applying in JSON mode and then
+  // switching back to the form would apply the form's MOUNT-TIME values over the
+  // author's JSON edit — silently reverting work with no message. Re-seeding on
+  // identity is `ParamRow`'s precedent above, and safe for the same reason: the
+  // store's `map` preserves element identity for untouched nodes, so a new
+  // `config` object arrives exactly when this node's config was replaced.
+  //
+  // A render-phase set-on-prop-change, not an effect — React's derived-state
+  // pattern, which this repo's React 19 lint permits where `useEffect` + setState
+  // would not be.
+  const [syncedConfig, setSyncedConfig] = useState(config);
+  if (syncedConfig !== config) {
+    setSyncedConfig(config);
+    setText(JSON.stringify(editable, null, 2));
+    setInputs(seedFieldInputs(fields, editable));
+    setError(null);
+  }
 
   // Kinds this activity accepts, PLUS whatever is currently bound — so a node
   // bound to an off-kind connection (e.g. loaded from an older doc) still shows
@@ -1189,8 +1216,8 @@ export function NodePanel({
         <label className="contract-check">
           <input
             type="checkbox"
-            checked={jsonMode}
-            onChange={(e) => setJsonMode(e.target.checked)}
+            checked={jsonPreferred}
+            onChange={(e) => setJsonPreferred(e.target.checked)}
           />
           Edit as JSON
         </label>
@@ -1246,94 +1273,3 @@ export function NodePanel({
   );
 }
 
-/**
- * One derived config control (U7).
- *
- * Every string field renders as a `<textarea>` rather than an `<input>`,
- * deliberately and uniformly: ANY string setting here may hold a multi-line `${}`
- * expression or prose (`prompt`, `body`, `content`, `task`), and the only
- * alternative — a per-field-name list of which ones are "long" — would be exactly
- * the magic-string table that deriving the form from the schema exists to avoid.
- *
- * The label carries the field NAME, not a prettified one: the name is what the
- * author writes in a `${nodes.x.config…}` reference and what the server's
- * validation errors cite, so renaming it for display would break the one thread
- * connecting the form, the doc and the error message.
- */
-function ConfigFieldControl({
-  field,
-  value,
-  onChange,
-}: {
-  field: ConfigField;
-  value: string | boolean;
-  onChange: (next: string | boolean) => void;
-}) {
-  const label = field.optional ? `${field.name} (optional)` : field.name;
-
-  if (field.kind === 'boolean') {
-    return (
-      <label className="contract-check">
-        <input
-          type="checkbox"
-          checked={value === true}
-          onChange={(e) => onChange(e.target.checked)}
-        />
-        {label}
-      </label>
-    );
-  }
-
-  if (field.kind === 'enum') {
-    return (
-      <label>
-        {label}
-        <select
-          value={typeof value === 'string' ? value : ''}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">— none —</option>
-          {(field.enumOptions ?? []).map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
-      </label>
-    );
-  }
-
-  if (field.kind === 'number') {
-    // A TEXT input, not `type="number"`: a number input reports an unparseable
-    // entry as the empty string, which this form reads as "not set" — so a typo
-    // would silently DELETE the setting instead of reporting "must be a number".
-    return (
-      <label>
-        {`${label} — number`}
-        <input
-          type="text"
-          inputMode="decimal"
-          value={typeof value === 'string' ? value : ''}
-          spellCheck={false}
-          placeholder={field.defaultText}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </label>
-    );
-  }
-
-  const hint = field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
-
-  return (
-    <label>
-      {hint === null ? label : `${label} — ${hint}`}
-      <textarea
-        value={typeof value === 'string' ? value : ''}
-        rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
-        spellCheck={false}
-        placeholder={field.defaultText}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
-  );
-}

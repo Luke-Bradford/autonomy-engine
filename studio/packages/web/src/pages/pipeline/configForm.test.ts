@@ -171,6 +171,19 @@ describe('formatFieldValue', () => {
     expect(formatFieldValue(list, 'a,b').ok).toBe(false);
   });
 
+  it('REFUSES a list a one-per-line control would silently alter', () => {
+    // The control splits on newlines, trims, and drops blanks — so these three
+    // shapes do not survive a render/parse cycle, and claiming they do would
+    // corrupt them on an apply that touched a different field entirely. An
+    // `llm_call.stop` sequence of "Human: " becoming "Human:" stops matching.
+    expect(formatFieldValue(list, ['Human: ']).ok).toBe(false);
+    expect(formatFieldValue(list, ['a\nb']).ok).toBe(false);
+    expect(formatFieldValue(list, ['a', '']).ok).toBe(false);
+    // What the control CAN represent still renders.
+    expect(formatFieldValue(list, ['red', 'green'])).toEqual({ ok: true, value: 'red\ngreen' });
+    expect(formatFieldValue(list, [])).toEqual({ ok: true, value: '' });
+  });
+
   it('names every field whose stored value cannot be rendered', () => {
     expect(unrepresentableFields([text, num], { url: 'ok', maxTokens: 5 })).toEqual([]);
     expect(unrepresentableFields([text, num], { url: { a: 1 }, maxTokens: '${x}' })).toEqual([
@@ -190,16 +203,30 @@ describe('parseFieldInput', () => {
   const json: ConfigField = { name: 'headers', kind: 'json', optional: true };
   const en: ConfigField = { name: 'mode', kind: 'enum', optional: true, enumOptions: ['a', 'b'] };
 
-  it('omits the key for an empty input rather than writing an empty value', () => {
-    // One uniform rule across every kind: empty means "not set". Writing `''` or
-    // `null` instead would turn "the author left it alone" into an explicit value
-    // the engine then has to interpret.
-    for (const f of [text, optText, num, list, json, en]) {
+  it('omits an OPTIONAL key left empty rather than writing an empty value', () => {
+    // For a key that may be absent, empty means "not set". Writing `''` or `null`
+    // instead would turn "the author left it alone" into an explicit value the
+    // engine then has to interpret.
+    for (const f of [optText, num, json, en]) {
       expect(parseFieldInput(f, '')).toEqual({ ok: true, omit: true });
     }
-    // A REQUIRED key omitted is not this function's business to refuse — the
-    // activity's own schema reports it missing, with its own message.
-    expect(parseFieldInput(text, '   ')).toEqual({ ok: true, omit: true });
+  });
+
+  it('writes a REQUIRED text key empty rather than omitting it', () => {
+    // Omitting is a one-way trap here. `file_write.content` is a bare
+    // `z.string()` — no `.min(1)` — so `''` is a config the SERVER accepts and an
+    // author can legitimately want. Omitting the key makes every apply fail with
+    // "expected string, received undefined" until they invent content, on a node
+    // they may only have opened to change the path.
+    expect(parseFieldInput(text, '')).toEqual({ ok: true, omit: false, value: '' });
+    expect(parseFieldInput(text, '   ')).toEqual({ ok: true, omit: false, value: '   ' });
+    // A required LIST empty is the empty list, which is a valid array value.
+    expect(parseFieldInput(list, '')).toEqual({ ok: true, omit: false, value: [] });
+    // A required NUMBER has no empty value to write, so the schema reporting the
+    // key as missing is the honest outcome — not a trap, because no input the
+    // author could type would have satisfied it either.
+    const reqNum: ConfigField = { name: 'n', kind: 'number', optional: false };
+    expect(parseFieldInput(reqNum, '')).toEqual({ ok: true, omit: true });
   });
 
   it('parses each kind back out of its control', () => {
@@ -276,6 +303,41 @@ describe('assembleConfig', () => {
   it('deletes a key the author cleared', () => {
     const result = assembleConfig({ url: 'u', body: 'gone' }, fields, { url: 'u', body: '' });
     expect(result).toEqual({ ok: true, owned: { url: 'u' }, config: { url: 'u' } });
+  });
+
+  it('KEEPS a stored value that was already empty when the panel opened', () => {
+    // The difference between a clearing GESTURE and a control that was empty all
+    // along. An explicit `false`, an empty array and an empty string are values an
+    // author can have meant, and all three render as an empty control — so a
+    // blanket delete would erase them on an apply that touched a different field.
+    const mixed: ConfigField[] = [
+      { name: 'url', kind: 'text', optional: false },
+      { name: 'flag', kind: 'boolean', optional: true },
+      { name: 'stop', kind: 'stringList', optional: true },
+      { name: 'body', kind: 'text', optional: true },
+    ];
+    const original = { url: 'a', flag: false, stop: [], body: '' };
+
+    // The author edits ONLY `url`; every other control is left as seeded.
+    const result = assembleConfig(original, mixed, {
+      url: 'b',
+      flag: false,
+      stop: '',
+      body: '',
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      owned: { url: 'b', flag: false, stop: [], body: '' },
+      config: { url: 'b', flag: false, stop: [], body: '' },
+    });
+  });
+
+  it('still deletes an optional key the author actually emptied', () => {
+    // The other side of the same rule: `body` held text, and now the control is
+    // empty, so this IS a clearing gesture and the key goes.
+    const result = assembleConfig({ url: 'a', body: 'was here' }, fields, { url: 'a', body: '' });
+    expect(result).toEqual({ ok: true, owned: { url: 'a' }, config: { url: 'a' } });
   });
 
   it('reports the first unparseable field by name and assembles nothing', () => {
