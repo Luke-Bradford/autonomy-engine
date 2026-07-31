@@ -13,7 +13,8 @@ import {
   pruneContainerChild,
   sameSelection,
 } from './canvasStore';
-import { canSave, validateCanvas } from './canvasDoc';
+import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import { DEFAULT_MAX_BOUNCES } from './edgeCondition';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -1380,5 +1381,116 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
 
     s.getState().rebaseLoaded(version({ version: 2, params: [] }));
     expect(s.getState().params).toBe(edited);
+  });
+});
+
+/**
+ * U6e — authoring and editing a BACK-EDGE.
+ *
+ * The engine has implemented back-edges since P2c (`fireBackEdges`: bounce
+ * counters, reset bodies, a `capped` failure) and the save gate has validated
+ * them just as long, but nothing on the canvas could create one. These pin the
+ * two halves that close that: `connect` authoring the back shape, and
+ * `updateEdgeBounces` editing the cap afterwards.
+ */
+describe('canvasStore — back-edges (U6e)', () => {
+  /** `n_a → n_b`, so `n_b →back n_a` is the ordinary retry loop. */
+  function loaded() {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    return s;
+  }
+
+  it('connect authors the back shape, with a cap that keeps the doc SAVABLE', () => {
+    const s = loaded();
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const authored = s.getState().edges.find((e) => e.from === 'n_b');
+    expect(authored?.back).toBe(true);
+    expect(authored?.maxBounces).toBe(DEFAULT_MAX_BOUNCES);
+    // The whole point of the default: an edge that cannot be saved the instant
+    // it is drawn is the #748/U16 trap, and a version is immutable.
+    expect(EdgeSchema.safeParse(authored).success).toBe(true);
+    const st = s.getState();
+    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+  });
+
+  it('connect still REFUSES a back candidate the save gate would refuse', () => {
+    const s = loaded();
+    // `n_a` does not lead back to `n_b`'s... `n_b` reaches nothing, so a
+    // back-edge from `n_a` to `n_b` has no loop to close.
+    s.getState().connect('n_a', 'n_b', { on: 'failure' }, { back: true });
+    expect(s.getState().edges.some((e) => e.back === true)).toBe(false);
+  });
+
+  it('a forward connect is unchanged — no stray back/maxBounces', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version({ edges: [] }));
+    s.getState().connect('n_a', 'n_b', { on: 'success' });
+    const authored = s.getState().edges[0];
+    expect(authored).not.toHaveProperty('back');
+    expect(authored).not.toHaveProperty('maxBounces');
+  });
+
+  describe('updateEdgeBounces', () => {
+    function withBack() {
+      const s = loaded();
+      s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+      const id = s.getState().edges.find((e) => e.back === true)!.id;
+      return { s, id };
+    }
+
+    it('sets the cap and marks the doc dirty', () => {
+      const { s, id } = withBack();
+      s.setState({ dirty: false });
+      s.getState().updateEdgeBounces(id, 7);
+      expect(s.getState().edges.find((e) => e.id === id)?.maxBounces).toBe(7);
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    /**
+     * ZERO is allowed, deliberately. `EdgeSchema` types `maxBounces` as
+     * `int().nonnegative()` and the save gate only requires it to be PRESENT,
+     * so `0` is a savable value — an edge that never bounces. An editor
+     * stricter than the format is the #748 trap in miniature: an imported doc
+     * whose persisted value its own editor refuses to accept back.
+     */
+    it('accepts 0 — the format allows it, so the editor must not refuse it', () => {
+      const { s, id } = withBack();
+      s.getState().updateEdgeBounces(id, 0);
+      expect(s.getState().edges.find((e) => e.id === id)?.maxBounces).toBe(0);
+    });
+
+    it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'refuses %p, which EdgeSchema would reject',
+      (bad) => {
+        const { s, id } = withBack();
+        s.getState().updateEdgeBounces(id, bad);
+        expect(s.getState().edges.find((e) => e.id === id)?.maxBounces).toBe(DEFAULT_MAX_BOUNCES);
+      },
+    );
+
+    it('refuses an edge that is not a back-edge, and an unknown id', () => {
+      const { s } = withBack();
+      s.getState().updateEdgeBounces('e_1', 4);
+      expect(s.getState().edges.find((e) => e.id === 'e_1')).not.toHaveProperty('maxBounces');
+      s.setState({ dirty: false });
+      s.getState().updateEdgeBounces('nope', 4);
+      expect(s.getState().dirty).toBe(false);
+    });
+  });
+
+  /**
+   * The persistence guard. `back`/`maxBounces` live on `edgeBase`, outside the
+   * `on`/`branch` discriminant, which is exactly the shape that has been
+   * silently dropped three times before (#746 `containers`, U16's `params`, and
+   * `toVersionBody` reading `loaded`). Cheap insurance against a fourth.
+   */
+  it('a back-edge round-trips into the version body', () => {
+    const s = loaded();
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const st = s.getState();
+    const body = toVersionBody(st.nodes, st.edges, st.containers, st.params, st.outputs);
+    const persisted = body.edges.find((e) => e.from === 'n_b');
+    expect(persisted).toMatchObject({ back: true, maxBounces: DEFAULT_MAX_BOUNCES });
   });
 });
