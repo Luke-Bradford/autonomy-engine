@@ -608,7 +608,7 @@ read as the loop's:
 The live log carried all three in four consecutive lines, which is what made it
 findable at all:
 
-```
+```text
 open PR #803 present -- waiting for its gate to settle
 PR #803 gate settled (or waited 0x30s)
 'fix/loop-commit-before-long-wait' is ahead of main -- work in flight, not a stall
@@ -645,6 +645,38 @@ Markdown, "is it a doc?" and "is it safe to skip review?" stopped being the same
 question. Fixed at the shared predicate (`merge_gate.doc_only_exclude_paths`,
 checked FIRST), never by forking it per-consumer — the divergence #192 exists to
 prevent.
+
+**AMENDMENT, five hours later, by the entry's own author (#823).** The rule above
+says *name the actor in the predicate*. The fix that produced this entry did name
+it — and still broke, because **the name was derived from a census, not from a
+rule.** `is_loop_ref` matched `*/studio-*` only, justified in its own comment by:
+*"across the last 40 merged PRs every `*/loop-*` branch was the operator's."*
+
+That measurement was correct. The inference from it was not. It held only
+because the loop had never yet worked on `loop/` itself — and hours later it did
+(#808, #811, #821), naming those branches the way it names every other one,
+`fix/loop-<issue>-<slug>`. The predicate then excluded **the loop's own work**:
+measured 2026-07-31 10:54Z, PR #822 open with a fire actively polling its gate,
+while the driver logged `no progress … no open PR … stall=1/3` and did not wait
+on that gate. Three of those STOPS the driver claiming the queue is drained —
+the identical false stop #775 exists to prevent, reintroduced by the fix for it.
+
+**A census tells you what the actors have done, not what they may do.** It is
+evidence about the past that reads exactly like a rule about the future, and it
+is at its most convincing when the sample is large — 40 PRs *felt* like proof.
+The tell: the justification is a COUNT ("every one so far", "all N of them")
+rather than a REASON the other case cannot arise. There was no reason here; the
+loop simply had not been given that kind of work yet.
+
+**Rule: when a predicate identifies an actor, key it on something the actor
+CONSTRUCTS, not on something it has HAPPENED to use.** The durable
+discriminator was structural and available the whole time — every branch the
+loop opens comes from a ticket and carries its number (`loop-811-`,
+`studio-806-`), because that is how it works; the supervisor's do not. And when
+the safe and expensive polarities are split across the same predicate, give the
+*other* actor a RESERVED namespace (`supervisor/**`) rather than relying on it
+to keep avoiding a pattern by habit — a convention only one side knows is the
+same census error one level up.
 
 ## 29. `grep -c … || echo 0` DOUBLE-EMITS on no match — an expected-ABSENT assertion is then permanently red
 
