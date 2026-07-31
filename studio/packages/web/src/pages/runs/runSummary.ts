@@ -14,14 +14,16 @@ import {
  * tests.
  *
  * The full engine reducer (`createEngine(doc).projectRunState`) is the SSOT for
- * node state, but it needs the pipeline-version DOC, which this page does not
- * fetch (there is no get-version-by-id endpoint yet — a documented P6c
- * follow-up). So this derives a lighter, doc-free activity view straight off the
- * node-bearing events: a node appears the moment it is dispatched and lights up
- * as its result lands. Every payload is re-validated through `EngineEventSchema`
- * (the whole `EngineEvent` is stored as the envelope's `payload`); a row that
- * does not parse is skipped, not thrown — a live monitor must never crash on one
- * odd frame.
+ * node state, and as of U11 the run page DOES fold it — R1
+ * (`GET /api/runs/:id/detail`) resolves the version doc it needs, and
+ * `runProjection.ts`/`RunCanvas.tsx` draw the result on the graph.
+ *
+ * This doc-FREE derivation is kept deliberately, and is not a leftover. It needs
+ * no doc, so it still renders for a run whose version no longer resolves, and it
+ * still renders while the stream is mid-replay — both cases where the overlay
+ * correctly refuses to draw. Its status vocabulary is its own and LOSSIER than
+ * the engine's on purpose (see `NodeActivity` below); where the two disagree,
+ * the engine is right.
  */
 
 /** Same-origin WebSocket URL for a run's live event tail. `wss` under TLS. */

@@ -90,17 +90,17 @@ export interface SeedDoc {
 }
 
 /**
- * Create a pipeline, mint one version holding `doc`, and open its canvas.
+ * Mint a pipeline version WITHOUT opening its canvas, and return both ids.
  *
- * Returns once React Flow has mounted, every seeded activity is on screen AND
- * the viewport has stopped moving. All three matter: `fitView` re-centres
- * asynchronously, so a rect read during it is a screen box that has already
- * moved; and a container's box is derived from its children's MEASURED sizes,
- * falling back to an assumed size for the one frame before React Flow has
- * measured them — so an early read is a first-frame box that is about to change.
- * The `draggable` class is React Flow's own signal that it has measured a node.
+ * The mint half of `openSeededCanvas`, which is written in terms of this: a spec
+ * about a RUN needs the version id to bind a trigger to, and must not navigate
+ * anywhere yet.
  */
-export async function openSeededCanvas(page: Page, name: string, doc: SeedDoc): Promise<string> {
+export async function seedVersion(
+  page: Page,
+  name: string,
+  doc: SeedDoc,
+): Promise<{ pipelineId: string; pipelineVersionId: string }> {
   const created = await page.request.post('/api/pipelines', { data: { name } });
   expect(created.status(), `creating pipeline '${name}': ${await created.text()}`).toBe(201);
   const { id } = (await created.json()) as { id: string };
@@ -120,15 +120,32 @@ export async function openSeededCanvas(page: Page, name: string, doc: SeedDoc): 
     },
   });
   expect(minted.status(), `minting version for '${name}': ${await minted.text()}`).toBe(201);
+  const { id: pipelineVersionId } = (await minted.json()) as { id: string };
+  return { pipelineId: id, pipelineVersionId };
+}
 
-  await page.goto(`/#/author/pipelines/${encodeURIComponent(id)}`);
+/**
+ * Create a pipeline, mint one version holding `doc`, and open its canvas.
+ *
+ * Returns once React Flow has mounted, every seeded activity is on screen AND
+ * the viewport has stopped moving. All three matter: `fitView` re-centres
+ * asynchronously, so a rect read during it is a screen box that has already
+ * moved; and a container's box is derived from its children's MEASURED sizes,
+ * falling back to an assumed size for the one frame before React Flow has
+ * measured them — so an early read is a first-frame box that is about to change.
+ * The `draggable` class is React Flow's own signal that it has measured a node.
+ */
+export async function openSeededCanvas(page: Page, name: string, doc: SeedDoc): Promise<string> {
+  const { pipelineId } = await seedVersion(page, name, doc);
+
+  await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
   await fluentRootReady(page);
   await page.locator('.react-flow__renderer').waitFor();
   for (const n of doc.nodes) {
     await expect(nodeById(page, n.id)).toHaveClass(/\bdraggable\b/);
   }
   await viewportSettled(page);
-  return id;
+  return pipelineId;
 }
 
 /**
@@ -164,36 +181,6 @@ export function rectOf(page: Page, selector: string): Promise<ScreenRect> {
       height: r.height,
     };
   });
-}
-
-/**
- * Mint a pipeline version WITHOUT opening its canvas, and return both ids.
- *
- * `openSeededCanvas` is the right tool when the spec is about authoring. This
- * one is for a spec about a RUN: it needs the version id to bind a trigger to,
- * and it must not navigate anywhere yet.
- */
-export async function seedVersion(
-  page: Page,
-  name: string,
-  doc: SeedDoc,
-): Promise<{ pipelineId: string; pipelineVersionId: string }> {
-  const created = await page.request.post('/api/pipelines', { data: { name } });
-  expect(created.status(), `creating pipeline '${name}': ${await created.text()}`).toBe(201);
-  const { id } = (await created.json()) as { id: string };
-
-  const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
-    data: {
-      params: doc.params ?? [],
-      outputs: doc.outputs ?? [],
-      nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
-      edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
-      containers: doc.containers ?? [],
-    },
-  });
-  expect(minted.status(), `minting version for '${name}': ${await minted.text()}`).toBe(201);
-  const { id: pipelineVersionId } = (await minted.json()) as { id: string };
-  return { pipelineId: id, pipelineVersionId };
 }
 
 /**
@@ -236,6 +223,11 @@ export async function fireAndSettle(
   const { runId } = (await fired.json()) as { runId: string };
   expect(runId, 'a manual fire must start a run').toBeTruthy();
 
+  // Hand-listed rather than read off `RunStatusSchema.options`: no e2e file
+  // imports `@autonomy-studio/shared` (the specs drive the app through its HTTP
+  // surface, as an operator does). The cost is that a NEW terminal status would
+  // leave this poll waiting — which fails loudly on the timeout, naming the
+  // status it was stuck in, rather than passing wrongly.
   const TERMINAL = ['success', 'failure', 'skipped', 'interrupted'];
   await expect
     .poll(

@@ -1375,6 +1375,7 @@ R1 closes that, and this draws the result on the graph.
 | Shared geometry lifted out of the author canvas | `web/src/pages/pipeline/containerLayout.ts` — `containerHandles`, `containerAriaLabel`, `UNMEASURED_NODE_SIZE` |
 | Tones (no new palette vars) | `index.css` — `.run-canvas`, `.run-node-*`, `.run-container-*` |
 | Browser coverage (first spec to drive a REAL run) | `e2e/run-overlay.spec.ts`, helpers `seedVersion`/`fireAndSettle` in `e2e/support/seedDoc.ts` |
+| Lazy boundary + the measured bundle cost | `pages/runs/RunGraph.lazy.ts`, numbers in `vite.config.ts` |
 
 Decisions worth not re-deriving:
 
@@ -1403,12 +1404,45 @@ Decisions worth not re-deriving:
   run table's pills already use (`index.css` records the same commitment for the edge hues), so the
   canvas, the pills and the edges cannot come to disagree; and the exact status WORD is rendered as
   text on the node, so grouping the four parked statuses into one `holding` amber collapses nothing.
-  `skipped` is grey and DASHED, matching the settled skipped-edge encoding. Status is carried by
-  `outline`, never `border-color`, so it cannot compete with `.flow-node.selected`.
+  `skipped` is grey and DASHED, matching the settled skipped-edge encoding. On a NODE the status is
+  carried by `outline`, never `border-color`, so it cannot compete with `.flow-node.selected`; a
+  CONTAINER does use `border-color`, which is safe only because a container can never be
+  `selectable` (U6c) and so has no selection ring to compete with. The tone→rule correspondence is
+  asserted in BOTH directions by `palette.test.ts` — a tone with no rule would paint nothing, and a
+  rule with no tone is how `.run-container-holding` survived this ticket's first cut.
+- **The U0 spike's palette non-injectivity is now REAL on one surface, and is being lived with for
+  now.** The spike warned that the mapping is not injective across surfaces and that U11 would
+  inherit it: `--accent` is `completion` on an edge and `running` on a node, so a blue completion
+  edge can now run into a blue running node on the SAME canvas. Not taken here, deliberately —
+  the two are different MARK TYPES (a 1.5px stroke vs a node outline) and the node states its status
+  in words, so nothing is conveyed by that hue alone. The semantic layer the spike pre-authorised
+  (`--status-running: var(--accent)` and friends) is the fix if it ever does read as ambiguous, and
+  it is a rename, not a re-design. The `--muted` half of the same collision WAS resolved, by making
+  a skipped node dashed exactly like a skipped edge.
 - **Tones are `Record<NodeRunStatus, …>`, not a `satisfies` array** — the day the engine adds a
   status, this fails to compile instead of falling through to a default hue. (The engine's own
   `TERMINAL_NODE` comment records that a `satisfies` array was probed for this and does NOT catch a
   forgotten member.)
+- **The overlay is loaded on demand, and the epic's bundle budget is a real gate.** Importing the
+  run canvas statically from the eagerly-routed `RunDetailPage` put `@xyflow/react` back in the
+  ENTRY chunk (111.09 → 182.14 kB gzip) and silently undid #698's route split — no test caught it,
+  which is why the numbers are now recorded in `vite.config.ts` for this ticket as for every prior
+  one. Final: entry 122.62 kB gzip. The residual +11.53 kB is the engine reducer, which lands in the
+  entry because eager code already imports the engine barrel; the lever is a subpath export, judged
+  not worth a package-boundary change today.
+- **`replayComplete`, not `phase === 'closed'`.** `closed` is set by ANY orderly close, including one
+  arriving mid-replay (a graceful shutdown, a proxy close frame, or the server's own send-failure
+  path, which tears down and then still closes 1000). Gating on it would present a TRUNCATED log as
+  authoritative — a finished run drawn with one node stuck `dispatched` and the rest `pending`,
+  indistinguishable from the truth. `useRunStream` now tracks the server's `replay_complete` marker.
+- **Node identity is preserved across folds, and that is correctness, not performance.** React Flow
+  rebuilds a node's internals for any user node that is not reference-identical to the previous one,
+  and `parseHandles` leaves `handleBounds` undefined for a node stating neither `measured` nor
+  `handles`, so `getEdgePosition` returns `null` and every edge touching it renders as NOTHING until
+  the next measurement. Since the projection returns a fresh `RunState` per event, the first cut
+  blinked every edge on every event of a live run — invisible to the e2e, which opens an
+  already-terminal run. `mergeRunNodes` keeps the object when nothing rendered changed and carries
+  the measurement forward when it did.
 - **No incremental fold, deliberately** (#849). The suffix fold was written and tested equivalent to
   a cold refold, then removed: a ref cannot be read or written during render, and a discarded React
   render would fold its events into the carry twice — silently, into a state machine. An effect

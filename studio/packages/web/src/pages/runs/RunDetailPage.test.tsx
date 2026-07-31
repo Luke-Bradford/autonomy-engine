@@ -12,6 +12,7 @@ vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
   listRuns: vi.fn().mockResolvedValue([]),
   getRunDetail: vi.fn(),
+  getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('./useRunStream', async (importActual) => ({
@@ -205,7 +206,9 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
-    expect(screen.getByText(/ended before this run’s history finished loading/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/ended before this run’s history finished loading/i),
+    ).toBeInTheDocument();
   });
 
   it('U11 — says the overlay is unavailable when the stream errored, and still draws the graph', async () => {
@@ -216,6 +219,30 @@ describe('RunDetailPage', () => {
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(screen.getByText(/event stream is unavailable/i)).toBeInTheDocument();
+  });
+
+  it('U11 — a doc that will not resolve costs the OVERLAY, not the run’s metadata', async () => {
+    // R1 resolves the run and its doc together, so a 409 on the doc must not
+    // take the metadata, node table and feed with it — a run whose graph is
+    // gone is exactly when those matter most.
+    getRunDetailMock.mockRejectedValue(new Error('pipeline version not found'));
+    const getRunMock = vi.mocked(runsApi.getRun);
+    getRunMock.mockResolvedValue(run());
+
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByText('pv_1')).toBeInTheDocument();
+    expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/no node overlay/i);
+    expect(screen.queryByTestId('run-canvas')).not.toBeInTheDocument();
+  });
+
+  it('U11 — only when the plain run read ALSO fails is the page empty', async () => {
+    getRunDetailMock.mockRejectedValue(new Error('detail exploded'));
+    vi.mocked(runsApi.getRun).mockRejectedValue(new Error('run gone'));
+
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('detail exploded');
   });
 
   it('surfaces a stream error', async () => {

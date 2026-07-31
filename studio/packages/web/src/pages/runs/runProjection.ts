@@ -34,8 +34,16 @@ import {
  * `withNode` spreads an `undefined` — `createEngine`'s own docblock names that
  * failure ("the reads walk off the end — a TypeError out of the PURE reducer").
  * A hole folded into a state machine is not a slightly-wrong picture, it is an
- * arbitrary one, so an unparseable event abandons the whole projection and the
- * page falls back to the doc-free table with the reason on screen.
+ * arbitrary one.
+ *
+ * The whole projection is abandoned, not just the tail — the valid PREFIX is
+ * discarded too, which the argument above does not by itself require. That is a
+ * deliberate second choice: a partial overlay would need its own "projected
+ * through seq N" vocabulary on every node to be honest, and this path is close
+ * to unreachable in the first place (the server validates through the SAME
+ * `EngineEventSchema` on write, so the only realistic cause is a stale browser
+ * bundle against an upgraded server). The page says why, and the doc-free table
+ * below — which does skip — still renders the whole run.
  */
 export type RunProjection = { ok: true; state: RunState } | { ok: false; reason: string };
 
@@ -94,7 +102,15 @@ export function projectRun(doc: EngineDoc, events: RunEvent[]): RunProjection {
  *     `neutral` and drawn DASHED, matching the settled edge encoding for a
  *     skipped edge, so "this did not run" reads the same everywhere.
  */
-export type StatusTone = 'neutral' | 'running' | 'holding' | 'success' | 'failure' | 'skipped';
+export const ALL_TONES = [
+  'neutral',
+  'running',
+  'holding',
+  'success',
+  'failure',
+  'skipped',
+] as const;
+export type StatusTone = (typeof ALL_TONES)[number];
 
 /**
  * Exhaustive BY CONSTRUCTION: `Record<NodeRunStatus, StatusTone>` fails to
@@ -132,4 +148,3 @@ export function nodeStatusTone(status: NodeRunStatus): StatusTone {
 export function containerStatusTone(status: ContainerRunStatus): StatusTone {
   return CONTAINER_TONES[status];
 }
-

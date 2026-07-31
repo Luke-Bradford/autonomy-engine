@@ -1,7 +1,12 @@
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EdgeOnSchema } from '@autonomy-studio/shared';
+import {
+  ContainerRunStatusSchema,
+  EdgeOnSchema,
+  NodeRunStatusSchema,
+} from '@autonomy-studio/shared';
 import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
+import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/runProjection';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -114,6 +119,40 @@ describe('U6a edge variant hues', () => {
    * rendered change nobody browser-verified. Adding an outcome now fails here
    * instead.
    */
+  /**
+   * U11 — the run overlay's tones, in BOTH directions.
+   *
+   * `runFlow.ts` builds a class by string concat (`run-node-${tone}`), so a tone
+   * with no rule paints nothing and a rule with no tone is dead weight nobody
+   * notices. The node and container vocabularies differ deliberately (no
+   * container status is `holding`), which is exactly the kind of asymmetry that
+   * rots — so each side is enumerated from the CODE, not from a copy of it.
+   */
+  it('has a run-overlay rule for every tone the projection can emit, and no others', () => {
+    const nodeTones = new Set(NodeRunStatusSchema.options.map(nodeStatusTone));
+    for (const tone of nodeTones) {
+      expect(ruleBody(css, `.run-node-${tone}`), `no .run-node-${tone} rule`).not.toBe('');
+    }
+    const containerTones = new Set(ContainerRunStatusSchema.options.map(containerStatusTone));
+    for (const tone of containerTones) {
+      expect(ruleBody(css, `.run-container-${tone}`), `no .run-container-${tone} rule`).not.toBe(
+        '',
+      );
+    }
+
+    // …and nothing beyond them. A `.run-container-holding` rule survived the
+    // first cut of U11 despite no container status mapping to `holding`.
+    // `includes`, not `ruleBody`: the latter THROWS on an absent rule, which is
+    // the outcome this half is asserting.
+    for (const tone of ALL_TONES) {
+      if (containerTones.has(tone)) continue;
+      expect(
+        css.includes(`.run-container-${tone} {`),
+        `.run-container-${tone} exists but no container status maps to it`,
+      ).toBe(false);
+    }
+  });
+
   it('has a variant rule for every operational outcome the picker offers', () => {
     for (const on of EdgeOnSchema.options) {
       const body = ruleBody(css, `.react-flow__edge.edge-variant-${on}`);

@@ -27,8 +27,16 @@ import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
  *    make enclosure and membership the same fact. Until then the box is a HINT
  *    at membership, and `connectRules` (not the picture) is what enforces it.
  *
- * Pure and framework-free — no React, no React Flow — so the arithmetic is
- * testable without mounting a canvas jsdom cannot measure anyway.
+ * Pure and React-free, so the arithmetic is testable without mounting a canvas
+ * jsdom cannot measure anyway. NOT React-Flow-free: `containerHandles` states
+ * port bounds in React Flow's own `NodeHandle` shape and uses its `Position`
+ * enum (a VALUE import), which is the price of the handles being stated rather
+ * than measured. Nothing here renders or holds component state.
+ *
+ * The module owns the box's derived GEOMETRY and what the box ANNOUNCES
+ * (`containerAriaLabel`) — both derived from the same membership, which is why
+ * they live together rather than the label sitting beside the component that
+ * renders it.
  */
 
 export interface Rect {
@@ -326,10 +334,15 @@ export function revealTransform(
 /**
  * The size assumed for a node React Flow has not measured yet.
  *
- * Used for ONE frame: `measured` is populated as soon as RF observes the node,
- * and the container box re-derives from the real size on the next render. It
- * exists so the first paint of a freshly-loaded doc has a plausible box instead
- * of a zero-area one, not as a layout constant anything depends on.
+ * On the AUTHOR canvas it is used for ONE frame: `measured` is populated as soon
+ * as RF observes the node, and the container box re-derives from the real size
+ * on the next render — so the first paint of a freshly-loaded doc has a
+ * plausible box instead of a zero-area one.
+ *
+ * The RUN canvas (`runFlow.ts`) uses it PERMANENTLY, because it derives its
+ * boxes from the doc's positions rather than from React Flow's measurements. A
+ * box there can sit a few pixels loose around its children; membership, which is
+ * the part that carries meaning, is unaffected.
  */
 export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
 
@@ -337,16 +350,7 @@ export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
  * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
  * centred on the node's border (`left: -4px` and friends).
  */
-export const HANDLE_SIZE = 6;
-
-/**
- * How many activity ids the #788 implicit-chain advisory spells out before it
- * summarises the rest. An advisory that grows without bound stops being an
- * advisory and becomes an occlusion: a panel naming forty nodes across the top
- * of the canvas is worse than the silence it replaces. Six is enough to make the
- * ORDER concrete (the surprising part is that there is one at all), and the
- * count in the same sentence keeps the total honest when the list is cut.
- */
+const HANDLE_SIZE = 6;
 
 /**
  * The port bounds of a derived container box, stated rather than measured.

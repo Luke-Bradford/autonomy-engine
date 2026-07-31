@@ -1755,13 +1755,22 @@ td button + button {
 
 /* Containers take the same tones on their own border. Theirs is already dashed
    (every container box is), so `skipped` is distinguished by the label text
-   rather than by a second dash. */
-.run-container-running {
-  border-color: var(--accent);
+   rather than by a second dash.
+
+   Exactly the tones `containerStatusTone` can emit — no `holding` (no container
+   status maps to it) and no gaps. `palette.test.ts` asserts that correspondence
+   in both directions, so a tone without a rule, or a rule without a tone, fails
+   rather than painting a container in the default border. */
+.run-container-neutral {
+  border-color: var(--muted);
 }
 
-.run-container-holding {
-  border-color: var(--warning);
+.run-container-skipped {
+  border-color: var(--muted);
+}
+
+.run-container-running {
+  border-color: var(--accent);
 }
 
 .run-container-success {

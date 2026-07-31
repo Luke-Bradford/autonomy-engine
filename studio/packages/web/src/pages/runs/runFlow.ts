@@ -7,13 +7,7 @@ import {
   containerRects,
   UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
-import {
-  edgeAriaLabel,
-  edgeArrowMarkerId,
-  edgeLabel,
-  edgeVariantClass,
-} from '../pipeline/edgeCondition';
-import { SOURCE_PORT_ID, TARGET_PORT_ID } from '../pipeline/ports';
+import { toFlowEdge } from '../pipeline/edgeCondition';
 import { containerStatusTone, nodeStatusTone, type StatusTone } from './runProjection';
 
 /**
@@ -47,7 +41,7 @@ export interface RunContainerData extends Record<string, unknown> {
 /** What a node says when the run has no state for it. */
 export const NO_STATUS_LABEL = 'not projected';
 
-export function toneClass(prefix: string, tone: StatusTone | null): string {
+export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone | null): string {
   return tone === null ? '' : ` ${prefix}-${tone}`;
 }
 
@@ -130,24 +124,12 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
 }
 
 /**
- * The edges — the author canvas's vocabulary verbatim (hue class, label,
- * arrowhead def, aria label, the additive `edge-back` hook), with every
- * interaction affordance off.
+ * The edges — the author canvas's own `toFlowEdge`, with every interaction
+ * affordance off. Shared as CODE, so the two views cannot come to draw the same
+ * edge differently.
  */
 export function runFlowEdges(doc: RunDoc): FlowEdge[] {
-  return doc.edges.map((e) => ({
-    id: e.id,
-    source: e.from,
-    target: e.to,
-    sourceHandle: SOURCE_PORT_ID,
-    targetHandle: TARGET_PORT_ID,
-    label: edgeLabel(e),
-    className: `${edgeVariantClass(e)}${e.back === true ? ' edge-back' : ''}`,
-    markerEnd: edgeArrowMarkerId(e),
-    ariaLabel: edgeAriaLabel(e),
-    selectable: false,
-    focusable: false,
-  }));
+  return doc.edges.map((e) => ({ ...toFlowEdge(e), selectable: false, focusable: false }));
 }
 
 /**

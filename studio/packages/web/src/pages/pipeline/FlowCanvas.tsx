@@ -25,7 +25,7 @@ import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel } from './activityLabel';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
-import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
+import { toFlowEdge } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
 import {
@@ -136,6 +136,14 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
 // new object each render re-mounts every node and warns).
 const nodeTypes = { activity: ActivityNode, container: ContainerNode };
 
+/**
+ * How many activity ids the #788 implicit-chain advisory spells out before it
+ * summarises the rest. An advisory that grows without bound stops being an
+ * advisory and becomes an occlusion: a panel naming forty nodes across the top
+ * of the canvas is worse than the silence it replaces. Six is enough to make the
+ * ORDER concrete (the surprising part is that there is one at all), and the
+ * count in the same sentence keeps the total honest when the list is cut.
+ */
 const IMPLICIT_CHAIN_PREVIEW = 6;
 
 /**
@@ -618,33 +626,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * gives them their own defs and their own CSS rules: `EdgeMarkers`.)
    */
   const flowEdges: FlowEdge[] = edges.map((e) => ({
-    id: e.id,
-    source: e.from,
-    target: e.to,
-    // The ports are named explicitly rather than left to React Flow's
-    // "first handle of this type" fallback: the fallback is what silently
-    // mis-attaches every edge the moment a node has TWO source handles (U19).
-    sourceHandle: SOURCE_PORT_ID,
-    targetHandle: TARGET_PORT_ID,
-    label: edgeLabel(e),
-    /* U6e — `edge-back` is ADDITIVE, and deliberately carries no style of its
-       own. A back-edge holds an ordinary condition, so it keeps that
-       condition's hue; the two channels that could have encoded it are both
-       spent or reserved — `skipped` owns the dash (`index.css`) and a back-edge
-       may legally BE `skipped`, and a sixth `edge-variant-*` would break
-       `EDGE_VARIANTS`' `Edge['on']` typing, its marker defs and the exact-match
-       palette guard. Back-ness is stated in the LABEL and the aria-label
-       instead. This is a semantic hook: a stable selector for the e2e spec, and
-       the seam U19 can style through without re-deriving the fact. */
-    className: `${edgeVariantClass(e)}${e.back === true ? ' edge-back' : ''}`,
-    // U6b — the arrowhead, so direction is on screen rather than inferred from
-    // which side the endpoints happen to sit on. A STRING marker id references
-    // one of `EdgeMarkers`' own defs (RF's object form would need a literal
-    // colour, and these hues are custom properties).
-    markerEnd: edgeArrowMarkerId(e),
-    // RF renders an edge as role="img"/"group"; under either, the SVG <text>
-    // label is NOT exposed, so without this the outcome is colour-only.
-    ariaLabel: edgeAriaLabel(e),
+    ...toFlowEdge(e),
     selected: selected?.kind === 'edge' && selected.id === e.id,
   }));
 

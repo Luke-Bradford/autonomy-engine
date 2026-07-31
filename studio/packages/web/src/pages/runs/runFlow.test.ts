@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RunState } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
-import {
-  mergeRunNodes,
-  NO_STATUS_LABEL,
-  runFlowEdges,
-  runFlowNodes,
-  type RunDoc,
-} from './runFlow';
+import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
 
 const DOC: RunDoc = {
   nodes: [

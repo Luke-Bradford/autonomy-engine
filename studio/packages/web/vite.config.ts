@@ -39,6 +39,30 @@ export default defineConfig({
         // without being asked; total CSS is a shade larger (5.43 vs 5.17 kB
         // gzip) but first paint only pays 2.87 kB of it.
         //
+        // U11 measured (run-monitor node overlay) — gzip: entry 122.62 kB
+        // (from 111.09 on `origin/main`, built in a throwaway worktree) · index
+        // css 3.99 kB · `PipelineCanvasRoute` 11.07 kB · NEW shared
+        // `containerLayout` chunk (React Flow + the canvas geometry both views
+        // use) · NEW `RunGraph` 1.4 kB. Rollup's >500 kB raw warning stays gone.
+        //
+        // The first cut of U11 imported the run canvas STATICALLY from
+        // `RunDetailPage`, which is eagerly routed — that put `@xyflow/react`
+        // straight back in the entry (111.09 -> 182.14 kB gzip) and undid #698
+        // above without any test noticing. `RunGraph.lazy.ts` is the fix, and
+        // the boundary is in the PAGE so the run metadata, node table and event
+        // feed paint without waiting on React Flow.
+        //
+        // The residual +11.53 kB is the ENGINE REDUCER, and it is understood
+        // rather than mysterious: eager code already imports the engine barrel
+        // (`runSummary.ts` needs `EngineEventSchema`), so `engine/reduce.js` is
+        // placed in the ENTRY chunk. On `main` nothing referenced `createEngine`
+        // and tree-shaking dropped it; U11's overlay references it from the LAZY
+        // chunk, so it survives — in the chunk it was already placed in. The
+        // lever, if this is ever worth reclaiming, is a subpath export on
+        // `@autonomy-studio/shared` so the reducer is not reached through a
+        // barrel the entry already holds. Not worth a package-boundary change
+        // for 11 kB today; recorded so the next person does not re-derive it.
+        //
         // Only the canvas route is lazy. The other pages are ordinary React +
         // Fluent and would each buy back single-digit kB for a Suspense
         // boundary apiece — measure before adding more, rather than lazying

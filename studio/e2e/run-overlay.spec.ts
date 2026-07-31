@@ -59,6 +59,14 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
   // this is the whole reason R1 hands the page the version doc.
   await expect(canvas.locator('.run-node')).toHaveCount(3);
 
+  /* Wait for the OVERLAY specifically, not just for the canvas. The graph is
+     drawn from the R1 fetch alone, with every node reading `not projected`,
+     before the WebSocket has replayed — so the count above is satisfied a beat
+     early, and the single `evaluate` below has no auto-retry to save it. This
+     is a retrying assertion that can only hold once the projection has landed. */
+  await expect(canvas.locator('.run-node-failure')).toHaveCount(2);
+  await expect(canvas.getByText('not projected')).toHaveCount(0);
+
   /* One evaluate, every assertion — a per-assertion round trip is what makes a
      browser-driven verification expensive. Returns the node label, its status
      word, its resolved outline colour and style, keyed by the DOC id RF puts on

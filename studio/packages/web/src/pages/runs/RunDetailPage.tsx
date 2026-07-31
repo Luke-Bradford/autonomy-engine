@@ -1,11 +1,15 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import type { PipelineVersion, Run, RunLifecycleStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import { getRunDetail } from '../../api/runs';
-import { useRunStream, type RunStreamState, type StreamPhase } from './useRunStream';
+import { getRun, getRunDetail } from '../../api/runs';
+import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
 import { RunGraph } from './RunGraph.lazy';
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -54,9 +58,27 @@ export function RunDetailPage({ runId }: { runId: string }) {
         setRun(d.run);
         setDoc(d.pipelineVersion);
       })
-      .catch((err: unknown) => {
+      .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
+        /* R1 resolves the run AND its doc together, so a doc that will not
+           resolve (409 — deleted, or present but no longer parsing) would
+           otherwise cost the operator the run's metadata, the node table and the
+           event feed as well. None of those need the doc, and a run whose graph
+           is gone is exactly when they matter most — `terminalFactFromLog`
+           records the same preference on the server. So fall back to the plain
+           run read; only if THAT fails is the page genuinely empty. */
+        return getRun(runId, ac.signal).then(
+          (r) => {
+            setRun(r);
+            setLoadError(
+              `The pipeline graph could not be loaded, so there is no node overlay: ${message(detailErr)}`,
+            );
+          },
+          () => {
+            if (ac.signal.aborted) return;
+            setLoadError(message(detailErr));
+          },
+        );
       });
     return () => ac.abort();
   }, [runId]);
@@ -128,7 +150,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
         <p>
           {loadError === null
             ? 'Loading the pipeline graph…'
-            : 'The pipeline graph is unavailable.'}
+            : 'The pipeline graph is unavailable, so there is no node overlay. The event feed below is unaffected.'}
         </p>
       ) : (
         /* #698 — the graph and everything needed to DRAW it (React Flow, and
