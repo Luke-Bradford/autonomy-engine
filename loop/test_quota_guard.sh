@@ -1672,9 +1672,13 @@ chmod 555 "$swtmp/ro"
   #     blocks the `rm` that cleans up after it (read-only dir), or is not
   #     portable to the ubuntu runner this suite also runs on (`chflags uchg`).
   #     So `mv` is shadowed as a shell function -- the same trick as `date` in
-  #     (g), touching nothing on disk or on PATH.
+  #     (g), touching nothing on disk or on PATH. It writes to STDERR as a real
+  #     failing `mv` would, which is what makes the stderr assertion below pin
+  #     drive.sh's `2>/dev/null` on the rename: the redirection under test is in
+  #     drive.sh and applies to a function's stderr exactly as to a binary's, so
+  #     this is an assertion about the muzzle, not about the stub.
   swk="$swtmp/infra/.mvfail"
-  mv() { return 1; }
+  mv() { echo "mv: rename failed" >&2; return 1; }
   quota_stamped_write "$swk" 42 && echo "wrote" || echo "refused"
   unset -f mv
   [ -e "$swk" ] && echo "record" || echo "nothing"
@@ -1688,15 +1692,32 @@ chmod 555 "$swtmp/ro"
   #     refuses at least as hard.
   export QUOTA_CACHE="$swtmp/infra/.cache"
   printf '%s 10\n' "$(date +%s)" >"$QUOTA_CACHE"
-  mv() { return 1; }
+  mv() { echo "mv: rename failed" >&2; return 1; }
   quota_cache_write 95
   unset -f mv
   [ -e "$QUOTA_CACHE" ] && echo "kept" || echo "dropped"
   printf '%s 98\n' "$(date +%s)" >"$QUOTA_CACHE"
-  mv() { return 1; }
+  mv() { echo "mv: rename failed" >&2; return 1; }
   quota_cache_write 95
   unset -f mv
   head -1 "$QUOTA_CACHE" 2>/dev/null | awk '{print $2}'
+
+  # (m) THE CONTRACT, enforced rather than enumerated. Every other guard is a
+  #     named failure mode; this is the one that catches the mode NOBODY named.
+  #     The rename installs a FRESH umask-derived mode where `>` preserved the
+  #     destination's, so under a hostile umask the record lands write-only: the
+  #     write succeeds, the file exists, and the shared reader cannot `head -1`
+  #     it. Without the read-back, `quota_stamped_write` returns 0 over a record
+  #     the reader rejects -- and `quota_shadow_probe` then polls studio on every
+  #     call, which is exactly what case 29g exists to prevent, through a SUCCESS.
+  #     (Vacuous under root, which ignores the mode -- the read-only-directory
+  #     precondition asserted in the parent is what rules that out.)
+  swm="$swtmp/infra/.unreadable"
+  sw_umask="$(umask)"
+  umask 0477
+  quota_stamped_write "$swm" 42 && echo "wrote" || echo "refused"
+  umask "$sw_umask"
+  [ -r "$swm" ] && echo "readable" || echo "unreadable"
 
   # (h) the permission dependency MOVED: a rename needs write on the DIRECTORY
   #     where `>` needed write on the FILE. So a read-only $INFRA holding a
@@ -1738,6 +1759,8 @@ check "...leaving no record at the destination" "nothing" "$(swout 18)"
 check "...and cleaning up the temp it had already created" "clean" "$(swout 19)"
 check "a cache reading that cannot be persisted DROPS a lower stale record" "dropped" "$(swout 20)"
 check "...but keeps a HIGHER one, which refuses at least as hard" "98" "$(swout 21)"
+check "a record the SHARED READER cannot accept is a refusal, not a 0 return" "refused" "$(swout 22)"
+check "...and the fixture really did land unreadable (else the case is vacuous)" "unreadable" "$(swout 23)"
 check "the cache write announces a failure it can no longer make invisible" "1" \
   "$(grep -q 'WARN: could not persist quota' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 # The muzzles the diff added are justified as "would otherwise print to the
