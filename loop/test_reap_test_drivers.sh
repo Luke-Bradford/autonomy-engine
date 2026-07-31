@@ -237,5 +237,38 @@ cache_probe="$( unset REAP_TEMP_ROOT; . "$HERE/reap_test_drivers.sh"; \
   reap_temp_root_init && echo "$REAP_TEMP_ROOT" )"
 check "reap_temp_root_init caches in the caller's shell" "$probe_truth" "$cache_probe"
 
+# --- 10. a SYMLINK is not a disposable tree --------------------------------
+# `[ -d ]` follows links, so a `tmp.*` symlink pointing at real work satisfies
+# every other clause of the gate. And the damage is not hypothetical: measured,
+# `rm -rf link/` (trailing slash) deletes the TARGET'S CONTENTS while `rm -rf
+# link` removes only the link -- and `dirname` normalises that slash away, so the
+# parent check cannot tell the two apart.
+mkdir -p "$SANDBOX_ROOT/precious"
+echo keepme >"$SANDBOX_ROOT/precious/keepme.txt"
+ln -s "$SANDBOX_ROOT/precious" "$SANDBOX_ROOT/tmp.linkbait"
+check "gate refuses a tmp.* SYMLINK" "1" \
+  "$(tree_path_is_disposable "$SANDBOX_ROOT/tmp.linkbait" && echo 0 || echo 1)"
+check "gate refuses it with a TRAILING SLASH too" "1" \
+  "$(tree_path_is_disposable "$SANDBOX_ROOT/tmp.linkbait/" && echo 0 || echo 1)"
+reap_known_tree "$SANDBOX_ROOT/tmp.linkbait/" >/dev/null 2>&1
+check "a refused symlink reap left the target's contents alone" "keepme" \
+  "$(cat "$SANDBOX_ROOT/precious/keepme.txt" 2>/dev/null)"
+
+# --- 11. the REAP_TEMP_ROOT seam cannot relocate destruction ----------------
+# It is the one input that decides where BOTH gates believe `rm -rf` is allowed.
+# Asserted against `reap_temp_root_init` DIRECTLY. Going through
+# `tree_path_is_disposable` would pass vacuously -- a bad root also fails the
+# parent-equality check, so the case would stay green with this validation
+# deleted. (Caught by mutation: the first version of these three did exactly
+# that.)
+check "an override of / is refused" "1" \
+  "$(REAP_TEMP_ROOT=/ reap_temp_root_init && echo 0 || echo 1)"
+check "a relative override is refused" "1" \
+  "$(REAP_TEMP_ROOT=relative reap_temp_root_init && echo 0 || echo 1)"
+check "an override naming a nonexistent directory is refused" "1" \
+  "$(REAP_TEMP_ROOT="$SANDBOX_ROOT/not-a-real-dir" reap_temp_root_init && echo 0 || echo 1)"
+check "a valid override is accepted" "0" \
+  "$(REAP_TEMP_ROOT="$SANDBOX_ROOT" reap_temp_root_init && echo 0 || echo 1)"
+
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi
