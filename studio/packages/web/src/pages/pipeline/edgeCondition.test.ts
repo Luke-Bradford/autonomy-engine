@@ -8,6 +8,7 @@ import {
   edgeLabel,
   edgeVariantClass,
   encodeCondition,
+  isMaxBounces,
   OPERATIONAL_CONDITIONS,
   authoringEdgeKey,
   takenConditions,
@@ -245,5 +246,43 @@ describe('branchOptionsFor', () => {
    * endpoint), has no `Node` to ask — degrade, never throw. */
   it('returns null for an absent source node', () => {
     expect(branchOptionsFor(undefined)).toBeNull();
+  });
+});
+
+/**
+ * U6e — a back-edge is the one edge whose DIRECTION contradicts its arrowhead:
+ * it points at a step that already ran. Both labels have to say so, because the
+ * canvas encodes it in no other channel (no hue, no dash — see `FlowCanvas`).
+ */
+describe('back-edge labelling', () => {
+  const back = (extra: Partial<Edge> = {}): Edge =>
+    ({ id: 'e', from: 'b', to: 'a', on: 'success', back: true, maxBounces: 3, ...extra }) as Edge;
+
+  it('marks back-ness and the cap in the visual label', () => {
+    expect(edgeLabel(back())).toBe('↺ success ×3');
+  });
+
+  it('keeps the branch key as the label for a back-edge off a branching node', () => {
+    expect(edgeLabel(back({ on: 'branch', branch: 'retry' }))).toBe('↺ retry ×3');
+  });
+
+  it('leaves a forward edge untouched', () => {
+    expect(edgeLabel({ id: 'e', from: 'a', to: 'b', on: 'success' } as Edge)).toBe('success');
+  });
+
+  /**
+   * The `↺ … ×N` glyph is not readable text, and RF does not expose the SVG
+   * label under its own role anyway — so the aria-label is the ONLY place a
+   * screen reader learns this edge loops, and how far.
+   */
+  it('spells back-ness and the cap in the aria-label', () => {
+    expect(edgeAriaLabel(back())).toBe(
+      "Edge from b to a, back-edge on success, up to 3 bounces",
+    );
+  });
+
+  it('isMaxBounces mirrors EdgeSchema — non-negative integers, zero included', () => {
+    expect([0, 1, 10_000].every(isMaxBounces)).toBe(true);
+    expect([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY].some(isMaxBounces)).toBe(false);
   });
 });
