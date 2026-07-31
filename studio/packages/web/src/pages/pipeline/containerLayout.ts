@@ -13,7 +13,7 @@ import { containerMembership, type Container } from '@autonomy-studio/shared';
  *  - Moving a child RESIZES its container, live. There is no drag-the-group
  *    gesture to keep in sync with membership, and none can drift out of sync.
  *  - A container cannot be positioned independently of its children. When
- *    membership becomes authorable (U6d) and RF `parentId` lands (U23), that is
+ *    RF `parentId` lands (U23, #839), that is
  *    the point at which a container may need geometry of its own; until then
  *    deriving it is strictly less state.
  *  - The box can assert a membership the DOC DOES NOT HAVE. It is the union of

@@ -141,6 +141,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U6c | Container group rendering | Author |
 | | **AS BUILT (2026-07-29):** derived boxes + the container-BOUNDARY connect rule U6b deferred here. A derived node must STATE `measured`+`handles` or React Flow drops every edge touching it. The box HINTS at membership; RF `parentId` subflows (**U23**) are what would make enclosure authoritative. | |
 | U6d | Container create/edit/drag-membership | Author |
+| | **AS BUILT (2026-07-31):** CREATE + membership only, through one `<select>` on the NODE (a container cannot be RF-`selectable`). Config editing and drag-membership are U23's. This ticket WARNS rather than refuses — refusing a boundary-crossing edit would make containerising an already-wired `a → b` impossible, and a membership edit is reversible by the same control. | |
 | U6e | Back-edge rendering/editing + bounce config | Author |
 | U7 | Node properties panel (tabbed, per-activity, conn picker) | Author |
 | U8a | Expression insert flyout + whole-doc validation + node issue list | Author |
@@ -1170,6 +1171,104 @@ NOT in U6c, with owners: creating/editing a container and dragging membership (*
 `parentId` subflows, which would make a container draggable as a group and enclosure authoritative
 (**U23**); back-edge authoring (**U6e**); pruning a deleted node from `containers[].children`
 (**#746**, U6d's path).
+
+## U6d — container CREATE + membership (AS BUILT, 2026-07-31)
+
+A container could be drawn (U6c) and deleted (#748) but never MADE: the only way to put a
+`loop`/`stage`/`foreach` on screen was to mint a version through the API, which is literally what
+every container e2e spec had to do. Authoring a pipeline that contains a loop was a core path with
+a hole in it. Closed here — for CREATE and MEMBERSHIP. Container CONFIG editing and DRAG membership
+stay U23's; see the deferrals below.
+
+| Piece | Lives in |
+|---|---|
+| Consequence rules + operator-readable issue text | `pages/pipeline/containerRules.ts` |
+| `assignContainerChild` / `containersWithNew` / `buildContainer`, `createContainer` / `setNodeContainer` | `pages/pipeline/canvasStore.ts` |
+| The `ContainerSection` control (membership `<select>` + New-container form) | `pages/pipeline/PipelineCanvas.tsx` |
+| Form styling | `index.css` — `.container-section`, `.container-create` |
+| Browser coverage | `e2e/container-authoring.spec.ts` |
+
+Decisions worth not re-deriving:
+
+- **The control is ONE `<select>` on the NODE, not a panel on the container.** Membership is stored
+  on the container (`children: string[]`), but `validateDoc` requires children to be DISJOINT, so it
+  is functionally a per-node fact — which makes "which container is this activity in" the whole
+  control: pick one to join, pick `— none —` to leave, and "New container" is the same act against a
+  container that does not exist yet. It also sidesteps the constraint U6c mutation-proved: a
+  container **cannot** be RF-`selectable`, so it can never be the thing a property panel is opened
+  for. Disjointness is kept by `assignContainerChild` in ONE pass over every container, so it is a
+  property of the function rather than of its caller.
+- **A container is created around the SELECTED node, never empty.** That is what carries a
+  `loop`/`foreach` past its one-child rule from the moment it exists, and it is why no multi-select
+  (U21) is needed to make the gesture useful.
+- **This ticket WARNS where `connectRules` REFUSES, and the difference is deliberate.** Take `a → b`
+  — the commonest doc there is — and ask for a container round `b`: the edge now has one endpoint
+  inside and one outside, which `validateDoc` refuses. Refusing the membership edit for that reason
+  would make containerising anything already wired IMPOSSIBLE (the only order left would be "delete
+  every edge, create the container, redraw"), and nothing on screen would say so. Warning is safe
+  here in the way it would not be for a connection, because a membership edit is **reversible by the
+  same control**: `— none —` puts the node back, and `deleteContainer` (#748) removes the box while
+  keeping its children. So the invalid state is one the operator can always walk out of — which is
+  what separates it from #748's one-way trap and #786's un-repairable dangling edge. The badge
+  (#444) and `canSave` still stop it reaching an immutable version.
+- **The warning is a diff of `validatePipelineDoc`, not a hand-written rule set.** Same SSOT as the
+  save badge and the server's write gate, so it cannot drift from what a save would be refused for,
+  and it covers cross-boundary edges, an emptied loop, nested containers, id collisions and
+  expression scope without restating any of them. Only issues the doc does not ALREADY have are
+  reported — an operator repairing a broken doc must not be blocked by the breakage they are
+  repairing.
+- **The doc-validator half is NOT the whole save gate, and that gap is real.**
+  `validatePipelineDoc` runs no zod parse, and the server parses the body FIRST — so a `maxRounds`
+  of `0` (or `1.5`, or a cleared numeric input, which `Number('')` reads as `0`) clears every canvas
+  check, enables Save, and returns a raw zod `400` with no badge naming the cause. `buildContainer`
+  closes it with `ContainerSchema.safeParse`, the same shape as `NodePanel.apply` validating an
+  edited config blob before it can reach the store.
+- **The implicit-routing flip is the consequence no VALIDATOR reports.** On an edge-less doc
+  `implicitRouting` synthesises one success chain in add order, but `containers.length > 0` makes it
+  `partitioned` — so creating the FIRST container silently replaces the sequence the operator was
+  relying on with parallel roots, and saving mints that. `validateDoc` accepts both docs and says
+  nothing, because the edges it iterates are synthesised, not authored. #788's `canvas-advisory`
+  panel is not silent — it is a STANDING description of an edge-less graph, and its text changes the
+  moment the first container lands. The confirmation is the PRE-HOC half: what a click is about to
+  do, while it can still be declined.
+- **The recovery sentence is per-CALL-SITE, and getting it wrong was the sharpest finding of the
+  pre-PR review.** "Set the activity back to — none —" undoes a membership change; following it after
+  CREATING a loop round a wired activity swaps one unsavable doc for a worse one — the loop is left
+  with no children (`makes no progress`) and its `exitWhen` names a node outside it. So the create
+  path names the container's own ✕ instead. A confirmation that names a recovery which does not
+  recover is worse than one that names none. The stage-only version of the e2e could not see this,
+  because an emptied stage validates clean; there is a `loop` variant now for exactly that reason.
+- **Validator ids are rewritten for a human before they are shown.** `newLocalId` mints
+  `n_7c44a16f-…`, and surfacing one verbatim reproduces the exact defect `connectRules.endpointLabel`
+  exists for. Only the IDENTIFIERS change — the sentence stays the validator's, so this cannot become
+  a second, drifting set of messages. An edge has no name, so it is named by its ENDS. Containers
+  carry a within-kind ordinal (`stage 2`) because a PICKER, unlike transient gesture feedback, cannot
+  accept two indistinguishable options. Two passes, not one: `validateExitWhen`/`validateForeachItems`
+  write their location as `container.<id>.exitWhen` with the id UNQUOTED, and those two fields are the
+  only container config this form authors — so the first error a beginner meets was the one arriving
+  as a bare uuid.
+- **The membership control renders IN the `execute_pipeline` stub too, not only in the editor.**
+  That early return is the only panel a structural-call node ever gets, and a container is exactly
+  the construct an imported doc puts one in — membership is orthogonal to `node.config`, so the stub
+  must not swallow it.
+
+**Verified by `pnpm -C studio test:e2e`** — 118 specs green, including `container-authoring.spec.ts`
+(7 specs). Every new test mutation-proven, 20/20 killed: drop each `createContainer` guard (id
+collision, childless, phantom child, schema); drop `buildContainer`'s schema parse; drop the
+no-op/dirty guard; return a fresh array from `assignContainerChild` unconditionally; stop filtering
+pre-existing issues; never report a routing change; return the raw validator text; drop the unquoted
+`container.<id>` pass; never confirm; ignore the caller's recovery sentence; revert the create path to
+the `— none —` recovery; apply without confirming; drop the disabled gate on Create; satisfy the
+required-field gate unconditionally; swallow the `buildContainer` error; make the membership
+`<select>` inert; list issues with raw ids.
+
+NOT in U6d, with owners — all four filed as **#839**: editing an existing container's
+`exitWhen`/`items`/`timeout`/`join`/`batchCount`, and DRAGGING a node into a box, both **U23**, which
+owns container-config forms and the domain-container↔RF-`parentId` drop mechanics (escape route
+meanwhile: `deleteContainer` un-groups the children, then re-create); the within-kind ordinal on the
+BOX itself, so "stage 2" in the picker identifies a rectangle as well as an option; and the inline
+"delete this loop?" offer #748 raised. Elsewhere: grouping N nodes at once (**U21** multi-select) and
+undo (**U17**).
 
 ## Non-goals (YAGNI)
 

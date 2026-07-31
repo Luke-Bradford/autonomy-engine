@@ -6,6 +6,8 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import {
+  assignContainerChild,
+  buildContainer,
   createCanvasStore,
   nextSelection,
   pruneContainerChild,
@@ -609,7 +611,8 @@ describe('selection model (#737)', () => {
  * survived into the save body — where `validatePipelineDoc` refused it with
  * `child '<id>' is not a node in this pipeline`, a message naming a node the
  * operator had just deliberately removed. `canSave` gates on that, and container
- * membership is not authorable on the canvas (U6d/#425), so the only way out was
+ * membership was not authorable on the canvas at the time (U6d has since added
+ * it), so the only way out was
  * to reload the page and lose every unsaved edit.
  *
  * These pin the fix at both levels: the prune itself, and the SYMPTOM (Save
@@ -716,7 +719,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
    *
    * Deleting the container would be a structure write that also owns its incident
    * edges and its `exitWhen`/`items`/`maxRounds`/`timeout` config — none of it
-   * re-authorable on the canvas until U6d/#425 — so a cascade would destroy
+   * re-authorable on the canvas until U23/#839 — so a cascade would destroy
    * authored structure the operator cannot get back, to save them one refused
    * save. An empty `stage` is a legal doc, so this case simply works.
    */
@@ -776,7 +779,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
    * expression names leaves the doc unsavable on a REFERENCE error.
    *
    * Unchanged by this fix and deliberately so — repairing it means editing the
-   * expression, which is container authoring (U6d/#425). Pinned here because the
+   * expression, which is container CONFIG authoring (U23/#839). Pinned here because the
    * PR body states it, and a stated residue nothing tests is just a confident
    * comment.
    */
@@ -1011,5 +1014,210 @@ describe('canvasStore — deleteContainer (#748)', () => {
     expect(s.getState().containers).toEqual([]);
     const st = s.getState();
     expect(validateCanvas(st.nodes, st.edges, st.containers, [])).toEqual([]);
+  });
+});
+
+/**
+ * U6d — authoring container membership from the canvas.
+ *
+ * Until this ticket a container could only arrive with a loaded version: the
+ * store could PRUNE membership (#746) and REMOVE a container (#748), but not
+ * create one or move a node between them, so the only way to put a `loop` on
+ * screen was to mint a version through the API.
+ */
+describe('canvasStore — container membership (U6d)', () => {
+  const LOOP: Container = {
+    id: 'loop_1',
+    kind: 'loop',
+    children: ['n_a'],
+    exitWhen: '${equals(1, 1)}',
+  };
+
+  describe('assignContainerChild', () => {
+    it('adds the node to the named container', () => {
+      const out = assignContainerChild([{ id: 'c_1', kind: 'stage', children: [] }], 'n_a', 'c_1');
+      expect(out[0]!.children).toEqual(['n_a']);
+    });
+
+    it('removes it from every other container in the SAME pass, so membership stays disjoint', () => {
+      const out = assignContainerChild(
+        [
+          { id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] },
+          { id: 'c_2', kind: 'stage', children: [] },
+        ],
+        'n_a',
+        'c_2',
+      );
+      expect(out[0]!.children).toEqual(['n_b']);
+      expect(out[1]!.children).toEqual(['n_a']);
+    });
+
+    it('un-groups the node when the target is null', () => {
+      const out = assignContainerChild(
+        [{ id: 'c_1', kind: 'stage', children: ['n_a'] }],
+        'n_a',
+        null,
+      );
+      expect(out[0]!.children).toEqual([]);
+    });
+
+    it('returns the SAME array when nothing changed, so a no-op edit sets no dirty flag', () => {
+      const before: Container[] = [{ id: 'c_1', kind: 'stage', children: ['n_a'] }];
+      expect(assignContainerChild(before, 'n_a', 'c_1')).toBe(before);
+    });
+  });
+
+  describe('buildContainer', () => {
+    it('builds a loop carrying its exit condition', () => {
+      const out = buildContainer('loop', 'n_a', { exitWhen: '${equals(1, 1)}' });
+      expect('container' in out).toBe(true);
+      if (!('container' in out)) return;
+      expect(out.container.kind).toBe('loop');
+      expect(out.container.id.startsWith('loop_')).toBe(true);
+      expect(out.container.children).toEqual(['n_a']);
+      expect(out.container.exitWhen).toBe('${equals(1, 1)}');
+    });
+
+    it('omits an empty optional rather than authoring a blank string', () => {
+      const out = buildContainer('stage', 'n_a', { exitWhen: '', items: '' });
+      expect('container' in out).toBe(true);
+      if (!('container' in out)) return;
+      expect(out.container.exitWhen).toBeUndefined();
+      expect(out.container.items).toBeUndefined();
+    });
+
+    it('builds a foreach carrying its items expression', () => {
+      const out = buildContainer('foreach', 'n_a', { items: '${run.params.rows}' });
+      expect('container' in out).toBe(true);
+      if (!('container' in out)) return;
+      expect(out.container.kind).toBe('foreach');
+      expect(out.container.items).toBe('${run.params.rows}');
+      expect(out.container.exitWhen).toBeUndefined();
+    });
+
+    /**
+     * The gap the canvas's own validation cannot see. `validatePipelineDoc` runs
+     * NO schema parse, and the server parses the body before reaching that gate,
+     * so a non-positive or fractional `maxRounds` would clear every canvas check,
+     * enable Save, and come back as a raw zod 400 with no badge naming the cause.
+     */
+    it('refuses a maxRounds ContainerSchema rejects, which no doc validation would catch', () => {
+      for (const maxRounds of [0, -1, 1.5, Number.NaN]) {
+        const out = buildContainer('loop', 'n_a', { exitWhen: '${true}', maxRounds });
+        expect('error' in out).toBe(true);
+      }
+    });
+  });
+
+  describe('createContainer', () => {
+    function loaded() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version());
+      return s;
+    }
+
+    it('adds the container and marks the canvas dirty', () => {
+      const s = loaded();
+      s.getState().createContainer(LOOP);
+      expect(s.getState().containers).toEqual([LOOP]);
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    it('takes the child out of the container that held it', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_a'] });
+      s.getState().createContainer(LOOP);
+      expect(s.getState().containers.map((c) => c.children)).toEqual([[], ['n_a']]);
+    });
+
+    it('refuses an id that collides with a NODE — the two share one namespace', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'n_a', kind: 'stage', children: ['n_b'] });
+      expect(s.getState().containers).toEqual([]);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    it('refuses an id that collides with an existing container', () => {
+      const s = loaded();
+      s.getState().createContainer(LOOP);
+      s.getState().createContainer({ ...LOOP, children: ['n_b'] });
+      expect(s.getState().containers).toHaveLength(1);
+    });
+
+    it('refuses a child that is not a current node — a phantom authored fresh', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_ghost'] });
+      expect(s.getState().containers).toEqual([]);
+    });
+
+    it('refuses a childless container, so a loop can never be born empty', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: [] });
+      expect(s.getState().containers).toEqual([]);
+    });
+
+    it('refuses a container ContainerSchema rejects', () => {
+      const s = loaded();
+      s.getState().createContainer({ ...LOOP, maxRounds: 0 });
+      expect(s.getState().containers).toEqual([]);
+    });
+  });
+
+  describe('setNodeContainer', () => {
+    function withLoop() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version({ containers: [LOOP] }));
+      return s;
+    }
+
+    it('moves a node in', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_b', 'loop_1');
+      expect(s.getState().containers[0]!.children).toEqual(['n_a', 'n_b']);
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    it('moves a node out', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_a', null);
+      expect(s.getState().containers[0]!.children).toEqual([]);
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    it('is a no-op for a node that is not on the canvas', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_ghost', 'loop_1');
+      expect(s.getState().containers[0]!.children).toEqual(['n_a']);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    it('is a no-op for a container that does not exist', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_b', 'loop_missing');
+      expect(s.getState().containers[0]!.children).toEqual(['n_a']);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    it('does not mark the canvas dirty when the node is already there', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_a', 'loop_1');
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    /**
+     * The edit is APPLIED, not refused, even though the doc is now unsavable —
+     * see `containerRules`. Refusing it would make containerising an already
+     * wired `a → b` impossible, and the same control reverses it.
+     */
+    it('applies an edit that leaves the doc invalid, and the badge reports it', () => {
+      const s = withLoop();
+      s.getState().setNodeContainer('n_b', 'loop_1');
+      s.getState().setNodeContainer('n_a', null);
+      const st = s.getState();
+      const issues = validateCanvas(st.nodes, st.edges, st.containers, st.loaded?.params ?? []);
+      expect(st.containers[0]!.children).toEqual(['n_b']);
+      expect(issues.some((i) => i.includes('crosses a container boundary'))).toBe(true);
+      expect(canSave({ saving: false, ready: true, issues })).toBe(false);
+    });
   });
 });

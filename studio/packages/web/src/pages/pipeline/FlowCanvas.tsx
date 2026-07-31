@@ -22,8 +22,9 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { getActivity, implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
+import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
+import { activityLabel } from './activityLabel';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
@@ -371,7 +372,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           // the domain position for a freshly-added node.
           position: existing?.position ?? n.position,
           data: {
-            title: getActivity(n.type)?.title ?? n.type,
+            title: activityLabel(n),
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
@@ -413,10 +414,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * breaks it by construction: container geometry depends only on ACTIVITY
    * geometry, never on its own.
    *
-   * `containers` are the store's working membership — the canvas cannot CREATE
-   * one or move a node in or out yet (U6d), but a delete prunes membership
-   * (#746), so what is drawn tracks the graph on screen rather than the version
-   * it was opened on.
+   * `containers` are the store's working membership — created and re-parented
+   * from the property panel (U6d), pruned by a delete (#746) — so what is drawn
+   * tracks the graph on screen rather than the version it was opened on.
    */
   /**
    * #748 — confirm, then remove the container.
@@ -425,7 +425,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
-   * surface can re-author yet (U6d/#425) and there is no undo, so a mis-click is
+   * surface can re-author yet (U23, #839) and there is no undo, so a mis-click is
    * unrecoverable rather than merely annoying.
    *
    * The message states BOTH halves — what goes and what stays. "Are you sure?"
@@ -563,9 +563,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            `e2e/container-rendering.spec.ts` mutation-proves against this line.
            The button opts back into hit-testing on its own instead.
 
-           Creating a container and dragging nodes in and out is still U6d/#425,
-           and the RF `parentId` mapping that would make a container draggable as
-           a group is U23's. */
+           Creating a container and moving a node in or out is the property
+           panel's, as of U6d — a `<select>` on the NODE, precisely because the box
+           itself cannot be selected. DRAGGING one in, and the RF `parentId`
+           mapping that would make a container draggable as a group, is U23's. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
@@ -744,7 +745,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
        measured dimensions, and a `remove` if one were ever deleted. Letting those
        through would ask `useNodesState` to track a node it does not own and,
        worse, hand `deleteNode('<container id>')` to the store, which would find
-       no node and silently do nothing today but is a live footgun for U6d.
+       no node and silently does nothing: U6d authors membership through the
+       property panel, not through this change seam, so the collision stays
+       latent — but it is a live footgun for U23's drag-membership.
        Filtered at the SEAM rather than in each branch below, so a change type
        added later cannot miss the guard. */
     const own = changes.filter((c) => !('id' in c) || !containerIds.has(c.id));

@@ -1039,6 +1039,27 @@ td button + button {
   color: var(--muted);
 }
 
+/* U6d — the "New container" form. `.property-panel` is already the flex column
+   the membership `<select>` wants, so only this fieldset needs a rule: it is what
+   visually separates "which container is this activity in" from "make a new
+   one", two different acts reached through one control. */
+.container-create {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+  margin: 0;
+}
+
+.container-create legend {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0 0.3rem;
+}
+
+.property-panel input,
 .property-panel select,
 .property-panel textarea {
   background: var(--bg);

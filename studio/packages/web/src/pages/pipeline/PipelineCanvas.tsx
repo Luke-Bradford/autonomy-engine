@@ -2,16 +2,25 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
+  ContainerKindSchema,
   getActivity,
   isStructuralCallActivity,
+  type Container,
   type ConnectionPublic,
+  type ContainerKind,
   type Edge,
   type Node,
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
-import { createCanvasStore } from './canvasStore';
+import {
+  assignContainerChild,
+  buildContainer,
+  containersWithNew,
+  createCanvasStore,
+} from './canvasStore';
+import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import {
   branchOptionsFor,
@@ -346,12 +355,204 @@ function ConditionOption({
 }
 
 /**
+ * U6d — the selected activity's container membership, and the one gesture that
+ * CREATES a container.
+ *
+ * Membership lives on the container (`children: string[]`), but disjointness
+ * makes it a per-NODE fact, which is why one `<select>` on the node is the whole
+ * control: picking a container joins it, picking `— none —` leaves, and "New
+ * container" is the same act against a container that does not exist yet. There
+ * is no multi-select to group N nodes at once (U21), and no drop target to drag
+ * one in (U23) — a derived box only HINTS at enclosure until React Flow
+ * `parentId` subflows make it authoritative.
+ *
+ * A container is created around the SELECTED node rather than empty, which is
+ * what keeps a `loop`/`foreach` past its one-child rule the moment it exists.
+ */
+function ContainerSection({
+  store,
+  nodeId,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  nodeId: string;
+}) {
+  const nodes = useStore(store, (s) => s.nodes);
+  const edges = useStore(store, (s) => s.edges);
+  const containers = useStore(store, (s) => s.containers);
+  const loaded = useStore(store, (s) => s.loaded);
+  const params = loaded?.params ?? [];
+
+  const [kind, setKind] = useState<ContainerKind>('stage');
+  const [exitWhen, setExitWhen] = useState('');
+  const [items, setItems] = useState('');
+  const [maxRounds, setMaxRounds] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const labels = containerLabels(containers);
+  const ownerId = containers.find((c) => c.children.includes(nodeId))?.id ?? '';
+
+  /**
+   * Apply an edit once the operator has seen what it costs.
+   *
+   * ONE evaluation, at the moment of the click, against live state — the
+   * consequence is never stored, so it cannot go stale the way a frozen
+   * `role="alert"` does (`FlowCanvas` documents that failure). `window.confirm`
+   * is the canvas's existing confirmation route (`confirmDeleteContainer`,
+   * and every list page).
+   */
+  function withConfirmation(
+    nextContainers: Container[],
+    recovery: string,
+    apply: () => void,
+  ): boolean {
+    const message = consequenceMessage(
+      containerEditConsequence({ nodes, edges, containers, params }, nextContainers),
+      nodes,
+      edges,
+      nextContainers,
+      recovery,
+    );
+    if (message !== null && !window.confirm(message)) return false;
+    apply();
+    return true;
+  }
+
+  function changeOwner(value: string) {
+    const target = value === '' ? null : value;
+    setError(null);
+    withConfirmation(
+      assignContainerChild(containers, nodeId, target),
+      'You can undo it by setting the activity back to — none —.',
+      () => store.getState().setNodeContainer(nodeId, target),
+    );
+  }
+
+  function create() {
+    const trimmedRounds = maxRounds.trim();
+    const built = buildContainer(kind, nodeId, {
+      ...(kind === 'loop' ? { exitWhen: exitWhen.trim() } : {}),
+      ...(kind === 'foreach' ? { items: items.trim() } : {}),
+      // An empty numeric input is ABSENT, not zero — `Number('')` is 0, which
+      // `ContainerSchema` rejects as non-positive and which no canvas check
+      // would have caught before the server's zod parse 400'd the save.
+      ...(kind === 'loop' && trimmedRounds !== '' ? { maxRounds: Number(trimmedRounds) } : {}),
+    });
+    if ('error' in built) {
+      setError(built.error);
+      return;
+    }
+    setError(null);
+    const applied = withConfirmation(
+      containersWithNew(containers, built.container),
+      // NOT "set it back to — none —": emptying a freshly-made loop leaves a
+      // worse doc than the one being escaped (see `consequenceMessage`).
+      'You can undo it with the ✕ on the container box.',
+      () => store.getState().createContainer(built.container),
+    );
+    if (applied) {
+      setExitWhen('');
+      setItems('');
+      setMaxRounds('');
+    }
+  }
+
+  // A loop with no exit condition and a foreach with no items are docs
+  // `validateDoc` refuses outright, so the form cannot offer to author one.
+  const canCreate =
+    kind === 'loop' ? exitWhen.trim() !== '' : kind === 'foreach' ? items.trim() !== '' : true;
+
+  // A fragment, not a wrapper: `.property-panel` is already the flex column
+  // these controls want, so a `<div>` here would need its own rule saying the
+  // same thing — two declarations that have to agree about one rhythm.
+  return (
+    <>
+      <label>
+        Container
+        <select
+          value={ownerId}
+          aria-label="Container membership"
+          onChange={(e) => changeOwner(e.target.value)}
+        >
+          <option value="">— none —</option>
+          {containers.map((c) => (
+            <option key={c.id} value={c.id}>
+              {labels.get(c.id)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <fieldset className="container-create">
+        <legend>New container</legend>
+        <label>
+          Kind
+          <select
+            value={kind}
+            aria-label="New container kind"
+            onChange={(e) => {
+              const parsed = ContainerKindSchema.safeParse(e.target.value);
+              if (parsed.success) setKind(parsed.data);
+            }}
+          >
+            {ContainerKindSchema.options.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+        </label>
+        {kind === 'loop' && (
+          <>
+            <label>
+              Exit when
+              <input
+                value={exitWhen}
+                spellCheck={false}
+                placeholder="${equals(nodes.x.output.status, 200)}"
+                onChange={(e) => setExitWhen(e.target.value)}
+              />
+            </label>
+            <label>
+              Max rounds (optional)
+              <input
+                value={maxRounds}
+                inputMode="numeric"
+                onChange={(e) => setMaxRounds(e.target.value)}
+              />
+            </label>
+          </>
+        )}
+        {kind === 'foreach' && (
+          <label>
+            Items
+            <input
+              value={items}
+              spellCheck={false}
+              placeholder="${run.params.rows}"
+              onChange={(e) => setItems(e.target.value)}
+            />
+          </label>
+        )}
+        <button type="button" disabled={!canCreate} onClick={create}>
+          Create container
+        </button>
+      </fieldset>
+      {error !== null && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
  * Editor for one activity node. Config is edited as JSON (minus the internal
  * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
  * since #526 — and which this slice does not surface);
  * Apply parses the JSON and validates it against the activity's `configSchema`
  * before committing, so an invalid blob never reaches the store. The connection
- * dropdown is filtered to the kinds this activity accepts.
+ * dropdown is filtered to the kinds this activity accepts. Container membership
+ * (U6d) is `ContainerSection` above.
  */
 export function NodePanel({
   store,
@@ -419,6 +620,11 @@ export function NodePanel({
       <aside className="property-panel" aria-label="Properties">
         <h3>{entry?.title ?? nodeType}</h3>
         <p className="page-hint">This activity is configured via the call-node editor (#425).</p>
+        {/* Rendered in the STUB too, not just in the editor below. Membership is
+            orthogonal to `node.config`, so this early return must not swallow it:
+            a container is exactly the construct an IMPORTED doc puts a call node
+            in, and this is the only panel such a node ever gets. */}
+        <ContainerSection store={store} nodeId={nodeId} />
       </aside>
     );
   }
@@ -444,6 +650,7 @@ export function NodePanel({
           </select>
         </label>
       )}
+      <ContainerSection store={store} nodeId={nodeId} />
       <label>
         Config (JSON)
         <textarea

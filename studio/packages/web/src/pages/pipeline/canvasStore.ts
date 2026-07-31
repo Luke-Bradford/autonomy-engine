@@ -1,9 +1,11 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
+  ContainerSchema,
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
   type Container,
+  type ContainerKind,
   type Edge,
   type Node,
   type PipelineVersion,
@@ -83,7 +85,8 @@ function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
  * this module owns graph mutation, and `canvasDoc` imports the API layer for
  * `PipelineVersionWrite` — importing it from the store inverted the layering,
  * dragging zod schemas and `apiFetch` into the domain store for a function that
- * is pure `Container[] -> Container[]`. Exported for its own tests and for U6d,
+ * is pure `Container[] -> Container[]`. Exported for its own tests and for U6d
+ * (`containersWithNew` builds on it),
  * the same reason `sameSelection`/`nextSelection` are.
  *
  * Copy-on-write at both levels — a container that does not list the id comes
@@ -114,6 +117,89 @@ export function pruneContainerChild(containers: Container[], nodeId: string): Co
   return changed ? next : containers;
 }
 
+/**
+ * U6d — move `nodeId` into `containerId`, or out of every container when it is
+ * `null`.
+ *
+ * The sibling of `pruneContainerChild`, and here for the same layering reason:
+ * this module owns graph mutation. Written as ONE pass over every container
+ * rather than "remove from the old, add to the new" so DISJOINTNESS is a
+ * property of the function rather than of its caller — `containerMembership`
+ * resolves a doubly-listed child FIRST-wins (#492) and `validateDoc` refuses the
+ * doc, so a partial move is a defect that renders as a coherent picture.
+ *
+ * Returns the SAME array when nothing changed, so the caller can skip a
+ * `dirty`-setting write for an edit that is a no-op (re-picking the container a
+ * node is already in).
+ */
+export function assignContainerChild(
+  containers: Container[],
+  nodeId: string,
+  containerId: string | null,
+): Container[] {
+  let changed = false;
+  const next = containers.map((c) => {
+    const shouldHold = c.id === containerId;
+    const holds = c.children.includes(nodeId);
+    if (shouldHold === holds) return c;
+    changed = true;
+    return shouldHold
+      ? { ...c, children: [...c.children, nodeId] }
+      : { ...c, children: c.children.filter((ch) => ch !== nodeId) };
+  });
+  return changed ? next : containers;
+}
+
+/** The containers array a doc would have once `container` is added to it. */
+export function containersWithNew(containers: Container[], container: Container): Container[] {
+  let next = containers;
+  // A new container's children leave whatever container held them — same
+  // disjointness invariant `assignContainerChild` keeps, applied at birth.
+  for (const child of container.children) next = pruneContainerChild(next, child);
+  return [...next, container];
+}
+
+/**
+ * Build the container a "New container" form describes, or say why it cannot.
+ *
+ * The zod parse is the load-bearing half, and it is NOT redundant with the
+ * canvas's validation badge. `validatePipelineDoc` runs no schema parse, and the
+ * server parses the request body BEFORE reaching that gate — so a `maxRounds` of
+ * `0` or `1.5` (or a cleared numeric input, which `Number('')` reads as `0`)
+ * passes every canvas check, enables Save, and comes back as a raw zod `400`
+ * with no badge naming the cause. Refusing it here is the same shape as
+ * `NodePanel.apply` validating an edited config blob against the activity's
+ * `configSchema` before it can reach the store.
+ *
+ * Only the fields a VALID doc requires are accepted (`exitWhen` for a loop,
+ * `items` for a foreach) plus `maxRounds`, which caps an otherwise unbounded
+ * loop. The rest of `ContainerSchema` — `timeout`, `join`, `batchCount`, and
+ * editing any of them after creation — is U23's container-config form.
+ */
+export function buildContainer(
+  kind: ContainerKind,
+  firstChildId: string,
+  config: { exitWhen?: string; maxRounds?: number; items?: string },
+): { container: Container } | { error: string } {
+  const candidate = {
+    id: newLocalId(kind),
+    kind,
+    children: [firstChildId],
+    ...(config.exitWhen !== undefined && config.exitWhen !== ''
+      ? { exitWhen: config.exitWhen }
+      : {}),
+    ...(config.maxRounds !== undefined ? { maxRounds: config.maxRounds } : {}),
+    ...(config.items !== undefined && config.items !== '' ? { items: config.items } : {}),
+  };
+  const parsed = ContainerSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues.map((i) => `${i.path.join('.') || kind}: ${i.message}`).join('; '),
+    };
+  }
+  return { container: parsed.data };
+}
+
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
@@ -128,10 +214,11 @@ export interface CanvasState {
   /**
    * The doc's containers — WORKING state as of #746, not a view of `loaded`.
    *
-   * The canvas cannot yet CREATE one or move a node in or out (U6d/#425), so
-   * they look like pass-through: seeded on load, drawn by `FlowCanvas`, fed to
-   * the connect rules, written back on save. But membership is not read-only,
-   * because deleting a node changes it. While these were read off `loaded`,
+   * Fully authored as of U6d: seeded on load, drawn by `FlowCanvas`, fed to the
+   * connect rules, CREATED and re-parented by the property panel, written back
+   * on save. Membership was never read-only even before that, because deleting
+   * a node changes it — and that is what forced the move. While these were read
+   * off `loaded`,
    * `deleteNode` had nothing to prune, so the deleted id stayed listed as a
    * child and every later save was refused (`child '<id>' is not a node in this
    * pipeline`) with no canvas affordance to repair it.
@@ -174,6 +261,32 @@ export interface CanvasState {
    * version forever (`stage`).
    */
   deleteContainer(id: string): void;
+  /**
+   * U6d — add `container` to the doc, taking its children out of whatever
+   * container held them.
+   *
+   * Takes a whole `Container` rather than a kind plus fields for the same reason
+   * `connect` takes a whole `EdgeCondition`: the caller has already built and
+   * schema-checked one (`buildContainer`), and re-deriving it here would mint a
+   * SECOND id, so the container the panel measured its consequences against
+   * would not be the container the store created.
+   *
+   * Refuses (silent no-op) a container the schema rejects, one whose id collides
+   * with an existing node or container — they share one namespace — one with no
+   * children at all, and one naming a child that is not a current node. Silent
+   * for the same reason `connect` is: the canvas is where a refusal is explained,
+   * because it is where the operator is.
+   */
+  createContainer(container: Container): void;
+  /**
+   * U6d — move a node into `containerId`, or out of every container when it is
+   * `null`.
+   *
+   * Deliberately does NOT refuse an edit that leaves the doc invalid — see
+   * `containerRules`. The badge (#444) blocks the save, and the same control
+   * reverses the edit.
+   */
+  setNodeContainer(nodeId: string, containerId: string | null): void;
   /**
    * Append an edge from `from` to `to` carrying `condition`. Refuses (no-op) a
    * candidate `connectRejection` rejects — a self-loop, an endpoint that is not
@@ -284,7 +397,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // must never write through. (`children` is the only array or object
         // field on `ContainerSchema`, so one level is the whole copy.) The prune
         // below is copy-on-write, so the alias would be harmless today and a
-        // live hazard the moment U6d edits membership in place — latent sharing
+        // live hazard the moment anything edits membership IN PLACE — U6d does
+        // not (`assignContainerChild` is copy-on-write), so this stays a standing
+        // invariant rather than a bug waiting on U23 — latent sharing
         // that is free to rule out here.
         containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
         selected: null,
@@ -361,7 +476,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // A container that loses its LAST child is KEPT, not deleted with it.
           // Deleting one is a structure write that also owns its incident edges
           // and its exitWhen/items/maxRounds/timeout config, none of it
-          // re-authorable on the canvas until U6d/#425 — so a cascade destroys
+          // re-authorable on the canvas until U23/#839 — so a cascade destroys
           // authored structure the operator cannot get back.
           //
           // That reasoning is SYMMETRIC, which is why keeping the container was
@@ -419,6 +534,36 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           dirty: true,
         };
       });
+    },
+
+    createContainer(container) {
+      const parsed = ContainerSchema.safeParse(container);
+      if (!parsed.success) return;
+      const c = parsed.data;
+      const s = get();
+      // One namespace for node and container ids (`validateDoc` says so), so a
+      // collision check has to look at both.
+      if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
+      // Never born empty: an empty `loop`/`foreach` is a doc `validateDoc`
+      // refuses, and an empty `stage` validates clean and mints itself into an
+      // immutable version forever — the two halves of #748's trap.
+      if (c.children.length === 0) return;
+      // A container whose children are not current nodes is the phantom-child
+      // doc #746 was filed about, authored fresh instead of left behind.
+      if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;
+      set((st) => ({ containers: containersWithNew(st.containers, c), dirty: true }));
+    },
+
+    setNodeContainer(nodeId, containerId) {
+      const s = get();
+      if (!s.nodes.some((n) => n.id === nodeId)) return;
+      if (containerId !== null && !s.containers.some((c) => c.id === containerId)) return;
+      const next = assignContainerChild(s.containers, nodeId, containerId);
+      // Re-picking the container a node is already in must not mark the canvas
+      // dirty — an unchanged graph that reports itself as edited is how a "you
+      // have unsaved changes" prompt loses the operator's trust.
+      if (next === s.containers) return;
+      set({ containers: next, dirty: true });
     },
 
     /**
