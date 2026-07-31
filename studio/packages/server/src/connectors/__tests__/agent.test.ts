@@ -1207,6 +1207,134 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
 // #2 L14c — the connection `config.quota` hint is validated at the boundary (save /
 // dispatch): an un-compilable regex or an out-of-range window is refused with a clear
 // error rather than throwing later at the failure emit.
+describe('#816 — per-shape quota classification scope (quota.classifyActivityTypes)', () => {
+  const PATTERN = 'usage limit reached';
+  /** A quota hint scoped to `shapes`; omit `shapes` for the unscoped default. */
+  function quotaConfig(shapes?: readonly string[]) {
+    return {
+      command: 'claude',
+      quota: {
+        exhaustionPattern: PATTERN,
+        resetWindowSeconds: 3600,
+        ...(shapes !== undefined ? { classifyActivityTypes: shapes } : {}),
+      },
+    };
+  }
+  /** A completed non-zero exit whose stderr carries a genuine refusal. */
+  function refusingSupervisor() {
+    return fakeSupervisor([{ stream: 'stderr', line: `Error: ${PATTERN}` }], { exitCode: 1 });
+  }
+
+  it('scoped to llm_call ONLY: an agent_task refusal is NOT classified — exit-code-is-data survives', async () => {
+    const { supervisor } = refusingSupervisor();
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({ connectionConfig: quotaConfig(['llm_call']) }),
+        null,
+      ),
+    );
+    // The #799 carve-out is scoped OUT, so this shape falls back to its default
+    // contract: any exit code is data the graph branches on.
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+    expect(events.some((e) => e.type === 'failed')).toBe(false);
+  });
+
+  it('scoped to agent_task: an agent_task refusal IS still classified (the positive leg)', async () => {
+    const { supervisor } = refusingSupervisor();
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({ connectionConfig: quotaConfig(['agent_task']) }),
+        null,
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('scoped to agent_task ONLY: an llm_call refusal stays `permanent` AND becomes METERED', async () => {
+    const { supervisor } = refusingSupervisor();
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({ connectionConfig: quotaConfig(['agent_task']) }),
+        null,
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The SECOND consequence of scoping `llm_call` out, named because it is not
+    // obvious: `quotaHit` also drives this shape's metering EXCLUSION (a refused
+    // call was never served). With no verdict there is nothing to except, so the
+    // invocation is metered — the over-mark direction `cliSpendFact` prefers.
+    expect(events.some((e) => e.type === 'metered')).toBe(true);
+  });
+
+  it('ABSENT classifyActivityTypes: BOTH shapes still classify — no behaviour change on upgrade', async () => {
+    const agentEvents = await drain(
+      createAgentAdapter(refusingSupervisor().supervisor).runActivity(
+        ctx({ connectionConfig: quotaConfig() }),
+        null,
+      ),
+    );
+    expect(agentEvents.at(-1)).toMatchObject({ kind: 'rate_limit' });
+    const llmEvents = await drain(
+      createAgentAdapter(refusingSupervisor().supervisor).runActivity(
+        llmCtx({ connectionConfig: quotaConfig() }),
+        null,
+      ),
+    );
+    expect(llmEvents.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('a scoped-out shape still reports the full stderr+stdout diagnostic on its failure', async () => {
+    // Scoping narrows WHICH SHAPE carries a quota verdict, never what a failure
+    // is allowed to say. `llm_call`'s `permanent` error must still fold both
+    // channels, or the narrowing would degrade every diagnostic it touches.
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stderr', line: 'boom on stderr' },
+        { stream: 'stdout', line: 'context on stdout' },
+      ],
+      { exitCode: 3 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        llmCtx({ connectionConfig: quotaConfig(['agent_task']) }),
+        null,
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({
+      type: 'failed',
+      error: 'llm_call CLI exited 3: boom on stderr\ncontext on stdout',
+    });
+  });
+
+  it('a scoped-out STRUCTURED agent_task misdiagnoses a real refusal as `permanent` — the cost, pinned', async () => {
+    // "Scoping restores exit-code-is-data" is true only for an OPAQUE agent_task.
+    // A STRUCTURED one never had that contract: a quota-refused run emits no
+    // fenced block, so with the quota branch scoped out it falls through to the
+    // structured branch and is reported `permanent` ("no valid structured output
+    // block found") — the misdiagnosis the quota branch is deliberately sited
+    // ABOVE to prevent. Not a regression (it is the pre-#799 behaviour), but it
+    // is the sharpest edge on the escape hatch, so it is pinned rather than left
+    // for an operator to discover.
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: `Error: ${PATTERN}` }], {
+      exitCode: 1,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: quotaConfig(['llm_call']),
+          input: {
+            task: 'review',
+            outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+          },
+        }),
+        null,
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(JSON.stringify(events.at(-1))).toContain('structured output');
+  });
+});
+
 describe('agent_cli config quota hint validation', () => {
   const schema = createAgentAdapter(fakeSupervisor([], {}).supervisor).configSchema;
 
@@ -1249,6 +1377,45 @@ describe('agent_cli config quota hint validation', () => {
         quota: { exhaustionPattern: 'x', resetWindowSeconds: MAX_RETRY_AFTER_SECONDS },
       }).success,
     ).toBe(true);
+  });
+
+  it('accepts a classifyActivityTypes scope naming either shape (#816)', () => {
+    for (const classifyActivityTypes of [
+      ['llm_call'],
+      ['agent_task'],
+      ['llm_call', 'agent_task'],
+    ]) {
+      const r = schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes },
+      });
+      expect(r.success).toBe(true);
+    }
+  });
+
+  it('REFUSES an EMPTY classifyActivityTypes — "classify nothing" must not be spelled obliquely (#816)', () => {
+    // An empty scope is an obscure way of writing "delete the quota block", and
+    // it silently disarms the hot-loop guard on BOTH shapes. Refuse at the
+    // boundary rather than honour a config whose intent cannot be read.
+    expect(
+      schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes: [] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an unknown member of classifyActivityTypes (#816)', () => {
+    expect(
+      schema.safeParse({
+        command: 'claude',
+        quota: {
+          exhaustionPattern: 'x',
+          resetWindowSeconds: 60,
+          classifyActivityTypes: ['http_request'],
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects a partial quota hint (both fields required)', () => {
