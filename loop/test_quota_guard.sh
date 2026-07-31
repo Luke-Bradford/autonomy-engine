@@ -2061,6 +2061,17 @@ check "...and how many of the commits behind touch studio/" "0" \
 check "...and the remedy, so the line is actionable where it is read" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'install_studio_server.sh --update' && echo 0 || echo 1)"
 check "...and saying the C3 evidence it produced is about that build" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'shadow readings it produced' && echo 0 || echo 1)"
+# ...but WITHOUT spelling the token the evidence procedure counts (#832 pre-PR
+# review). The first version of this line said "treat the 'quota shadow: studio'
+# lines it produced", which put a false hit for `grep 'quota shadow: studio'`
+# into driver.log once per iteration -- and precisely while the service is
+# stale, i.e. exactly when the real readings are void. An operator or a prior
+# session note still counting the old way would over-count in the stale
+# direction: the mis-attribution this whole ticket exists to end, reintroduced
+# through the fix's own log text. The assertion above pins that the line still
+# SAYS it; this one pins that it does not say it in the countable spelling.
+check "...without planting a false hit for the evidence grep" "1" \
   "$(printf '%s' "$ss_stale" | grep -q 'quota shadow' && echo 0 || echo 1)"
 check "...and is never also reported as current" "1" \
   "$(printf '%s' "$ss_stale" | grep -q 'current' && echo 0 || echo 1)"
