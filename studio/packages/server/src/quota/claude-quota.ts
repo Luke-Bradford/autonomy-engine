@@ -460,7 +460,9 @@ export function createClaudeAccountQuotaReader(
       const value = buildQuota(raw);
       // The provider IS serving us and we cannot use what it said: a contract
       // break to chase, not a bucket to wait out.
-      return value === null ? { value: null, unavailable: 'unrecognized_payload' } : { value, unavailable: null };
+      return value === null
+        ? { value: null, unavailable: 'unrecognized_payload' }
+        : { value, unavailable: null };
     } catch {
       // Fail-safe: ANY unexpected error is UNREADABLE, never a raise (which
       // would 500 the guard's poll) and never a substituted value.
