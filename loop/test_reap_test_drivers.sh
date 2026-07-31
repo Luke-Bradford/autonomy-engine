@@ -26,32 +26,50 @@ check() { # $1=label $2=expected $3=actual
 # fixtures would land back in the real root while the gates looked at the sandbox.
 # `REAP_TEMP_ROOT` is the seam the reaper exposes for exactly this, and every
 # fixture below is created with an EXPLICIT template inside it.
-SANDBOX_ROOT="$(mktemp -d)"
+SANDBOX_ROOT="$(mktemp -d)" || SANDBOX_ROOT=""
+# HARD-FAIL on a failed mktemp. An empty SANDBOX_ROOT turns the cleanup sweep's
+# pattern `*"$SANDBOX_ROOT"/*` into `*/*`, which matches the command line of
+# essentially every process on the machine -- and that sweep runs `kill -9`.
+# The `rm -rf` beside it is gated on the path shape; this is the one destruction
+# primitive whose safety rests entirely on the variable being non-empty.
+case "$SANDBOX_ROOT" in
+  /*/tmp.?*) : ;;
+  *) echo "FAIL - could not create a sandbox root (got '$SANDBOX_ROOT')"; exit 1 ;;
+esac
 export REAP_TEMP_ROOT="$SANDBOX_ROOT"
 sandbox_mktemp() { mktemp -d "$SANDBOX_ROOT/tmp.XXXXXXXX"; }
 
 # This suite spawns spinners of its own, so it owes the same hygiene it is
 # testing for. Two mechanisms, because the obvious one is not enough:
 #
-#  1. A pid registry in a FILE. A shell VARIABLE cannot work here: every spawn
-#     goes through `p="$(spin ...)"`, and a command substitution runs in a
-#     SUBSHELL, so the append is discarded with it and the parent's list stays
-#     empty. That is not hypothetical -- the first version of this file used a
-#     variable and left ELEVEN orphaned spinners behind, which is the very defect
-#     #821 is about, reproduced by its own test suite.
-#  2. A path-scoped sweep of the process table, which depends on no bookkeeping
-#     at all: anything still running out of the sandbox dies, however it got
-#     there. This is the one that actually guarantees the invariant.
-SPAWN_LOG="$(mktemp)"
+# Cleanup is a PATH-SCOPED sweep of the process table, and deliberately nothing
+# else: anything still running out of the sandbox dies, however it got there.
+#
+# Two rejected alternatives, both instructive. A pid registry in a VARIABLE
+# cannot work at all -- every spawn goes through `p="$(spin ...)"`, and a command
+# substitution runs in a SUBSHELL, so the append is discarded with it. The first
+# version of this file did exactly that and left ELEVEN orphaned spinners behind:
+# the very defect #821 is about, reproduced inside its own test suite. A registry
+# in a FILE fixes that but adds its own hazard -- pids get recycled, so killing a
+# remembered pid can hit an unrelated process that inherited the number. The
+# sweep has neither problem.
+# Idempotent: the INT/TERM handler exits, which re-fires the EXIT trap, and a
+# second pass would re-scan and re-`rm -rf` a sandbox that is already gone --
+# noise on the one path where the output matters.
+cleanup_done=""
 cleanup() {
-  while read -r cl_pid; do [ -n "$cl_pid" ] && kill -9 "$cl_pid" 2>/dev/null; done <"$SPAWN_LOG"
+  [ -z "$cleanup_done" ] || return 0
+  cleanup_done=1
   ps -ww -eo pid=,command= 2>/dev/null | while read -r cl_p cl_cmd; do
     case "$cl_cmd" in *"$SANDBOX_ROOT"/*) kill -9 "$cl_p" 2>/dev/null || true ;; esac
   done
-  rm -f "$SPAWN_LOG"
   case "$SANDBOX_ROOT" in /*/tmp.?*) rm -rf "$SANDBOX_ROOT" ;; esac
 }
-trap cleanup EXIT INT TERM
+# INT/TERM must EXIT, not just clean: a bare `trap cleanup INT` runs the handler
+# and then RESUMES the script, so a Ctrl-C would tear down the sandbox and carry
+# on running cases against a directory that no longer exists.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 
 # A fixture tree exactly as test_quota_guard.sh's run_case builds one: a driver
 # under infra/ and the stub bin/ that makes it unmistakably ours.
@@ -68,7 +86,6 @@ mk_fixture() { # -> echoes the tree path
 spin() { # $1 = script to run in the background -> echoes its pid
   bash "$1" >/dev/null 2>&1 &
   sp_pid=$!
-  echo "$sp_pid" >>"$SPAWN_LOG"
   # `ps` has to have observed it before any assertion about ps output is honest.
   sp_i=0
   while [ "$sp_i" -lt 25 ]; do
@@ -204,6 +221,21 @@ check "reap_known_tree refuses the repo directory it is running from" "1" \
   "$(reap_known_tree "$HERE" >/dev/null 2>&1 && echo 0 || echo 1)"
 check "refusing the repo directory deleted nothing" "0" \
   "$([ -f "$HERE/reap_test_drivers.sh" ] && echo 0 || echo 1)"
+
+# --- 9. the PROBE path (no REAP_TEMP_ROOT override) -------------------------
+# Every case above runs with the sandbox override set, so the production path --
+# work out where `mktemp -d` actually writes -- is otherwise never executed here.
+# Run it in a subshell with the override unset and check it against a real
+# `mktemp -d`, which is the only ground truth available and the reason the module
+# probes instead of reading $TMPDIR.
+probe_out="$( unset REAP_TEMP_ROOT; . "$HERE/reap_test_drivers.sh"; reap_temp_root )"
+probe_truth="$( d="$(mktemp -d)"; dirname "$d"; rmdir "$d" )"
+check "reap_temp_root probes the directory mktemp -d really uses" "$probe_truth" "$probe_out"
+# And the cache must land in the CALLER's shell, not in a subshell that discards
+# it -- the defect that ate both registries. `_init` is the form that can do it.
+cache_probe="$( unset REAP_TEMP_ROOT; . "$HERE/reap_test_drivers.sh"; \
+  reap_temp_root_init && echo "$REAP_TEMP_ROOT" )"
+check "reap_temp_root_init caches in the caller's shell" "$probe_truth" "$cache_probe"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi
