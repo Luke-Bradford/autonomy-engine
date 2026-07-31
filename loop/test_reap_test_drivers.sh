@@ -98,12 +98,14 @@ check "gate refuses an empty path" "1" "$(fixture_tree_is_ours "" && echo 0 || e
 check "gate refuses /"             "1" "$(fixture_tree_is_ours / && echo 0 || echo 1)"
 check "gate refuses a relative path" "1" \
   "$(fixture_tree_is_ours "$(basename "$t1")" && echo 0 || echo 1)"
-# Deep enough that it is NOT a direct child of $TMPDIR, but otherwise a perfect
-# fixture: the parent check is the only thing that can refuse this one.
-t3="$(mk_fixture)"; mkdir -p "$t3/nested"
-cp -R "$t3/infra" "$t3/bin" "$t3/nested/" 2>/dev/null
+# One level too deep, but IDENTICAL in every other respect -- full signature AND a
+# `tmp.*` basename. Naming it `nested` instead would let the basename check refuse
+# it and the case would pass with the parent check deleted, which is exactly how
+# the first version of this case was vacuous.
+t3="$(mk_fixture)"; mkdir -p "$t3/tmp.deepfixture"
+cp -R "$t3/infra" "$t3/bin" "$t3/tmp.deepfixture/" 2>/dev/null
 check "gate refuses a signature tree that is not a direct child of the temp root" "1" \
-  "$(fixture_tree_is_ours "$t3/nested" && echo 0 || echo 1)"
+  "$(fixture_tree_is_ours "$t3/tmp.deepfixture" && echo 0 || echo 1)"
 
 # --- 4. drivers_under finds a live driver, and ONLY inside its own tree ------
 t4="$(mk_fixture)"
@@ -178,9 +180,15 @@ check "reap_known_tree refuses an empty path" "1" \
   "$(reap_known_tree "" >/dev/null 2>&1 && echo 0 || echo 1)"
 check "reap_known_tree refuses /" "1" \
   "$(reap_known_tree / >/dev/null 2>&1 && echo 0 || echo 1)"
+# `tmp.*`-named, so only the parent check stands between it and `rm -rf`.
+mkdir -p "$SANDBOX_ROOT/elsewhere/tmp.outsider"
 check "reap_known_tree refuses a directory outside the temp root" "1" \
-  "$(reap_known_tree "$HERE" >/dev/null 2>&1 && echo 0 || echo 1)"
+  "$(reap_known_tree "$SANDBOX_ROOT/elsewhere/tmp.outsider" >/dev/null 2>&1 && echo 0 || echo 1)"
 check "refusing an outside directory deleted nothing" "0" \
+  "$([ -d "$SANDBOX_ROOT/elsewhere/tmp.outsider" ] && echo 0 || echo 1)"
+check "reap_known_tree refuses the repo directory it is running from" "1" \
+  "$(reap_known_tree "$HERE" >/dev/null 2>&1 && echo 0 || echo 1)"
+check "refusing the repo directory deleted nothing" "0" \
   "$([ -f "$HERE/reap_test_drivers.sh" ] && echo 0 || echo 1)"
 
 echo
