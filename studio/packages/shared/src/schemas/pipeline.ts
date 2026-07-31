@@ -449,6 +449,20 @@ export const StrictNodeSchema = NodeSchema.extend({
 export const EdgeOnSchema = z.enum(['success', 'failure', 'completion', 'skipped']);
 export type EdgeOn = z.infer<typeof EdgeOnSchema>;
 
+/**
+ * What a back-edge's bounce cap may be — a NON-NEGATIVE INTEGER.
+ *
+ * Named and exported (U6e) rather than left inline on `edgeBase` so the canvas'
+ * editor can gate on the schema ITSELF instead of hand-rolling the same three
+ * constraints. Two copies of "what a cap may be" is exactly the drift that lets
+ * a tightening here — an upper bound, say — silently stop being reflected in
+ * the field the operator types into, leaving an editor that accepts a value the
+ * write gate then refuses on an IMMUTABLE doc.
+ *
+ * Zero is deliberately legal: a back-edge that never bounces.
+ */
+export const MaxBouncesSchema = z.number().int().nonnegative();
+
 const edgeBase = {
   id: z.string().min(1),
   from: z.string().min(1),
@@ -463,7 +477,7 @@ const edgeBase = {
    * the driver's event loop. Declaring more than the ceiling is not an error
    * (the doc stays savable) but is clamped, with a reducer diagnostic saying so.
    */
-  maxBounces: z.number().int().nonnegative().optional(),
+  maxBounces: MaxBouncesSchema.optional(),
 };
 
 /** An edge keyed off the predecessor's operational outcome. */

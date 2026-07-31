@@ -1,6 +1,7 @@
 import {
   declaredBranchesOf,
   EdgeOnSchema,
+  MaxBouncesSchema,
   stableEdgeKey,
   type Edge,
   type EdgeOn,
@@ -125,9 +126,17 @@ export function edgeAriaLabel(e: Edge): string {
   // The `↺ … ×N` glyph in `edgeLabel` is not readable text, and the SVG <text>
   // label is not exposed under RF's own role anyway — so back-ness and the cap
   // have to be SPELLED here or they are colour-and-symbol only.
-  return e.back === true
-    ? `${where}, back-edge ${on}, up to ${e.maxBounces ?? 0} bounces`
-    : `${where}, ${on}`;
+  if (e.back !== true) return `${where}, ${on}`;
+  /* A MISSING cap is reported as missing, in the same words the visual label's
+     `×?` stands for — not as `0`. Zero is a real and DIFFERENT value (an edge
+     that never bounces), so defaulting to it would state a specific behaviour
+     for a doc that declares none, and would state a different one to a screen
+     reader than the canvas shows. Reachable only for an imported or API-authored
+     doc — the canvas always sets a cap — and that doc is refused by the save
+     gate, which is a fact worth being able to hear rather than one to paper over. */
+  return e.maxBounces === undefined
+    ? `${where}, back-edge ${on}, no bounce cap declared`
+    : `${where}, back-edge ${on}, up to ${e.maxBounces} bounces`;
 }
 
 /**
@@ -145,14 +154,16 @@ export function edgeAriaLabel(e: Edge): string {
 export const DEFAULT_MAX_BOUNCES = 10;
 
 /**
- * Whether `n` is a value `maxBounces` can hold: a non-negative INTEGER.
+ * Whether `n` is a value `maxBounces` can hold.
  *
- * Mirrors `EdgeSchema`'s `z.number().int().nonnegative()` and nothing stricter.
- * Zero is legal — an edge that never bounces — and an editor that refused it
- * would be an editor that cannot accept back a value the format persists.
+ * Delegates to `MaxBouncesSchema` rather than restating its constraints, so a
+ * tightening of the format propagates to this editor instead of leaving the
+ * canvas accepting a value the write gate refuses — on an IMMUTABLE doc, where
+ * that is unrepairable. Zero is legal, and an editor that refused it would be
+ * an editor that cannot accept back a value the format persists.
  */
 export function isMaxBounces(n: number): boolean {
-  return Number.isInteger(n) && n >= 0;
+  return MaxBouncesSchema.safeParse(n).success;
 }
 
 /**

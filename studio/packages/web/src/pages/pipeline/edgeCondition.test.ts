@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stableEdgeKey, type Edge, type Node } from '@autonomy-studio/shared';
+import { MaxBouncesSchema, stableEdgeKey, type Edge, type Node } from '@autonomy-studio/shared';
 import {
   branchOptionsFor,
   conditionOf,
@@ -282,5 +282,42 @@ describe('back-edge labelling', () => {
   it('isMaxBounces mirrors EdgeSchema — non-negative integers, zero included', () => {
     expect([0, 1, 10_000].every(isMaxBounces)).toBe(true);
     expect([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY].some(isMaxBounces)).toBe(false);
+  });
+});
+
+/**
+ * A back-edge with NO cap — reachable only for an imported or API-authored doc,
+ * since the canvas always sets one, and refused by the save gate. Both labels
+ * must report it as missing rather than inventing a value: `0` is a real and
+ * DIFFERENT behaviour (an edge that never bounces), so defaulting to it would
+ * state a specific cap for a doc that declares none — and would tell a screen
+ * reader something the canvas does not show.
+ */
+describe('a back-edge with no declared cap', () => {
+  const capless = { id: 'e', from: 'b', to: 'a', on: 'success', back: true } as Edge;
+
+  it('shows the cap as unknown rather than as zero', () => {
+    expect(edgeLabel(capless)).toBe('↺ success ×?');
+  });
+
+  it('says so in the aria-label, in the same terms', () => {
+    expect(edgeAriaLabel(capless)).toBe('Edge from b to a, back-edge on success, no bounce cap declared');
+  });
+
+  it('a declared cap of ZERO is reported as the real value it is', () => {
+    const zero = { ...capless, maxBounces: 0 } as Edge;
+    expect(edgeLabel(zero)).toBe('↺ success ×0');
+    expect(edgeAriaLabel(zero)).toBe('Edge from b to a, back-edge on success, up to 0 bounces');
+  });
+
+  /**
+   * The SSOT tie: `isMaxBounces` delegates to the schema rather than restating
+   * it, so a tightening of the format cannot leave this editor accepting a
+   * value the write gate refuses.
+   */
+  it('isMaxBounces IS MaxBouncesSchema, not a second opinion about it', () => {
+    for (const n of [0, 1, 3.5, -1, 10_000, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(isMaxBounces(n)).toBe(MaxBouncesSchema.safeParse(n).success);
+    }
   });
 });

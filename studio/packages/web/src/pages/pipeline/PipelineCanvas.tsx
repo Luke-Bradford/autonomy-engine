@@ -739,7 +739,17 @@ function BounceCapField({
   function commit(text: string) {
     // A blur that changed nothing must not write — tabbing THROUGH the field
     // would otherwise mark the canvas dirty on an untouched doc.
-    if (text === stored) return;
+    //
+    // It must still CLEAR a standing error, though, and that ordering is the
+    // whole point: type `1.5`, blur (error shown), retype the original value,
+    // blur — and an early return that skipped this would leave the banner
+    // asserting "not a whole number" over a field showing a perfectly valid,
+    // unchanged cap. The write is what a no-op blur must skip, not the
+    // acknowledgement that the value on screen is now fine.
+    if (text === stored) {
+      setError(null);
+      return;
+    }
     const n = Number(text.trim());
     // `Number('')` is 0 and `Number('  ')` is 0, so an EMPTY field has to be
     // caught before the numeric test or clearing the box would silently store

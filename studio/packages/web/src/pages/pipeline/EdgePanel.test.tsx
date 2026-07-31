@@ -298,6 +298,27 @@ describe('EdgePanel — a back-edge bounce cap', () => {
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
+  /**
+   * Reverting to the STORED value after a refusal must clear the banner.
+   *
+   * The no-op-blur guard returns before the write, and used to return before
+   * the error was cleared too — so typing `1.5`, blurring, then retyping the
+   * original cap and blurring left the banner asserting "not a whole number"
+   * over a field showing a valid, unchanged value. The write is what a no-op
+   * blur skips; the acknowledgement is not.
+   */
+  it('clears a standing error when the field is put back to the stored value', () => {
+    const { store, field } = mountBack(back(6));
+    fireEvent.change(field, { target: { value: '1.5' } });
+    fireEvent.blur(field, { target: { value: '1.5' } });
+    expect(screen.getByRole('alert')).toBeTruthy();
+
+    fireEvent.change(field, { target: { value: '6' } });
+    fireEvent.blur(field, { target: { value: '6' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
+  });
+
   it('a blur that changed nothing does not dirty the doc', () => {
     const { store, field } = mountBack(back(6));
     store.setState({ dirty: false });
