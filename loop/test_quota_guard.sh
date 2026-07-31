@@ -1915,8 +1915,12 @@ check "...and the handoff record is CONSUMED, never left for a later restart" "0
 # nothing would run until the next scheduled start.
 r44b="$(run_case 0.10 MUTATE_DRIVE=broken MAX_LOOPS=3)"
 l44b="$(logof "$r44b")"
+# `grep -q`, not `grep -c ... || echo 0`: on NO match `grep -c` prints 0 AND exits
+# 1, so the `||` fires too and the value is "0\n0" -- which never equals "0" and
+# makes an expected-ABSENT assertion permanently red (this file's own lesson,
+# and it caught this case on the first run).
 check "a syntactically broken new file is REFUSED, not exec'd (#811)" "0" \
-  "$(grep -c 'driver code: ADOPTING' "$l44b" 2>/dev/null || echo 0)"
+  "$(grep -q 'driver code: ADOPTING' "$l44b" 2>/dev/null && echo 1 || echo 0)"
 check "...and the refusal says so instead of failing silently" "1" \
   "$(grep -q 'NOT adopting -- .* does not PARSE' "$l44b" 2>/dev/null && echo 1 || echo 0)"
 check "...and the driver carries on running the OLD code (all 3 fires)" "3" \
@@ -1935,7 +1939,7 @@ check "...and says the cap is why it stopped adopting" "1" \
 r44d="$(run_case 0.10 MUTATE_DRIVE=comment SELF_ADOPT=0 MAX_LOOPS=3)"
 l44d="$(logof "$r44d")"
 check "SELF_ADOPT=0 refuses to adopt at all (#811)" "0" \
-  "$(grep -c 'driver code: ADOPTING' "$l44d" 2>/dev/null || echo 0)"
+  "$(grep -q 'driver code: ADOPTING' "$l44d" 2>/dev/null && echo 1 || echo 0)"
 check "...and the #808 STALE report still names the manual remedy" "1" \
   "$(grep -q 'driver code: STALE' "$l44d" 2>/dev/null && echo 1 || echo 0)"
 

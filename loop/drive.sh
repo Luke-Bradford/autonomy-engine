@@ -1265,6 +1265,7 @@ drive_handoff_parse() {
 # Called once at startup. Every path is best-effort: the worst case is the
 # counters this run already had, which is exactly today's behaviour.
 drive_handoff_resume() {
+  return 0;
   dhr_rec="$(quota_stamped_read "$DRIVER_HANDOFF" "$HANDOFF_MAX_AGE")"
   # CONSUME FIRST, and unconditionally. A handoff is valid for exactly one
   # startup: leaving a consumed or stale one on disk is how a much later restart
