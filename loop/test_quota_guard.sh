@@ -78,6 +78,13 @@ case "$*" in
     # distinguish "studio was never asked" from "studio was asked and lost" --
     # and "never asked" is the entire justification for the read order.
     : >"${STUDIO_POLL_MARKER:-/dev/null}"
+    # ...and a COUNT, appended, because the marker is truncate-only and so cannot
+    # distinguish one poll from ten. #765's shadow probe is RATE-BOUNDED, and a
+    # rate bound whose test cannot count is untestable -- the same blind spot #777
+    # reported for source 2, which is why `readercalls` below is append-based too.
+    # Separate file rather than converting the marker: three existing cases assert
+    # on the marker's EXISTENCE and must keep their exact meaning.
+    echo 1 >>"${STUDIO_POLL_COUNT:-/dev/null}"
     if [ -n "${STUDIO_UTIL:-}" ]; then
       echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
     else
@@ -286,6 +293,7 @@ EOS
   # still exercise "no fallback available".
   env PATH="$bin:$PATH" INFRA="$tmp/infra" REPO="$tmp" DLOG="$rc_dlog" \
     STUDIO_POLL_MARKER="$tmp/studio_polled" READER_CALLS="$tmp/readercalls" \
+    STUDIO_POLL_COUNT="$tmp/studiopolls" \
     BACKOFF_BASE=0 MAX_LOOPS=12 GATE_WAIT_TRIES=1 \
     AUTH_TRIES=1 "$@" bash "$tmp/infra/drive.sh" >/dev/null 2>&1
   n=0; [ -f "$tmp/fires.txt" ] && n="$(wc -l <"$tmp/fires.txt" | tr -d ' ')"
@@ -304,6 +312,34 @@ tmpof()     { echo "${1##*|}"; }
 readerpolls() {
   rp_f="$(tmpof "$1")/readercalls"
   if [ -f "$rp_f" ]; then wc -l <"$rp_f" | tr -d ' '; else echo 0; fi
+}
+# How many times studio (source 3) was actually POLLED in that run -- by the live
+# fallback OR by the #765 shadow probe, which share one curl arm. Same accessor
+# contract as readerpolls: the tmp dir is READ from the result string, never
+# inferred from the log path (that derivation reads 0 under FRESH_LOGDIR=1 and
+# passes vacuously).
+studiopolls() {
+  sp_f="$(tmpof "$1")/studiopolls"
+  if [ -f "$sp_f" ]; then wc -l <"$sp_f" | tr -d ' '; else echo 0; fi
+}
+# Did the GUARD report a quota it could not read? $1 = the run result string.
+#
+# `UNREADABLE` has TWO subjects in this log since #765: the guard's own reading,
+# and the shadow probe's diagnostic line about studio. Every assertion using this
+# helper means the FORMER, so the shadow line is excluded rather than matched.
+#
+# That is a STRENGTHENING, not a loosening -- any non-shadow UNREADABLE still
+# counts -- and it is needed in BOTH directions, which is the part worth stating.
+# Case 33 asserts the word is ABSENT and merely broke loudly. Case 28d asserts it
+# is PRESENT (a fire outcome the #774 classifier could not read) and would have
+# gone on passing while satisfied by a shadow line about something else entirely:
+# green, and proving nothing. That is the vacuous-coverage shape this repo has
+# shipped twice, and it appeared here as a side effect of a feature in another
+# file -- which is why the word is disambiguated everywhere rather than at the one
+# site that happened to fail.
+guard_unreadable() {  # echoes 0 if the GUARD reported UNREADABLE, 1 if it did not
+  if grep 'UNREADABLE' "$(logof "$1")" 2>/dev/null | grep -qv 'quota shadow:'
+  then echo 0; else echo 1; fi
 }
 
 # --- 1. over the threshold: refuse to fire AT ALL ----------------------------
@@ -340,8 +376,7 @@ check "79% still fires (guard is a threshold, not a block)" "1" "$(fires_of "$r"
 # --- 4. unreadable quota: bounded blind fires, then stop ---------------------
 r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=2 MAX_FIRES=0)"
 check "unreadable util -> exactly QUOTA_UNKNOWN_FIRES=2 blind fires" "2" "$(fires_of "$r")"
-check "unreadable util logs the blind-fire WARN" "0" \
-  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+check "unreadable util logs the blind-fire WARN" "0" "$(guard_unreadable "$r")"
 
 # --- 5. unreadable is NOT treated as 0% (the conflation bug) -----------------
 r="$(run_case EMPTY QUOTA_UNKNOWN_FIRES=0 MAX_FIRES=0)"
@@ -491,8 +526,13 @@ check "quota re-checked after a gate wait -> refuses on the fresh reading" "0" "
 # whole suite green. With studio offering a permissive 10% behind a refusing 97%
 # reader, a swap now fails three ways: fires appear, the source label changes, and
 # the poll marker shows up.
+#
+# QUOTA_SHADOW_MIN_INTERVAL=0 for the same reason as case 25: the #765 shadow
+# probe polls studio whenever an EARLIER source answered, which is this topology,
+# and it would make the "studio is unpolled" assertion true-by-accident-or-false
+# regardless of the selection order it exists to pin.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=0 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UTIL=97 \
-      STUDIO_UTIL=0.10)"
+      STUDIO_UTIL=0.10 QUOTA_SHADOW_MIN_INTERVAL=0)"
 check "a working fallback is READ when the dashboard is down" "0" "$(fires_of "$r")"
 check "the loop reader OUTRANKS studio (not merely outvoted -- studio is unpolled)" "1" \
   "$([ -f "$(tmpof "$r")/studio_polled" ] && echo 0 || echo 1)"
@@ -543,7 +583,16 @@ check "a PRESENT fallback reader logs no missing-reader WARN" "1" \
 # and lost" -- which is precisely the regression this case has to catch, since
 # reading both sources unconditionally and preferring the dashboard would look
 # identical in the log while doubling upstream load.
-r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+#
+# QUOTA_SHADOW_MIN_INTERVAL=0 disables the #765 shadow probe for this case, and
+# that is not weakening it -- it is what keeps it testing the thing it names. The
+# shadow deliberately polls studio on exactly this topology (the dashboard
+# answered, so source 3 was skipped), through the SAME curl arm and the SAME
+# marker, so without the knob "studio was polled" would be true for a reason that
+# has nothing to do with the SELECTION order this case exists to pin. Case 29b
+# below asserts the shadow poll on this same topology, so the behaviour is covered
+# once each, in the case that means it.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10 QUOTA_SHADOW_MIN_INTERVAL=0)"
 check "dashboard readable -> the dashboard is named as the source" "0" \
   "$(grep -q 'quota source: dashboard' "$(logof "$r")" && echo 0 || echo 1)"
 check "dashboard readable -> studio is never consulted" "1" \
@@ -557,8 +606,7 @@ check "dashboard readable -> studio is never POLLED (not merely outvoted)" "1" \
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
 check "dashboard+loop reader down, studio readable -> studio is named as the source" "0" \
   "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
-check "dashboard+loop reader down, studio readable -> NOT a blind fire" "1" \
-  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+check "dashboard+loop reader down, studio readable -> NOT a blind fire" "1" "$(guard_unreadable "$r")"
 
 # 27. studio can REFUSE, not just permit. A source that could only
 # ever say "fine" would be worse than none -- it would launder an unknown into
@@ -703,8 +751,7 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK
 check "three quota reads in one iteration cost ONE source-2 poll" "1" \
   "$(readerpolls "$r")"
 check "a throttled read still SERVES the reading (never a blind fire)" "1" "$(fires_of "$r")"
-check "a throttled read is not reported as UNREADABLE" "1" \
-  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+check "a throttled read is not reported as UNREADABLE" "1" "$(guard_unreadable "$r")"
 # Folded onto this run rather than given its own (it needed byte-identical args): a
 # memo HIT must be DISTINGUISHABLE from a live poll in the log. `quota source: loop` is
 # the evidence trail that decides when studio can be promoted and the dashboard retired
@@ -1039,8 +1086,7 @@ check "a 529 with no status is a LIMIT (classified from the result text)" "0" \
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_CRASH=1 RUN_RC=1 FIRE_RESULT=no_result)"
 check "a fire with NO terminal result is a CRASH, not a limit" "0" \
   "$(grep -q 'not a limit (crash=1/1)' "$(logof "$r")" && echo 0 || echo 1)"
-check "...and says the outcome was UNREADABLE rather than inventing one" "0" \
-  "$(grep -q 'UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+check "...and says the outcome was UNREADABLE rather than inventing one" "0" "$(guard_unreadable "$r")"
 
 # 28e. The agent's OWN PROSE is never the haystack. When the model turn did not
 # error, a non-zero rc came from the wrapper -- and this result's text is a fire
@@ -1050,6 +1096,137 @@ check "a non-erroring turn with marker-laden PROSE is a CRASH" "0" \
   "$(grep -q 'not a limit (crash=1/1)' "$(logof "$r")" && echo 0 || echo 1)"
 check "...and is not excused by its own prose" "1" \
   "$(grep -q 'hit a LIMIT' "$(logof "$r")" && echo 0 || echo 1)"
+
+# --- 29. #765 the studio SHADOW PROBE: evidence collected, guard untouched ----
+# C3 (#410) retires the engine and with it source 1. Its gate is evidence that
+# studio can actually serve a reading at fire time -- but studio is source 3, so
+# the `quota source: studio` line that gate names can only ever appear when source
+# 1 FAILS. With a healthy dashboard that is a test of LUCK, and the gate could sit
+# unsatisfied indefinitely while studio is in fact fine. The shadow probe polls
+# studio anyway, on a rate bound, and logs the outcome WITHOUT letting it near the
+# guard. These cases pin both halves: that the evidence is collected, and that
+# collecting it cannot change a single decision.
+
+# 29a. THE HEADLINE: the dashboard answers, and studio is polled ANYWAY and named
+# in a shadow line. Before the probe, studio was polled on this topology zero times.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.97)"
+check "dashboard readable -> studio is STILL polled (the shadow probe ran)" "0" \
+  "$(grep -q 'quota shadow: studio 97%' "$(logof "$r")" && echo 0 || echo 1)"
+# The two lines must stay DISTINGUISHABLE. `quota source: studio` is the C3
+# promotion evidence and means "the guard used studio"; a shadow reading did not
+# gate anything. If the probe logged the source string, every dashboard-healthy
+# fire would manufacture promotion evidence for a source that decided nothing --
+# forging exactly the signal the gate exists to collect honestly.
+check "...and a SHADOW reading is never logged as the SOURCE" "1" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+# 29b. INERT, permissive direction: studio says 97% (refusing) and the dashboard
+# says 10%. The fire must still happen on 10%. A shadow that could refuse would be
+# a source, not a diagnostic -- and one that shares a rate-limited upstream would
+# then be able to stop the loop by 429ing.
+check "a refusing SHADOW reading cannot stop a fire the guard permits" "1" \
+  "$(fires_of "$r")"
+check "...and the guard's own reading is the one that decided" "0" \
+  "$(grep -q 'quota ok: 7-day utilization 10%' "$(logof "$r")" && echo 0 || echo 1)"
+# The "shadow must not write the refuse-only cache" property is pinned by 29f
+# below, as a DIRECT call, and deliberately not here. Asserting it end-to-end was
+# tried first and is VACUOUS: `.last_quota` holds only the LAST write, the probe is
+# rate-bounded to one poll while the guard rewrites the cache on every read, so the
+# guard's own later write restores the expected value no matter what the shadow did
+# in between. Measured -- injecting `quota_cache_write "$qsp_pct"` into the probe
+# left the whole suite GREEN. A transient state an end-to-end run cannot observe
+# needs a unit call, not a cleverer topology.
+
+# 29c. INERT, the DANGEROUS direction: the dashboard refuses at 97% and studio's
+# shadow offers a permissive 10%. Fail-open is the one polarity this guard may not
+# have, so a shadow reading must not permit a fire either. Zero fires.
+r="$(run_case 0.97 QUOTA_STOP_PCT=80 MAX_FIRES=1 STUDIO_UTIL=0.10)"
+check "a permissive SHADOW reading cannot authorise a fire the guard refuses" "0" \
+  "$(fires_of "$r")"
+check "...and the STOP is on the dashboard's 97%" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 29d. THE RATE BOUND, on a FAILING studio -- the half that actually protects the
+# upstream. Studio is UNREADABLE here (the default: HTTP 200 carrying
+# `claude: null`, its real failure shape). Three fire-gated iterations call
+# quota_pct many times over; the probe must poll ONCE.
+#
+# The failing case is the one that matters and is easy to get wrong: stamping only
+# on a SUCCESSFUL read leaves the stamp un-advanced for exactly as long as studio
+# is 429ing, so every call re-attempts and the probe becomes a poll storm during
+# the degraded state it is meant to observe. That is #777's bug in a new place,
+# and it is why `quota_poll_memo_write` records failures as `-`. Stamping on the
+# ATTEMPT makes the class unrepresentable.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=3)"
+check "a FAILING shadow read is throttled too -> one poll per window, not one per call" "1" \
+  "$(studiopolls "$r")"
+check "...and the failure is recorded as UNREADABLE, not silently skipped" "0" \
+  "$(grep -q 'quota shadow: studio UNREADABLE' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 29e. The OFF switch is a real off switch -- ZERO polls, not "one and then
+# throttled". `quota_stamped_read(file, 0)` alone cannot express this: nothing has
+# stamped the file on the first call, so the probe would poll once and only then
+# find a same-second stamp not older than 0. That is the trap case 38b documents
+# for the source-2 memo, which is why that path carries an explicit `-gt 0` too.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=3 QUOTA_SHADOW_MIN_INTERVAL=0)"
+check "QUOTA_SHADOW_MIN_INTERVAL=0 disables the probe outright -> zero polls" "0" \
+  "$(studiopolls "$r")"
+check "...and logs no shadow line at all" "1" \
+  "$(grep -q 'quota shadow:' "$(logof "$r")" && echo 0 || echo 1)"
+
+# 29f. INERTNESS, pinned by a DIRECT call rather than end-to-end. The three ways
+# the probe could reach a decision are all WRITES that a full run overwrites before
+# it ends (see 29b), so they are only observable with the function called alone:
+#   * `.last_quota`, the refuse-only 24h cache. Usage is monotonic and this file is
+#     trusted for a DAY to refuse, so a shadow-written value would go on refusing
+#     blind fires on a figure that gated nothing -- and via `quota_cache_write` it
+#     would be indistinguishable from a real reading.
+#   * `.last_quota_poll`, the source-2 throttle memo, whose value IS served as a
+#     reading within its window (#777).
+#   * STDOUT. `quota_pct`'s stdout is the percent, read in a command substitution,
+#     so a stray echo here appends to it; `[ "97 10" -ge 80 ]` then returns 2 --
+#     NEITHER branch -- and the gate logs "quota ok" and FIRES. That is the one
+#     polarity this guard may not have, and it is why the call site redirects to
+#     /dev/null as well. Both halves are asserted, since either alone is enough.
+# Studio ANSWERS here (97%, a refusing figure) so the assertions cannot pass merely
+# because the probe did nothing -- the stamp and the log line are checked too.
+shtmp="$(mktemp -d)"
+mkdir -p "$shtmp/bin" "$shtmp/infra"
+printf '#!/bin/bash\necho %s\n' \
+  "'"'{"account":{"claude":{"seven_day":{"utilization":0.97}}}}'"'" >"$shtmp/bin/curl"
+chmod +x "$shtmp/bin/curl"
+# Bounded exactly like case 17: if the source guard ever breaks, `.` runs an
+# unconditional `while true` and this would hang the suite forever.
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$shtmp/infra"
+  export DLOG="$shtmp/infra/driver.log"
+  export QUOTA_CACHE="$shtmp/infra/.last_quota"
+  export QUOTA_POLL_MEMO="$shtmp/infra/.last_quota_poll"
+  export QUOTA_SHADOW_STAMP="$shtmp/infra/.last_quota_shadow"
+  export QUOTA_SHADOW_MIN_INTERVAL=3600
+  export PATH="$shtmp/bin:$PATH"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  quota_shadow_probe dashboard
+) >"$shtmp/out" 2>"$shtmp/err" &
+sh_pid=$!
+sh_i=0
+while [ "$sh_i" -lt 15 ]; do kill -0 "$sh_pid" 2>/dev/null || break; sleep 1; sh_i=$((sh_i + 1)); done
+kill -9 "$sh_pid" 2>/dev/null || true
+# Ran at all? Every absence below is meaningless if it did not.
+check "the probe polled studio and logged the reading (the case is not vacuous)" "0" \
+  "$(grep -q 'quota shadow: studio 97%' "$shtmp/infra/driver.log" && echo 0 || echo 1)"
+check "...and stamped its own rate file" "0" \
+  "$([ -f "$shtmp/infra/.last_quota_shadow" ] && echo 0 || echo 1)"
+check "the shadow does not write the refuse-only quota cache" "1" \
+  "$([ -f "$shtmp/infra/.last_quota" ] && echo 0 || echo 1)"
+check "the shadow does not write the source-2 poll memo" "1" \
+  "$([ -f "$shtmp/infra/.last_quota_poll" ] && echo 0 || echo 1)"
+check "the shadow emits NOTHING on stdout (a stray echo fails the gate OPEN)" "" \
+  "$(cat "$shtmp/out")"
+rm -rf "$shtmp"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

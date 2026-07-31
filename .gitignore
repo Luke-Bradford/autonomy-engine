@@ -21,11 +21,13 @@ __pycache__/
 # WRITE is not. logs/ alone is ~546MB of per-fire stream-json (one file per fire,
 # multi-MB each), .last_quota is a per-machine cache of the last readable
 # 7-day utilization reading, and .last_quota_poll is the source-2 poll throttle's
-# memo (#777) -- both per-machine, both meaningless in another checkout.
+# memo (#777) -- both per-machine, both meaningless in another checkout. And
+# .last_quota_shadow is the #765 shadow probe's rate stamp, same story.
 # Anchored to the repo root.
 /loop/logs/
 /loop/.last_quota
 /loop/.last_quota_poll
+/loop/.last_quota_shadow
 
 # Page snapshots / traces the playwright MCP server writes into its launch CWD.
 # Unattended this is git-VISIBLE dirt: the supervisor's "tree clean on

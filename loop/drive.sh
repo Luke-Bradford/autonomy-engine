@@ -118,6 +118,11 @@ DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
 # copy is `DEFAULT_PORT` in `install_studio_server.sh`, and
 # `test_install_studio_server.sh` asserts the two agree.
 STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
+QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
+                                  # last SHADOW poll ATTEMPT. Its own file, its own age, its own
+                                  # contract -- see quota_shadow_probe (#765).
+QUOTA_SHADOW_MIN_INTERVAL="${QUOTA_SHADOW_MIN_INTERVAL:-3600}"  # min seconds between DIAGNOSTIC
+                                  # polls of studio. 0 disables the probe entirely.
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
@@ -201,9 +206,15 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # -- competing for the very budget the working source depends on.
 #
 # Studio is promoted (and source 1 retired with the engine, C3) once it has
-# DEMONSTRABLY answered here across scheduled fires -- the `quota source: studio`
-# lines below are that evidence, and they only became collectable once #765
-# Defect 2 gave studio a supervised server to answer from.
+# DEMONSTRABLY answered here across scheduled fires -- and they only became
+# collectable at all once #765 Defect 2 gave studio a supervised server to answer
+# from. TWO log lines carry that evidence now, and they are NOT interchangeable:
+# `quota source: studio` means the guard USED studio, and can only appear when the
+# sources before it failed; `quota shadow: studio` means the probe asked studio on
+# a fire the dashboard was perfectly capable of answering. The second exists
+# because the first is unreachable while source 1 is healthy, which made the gate
+# a test of luck. Rationale lives in ONE place -- `quota_shadow_probe` -- and is
+# deliberately not restated here (#776 is about exactly this duplication).
 #
 # Note the promotion criterion is no longer "add a sampler": #770 measured a cold
 # poll returning 200 and rejected a sampler on the evidence -- it would add a
@@ -282,6 +293,7 @@ except Exception:
 quota_pct() {
   qp_src=""
   qp_memo_hit=0      # set -u: must exist before the source-2 branch reads it
+  qp_studio_polled=0 # did source 3 run LIVE this call? gates the shadow probe below
   qp_out="$(quota_read_url "$DASH_URL")"
   [ -n "$qp_out" ] && qp_src="dashboard"
   # NOTE the single exit point below: BOTH sources must feed the cache. An early
@@ -362,6 +374,7 @@ quota_pct() {
   # decides when it can be promoted. See #765.
   if [ -z "$qp_out" ]; then
     qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
+    qp_studio_polled=1
     [ -n "$qp_out" ] && qp_src="studio"
   fi
   if [ -n "$qp_out" ]; then
@@ -374,6 +387,15 @@ quota_pct() {
     # it ever answers at all, is the measurement that decides when it can be
     # promoted and when the dashboard can be retired (C3).
     log "quota source: $qp_src (7-day utilization ${qp_out}%)"
+  fi
+  # DIAGNOSTIC-ONLY studio poll, for the C3 evidence the read order above cannot
+  # otherwise produce (#765). Placed here so `qp_out`/`qp_src` are already settled
+  # and cannot be touched, and SKIPPED when source 3 already ran live -- a live
+  # poll is real evidence and re-asking would just double the load. stdout is
+  # redirected because this function's stdout is the reading itself; see
+  # quota_shadow_probe for why that redirect is structural and not decoration.
+  if [ "$qp_studio_polled" = "0" ]; then
+    quota_shadow_probe "${qp_src:-none}" >/dev/null
   fi
   echo "$qp_out"
 }
@@ -516,7 +538,12 @@ quota_cache_read() {
 # to a throttled source 3, nothing would spend the blind allowance, and #777's
 # fail-safe "serve nothing in-window" becomes affordable. At that point this
 # both-directions memo is unnecessary exposure and should be narrowed to refuse-only.
-# The evidence to watch for is a scheduled fire logging `quota source: studio`.
+# The evidence to watch for is a scheduled fire logging `quota source: studio` -- or,
+# since #765, a `quota shadow: studio <n>%` line, which answers the same question
+# ("can source 3 serve a reading at fire time?") without needing source 1 to fail
+# first. A shadow line is the WEAKER trigger of the two for this particular
+# revisit, though: it says studio could have answered, not that the fallthrough
+# actually reached it.
 #
 # The staleness is bounded on TWO sides instead:
 #   * by age, to one minute -- the same contract the other two sources already have;
@@ -538,6 +565,98 @@ quota_poll_memo_write() {  # $1=pct, or "" for a poll that failed
   printf '%s %s\n' "$(date +%s)" "${1:--}" 2>/dev/null >"$QUOTA_POLL_MEMO" || true
 }
 quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
+
+# --- quota_shadow_probe: poll studio for the RECORD, never for the DECISION.
+#
+# THE PROBLEM IT SOLVES. Cutover C3 (#410) retires the engine and with it source
+# 1, leaving the loop reader and studio. Its gate is evidence that studio can
+# actually serve a reading at fire time, and #765 states that evidence as a
+# scheduled fire logging `quota source: studio`. But studio is source 3: that line
+# can only ever appear when source 1 FAILS. While the dashboard is healthy every
+# fire logs `quota source: dashboard` and studio is not polled at all, so the gate
+# is unreachable by construction -- not because studio is broken, but because
+# nothing ever asks it. The operator hit exactly this on 2026-07-30: an attended
+# manual probe returned a real 0.16 matching the dashboard, proving the whole path
+# (supervised server, reader, credential store, upstream, mapping) works end to
+# end, while `grep 'quota source: studio'` over the driver log stayed at zero.
+# A gate that can only be satisfied by an outage of the source it is replacing is
+# a test of luck, and C3 could sit blocked indefinitely on it.
+#
+# So the probe asks studio ANYWAY, once per window, and writes down what it said.
+#
+# WHY THIS IS NOT THE SAMPLER #770 REJECTED, which is the obvious objection since
+# both add load to the same rate-limited upstream. #770 measured a cold poll
+# returning 200 and refused a STANDING background sample at ~1/min against a
+# budget already at its ceiling. This is on-demand (it runs only when the driver
+# is already reading quota, never on a timer), rate-bounded at 1/hour by default
+# -- ~60x lighter, and only while the driver is active rather than around the
+# clock -- and it throttles FAILED reads too. That is precisely the property the
+# narrowed invariant above demands of every non-standing poller: at most ONE
+# process may hold a standing sample, and everything else must be rate-bounded and
+# must back off when it starts failing. A second standing sampler is still
+# refused. This is not one.
+#
+# WHAT IT CHANGES, stated plainly rather than buried: the read order's claim that
+# studio "adds no upstream load in the common case" is no longer strictly true --
+# the common case is now exactly when the probe runs. That is a deliberate
+# reversal, bought for the evidence, and priced at one request per hour per active
+# driver. The SELECTION order is untouched; studio is still last, still reached
+# live only when both other sources fail.
+#
+# WHAT IT MAY NEVER DO is influence a decision, and that is structural rather than
+# careful:
+#   * it calls `quota_read_url` DIRECTLY, not `quota_pct`. `quota_cache_write` and
+#     `quota_poll_memo_write` live only in `quota_pct`'s body, so the shadow cannot
+#     poison the refuse-only 24h cache or the source-2 throttle -- there is no code
+#     path from here to either. A shadow-written cache entry would be especially
+#     nasty: indistinguishable from a real reading, and trusted for a day.
+#   * it returns nothing on stdout, and the call site redirects stdout to
+#     /dev/null anyway. `quota_pct`'s stdout IS the percent (read in a command
+#     substitution), so a stray echo would be appended to the reading and
+#     `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]` would return 2 -- NEITHER branch -- and
+#     the gate would log "quota ok" and FIRE. Belt and braces on the one guard that
+#     may not fail open.
+#   * it logs a line that is DISTINCT from the live-source line. `quota source:
+#     studio` means the guard used studio and is the promotion evidence; `quota
+#     shadow: studio` means studio was asked and decided nothing. Collapsing the
+#     two would manufacture promotion evidence on every dashboard-healthy fire --
+#     forging the very signal this exists to collect honestly.
+#
+# THE STAMP IS WRITTEN ON THE ATTEMPT, not on success. Stamping only a successful
+# read leaves the stamp un-advanced for exactly as long as studio is 429ing, so
+# every call re-attempts and the probe becomes a poll storm during the degraded
+# state it exists to observe -- #777's bug in a new place. `quota_poll_memo_write`
+# records failures as `-` for the same reason. Case 29d pins it.
+#
+# The value token is a constant: unlike the memo, nothing here is ever READ BACK
+# as a reading, so the file carries a timestamp and nothing else. Reusing
+# `quota_stamped_read` gets the epoch handling -- separator, leading zero, 64-bit
+# length bound, future stamp -- that every bug in this shape has lived in.
+quota_shadow_probe() {  # $1 = the source the guard actually used, for the log line
+  # EXPLICIT disable check, not left to the age comparison. Via `quota_stamped_read
+  # $file 0` alone the first call finds no stamp at all, polls, and only then writes
+  # one -- so `=0` would still cost a poll per fire. Same trap the source-2 memo
+  # carries a `-gt 0` for (case 38b); case 29e pins the zero here.
+  [ "$QUOTA_SHADOW_MIN_INTERVAL" -gt 0 ] || return 0
+  [ -n "$(quota_stamped_read "$QUOTA_SHADOW_STAMP" "$QUOTA_SHADOW_MIN_INTERVAL")" ] && return 0
+  # STAMPED BEFORE THE POLL, so the window opens on the ATTEMPT and closes whatever
+  # the attempt does -- succeed, fail, or die mid-curl. Stamping after a successful
+  # read instead leaves the stamp un-advanced for exactly as long as studio is
+  # 429ing, so every call re-attempts and the probe turns into a poll storm during
+  # the degraded state it exists to observe. Case 29d measured that shape here (4
+  # polls where 1 was due) before this line moved up.
+  printf '%s probe\n' "$(date +%s)" 2>/dev/null >"$QUOTA_SHADOW_STAMP" || true
+  qsp_pct="$(quota_read_url "$STUDIO_QUOTA_URL")"
+  if [ -n "$qsp_pct" ]; then
+    log "quota shadow: studio ${qsp_pct}% (diagnostic only -- the guard used $1; #765 C3 evidence)"
+  else
+    # UNREADABLE is logged, never skipped: "studio was asked and could not answer"
+    # is the measurement, and a silent skip would be indistinguishable from the
+    # probe not running -- which is the blind spot the whole ticket is about.
+    log "quota shadow: studio UNREADABLE (diagnostic only -- the guard used $1; #765 C3 evidence)"
+  fi
+  return 0
+}
 
 # --- quota_knob_secs: normalise a "how old may a reading be" knob, because BOTH of
 # them are fed straight to `test` and an operand `test` cannot parse returns 2 --
@@ -892,6 +1011,13 @@ prev_head=""
 # directory. Nothing reads a quota before the loop below, so this is in time.
 QUOTA_POLL_MIN_INTERVAL="$(quota_knob_secs QUOTA_POLL_MIN_INTERVAL "$QUOTA_POLL_MIN_INTERVAL" 60 300)"
 QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE" 86400 0)"
+# No CEILING for the shadow interval, and the reason is the opposite of the poll
+# memo's. That one bounds how stale a reading may be when it PERMITS a fire, so an
+# over-wide value is a fail-open and is clamped. The shadow never feeds the guard
+# at all: a wide value buys LESS load and LESS evidence, which is merely useless,
+# never unsafe. It is normalised anyway so an unparseable knob is announced rather
+# than silently making every stamp look fresh (i.e. the probe quietly never running).
+QUOTA_SHADOW_MIN_INTERVAL="$(quota_knob_secs QUOTA_SHADOW_MIN_INTERVAL "$QUOTA_SHADOW_MIN_INTERVAL" 3600 0)"
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
