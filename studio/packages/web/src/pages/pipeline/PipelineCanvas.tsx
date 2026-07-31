@@ -39,8 +39,10 @@ import {
   branchOptionsFor,
   conditionOf,
   decodeConditionValue,
+  DEFAULT_MAX_BOUNCES,
   edgeLabel,
   encodeCondition,
+  isMaxBounces,
   OPERATIONAL_CONDITIONS,
   takenConditions,
   type EdgeCondition,
@@ -251,7 +253,10 @@ function PropertyPanel({
     // operator's side, indistinguishable from having nothing selected — so it
     // gets the same pipeline-level panel as the `!selected` branch above.
     if (!edge) return <PipelinePanel store={store} />;
-    return <EdgePanel store={store} edge={edge} nodes={nodes} edges={edges} />;
+    // Keyed like `NodePanel`: `EdgePanel` holds a DRAFT for the bounce cap, and
+    // selecting a different edge must not carry the previous one's half-typed
+    // text (or its error) onto it.
+    return <EdgePanel key={edge.id} store={store} edge={edge} nodes={nodes} edges={edges} />;
   }
 
   const node = nodes.find((n) => n.id === selected.id);
@@ -665,7 +670,8 @@ export function EdgePanel({
 
   return (
     <aside className="property-panel" aria-label="Properties">
-      <h3>Edge</h3>
+      <h3>{edge.back === true ? 'Back-edge' : 'Edge'}</h3>
+      {edge.back === true && <BounceCapField store={store} edge={edge} />}
       <label>
         Fires on
         <select
@@ -703,6 +709,73 @@ export function EdgePanel({
         Delete edge
       </button>
     </aside>
+  );
+}
+
+/**
+ * U6e — a back-edge's BOUNCE CAP.
+ *
+ * The one number that decides whether an authored loop terminates, so it is
+ * first in the panel rather than tucked under the condition picker.
+ *
+ * Holds a DRAFT and commits on blur, the `ParamRow` idiom and for the same
+ * reason: a numeric field cannot commit per keystroke, because clearing it to
+ * retype gives `''`, which `Number('')` reads as `0` — a legal, silently
+ * different cap. Committing that would rewrite the operator's loop mid-edit.
+ * A refused value KEEPS the text on screen and says why, rather than reverting
+ * to the stored value and losing what they typed.
+ */
+function BounceCapField({
+  store,
+  edge,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  edge: Edge;
+}) {
+  const stored = String(edge.maxBounces ?? DEFAULT_MAX_BOUNCES);
+  const [draft, setDraft] = useState(stored);
+  const [error, setError] = useState<string | null>(null);
+
+  function commit(text: string) {
+    // A blur that changed nothing must not write — tabbing THROUGH the field
+    // would otherwise mark the canvas dirty on an untouched doc.
+    if (text === stored) return;
+    const n = Number(text.trim());
+    // `Number('')` is 0 and `Number('  ')` is 0, so an EMPTY field has to be
+    // caught before the numeric test or clearing the box would silently store
+    // a cap of zero.
+    if (text.trim() === '' || !isMaxBounces(n)) {
+      setError('A bounce cap must be a whole number, 0 or more');
+      return;
+    }
+    setError(null);
+    store.getState().updateEdgeBounces(edge.id, n);
+  }
+
+  return (
+    <>
+      <label>
+        Bounce cap
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={(e) => commit(e.target.value)}
+        />
+      </label>
+      {error !== null ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : (
+        <p className="page-hint">
+          How many times this loop may repeat before the run fails as <code>capped</code>. Zero
+          never bounces.
+        </p>
+      )}
+    </>
   );
 }
 
