@@ -1667,10 +1667,13 @@ check "an empty value is refused" "refused" "$(swout 9)"
 check "...and neither refusal disturbed the target" "7" "$(swout 10)"
 check "an unusable epoch is a failure, not a silently unreadable record" "refused" "$(swout 11)"
 check "...and nothing was written" "nothing" "$(swout 12)"
+# `grep -q`, not `grep -c ... || echo 0`: on NO match `grep -c` prints 0 AND exits
+# 1, so the `||` fires too and the value is "0\n0" -- which never equals "0" and
+# makes an expected-ABSENT assertion permanently red. 1 = present, 0 = absent.
 check "the shadow probe SKIPS when the rename cannot happen (permission moved)" "1" \
-  "$(grep -c 'quota shadow: skipped' "$swtmp/infra/driver.log" 2>/dev/null || echo 0)"
+  "$(grep -q 'quota shadow: skipped' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 check "...and did NOT poll studio, which would defeat the throttle" "0" \
-  "$(grep -c 'quota shadow: studio' "$swtmp/infra/driver.log" 2>/dev/null || echo 0)"
+  "$(grep -q 'quota shadow: studio' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 chmod 755 "$swtmp/ro" 2>/dev/null || true
 rm -rf "$swtmp"
 
