@@ -18,7 +18,6 @@ import {
   type FinalConnectionState,
   type Node as FlowNode,
   type NodeChange,
-  type NodeHandle,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -26,16 +25,19 @@ import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel } from './activityLabel';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
-import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
+import { toFlowEdge } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
 import {
   appearedIds,
+  containerAriaLabel,
+  containerHandles,
   containerRects,
   emptyContainerIds,
   liveNodeRects,
   revealTransform,
   usableExtent,
+  UNMEASURED_NODE_SIZE,
   type ContainerBox,
 } from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
@@ -130,43 +132,9 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   );
 });
 
-/**
- * What the box announces. Lives on the NODE (`ariaRole`/`ariaLabel`), not on this
- * component's own `<div>`.
- *
- * React Flow owns the outer element — `role: node.ariaRole ?? (isFocusable ?
- * 'group' : undefined)` and `aria-label: node.ariaLabel` — and this file already
- * takes that route for edges (`ariaLabel: edgeAriaLabel(e)` below). Labelling the
- * inner div instead put the accessible name on a `pointer-events: none` child of
- * a wrapper that, because the container is not focusable, had NO role at all
- * while still carrying RF's unconditional `aria-roledescription="node"`.
- *
- * Counted from the box's OWN `childCount`, not `container.children.length`: see
- * `ContainerBox`. What is announced is what is drawn.
- */
-function containerAriaLabel(kind: ContainerKind, childCount: number): string {
-  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
-}
-
 // Module-level constant: React Flow requires a stable `nodeTypes` identity (a
 // new object each render re-mounts every node and warns).
 const nodeTypes = { activity: ActivityNode, container: ContainerNode };
-
-/**
- * The size assumed for a node React Flow has not measured yet.
- *
- * Used for ONE frame: `measured` is populated as soon as RF observes the node,
- * and the container box re-derives from the real size on the next render. It
- * exists so the first paint of a freshly-loaded doc has a plausible box instead
- * of a zero-area one, not as a layout constant anything depends on.
- */
-const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
-
-/**
- * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
- * centred on the node's border (`left: -4px` and friends).
- */
-const HANDLE_SIZE = 6;
 
 /**
  * How many activity ids the #788 implicit-chain advisory spells out before it
@@ -177,43 +145,6 @@ const HANDLE_SIZE = 6;
  * count in the same sentence keeps the total honest when the list is cut.
  */
 const IMPLICIT_CHAIN_PREVIEW = 6;
-
-/**
- * The port bounds of a derived container box, stated rather than measured.
- *
- * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
- * off them positionally (`getHandlePosition`): a LEFT handle contributes
- * `(handle.x, y + height/2)` and a RIGHT one `(handle.x + handle.width, …)`.
- *
- * So centring each 6px dot on its border puts the endpoint 3px OUTSIDE the box
- * (`-HANDLE_SIZE / 2` on the left, `width + HANDLE_SIZE / 2` on the right) and
- * exactly on the vertical midpoint. Three pixels out is the convention, not a
- * miss: RF's own stylesheet draws an activity's handle the same way, and what it
- * MEASURES for one lands within a pixel of this. The line therefore meets the
- * rendered dot on a container exactly as it does on an activity.
- */
-function containerHandles(width: number, height: number): NodeHandle[] {
-  const y = (height - HANDLE_SIZE) / 2;
-  const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
-  return [
-    {
-      id: TARGET_PORT_ID,
-      type: 'target',
-      position: Position.Left,
-      x: -HANDLE_SIZE / 2,
-      y,
-      ...size,
-    },
-    {
-      id: SOURCE_PORT_ID,
-      type: 'source',
-      position: Position.Right,
-      x: width - HANDLE_SIZE / 2,
-      y,
-      ...size,
-    },
-  ];
-}
 
 /**
  * Canvas CHROME that must not accept a toolbox drop (U5).
@@ -695,33 +626,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * gives them their own defs and their own CSS rules: `EdgeMarkers`.)
    */
   const flowEdges: FlowEdge[] = edges.map((e) => ({
-    id: e.id,
-    source: e.from,
-    target: e.to,
-    // The ports are named explicitly rather than left to React Flow's
-    // "first handle of this type" fallback: the fallback is what silently
-    // mis-attaches every edge the moment a node has TWO source handles (U19).
-    sourceHandle: SOURCE_PORT_ID,
-    targetHandle: TARGET_PORT_ID,
-    label: edgeLabel(e),
-    /* U6e — `edge-back` is ADDITIVE, and deliberately carries no style of its
-       own. A back-edge holds an ordinary condition, so it keeps that
-       condition's hue; the two channels that could have encoded it are both
-       spent or reserved — `skipped` owns the dash (`index.css`) and a back-edge
-       may legally BE `skipped`, and a sixth `edge-variant-*` would break
-       `EDGE_VARIANTS`' `Edge['on']` typing, its marker defs and the exact-match
-       palette guard. Back-ness is stated in the LABEL and the aria-label
-       instead. This is a semantic hook: a stable selector for the e2e spec, and
-       the seam U19 can style through without re-deriving the fact. */
-    className: `${edgeVariantClass(e)}${e.back === true ? ' edge-back' : ''}`,
-    // U6b — the arrowhead, so direction is on screen rather than inferred from
-    // which side the endpoints happen to sit on. A STRING marker id references
-    // one of `EdgeMarkers`' own defs (RF's object form would need a literal
-    // colour, and these hues are custom properties).
-    markerEnd: edgeArrowMarkerId(e),
-    // RF renders an edge as role="img"/"group"; under either, the SVG <text>
-    // label is NOT exposed, so without this the outcome is colour-only.
-    ariaLabel: edgeAriaLabel(e),
+    ...toFlowEdge(e),
     selected: selected?.kind === 'edge' && selected.id === e.id,
   }));
 

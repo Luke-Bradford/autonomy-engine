@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { computeRunCost } from '@autonomy-studio/shared';
+import { computeRunCost, type RunDetail } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
+import { makeDocResolver } from '../run/driver.js';
 import { requireOwned } from './util.js';
 
 /**
@@ -28,6 +29,7 @@ const ListRunsQuerystringSchema = z.object({
  */
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
+  const resolveDoc = makeDocResolver(db);
 
   fastify.get('/api/runs', async (request) => {
     const { pipelineVersionId, triggerId, parentRunId, rerunOf } = ListRunsQuerystringSchema.parse(
@@ -44,6 +46,50 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
     return requireOwned(getRun(db, request.params.id), request.principal, 'run', request.params.id);
+  });
+
+  /**
+   * R1 — the run-detail read-model: the run PLUS the immutable version doc it is
+   * bound to, resolved server-side in one call (`RunDetailSchema`).
+   *
+   * U11's node-state overlay folds `createEngine(doc).projectRunState(events)`,
+   * which needs `nodes`/`edges`/`containers`. A `Run` carries only
+   * `pipelineVersionId`, and every version route is pipeline-SCOPED, so the page
+   * had no way to reach the doc at all.
+   *
+   * SECURITY — the ownership proof is the RUN's. This route establishes two of
+   * the three links itself: a version is reachable here ONLY via a run that
+   * `requireOwned` has already cleared, and `runs.pipelineVersionId` is a
+   * foreign key, so the version returned is necessarily the one that run is
+   * bound to. The third link — that the run's owner owns the version's PIPELINE
+   * — is upheld OUTSIDE this file: a run is created only from a trigger whose
+   * `pipelineVersionId` passed `requireOwnedPipelineVersion` at create time
+   * (`routes/triggers.ts`) and is immutable thereafter, or by copying an owned
+   * run's binding (`run/reseed.ts`). Stated rather than assumed because the
+   * version row itself carries NO `ownerId` — owner scoping rides the pipeline
+   * FK — and `resolveDoc` therefore applies no owner filter of its own. Which is
+   * exactly why this route must never accept a version id from the caller, and
+   * the second reason R1 is a run-detail read-model rather than the
+   * `GET /api/pipeline-versions/:id` the ticket first sketched.
+   */
+  fastify.get<{ Params: { id: string } }>('/api/runs/:id/detail', async (request) => {
+    const run = requireOwned(
+      getRun(db, request.params.id),
+      request.principal,
+      'run',
+      request.params.id,
+    );
+    // `makeDocResolver` is the ONE production classifier of "gone" vs "present
+    // but does not parse" (#508/#515), and the global handler already maps both
+    // to a 409. Reaching it is a violated invariant either way —
+    // `runs.pipelineVersionId` is `onDelete: 'restrict'` with `PRAGMA
+    // foreign_keys` on, so a surviving run pins its version row — but the
+    // classification is not this route's to re-derive, and a hand-rolled throw
+    // got it wrong in both directions: a bare `Error` for the missing case, and
+    // an escaping `ZodError` for the unparseable one, which the handler turns
+    // into a 400 `validation_error` on a GET with no request body.
+    const pipelineVersion = resolveDoc(run.pipelineVersionId);
+    return { run, pipelineVersion } satisfies RunDetail;
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/events', async (request) => {

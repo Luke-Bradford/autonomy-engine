@@ -1,3 +1,5 @@
+import type { Edge as FlowEdge } from '@xyflow/react';
+import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 import {
   declaredBranchesOf,
   EdgeOnSchema,
@@ -281,4 +283,50 @@ export function decodeConditionValue(value: string): EdgeCondition | null {
     return parsed.success ? { on: parsed.data } : null;
   }
   return null;
+}
+
+/**
+ * One doc `Edge` → the React Flow edge both canvases draw.
+ *
+ * The author canvas and the run monitor render the SAME edges and must never
+ * disagree about them. The leaf rules below (hue class, label, arrowhead def,
+ * aria label) were already shared; the COMPOSITION was not — which ports an
+ * edge names, and how U6e's additive `edge-back` class stacks on the condition's
+ * own hue, existed as two copies. That is the part a future edge property would
+ * be added to twice.
+ *
+ * Interaction is deliberately NOT set here: the author canvas spreads
+ * `selected`, the monitor spreads `selectable: false`/`focusable: false`. Those
+ * are the two views' own business; everything ABOUT THE EDGE is this function's.
+ */
+export function toFlowEdge(e: Edge): FlowEdge {
+  return {
+    id: e.id,
+    source: e.from,
+    target: e.to,
+    // The ports are named explicitly rather than left to React Flow's
+    // "first handle of this type" fallback: the fallback is what silently
+    // mis-attaches every edge the moment a node has TWO source handles (U19).
+    sourceHandle: SOURCE_PORT_ID,
+    targetHandle: TARGET_PORT_ID,
+    label: edgeLabel(e),
+    /* U6e — `edge-back` is ADDITIVE, and deliberately carries no style of its
+       own. A back-edge holds an ordinary condition, so it keeps that
+       condition's hue; the two channels that could have encoded it are both
+       spent or reserved — `skipped` owns the dash and a back-edge may legally
+       BE `skipped`, and a sixth `edge-variant-*` would break `EDGE_VARIANTS`'
+       typing, its marker defs and the exact-match palette guard. Back-ness is
+       stated in the LABEL and the aria-label instead. This is a semantic hook:
+       a stable selector for the e2e spec, and the seam U19 can style through
+       without re-deriving the fact. */
+    className: `${edgeVariantClass(e)}${e.back === true ? ' edge-back' : ''}`,
+    // U6b — the arrowhead, so direction is on screen rather than inferred from
+    // which side the endpoints happen to sit on. A STRING marker id references
+    // one of `EdgeMarkers`' own defs (RF's object form would need a literal
+    // colour, and these hues are custom properties).
+    markerEnd: edgeArrowMarkerId(e),
+    // RF renders an edge as role="img"/"group"; under either, the SVG <text>
+    // label is NOT exposed, so without this the outcome is colour-only.
+    ariaLabel: edgeAriaLabel(e),
+  };
 }

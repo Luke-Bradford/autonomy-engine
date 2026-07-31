@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { CATALOG_VERSION } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, RunDetailSchema } from '@autonomy-studio/shared';
 import {
   appendRunEvent,
   createPipeline,
@@ -297,6 +297,63 @@ describe('runs routes (read-only)', () => {
   it('404 for a missing run', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/runs/run_missing' });
     expect(res.statusCode).toBe(404);
+  });
+
+  describe('R1 — GET /api/runs/:id/detail (the run-detail read-model)', () => {
+    it('resolves the run AND its bound version doc in one call', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'R1 detail' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+          { id: 'b', type: 'http_request', position: { x: 200, y: 0 }, config: {} },
+        ],
+        edges: [{ id: 'e1', from: 'a', to: 'b', on: 'success' }],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const run = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId: version.id,
+        triggerId: null,
+        parentRunId: null,
+        params: { topic: 'r1' },
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/detail` });
+      expect(res.statusCode).toBe(200);
+
+      // Parsed through the SHARED schema, so this asserts the wire contract the
+      // web client re-parses, not just "some JSON came back".
+      const detail = RunDetailSchema.parse(res.json());
+      expect(detail.run.id).toBe(run.id);
+      expect(detail.pipelineVersion.id).toBe(version.id);
+      // The DOC is the whole point — U11 cannot project node state without it.
+      expect(detail.pipelineVersion.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+      expect(detail.pipelineVersion.edges).toHaveLength(1);
+    });
+
+    it("404s for a run belonging to a different owner — a run handle must not leak someone else's doc", async () => {
+      // The version doc carries node config and param defaults, so this route
+      // hands out strictly MORE than `GET /api/runs/:id`. The ownership proof is
+      // the run's, and it has to actually run.
+      const other = createRun(app.db, {
+        ownerId: 'someone-else',
+        pipelineVersionId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+
+      const res = await app.inject({ method: 'GET', url: `/api/runs/${other.id}/detail` });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404s for a missing run (same response as the other-owner case — no oracle)', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/runs/run_missing/detail' });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   it('filters by pipelineVersionId/triggerId/parentRunId query params', async () => {

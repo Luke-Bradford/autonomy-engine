@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { RunSchema, RunEventSchema, type Run, type RunEvent } from '@autonomy-studio/shared';
+import {
+  RunDetailSchema,
+  RunSchema,
+  RunEventSchema,
+  type Run,
+  type RunDetail,
+  type RunEvent,
+} from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
 const RunListSchema = z.array(RunSchema);
@@ -23,6 +30,19 @@ export function listRuns(signal?: AbortSignal): Promise<Run[]> {
 /** One run by id (`GET /api/runs/:id`); 404 → `ApiError(404)`. */
 export function getRun(id: string, signal?: AbortSignal): Promise<Run> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}`, { schema: RunSchema, signal });
+}
+
+/**
+ * R1 — a run WITH the immutable version doc it is bound to, in one call
+ * (`GET /api/runs/:id/detail`). The monitor's node-state overlay needs the doc
+ * to fold `projectRunState`; a `Run` alone carries only `pipelineVersionId`, and
+ * the version routes are pipeline-scoped. 404 → `ApiError(404)`, same as `getRun`.
+ */
+export function getRunDetail(id: string, signal?: AbortSignal): Promise<RunDetail> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/detail`, {
+    schema: RunDetailSchema,
+    signal,
+  });
 }
 
 /**

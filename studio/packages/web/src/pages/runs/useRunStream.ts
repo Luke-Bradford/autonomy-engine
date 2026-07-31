@@ -30,6 +30,19 @@ export interface RunStreamState {
   phase: StreamPhase;
   /** A human-readable reason when `phase === 'error'`. */
   error: string | undefined;
+  /**
+   * Has the server's `replay_complete` marker arrived — i.e. is `events` known
+   * to hold the run's whole log so far?
+   *
+   * Deliberately NOT derivable from `phase`. `closed` is set on ANY orderly
+   * close, including one that arrives mid-replay (a graceful server shutdown, a
+   * proxy close frame, or the server's own send-failure path, which tears down
+   * and then still closes with 1000). A consumer that read `closed` as "the log
+   * is complete" would present a TRUNCATED log as authoritative — for U11's
+   * overlay that means a finished run drawn with one node stuck `dispatched` and
+   * the rest `pending`, indistinguishable from the truth.
+   */
+  replayComplete: boolean;
 }
 
 /** The minimal socket surface the hook drives — satisfied by the DOM
@@ -59,7 +72,12 @@ function toMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const INITIAL: RunStreamState = { events: [], phase: 'connecting', error: undefined };
+const INITIAL: RunStreamState = {
+  events: [],
+  phase: 'connecting',
+  error: undefined,
+  replayComplete: false,
+};
 
 /**
  * Subscribe to a run's live event stream. Pass a falsy `runId` (e.g. before a
@@ -78,13 +96,13 @@ export function useRunStream(
     }
     let disposed = false;
     const seen = new Set<number>();
-    setState({ events: [], phase: 'connecting', error: undefined });
+    setState(INITIAL);
 
     let socket: SocketLike;
     try {
       socket = makeSocket(runStreamUrl(runId));
     } catch (err) {
-      setState({ events: [], phase: 'error', error: toMessage(err) });
+      setState({ ...INITIAL, phase: 'error', error: toMessage(err) });
       return;
     }
 
@@ -113,7 +131,7 @@ export function useRunStream(
         return;
       }
       if (parsed.kind === 'replay_complete') {
-        setState((s) => (s.phase === 'error' ? s : { ...s, phase: 'live' }));
+        setState((s) => (s.phase === 'error' ? s : { ...s, phase: 'live', replayComplete: true }));
         return;
       }
       const { event } = parsed;

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { renderWithRouter } from '../../testing/renderWithRouter';
-import type { EngineEvent, Run, RunEvent } from '@autonomy-studio/shared';
+import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
+import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
 import * as runsApi from '../../api/runs';
 import * as hook from './useRunStream';
@@ -10,6 +11,7 @@ import type { RunStreamState } from './useRunStream';
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
   listRuns: vi.fn().mockResolvedValue([]),
+  getRunDetail: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
 }));
@@ -18,7 +20,7 @@ vi.mock('./useRunStream', async (importActual) => ({
   useRunStream: vi.fn(),
 }));
 
-const getRunMock = vi.mocked(runsApi.getRun);
+const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
 
 let seq = 0;
@@ -53,18 +55,42 @@ function run(overrides: Partial<Run> = {}): Run {
   };
 }
 
+function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
+  // Parsed through the REAL schema, so a fixture cannot drift from the contract
+  // the page actually receives.
+  return PipelineVersionSchema.parse({
+    id: 'pv_1',
+    resourceId: 'res_1',
+    pipelineId: 'pl_1',
+    version: 1,
+    params: [],
+    outputs: [],
+    nodes: [
+      { id: 'greet', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'never', type: 'http_request', position: { x: 240, y: 0 }, config: {} },
+    ],
+    edges: [{ id: 'e1', from: 'greet', to: 'never', on: 'failure' }],
+    containers: [],
+    catalogVersion: CATALOG_VERSION,
+    createdAt: 1_700_000_000_000,
+    ...overrides,
+  });
+}
+
 function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
-  return { events: [], phase: 'live', error: undefined, ...overrides };
+  // `replayComplete` defaults TRUE so a spec that does not care reads as a
+  // normally-replayed stream; the specs that DO care set it explicitly.
+  return { events: [], phase: 'live', error: undefined, replayComplete: true, ...overrides };
 }
 
 beforeEach(() => {
-  getRunMock.mockResolvedValue(run());
+  getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: version() });
   useRunStreamMock.mockReturnValue(stream());
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe('RunDetailPage', () => {
-  it('renders run metadata from the REST fetch', async () => {
+  it('renders run metadata from the R1 read-model fetch', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText('pv_1')).toBeInTheDocument();
     expect(screen.getByText('trg_1')).toBeInTheDocument();
@@ -126,6 +152,122 @@ describe('RunDetailPage', () => {
     // The oldest event's row is dropped; the newest is kept (glosses are unique).
     expect(screen.queryByText('node=a name=chunk0')).not.toBeInTheDocument();
     expect(screen.getByText('node=a name=chunk500')).toBeInTheDocument();
+  });
+
+  /* The three specs below assert what the PAGE decides: whether an overlay is
+     available, and what it says when it is not. They deliberately do NOT assert
+     node contents — jsdom measures every element as zero and React Flow's
+     `onlyRenderVisibleElements` culls against that, so nothing inside the canvas
+     is in the DOM here. The node/edge construction is unit-tested for real in
+     `runFlow.test.ts`, and the RENDERED result in `e2e/run-overlay.spec.ts`. */
+
+  it('U11 — mounts the graph and projects the run once the stream has replayed', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'closed',
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    // Projected: no "why not" line is shown.
+    expect(screen.queryByText(/cannot be projected|Loading this run/i)).not.toBeInTheDocument();
+  });
+
+  it('U11 — withholds the overlay while the stream is still replaying, and says so', async () => {
+    // The engine seeds no nodes until `run.started` folds, so projecting
+    // mid-replay would draw a finished run as one where nothing ran.
+    useRunStreamMock.mockReturnValue(
+      stream({ phase: 'replaying', events: [], replayComplete: false }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(screen.getByText(/Loading this run’s history/i)).toBeInTheDocument();
+  });
+
+  it('U11 — refuses to project a log the stream CLOSED before finishing, and says why', async () => {
+    // `closed` is set by any orderly close, including one mid-replay. Reading it
+    // as "the log is complete" would present a TRUNCATED log as authoritative —
+    // a finished run drawn with one node stuck dispatched and the rest pending,
+    // indistinguishable from the truth.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'closed',
+        replayComplete: false,
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(
+      screen.getByText(/ended before this run’s history finished loading/i),
+    ).toBeInTheDocument();
+  });
+
+  it('U11 — KEEPS the overlay when the socket errors AFTER a complete replay', async () => {
+    // The error path preserves `events`, so the log in hand is still the whole
+    // run as of the last frame. Discarding a valid projection over a connection
+    // that has merely stopped delivering new frames loses a correct picture; the
+    // stream error is reported separately, as its own alert.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'error',
+        error: 'socket closed',
+        replayComplete: true,
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(screen.queryByText(/cannot be projected/i)).not.toBeInTheDocument();
+    // …and the connection problem is still reported.
+    expect(screen.getByText('socket closed')).toBeInTheDocument();
+  });
+
+  it('U11 — says the overlay is unavailable when the stream errored BEFORE replaying', async () => {
+    // R1 carries no `events`, so an overlay that never got a replay has no
+    // source at all. Stated on screen rather than drawn as an all-blank graph.
+    useRunStreamMock.mockReturnValue(
+      stream({ phase: 'error', error: 'socket closed', replayComplete: false }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(screen.getByText(/event stream is unavailable/i)).toBeInTheDocument();
+  });
+
+  it('U11 — a doc that will not resolve costs the OVERLAY, not the run’s metadata', async () => {
+    // R1 resolves the run and its doc together, so a 409 on the doc must not
+    // take the metadata, node table and feed with it — a run whose graph is
+    // gone is exactly when those matter most.
+    getRunDetailMock.mockRejectedValue(new Error('pipeline version not found'));
+    const getRunMock = vi.mocked(runsApi.getRun);
+    getRunMock.mockResolvedValue(run());
+
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByText('pv_1')).toBeInTheDocument();
+    expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/no node overlay/i);
+    expect(screen.queryByTestId('run-canvas')).not.toBeInTheDocument();
+  });
+
+  it('U11 — only when the plain run read ALSO fails is the page empty', async () => {
+    getRunDetailMock.mockRejectedValue(new Error('detail exploded'));
+    vi.mocked(runsApi.getRun).mockRejectedValue(new Error('run gone'));
+
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('detail exploded');
   });
 
   it('surfaces a stream error', async () => {

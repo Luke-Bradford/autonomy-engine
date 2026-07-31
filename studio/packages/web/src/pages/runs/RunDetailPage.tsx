@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Run, RunLifecycleStatus } from '@autonomy-studio/shared';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import type { PipelineVersion, Run, RunLifecycleStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import { getRun } from '../../api/runs';
+import { getRun, getRunDetail } from '../../api/runs';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
+import { RunGraph } from './RunGraph.lazy';
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -40,6 +45,7 @@ function phaseLabel(phase: StreamPhase): string {
 export function RunDetailPage({ runId }: { runId: string }) {
   const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
+  const [doc, setDoc] = useState<PipelineVersion | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // `RunDetailRoute` renders this with `key={runId}`, so a different run
@@ -47,11 +53,32 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // state synchronously in the effect body — the effect only performs the fetch.
   useEffect(() => {
     const ac = new AbortController();
-    getRun(runId, ac.signal)
-      .then((r) => setRun(r))
-      .catch((err: unknown) => {
+    getRunDetail(runId, ac.signal)
+      .then((d) => {
+        setRun(d.run);
+        setDoc(d.pipelineVersion);
+      })
+      .catch((detailErr: unknown) => {
         if (ac.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
+        /* R1 resolves the run AND its doc together, so a doc that will not
+           resolve (409 — deleted, or present but no longer parsing) would
+           otherwise cost the operator the run's metadata, the node table and the
+           event feed as well. None of those need the doc, and a run whose graph
+           is gone is exactly when they matter most — `terminalFactFromLog`
+           records the same preference on the server. So fall back to the plain
+           run read; only if THAT fails is the page genuinely empty. */
+        return getRun(runId, ac.signal).then(
+          (r) => {
+            setRun(r);
+            setLoadError(
+              `The pipeline graph could not be loaded, so there is no node overlay: ${message(detailErr)}`,
+            );
+          },
+          () => {
+            if (ac.signal.aborted) return;
+            setLoadError(message(detailErr));
+          },
+        );
       });
     return () => ac.abort();
   }, [runId]);
@@ -116,6 +143,24 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <code>{JSON.stringify(run.params)}</code>
           </dd>
         </dl>
+      )}
+
+      <h3>Graph</h3>
+      {doc === null ? (
+        <p>
+          {loadError === null
+            ? 'Loading the pipeline graph…'
+            : 'The pipeline graph is unavailable, so there is no node overlay. The event feed below is unaffected.'}
+        </p>
+      ) : (
+        /* #698 — the graph and everything needed to DRAW it (React Flow, and
+           the engine reducer the overlay folds) load on demand, so the run
+           metadata, node table and event feed below paint without waiting on
+           either. The boundary is HERE rather than at the route for that
+           reason: all of that is useful without the graph. */
+        <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
+          <RunGraph doc={doc} stream={stream} />
+        </Suspense>
       )}
 
       <h3>Nodes</h3>
