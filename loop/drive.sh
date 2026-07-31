@@ -327,8 +327,23 @@ quota_sane() {  # $1=candidate; echoes it if usable as a percent, "" otherwise
   echo "$qs_v"
 }
 
-quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
-  qr_out="$(curl -s --max-time 8 "$1" 2>/dev/null | python3 -c "
+# --- quota_fetch_url: $1=url; echoes the raw response body, "" on any failure.
+#
+# Split from the parse (#825) so ONE body can be read TWICE -- for the percent
+# and, when there is no percent, for studio's advisory reason. Two curls would be
+# two SAMPLES: studio's reader re-polls once its throttle window elapses, so the
+# second call can legitimately answer differently from the first, and the probe
+# would then log a cause that did not belong to the reading it is explaining.
+# That is the exact mis-attribution the ticket is about, so the single fetch is
+# load-bearing rather than a tidiness.
+quota_fetch_url() {
+  curl -s --max-time 8 "$1" 2>/dev/null
+}
+
+# --- quota_parse_pct: stdin=a quota JSON body; echoes an integer percent or "".
+# Total by construction: every parse, key and type failure prints "".
+quota_parse_pct() {
+  python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -336,7 +351,33 @@ try:
     print(int(round(float(u) * 100)) if u is not None else '')
 except Exception:
     print('')
-" 2>/dev/null)"
+" 2>/dev/null
+}
+
+# --- quota_parse_reason: stdin=a quota JSON body; echoes studio's `unavailable`
+# reason (#825), or "" when there is none or it is not a shape we recognise.
+#
+# DIAGNOSTIC ONLY. This value reaches a LOG LINE and nothing else -- never the
+# guard's arithmetic, never `quota_pct`'s stdout. Sanitised HERE, in python,
+# rather than after it crosses into the shell: the enum is `[a-z_]` by contract,
+# so anything else is either a server that has drifted or a body that is not
+# studio's at all (a wrong-port service 404 answering in some other JSON), and
+# neither should reach a `log` line that an operator reads and a human quotes.
+# Bounded length for the same reason -- an unbounded string in a log line is a
+# way to make the rest of the line unreadable.
+quota_parse_reason() {
+  python3 -c "
+import sys, json, re
+try:
+    r = json.load(sys.stdin)['unavailable']['claude']
+    print(r if isinstance(r, str) and re.fullmatch(r'[a-z_]{1,32}', r) else '')
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
+  qr_out="$(quota_fetch_url "$1" | quota_parse_pct)"
   # TOTALITY GUARD, applied per-read at the boundary the value crosses.
   #
   # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
@@ -971,14 +1012,30 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
     log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP could not be written (#765)"
     return 0
   fi
-  qsp_pct="$(quota_read_url "$STUDIO_QUOTA_URL")"
+  # ONE fetch, parsed twice -- NOT two calls to `quota_read_url`. See
+  # `quota_fetch_url`: a second poll is a second sample, and a reason from a
+  # different sample than the reading it explains is worse than no reason.
+  qsp_body="$(quota_fetch_url "$STUDIO_QUOTA_URL")"
+  # Through `quota_sane` exactly as the DECISION path is, so the probe can never
+  # log a percent the guard would have refused to use.
+  qsp_pct="$(quota_sane "$(printf '%s' "$qsp_body" | quota_parse_pct)")"
   if [ -n "$qsp_pct" ]; then
     log "quota shadow: studio ${qsp_pct}% (diagnostic only -- the guard used $1; #765 C3 evidence)"
   else
     # UNREADABLE is logged, never skipped: "studio was asked and could not answer"
     # is the measurement, and a silent skip would be indistinguishable from the
     # probe not running -- which is the blind spot the whole ticket is about.
-    log "quota shadow: studio UNREADABLE (diagnostic only -- the guard used $1; #765 C3 evidence)"
+    #
+    # ...and WHY it could not answer (#825), because bare UNREADABLE conflates a
+    # broken reader with a contended account, and C3 is decided on a run of these
+    # lines. Measured 2026-07-31: studio sat rate-limited for ~7.8h while the old
+    # dashboard's sampler held the shared bucket, and the one probe taken in that
+    # window logged a bare UNREADABLE that reads as "studio is broken". The suffix
+    # is OPTIONAL by design -- an older studio, or any non-studio service on the
+    # port, simply yields no reason and the line degrades to what it always was.
+    qsp_reason="$(printf '%s' "$qsp_body" | quota_parse_reason)"
+    [ -n "$qsp_reason" ] && qsp_reason=" ($qsp_reason)"
+    log "quota shadow: studio UNREADABLE${qsp_reason} (diagnostic only -- the guard used $1; #765 C3 evidence)"
   fi
   return 0
 }

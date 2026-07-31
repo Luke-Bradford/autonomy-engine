@@ -1416,6 +1416,106 @@ check "the shadow emits NOTHING on stdout (a stray echo fails the gate OPEN)" ""
   "$(cat "$shtmp/out")"
 rm -rf "$shtmp"
 
+# --- 29h-29k. #825: the shadow line says WHY, not just that it failed ---------
+#
+# C3 (#410) is decided on a run of these lines, and the work order reads a run of
+# UNREADABLE as "studio is not ready". That inference is only sound if UNREADABLE
+# is attributable: measured 2026-07-31, studio sat rate-limited for ~7.8h while
+# the old dashboard's sampler held the shared account bucket, and the one probe
+# taken in that window logged a bare UNREADABLE -- a fact about the ACCOUNT being
+# recorded as a fact about STUDIO. These cases pin the attribution, and pin the
+# two things it must never do: reach the decision path, or invent a reason.
+#
+# Direct-call for the same reason 29f is: the body has to be controlled exactly,
+# and an end-to-end run cannot vary studio's failure SHAPE.
+shrun() {  # $1 = the exact body curl should echo. Echoes the driver.log line.
+  shrtmp="$(mk_tmp)"
+  mkdir -p "$shrtmp/bin" "$shrtmp/infra"
+  # `cat`, not printf: the bodies below carry `%` and backslash-free JSON, and a
+  # format string would be one escaping bug away from testing the wrong body.
+  {
+    echo '#!/bin/bash'
+    echo 'cat <<'\''BODY'\'''
+    echo "$1"
+    echo 'BODY'
+  } >"$shrtmp/bin/curl"
+  chmod +x "$shrtmp/bin/curl"
+  (
+    set -uo pipefail
+    export INFRA="$shrtmp/infra"
+    export DLOG="$shrtmp/infra/driver.log"
+    export QUOTA_SHADOW_STAMP="$shrtmp/infra/.last_quota_shadow"
+    export QUOTA_SHADOW_MIN_INTERVAL=3600
+    export PATH="$shrtmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    quota_shadow_probe dashboard
+  ) >"$shrtmp/out" 2>"$shrtmp/err" &
+  shr_pid=$!
+  shr_i=0
+  while [ "$shr_i" -lt 15 ]; do kill -0 "$shr_pid" 2>/dev/null || break; sleep 1; shr_i=$((shr_i + 1)); done
+  kill -9 "$shr_pid" 2>/dev/null || true
+  sed -n 's/.*\(quota shadow: studio [^(]*\).*/\1/p' "$shrtmp/infra/driver.log" 2>/dev/null | tail -1
+  rm -rf "$shrtmp"
+}
+
+# 29h. The reason rides the line. `rate_limited` specifically, because that is
+# the one the C3 evidence keeps hitting and the one most wrongly read as a studio
+# fault.
+check "the shadow names a rate-limited account rather than blaming studio (#825)" \
+  "quota shadow: studio UNREADABLE (rate_limited) " \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}')"
+
+# 29i. ...and it is the SERVER's reason, not a constant. Without this, hardcoding
+# the string above would pass 29h.
+check "...and reports the cause it was actually given (#825)" \
+  "quota shadow: studio UNREADABLE (no_credential) " \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"no_credential"}}')"
+
+# 29j. A READING carries no reason suffix. The iff-contract, seen from the
+# consumer: a line that both quotes a percent and explains its absence is
+# incoherent, and would mean the server emitted both.
+check "a readable probe logs the percent with no reason attached (#825)" \
+  "quota shadow: studio 97% " \
+  "$(shrun '{"account":{"claude":{"seven_day":{"utilization":0.97}}},"unavailable":{"claude":"rate_limited"}}')"
+
+# 29k. Anything that is not the contract's enum degrades to the OLD line rather
+# than to a corrupted one. Four shapes, each a real way this could arrive: an
+# older studio (no key at all), a wrong service on the port, a drifted server,
+# and a body trying to get its own text into an operator's log.
+for sh_body in \
+  '{"account":{"claude":null}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":null}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":"RATE LIMITED; rm -rf /"}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'; do
+  check "an unrecognised reason degrades to the bare line, never a corrupt one (#825)" \
+    "quota shadow: studio UNREADABLE " "$(shrun "$sh_body")"
+done
+
+# 29l. The reason NEVER reaches the decision path. `quota_read_url` is what
+# `quota_pct` reads, and a stray token on its stdout makes `[ "$x" -ge "$y" ]`
+# return 2 -- neither branch, so the gate logs "quota ok" and FIRES. The one
+# polarity this guard may not have, and the reason the parse is split rather than
+# widened.
+shdtmp="$(mk_tmp)"
+mkdir -p "$shdtmp/bin"
+{
+  echo '#!/bin/bash'
+  echo 'cat <<'\''BODY'\'''
+  echo '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}'
+  echo 'BODY'
+} >"$shdtmp/bin/curl"
+chmod +x "$shdtmp/bin/curl"
+check "an attributed UNREADABLE still reads as UNREADABLE on the decision path (#825)" "" \
+  "$(
+    set -uo pipefail
+    export PATH="$shdtmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    quota_read_url http://studio.invalid/api/quota
+  )"
+rm -rf "$shdtmp"
+
 # 29g. An UNWRITABLE rate stamp SKIPS the poll -- it does not silently UN-THROTTLE
 # it. Every other writer in this file can afford `|| true` because a lost write
 # fails SAFE: no cache entry means the guard takes the blind path, no memo means
