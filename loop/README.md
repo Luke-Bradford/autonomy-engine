@@ -169,6 +169,47 @@ source, which is the exact failure #764 exists to prevent, just re-created by ha
 write `drive.sh` via a sibling temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
 in-place overwrite corrupts a running fire.
 
+**A sync is not a deploy. Restart the driver, or the merged fix does not run.** `drive.sh`'s body
+is a plain `while true` with no `exec` and no re-source, and bash holds its script open by
+descriptor — so replacing the file stages the new code for the *next* start and changes nothing
+about the process now running. Measured 2026-07-31 (#808): the live `drive.sh` was byte-identical
+to `origin/main`, and PID 74021 — booted ~15h earlier — was still executing a 13KB-older inode.
+#765's quota shadow probe had been merged, synced, and had *never once run*; C3's evidence gate was
+therefore accumulating nothing while looking perfectly healthy. After any `loop/` sync:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/com.autonomy.studio-build-driver   # -k: restart if running
+```
+
+`-k` terminates the current process, so do it between fires, not during one.
+
+**The driver now measures both gaps itself** (#808), once per loop iteration, right after the
+iteration's `git fetch` and *ahead of every stop condition* — a run that never fires because the
+quota gate, an operator signal or `MAX_STALL` stopped it is exactly a run that might be stopping
+because it is executing superseded code, so reporting only alongside a fire would go quiet in the
+case that matters most. Two independent verdicts, because the 2026-07-31 incident is exactly the
+case where one of them reads healthy and the other does not:
+
+| log line | question | how to read it |
+| --- | --- | --- |
+| `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
+| `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
+
+Both are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure path
+reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must not be
+indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
+`plane drift` naming files is information, not an alarm; `driver code: STALE` is the one that means
+a merged fix is inert. `DRIFT_REPORT=0` silences both — and *only* the literal `0` does, so a typo
+such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
+
+`driver code` reads `UNKNOWN` for the whole of any run started before #808 landed, because that
+process recorded no boot hash — which is the honest answer, not a gap.
+
+The driver deliberately does **not** re-`exec` itself to adopt new code. Cross-fire state (`fires`,
+`stall`, `blind_fires`, `budget_regrants`) lives in shell variables, so an exec would silently reset
+the counters bounding `MAX_STALL` and `MAX_BUDGET_REGRANTS` — trading a visible staleness for an
+invisible fail-open in the spend and stall guards. Self-adoption needs that state persisted first — filed as #811.
+
 ## Safety model
 
 Three independent bounds, checked before every fire, each with its own test in

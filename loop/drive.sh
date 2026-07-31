@@ -123,6 +123,29 @@ QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch
                                   # contract -- see quota_shadow_probe (#765).
 QUOTA_SHADOW_MIN_INTERVAL="${QUOTA_SHADOW_MIN_INTERVAL:-3600}"  # min seconds between DIAGNOSTIC
                                   # polls of studio. 0 disables the probe entirely.
+DRIFT_REPORT="${DRIFT_REPORT:-1}"  # set to exactly "0" to silence the #808 drift report. Any OTHER
+                                  # value still reports: a monitor a typo can switch off without
+                                  # saying so fails in the monitored direction, and `DRIFT_REPORT=no`
+                                  # reading as "off" is the same silence this ticket exists to end.
+DRIVE_SELF="${DRIVE_SELF:-${BASH_SOURCE[0]}}"  # the file THIS process was started from. Overridable
+                                  # so the drift checks are unit-testable against a scratch file
+                                  # instead of against drive.sh itself.
+# Resolved to an ABSOLUTE path here, while the cwd is still the one this process
+# was launched in. `drive.sh` does `cd "$REPO"` further down, and the hash is
+# re-taken on every fire -- so a relative `$0` (`./drive.sh`, as any manual run
+# produces) would resolve against the repo by then and hash nothing. Verified:
+# it yields an empty hash, i.e. `driver code: UNKNOWN` forever. That direction is
+# at least safe rather than open, but the check is silently gone, which is the
+# same class of quiet loss #808 exists to end. launchd passes an absolute path,
+# so this is about the manual path, not the scheduled one.
+case "$DRIVE_SELF" in
+  /*) ;;
+  *) ds_dir="$(cd "$(dirname "$DRIVE_SELF")" 2>/dev/null && pwd)"
+     # An unresolvable dirname leaves DRIVE_SELF alone rather than building a
+     # bogus "/name": the later shasum then fails and reads UNKNOWN, which is
+     # the honest answer. Never invent a path that might hash some other file.
+     [ -n "$ds_dir" ] && DRIVE_SELF="$ds_dir/$(basename "$DRIVE_SELF")" ;;
+esac
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
@@ -718,6 +741,169 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   return 0
 }
 
+# --- #808: is the code that MERGED actually the code that is RUNNING? ----------
+#
+# `loop/` in the repo is versioned; the plane launchd actually executes,
+# `~/Dev/studio-loop/`, is an unversioned copy kept in step BY HAND. So "merged"
+# and "running" are two different claims, and the gap between them has now
+# silently swallowed a fix twice (`3a17fe1`, then `f3ef05f`). Documentation has
+# failed to prevent it both times, so the driver measures it and says so in the
+# log it already writes.
+#
+# There are TWO independent gaps, and the 2026-07-31 incident is why both are
+# reported rather than just the obvious one:
+#
+#   plane drift  -- the live FILE differs from what is on origin/main.
+#   driver code  -- the live file is fine, but the RUNNING PROCESS predates it.
+#
+# That second one is the load-bearing half and it is the one a file-hash check
+# cannot see. drive.sh's body is a plain `while true` with no `exec` and no
+# re-source, and bash holds its script open by descriptor -- so replacing the
+# file does NOT deploy it, it only stages it for the next START. On 2026-07-31
+# the live drive.sh was byte-identical to origin/main (a plane-drift check would
+# have said "in sync") while PID 74021, booted ~15h earlier, still held a 13KB
+# older inode. #765's shadow probe had merged, been synced, and never once run.
+#
+# Both are ADVISORY. They log and they decide nothing -- same posture as
+# `quota_shadow_probe`. A stale driver is a real problem but it is the
+# OPERATOR's to fix (see the deliberate non-goal below), and a plane that is
+# temporarily AHEAD of main is a normal state during a deploy, not a fault.
+#
+# DELIBERATE NON-GOAL: the driver does not re-`exec` itself to adopt new code.
+# Cross-fire state -- `fires`, `stall`, `blind_fires`, `budget_regrants` -- lives
+# in shell variables, so an exec would silently reset the counters that bound
+# MAX_STALL and MAX_BUDGET_REGRANTS. Trading a visible staleness for an invisible
+# fail-open in the spend/stall guards is a bad trade. Self-adoption needs that
+# state persisted first (#811); until then, report and let a human restart.
+
+# --- drive_self_hash: content hash of the driver's own source, "" if unreadable.
+# Unreadable must stay distinguishable from "unchanged", so this returns EMPTY
+# rather than some sentinel a comparison would treat as a value.
+drive_self_hash() { shasum "$DRIVE_SELF" 2>/dev/null | awk '{print $1}'; }
+
+# --- drift_report_driver_code: is this process running its own file's contents?
+#
+# Compares the file NOW against what it hashed to when this process booted. A
+# boot-time hash rather than an inode/`lsof` comparison on purpose: the inode
+# only moves when the sync uses `mv`, so an in-place truncate+write -- the case
+# where bash goes on to execute GARBAGE from a shifted byte offset -- would slip
+# straight through. It also needs no `lsof`, and does not care which descriptor
+# bash happened to open the script on.
+#
+# The check therefore only works from the FIRST RESTART after this lands, since
+# the currently-running process recorded no boot hash. That is not a gap in the
+# check, it is the thing being measured: no boot hash means "this process is
+# older than the code that would have taken one", which is exactly the state
+# that should not read as healthy.
+drift_report_driver_code() {
+  if [ -z "${DRIVE_BOOT_HASH:-}" ]; then
+    log "driver code: UNKNOWN -- no boot hash was recorded at DRIVER START, so whether this process is running current code is unmeasured (#808)"
+    return 0
+  fi
+  dc_now="$(drive_self_hash)"
+  if [ -z "$dc_now" ]; then
+    log "driver code: UNKNOWN -- $DRIVE_SELF is unreadable now, so drift is unmeasured (#808)"
+  elif [ "$dc_now" = "$DRIVE_BOOT_HASH" ]; then
+    log "driver code: live ($DRIVE_SELF is unchanged since this driver booted; #808)"
+  else
+    log "driver code: STALE -- $DRIVE_SELF changed since this driver booted, so this process is running SUPERSEDED code and every merged loop/ fix is inert until it restarts: launchctl kickstart -k gui/\$(id -u)/com.autonomy.studio-build-driver -- and \`-k\` kills a fire in flight, so restart BETWEEN fires (#808)"
+  fi
+  return 0
+}
+
+# --- drift_report_plane: does the live plane match what is on origin/main?
+#
+# FETCHES FIRST, and that is the difference between a drift report and a
+# comforting one: `origin/main` is a cached local ref that only advances when
+# something fetches, so a report built on an unrefreshed one fails in the same
+# direction as the thing it monitors. A failed fetch is UNKNOWN, never "in
+# sync". Mirrors the discipline `install_studio_server.sh`'s `fetch_origin` /
+# `report_status` already enforce for the studio-server clone (#773) -- the
+# discipline, not the code: the subject there is a git clone, here it is a
+# hand-copied directory, and a shared abstraction over the two would be a
+# coupling that buys nothing.
+#
+# Enumerates from `git ls-tree origin/main loop/` -- the set of files that are ON
+# MAIN -- rather than from what happens to exist in both places. A file on main
+# that was never synced at all is the STRONGEST drift signal, and "for each file
+# present in both" reports it as nothing. Listing from main also excludes the
+# live plane's `.bak-*` clutter and its unversioned state (`logs/`, `.last_*`)
+# for free, without needing globstar (bash 3.2).
+drift_report_plane() {
+  # `git rev-parse`, NOT `[ -d "$REPO/.git" ]`. This checkout is a git WORKTREE,
+  # whose `.git` is a FILE holding a gitdir pointer rather than a directory, so
+  # the `-d` test the first draft used was false in production on every fire --
+  # the whole half returned UNKNOWN forever. Safe direction, but a check that
+  # silently never runs while looking installed is precisely what #808 is about.
+  if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    log "plane drift: UNKNOWN -- $REPO is not a git checkout to compare against (#808)"
+    return 0
+  fi
+  if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
+    log "plane drift: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the live plane is current (#808)"
+    return 0
+  fi
+  dp_names=""
+  dp_listed=0
+  # Blob ids from git on BOTH sides -- `rev-parse` for what is on main and
+  # `hash-object` for the live file -- rather than piping `git show` into
+  # `shasum`. That pipeline could not fail visibly: a failed `git show` yields
+  # empty output, which `shasum` happily hashes to the sha1 of the empty string,
+  # so the "(unreadable)" branch was unreachable and a git failure against a
+  # 0-byte live file would have compared EQUAL and read "in sync". Both commands
+  # here return EMPTY on failure, which is what makes that guard real.
+  while IFS= read -r -d '' dp_path; do
+    [ -n "$dp_path" ] || continue
+    dp_listed=1
+    dp_name="${dp_path#loop/}"
+    if [ ! -f "$INFRA/$dp_name" ]; then
+      dp_names="$dp_names $dp_name(never synced)"
+      continue
+    fi
+    dp_main="$(git -C "$REPO" rev-parse --quiet --verify "origin/main:$dp_path" 2>/dev/null)"
+    dp_live="$(git -C "$REPO" hash-object "$INFRA/$dp_name" 2>/dev/null)"
+    if [ -z "$dp_main" ] || [ -z "$dp_live" ]; then
+      dp_names="$dp_names $dp_name(unreadable)"
+    elif [ "$dp_main" != "$dp_live" ]; then
+      dp_names="$dp_names $dp_name"
+    fi
+    # `-r` because ls-tree is NOT recursive by default: a subdirectory emerges as
+    # the TREE `loop/sub`, which is not a file in the plane, so it read
+    # `sub(never synced)` on a perfectly synced plane -- permanently, and with
+    # its contents never compared at all.
+    # `-z` because the default output C-QUOTES a non-ASCII path
+    # (`"loop/caf\303\251.sh"`); the leading quote defeats the `loop/` strip and
+    # the file was skipped in silence, i.e. an unmeasured file reported as "in
+    # sync". NUL-terminated output is never quoted.
+    # Process substitution rather than a pipe: `... | while` runs the body in a
+    # SUBSHELL under bash 3.2 (verified), so every name accumulated into
+    # dp_names would be discarded at the `done` and the plane would ALWAYS read
+    # "in sync". A here-doc cannot serve here -- command substitution strips the
+    # NULs that `-z` depends on.
+  done < <(git -C "$REPO" ls-tree -r -z --name-only origin/main loop/ 2>/dev/null)
+  if [ "$dp_listed" = 0 ]; then
+    log "plane drift: UNKNOWN -- could not list loop/ on origin/main (#808)"
+  elif [ -n "$dp_names" ]; then
+    log "plane drift:$dp_names differ from origin/main -- the live plane at $INFRA is NOT what merged. Sync it, then RESTART the driver (a sync alone does not deploy; #808)"
+  else
+    log "plane drift: in sync with origin/main"
+  fi
+  return 0
+}
+
+# --- drift_report: both halves, once per loop iteration. Advisory; always 0.
+# Named for the pair, not for either half -- the driver-code half is the
+# load-bearing one and is not plane drift at all.
+drift_report() {
+  # ONLY the documented value disables. `= "1"` would have let `DRIFT_REPORT=no`
+  # or `=true` silence the whole thing without a word, and a monitor a typo can
+  # switch off invisibly fails in the direction it is monitoring.
+  [ "$DRIFT_REPORT" = "0" ] && return 0
+  drift_report_driver_code
+  drift_report_plane
+  return 0
+}
+
 # --- quota_knob_secs: normalise a "how old may a reading be" knob, because BOTH of
 # them are fed straight to `test` and an operand `test` cannot parse returns 2 --
 # NEITHER branch -- so `[ age -gt bound ]` falls through and EVERY record looks fresh
@@ -1081,6 +1267,12 @@ QUOTA_SHADOW_MIN_INTERVAL="$(quota_knob_secs QUOTA_SHADOW_MIN_INTERVAL "$QUOTA_S
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
+# #808. Taken HERE, as early below the guard as the log allows, because it is the
+# only moment at which "the file on disk" and "the code this process is running"
+# are known to be the same thing. Every later comparison is against this.
+DRIVE_BOOT_HASH="$(drive_self_hash)"
+[ -n "$DRIVE_BOOT_HASH" ] || log "WARN: could not hash $DRIVE_SELF at start -- the driver-code drift check will read UNKNOWN for this whole run (#808)"
+
 # Is the quota guard's fallback reader actually THERE? A missing reader and a
 # rate-limited one are indistinguishable downstream -- both yield "" and the fire
 # just logs a different winning source, or UNREADABLE. That silence is exactly
@@ -1103,6 +1295,15 @@ while true; do
     break
   fi
   git fetch origin --quiet 2>>"$DLOG"
+
+  # #808. Per ITERATION, not per fire, and deliberately ahead of every stop
+  # condition below: a run that never fires -- stopped by the quota gate, an
+  # operator signal, or MAX_STALL -- is exactly a run that might be stopping
+  # BECAUSE it is executing superseded code, and reporting only alongside a fire
+  # would say nothing in the one case where it matters most. Iterations are
+  # roughly one per fire (auth backoff and the PR gate wait loop internally), so
+  # this costs no extra log volume.
+  drift_report
 
   # --- STOP: operator signal ([operator-decision]/[mvp-ready]) or a real block.
   #     [loop-paused] is deliberately NOT matched here -- it never stops. -------
