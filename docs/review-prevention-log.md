@@ -711,3 +711,35 @@ The deeper rule is the one #25 and #29 keep restating from different angles: **a
 test that asserts absence is only worth what its ability to see presence is
 worth.** Make the thing PRESENT once and watch the assertion go red. If it does
 not, the test is decoration. Mutation-prove the guard, not just the feature.
+
+## 31. A bound must not be transported by the mechanism whose loss it exists to survive
+
+*Origin: 2026-07-31, PR for #811 (driver self-adoption).* `loop/drive.sh` gained
+the ability to re-`exec` into merged code, handing its cross-fire counters to the
+new process in a state file. One of those counters was `adoptions`, bounded by
+`MAX_SELF_ADOPT` — the guard whose entire job is to stop an adopt-`exec` **loop**
+when the driver's own file keeps changing underneath it.
+
+That cap rode in the same handoff record as everything else. Mutation-testing the
+record's reader into a no-op did not produce a red assertion: it **hung the test
+suite**. Every exec'd process restarted at `adoptions=0`, so a file that changed
+on every fire was adopted forever and no fire ever completed. The guard against
+infinite adoption was itself carried by the thing whose failure causes infinite
+adoption.
+
+**Rule: when a guard exists to survive the failure of mechanism X, its state must
+not travel through X.** Give it a second, independent carrier and combine them in
+the direction that keeps the guard armed — here the count also rides in the
+environment (which `exec` preserves for free and no other restart can supply),
+and the two are reconciled by MAX, never by preference, so a lost carrier can
+only ever *tighten* the cap.
+
+Two corollaries worth keeping:
+
+- **The failure mode of a transport-coupled bound is a hang, not a wrong answer.**
+  A test suite that only greps for `FAIL` will report nothing at all. Treat "the
+  suite stopped producing output" as a result, not as an infrastructure problem.
+- **Ask the question at design time by naming the dependency out loud:** "this
+  guard protects against X failing — what does it need in order to run *when X
+  has failed?*" For a retry cap, a circuit breaker, a stall detector or a spend
+  bound, the answer is almost never "the thing X was carrying".
