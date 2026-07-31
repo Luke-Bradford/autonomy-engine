@@ -492,6 +492,17 @@ quota_cache_write() {  # $1=pct
   # The log line is now conditioned on what actually happened, because a drop CAN
   # still fail (a read-only file in a read-only directory) and "silent" stopped
   # being tolerable the moment a failed write could leave a permitting record.
+  #
+  # NAMING THE COST, since the tradeoff above only weighs one side: in the 555
+  # state the drop is PERMANENT, not momentary. Temp creation needs write on the
+  # directory, so every later write fails too and the cache never holds a record
+  # again -- where `>` (writing the FILE, which is writable) would have kept it
+  # current and could go on REFUSING. So the fires after the drop take the blind
+  # path and spend the QUOTA_UNKNOWN_FIRES allowance. Still the right call --
+  # keeping a record we have proved too low is strictly worse than having none,
+  # since the blind allowance is bounded and a permitting cache is not -- but it
+  # is a real cost and not a free repair. The state itself is a misconfigured
+  # $INFRA, which #773's drift check is the thing that surfaces.
   qcw_old="$(quota_sane "$(quota_stamped_read "$QUOTA_CACHE" "$QUOTA_CACHE_MAX_AGE")")"
   qcw_new="$(quota_sane "$1")"
   if [ -n "$qcw_old" ] && [ -n "$qcw_new" ] && [ "$qcw_old" -lt "$qcw_new" ]; then
@@ -641,6 +652,15 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
   # up to nine per iteration and unbounded during a long block. Each read-back is
   # also a `head` PLUS a `date` fork inside `quota_stamped_read`. Still cheap
   # against a fire; the conclusion survived the correction, the number did not.
+  #
+  # One false-negative this admits, and its direction: `quota_stamped_read`
+  # returns nothing when the record's age is NEGATIVE, so a clock that steps
+  # backwards between the `date` above and the reader's own makes a perfectly
+  # good record read as unacceptable -- and since the rename already happened,
+  # the prior record is gone and this discards the new one too. Net effect is an
+  # empty cache and the blind path, never a false LOW reading, so the polarity is
+  # the safe one; the window is the microseconds between two forks. Not worth a
+  # guard that would have to decide which of the two clocks to trust.
   if [ -z "$(quota_stamped_read "$qsw_file" 60)" ]; then
     # The rename has already replaced the destination, so leaving the unreadable
     # record in place would strand it there for every future reader -- and for a

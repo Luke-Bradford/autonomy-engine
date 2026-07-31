@@ -1579,7 +1579,14 @@ printf '%s probe\n' "$((now - 999999))" >"$swtmp/ro/.shadow"
 # Case (n)'s fixture: a FRESH, LOW cache reading in the same unwritable dir. Low
 # because the drop only fires on old < new -- a high one would take the "keep"
 # branch and prove nothing about the drop.
-printf '%s 10\n' "$(date +%s)" >"$swtmp/ro/.cache"
+#
+# 12, NOT 10, and the difference is load-bearing: case (l) drops a stale 10 to
+# the SAME driver.log, so an assertion grepping for "dropped the stale 10%" would
+# be satisfied by (l)'s line and could not go red if (n)'s vanished. A distinct
+# value makes the log assertion name the case it claims to measure. (Found by the
+# pre-PR correctness lens -- the coverage was not lost, since 45n is also pinned
+# by the read-back assertions, but the assertion did not measure what it said.)
+printf '%s 12\n' "$(date +%s)" >"$swtmp/ro/.cache"
 # CAPTURED BEFORE the subshell runs. Comparing against a re-read of the file
 # afterwards would be self-referential -- both sides would be the POST state, so
 # the assertion would hold whatever the writer did to it, including destroying
@@ -1765,6 +1772,33 @@ chmod 555 "$swtmp/ro"
   export QUOTA_SHADOW_STAMP="$swtmp/ro/.shadow"
   export QUOTA_SHADOW_MIN_INTERVAL=3600
   quota_shadow_probe dashboard
+
+  # (p) the OTHER cleanup branch. There are two `rm -f "$qsw_tmp"` calls -- one
+  #     per failure path -- and until this case only the `mv` one (45k) had
+  #     cover. 45d looked like it covered the printf one but does not: there the
+  #     directory is read-only, so the redirect fails at OPEN and no temp is ever
+  #     created, leaving the assertion green with the `rm` deleted. (Found by the
+  #     pre-PR correctness lens. Same family as prevention-log #30: an absence
+  #     assertion is worth exactly what its ability to see presence is worth.)
+  #
+  #     To reach a printf that fails with the temp ALREADY EXISTING, seed the
+  #     temp path itself as an unwritable file in a WRITABLE directory: the open
+  #     fails EACCES (verified: `printf >` a mode-444 file we own is denied),
+  #     while `rm` -- which needs write on the DIRECTORY, not the file -- can
+  #     still clear it. Deleting the printf branch's `rm -f` leaves the seeded
+  #     temp behind and turns the second assertion red.
+  #
+  #     Appended AFTER (o) deliberately: (n) and (o) consume the read-only dir,
+  #     and inserting here rather than mid-section keeps every earlier `swout`
+  #     line number stable. `$$` is the same in this subshell as in drive.sh --
+  #     bash does not re-assign it for a subshell -- so the temp name is exact.
+  #     (Vacuous under root, which ignores the mode; ruled out by the read-only
+  #     directory precondition asserted in the parent.)
+  swp="$swtmp/infra/.printffail"
+  : >"$swp.tmp.$$"
+  chmod 444 "$swp.tmp.$$"
+  quota_stamped_write "$swp" 42 && echo "wrote" || echo "refused"
+  ls "$swtmp/infra"/.printffail.tmp.* >/dev/null 2>&1 && echo "dirt" || echo "clean"
 ) >"$swtmp/out" 2>"$swtmp/err" &
 sw_pid=$!
 sw_i=0
@@ -1803,7 +1837,7 @@ check "a cache drop REACHES the read-only-dir state that motivated it" "no-recor
 check "...and says so honestly, rather than claiming a drop that did not happen" "0" \
   "$(grep -q 'could not drop the stale' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 check "...having reported the drop it DID do" "1" \
-  "$(grep -q 'dropped the stale 10% cache' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'dropped the stale 12% cache' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 check "the cache write announces a failure it can no longer make invisible" "1" \
   "$(grep -q 'WARN: could not persist quota' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 # The muzzles the diff added are justified as "would otherwise print to the
@@ -1818,6 +1852,8 @@ check "the shadow probe SKIPS when the rename cannot happen (permission moved)" 
   "$(grep -q 'quota shadow: skipped' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 check "...and did NOT poll studio, which would defeat the throttle" "0" \
   "$(grep -q 'quota shadow: studio' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "a printf that fails with the temp already created is a refusal" "refused" "$(swout 26)"
+check "...and that branch cleans up its temp too (45d could not see this)" "clean" "$(swout 27)"
 chmod 755 "$swtmp/ro" 2>/dev/null || true
 rm -rf "$swtmp"
 
