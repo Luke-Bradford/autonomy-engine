@@ -1329,6 +1329,16 @@ except Exception:
 # path here, whose failure mode -- an absent stamp reporting UNKNOWN forever
 # while the install looks perfect -- is the same silent-never-runs shape
 # `drift_report_plane` had to be rewritten out of.
+#
+# TWO THINGS THIS DELIBERATELY DOES NOT DO, both deferred with reasons:
+#   * stamp the served build onto each `quota shadow: studio` line instead of
+#     emitting a separate one (#833). Strictly better attribution -- it survives
+#     log rotation and `DRIFT_REPORT=0` -- but it needs a freshness contract,
+#     because `quota_shadow_probe` can run BEFORE this in an iteration and a
+#     stamp that is silently one iteration stale is worse than none.
+#   * share one `origin/main` fetch with the plane half (#834). Both halves
+#     fetch for themselves so both stay independently callable and testable.
+
 drift_report_studio_server() {
   if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     log "studio server: UNKNOWN -- $REPO is not a git checkout to compare against (#832)"

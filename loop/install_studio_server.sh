@@ -380,6 +380,21 @@ server_healthy() {
 # --- report_status: the drift surface (#773 asked for the running commit to be
 # readable rather than inferred from a git incantation nobody thinks to run).
 # Read-only: it must never write, build, or touch launchd.
+#
+# THERE ARE NOW TWO ANSWERS TO "IS THE QUOTA SOURCE BEHIND MAIN", and they can
+# legitimately disagree, so which one to believe depends on what is being asked:
+#
+#   * HERE, from `built.sha` -- what this installer last COMPILED. Authoritative
+#     on whether a build succeeded, which is the question `--update` acts on.
+#   * `drive.sh`'s `studio server:` drift line (#832), from the running
+#     service's own `GET /api/version` -- what the loaded unit is SERVING.
+#     Authoritative on which code actually answered a quota poll, which is the
+#     question the C3 evidence turns on.
+#
+# They diverge exactly when a build succeeded but the unit did not restart onto
+# it. That line is also stricter in one direction and looser in another: it
+# judges currency by commits touching `studio/` (this service is built from
+# `studio/` alone), where the verdict below is plain sha equality.
 report_status() {
   # It FETCHES first, and that is the difference between a drift report and a
   # comforting one. `origin/main` inside the clone is a cached local ref that
