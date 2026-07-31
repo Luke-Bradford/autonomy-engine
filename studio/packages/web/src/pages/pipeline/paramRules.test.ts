@@ -85,9 +85,10 @@ describe('nameIssues — the save gate', () => {
   });
 
   it('reports every offender, not just the first', () => {
-    const issues = nameIssues([param({ name: '' }), param({ name: 'b' }), param({ name: 'b' })], [
-      output({ name: '' }),
-    ]);
+    const issues = nameIssues(
+      [param({ name: '' }), param({ name: 'b' }), param({ name: 'b' })],
+      [output({ name: '' })],
+    );
     expect(issues).toHaveLength(3);
   });
 });

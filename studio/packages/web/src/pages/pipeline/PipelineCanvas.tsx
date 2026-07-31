@@ -85,7 +85,6 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     return () => ctrl.abort();
   }, [pipelineId, store]);
 
-  const loaded = useStore(store, (s) => s.loaded);
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
@@ -378,7 +377,8 @@ function ParamRow({
     } else {
       // Blank means NO default, which is the absence of the key, not
       // `default: undefined` — `resolveRunParams` reads it with `hasOwnProperty`.
-      const { default: _cleared, ...rest } = param;
+      const { default: cleared, ...rest } = param;
+      void cleared; // discard: lint has no ignoreRestSiblings here
       store.getState().updateParam(index, rest);
     }
   }
@@ -420,7 +420,9 @@ function ParamRow({
           type="checkbox"
           aria-label={`param ${index + 1} required`}
           checked={param.required}
-          onChange={(e) => store.getState().updateParam(index, withRequired(param, e.target.checked))}
+          onChange={(e) =>
+            store.getState().updateParam(index, withRequired(param, e.target.checked))
+          }
         />
         Required
       </label>
@@ -466,7 +468,8 @@ function ParamRow({
             if (text) {
               store.getState().updateParam(index, { ...param, description: text });
             } else {
-              const { description: _cleared, ...rest } = param;
+              const { description: cleared, ...rest } = param;
+              void cleared;
               store.getState().updateParam(index, rest);
             }
           }}
@@ -499,7 +502,9 @@ function OutputRow({
         <input
           aria-label={`output ${index + 1} name`}
           value={output.name}
-          onChange={(e) => store.getState().updateOutput(index, { ...output, name: e.target.value })}
+          onChange={(e) =>
+            store.getState().updateOutput(index, { ...output, name: e.target.value })
+          }
         />
       </label>
       <label>
@@ -535,7 +540,8 @@ function OutputRow({
               // ABSENT means required in `OutputSchema`, so unchecking removes
               // the key rather than writing `optional: false`. Both read the
               // same, but only one matches what the schema documents.
-              const { optional: _cleared, ...rest } = output;
+              const { optional: cleared, ...rest } = output;
+              void cleared;
               store.getState().updateOutput(index, rest);
             }
           }}
@@ -552,7 +558,8 @@ function OutputRow({
             if (text) {
               store.getState().updateOutput(index, { ...output, description: text });
             } else {
-              const { description: _cleared, ...rest } = output;
+              const { description: cleared, ...rest } = output;
+              void cleared;
               store.getState().updateOutput(index, rest);
             }
           }}
@@ -568,7 +575,6 @@ function OutputRow({
     </div>
   );
 }
-
 
 /**
  * Editor for one edge's CONDITION (U6a) — the picker that replaced the pinned

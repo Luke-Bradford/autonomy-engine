@@ -140,9 +140,7 @@ export function defaultAdvisory(p: Param): string | null {
 
 /** What a default field's text means: absent, a typed value, or a parse failure. */
 export type DefaultParse =
-  | { ok: true; has: false }
-  | { ok: true; has: true; value: unknown }
-  | { ok: false; error: string };
+  { ok: true; has: false } | { ok: true; has: true; value: unknown } | { ok: false; error: string };
 
 /**
  * Turn the default field's raw text into the TYPED value the doc should store.
@@ -215,6 +213,7 @@ export function formatDefaultInput(value: unknown): string {
  */
 export function withRequired(p: Param, required: boolean): Param {
   if (!required) return { ...p, required: false };
-  const { default: _dropped, ...rest } = p;
+  const { default: dropped, ...rest } = p;
+  void dropped; // discard: lint has no ignoreRestSiblings here
   return { ...rest, required: true };
 }
