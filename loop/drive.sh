@@ -1370,7 +1370,14 @@ drift_report_studio_server() {
     # next is how far back the answering code is, and the served sha is what
     # makes every `quota shadow: studio` line above and below this one
     # attributable after the fact rather than only in the moment.
-    log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, but origin/main is $(git -C "$REPO" rev-parse --short origin/main 2>/dev/null). So the spend guard's source 3, and every 'quota shadow: studio' line beside this one, is answering from SUPERSEDED code -- treat those as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+    # The abbreviation is computed BEFORE the message and falls back to the full
+    # sha, rather than being substituted inline. An inline `$(...)` that fails
+    # renders "origin/main is ." -- a gap in the one line someone is reading at
+    # the moment they need it, and one that reads as if there were no such
+    # commit rather than as if `rev-parse` had failed.
+    ds_short="$(git -C "$REPO" rev-parse --short origin/main 2>/dev/null)"
+    [ -n "$ds_short" ] || ds_short="$ds_main"
+    log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, but origin/main is $ds_short. So the spend guard's source 3, and every 'quota shadow: studio' line beside this one, is answering from SUPERSEDED code -- treat those as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
   fi
   return 0
 }
