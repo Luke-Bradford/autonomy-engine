@@ -165,3 +165,91 @@ export function rectOf(page: Page, selector: string): Promise<ScreenRect> {
     };
   });
 }
+
+/**
+ * Mint a pipeline version WITHOUT opening its canvas, and return both ids.
+ *
+ * `openSeededCanvas` is the right tool when the spec is about authoring. This
+ * one is for a spec about a RUN: it needs the version id to bind a trigger to,
+ * and it must not navigate anywhere yet.
+ */
+export async function seedVersion(
+  page: Page,
+  name: string,
+  doc: SeedDoc,
+): Promise<{ pipelineId: string; pipelineVersionId: string }> {
+  const created = await page.request.post('/api/pipelines', { data: { name } });
+  expect(created.status(), `creating pipeline '${name}': ${await created.text()}`).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+
+  const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
+    data: {
+      params: doc.params ?? [],
+      outputs: doc.outputs ?? [],
+      nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
+      edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
+      containers: doc.containers ?? [],
+    },
+  });
+  expect(minted.status(), `minting version for '${name}': ${await minted.text()}`).toBe(201);
+  const { id: pipelineVersionId } = (await minted.json()) as { id: string };
+  return { pipelineId: id, pipelineVersionId };
+}
+
+/**
+ * Bind a manual trigger to `pipelineVersionId`, FIRE it, and wait for the run to
+ * reach a terminal status. Returns the run id.
+ *
+ * This is the first e2e path that produces a real run, so it goes through the
+ * public API exactly as an operator would: create → fire → poll. It polls the
+ * run row rather than the event stream because the terminal fact it needs lives
+ * on the row, and because a poll cannot miss a frame that arrived before the
+ * subscription did.
+ *
+ * The pipeline it fires must be egress-free (the `control` activities — `fail`,
+ * `if`, `switch`, `filter` — need no connection and make no network call), or
+ * this waits on something a test machine cannot do.
+ */
+export async function fireAndSettle(
+  page: Page,
+  pipelineVersionId: string,
+  name = 'e2e manual',
+): Promise<string> {
+  const trigger = await page.request.post('/api/triggers', {
+    data: {
+      name,
+      pipelineVersionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      runWindows: null,
+      concurrency: { policy: 'skip_if_running' },
+      enabled: true,
+    },
+  });
+  expect(trigger.status(), `creating trigger: ${await trigger.text()}`).toBe(201);
+  const { id: triggerId } = (await trigger.json()) as { id: string };
+
+  const fired = await page.request.post(`/api/triggers/${encodeURIComponent(triggerId)}/fire`);
+  expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
+  const { runId } = (await fired.json()) as { runId: string };
+  expect(runId, 'a manual fire must start a run').toBeTruthy();
+
+  const TERMINAL = ['success', 'failure', 'skipped', 'interrupted'];
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`/api/runs/${encodeURIComponent(runId)}`);
+        if (res.status() !== 200) return `http ${res.status()}`;
+        const { status } = (await res.json()) as { status: string };
+        // Collapsed to one word so a timeout message names the status it was
+        // stuck in, rather than just "false".
+        return TERMINAL.includes(status) ? 'terminal' : status;
+      },
+      { message: `run ${runId} never reached a terminal status`, timeout: 20_000 },
+    )
+    .toBe('terminal');
+
+  return runId;
+}
