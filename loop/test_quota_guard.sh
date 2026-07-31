@@ -12,10 +12,78 @@ check() { # $1=label $2=expected $3=actual
   else echo "FAIL - $1 (expected '$2', got '$3')"; fails=$((fails + 1)); fi
 }
 
+# --- #821 fixture lifecycle --------------------------------------------------
+# Every tree this suite builds is recorded, and the trap clears the lot on ANY
+# exit path -- pass, fail, or Ctrl-C. Before this, `run_case` could not delete
+# its own tree (it RETURNS the path and callers read files out of it afterwards)
+# and nothing else ever did: 6,768 abandoned trees, ~800 MB, had piled up on the
+# operator's Mac. Worse, a driver could OUTLIVE the suite -- one was found still
+# firing an hour after the run that spawned it had been killed.
+#
+# `reap_known_tree` rather than `reap_tree`: these trees' provenance is already
+# established (this process created them), and the ad-hoc ones below hold an
+# `infra/` with no stub `bin/`, so the signature gate would refuse exactly the
+# trees the trap exists to clean. See the SAFETY note in reap_test_drivers.sh.
+# A missing module must FAIL THE SUITE, not degrade it. There is no `set -e`
+# here, so an unguarded `.` on an absent file returns 1 and the suite carries on
+# with every reaper function undefined: no startup sweep, a trap that cleans
+# nothing, and a leak assertion whose `drivers_under` fails so `leaked` stays
+# empty and the case passes GREEN. That is not hypothetical -- `loop/` is
+# hand-synced file by file to the live plane, so "this file has not arrived yet"
+# is the default state after a merge.
+# shellcheck source=/dev/null
+. "$HERE/reap_test_drivers.sh" || {
+  echo "FAIL - reap_test_drivers.sh could not be sourced (#821)"; exit 1; }
+# The registry is a FILE, not a variable. Every tree is created inside a command
+# substitution -- `r="$(run_case ...)"`, `shtmp="$(mk_tmp)"` -- which runs in a
+# SUBSHELL, so an appended variable is discarded the moment the substitution
+# closes and the parent's list stays empty. A variable registry here would leave
+# the trap with nothing to clean and make the leak assertion below pass
+# VACUOUSLY: green suite, orphaned driver, exactly the #821 failure. (Measured:
+# the first version of this fix did precisely that.)
+REG_FILE="$(mktemp)" || REG_FILE=""
+# Hard-fail: with no registry file the trap cleans nothing, every tree and driver
+# leaks, and case 19's `done <"$REG_FILE"` fails so `leaked` stays empty and the
+# leak assertion passes GREEN. The registry is the single point of failure for
+# both, so it is the one thing that must be validated.
+[ -n "$REG_FILE" ] && [ -f "$REG_FILE" ] || { echo "FAIL - could not create the fixture registry (#821)"; exit 1; }
+mk_tmp() { mt_d="$(mktemp -d)"; echo "$mt_d" >>"$REG_FILE"; echo "$mt_d"; }
+# KEEP_TMP=1 keeps the trees for debugging -- but NEVER the processes: an
+# orphaned driver is the defect, not a diagnostic.
+# Idempotent: the INT/TERM handler's `exit 130` re-fires the EXIT trap, and the
+# second pass would read a $REG_FILE it has already removed -- a "No such file"
+# on stderr at exactly the moment someone is watching the output.
+rr_done=""
+reap_registered() {
+  [ -z "$rr_done" ] || return 0
+  rr_done=1
+  rr_ps="$(ps -ww -eo pid=,command= 2>/dev/null)"
+  while read -r rr_t; do
+    [ -n "$rr_t" ] && [ -d "$rr_t" ] || continue
+    if [ -n "${KEEP_TMP:-}" ]; then reap_kill_under "$rr_t" "$rr_ps"
+    else reap_known_tree "$rr_t" "$rr_ps" >/dev/null 2>&1 || true; fi
+  done <"$REG_FILE"
+  # KEEP_TMP keeps the LIST too -- a set of kept trees with no record of which
+  # ones they are is a poor diagnostic.
+  [ -n "${KEEP_TMP:-}" ] && echo "note - kept fixture trees listed in $REG_FILE" || rm -f "$REG_FILE"
+}
+rr_rc=0
+trap 'rr_rc=$?; reap_registered; exit "$rr_rc"' EXIT
+trap 'reap_registered; exit 130' INT TERM
+# And sweep what earlier runs left behind. Bounded to trees older than an hour so
+# a concurrently-running suite's trees are never pulled out from under it.
+if stale_reaped="$(reap_stale_trees 60)" && [ -n "$stale_reaped" ]; then
+  [ "$stale_reaped" = "0" ] || echo "note - reaped $stale_reaped stale fixture tree(s) from earlier runs (#821)"
+else
+  # An empty count is a FAILED sweep, not a clean one. Saying "reaped  trees"
+  # would report the failure as a success.
+  echo "note - stale-tree sweep could not run (temp root unreadable) (#821)"
+fi
+
 # One scenario: $1=utilization-json-or-EMPTY  $2=extra env  -> echoes fire count
 run_case() {
   rc_util="$1"; shift
-  tmp="$(mktemp -d)"; bin="$tmp/bin"; mkdir -p "$bin"
+  tmp="$(mk_tmp)"; bin="$tmp/bin"; mkdir -p "$bin"
   # --- stubs -----------------------------------------------------------------
   # No operator signals. GH_OPEN_PR=1 puts an open PR in front of the driver so
   # the gate-wait path is reachable; `pr checks` then always reports pending, so
@@ -236,6 +304,28 @@ EOS
   cat >"$tmp/infra/run.sh" <<'EOS'
 #!/bin/bash
 echo fired >>"$REPO/fires.txt"
+# #821: the fixture kill switch. The driver runs this on EVERY fire, so this is
+# the one place a bound can sit that survives the harness being SIGKILLed and the
+# driver re-exec'ing itself. It bounds a driver that keeps FIRING -- the observed
+# orphan, 3,177 fires. It does NOT bound one wedged in an inner loop that never
+# reaches a fire (`ensure_auth`, the gate wait); that bound belongs to drive.sh
+# itself and is out of scope here (#819). Scoped to $INFRA/drive.sh: the live control plane at
+# ~/Dev/studio-loop/drive.sh can never match. The pid is read with default-IFS
+# word splitting because `ps -o pid=` right-justifies it, and `${line%% *}` on a
+# space-padded line strips the WHOLE line -- a kill switch that kills nothing.
+if [ -f "$INFRA/.fixture_deadline" ]; then
+  fd_at="$(cat "$INFRA/.fixture_deadline" 2>/dev/null)"
+  # Strictly `-?[0-9]+`. The looser `*[!0-9-]*` admitted `1-2-3`, on which
+  # `[ "$now" -gt ... ]` errors and the `if` takes the FALSE branch -- a kill
+  # switch that is silently off. A bound must not fail open.
+  case "${fd_at#-}" in "" | *[!0-9]*) fd_at="" ;; esac
+  if [ -n "$fd_at" ] && [ "$(date +%s)" -gt "$fd_at" ]; then
+    ps -ww -eo pid=,command= 2>/dev/null | while read -r fd_pid fd_cmd; do
+      case "$fd_cmd" in *"$INFRA/drive.sh"*) kill -9 "$fd_pid" 2>/dev/null || true ;; esac
+    done
+    exit 1
+  fi
+fi
 # #811: what the FIRE sees of the adopt marker. The driver carries the adopt
 # count in the environment as a second carrier for the MAX_SELF_ADOPT cap, and
 # must unset it before any child runs -- a stray DRIVE_ADOPT_COUNT in an agent's
@@ -302,6 +392,31 @@ exit "${RUN_RC:-0}"
 EOS
   chmod +x "$tmp/infra/run.sh"
   cp "$HERE/drive.sh" "$tmp/infra/drive.sh"
+
+  # #821: the deadline the stub run.sh enforces. This is the half of the fix that
+  # does not ride the harness: a `trap` dies with the shell, and the orphan that
+  # started this ticket was born exactly when the suite was killed. The deadline
+  # is on DISK in $INFRA, so it survives both that and the driver's own self-exec.
+  # The bound to clear is MAX_LOOPS x GATE_WAIT_SLEEP: `run_case` pins
+  # GATE_WAIT_TRIES=1 but NOT GATE_WAIT_SLEEP, whose default in drive.sh is 30 --
+  # so a future gate-wait case that forgets `GATE_WAIT_SLEEP=0` (every current one
+  # sets it) would legitimately take 12 x 30 = 360s. 1200s leaves that a 3x margin
+  # while still being a bound; it exists to make an immortal driver impossible,
+  # not to be tight. The earlier figure here was derived from `sleep 0.10`, which
+  # is not a sleep at all -- it is run_case's utilization argument.
+  rc_ttl=1200
+  for rc_a in "$@"; do
+    case "$rc_a" in
+      FIXTURE_TTL=*)
+        rc_v="${rc_a#FIXTURE_TTL=}"
+        # Validated, because `$(( now + abc ))` resolves a bare name to 0 (giving
+        # "deadline = now" for a typo) and `$(( now + 08 ))` is a fatal expansion
+        # error that takes the subshell with it. Both would look like the
+        # deadline firing correctly.
+        case "${rc_v#-}" in "" | *[!0-9]*) : ;; *) rc_ttl="$rc_v" ;; esac ;;
+    esac
+  done
+  echo "$(( $(date +%s) + rc_ttl ))" >"$tmp/infra/.fixture_deadline"
 
   # FRESH_LOGDIR=1 points DLOG at a directory that does NOT exist, which is what
   # a first run under a new INFRA looks like (the README's cutover procedure).
@@ -1262,7 +1377,7 @@ check "...and logs no shadow line at all" "1" \
 #     /dev/null as well. Both halves are asserted, since either alone is enough.
 # Studio ANSWERS here (97%, a refusing figure) so the assertions cannot pass merely
 # because the probe did nothing -- the stamp and the log line are checked too.
-shtmp="$(mktemp -d)"
+shtmp="$(mk_tmp)"
 mkdir -p "$shtmp/bin" "$shtmp/infra"
 printf '#!/bin/bash\necho %s\n' \
   "'"'{"account":{"claude":{"seven_day":{"utilization":0.97}}}}'"'" >"$shtmp/bin/curl"
@@ -1339,7 +1454,7 @@ sgrun() {  # $1 = stamp path, $2 = infra dir. The curl stub marks $sgtmp/polled.
   while [ "$sg_i" -lt 15 ]; do kill -0 "$sg_pid" 2>/dev/null || break; sleep 1; sg_i=$((sg_i + 1)); done
   kill -9 "$sg_pid" 2>/dev/null || true
 }
-sgtmp="$(mktemp -d)"
+sgtmp="$(mk_tmp)"
 mkdir -p "$sgtmp/bin"
 printf '#!/bin/bash\n: >"%s/polled"\necho %s\n' "$sgtmp" \
   "'"'{"account":{"claude":{"seven_day":{"utilization":0.97}}}}'"'" >"$sgtmp/bin/curl"
@@ -1368,7 +1483,7 @@ rm -rf "$sgtmp"
 # only thing that can is comparing the file NOW against what it was when this
 # process booted. Every failure path must read UNKNOWN, never `live` -- the same
 # rule that keeps UNREADABLE distinct from 0% in the quota guard.
-dctmp="$(mktemp -d)"
+dctmp="$(mk_tmp)"
 mkdir -p "$dctmp/infra"
 printf '#!/bin/bash\necho boot\n' >"$dctmp/fake_drive.sh"
 # Bounded exactly like case 17: a broken source guard turns `.` into an
@@ -1455,7 +1570,7 @@ rm -rf "$dctmp"
 # the 2026-07-31 incident the plane was in sync and the process was not). Uses a
 # REAL git repo rather than a stubbed one: the thing under test is a git
 # comparison, so stubbing git would assert on the mock.
-pdtmp="$(mktemp -d)"
+pdtmp="$(mk_tmp)"
 git init -q --bare "$pdtmp/origin" 2>/dev/null
 mkdir -p "$pdtmp/src/loop/sub" "$pdtmp/infra/sub"
 git init -q "$pdtmp/src" 2>/dev/null
@@ -1593,7 +1708,7 @@ rm -rf "$pdtmp"
 # attended run alongside the scheduled one) could `head -1` an emptied file and
 # read a live record as "no record". Temp-then-rename closes that window, and
 # routing all three through one function gives the format an owner on both sides.
-swtmp="$(mktemp -d)"
+swtmp="$(mk_tmp)"
 mkdir -p "$swtmp/infra" "$swtmp/ro"
 # The pre-existing record case (c) needs a directory the writer cannot create in.
 # Seeded BEFORE the chmod, and the write-block is asserted below rather than
@@ -1978,7 +2093,7 @@ check "...and the #808 STALE report still names the manual remedy" "1" \
 # `quota_stamped_discard` on this destination, and pointing that at a shared
 # system directory -- even though `rm -f` refuses a directory -- is not something
 # a test should read as normal.
-r46edir="$(mktemp -d)"
+r46edir="$(mk_tmp)"
 r46e="$(run_case 0.10 MUTATE_DRIVE=comment DRIVER_HANDOFF="$r46edir" MAX_LOOPS=3)"
 l46e="$(logof "$r46e")"
 check "a handoff that cannot be WRITTEN refuses the exec (#811)" "0" \
@@ -1997,7 +2112,7 @@ rmdir "$r46edir" 2>/dev/null || true
 # `$$` inside this backgrounded subshell is the TEST SCRIPT's pid (verified:
 # bash keeps $$ stable across subshells; BASHPID is the one that changes), which
 # is exactly why a record written with `$$` here reads as a continuation there.
-hftmp="$(mktemp -d)"
+hftmp="$(mk_tmp)"
 mkdir -p "$hftmp/infra"
 hfnow="$(date +%s)"
 printf '%s v=1,pid=%s,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
@@ -2108,7 +2223,7 @@ rm -rf "$hftmp"
 # $INFRA/logs/ anyway. The guard is only worth having if nothing outruns it.
 # Bounded with a background pid + poll: if the guard ever breaks, the body is an
 # unconditional `while true` and a plain `.` would hang this suite forever.
-srctmp="$(mktemp -d)"
+srctmp="$(mk_tmp)"
 (
   set -uo pipefail
   # exported because the SOURCED file is what reads them; shellcheck cannot see
@@ -2127,6 +2242,38 @@ check "sourcing drive.sh returns instead of running the loop" "1" "$src_hung"
 check "sourcing drive.sh creates no directories" "1" \
   "$([ -d "$srctmp/infra/logs" ] && echo 0 || echo 1)"
 rm -rf "$srctmp"
+
+# --- 18. #821 the fixture deadline kills a driver the harness cannot ---------
+# FIXTURE_TTL=-5 back-dates the deadline, so the FIRST fire is already past it.
+# A driver with MAX_LOOPS=12 and MAX_FIRES=0 would otherwise fire twelve times;
+# one fire means the stub run.sh reached up and killed its own driver. That is
+# the only bound in this suite that does not depend on the harness still being
+# alive, which is the whole point -- the #821 orphan was born when the harness
+# was killed.
+r821="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 MAX_LOOPS=12 FIXTURE_TTL=-5)"
+check "the fixture deadline stops the driver on its first fire" "1" "$(fires_of "$r821")"
+# ...and the same case WITHOUT the back-dated deadline still runs to its cap, so
+# the assertion above is about the deadline and not about some other refusal.
+r821b="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 MAX_LOOPS=12)"
+check "an in-date deadline does not interfere" "12" "$(fires_of "$r821b")"
+
+# --- 19. #821 no fixture driver outlived its case ---------------------------
+# The leak canary. Runs LAST, before the exit trap cleans up, and asks the real
+# process table whether anything is still running out of a tree this suite built.
+#
+# Scoped honestly: `run_case` runs its driver in the FOREGROUND, so no run_case
+# driver can outlive its own case while this suite is still alive to assert
+# anything -- and the #821 orphan was born on the path where the suite is KILLED
+# and this line never runs at all (that path is the deadline's job, not this
+# one's). What this catches is a FUTURE backgrounded spawn that forgets to clean
+# up, which is cheap insurance in a suite that already backgrounds ~8 subshells.
+leaked=""
+leak_ps="$(ps -ww -eo pid=,command= 2>/dev/null)"
+while read -r lk_t; do
+  [ -n "$lk_t" ] && [ -d "$lk_t" ] || continue
+  for lk_p in $(drivers_under "$lk_t" "$leak_ps"); do leaked="$leaked $lk_p"; done
+done <"$REG_FILE"
+check "no run_case fixture driver outlived its case (#821)" "" "${leaked# }"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi

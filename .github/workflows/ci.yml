@@ -105,9 +105,18 @@ jobs:
             grep -qF 'utilization' "$f" || fail "$f no longer reads utilization"
           done
 
+      - name: Fixture reaper tests
+        # #821. The quota-guard suite below spawns REAL drivers inside throwaway
+        # trees, and one of them outlived its run by an hour (3,177 stub fires,
+        # ppid 1) because the only bound was the harness's own liveness. This is
+        # the reaper that cleans up after it; its cases are mostly REFUSALS, since
+        # a gate that only ever says yes is the bug rather than the fix.
+        run: bash loop/test_reap_test_drivers.sh
+
       - name: Quota-guard + fire-budget tests
         # Drives the REAL drive.sh with PATH stubs for gh/git/curl/claude, so it
-        # makes no network calls and spends no tokens.
+        # makes no network calls and spends no tokens. Its last case asserts no
+        # fixture driver outlived its case (#821) -- a leak is now RED, not silent.
         run: bash loop/test_quota_guard.sh
 
       - name: Studio-server LaunchAgent installer tests
