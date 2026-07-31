@@ -1435,6 +1435,9 @@ shrun() {  # $1 = the exact body curl should echo. Echoes the driver.log line.
   # format string would be one escaping bug away from testing the wrong body.
   {
     echo '#!/bin/bash'
+    # Append-based call counter: the probe must take ONE sample, and a suite that
+    # cannot count polls cannot tell one from two.
+    echo "echo 1 >>\"$shrtmp/polls\""
     echo 'cat <<'\''BODY'\'''
     echo "$1"
     echo 'BODY'
@@ -1455,28 +1458,37 @@ shrun() {  # $1 = the exact body curl should echo. Echoes the driver.log line.
   shr_i=0
   while [ "$shr_i" -lt 15 ]; do kill -0 "$shr_pid" 2>/dev/null || break; sleep 1; shr_i=$((shr_i + 1)); done
   kill -9 "$shr_pid" 2>/dev/null || true
-  sed -n 's/.*\(quota shadow: studio [^(]*\).*/\1/p' "$shrtmp/infra/driver.log" 2>/dev/null | tail -1
+  # Cut at " (diagnostic", NOT at the first "(" -- the reason suffix is itself
+  # parenthesised, so a `[^(]*` capture silently swallows the very thing these
+  # cases assert and every one of them passes vacuously. (It did; that is why
+  # this comment exists.)
+  sed -n 's/.*\(quota shadow: studio .*\) (diagnostic.*/\1/p' "$shrtmp/infra/driver.log" 2>/dev/null | tail -1
+  # To a FILE, not a variable: every caller runs `shrun` inside `$(...)`, and a
+  # subshell's variable assignment dies with it -- the same trap that ate two
+  # registries during #821. A file crosses the boundary.
+  wc -l <"$shrtmp/polls" 2>/dev/null | tr -d ' \n' >"$SHR_POLLS"
   rm -rf "$shrtmp"
 }
+SHR_POLLS="$(mk_tmp)/polls"
 
 # 29h. The reason rides the line. `rate_limited` specifically, because that is
 # the one the C3 evidence keeps hitting and the one most wrongly read as a studio
 # fault.
 check "the shadow names a rate-limited account rather than blaming studio (#825)" \
-  "quota shadow: studio UNREADABLE (rate_limited) " \
+  "quota shadow: studio UNREADABLE (rate_limited)" \
   "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}')"
 
 # 29i. ...and it is the SERVER's reason, not a constant. Without this, hardcoding
 # the string above would pass 29h.
 check "...and reports the cause it was actually given (#825)" \
-  "quota shadow: studio UNREADABLE (no_credential) " \
+  "quota shadow: studio UNREADABLE (no_credential)" \
   "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"no_credential"}}')"
 
 # 29j. A READING carries no reason suffix. The iff-contract, seen from the
 # consumer: a line that both quotes a percent and explains its absence is
 # incoherent, and would mean the server emitted both.
 check "a readable probe logs the percent with no reason attached (#825)" \
-  "quota shadow: studio 97% " \
+  "quota shadow: studio 97%" \
   "$(shrun '{"account":{"claude":{"seven_day":{"utilization":0.97}}},"unavailable":{"claude":"rate_limited"}}')"
 
 # 29k. Anything that is not the contract's enum degrades to the OLD line rather
@@ -1489,10 +1501,19 @@ for sh_body in \
   '{"account":{"claude":null},"unavailable":{"claude":"RATE LIMITED; rm -rf /"}}' \
   '{"account":{"claude":null},"unavailable":{"claude":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'; do
   check "an unrecognised reason degrades to the bare line, never a corrupt one (#825)" \
-    "quota shadow: studio UNREADABLE " "$(shrun "$sh_body")"
+    "quota shadow: studio UNREADABLE" "$(shrun "$sh_body")"
 done
 
-# 29l. The reason NEVER reaches the decision path. `quota_read_url` is what
+# 29l. ONE sample, not two. The percent and the reason must come from the SAME
+# response: studio re-polls its provider once its throttle window elapses, so a
+# second call can legitimately answer differently, and the probe would then
+# attribute a cause that belongs to a reading it did not log. Reading the body
+# once is what forbids that, and this is the assertion that keeps it true -- a
+# refactor back to two `quota_read_url`-style calls goes red here.
+check "the probe takes ONE sample, so the reason belongs to the reading (#825)" "1" \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}' >/dev/null; cat "$SHR_POLLS")"
+
+# 29m. The reason NEVER reaches the decision path. `quota_read_url` is what
 # `quota_pct` reads, and a stray token on its stdout makes `[ "$x" -ge "$y" ]`
 # return 2 -- neither branch, so the gate logs "quota ok" and FIRES. The one
 # polarity this guard may not have, and the reason the parse is split rather than
