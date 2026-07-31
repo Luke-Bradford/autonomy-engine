@@ -22,24 +22,50 @@
 #
 #   * `reap_tree` (gate: `fixture_tree_is_ours`) is for a BLIND sweep of
 #     directories nobody vouched for. It demands the full fixture signature --
-#     `tmp.*` directly in `$TMPDIR`, plus `infra/drive.sh` + `bin/claude` +
+#     `tmp.*` directly in the temp root, plus `infra/drive.sh` + `bin/claude` +
 #     `bin/gh` -- because the only evidence available is what is on disk.
 #   * `reap_known_tree` (gate: `tree_path_is_disposable`) is for a directory THIS
 #     RUN created and recorded. Provenance is already established, so requiring a
 #     signature would be wrong, not stricter: the suite's ad-hoc trees hold an
 #     `infra/` and no stub `bin/` at all, and a signature-gated trap would refuse
 #     to clean up exactly the trees it exists to clean up. It still demands an
-#     absolute `tmp.*` path directly inside `$TMPDIR`.
+#     absolute `tmp.*` path directly inside the temp root.
 #
 # Neither gate can reach the live control plane at `~/Dev/studio-loop/drive.sh`:
-# it is not under `$TMPDIR`, and `drivers_under` matches on the candidate tree's
+# it is not under the temp root, and `drivers_under` matches on the candidate tree's
 # own absolute path, so its command line cannot match another tree's query. A
-# relative path, `/`, an empty string, and any directory outside `$TMPDIR` are
+# relative path, `/`, an empty string, and any directory outside the temp root are
 # refused by both.
+
+# --- reap_temp_root: where `mktemp -d` ACTUALLY writes -----------------------
+# Echoes the directory bare `mktemp -d` creates into, probed once and cached.
+#
+# Deliberately probed, not read from `$TMPDIR`. macOS `mktemp` IGNORES `$TMPDIR`
+# for a template-less call -- it uses `_CS_DARWIN_USER_TEMP_DIR` -- so a gate
+# written against `$TMPDIR` refuses every real fixture tree the moment anything
+# sets that variable, and the reaper silently stops reaping. (Measured: exporting
+# `TMPDIR` and calling `mktemp -d` returns a path under the ORIGINAL root on this
+# Mac.) GNU mktemp does honour `$TMPDIR`, so the two platforms disagree; asking
+# mktemp itself is the only answer that is right on both.
+#
+# `REAP_TEMP_ROOT` may be pre-set to override the probe. That is the TEST SEAM --
+# it is how the reaper's own suite gets a sandbox root that macOS's mktemp would
+# otherwise ignore -- and it is also the only way a caller can point the gates at
+# a root that is not the process's own temp dir.
+reap_temp_root() {
+  if [ -z "${REAP_TEMP_ROOT:-}" ]; then
+    rtr_probe="$(mktemp -d 2>/dev/null)" || return 1
+    [ -n "$rtr_probe" ] || return 1
+    REAP_TEMP_ROOT="$(dirname "$rtr_probe")"
+    rmdir "$rtr_probe" 2>/dev/null || true
+  fi
+  echo "$REAP_TEMP_ROOT"
+}
 
 # --- tree_path_is_disposable: the PATH-SHAPE gate ----------------------------
 # $1 = candidate directory. Returns 0 only for an existing `mktemp -d`-shaped
-# directory sitting directly in this process's `$TMPDIR`. This is the weaker of
+# directory sitting directly in this process's temp root (see `reap_temp_root`).
+# This is the weaker of
 # the two gates and is sound only where the CALLER already knows the path's
 # provenance (it created and recorded it).
 tree_path_is_disposable() {
@@ -52,13 +78,8 @@ tree_path_is_disposable() {
     *) return 1 ;;
   esac
   [ -d "$tpid_dir" ] || return 1
-  # `$TMPDIR` carries a trailing slash on macOS and usually none on Linux, so
-  # compare against a normalised copy rather than the raw value -- otherwise the
-  # parent test fails on exactly one of the two platforms this runs on.
-  tpid_tmp="${TMPDIR:-/tmp}"
-  while [ "${tpid_tmp%/}" != "$tpid_tmp" ] && [ "$tpid_tmp" != "/" ]; do
-    tpid_tmp="${tpid_tmp%/}"
-  done
+  tpid_tmp="$(reap_temp_root)" || return 1
+  [ -n "$tpid_tmp" ] || return 1
   [ "$(dirname "$tpid_dir")" = "$tpid_tmp" ] || return 1
   case "$(basename "$tpid_dir")" in
     tmp.?*) return 0 ;;
@@ -72,7 +93,7 @@ tree_path_is_disposable() {
 fixture_tree_is_ours() {
   ftio_dir="${1:-}"
   tree_path_is_disposable "$ftio_dir" || return 1
-  # `mktemp -d` alone gets you a `tmp.*` directory under $TMPDIR; what makes an
+  # `mktemp -d` alone gets you a `tmp.*` directory in the temp root; what makes an
   # unvouched-for one OURS is the stub tree inside. Requiring three separate
   # members means an unrelated tool's temp dir cannot collide by accident, and a
   # HALF-built fixture (the suite dying between `mktemp` and the stubs) is left
@@ -89,7 +110,7 @@ fixture_tree_is_ours() {
 #
 # Matches on the tree's own absolute path, which is what makes this safe: the
 # live driver's command line is `/Users/.../studio-loop/drive.sh` and cannot
-# contain a `$TMPDIR/tmp.*/infra/drive.sh` substring. `ps` output is captured
+# contain a `<temp root>/tmp.*/infra/drive.sh` substring. `ps` output is captured
 # BEFORE it is searched -- searching through a pipe would put grep's own argv
 # (which contains the pattern) into the very snapshot being searched, and the
 # reaper would report a driver that is really its own matcher.
@@ -174,11 +195,8 @@ reap_stale_trees() {
       return 1
       ;;
   esac
-  rst_tmp="${TMPDIR:-/tmp}"
-  while [ "${rst_tmp%/}" != "$rst_tmp" ] && [ "$rst_tmp" != "/" ]; do
-    rst_tmp="${rst_tmp%/}"
-  done
-  [ -d "$rst_tmp" ] || return 0
+  rst_tmp="$(reap_temp_root)" || return 1
+  [ -n "$rst_tmp" ] && [ -d "$rst_tmp" ] || return 0
   rst_n=0
   # ONE `ps` for the whole sweep -- see `drivers_under`'s $2. Per-tree it was
   # minutes of fork+exec across the 6,768 trees #821 measured.
@@ -197,5 +215,5 @@ reap_stale_trees() {
 # Executable body guarded: sourcing this file only defines the functions.
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   reaped="$(reap_stale_trees "${1:-60}")"
-  echo "reaped $reaped stale fixture tree(s) older than ${1:-60}m from ${TMPDIR:-/tmp}"
+  echo "reaped $reaped stale fixture tree(s) older than ${1:-60}m from $(reap_temp_root)"
 fi
