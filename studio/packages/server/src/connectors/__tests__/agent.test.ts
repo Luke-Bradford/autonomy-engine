@@ -1070,6 +1070,62 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
     expect(events[2]).toMatchObject({ outputs: { exitCode: 2 } });
   });
 
+  // The pattern is matched against a BOUNDED excerpt, not the whole transcript
+  // (`MAX_CLI_MATCH_CHARS` = 64k, head + tail). `RegExp.test` is synchronous, and
+  // an `agent_task` transcript runs to `maxOutputBytes` (10 MB default), so an
+  // unbounded scan stalls the server's only thread on every failed node — a cost
+  // the single-completion `llm_call` shape never had. These three pin the bound's
+  // shape: what it deliberately stops seeing, what it must still see, and that
+  // eliding the middle cannot FORGE a match across the seam.
+  const overCap = (head: string, tail: string, gap = 100) =>
+    `${'x'.repeat(32_000 - head.length)}${head}${'z'.repeat(gap)}${tail}${'y'.repeat(32_000 - tail.length)}`;
+
+  it('does NOT match a pattern buried in the elided MIDDLE of an over-cap transcript', async () => {
+    // The deliberate narrowing. A refusal 40k chars deep in an 80k transcript is
+    // not the reason the process exited; the exit reason is at one end or the
+    // other. Costs a mid-transcript mention, buys a bounded scan.
+    const { supervisor } = fakeSupervisor(
+      [
+        {
+          stream: 'stdout',
+          line: `${'x'.repeat(40_000)}usage limit reached${'y'.repeat(40_000)}`,
+        },
+      ],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+  });
+
+  it('STILL matches a refusal in the TAIL of an over-cap transcript — the cap must not miss real ones', async () => {
+    // The half that matters for #799: a CLI prints why it is exiting LAST, so a
+    // cap that dropped the tail would reopen the hot loop this ticket closed.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: `${'x'.repeat(80_000)}\nError: usage limit reached` }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events[2]).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('does NOT forge a match across the elision seam (head + tail are not spliced bare)', async () => {
+    // `headTailExcerpt`'s marker is load-bearing, not decoration: a head ending
+    // 'usage li' spliced onto a tail starting 'mit reached' would invent a quota
+    // refusal — and arm a connection-wide window — out of two unrelated fragments.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: overCap('usage li', 'mit reached') }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+  });
+
   it('does NOT consult the quota pattern on a successful (exit 0) completion', async () => {
     // A clean run whose transcript happens to discuss rate limits is NOT a refusal.
     const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'usage limit reached' }], {

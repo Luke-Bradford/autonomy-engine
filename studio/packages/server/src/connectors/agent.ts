@@ -230,6 +230,51 @@ function cliSpendFact(model: string): Extract<ActivityEvent, { type: 'metered' }
  * `runAgentTask`, so it played no part in the gap #799 fixed.) */
 const MAX_CLI_DIAGNOSTIC_CHARS = 1000;
 
+/**
+ * The cap on how much diagnostic text the operator's `quota.exhaustionPattern`
+ * is matched against. Deliberately MUCH larger than the persisted excerpt: this
+ * is an availability bound, not the evidence bound.
+ *
+ * Why it exists (#799 review): on `llm_call` the matched text is a single
+ * completion, but on `agent_task` it is the whole transcript, up to the
+ * connection's `maxOutputBytes` (10 MB by default), and the match is a
+ * SYNCHRONOUS `RegExp.test` on the server's only thread. Scanning megabytes per
+ * failed node is an event-loop stall the `llm_call` shape never had.
+ *
+ * Be honest about what this does and does not buy. It bounds the INPUT, so it
+ * bounds the cost of a well-behaved pattern and of polynomial backtracking. It
+ * does NOT make a catastrophically-backtracking pattern safe — `(a+)+$` blows up
+ * on a few dozen characters, so no input cap saves it. That residual risk is
+ * bounded elsewhere, by the pattern being operator-authored rather than
+ * agent-influenced; it is the TEXT that grew by orders of magnitude here, and
+ * the text is what this caps.
+ *
+ * 64k chars ≈ 160× smaller than the default transcript ceiling while staying far
+ * wider than any real CLI refusal. The head keeps stderr (which leads the joined
+ * diagnostic) and the tail keeps the end of stdout, where a CLI that exits
+ * non-zero prints the reason it is exiting.
+ *
+ * This is a SIZE bound only. WHICH CHANNELS `agent_task` should match at all —
+ * stderr only, or stderr plus a stdout tail — is a semantics decision that needs
+ * evidence about real CLI behaviour, and stays with #816. */
+const MAX_CLI_MATCH_CHARS = 64_000;
+
+/**
+ * `text` bounded to `cap` characters, keeping BOTH ends with a middle elision.
+ *
+ * Head + tail rather than either alone because a CLI may print the real error
+ * EARLY (then trail off in progress noise) OR summarise it at the END, so
+ * preserving only one end can bury the signal.
+ *
+ * The elision marker is load-bearing, not decoration: splicing the head directly
+ * onto the tail could FORGE a match across the seam (`…usage li` + `mit
+ * reached…`), inventing a quota refusal out of two unrelated fragments. */
+function headTailExcerpt(text: string, cap: number): string {
+  if (text.length <= cap) return text;
+  const half = Math.floor(cap / 2);
+  return `${text.slice(0, half)}…${text.slice(-half)}`;
+}
+
 /** The validated `quota` block of an `agent_cli` connection config. */
 type AgentQuotaHint = NonNullable<AgentConnectionConfig['quota']>;
 
@@ -268,10 +313,11 @@ type CliTerminal = CliClassification['terminal'];
  * connection-wide window that admission-gates every other run bound to that
  * connection until it elapses. A self-referential agent (one reading logs that
  * discuss quota) is a plausible trip. Bounded by the pattern being operator-
- * authored and opt-in; narrowing the `agent_task` match surface is tracked
- * separately. The same size note applies to the regex itself — it runs
- * synchronously over that transcript, so a backtracking-prone pattern is an
- * event-loop hazard.
+ * authored and opt-in; narrowing WHICH CHANNELS `agent_task` matches at all is a
+ * semantics decision tracked separately (#816). The SIZE half of that surface is
+ * bounded here and now: the pattern is tested against a `MAX_CLI_MATCH_CHARS`
+ * excerpt, not the whole transcript, because the `test` is synchronous and
+ * scanning megabytes on the server's only thread is an event-loop stall.
  *
  * The pattern is boundary-validated compilable by `agentConnectionConfigSchema`
  * (re-parsed on every dispatch), so `new RegExp` here cannot throw.
@@ -288,8 +334,15 @@ function diagnoseCliExit(
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .join('\n');
+  // Match against a BOUNDED excerpt (`MAX_CLI_MATCH_CHARS`) — an `agent_task`
+  // transcript can be megabytes and this `test` is synchronous. The FULL
+  // `diagnostic` is still returned: the excerpt bounds what the pattern scans,
+  // not what the failure event reports.
   const quotaHit =
-    quota !== undefined && new RegExp(quota.exhaustionPattern).test(diagnostic) ? quota : undefined;
+    quota !== undefined &&
+    new RegExp(quota.exhaustionPattern).test(headTailExcerpt(diagnostic, MAX_CLI_MATCH_CHARS))
+      ? quota
+      : undefined;
   return { diagnostic, quotaHit };
 }
 
@@ -304,15 +357,12 @@ function diagnoseCliExit(
  * fully scrubbed. Same never-leak discipline every sibling adapter upholds
  * (http/llm-shared → `redactSecrets`).
  *
- * Keep BOTH ends when over the cap: a CLI may print the real error EARLY (then
- * trail off in progress noise) OR summarise it at the END, so preserving only
- * one end can bury the signal. Head + tail with a middle elision covers both.
+ * Bounding is `headTailExcerpt` (which keeps both ends, for the reason stated
+ * there). The ORDER is what is specific to this function: redact first, bound
+ * second.
  */
 function cliFailureDetail(diagnostic: string, secret: string | null): string {
-  const raw = redactSecrets(diagnostic, [secret]);
-  if (raw.length <= MAX_CLI_DIAGNOSTIC_CHARS) return raw;
-  const half = Math.floor(MAX_CLI_DIAGNOSTIC_CHARS / 2);
-  return `${raw.slice(0, half)}…${raw.slice(-half)}`;
+  return headTailExcerpt(redactSecrets(diagnostic, [secret]), MAX_CLI_DIAGNOSTIC_CHARS);
 }
 
 /**
