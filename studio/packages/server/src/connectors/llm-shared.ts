@@ -522,9 +522,15 @@ export function unsupportedParamFailure(
   model: string,
   params: readonly [UnsupportedParam, ...UnsupportedParam[]],
 ): Extract<ActivityEvent, { type: 'failed' }> {
-  // "a and b", not "a, b" — an operator reads this. The join is n-safe; today
-  // the list happens to be ≤2 because the two capability sets are disjoint, but
-  // nothing here relies on that (a model in both sets yields three names).
+  // "a and b", not "a, b" — an operator reads this. The join is n-safe, and
+  // #752 made that load-bearing rather than hypothetical: this comment used to
+  // say the list "happens to be ≤2 because the two capability sets are
+  // disjoint". They are no longer disjoint. `o1-mini` is in BOTH of the OpenAI
+  // sets, so an author setting `temperature` and `reasoningEffort` on it really
+  // does get three names across two cause-grouped sentences — and the two
+  // remedies point OPPOSITE ways (an older model for the sampling knobs, a
+  // newer one for the reasoning knob). Both are individually correct; nothing
+  // here relies on disjointness, and the rendered pair is pinned by test.
   const join = (names: readonly string[]): string =>
     names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]!;
 
@@ -1229,11 +1235,20 @@ export function coerceStopReason(value: unknown): string {
  * vocabulary. Anthropic (`output_config.effort`) and Ollama (`think`) both accept
  * the full `low|medium|high|max` enum verbatim, so ONLY OpenAI needs a mapping:
  * its canonical levels are `low|medium|high` (some newer models also accept
- * `minimal`/`xhigh`, but never `max`), so `max` clamps DOWN to the strongest
- * universally-valid level, `high`. Clamping (not dropping) preserves the author's
- * "maximum reasoning" intent on the provider that lacks a `max` rung. This is the
- * single place that decides the OpenAI lowering, mirroring how `meterUsage` is the
+ * `minimal`/`xhigh`), so `max` clamps DOWN to the strongest universally-valid
+ * level, `high`. Clamping (not dropping) preserves the author's "maximum
+ * reasoning" intent on the provider that lacks a `max` rung. This is the single
+ * place that decides the OpenAI lowering, mirroring how `meterUsage` is the
  * single place that classifies usage completeness.
+ *
+ * #752 CORRECTED THE REASON, not the behaviour. This comment used to assert
+ * OpenAI accepts `max` "never"; the source (Microsoft Learn, "Azure OpenAI
+ * reasoning models") in fact states `max` IS accepted — "only supported with
+ * `gpt-5.6` and Responses API". The clamp remains right for THIS adapter,
+ * because it posts only to `/chat/completions`, so no reachable model here
+ * takes `max`. The distinction matters if a Responses-API path is ever added:
+ * the lowering would then be wrong for exactly one model rather than
+ * universally correct, and this is the single place that would need to know.
  */
 export function openAiReasoningEffort(effort: ReasoningEffort): 'low' | 'medium' | 'high' {
   return effort === 'max' ? 'high' : effort;

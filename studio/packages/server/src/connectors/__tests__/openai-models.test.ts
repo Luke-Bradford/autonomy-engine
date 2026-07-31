@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_OPENAI_BASE_URL,
+  MODELS_REJECTING_REASONING_EFFORT,
   MODELS_REJECTING_SAMPLING_PARAMS,
   isOpenAiFirstParty,
   openAiUsesMaxCompletionTokens,
@@ -8,7 +9,7 @@ import {
 } from '../openai-models.js';
 import { normalizeModelId } from '../llm-shared.js';
 
-const NONE = { hasTemperature: false, hasTopP: false };
+const NONE = { hasTemperature: false, hasTopP: false, hasReasoningEffort: false };
 
 describe('unsupportedOpenAiParams (#730)', () => {
   it('returns nothing when the author set neither sampling param', () => {
@@ -21,7 +22,13 @@ describe('unsupportedOpenAiParams (#730)', () => {
   // test would move input and expectation in lockstep, so these could only fail
   // on a change to the function body. The membership pin below guards the data.
   it.each(['o3', 'o4-mini', 'gpt-5', 'gpt-5.4-mini'])('names both params on %s', (model) => {
-    expect(unsupportedOpenAiParams(model, { hasTemperature: true, hasTopP: true })).toEqual([
+    expect(
+      unsupportedOpenAiParams(model, {
+        hasTemperature: true,
+        hasTopP: true,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([
       // `removed`, NOT `unavailable`: a reasoning model is the NEWER thing, so
       // "select a newer model" would send the author the wrong way. The remedy
       // is a model that still accepts the knob.
@@ -31,12 +38,20 @@ describe('unsupportedOpenAiParams (#730)', () => {
   });
 
   it('names only the param the author actually set', () => {
-    expect(unsupportedOpenAiParams('o3', { hasTemperature: true, hasTopP: false })).toEqual([
-      { name: 'temperature', cause: 'removed' },
-    ]);
-    expect(unsupportedOpenAiParams('o3', { hasTemperature: false, hasTopP: true })).toEqual([
-      { name: 'topP', cause: 'removed' },
-    ]);
+    expect(
+      unsupportedOpenAiParams('o3', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([{ name: 'temperature', cause: 'removed' }]);
+    expect(
+      unsupportedOpenAiParams('o3', {
+        hasTemperature: false,
+        hasTopP: true,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([{ name: 'topP', cause: 'removed' }]);
   });
 
   it('does NOT refuse a non-reasoning model, which accepts sampling', () => {
@@ -44,7 +59,13 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // family take `temperature` happily, and refusing them would break calls
     // that work today.
     for (const model of ['gpt-4o', 'gpt-4.1', 'gpt-5-chat-latest', 'gpt-5.1-chat']) {
-      expect(unsupportedOpenAiParams(model, { hasTemperature: true, hasTopP: true })).toEqual([]);
+      expect(
+        unsupportedOpenAiParams(model, {
+          hasTemperature: true,
+          hasTopP: true,
+          hasReasoningEffort: false,
+        }),
+      ).toEqual([]);
     }
   });
 
@@ -56,7 +77,11 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // `temperature` identically, and permitting it just moved the failure to a
     // provider 400 with a worse diagnostic.
     expect(
-      unsupportedOpenAiParams('o3-2025-04-16', { hasTemperature: true, hasTopP: false }),
+      unsupportedOpenAiParams('o3-2025-04-16', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
     ).toEqual([{ name: 'temperature', cause: 'removed' }]);
   });
 
@@ -65,16 +90,22 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // snapshot, the id it resolves to is not published, and `codex-mini` is not
     // a set member anyway. The absent fact stays absent.
     expect(
-      unsupportedOpenAiParams('codex-mini-latest', { hasTemperature: true, hasTopP: false }),
+      unsupportedOpenAiParams('codex-mini-latest', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
     ).toEqual([]);
   });
 
   it('pins the sourced membership of the set', () => {
     // Sourced from Microsoft Learn "Azure OpenAI reasoning models" (2026-07-25):
     // its two enumerated reasoning-model feature tables, minus the four classes
-    // of deliberate omission documented on the set. Pinned so a future edit is a
-    // decision against the source rather than a drift — and so "completing" the
-    // list with a guess has to argue with this test first.
+    // of deliberate omission documented on the set — PLUS `o1-mini`, which #752
+    // found sits in neither table and is sourced from the page's prose instead.
+    // Pinned so a future edit is a decision against the source rather than a
+    // drift — and so "completing" the list with a guess has to argue with this
+    // test first.
     expect([...MODELS_REJECTING_SAMPLING_PARAMS].sort()).toEqual([
       'gpt-5',
       'gpt-5-codex',
@@ -164,6 +195,88 @@ describe('openAiUsesMaxCompletionTokens (#739)', () => {
     // a fixed point is unreachable. It would fire if a dated snapshot
     // (`o3-2025-04-16`) were ever added to the set instead of its alias.
     for (const model of MODELS_REJECTING_SAMPLING_PARAMS) {
+      expect(normalizeModelId(model)).toBe(model);
+    }
+  });
+});
+
+describe('unsupportedOpenAiParams — reasoningEffort (#752)', () => {
+  const EFFORT = { hasTemperature: false, hasTopP: false, hasReasoningEffort: true };
+
+  it('refuses reasoningEffort on o1-mini, the one reasoning model that takes none', () => {
+    expect(unsupportedOpenAiParams('o1-mini', EFFORT)).toEqual([
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('is `unavailable`, NOT `removed` — the remedy points at a NEWER model', () => {
+    // The direction is the OPPOSITE of temperature's on this same model, and
+    // that is the whole reason the cause is typed. `o1-mini` predates the knob;
+    // `o3-mini`/`o4-mini` accept it. `removed` would render "select a model that
+    // still accepts reasoningEffort", pointing backwards at older models that
+    // are even less likely to have it.
+    const [param] = unsupportedOpenAiParams('o1-mini', EFFORT);
+    expect(param?.cause).toBe('unavailable');
+  });
+
+  it('permits reasoningEffort on every OTHER reasoning model', () => {
+    // The source restricts exactly one id. Refusing the rest would be the
+    // manufactured refusal the module's FAIL DIRECTION rule forbids.
+    for (const model of ['o1', 'o3', 'o3-mini', 'o4-mini', 'gpt-5', 'gpt-5.1']) {
+      expect(unsupportedOpenAiParams(model, EFFORT)).toEqual([]);
+    }
+  });
+
+  it('permits reasoningEffort on a NON-reasoning model (#752 problem 1 — a deliberate no-op)', () => {
+    // The ticket's first defect is `reasoning_effort` reaching models that are
+    // not reasoning models at all. The decision recorded in the module is to
+    // send it: the source names no non-reasoning model that REJECTS the key,
+    // and an absent fact must not become a local refusal.
+    expect(unsupportedOpenAiParams('gpt-4o', EFFORT)).toEqual([]);
+  });
+
+  it('says nothing when the author set no reasoningEffort', () => {
+    expect(unsupportedOpenAiParams('o1-mini', NONE)).toEqual([]);
+  });
+
+  it('classifies a DATED o1-mini snapshot like the alias it is a snapshot of (#751)', () => {
+    expect(unsupportedOpenAiParams('o1-mini-2024-09-12', EFFORT)).toEqual([
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('yields BOTH causes when o1-mini is asked for temperature AND reasoningEffort', () => {
+    // Unlike the anthropic sibling — where the equivalent case is unreachable
+    // and its test had to synthesise a model in both sets — `o1-mini` is
+    // genuinely in both sets here, so an author setting both fields really does
+    // get two remedies pointing in opposite directions. Pinned so the combined
+    // message is a decision rather than a surprise.
+    expect(
+      unsupportedOpenAiParams('o1-mini', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: true,
+      }),
+    ).toEqual([
+      { name: 'temperature', cause: 'removed' },
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('pins the sourced membership of the set', () => {
+    // The same guard the sampling set carries, and this set needs it MORE: its
+    // docstring claims "one id long, and the fail-direction rule keeps it that
+    // way", which nothing else enforces. The source excepts exactly one model,
+    // so widening this on a hunch — every reasoning model "probably" has some
+    // restriction — has to argue with this test first.
+    expect([...MODELS_REJECTING_REASONING_EFFORT]).toEqual(['o1-mini']);
+  });
+
+  it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
+    // Same invariant as the sampling set's, pinned SEPARATELY because this set
+    // is maintained separately: lookups normalise first, so a member that is not
+    // a fixed point can never be reached.
+    for (const model of MODELS_REJECTING_REASONING_EFFORT) {
       expect(normalizeModelId(model)).toBe(model);
     }
   });
