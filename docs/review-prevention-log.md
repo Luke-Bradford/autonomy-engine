@@ -645,3 +645,37 @@ Markdown, "is it a doc?" and "is it safe to skip review?" stopped being the same
 question. Fixed at the shared predicate (`merge_gate.doc_only_exclude_paths`,
 checked FIRST), never by forking it per-consumer — the divergence #192 exists to
 prevent.
+
+## 29. `grep -c … || echo 0` DOUBLE-EMITS on no match — an expected-ABSENT assertion is then permanently red
+
+Found while writing `#806`'s tests (`loop/test_quota_guard.sh` section 45), and it
+is the third member of a family already in this log (#7 `producer | grep -q` under
+`pipefail`; #11 a non-zero function poisoning `… && echo 0`): **a shell idiom that
+silently produces a permanently-red or vacuous assertion.**
+
+`grep -c` prints the count AND exits 1 when the count is zero. So:
+
+```bash
+"$(grep -c 'needle' "$f" 2>/dev/null || echo 0)"     # no match -> "0\n0", not "0"
+```
+
+The `|| echo 0` was added for the FILE-MISSING case, and it does fix that — but it
+also fires on the ordinary no-match case, appending a second `0` to a value that
+already read `0`. Measured: `[0\n0]`.
+
+This never bites where the expectation is a NON-ZERO count (the `||` branch is
+unreachable once there is a match), which is why three pre-existing uses in that
+file are fine and the idiom looks safe by induction. It bites the moment you
+assert that something is **absent** — exactly the assertion that pins "the guard
+did NOT do the thing", which is the interesting half of most safety tests.
+
+**Rule: for an expected-ABSENT assertion, use `grep -q` and map the status, never
+`grep -c`.**
+
+```bash
+"$(grep -q 'needle' "$f" 2>/dev/null && echo 1 || echo 0)"   # 1 present, 0 absent
+```
+
+Same shape as #25: the assertion that never goes green is easy to spot, but its
+sibling — the one that never goes RED — is the dangerous one. Before trusting any
+new assertion about absence, make the thing PRESENT once and watch it fail.

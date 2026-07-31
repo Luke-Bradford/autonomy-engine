@@ -482,19 +482,30 @@ quota_cache_write() {  # $1=pct
 # Hence write-to-temp-then-rename: `mv` within a directory is a rename(2), so a
 # reader sees either the old record or the new one and never a half-written or
 # emptied file. Prior art in this tree: `loop/install_studio_server.sh` uses the
-# same shape for the plist. Two deliberate deltas from it -- `$$` in the temp
+# same shape for the plist. Three deliberate deltas from it -- `$$` in the temp
 # name (that file has one writer; #806 names a SECOND driver racing this one, and
 # a shared `.tmp` name lets two of them rename each other's half-written temp),
-# and `mv -f` (nothing here may ever block on a prompt).
+# `mv -f` (nothing here may ever block on a prompt), and the stderr muzzles below.
 #
 # THE CONTRACT IS "RETURN 0 MEANS THE SHARED READER WILL ACCEPT WHAT IS ON DISK",
-# which is why the EPOCH is validated and not merely interpolated. A `date +%s`
-# that yields empty (fork failure, broken PATH) writes " <value>", which
-# `quota_stamped_read` correctly rejects as having no epoch -- fail-safe for the
-# cache and memo, but NOT for `quota_shadow_probe`, whose whole throttle rests on
-# a successful write meaning a readable stamp exists. A `return 0` over an
-# unreadable record would silently disarm it and poll studio on every call, which
-# is the exact failure case 29g exists to prevent. So a bad epoch is a failure.
+# which is why the EPOCH and the DESTINATION are validated and not merely
+# interpolated. Two ways a naive version returns 0 over a record the reader then
+# rejects:
+#
+#   * a `date +%s` that yields empty (fork failure, broken PATH) writes
+#     " <value>", which `quota_stamped_read` rejects as having no epoch; and one
+#     longer than 11 digits is rejected by that reader's 64-bit length bound, so
+#     the writer mirrors the SAME bound rather than merely checking for digits.
+#   * `mv -f tmp DIR` SUCCEEDS -- it moves the temp INSIDE the directory and
+#     returns 0, leaving nothing at `$qsw_file` (measured: rc 0, versus rc 1 for
+#     `> DIR`). So the rename's own status is not sufficient evidence that the
+#     record landed, and a destination that is a directory is refused up front.
+#
+# Both are fail-safe for the cache and memo, which discard the status -- but NOT
+# for `quota_shadow_probe`, whose whole throttle rests on a successful write
+# meaning a readable stamp exists. A `return 0` over an unreadable record would
+# silently disarm it and poll studio on every call, which is the exact failure
+# case 29g exists to prevent, reached through a SUCCESS.
 #
 # The VALUE is checked for FORMAT ONLY (non-empty, no whitespace) -- a value
 # carrying a space or newline would split into a second token or a second line
@@ -504,21 +515,34 @@ quota_cache_write() {  # $1=pct
 # three pass a `quota_sane`-sanitised digit string or a literal -- it exists so a
 # future one cannot corrupt the format silently.
 #
-# Not fully dirt-free: a process killed between create and rename leaks one
+# Two side effects of replacing rather than truncating, both harmless for private
+# state files under $INFRA but worth naming: the destination's MODE becomes the
+# temp's (600 -> 644 under the default umask) where `>` preserved it, and a
+# SYMLINKED destination is replaced by a regular file where `>` wrote through it.
+#
+# Not fully dirt-free either: a process killed between create and rename leaks one
 # `<file>.tmp.<pid>`, which nothing sweeps. Bounded (one per file per driver PID)
 # and invisible to #808's drift checks, which enumerate from `git ls-tree`.
 quota_stamped_write() {  # $1=file $2=value -> 0 written, non-zero nothing written
   qsw_file="$1"; qsw_val="$2"
   case "$qsw_val" in ""|*[[:space:]]*) return 1 ;; esac
+  # A directory destination is refused HERE, because `mv -f` would not refuse it
+  # -- see the header. Checked before the temp is created so there is nothing to
+  # clean up on this path.
+  [ -d "$qsw_file" ] && return 1
   qsw_now="$(date +%s 2>/dev/null)"
   case "$qsw_now" in ""|*[!0-9]*) return 1 ;; esac
+  # The reader's own 64-bit length bound, mirrored so the contract above holds:
+  # 11 digits reaches year 5138, and `quota_stamped_read` discards anything longer.
+  [ "${#qsw_now}" -gt 11 ] && return 1
   qsw_tmp="$qsw_file.tmp.$$"
-  # `2>/dev/null` FIRST on both: redirections apply left to right, so with the
-  # file open written first the shell reports its failure on the still-open
+  # `2>/dev/null` FIRST on the printf: redirections apply left to right, so with
+  # the file open written first the shell reports its failure on the still-open
   # stderr -- which on an unwritable $INFRA meant a "No such file or directory"
   # line in the launchd stderr log on every single gate. The `mv` needs the same
-  # muzzle for the same reason: a rename that fails where the create succeeded
-  # (an immutable or foreign-owned destination) would otherwise print per gate.
+  # muzzle (a rename that fails where the create succeeded -- an immutable or
+  # foreign-owned destination -- would otherwise print per gate), but not the
+  # same ordering: it has one redirect and nothing to race it.
   printf '%s %s\n' "$qsw_now" "$qsw_val" 2>/dev/null >"$qsw_tmp" || {
     rm -f "$qsw_tmp" 2>/dev/null || true; return 1
   }
@@ -795,9 +819,11 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   # NOTE the permission dependency this moved: a rename needs write on the
   # DIRECTORY, where `>` needed write on the FILE. So a read-only $INFRA holding
   # a writable stamp now skips (it did not before), and a writable $INFRA holding
-  # an immutable stamp now succeeds (it did not before). Both directions still
-  # end somewhere safe -- skip, or a fresh readable stamp -- and case 45h pins
-  # the first, which is the one that changed toward refusing.
+  # an immutable stamp now succeeds (it did not before). Both end somewhere safe
+  # -- skip, or a fresh readable stamp -- and case 45h pins the first, which is
+  # the one that changed toward refusing. A THIRD case, a directory at
+  # $QUOTA_SHADOW_STAMP, would have ended UNSAFE (`mv -f` succeeds into a
+  # directory), so `quota_stamped_write` refuses it explicitly; case 45i pins it.
   if ! quota_stamped_write "$QUOTA_SHADOW_STAMP" probe; then
     log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP is unwritable (#765)"
     return 0

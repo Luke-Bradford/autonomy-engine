@@ -1636,6 +1636,29 @@ chmod 555 "$swtmp/ro"
   unset -f date
   [ -e "$swg" ] && echo "record" || echo "nothing"
 
+  # (i) a DIRECTORY destination. `mv -f tmp DIR` SUCCEEDS -- it moves the temp
+  #     INSIDE the directory and returns 0 -- so the rename's status alone is not
+  #     evidence the record landed, and a naive writer returns 0 with nothing at
+  #     $file. `> DIR` failed here, so this is the one direction in which
+  #     temp+rename is WEAKER than what it replaced, and the only one that ends
+  #     fail-OPEN: the shadow probe would read a 0 return as "stamp written" and
+  #     poll studio on every call.
+  swd="$swtmp/infra/.asdir"
+  mkdir -p "$swd"
+  quota_stamped_write "$swd" 42 && echo "wrote" || echo "refused"
+  ls "$swd" | wc -l | tr -d ' '
+
+  # (j) an epoch LONGER than the reader's 11-digit bound is refused. The reader
+  #     discards it (`$(( ))` wraps silently on a 64-bit value, so the bound is
+  #     what keeps a fabricated stamp from looking fresh), and a writer that
+  #     returned 0 over a record the reader discards breaks the same contract (g)
+  #     protects, one door over.
+  swj="$swtmp/infra/.longepoch"
+  date() { echo 123456789012; }
+  quota_stamped_write "$swj" 42 && echo "wrote" || echo "refused"
+  unset -f date
+  [ -e "$swj" ] && echo "record" || echo "nothing"
+
   # (h) the permission dependency MOVED: a rename needs write on the DIRECTORY
   #     where `>` needed write on the FILE. So a read-only $INFRA holding a
   #     writable stamp now skips where it used to poll. 29g pins the same skip
@@ -1667,6 +1690,10 @@ check "an empty value is refused" "refused" "$(swout 9)"
 check "...and neither refusal disturbed the target" "7" "$(swout 10)"
 check "an unusable epoch is a failure, not a silently unreadable record" "refused" "$(swout 11)"
 check "...and nothing was written" "nothing" "$(swout 12)"
+check "a DIRECTORY destination is refused (mv -f would succeed INTO it)" "refused" "$(swout 13)"
+check "...and the temp was not left sitting inside that directory" "0" "$(swout 14)"
+check "an epoch past the reader's 11-digit bound is refused, not written" "refused" "$(swout 15)"
+check "...and nothing was written" "nothing" "$(swout 16)"
 # `grep -q`, not `grep -c ... || echo 0`: on NO match `grep -c` prints 0 AND exits
 # 1, so the `||` fires too and the value is "0\n0" -- which never equals "0" and
 # makes an expected-ABSENT assertion permanently red. 1 = present, 0 = absent.
