@@ -1576,6 +1576,12 @@ mkdir -p "$swtmp/infra" "$swtmp/ro"
 # into vacuous passes, which is the failure mode this whole suite exists to avoid.
 printf '%s 11\n' "$(date +%s)" >"$swtmp/ro/.stamp"
 printf '%s probe\n' "$((now - 999999))" >"$swtmp/ro/.shadow"
+# CAPTURED BEFORE the subshell runs. Comparing against a re-read of the file
+# afterwards would be self-referential -- both sides would be the POST state, so
+# the assertion would hold whatever the writer did to it, including destroying
+# the record entirely. (Caught by the pre-PR correctness lens, which simulated a
+# revert to `>`: the record was clobbered and the assertion still passed.)
+sw_seed="$(head -1 "$swtmp/ro/.stamp")"
 chmod 555 "$swtmp/ro"
 # Bounded exactly like cases 17 and 43: a broken source guard turns `.` into an
 # unconditional `while true` and would hang the suite forever.
@@ -1659,6 +1665,39 @@ chmod 555 "$swtmp/ro"
   unset -f date
   [ -e "$swj" ] && echo "record" || echo "nothing"
 
+  # (k) THE RENAME FAILING is a branch nothing else reaches: in (c) and (h) the
+  #     PRINTF fails (read-only dir), so the `mv`'s cleanup and its stderr muzzle
+  #     never execute, and (d)'s "no temp left" checks a state where no temp could
+  #     have been created. Every portable way to make a real `mv` fail here also
+  #     blocks the `rm` that cleans up after it (read-only dir), or is not
+  #     portable to the ubuntu runner this suite also runs on (`chflags uchg`).
+  #     So `mv` is shadowed as a shell function -- the same trick as `date` in
+  #     (g), touching nothing on disk or on PATH.
+  swk="$swtmp/infra/.mvfail"
+  mv() { return 1; }
+  quota_stamped_write "$swk" 42 && echo "wrote" || echo "refused"
+  unset -f mv
+  [ -e "$swk" ] && echo "record" || echo "nothing"
+  ls "$swtmp/infra"/.mvfail.tmp.* >/dev/null 2>&1 && echo "dirt" || echo "clean"
+
+  # (l) ...and THAT is the state where the cache's failure path changed polarity.
+  #     `>` left no record on failure (blind path); temp+rename leaves the PRIOR
+  #     one, and for a refuse-only cache over a monotonic quantity a surviving
+  #     LOWER record permits fires the reading that failed to persist would have
+  #     refused. So a too-low record is dropped; a >= one is kept, since it
+  #     refuses at least as hard.
+  export QUOTA_CACHE="$swtmp/infra/.cache"
+  printf '%s 10\n' "$(date +%s)" >"$QUOTA_CACHE"
+  mv() { return 1; }
+  quota_cache_write 95
+  unset -f mv
+  [ -e "$QUOTA_CACHE" ] && echo "kept" || echo "dropped"
+  printf '%s 98\n' "$(date +%s)" >"$QUOTA_CACHE"
+  mv() { return 1; }
+  quota_cache_write 95
+  unset -f mv
+  head -1 "$QUOTA_CACHE" 2>/dev/null | awk '{print $2}'
+
   # (h) the permission dependency MOVED: a rename needs write on the DIRECTORY
   #     where `>` needed write on the FILE. So a read-only $INFRA holding a
   #     writable stamp now skips where it used to poll. 29g pins the same skip
@@ -1682,7 +1721,7 @@ check "a written record is one the SHARED reader accepts" "ok" "$(swout 1)"
 check "...and reads back as the value that was written" "42" "$(swout 2)"
 check "the record is installed by RENAME, not by truncating in place" "renamed" "$(swout 3)"
 check "a write that cannot complete leaves the PRIOR record intact" "refused" "$(swout 4)"
-check "...the prior record, byte for byte -- not an emptied or partial file" "$(head -1 "$swtmp/ro/.stamp")" "$(swout 5)"
+check "...the prior record, byte for byte -- not an emptied or partial file" "$sw_seed" "$(swout 5)"
 check "...and leaves no temp file behind" "clean" "$(swout 6)"
 check "a target with prior content is REPLACED, not appended to" "1" "$(swout 7)"
 check "a value carrying a separator is refused" "refused" "$(swout 8)"
@@ -1694,6 +1733,18 @@ check "a DIRECTORY destination is refused (mv -f would succeed INTO it)" "refuse
 check "...and the temp was not left sitting inside that directory" "0" "$(swout 14)"
 check "an epoch past the reader's 11-digit bound is refused, not written" "refused" "$(swout 15)"
 check "...and nothing was written" "nothing" "$(swout 16)"
+check "a failing RENAME is a refusal, not a silent success" "refused" "$(swout 17)"
+check "...leaving no record at the destination" "nothing" "$(swout 18)"
+check "...and cleaning up the temp it had already created" "clean" "$(swout 19)"
+check "a cache reading that cannot be persisted DROPS a lower stale record" "dropped" "$(swout 20)"
+check "...but keeps a HIGHER one, which refuses at least as hard" "98" "$(swout 21)"
+check "the cache write announces a failure it can no longer make invisible" "1" \
+  "$(grep -q 'WARN: could not persist quota' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+# The muzzles the diff added are justified as "would otherwise print to the
+# launchd stderr log on every gate" -- so pin that they do, rather than trusting
+# the argument (prevention-log #25).
+check "nothing in section 45 leaked to stderr (the 2>/dev/null muzzles hold)" "" \
+  "$(cat "$swtmp/err" 2>/dev/null)"
 # `grep -q`, not `grep -c ... || echo 0`: on NO match `grep -c` prints 0 AND exits
 # 1, so the `||` fires too and the value is "0\n0" -- which never equals "0" and
 # makes an expected-ABSENT assertion permanently red. 1 = present, 0 = absent.

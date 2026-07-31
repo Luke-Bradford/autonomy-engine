@@ -461,9 +461,35 @@ quota_pct() {
 # fires may have run since. The cache is therefore trusted in ONE direction only:
 # it may REFUSE a fire, never permit one. Fail-safe, same polarity as ci_check.
 quota_cache_write() {  # $1=pct
-  # Fail-safe, so the status is deliberately discarded: no cache entry means the
-  # guard takes the blind path, which is the same place a missing file lands.
-  quota_stamped_write "$QUOTA_CACHE" "$1" || true
+  quota_stamped_write "$QUOTA_CACHE" "$1" && return 0
+  # THE FAILURE PATH CHANGED POLARITY WITH #806, so it is no longer a `|| true`.
+  # Under `>` a failed write left the file truncated or absent -- no record, blind
+  # path. Temp-and-rename leaves the PREVIOUS record intact, and for a refuse-only
+  # cache over a MONOTONIC quantity a surviving record cuts both ways:
+  #
+  #   old >= the reading we could not persist -> SAFER (it refuses at least as
+  #     hard as the new one would have), so keep it.
+  #   old <  it -> FAIL-OPEN. Measured by review: $INFRA mode 555 with an
+  #     owner-writable `.last_quota` holding 10, a live reading of 95 that STOPs
+  #     the gate but cannot be persisted, and every source unreadable an hour
+  #     later then serves 10 -- which permits blind fires into a 95% window. `>`
+  #     succeeded in that exact state (the FILE was writable), so this is a
+  #     regression the rename introduced and not a pre-existing hole.
+  #
+  # So drop a record we have just proved too low. `rm` needs write on the
+  # DIRECTORY, which the 555 case denies -- there the drop fails too and the hole
+  # survives; it works where the destination alone is the problem (a full disk, an
+  # immutable file in a writable dir). Hence the log line as well: silent was
+  # tolerable when a failed write meant "no record", and is not now.
+  qcw_old="$(quota_sane "$(quota_stamped_read "$QUOTA_CACHE" "$QUOTA_CACHE_MAX_AGE")")"
+  qcw_new="$(quota_sane "$1")"
+  if [ -n "$qcw_old" ] && [ -n "$qcw_new" ] && [ "$qcw_old" -lt "$qcw_new" ]; then
+    rm -f "$QUOTA_CACHE" 2>/dev/null || true
+    log "WARN: could not persist quota ${qcw_new}%; dropped the stale ${qcw_old}% cache (#806)"
+  else
+    log "WARN: could not persist quota reading '$1' to $QUOTA_CACHE (#806)"
+  fi
+  return 0
 }
 # --- quota_stamped_write: the ONE writer for the "<epoch> <value>" state files,
 # and `quota_stamped_read`'s counterpart (#806). Three sites hand-rolled this
@@ -549,6 +575,16 @@ quota_stamped_write() {  # $1=file $2=value -> 0 written, non-zero nothing writt
   mv -f "$qsw_tmp" "$qsw_file" 2>/dev/null || {
     rm -f "$qsw_tmp" 2>/dev/null || true; return 1
   }
+  # ENFORCE the contract instead of asserting it. Every check above is an
+  # enumeration of ways a 0 return could be a lie, and enumerations are how this
+  # file has been bitten before -- the `mv`-onto-a-directory case above was found
+  # by review, not by reasoning, and a `umask` of 0477 gets there another way
+  # (the rename installs a FRESH umask-derived mode where `>` preserved the
+  # destination's, so the record lands mode `--w-------` and the reader cannot
+  # `head -1` it). Reading it back through the SHARED reader is the contract
+  # stated as code and closes the whole class, including the next member of it.
+  # Cheap: one `head -1` on a one-line file, at most three times per iteration.
+  [ -n "$(quota_stamped_read "$qsw_file" 60)" ] || return 1
   return 0
 }
 # --- quota_stamped_read: the ONE parser for this file's "<epoch> <value>" state
@@ -818,14 +854,19 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   #
   # NOTE the permission dependency this moved: a rename needs write on the
   # DIRECTORY, where `>` needed write on the FILE. So a read-only $INFRA holding
-  # a writable stamp now skips (it did not before), and a writable $INFRA holding
-  # an immutable stamp now succeeds (it did not before). Both end somewhere safe
-  # -- skip, or a fresh readable stamp -- and case 45h pins the first, which is
-  # the one that changed toward refusing. A THIRD case, a directory at
-  # $QUOTA_SHADOW_STAMP, would have ended UNSAFE (`mv -f` succeeds into a
-  # directory), so `quota_stamped_write` refuses it explicitly; case 45i pins it.
+  # a writable stamp now SKIPS where it used to poll -- toward refusing, which is
+  # the safe direction; case 45h pins it. (Not a symmetric trade: an immutable
+  # destination fails under BOTH shapes -- `rename(2)` returns EPERM on a `uchg`
+  # target and BSD `mv` only falls back to copying on EXDEV -- so there is no
+  # matching case that newly succeeds.) The one direction that would have ended
+  # UNSAFE is a DIRECTORY at $QUOTA_SHADOW_STAMP, where `mv -f` succeeds into it
+  # and writes no record; `quota_stamped_write` refuses that, and case 45i pins it.
   if ! quota_stamped_write "$QUOTA_SHADOW_STAMP" probe; then
-    log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP is unwritable (#765)"
+    # "could not be written", not "is unwritable": since #806 this branch also
+    # covers a rejected epoch (a broken `date`) and a destination the shared
+    # reader will not accept, neither of which is a permissions problem. A log
+    # line that names the wrong cause sends the operator to the wrong file.
+    log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP could not be written (#765)"
     return 0
   fi
   qsp_pct="$(quota_read_url "$STUDIO_QUOTA_URL")"
