@@ -2305,12 +2305,18 @@ describe('#816 — classifyActivityTypes scopes the WRITE side only', () => {
   });
 
   it('a scoped-OUT shape is STILL admission-gated by a window the OTHER shape armed', async () => {
-    // The asymmetry, pinned so nobody reads `classifyActivityTypes` as immunity. The
-    // gate keys on the CONNECTION, not the shape, and that is the fail-safe
+    // The asymmetry, pinned so nobody reads `classifyActivityTypes` as immunity.
+    // The gate keys on the CONNECTION, not the shape, and that is the fail-safe
     // reading: a live window states the subscription account is exhausted, which
     // is true for every shape spending it. Scoping declares only whose output is
     // trustworthy EVIDENCE of exhaustion — here, `llm_call`'s. So an `agent_task`
     // node scoped out of classification is still refused dispatch.
+    //
+    // HONESTY NOTE: this is a CHARACTERIZATION pin, not evidence about
+    // `classifyActivityTypes` — it passes identically without the field, because
+    // the gate never consults `config.quota`. It guards the asymmetry against a
+    // future change that makes the gate shape-aware. Mutation-proven against the
+    // gate itself (disabling the `AGENT_CLI_CONNECTION_KIND` branch turns it red).
     const db = freshDb().db;
     const connId = await seedConnection(
       db,

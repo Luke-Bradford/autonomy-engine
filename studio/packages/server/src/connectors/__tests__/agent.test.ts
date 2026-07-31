@@ -1305,6 +1305,34 @@ describe('#816 — per-shape quota classification scope (quota.classifyActivityT
       error: 'llm_call CLI exited 3: boom on stderr\ncontext on stdout',
     });
   });
+
+  it('a scoped-out STRUCTURED agent_task misdiagnoses a real refusal as `permanent` — the cost, pinned', async () => {
+    // "Scoping restores exit-code-is-data" is true only for an OPAQUE agent_task.
+    // A STRUCTURED one never had that contract: a quota-refused run emits no
+    // fenced block, so with the quota branch scoped out it falls through to the
+    // structured branch and is reported `permanent` ("no valid structured output
+    // block found") — the misdiagnosis the quota branch is deliberately sited
+    // ABOVE to prevent. Not a regression (it is the pre-#799 behaviour), but it
+    // is the sharpest edge on the escape hatch, so it is pinned rather than left
+    // for an operator to discover.
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: `Error: ${PATTERN}` }], {
+      exitCode: 1,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: quotaConfig(['llm_call']),
+          input: {
+            task: 'review',
+            outputSchema: { type: 'object', properties: { verdict: { type: 'string' } } },
+          },
+        }),
+        null,
+      ),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(JSON.stringify(events.at(-1))).toContain('structured output');
+  });
 });
 
 describe('agent_cli config quota hint validation', () => {
@@ -1352,7 +1380,11 @@ describe('agent_cli config quota hint validation', () => {
   });
 
   it('accepts a classifyActivityTypes scope naming either shape (#816)', () => {
-    for (const classifyActivityTypes of [['llm_call'], ['agent_task'], ['llm_call', 'agent_task']]) {
+    for (const classifyActivityTypes of [
+      ['llm_call'],
+      ['agent_task'],
+      ['llm_call', 'agent_task'],
+    ]) {
       const r = schema.safeParse({
         command: 'claude',
         quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes },
@@ -1377,7 +1409,11 @@ describe('agent_cli config quota hint validation', () => {
     expect(
       schema.safeParse({
         command: 'claude',
-        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes: ['http_request'] },
+        quota: {
+          exhaustionPattern: 'x',
+          resetWindowSeconds: 60,
+          classifyActivityTypes: ['http_request'],
+        },
       }).success,
     ).toBe(false);
   });

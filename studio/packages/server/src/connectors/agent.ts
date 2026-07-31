@@ -196,7 +196,10 @@ const agentConnectionConfigSchema = z.object({
        */
       classifyActivityTypes: z
         .array(z.enum([LLM_CALL_ACTIVITY_TYPE, AGENT_TASK_ACTIVITY_TYPE]))
-        .min(1, { message: 'classifyActivityTypes must name at least one activity type (omit it to mean both)' })
+        .min(1, {
+          message:
+            'classifyActivityTypes must name at least one activity type (omit it to mean both)',
+        })
         .optional(),
     })
     .optional(),
@@ -818,12 +821,19 @@ async function* runAgentTask(
   // NOT buy is immunity from the admission gate, which keys on the connection —
   // see `classifyActivityTypes` for why that asymmetry is the fail-safe reading.
   //
-  // NAME THE COST, because scoping this shape out is not free: it restores exactly
-  // the silent-wrong data path the paragraph above argues against — the CLI's
-  // refusal TEXT flows into `${nodes.x.output}` and downstream nodes run on it —
-  // AND leaves the connection window un-armed, so sibling `llm_call` nodes keep
-  // hot-looping until one of THEM is refused. It is the right lever for an
-  // operator whose agent transcripts trip the pattern; it is not a free upgrade.
+  // NAME THE COST, because scoping this shape out is not free. THREE things come
+  // back, all of them the pre-#799 behaviour:
+  //  - the silent-wrong data path the paragraph above argues against — the CLI's
+  //    refusal TEXT flows into `${nodes.x.output}` and downstream nodes run on it;
+  //  - the connection window stays un-armed, so sibling `llm_call` nodes keep
+  //    hot-looping until one of THEM is refused;
+  //  - and on a STRUCTURED node it is worse than "exit code is data", because that
+  //    contract never applied there: a refused run emits no fenced block, so it
+  //    falls through to the structured branch below and is reported `permanent`
+  //    ("no valid structured output block found") — precisely the misdiagnosis
+  //    this branch is sited above to prevent. Pinned in `agent.test.ts`.
+  // It is the right lever for an operator whose agent transcripts trip the
+  // pattern; it is not a free upgrade.
   if (quotaHit !== undefined) {
     yield quotaRefusedFailure(
       shape,
@@ -971,10 +981,18 @@ async function* runLlmCall(
   //    quota refusal and then hangs until the wall-clock kill is still metered —
   //    correct-by-policy (an over-mark costs one `unpriced` response), not a hole.
   //    #816 narrows it once more, and deliberately: scoping this shape out of
-  //    `quota.classifyActivityTypes` leaves `quotaHit` undefined, so a genuine refusal
-  //    here is METERED. There is nothing to except once the operator has declared
-  //    this shape's output is not trustworthy evidence of exhaustion, and the
-  //    over-mark direction is the one `cliSpendFact` already prefers.
+  //    `quota.classifyActivityTypes` leaves `quotaHit` undefined, so a genuine
+  //    refusal here is METERED. There is nothing to except once the operator has
+  //    declared this shape's output is not trustworthy evidence of exhaustion, and
+  //    the over-mark direction is the one `cliSpendFact` already prefers — an
+  //    `unpriced` fact is carved out of the run-cost completeness count
+  //    (`pricing/run-cost.ts`), so it can never flip a run to INCOMPLETE nor move a
+  //    dollar figure. The OTHER two consequences of scoping this shape out are
+  //    sharper and are the operator's to weigh: a real throttle is recorded
+  //    durably as `permanent` (factually wrong for a transient condition, and no
+  //    retry can ever fire off it), and if every `llm_call` consumer of a
+  //    connection is scoped out, that shape can no longer arm the window at all —
+  //    the #799 hot-loop guard is configuration-disabled for it.
   // A plain non-zero EXIT is deliberately NOT excluded. It is tempting to read it
   // as the HTTP adapters' unmarked non-2xx, but the analogy breaks: a non-2xx is
   // the PROVIDER stating it did not serve the request, whereas an exit code is the
