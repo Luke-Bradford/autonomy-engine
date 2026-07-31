@@ -673,7 +673,15 @@ check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1
 # are DISTINCT outcomes (#440). 0% means wide open and PERMITS a fire; a reader
 # that answered "0" on failure would silently disarm the guard. Mutation-checked:
 # making the failing reader print `0` flips both assertions below.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=1)"
+# QUOTA_SHADOW_MIN_INTERVAL=0 is LOAD-BEARING for the third assertion, not tidiness.
+# The shadow probe (#765) polls the same `/api/quota` URL through the same curl arm
+# and drops the same marker, so with the probe live the marker is present whether or
+# not the FALLTHROUGH reached studio -- the exact regression this case exists to
+# catch would pass. Cases 25/26 got this knob when the probe landed; this one, the
+# only marker assertion with POSITIVE polarity, was missed. Mutation-checked both
+# ways: with the source-3 block disabled (`if false`) this case FAILS with the knob
+# and PASSES without it.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=1 QUOTA_SHADOW_MIN_INTERVAL=0)"
 check "a present-but-failing reader -> refuses to fire blind" "0" "$(fires_of "$r")"
 check "a present-but-failing reader is never read as a 0% reading" "1" \
   "$(grep -q 'utilization 0%' "$(logof "$r")" && echo 0 || echo 1)"
@@ -1152,10 +1160,11 @@ check "...and the STOP is on the dashboard's 97%" "0" \
 #
 # The failing case is the one that matters and is easy to get wrong: stamping only
 # on a SUCCESSFUL read leaves the stamp un-advanced for exactly as long as studio
-# is 429ing, so every call re-attempts and the probe becomes a poll storm during
-# the degraded state it is meant to observe. That is #777's bug in a new place,
-# and it is why `quota_poll_memo_write` records failures as `-`. Stamping on the
-# ATTEMPT makes the class unrepresentable.
+# is failing, so every call re-attempts. Stamping on the ATTEMPT makes the class
+# unrepresentable. The full rationale -- including WHY the tempting "#777's bug in
+# a new place" framing overstates the cost, since studio absorbs repeat polls in
+# its own server rather than passing them to the shared upstream -- is stated once,
+# in `quota_shadow_probe`'s header block, and deliberately not restated here.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=3)"
 check "a FAILING shadow read is throttled too -> one poll per window, not one per call" "1" \
   "$(studiopolls "$r")"
@@ -1227,6 +1236,62 @@ check "the shadow does not write the source-2 poll memo" "1" \
 check "the shadow emits NOTHING on stdout (a stray echo fails the gate OPEN)" "" \
   "$(cat "$shtmp/out")"
 rm -rf "$shtmp"
+
+# 29g. An UNWRITABLE rate stamp SKIPS the poll -- it does not silently UN-THROTTLE
+# it. Every other writer in this file can afford `|| true` because a lost write
+# fails SAFE: no cache entry means the guard takes the blind path, no memo means
+# source 2 is re-read. This one is the exception. `quota_stamped_read` on a missing
+# file returns empty, which the probe reads as "the window is open", so a stamp
+# that can NEVER be written means the throttle is silently gone and studio is
+# polled on every `quota_pct` call -- up to 3 per iteration plus one per
+# AUTH_LONG_BLOCK retry, unbounded during a long block. A diagnostic that cannot
+# record when it last ran has no business running.
+#
+# Direct-call, like 29f: an end-to-end run cannot make ONE path unwritable without
+# breaking $INFRA for the cache and the driver log too, and the case would then
+# pass for the wrong reason.
+sgrun() {  # $1 = stamp path, $2 = infra dir. The curl stub marks $sgtmp/polled.
+  rm -f "$sgtmp/polled"
+  mkdir -p "$2"
+  # Bounded exactly like 29f: if the source guard ever breaks, `.` runs an
+  # unconditional `while true` and this would hang the suite forever.
+  (
+    set -uo pipefail
+    # exported because the SOURCED file is what reads them; shellcheck cannot see
+    # across the `.` and would otherwise call them unused.
+    export INFRA="$2"
+    export DLOG="$2/driver.log"
+    export QUOTA_CACHE="$2/.last_quota"
+    export QUOTA_POLL_MEMO="$2/.last_quota_poll"
+    export QUOTA_SHADOW_STAMP="$1"
+    export QUOTA_SHADOW_MIN_INTERVAL=3600
+    export PATH="$sgtmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    quota_shadow_probe dashboard
+  ) >"$2/out" 2>"$2/err" &
+  sg_pid=$!
+  sg_i=0
+  while [ "$sg_i" -lt 15 ]; do kill -0 "$sg_pid" 2>/dev/null || break; sleep 1; sg_i=$((sg_i + 1)); done
+  kill -9 "$sg_pid" 2>/dev/null || true
+}
+sgtmp="$(mktemp -d)"
+mkdir -p "$sgtmp/bin"
+printf '#!/bin/bash\n: >"%s/polled"\necho %s\n' "$sgtmp" \
+  "'"'{"account":{"claude":{"seven_day":{"utilization":0.97}}}}'"'" >"$sgtmp/bin/curl"
+chmod +x "$sgtmp/bin/curl"
+# CONTROL FIRST. Without it, "no poll happened" below would be satisfied by a probe
+# that failed to run for any reason at all -- a vacuous pass.
+sgrun "$sgtmp/ok/.last_quota_shadow" "$sgtmp/ok"
+check "control: the same harness with a WRITABLE stamp does poll" "0" \
+  "$([ -f "$sgtmp/polled" ] && echo 0 || echo 1)"
+# The real case: the stamp's PARENT directory does not exist, so the write fails.
+sgrun "$sgtmp/bad/nodir/.last_quota_shadow" "$sgtmp/bad"
+check "an unwritable rate stamp SKIPS the poll rather than un-throttling it" "1" \
+  "$([ -f "$sgtmp/polled" ] && echo 0 || echo 1)"
+check "...and says so in the log, rather than skipping silently" "0" \
+  "$(grep -q 'quota shadow: skipped' "$sgtmp/bad/driver.log" && echo 0 || echo 1)"
+rm -rf "$sgtmp"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the

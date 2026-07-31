@@ -197,9 +197,13 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 # the promotion decision needs; before, it only measured "no server".
 #
 # Studio LAST is what makes adding it free. It is reached only when both other
-# sources have already failed, so it adds no upstream load in the common case,
-# cannot starve the sampler that keeps source 1 warm, and still produces the
-# `quota source: studio` log line that is the evidence for promoting it. Putting
+# sources have already failed, so it adds no SELECTION-path load in the common
+# case, cannot starve the sampler that keeps source 1 warm, and still produces the
+# `quota source: studio` log line that is the evidence for promoting it. (Since
+# #765 studio IS asked in the common case, by the hourly diagnostic probe -- that
+# is a deliberate reversal of the "no load" claim, bought for the C3 evidence and
+# priced at one request per hour per active driver. It does not touch the order
+# below. See `quota_shadow_probe`.) Putting
 # it first would instead put a direct poll on EVERY read -- three per iteration
 # from quota_gate plus one per AUTH_LONG_BLOCK retries while blocked, i.e. tens
 # of polls in one iteration during the 71h block this file documents, unbounded
@@ -622,11 +626,29 @@ quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
 #     two would manufacture promotion evidence on every dashboard-healthy fire --
 #     forging the very signal this exists to collect honestly.
 #
-# THE STAMP IS WRITTEN ON THE ATTEMPT, not on success. Stamping only a successful
-# read leaves the stamp un-advanced for exactly as long as studio is 429ing, so
-# every call re-attempts and the probe becomes a poll storm during the degraded
-# state it exists to observe -- #777's bug in a new place. `quota_poll_memo_write`
-# records failures as `-` for the same reason. Case 29d pins it.
+# THE STAMP IS WRITTEN ON THE ATTEMPT, not on success -- and this is the CANONICAL
+# statement of why; the two sites that depend on it (the write below, case 29d)
+# point here rather than restating it (#776). Stamping only a successful read
+# leaves the stamp un-advanced for exactly as long as studio is failing, so every
+# call re-attempts: up to 3 per `quota_gate` iteration plus one per
+# `AUTH_LONG_BLOCK` retry, i.e. unbounded during a long block. A throttle that
+# stops throttling in precisely the failure mode it was added for is the wrong
+# shape. `quota_poll_memo_write` records failures as `-` for the same reason, and
+# case 29d pins it here (it measured 4 polls where 1 was due).
+#
+# BE PRECISE ABOUT THE COST, because the obvious framing -- "#777's bug in a new
+# place" -- OVERSTATES it and would justify this line for a reason that is not
+# true. #777 was source 2 hitting the shared rate-limited upstream DIRECTLY with
+# no throttle. #777's own text says studio is NOT in that position, and the server
+# confirms it: `studio/packages/server/src/quota/claude-quota.ts` caches on a TTL,
+# stamps every sample including a rate-limited one, and widens geometrically to
+# ~8 min on a 429. So un-stamped retries land on a supervised localhost server and
+# are absorbed there; they do NOT reach the upstream budget. The real costs are
+# localhost request churn and one `quota shadow: ... UNREADABLE` line per call --
+# which floods the driver log at exactly the moment it is being read to diagnose
+# the failure. Smaller than a true poll storm, still worth the one line, and the
+# absorbing behaviour is a property of the CURRENT server rather than a contract
+# this file may lean on.
 #
 # The value token is a constant: unlike the memo, nothing here is ever READ BACK
 # as a reading, so the file carries a timestamp and nothing else. Reusing
@@ -640,12 +662,22 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   [ "$QUOTA_SHADOW_MIN_INTERVAL" -gt 0 ] || return 0
   [ -n "$(quota_stamped_read "$QUOTA_SHADOW_STAMP" "$QUOTA_SHADOW_MIN_INTERVAL")" ] && return 0
   # STAMPED BEFORE THE POLL, so the window opens on the ATTEMPT and closes whatever
-  # the attempt does -- succeed, fail, or die mid-curl. Stamping after a successful
-  # read instead leaves the stamp un-advanced for exactly as long as studio is
-  # 429ing, so every call re-attempts and the probe turns into a poll storm during
-  # the degraded state it exists to observe. Case 29d measured that shape here (4
-  # polls where 1 was due) before this line moved up.
-  printf '%s probe\n' "$(date +%s)" 2>/dev/null >"$QUOTA_SHADOW_STAMP" || true
+  # the attempt does -- succeed, fail, or die mid-curl. Rationale is stated once, in
+  # the header block above; case 29d pins it.
+  #
+  # AND NO STAMP MEANS NO POLL. Every other writer in this file can afford `|| true`
+  # because a lost write fails SAFE: no cache entry means the guard takes the blind
+  # path, no memo means source 2 is re-read. Here it fails the wrong way -- an
+  # unwritable `$INFRA` (full disk, bad perms) leaves `quota_stamped_read` returning
+  # empty forever, so the throttle is silently gone and the probe polls on EVERY
+  # `quota_pct` call. A diagnostic that cannot record when it last ran has no
+  # business running: skip, say so, and let the next call try again. Case 29g pins
+  # it. `>` truncates before writing, so a partial/emptied stamp reads as "no stamp"
+  # and lands here too rather than being trusted.
+  if ! printf '%s probe\n' "$(date +%s)" >"$QUOTA_SHADOW_STAMP" 2>/dev/null; then
+    log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP is unwritable (#765)"
+    return 0
+  fi
   qsp_pct="$(quota_read_url "$STUDIO_QUOTA_URL")"
   if [ -n "$qsp_pct" ]; then
     log "quota shadow: studio ${qsp_pct}% (diagnostic only -- the guard used $1; #765 C3 evidence)"

@@ -70,20 +70,38 @@ working source warm. See **#765**.
 git history preserves it and the ticket says so explicitly. **BLOCKED ON #765 — do not start.**
 The old entry gate ("a scheduled fire has run green against the studio-served quota figure") is
 now UNSATISFIABLE and must not be read as met: studio is the THIRD source, so a healthy dashboard
-means every fire logs `quota source: dashboard` and studio is never polled at all. A fire running
-green proves nothing about studio. The real gate is **a scheduled fire that logged `quota source:
-studio`**. #765 has since delivered what that needs: Defect 2 (`1381a4d`) put studio behind a
-supervised `com.autonomy.studio-server` LaunchAgent on 8788, so `/api/quota` is reachable at 03:05
-rather than connection-refused, and every UNREADABLE it now logs is a real measurement of the READER
-instead of of "no server". The gate is NOT "add a background sampler": #770 measured a cold poll
-returning 200 and rejected a sampler on the evidence; studio backs off geometrically on a 429
-instead. What is still outstanding is purely the EVIDENCE — a scheduled fire that actually logged
-`quota source: studio`.
+means every fire logs `quota source: dashboard` and the guard never falls through to studio. A fire
+running green proves nothing about studio. #765 has since delivered what the gate needs: Defect 2
+(`1381a4d`) put studio behind a supervised `com.autonomy.studio-server` LaunchAgent on 8788, so
+`/api/quota` is reachable at 03:05 rather than connection-refused, and every UNREADABLE it now logs
+is a real measurement of the READER instead of of "no server". The gate is NOT "add a background
+sampler": #770 measured a cold poll returning 200 and rejected a sampler on the evidence; studio
+backs off geometrically on a 429 instead.
+
+**TWO log lines are now valid evidence, and they are NOT interchangeable** (`quota_shadow_probe`,
+#765):
+- **`quota source: studio`** — the guard actually USED studio. Strongest evidence, and still the
+  thing C3 would most like to see. But it can only appear when sources 1 AND 2 have both failed, so
+  waiting for it is waiting for an outage of the very source C3 removes. Do not treat its absence as
+  a finding about studio.
+- **`quota shadow: studio <n>%`** — the once-per-hour DIAGNOSTIC probe asked studio on a fire the
+  dashboard was perfectly capable of answering, and studio returned a real figure. This answers the
+  question the gate is actually asking — *can source 3 serve a reading at fire time?* — without
+  needing an outage first. It is the WEAKER of the two: it says studio COULD have answered, not that
+  the fallthrough reached it. `quota shadow: studio UNREADABLE` is evidence in the other direction
+  and is equally real; a run of those means C3 is NOT ready.
+
+So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
+reading** (a `quota source: studio` line is better still if one ever occurs). Count them with
+`grep 'quota shadow: studio' loop/logs/driver.log` — and remember only `logs/driver.log` counts;
+agent transcripts are full of false hits.
 Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
 `loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
 polls of one shared, rate-limited budget, sharing one Keychain credential and one macOS-only
 assumption, and the warm-cache source that rides through a 429 is exactly the one being removed. So
-C3 still materially weakens the guard, and the studio half has never once returned a number. `loop/` itself is NOT part of
+C3 still materially weakens the guard. (The studio half HAS now returned a real number — an attended
+probe on 2026-07-30 read 0.16, matching the dashboard — but that was one attended reading, not the
+run of scheduled-fire evidence the gate wants.) `loop/` itself is NOT part of
 the old engine — it is the control plane and it STAYS. Note `.github/workflows/ci.yml` has a
 `lint-and-test` job scoped to the engine and a SEPARATE `loop` job: removing the engine means
 retiring the former and keeping the latter.
