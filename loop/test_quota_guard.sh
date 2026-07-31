@@ -1966,12 +1966,14 @@ printf '%s v=1,pid=%s,fires=7,stall=2,regrants=1,crash=3,loops=9,adopt=1,head=ab
 # unconditional `while true` and would hang the suite forever.
 (
   set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
   export INFRA="$hftmp/infra"
   export DLOG="$hftmp/infra/driver.log"
+  export MAX_SELF_ADOPT=3
+  export HANDOFF_MAX_AGE=300
   # shellcheck source=/dev/null
   . "$HERE/drive.sh"
-  MAX_SELF_ADOPT=3
-  HANDOFF_MAX_AGE=300
   for hf_case in mine foreign stale corrupt skewed; do
     fires=0; stall=0; blind_fires=0; budget_regrants=0; crash=0; loops=0
     adoptions=0; prev_head=""
