@@ -177,7 +177,15 @@ export function readableIssue(
     const node = nodeById.get(id);
     return node !== undefined ? activityLabel(node) : labels.get(id);
   };
-  // `validateExitWhen`/`validateForeachItems` build their location as
+  // COUPLING: both passes below read the validator's MESSAGE FORMAT, not a
+  // structured field, so a change to how `validateExitWhen`/`validateForeachItems`
+  // (packages/shared/src/engine/params.ts) render a location silently degrades this
+  // to raw uuids rather than breaking a type. The pass-1 regex keys on the
+  // `container.<id>.` PREFIX only, so it covers both `.exitWhen` and `.items`
+  // without naming either; `containerRules.test.ts` pins that prefix. If you change
+  // the `where` string in either validator, change this with it.
+  //
+  // Pass 1 exists because those two build their location as
   // `container.<id>.exitWhen` — the id UNQUOTED, so the quoted-token pass below
   // cannot see it. Those two fields are the ONLY container config the New-container
   // form authors, which makes this the first error a beginner meets: without this

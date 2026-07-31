@@ -488,7 +488,10 @@ function ContainerSection({
           <select
             value={kind}
             aria-label="New container kind"
-            onChange={(e) => setKind(e.target.value as ContainerKind)}
+            onChange={(e) => {
+              const parsed = ContainerKindSchema.safeParse(e.target.value);
+              if (parsed.success) setKind(parsed.data);
+            }}
           >
             {ContainerKindSchema.options.map((k) => (
               <option key={k} value={k}>
