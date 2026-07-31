@@ -22,7 +22,13 @@ describe('unsupportedOpenAiParams (#730)', () => {
   // test would move input and expectation in lockstep, so these could only fail
   // on a change to the function body. The membership pin below guards the data.
   it.each(['o3', 'o4-mini', 'gpt-5', 'gpt-5.4-mini'])('names both params on %s', (model) => {
-    expect(unsupportedOpenAiParams(model, { hasTemperature: true, hasTopP: true })).toEqual([
+    expect(
+      unsupportedOpenAiParams(model, {
+        hasTemperature: true,
+        hasTopP: true,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([
       // `removed`, NOT `unavailable`: a reasoning model is the NEWER thing, so
       // "select a newer model" would send the author the wrong way. The remedy
       // is a model that still accepts the knob.
@@ -32,12 +38,20 @@ describe('unsupportedOpenAiParams (#730)', () => {
   });
 
   it('names only the param the author actually set', () => {
-    expect(unsupportedOpenAiParams('o3', { hasTemperature: true, hasTopP: false })).toEqual([
-      { name: 'temperature', cause: 'removed' },
-    ]);
-    expect(unsupportedOpenAiParams('o3', { hasTemperature: false, hasTopP: true })).toEqual([
-      { name: 'topP', cause: 'removed' },
-    ]);
+    expect(
+      unsupportedOpenAiParams('o3', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([{ name: 'temperature', cause: 'removed' }]);
+    expect(
+      unsupportedOpenAiParams('o3', {
+        hasTemperature: false,
+        hasTopP: true,
+        hasReasoningEffort: false,
+      }),
+    ).toEqual([{ name: 'topP', cause: 'removed' }]);
   });
 
   it('does NOT refuse a non-reasoning model, which accepts sampling', () => {
@@ -45,7 +59,13 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // family take `temperature` happily, and refusing them would break calls
     // that work today.
     for (const model of ['gpt-4o', 'gpt-4.1', 'gpt-5-chat-latest', 'gpt-5.1-chat']) {
-      expect(unsupportedOpenAiParams(model, { hasTemperature: true, hasTopP: true })).toEqual([]);
+      expect(
+        unsupportedOpenAiParams(model, {
+          hasTemperature: true,
+          hasTopP: true,
+          hasReasoningEffort: false,
+        }),
+      ).toEqual([]);
     }
   });
 
@@ -57,7 +77,11 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // `temperature` identically, and permitting it just moved the failure to a
     // provider 400 with a worse diagnostic.
     expect(
-      unsupportedOpenAiParams('o3-2025-04-16', { hasTemperature: true, hasTopP: false }),
+      unsupportedOpenAiParams('o3-2025-04-16', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
     ).toEqual([{ name: 'temperature', cause: 'removed' }]);
   });
 
@@ -66,16 +90,22 @@ describe('unsupportedOpenAiParams (#730)', () => {
     // snapshot, the id it resolves to is not published, and `codex-mini` is not
     // a set member anyway. The absent fact stays absent.
     expect(
-      unsupportedOpenAiParams('codex-mini-latest', { hasTemperature: true, hasTopP: false }),
+      unsupportedOpenAiParams('codex-mini-latest', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: false,
+      }),
     ).toEqual([]);
   });
 
   it('pins the sourced membership of the set', () => {
     // Sourced from Microsoft Learn "Azure OpenAI reasoning models" (2026-07-25):
     // its two enumerated reasoning-model feature tables, minus the four classes
-    // of deliberate omission documented on the set. Pinned so a future edit is a
-    // decision against the source rather than a drift — and so "completing" the
-    // list with a guess has to argue with this test first.
+    // of deliberate omission documented on the set — PLUS `o1-mini`, which #752
+    // found sits in neither table and is sourced from the page's prose instead.
+    // Pinned so a future edit is a decision against the source rather than a
+    // drift — and so "completing" the list with a guess has to argue with this
+    // test first.
     expect([...MODELS_REJECTING_SAMPLING_PARAMS].sort()).toEqual([
       'gpt-5',
       'gpt-5-codex',
