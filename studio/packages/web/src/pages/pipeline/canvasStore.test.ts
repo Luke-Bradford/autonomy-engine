@@ -611,7 +611,8 @@ describe('selection model (#737)', () => {
  * survived into the save body — where `validatePipelineDoc` refused it with
  * `child '<id>' is not a node in this pipeline`, a message naming a node the
  * operator had just deliberately removed. `canSave` gates on that, and container
- * membership is not authorable on the canvas (U6d/#425), so the only way out was
+ * membership was not authorable on the canvas at the time (U6d has since added
+ * it), so the only way out was
  * to reload the page and lose every unsaved edit.
  *
  * These pin the fix at both levels: the prune itself, and the SYMPTOM (Save
@@ -718,7 +719,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
    *
    * Deleting the container would be a structure write that also owns its incident
    * edges and its `exitWhen`/`items`/`maxRounds`/`timeout` config — none of it
-   * re-authorable on the canvas until U6d/#425 — so a cascade would destroy
+   * re-authorable on the canvas until U23/#839 — so a cascade would destroy
    * authored structure the operator cannot get back, to save them one refused
    * save. An empty `stage` is a legal doc, so this case simply works.
    */
@@ -778,7 +779,7 @@ describe('canvasStore — container membership on delete (#746)', () => {
    * expression names leaves the doc unsavable on a REFERENCE error.
    *
    * Unchanged by this fix and deliberately so — repairing it means editing the
-   * expression, which is container authoring (U6d/#425). Pinned here because the
+   * expression, which is container CONFIG authoring (U23/#839). Pinned here because the
    * PR body states it, and a stated residue nothing tests is just a confident
    * comment.
    */
@@ -1083,6 +1084,15 @@ describe('canvasStore — container membership (U6d)', () => {
       if (!('container' in out)) return;
       expect(out.container.exitWhen).toBeUndefined();
       expect(out.container.items).toBeUndefined();
+    });
+
+    it('builds a foreach carrying its items expression', () => {
+      const out = buildContainer('foreach', 'n_a', { items: '${run.params.rows}' });
+      expect('container' in out).toBe(true);
+      if (!('container' in out)) return;
+      expect(out.container.kind).toBe('foreach');
+      expect(out.container.items).toBe('${run.params.rows}');
+      expect(out.container.exitWhen).toBeUndefined();
     });
 
     /**

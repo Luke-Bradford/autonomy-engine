@@ -1,12 +1,12 @@
 import {
-  getActivity,
   implicitRouting,
-  validatePipelineDoc,
   type Container,
   type Edge,
   type Node,
   type Param,
 } from '@autonomy-studio/shared';
+import { activityLabel } from './activityLabel';
+import { validateCanvas } from './canvasDoc';
 
 /**
  * U6d — what a CONTAINER-MEMBERSHIP edit does to the doc, decided before it is
@@ -54,19 +54,37 @@ export interface ContainerEditConsequence {
    * Validation issues the edit ADDS — issues the doc does not already have.
    * Pre-existing ones are tolerated deliberately: an operator repairing a broken
    * doc must not be blocked by the breakage they are repairing.
+   *
+   * Matched by exact STRING, which over-reports in one case: an issue whose text
+   * merely changes (a boundary error gaining `(child of 'stage 2')` on its far
+   * end) reads as new. Kept anyway — the alternative is a coarser key, and a
+   * coarser key can MASK a genuinely new issue about the same element, since
+   * more than one rule can report the same edge. Over-warning on a doc that is
+   * already broken is the safe polarity; silently withholding a warning is not.
    */
   newIssues: string[];
   /**
    * Non-null when the edit changes what the doc's routing is INFERRED from.
    *
-   * This is the consequence no validator reports and no badge shows. On an
-   * edge-less doc `implicitRouting` synthesises one success chain in add order —
-   * but `containers.length > 0` makes it `partitioned` instead
-   * (`engine/params.ts`), so creating the FIRST container silently replaces the
-   * sequence the operator was relying on with parallel roots. `validateDoc`
-   * accepts both docs and says nothing, because the edges it iterates are
+   * No VALIDATOR reports this: on an edge-less doc `implicitRouting`
+   * synthesises one success chain in add order, but `containers.length > 0`
+   * makes it `partitioned` instead (`engine/params.ts`), and `validateDoc`
+   * accepts both docs without complaint because the edges it iterates are
    * synthesised, not authored. Saving mints whichever one is current into an
    * immutable version.
+   *
+   * The canvas is not silent about it — #788's `canvas-advisory` panel
+   * (`FlowCanvas`) is a STANDING description of an edge-less graph, and its text
+   * changes the moment the first container lands. This is the PRE-HOC half: the
+   * panel tells an operator what the graph has become, this tells them what a
+   * click is about to do, while they can still decline.
+   *
+   * HOW FAR IT REACHES, stated rather than left to be discovered: only a change
+   * of KIND. `implicitRouting` collapses every containered edge-less doc to a
+   * detail-free `{kind:'partitioned'}`, so moving a node in or out of a container
+   * that ALREADY exists changes which activities are roots without changing the
+   * kind, and fires nothing. Nor does `deleteContainer` removing the last one
+   * (that edit does not come through this module at all). Both are #840.
    */
   routingChange: { from: RoutingSource; to: RoutingSource } | null;
 }
@@ -81,8 +99,9 @@ function routingSource(
  * What applying `nextContainers` to `doc` would cost.
  *
  * The issue half is deliberately NOT a hand-written rule set: it diffs
- * `validatePipelineDoc` — the same SSOT the save badge and the server's write
- * gate call (#444) — over the current and candidate docs. So it cannot drift
+ * `validateCanvas` — the canvas's single call site into `validatePipelineDoc`,
+ * the same SSOT the save badge and the server's write gate call (#444) — over
+ * the current and candidate docs. So it cannot drift
  * from what a save would be refused for, and it covers, without restating any of
  * them, cross-boundary forward edges, a loop or foreach emptied below its
  * one-child rule, nested containers, id collisions and `exitWhen`/`items`
@@ -96,19 +115,8 @@ export function containerEditConsequence(
   doc: ContainerEditDoc,
   nextContainers: Container[],
 ): ContainerEditConsequence {
-  const before = validatePipelineDoc({
-    params: doc.params,
-    nodes: doc.nodes,
-    edges: doc.edges,
-    containers: doc.containers,
-  });
-  const known = new Set(before);
-  const after = validatePipelineDoc({
-    params: doc.params,
-    nodes: doc.nodes,
-    edges: doc.edges,
-    containers: nextContainers,
-  });
+  const known = new Set(validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params));
+  const after = validateCanvas(doc.nodes, doc.edges, nextContainers, doc.params);
   const from = routingSource(doc);
   const to = routingSource({ nodes: doc.nodes, edges: doc.edges, containers: nextContainers });
   return {
@@ -129,8 +137,8 @@ export function containerEditConsequence(
  *
  * The honest cost, stated rather than hidden: the ordinal is not drawn on the
  * box, so with two loops on screen "loop 2" identifies the option but not the
- * rectangle. Putting it on the box is a U6c render change; filed as a follow-up
- * rather than smuggled in here.
+ * rectangle. Putting it on the box is a U6c render change; deferred to U23
+ * (#839) rather than smuggled in here.
  */
 export function containerLabels(containers: Container[]): Map<string, string> {
   const seen = new Map<string, number>();
@@ -167,10 +175,19 @@ export function readableIssue(
   const labels = containerLabels(containers);
   const label = (id: string): string | undefined => {
     const node = nodeById.get(id);
-    if (node !== undefined) return getActivity(node.type)?.title ?? node.type;
-    return labels.get(id);
+    return node !== undefined ? activityLabel(node) : labels.get(id);
   };
-  return issue.replace(/'([^']+)'/g, (whole, id: string) => {
+  // `validateExitWhen`/`validateForeachItems` build their location as
+  // `container.<id>.exitWhen` — the id UNQUOTED, so the quoted-token pass below
+  // cannot see it. Those two fields are the ONLY container config the New-container
+  // form authors, which makes this the first error a beginner meets: without this
+  // pass it arrives as a bare uuid, the exact defect the rest of this function
+  // exists to prevent.
+  const located = issue.replace(/\bcontainer\.([^.\s]+)\./g, (whole, id: string) => {
+    const l = labels.get(id);
+    return l === undefined ? whole : `container '${l}' `;
+  });
+  return located.replace(/'([^']+)'/g, (whole, id: string) => {
     const direct = label(id);
     if (direct !== undefined) return `'${direct}'`;
     const edge = edgeById.get(id);
@@ -191,12 +208,22 @@ export function readableIssue(
  * `nextContainers`, not the current ones, label the issues: a brand-new
  * container appears only in the candidate doc, and an issue naming it would
  * otherwise fall back to its raw uuid.
+ *
+ * `recovery` is a PARAMETER because the way back out is not the same for both
+ * edits, and one hard-coded sentence was actively wrong. "Set the activity back
+ * to — none —" undoes a membership change, but following it after CREATING a
+ * loop around a wired activity swaps one unsavable doc for a worse one: the loop
+ * is left with no children (`makes no progress`) and its `exitWhen` now names a
+ * node outside it. The way out of a create is deleting the container. A
+ * confirmation that names a recovery which does not recover is worse than one
+ * that names none.
  */
 export function consequenceMessage(
   consequence: ContainerEditConsequence,
   nodes: Node[],
   edges: Edge[],
   nextContainers: Container[],
+  recovery: string,
 ): string | null {
   const parts: string[] = [];
   const change = consequence.routingChange;
@@ -206,13 +233,12 @@ export function consequenceMessage(
         'activities were added. A container splits that single sequence into parallel roots — ' +
         'saving mints the split routing into the next version.',
     );
-  } else if (change !== null && change.to === 'chain') {
-    parts.push(
-      'This pipeline has no authored edges and no containers left, so its routing falls back ' +
-        'to one inferred sequence in the order activities were added — saving mints that into ' +
-        'the next version.',
-    );
   }
+  // No `to === 'chain'` arm: both callers only GROW the container array
+  // (`assignContainerChild` is length-preserving, `containersWithNew` appends),
+  // so a doc can only gain its first container here. Removing the LAST one is
+  // `deleteContainer`'s edit (#748), which does not come through this module.
+
   if (consequence.newIssues.length > 0) {
     const lines = consequence.newIssues.map(
       (issue) => `• ${readableIssue(issue, nodes, edges, nextContainers)}`,
@@ -220,7 +246,7 @@ export function consequenceMessage(
     parts.push(
       'This edit leaves the pipeline unsavable until it is fixed:\n' +
         lines.join('\n') +
-        '\n\nYou can undo it by setting the activity back to — none —.',
+        `\n\n${recovery}`,
     );
   }
   if (parts.length === 0) return null;

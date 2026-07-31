@@ -147,6 +147,67 @@ test.describe('U6d — creating a container from the canvas', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * The same journey for a LOOP, which is where the stage version cannot
+   * discriminate: an emptied stage validates clean, so "set it back to — none —"
+   * looks like a recovery for it. For a loop that instruction makes the doc
+   * WORSE (no children, and an `exitWhen` naming a node outside), so the create
+   * path names the container's own delete instead — and this walks that.
+   */
+  test('the way out of a loop created round a wired activity is the box, not — none —', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'u6d-loop-undo', {
+      nodes: [
+        { id: 'a', position: { x: 0, y: 0 } },
+        { id: 'b', position: { x: 260, y: 0 } },
+      ],
+      edges: [{ from: 'a', to: 'b', on: 'success' }],
+    });
+
+    await select(page, 'b');
+    await page.getByLabel('New container kind').selectOption('loop');
+    await page.getByLabel('Exit when').fill('${equals(nodes.b.status, "success")}');
+    const message = await captureConfirm(page, async () => {
+      await page.getByRole('button', { name: 'Create container' }).click();
+    });
+
+    expect(message).toContain('✕ on the container box');
+    expect(message, 'named a recovery that would make the doc worse').not.toContain('— none —');
+
+    expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    // The recovery the dialog actually named.
+    await captureConfirm(page, async () => {
+      await page.getByRole('button', { name: 'Delete loop container' }).click();
+    });
+    await expect(page.locator('.flow-container')).toHaveCount(0);
+    expect(await validationIssues(page)).toEqual([]);
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
+
+    await expectQuiet(page, problems);
+  });
+
+  /** A foreach needs its items expression for the same reason a loop needs an exit. */
+  test('a foreach cannot be created without an items expression', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'u6d-foreach-gate', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+    });
+
+    await select(page, 'a');
+    await page.getByLabel('New container kind').selectOption('foreach');
+    const create = page.getByRole('button', { name: 'Create container' });
+    await expect(create).toBeDisabled();
+
+    await page.getByLabel('Items').fill('${run.params.rows}');
+    await expect(create).toBeEnabled();
+
+    await expectQuiet(page, problems);
+  });
+
   /** Dismissing the confirmation must leave the graph exactly as it was. */
   test('declining the confirmation applies nothing', async ({ page }) => {
     const problems = collectPageProblems(page);
@@ -216,7 +277,9 @@ test.describe('U6d — creating a container from the canvas', () => {
     await page.getByLabel('Max rounds (optional)').fill('0');
     await page.getByRole('button', { name: 'Create container' }).click();
 
-    await expect(page.locator('.property-panel .error')).toBeVisible();
+    // Scoped by TEXT: `.property-panel .error` alone also matches NodePanel's
+    // config-parse error, so it would stay green if this one never rendered.
+    await expect(page.locator('.property-panel .error')).toContainText('maxRounds');
     await expect(page.locator('.flow-container')).toHaveCount(0);
 
     await expectQuiet(page, problems);

@@ -22,8 +22,9 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { getActivity, implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
+import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
+import { activityLabel } from './activityLabel';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { edgeAriaLabel, edgeArrowMarkerId, edgeLabel, edgeVariantClass } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
@@ -371,7 +372,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           // the domain position for a freshly-added node.
           position: existing?.position ?? n.position,
           data: {
-            title: getActivity(n.type)?.title ?? n.type,
+            title: activityLabel(n),
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
@@ -424,7 +425,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
-   * surface can re-author yet (U6d/#425) and there is no undo, so a mis-click is
+   * surface can re-author yet (U23, #839) and there is no undo, so a mis-click is
    * unrecoverable rather than merely annoying.
    *
    * The message states BOTH halves — what goes and what stays. "Are you sure?"
@@ -744,7 +745,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
        measured dimensions, and a `remove` if one were ever deleted. Letting those
        through would ask `useNodesState` to track a node it does not own and,
        worse, hand `deleteNode('<container id>')` to the store, which would find
-       no node and silently do nothing today but is a live footgun for U6d.
+       no node and silently does nothing: U6d authors membership through the
+       property panel, not through this change seam, so the collision stays
+       latent — but it is a live footgun for U23's drag-membership.
        Filtered at the SEAM rather than in each branch below, so a change type
        added later cannot miss the guard. */
     const own = changes.filter((c) => !('id' in c) || !containerIds.has(c.id));

@@ -10,7 +10,6 @@ import {
   type ContainerKind,
   type Edge,
   type Node,
-  type Param,
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
@@ -356,17 +355,6 @@ function ConditionOption({
 }
 
 /**
- * Editor for one activity node. Config is edited as JSON (minus the internal
- * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
- * since #526 — and which this slice does not surface);
- * Apply parses the JSON and validates it against the activity's `configSchema`
- * before committing, so an invalid blob never reaches the store. The connection
- * dropdown is filtered to the kinds this activity accepts.
- */
-/** Stable identity so the `params` selector below never re-renders on a miss. */
-const NO_PARAMS: Param[] = [];
-
-/**
  * U6d — the selected activity's container membership, and the one gesture that
  * CREATES a container.
  *
@@ -392,7 +380,7 @@ function ContainerSection({
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
   const loaded = useStore(store, (s) => s.loaded);
-  const params = loaded?.params ?? NO_PARAMS;
+  const params = loaded?.params ?? [];
 
   const [kind, setKind] = useState<ContainerKind>('stage');
   const [exitWhen, setExitWhen] = useState('');
@@ -412,12 +400,17 @@ function ContainerSection({
    * is the canvas's existing confirmation route (`confirmDeleteContainer`,
    * and every list page).
    */
-  function withConfirmation(nextContainers: Container[], apply: () => void): boolean {
+  function withConfirmation(
+    nextContainers: Container[],
+    recovery: string,
+    apply: () => void,
+  ): boolean {
     const message = consequenceMessage(
       containerEditConsequence({ nodes, edges, containers, params }, nextContainers),
       nodes,
       edges,
       nextContainers,
+      recovery,
     );
     if (message !== null && !window.confirm(message)) return false;
     apply();
@@ -427,8 +420,10 @@ function ContainerSection({
   function changeOwner(value: string) {
     const target = value === '' ? null : value;
     setError(null);
-    withConfirmation(assignContainerChild(containers, nodeId, target), () =>
-      store.getState().setNodeContainer(nodeId, target),
+    withConfirmation(
+      assignContainerChild(containers, nodeId, target),
+      'You can undo it by setting the activity back to — none —.',
+      () => store.getState().setNodeContainer(nodeId, target),
     );
   }
 
@@ -447,8 +442,12 @@ function ContainerSection({
       return;
     }
     setError(null);
-    const applied = withConfirmation(containersWithNew(containers, built.container), () =>
-      store.getState().createContainer(built.container),
+    const applied = withConfirmation(
+      containersWithNew(containers, built.container),
+      // NOT "set it back to — none —": emptying a freshly-made loop leaves a
+      // worse doc than the one being escaped (see `consequenceMessage`).
+      'You can undo it with the ✕ on the container box.',
+      () => store.getState().createContainer(built.container),
     );
     if (applied) {
       setExitWhen('');
@@ -462,8 +461,11 @@ function ContainerSection({
   const canCreate =
     kind === 'loop' ? exitWhen.trim() !== '' : kind === 'foreach' ? items.trim() !== '' : true;
 
+  // A fragment, not a wrapper: `.property-panel` is already the flex column
+  // these controls want, so a `<div>` here would need its own rule saying the
+  // same thing — two declarations that have to agree about one rhythm.
   return (
-    <div className="container-section">
+    <>
       <label>
         Container
         <select
@@ -536,10 +538,19 @@ function ContainerSection({
           {error}
         </p>
       )}
-    </div>
+    </>
   );
 }
 
+/**
+ * Editor for one activity node. Config is edited as JSON (minus the internal
+ * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
+ * since #526 — and which this slice does not surface);
+ * Apply parses the JSON and validates it against the activity's `configSchema`
+ * before committing, so an invalid blob never reaches the store. The connection
+ * dropdown is filtered to the kinds this activity accepts. Container membership
+ * (U6d) is `ContainerSection` above.
+ */
 export function NodePanel({
   store,
   connections,
@@ -606,10 +617,10 @@ export function NodePanel({
       <aside className="property-panel" aria-label="Properties">
         <h3>{entry?.title ?? nodeType}</h3>
         <p className="page-hint">This activity is configured via the call-node editor (#425).</p>
-        {/* Membership is orthogonal to `node.config`, so the stub must not
-            swallow it: a container is exactly the construct an IMPORTED doc puts
-            a call node in, and this early return is the only panel such a node
-            ever gets. */}
+        {/* Rendered in the STUB too, not just in the editor below. Membership is
+            orthogonal to `node.config`, so this early return must not swallow it:
+            a container is exactly the construct an IMPORTED doc puts a call node
+            in, and this is the only panel such a node ever gets. */}
         <ContainerSection store={store} nodeId={nodeId} />
       </aside>
     );

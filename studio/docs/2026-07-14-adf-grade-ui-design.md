@@ -1223,34 +1223,52 @@ Decisions worth not re-deriving:
   check, enables Save, and returns a raw zod `400` with no badge naming the cause. `buildContainer`
   closes it with `ContainerSchema.safeParse`, the same shape as `NodePanel.apply` validating an
   edited config blob before it can reach the store.
-- **The implicit-routing flip is the consequence NO validator reports.** On an edge-less doc
+- **The implicit-routing flip is the consequence no VALIDATOR reports.** On an edge-less doc
   `implicitRouting` synthesises one success chain in add order, but `containers.length > 0` makes it
   `partitioned` — so creating the FIRST container silently replaces the sequence the operator was
   relying on with parallel roots, and saving mints that. `validateDoc` accepts both docs and says
-  nothing, because the edges it iterates are synthesised, not authored. The confirmation states it.
+  nothing, because the edges it iterates are synthesised, not authored. #788's `canvas-advisory`
+  panel is not silent — it is a STANDING description of an edge-less graph, and its text changes the
+  moment the first container lands. The confirmation is the PRE-HOC half: what a click is about to
+  do, while it can still be declined.
+- **The recovery sentence is per-CALL-SITE, and getting it wrong was the sharpest finding of the
+  pre-PR review.** "Set the activity back to — none —" undoes a membership change; following it after
+  CREATING a loop round a wired activity swaps one unsavable doc for a worse one — the loop is left
+  with no children (`makes no progress`) and its `exitWhen` names a node outside it. So the create
+  path names the container's own ✕ instead. A confirmation that names a recovery which does not
+  recover is worse than one that names none. The stage-only version of the e2e could not see this,
+  because an emptied stage validates clean; there is a `loop` variant now for exactly that reason.
 - **Validator ids are rewritten for a human before they are shown.** `newLocalId` mints
   `n_7c44a16f-…`, and surfacing one verbatim reproduces the exact defect `connectRules.endpointLabel`
   exists for. Only the IDENTIFIERS change — the sentence stays the validator's, so this cannot become
   a second, drifting set of messages. An edge has no name, so it is named by its ENDS. Containers
   carry a within-kind ordinal (`stage 2`) because a PICKER, unlike transient gesture feedback, cannot
-  accept two indistinguishable options.
-- **The membership control renders ABOVE the `execute_pipeline` stub.** That early return is the only
-  panel a structural-call node ever gets, and a container is exactly the construct an imported doc
-  puts one in — membership is orthogonal to `node.config`, so the stub must not swallow it.
+  accept two indistinguishable options. Two passes, not one: `validateExitWhen`/`validateForeachItems`
+  write their location as `container.<id>.exitWhen` with the id UNQUOTED, and those two fields are the
+  only container config this form authors — so the first error a beginner meets was the one arriving
+  as a bare uuid.
+- **The membership control renders IN the `execute_pipeline` stub too, not only in the editor.**
+  That early return is the only panel a structural-call node ever gets, and a container is exactly
+  the construct an imported doc puts one in — membership is orthogonal to `node.config`, so the stub
+  must not swallow it.
 
-**Verified by `pnpm -C studio test:e2e`** — 116 specs green, including `container-authoring.spec.ts`
-(5 specs). Every new test mutation-proven: 11 unit mutations (drop each `createContainer` guard, drop
-either schema parse, drop the no-op/dirty guard, stop filtering pre-existing issues, never report a
-routing change, raw issue text, never confirm) and 5 e2e mutations (apply without confirming, drop
-the disabled gate on Create, swallow the `buildContainer` error, make the membership `<select>` inert,
-list issues with raw ids) — 16/16 killed.
+**Verified by `pnpm -C studio test:e2e`** — 118 specs green, including `container-authoring.spec.ts`
+(7 specs). Every new test mutation-proven, 20/20 killed: drop each `createContainer` guard (id
+collision, childless, phantom child, schema); drop `buildContainer`'s schema parse; drop the
+no-op/dirty guard; return a fresh array from `assignContainerChild` unconditionally; stop filtering
+pre-existing issues; never report a routing change; return the raw validator text; drop the unquoted
+`container.<id>` pass; never confirm; ignore the caller's recovery sentence; revert the create path to
+the `— none —` recovery; apply without confirming; drop the disabled gate on Create; satisfy the
+required-field gate unconditionally; swallow the `buildContainer` error; make the membership
+`<select>` inert; list issues with raw ids.
 
-NOT in U6d, with owners: editing an existing container's `exitWhen`/`items`/`timeout`/`join`/
-`batchCount`, and DRAGGING a node into a box — both **U23**, which owns container-config forms and
-the domain-container↔RF-`parentId` drop mechanics (escape route meanwhile: `deleteContainer`
-un-groups the children, then re-create); grouping N nodes at once (**U21** multi-select); undo
-(**U17**); the within-kind ordinal on the BOX itself, so "stage 2" in the picker identifies a
-rectangle as well as an option.
+NOT in U6d, with owners — all four filed as **#839**: editing an existing container's
+`exitWhen`/`items`/`timeout`/`join`/`batchCount`, and DRAGGING a node into a box, both **U23**, which
+owns container-config forms and the domain-container↔RF-`parentId` drop mechanics (escape route
+meanwhile: `deleteContainer` un-groups the children, then re-create); the within-kind ordinal on the
+BOX itself, so "stage 2" in the picker identifies a rectangle as well as an option; and the inline
+"delete this loop?" offer #748 raised. Elsewhere: grouping N nodes at once (**U21** multi-select) and
+undo (**U17**).
 
 ## Non-goals (YAGNI)
 

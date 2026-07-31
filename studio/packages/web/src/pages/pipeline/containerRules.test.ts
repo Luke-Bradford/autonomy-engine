@@ -113,6 +113,23 @@ describe('readableIssue', () => {
     expect(out).toBe(`container 'unknown': something about 'stage'`);
   });
 
+  /**
+   * `exitWhen` and `items` are the only container config the New-container form
+   * authors, and their validator writes the id UNQUOTED — so this is the first
+   * error a beginner meets, and it arrived as a bare uuid until this pass existed.
+   */
+  it('rewrites the validator’s unquoted container.<id>.<field> location too', () => {
+    const out = readableIssue(
+      'container.stage_1.exitWhen: ${nodes.x.status} does not name an upstream node',
+      [A],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "container 'stage 1' exitWhen: ${nodes.x.status} does not name an upstream node",
+    );
+  });
+
   it('falls back to the raw type for an activity the catalog does not know', () => {
     const out = readableIssue(`node 'n_c' is broken`, [C], [], []);
     expect(out).toBe(`node 'not_in_catalog' is broken`);
@@ -122,7 +139,7 @@ describe('readableIssue', () => {
 describe('consequenceMessage', () => {
   it('is null when the edit costs nothing — no dialog for a routine move', () => {
     expect(
-      consequenceMessage({ newIssues: [], routingChange: null }, [A, B, C], [], []),
+      consequenceMessage({ newIssues: [], routingChange: null }, [A, B, C], [], [], 'undo me'),
     ).toBeNull();
   });
 
@@ -132,6 +149,7 @@ describe('consequenceMessage', () => {
       [A, B, C],
       [],
       [],
+      'undo me',
     );
     expect(msg).toContain('parallel roots');
     expect(msg).toContain('Apply it anyway?');
@@ -144,10 +162,29 @@ describe('consequenceMessage', () => {
       [A, B, C],
       [AB],
       containers,
+      'You can undo it by setting the activity back to — none —.',
     );
     expect(msg).toContain('HTTP Request → LLM Call');
     expect(msg).not.toContain('e_ab');
     expect(msg).toContain('— none —');
+  });
+
+  /**
+   * The recovery sentence is the CALLER's, because the two edits do not share
+   * one. Following "set it back to — none —" after CREATING a loop empties it,
+   * which is a worse doc than the one being escaped — so the create path names
+   * the container's own delete instead.
+   */
+  it('states the recovery the CALLER gave it, verbatim', () => {
+    const msg = consequenceMessage(
+      { newIssues: [`container 'stage_1': broken`], routingChange: null },
+      [A],
+      [],
+      [{ id: 'stage_1', kind: 'stage', children: [] }],
+      'You can undo it with the ✕ on the container box.',
+    );
+    expect(msg).toContain('✕ on the container box');
+    expect(msg).not.toContain('— none —');
   });
 
   it('states BOTH consequences when an edit has both', () => {
@@ -159,6 +196,7 @@ describe('consequenceMessage', () => {
       [A, B, C],
       [],
       [{ id: 'stage_1', kind: 'stage', children: [] }],
+      'undo me',
     );
     expect(msg).toContain('parallel roots');
     expect(msg).toContain('unsavable');

@@ -34,7 +34,9 @@ function translateOf(transform: string): { x: string | undefined; y: string | un
  * container's rect is derived from MEASURED child sizes it reports as 0×0.
  *
  * So this spec walks the path: seed a doc with a container (the canvas cannot
- * author one until U6d, so the seed goes through the real write gate), delete a
+ * author one when this was written — U6d has since added the gesture, and
+ * `container-authoring.spec.ts` covers it — so the seed goes through the real
+ * write gate), delete a
  * child, and assert the doc is still savable — by SAVING it, which is the only
  * assertion that proves the save BODY no longer carries the phantom.
  *

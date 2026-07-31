@@ -85,7 +85,8 @@ function retypeEdge(e: Edge, condition: EdgeCondition): Edge {
  * this module owns graph mutation, and `canvasDoc` imports the API layer for
  * `PipelineVersionWrite` — importing it from the store inverted the layering,
  * dragging zod schemas and `apiFetch` into the domain store for a function that
- * is pure `Container[] -> Container[]`. Exported for its own tests and for U6d,
+ * is pure `Container[] -> Container[]`. Exported for its own tests and for U6d
+ * (`containersWithNew` builds on it),
  * the same reason `sameSelection`/`nextSelection` are.
  *
  * Copy-on-write at both levels — a container that does not list the id comes
@@ -271,10 +272,10 @@ export interface CanvasState {
    * would not be the container the store created.
    *
    * Refuses (silent no-op) a container the schema rejects, one whose id collides
-   * with an existing node or container — they share one namespace — and one
-   * naming a child that is not a current node. Silent for the same reason
-   * `connect` is: the canvas is where a refusal is explained, because it is
-   * where the operator is.
+   * with an existing node or container — they share one namespace — one with no
+   * children at all, and one naming a child that is not a current node. Silent
+   * for the same reason `connect` is: the canvas is where a refusal is explained,
+   * because it is where the operator is.
    */
   createContainer(container: Container): void;
   /**
@@ -396,7 +397,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // must never write through. (`children` is the only array or object
         // field on `ContainerSchema`, so one level is the whole copy.) The prune
         // below is copy-on-write, so the alias would be harmless today and a
-        // live hazard the moment U6d edits membership in place — latent sharing
+        // live hazard the moment anything edits membership IN PLACE — U6d does
+        // not (`assignContainerChild` is copy-on-write), so this stays a standing
+        // invariant rather than a bug waiting on U23 — latent sharing
         // that is free to rule out here.
         containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
         selected: null,
@@ -473,7 +476,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // A container that loses its LAST child is KEPT, not deleted with it.
           // Deleting one is a structure write that also owns its incident edges
           // and its exitWhen/items/maxRounds/timeout config, none of it
-          // re-authorable on the canvas until U6d/#425 — so a cascade destroys
+          // re-authorable on the canvas until U23/#839 — so a cascade destroys
           // authored structure the operator cannot get back.
           //
           // That reasoning is SYMMETRIC, which is why keeping the container was
@@ -541,9 +544,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       // One namespace for node and container ids (`validateDoc` says so), so a
       // collision check has to look at both.
       if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
+      // Never born empty: an empty `loop`/`foreach` is a doc `validateDoc`
+      // refuses, and an empty `stage` validates clean and mints itself into an
+      // immutable version forever — the two halves of #748's trap.
+      if (c.children.length === 0) return;
       // A container whose children are not current nodes is the phantom-child
       // doc #746 was filed about, authored fresh instead of left behind.
-      if (c.children.length === 0) return;
       if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;
       set((st) => ({ containers: containersWithNew(st.containers, c), dirty: true }));
     },

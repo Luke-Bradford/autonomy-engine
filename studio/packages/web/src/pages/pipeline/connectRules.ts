@@ -2,11 +2,11 @@ import {
   closesForwardCycle,
   containerMembership,
   crossesContainerBoundary,
-  getActivity,
   type Container,
   type Edge,
   type Node,
 } from '@autonomy-studio/shared';
+import { activityLabel } from './activityLabel';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
 
 /**
@@ -146,7 +146,7 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  */
 function endpointLabel(pre: ConnectPrecheck, id: string): string {
   const node = pre.byId.get(id);
-  if (node !== undefined) return getActivity(node.type)?.title ?? node.type;
+  if (node !== undefined) return activityLabel(node);
   const container = pre.containerById.get(id);
   if (container !== undefined) return `${container.kind} container`;
   return id;
