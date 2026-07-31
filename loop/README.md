@@ -19,6 +19,8 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 | `claude_usage.py` | The quota guard's fallback reader: prints the 7-day utilization percent, or nothing (#764) |
 | `test_quota_guard.sh` | Drives the REAL `drive.sh` with PATH stubs. No network, no tokens, ~10 min |
 | `test_claude_usage.py` | Unit tests for `claude_usage.py`; every seam injected, so no Keychain and no network |
+| `reap_test_drivers.sh` | Kills and removes the fixture trees the suite above builds — including a driver still running out of one (#821) |
+| `test_reap_test_drivers.sh` | Tests for the reaper, mostly REFUSALS: real trees, real processes, no mocks |
 | `fire_stats.sh` | Per-fire cost/turn/tool report read from the stream-json logs |
 | `reload_schedule_once.sh` | Reload helper for the launchd schedule |
 | `install_studio_server.sh` | Installs the SUPERVISED studio server LaunchAgent the quota guard reads |
