@@ -73,11 +73,12 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     // '42' would type as a string everywhere it is referenced.
     const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
     expect(versions.status()).toBe(200);
-    const body = (await versions.json()) as {
-      items: { version: number; params: { name: string; default?: unknown }[] }[];
-    };
-    const latest = body.items.reduce((a, b) => (a.version > b.version ? a : b));
-    expect(latest.params[0].default).toBe(42);
+    const items = (await versions.json()) as {
+      version: number;
+      params: { name: string; default?: unknown }[];
+    }[];
+    const latest = items.reduce((a, b) => (a.version > b.version ? a : b));
+    expect(latest.params[0]!.default).toBe(42);
 
     await expectQuiet(page, problems);
   });
@@ -102,10 +103,12 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expect(page.locator('.notice')).toHaveText('Saved v2.');
 
     const versions = await page.request.get(`/api/pipelines/${encodeURIComponent(id)}/versions`);
-    const body = (await versions.json()) as {
-      items: { version: number; params: { name: string }[]; outputs: { name: string }[] }[];
-    };
-    const latest = body.items.reduce((a, b) => (a.version > b.version ? a : b));
+    const items = (await versions.json()) as {
+      version: number;
+      params: { name: string }[];
+      outputs: { name: string }[];
+    }[];
+    const latest = items.reduce((a, b) => (a.version > b.version ? a : b));
     expect(latest.params.map((p) => p.name)).toEqual(['kept']);
     expect(latest.outputs.map((o) => o.name)).toEqual(['also_kept', 'added']);
 

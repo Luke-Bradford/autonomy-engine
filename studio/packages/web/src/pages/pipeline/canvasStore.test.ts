@@ -1257,10 +1257,10 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
     });
     s.getState().loadVersion(v);
 
-    const stored = s.getState().params[0].default as { nested: { n: number } };
+    const stored = s.getState().params[0]!.default as { nested: { n: number } };
     stored.nested.n = 99;
 
-    const original = v.params[0].default as { nested: { n: number } };
+    const original = v.params[0]!.default as { nested: { n: number } };
     expect(original.nested.n).toBe(1);
   });
 
@@ -1290,7 +1290,7 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
     s.getState().updateParam(1, { name: 'renamed', type: 'number', required: true });
 
     expect(s.getState().params.map((p) => p.name)).toEqual(['a', 'renamed']);
-    expect(s.getState().params[1].type).toBe('number');
+    expect(s.getState().params[1]!.type).toBe('number');
   });
 
   it('updateParam can REMOVE the default key, not merely blank it', () => {
@@ -1302,7 +1302,7 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
       version({ params: [{ name: 'a', type: 'string', required: false, default: 'x' }] }),
     );
     s.getState().updateParam(0, { name: 'a', type: 'string', required: false });
-    expect('default' in s.getState().params[0]).toBe(false);
+    expect('default' in s.getState().params[0]!).toBe(false);
   });
 
   it('removeParam drops exactly one row', () => {
@@ -1328,7 +1328,7 @@ describe('canvasStore — params/outputs as WORKING state (U16)', () => {
     expect(s.getState().outputs).toHaveLength(1);
 
     s.getState().updateOutput(0, { name: 'result', type: 'json', optional: true });
-    expect(s.getState().outputs[0]).toEqual({ name: 'result', type: 'json', optional: true });
+    expect(s.getState().outputs[0]!).toEqual({ name: 'result', type: 'json', optional: true });
 
     s.getState().removeOutput(0);
     expect(s.getState().outputs).toEqual([]);

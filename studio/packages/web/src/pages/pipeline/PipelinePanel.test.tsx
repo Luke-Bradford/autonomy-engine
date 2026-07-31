@@ -50,7 +50,7 @@ describe('PipelinePanel (U16) — params', () => {
   it('typing a name writes straight through to the store', () => {
     const store = mount(version({ params: [{ name: 'a', type: 'string', required: false }] }));
     fireEvent.change(screen.getByLabelText('param 1 name'), { target: { value: 'topic' } });
-    expect(store.getState().params[0].name).toBe('topic');
+    expect(store.getState().params[0]!.name).toBe('topic');
   });
 
   it('changing the type keeps a now-mismatched default rather than destroying it', () => {
@@ -60,7 +60,7 @@ describe('PipelinePanel (U16) — params', () => {
       version({ params: [{ name: 'a', type: 'string', required: false, default: 'abc' }] }),
     );
     fireEvent.change(screen.getByLabelText('param 1 type'), { target: { value: 'number' } });
-    expect(store.getState().params[0]).toEqual({
+    expect(store.getState().params[0]!).toEqual({
       name: 'a',
       type: 'number',
       required: false,
@@ -74,7 +74,7 @@ describe('PipelinePanel (U16) — params', () => {
     );
     fireEvent.click(screen.getByLabelText('param 1 required'));
 
-    expect('default' in store.getState().params[0]).toBe(false);
+    expect('default' in store.getState().params[0]!).toBe(false);
     expect(screen.queryByLabelText('param 1 default')).toBeNull();
     expect(screen.getByText('A run must supply this param.')).toBeInTheDocument();
   });
@@ -84,10 +84,10 @@ describe('PipelinePanel (U16) — params', () => {
     const field = screen.getByLabelText('param 1 default');
     fireEvent.change(field, { target: { value: '42' } });
     // Still uncommitted while typing: half-typed JSON is not JSON.
-    expect('default' in store.getState().params[0]).toBe(false);
+    expect('default' in store.getState().params[0]!).toBe(false);
 
     fireEvent.blur(field, { target: { value: '42' } });
-    expect(store.getState().params[0].default).toBe(42);
+    expect(store.getState().params[0]!.default).toBe(42);
   });
 
   it('blanking the default REMOVES the key rather than storing undefined', () => {
@@ -95,7 +95,7 @@ describe('PipelinePanel (U16) — params', () => {
       version({ params: [{ name: 'n', type: 'number', required: false, default: 7 }] }),
     );
     fireEvent.blur(screen.getByLabelText('param 1 default'), { target: { value: '' } });
-    expect('default' in store.getState().params[0]).toBe(false);
+    expect('default' in store.getState().params[0]!).toBe(false);
   });
 
   it('refuses an unparseable default, keeping the text on screen and the store unchanged', () => {
@@ -104,7 +104,7 @@ describe('PipelinePanel (U16) — params', () => {
     fireEvent.change(field, { target: { value: 'abc' } });
     fireEvent.blur(field, { target: { value: 'abc' } });
 
-    expect('default' in store.getState().params[0]).toBe(false);
+    expect('default' in store.getState().params[0]!).toBe(false);
     expect(field).toHaveValue('abc'); // the operator's text is not reverted
     expect(screen.getByRole('alert')).toHaveTextContent('expected a number');
   });
@@ -176,13 +176,13 @@ describe('PipelinePanel (U16) — outputs', () => {
   it('unchecking Optional REMOVES the key, since absent is what the schema reads as required', () => {
     const store = mount(version({ outputs: [{ name: 'r', type: 'string', optional: true }] }));
     fireEvent.click(screen.getByLabelText('output 1 optional'));
-    expect('optional' in store.getState().outputs[0]).toBe(false);
+    expect('optional' in store.getState().outputs[0]!).toBe(false);
   });
 
   it('checking Optional sets it', () => {
     const store = mount(version({ outputs: [{ name: 'r', type: 'string' }] }));
     fireEvent.click(screen.getByLabelText('output 1 optional'));
-    expect(store.getState().outputs[0].optional).toBe(true);
+    expect(store.getState().outputs[0]!.optional).toBe(true);
   });
 
   it('"Add output" puts a new row in the store', () => {
@@ -196,6 +196,6 @@ describe('PipelinePanel (U16) — outputs', () => {
       version({ outputs: [{ name: 'r', type: 'string', description: 'the answer' }] }),
     );
     fireEvent.change(screen.getByLabelText('output 1 description'), { target: { value: '' } });
-    expect('description' in store.getState().outputs[0]).toBe(false);
+    expect('description' in store.getState().outputs[0]!).toBe(false);
   });
 });
