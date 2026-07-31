@@ -796,7 +796,7 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   # DIRECTORY, where `>` needed write on the FILE. So a read-only $INFRA holding
   # a writable stamp now skips (it did not before), and a writable $INFRA holding
   # an immutable stamp now succeeds (it did not before). Both directions still
-  # end somewhere safe -- skip, or a fresh readable stamp -- and case 45f pins
+  # end somewhere safe -- skip, or a fresh readable stamp -- and case 45h pins
   # the first, which is the one that changed toward refusing.
   if ! quota_stamped_write "$QUOTA_SHADOW_STAMP" probe; then
     log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP is unwritable (#765)"

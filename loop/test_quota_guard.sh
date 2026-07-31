@@ -1562,6 +1562,118 @@ check "...but an undocumented value still REPORTS rather than silently disabling
   "$(grep -cE 'driver code:|plane drift:' "$pdtmp/infra/typo.log" 2>/dev/null || echo 0)"
 rm -rf "$pdtmp"
 
+# --- 45. #806 quota_stamped_write: ONE owner for the "<epoch> <value>" format --
+# The reader was shared; the writer was hand-rolled at three sites, each with `>`.
+# `>` truncates BEFORE writing, so a racing reader (a second driver, or an
+# attended run alongside the scheduled one) could `head -1` an emptied file and
+# read a live record as "no record". Temp-then-rename closes that window, and
+# routing all three through one function gives the format an owner on both sides.
+swtmp="$(mktemp -d)"
+mkdir -p "$swtmp/infra" "$swtmp/ro"
+# The pre-existing record case (c) needs a directory the writer cannot create in.
+# Seeded BEFORE the chmod, and the write-block is asserted below rather than
+# assumed -- running as root would make `chmod 555` a no-op and turn (c) and (h)
+# into vacuous passes, which is the failure mode this whole suite exists to avoid.
+printf '%s 11\n' "$(date +%s)" >"$swtmp/ro/.stamp"
+printf '%s probe\n' "$((now - 999999))" >"$swtmp/ro/.shadow"
+chmod 555 "$swtmp/ro"
+# Bounded exactly like cases 17 and 43: a broken source guard turns `.` into an
+# unconditional `while true` and would hang the suite forever.
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$swtmp/infra"
+  export DLOG="$swtmp/infra/driver.log"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  swf="$swtmp/infra/.stamp"
+
+  # (a) the two halves agree: what the writer emits, the shared reader accepts.
+  quota_stamped_write "$swf" 42 && echo "ok" || echo "failed"
+  quota_stamped_read "$swf" 300
+
+  # (b) rename witness. A rename(2) INSTALLS a new inode; `>` truncation reuses
+  #     the old one. Cheap, but it only proves "a rename happened" -- (c) is what
+  #     proves the property #806 is actually about.
+  swi1="$(ls -i "$swf" | awk '{print $1}')"
+  quota_stamped_write "$swf" 43 || true
+  swi2="$(ls -i "$swf" | awk '{print $1}')"
+  [ "$swi1" != "$swi2" ] && echo "renamed" || echo "same-inode"
+
+  # (c) THE PROOF: a write that cannot complete leaves the PRIOR record intact.
+  #     Under `>` this state (read-only dir, writable file) succeeds and destroys
+  #     the record it could not replace; under temp+rename it fails having
+  #     touched nothing. This is the assertion that goes red on a revert.
+  quota_stamped_write "$swtmp/ro/.stamp" 99 && echo "wrote" || echo "refused"
+  head -1 "$swtmp/ro/.stamp"
+  # (d) ...and leaves no temp behind for the next reader to trip over.
+  ls "$swtmp/ro"/*.tmp.* >/dev/null 2>&1 && echo "dirt" || echo "clean"
+
+  # (e) a target with prior content is REPLACED, never appended to -- the reader
+  #     takes the epoch from line 1 and the value from the LAST line (case 37d),
+  #     so an appending writer would pair a fresh stamp with a stale value.
+  printf 'junk\nmore junk\n' >"$swf"
+  quota_stamped_write "$swf" 7 || true
+  wc -l <"$swf" | tr -d ' '
+
+  # (f) a value that would corrupt the one-line format is refused, and refused
+  #     BEFORE anything is written -- an embedded space splits into a second
+  #     token, so `##* ` would return only its tail.
+  quota_stamped_write "$swf" "7 8" && echo "wrote" || echo "refused"
+  quota_stamped_write "$swf" "" && echo "wrote" || echo "refused"
+  quota_stamped_read "$swf" 300
+
+  # (g) an unusable epoch is a FAILURE, not a silently unreadable record. Without
+  #     this, a broken `date` writes " probe", the shared reader rejects it as
+  #     having no epoch, and `quota_shadow_probe` -- whose throttle rests on a 0
+  #     return meaning a READABLE stamp exists -- would poll on every call. That
+  #     is exactly what case 29g exists to prevent, reached through a SUCCESS.
+  #     Shadowed as a function, so nothing on disk or on PATH is touched.
+  swg="$swtmp/infra/.epoch"
+  date() { :; }
+  quota_stamped_write "$swg" 42 && echo "wrote" || echo "refused"
+  unset -f date
+  [ -e "$swg" ] && echo "record" || echo "nothing"
+
+  # (h) the permission dependency MOVED: a rename needs write on the DIRECTORY
+  #     where `>` needed write on the FILE. So a read-only $INFRA holding a
+  #     writable stamp now skips where it used to poll. 29g pins the same skip
+  #     via a non-existent parent, which fails under both shapes and so cannot
+  #     see this direction change. The stamp seeded above is STALE, so the
+  #     throttle lets the probe through to the write it then cannot do.
+  export QUOTA_SHADOW_STAMP="$swtmp/ro/.shadow"
+  export QUOTA_SHADOW_MIN_INTERVAL=3600
+  quota_shadow_probe dashboard
+) >"$swtmp/out" 2>"$swtmp/err" &
+sw_pid=$!
+sw_i=0
+while [ "$sw_i" -lt 15 ]; do kill -0 "$sw_pid" 2>/dev/null || break; sleep 1; sw_i=$((sw_i + 1)); done
+kill -9 "$sw_pid" 2>/dev/null || true
+swout() { sed -n "${1}p" "$swtmp/out" 2>/dev/null; }
+# Not vacuous: the read-only setup must actually block, or (c) and (h) prove
+# nothing. Asserted, not assumed -- under root `chmod 555` is a no-op.
+check "the read-only directory really is unwritable (else 45c/45h are vacuous)" "1" \
+  "$( (touch "$swtmp/ro/probe" >/dev/null 2>&1 && echo 0) || echo 1)"
+check "a written record is one the SHARED reader accepts" "ok" "$(swout 1)"
+check "...and reads back as the value that was written" "42" "$(swout 2)"
+check "the record is installed by RENAME, not by truncating in place" "renamed" "$(swout 3)"
+check "a write that cannot complete leaves the PRIOR record intact" "refused" "$(swout 4)"
+check "...the prior record, byte for byte -- not an emptied or partial file" "$(head -1 "$swtmp/ro/.stamp")" "$(swout 5)"
+check "...and leaves no temp file behind" "clean" "$(swout 6)"
+check "a target with prior content is REPLACED, not appended to" "1" "$(swout 7)"
+check "a value carrying a separator is refused" "refused" "$(swout 8)"
+check "an empty value is refused" "refused" "$(swout 9)"
+check "...and neither refusal disturbed the target" "7" "$(swout 10)"
+check "an unusable epoch is a failure, not a silently unreadable record" "refused" "$(swout 11)"
+check "...and nothing was written" "nothing" "$(swout 12)"
+check "the shadow probe SKIPS when the rename cannot happen (permission moved)" "1" \
+  "$(grep -c 'quota shadow: skipped' "$swtmp/infra/driver.log" 2>/dev/null || echo 0)"
+check "...and did NOT poll studio, which would defeat the throttle" "0" \
+  "$(grep -c 'quota shadow: studio' "$swtmp/infra/driver.log" 2>/dev/null || echo 0)"
+chmod 755 "$swtmp/ro" 2>/dev/null || true
+rm -rf "$swtmp"
+
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
 # same commit added -- so sourcing the file to unit-test its functions created
