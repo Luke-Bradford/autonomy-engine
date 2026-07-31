@@ -236,6 +236,13 @@ EOS
   cat >"$tmp/infra/run.sh" <<'EOS'
 #!/bin/bash
 echo fired >>"$REPO/fires.txt"
+# #811: what the FIRE sees of the adopt marker. The driver carries the adopt
+# count in the environment as a second carrier for the MAX_SELF_ADOPT cap, and
+# must unset it before any child runs -- a stray DRIVE_ADOPT_COUNT in an agent's
+# environment would be read back by a nested driver as an adoption that never
+# happened. One line per fire, so "it leaked on the fire after the exec" is
+# visible and not averaged away.
+echo "[${DRIVE_ADOPT_COUNT:-}]" >>"$REPO/adoptmarker.txt"
 # #811: MUTATE_DRIVE makes a fire change the DRIVER'S OWN source, which is what a
 # `loop/` merge + sync does in production. The next iteration's `drive_self_adopt`
 # then sees its file differ from its boot hash. Appending is the only sanctioned
@@ -1901,10 +1908,11 @@ check "...and the exec'd process RESUMES the handoff rather than starting clean"
   "$(grep -c 'driver handoff: RESUMED' "$l44" 2>/dev/null || echo 0)"
 check "...carrying MAX_LOOPS across the exec (3 fires, not the 5 a reset gives)" "3" \
   "$(fires_of "$r44")"
-check "...and the fire COUNTER too -- the fire after the exec is FIRE 2, not FIRE 1" "1" \
-  "$(grep -q '=== FIRE 2 ' "$l44" 2>/dev/null && echo 1 || echo 0)"
-check "...so FIRE 1 happened exactly once across both processes" "1" \
-  "$(grep -c '=== FIRE 1 ' "$l44" 2>/dev/null || echo 0)"
+# The fire NUMBERING across both processes, not merely "FIRE 2 exists" -- that
+# weaker form is vacuous, because a driver that reset its counters still reaches
+# FIRE 2 eventually. A reset shows up here as a repeat: "1 1 2 3 4".
+check "...and the fire counter continues across the exec (1 2 3, never a repeat)" "1 2 3" \
+  "$(grep -o '=== FIRE [0-9]* ' "$l44" 2>/dev/null | awk '{print $3}' | tr '\n' ' ' | sed 's/ $//')"
 # The handoff is single-use. A record left on disk is one a much later restart
 # could resume bounds from -- the failure this file cares about, arriving late.
 check "...and the handoff record is CONSUMED, never left for a later restart" "0" \
@@ -1934,6 +1942,24 @@ check "the adopt cap survives the exec -- exactly ONE adoption, not one per fire
   "$(grep -c 'driver code: ADOPTING' "$l44c" 2>/dev/null || echo 0)"
 check "...and says the cap is why it stopped adopting" "1" \
   "$(grep -q 'cap MAX_SELF_ADOPT=1' "$l44c" 2>/dev/null && echo 1 || echo 0)"
+# The marker must never reach a fire. Every line is "[]" or the driver leaked it
+# into the agent's environment.
+check "...and no fire ever inherits DRIVE_ADOPT_COUNT (it is unset before the loop)" "0" \
+  "$(grep -cv '^\[\]$' "$(tmpof "$r44c")/adoptmarker.txt" 2>/dev/null | head -1)"
+
+# (c2) the cap must not rest on the handoff RECORD surviving. Mutating
+# `drive_handoff_resume` to a no-op did not just turn (c) red -- it HUNG the
+# suite in an infinite adopt-exec loop, because every exec'd process restarted at
+# adoptions=0 while the file kept changing. The environment carries the count
+# too, and starting AT the cap is the cheapest way to prove that carrier is read:
+# the driver must refuse from its very first iteration, with a file that changes
+# under it on every fire.
+r44c2="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 DRIVE_ADOPT_COUNT=1 MAX_LOOPS=3)"
+l44c2="$(logof "$r44c2")"
+check "an adopt count inherited from the environment is honoured (#811)" "0" \
+  "$(grep -q 'driver code: ADOPTING' "$l44c2" 2>/dev/null && echo 1 || echo 0)"
+check "...and the run still makes progress rather than looping (all 3 fires)" "3" \
+  "$(fires_of "$r44c2")"
 
 # (d) SELF_ADOPT=0 returns the driver to #808's report-and-wait behaviour.
 r44d="$(run_case 0.10 MUTATE_DRIVE=comment SELF_ADOPT=0 MAX_LOOPS=3)"

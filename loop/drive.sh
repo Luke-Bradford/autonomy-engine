@@ -1265,7 +1265,6 @@ drive_handoff_parse() {
 # Called once at startup. Every path is best-effort: the worst case is the
 # counters this run already had, which is exactly today's behaviour.
 drive_handoff_resume() {
-  return 0;
   dhr_rec="$(quota_stamped_read "$DRIVER_HANDOFF" "$HANDOFF_MAX_AGE")"
   # CONSUME FIRST, and unconditionally. A handoff is valid for exactly one
   # startup: leaving a consumed or stale one on disk is how a much later restart
@@ -1294,6 +1293,36 @@ drive_handoff_resume() {
   log "driver handoff: RESUMED after a self-adopt exec (fires=$fires stall=$stall blind=$blind_fires regrants=$budget_regrants crash=$crash loops=$loops adopt=$adoptions) -- the bounds this run has already spent are still armed (#811)"
   [ -n "$dh_missing" ] && log "WARN: the handoff carried no$dh_missing -- written by a drive.sh that did not have that counter, so that bound restarts from zero (#811)"
   [ -n "$dh_unknown" ] && log "driver handoff: ignored unknown field(s)$dh_unknown -- written by a NEWER drive.sh than the one now running (#811)"
+  return 0
+}
+
+# --- drive_adopt_floor: the adopt cap must not depend on the handoff surviving.
+#
+# MEASURED, not theorised. Mutating `drive_handoff_resume` into a no-op and
+# running case 44c did not merely turn assertions red -- it HUNG the suite in an
+# infinite adopt-exec loop: every exec'd process started at adoptions=0, so a
+# file that kept changing was adopted forever and no fire ever completed. That is
+# the one failure mode MAX_SELF_ADOPT exists to prevent, and it was resting
+# entirely on the same handoff record whose loss it has to survive.
+#
+# So the count is ALSO carried in the environment, which `exec` preserves for
+# free and which no other restart can supply. The two carriers are combined by
+# MAX, never by preference: whichever remembers MORE adoptions is the one that
+# keeps the cap honest, and a lost carrier can then only tighten it.
+#
+# UNSET after reading, so no child -- run.sh, and through it the agent itself --
+# ever inherits it. A stray DRIVE_ADOPT_COUNT in a fire's environment would be
+# read back by a nested driver as an adoption that never happened.
+drive_adopt_floor() {
+  daf_env="${DRIVE_ADOPT_COUNT:-}"
+  unset DRIVE_ADOPT_COUNT
+  case "$daf_env" in ""|*[!0-9]*) return 0 ;; esac
+  [ "${#daf_env}" -gt 9 ] && return 0
+  [ "$daf_env" -gt "$adoptions" ] || return 0
+  # Reached whenever the handoff was lost, refused or never written, on a process
+  # that WAS exec'd -- i.e. exactly the case the hang above came from.
+  log "driver handoff: adopt count $daf_env recovered from the environment (the handoff record carried $adoptions) -- the MAX_SELF_ADOPT cap stays armed even when the record does not survive (#811)"
+  adoptions="$daf_env"
   return 0
 }
 
@@ -1354,6 +1383,11 @@ drive_self_adopt() {
   # drops it) must still adopt.
   # `execfail` so a failed exec RETURNS here instead of exiting the shell -- the
   # default would turn "could not exec" into "the driver is gone".
+  # The second carrier for the cap (see drive_adopt_floor). Exported HERE and
+  # nowhere else: between this line and the exec there is no child to inherit it,
+  # and the exec'd process unsets it before its first fire.
+  DRIVE_ADOPT_COUNT="$adoptions"
+  export DRIVE_ADOPT_COUNT
   shopt -s execfail 2>/dev/null || true
   # shellcheck disable=SC2093
   # SC2093 assumes the lines after `exec` are dead. Under `execfail` they are the
@@ -1361,6 +1395,7 @@ drive_self_adopt() {
   # flags this and the disable belongs here, at write time, not after a red run).
   exec "${BASH:-/bin/bash}" "$DRIVE_SELF" ${DRIVE_ARGV+"${DRIVE_ARGV[@]}"}
   log "driver code: adoption FAILED -- exec of $DRIVE_SELF did not happen. Discarding the handoff and continuing on the OLD code (#811)"
+  unset DRIVE_ADOPT_COUNT
   quota_stamped_discard "$DRIVER_HANDOFF" || true
   return 0
 }
@@ -1764,6 +1799,10 @@ DRIVE_BOOT_HASH="$(drive_self_hash)"
 # rather than inheriting the predecessor's idea of what it booted from. Before
 # the loop, because every counter it restores bounds the first iteration.
 drive_handoff_resume
+# AFTER the resume, because it is a FLOOR on what that record said rather than an
+# alternative to it -- and unconditional, because its whole job is the case where
+# the record did not survive.
+drive_adopt_floor
 
 # Is the quota guard's fallback reader actually THERE? A missing reader and a
 # rate-limited one are indistinguishable downstream -- both yield "" and the fire
