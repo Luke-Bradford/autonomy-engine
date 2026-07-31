@@ -2231,6 +2231,22 @@ check "...and is never called current for studio/" "1" \
   "$(printf '%s' "$ss_evil" | grep -q 'current' && echo 0 || echo 1)"
 check "...saying the TREE differs, rather than quoting a count that says 0" "0" \
   "$(printf '%s' "$ss_evil" | grep -q 'studio/ tree differs' && echo 0 || echo 1)"
+# ...and the DISCLOSED COUNT must not argue against that verdict (#832 review).
+# The STALE arm quotes a per-path count for the operator's benefit; computed the
+# default way it returns 0 on exactly this fixture, so the line would have read
+# "whose studio/ tree differs from origin/main's ...; 0 of them touching
+# studio/" -- self-refuting, in the one case the half exists to catch. Pinned
+# from BOTH sides: `--full-history` counts the evil merge (measured: plain 0,
+# full-history 1), and the "0 of them" spelling must never appear.
+check "...and never quotes a per-path count that refutes its own verdict" "1" \
+  "$(printf '%s' "$ss_evil" | grep -qE '(^| )0 of them touching studio/' && echo 0 || echo 1)"
+check "...crediting the evil merge itself, which --full-history is what counts" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q '1 of them touching studio/' && echo 0 || echo 1)"
+# The unmeasurable/zero degradation is a real arm, so prove it renders prose and
+# not a bare number. `--full-history` says 1 here, so this asserts the OTHER arm
+# stays unreachable on this fixture rather than asserting the arm itself.
+check "...and does not fall back to the attribution-unavailable wording here" "1" \
+  "$(printf '%s' "$ss_evil" | grep -q 'attribution cannot say' && echo 0 || echo 1)"
 # (d) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
 #     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
 #     announces a verdict about a build it cannot identify.

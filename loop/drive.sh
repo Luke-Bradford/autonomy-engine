@@ -1564,9 +1564,29 @@ drift_report_studio_server() {
       # reading it is entitled to see what it is discounting.
       log "studio server: current for studio/ -- serving $ds_commit, behind origin/main ($ds_short) by $ds_behind commit(s), none of which changed studio/"
     else
-      ds_behind_studio="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
-      [ -n "$ds_behind_studio" ] || ds_behind_studio="an unknown number"
-      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      # `--full-history` IS LOAD-BEARING HERE, not a tidier spelling (#832
+      # review). The default simplification is precisely what the tree
+      # comparison above exists to distrust, so a plain `-- studio/` count in
+      # THIS arm renders the evil-merge case as "whose studio/ tree differs from
+      # origin/main's ...; 0 of them touching studio/" -- the one scenario the
+      # half was built to catch, described in prose that argues against its own
+      # verdict, at the moment an operator is deciding whether to believe it.
+      # Measured on a scratch repo: plain 0, `--full-history` 1, trees differ.
+      ds_behind_studio="$(git -C "$REPO" rev-list --count --full-history "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
+      # ...and the count is still only a PROXY; the tree is the fact. If the
+      # proxy comes back 0 or unmeasurable while the trees demonstrably differ,
+      # the honest line says the attribution is unavailable rather than quoting
+      # a number that contradicts the verdict it is attached to. Same refusal as
+      # `ds_behind` above: an unmeasurable thing never renders as a clean 0.
+      case "$ds_behind_studio" in
+        ''|0)
+          ds_studio_clause="though commit-level attribution cannot say which of them changed it"
+          ;;
+        *)
+          ds_studio_clause="$ds_behind_studio of them touching studio/"
+          ;;
+      esac
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
     fi
   fi
   return 0
