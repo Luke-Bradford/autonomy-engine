@@ -72,6 +72,12 @@ tree_path_is_disposable() {
   tpid_dir="${1:-}"
   # An empty or relative path can never be a temp tree, and both are the shapes
   # that turn a later `rm -rf` into something else entirely.
+  #
+  # Honesty note: this clause is REDUNDANT today -- deleting it leaves the suite
+  # green, because `[ -d "" ]` and the parent-directory check below refuse the
+  # same inputs by other means. It is kept as an explicit statement of intent, so
+  # that a future edit to the parent check cannot quietly open a path this
+  # function should never have accepted. It is not load-bearing on its own.
   case "$tpid_dir" in
     "" | /) return 1 ;;
     /*) : ;;

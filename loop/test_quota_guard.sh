@@ -26,17 +26,25 @@ check() { # $1=label $2=expected $3=actual
 # trees the trap exists to clean. See the SAFETY note in reap_test_drivers.sh.
 # shellcheck source=/dev/null
 . "$HERE/reap_test_drivers.sh"
-registered=""
-mk_tmp() { mt_d="$(mktemp -d)"; registered="$registered $mt_d"; echo "$mt_d"; }
+# The registry is a FILE, not a variable. Every tree is created inside a command
+# substitution -- `r="$(run_case ...)"`, `shtmp="$(mk_tmp)"` -- which runs in a
+# SUBSHELL, so an appended variable is discarded the moment the substitution
+# closes and the parent's list stays empty. A variable registry here would leave
+# the trap with nothing to clean and make the leak assertion below pass
+# VACUOUSLY: green suite, orphaned driver, exactly the #821 failure. (Measured:
+# the first version of this fix did precisely that.)
+REG_FILE="$(mktemp)"
+mk_tmp() { mt_d="$(mktemp -d)"; echo "$mt_d" >>"$REG_FILE"; echo "$mt_d"; }
 # KEEP_TMP=1 keeps the trees for debugging -- but NEVER the processes: an
 # orphaned driver is the defect, not a diagnostic.
 reap_registered() {
   rr_ps="$(ps -ww -eo pid=,command= 2>/dev/null)"
-  for rr_t in $registered; do
-    [ -d "$rr_t" ] || continue
+  while read -r rr_t; do
+    [ -n "$rr_t" ] && [ -d "$rr_t" ] || continue
     for rr_pid in $(drivers_under "$rr_t" "$rr_ps"); do kill -9 "$rr_pid" 2>/dev/null || true; done
     [ -n "${KEEP_TMP:-}" ] || reap_known_tree "$rr_t" "$rr_ps" >/dev/null 2>&1 || true
-  done
+  done <"$REG_FILE"
+  rm -f "$REG_FILE"
 }
 rr_rc=0
 trap 'rr_rc=$?; reap_registered; exit "$rr_rc"' EXIT
@@ -2209,10 +2217,10 @@ check "an in-date deadline does not interfere" "12" "$(fires_of "$r821b")"
 # hour, and the only evidence was a temp directory nobody looked at.
 leaked=""
 leak_ps="$(ps -ww -eo pid=,command= 2>/dev/null)"
-for lk_t in $registered; do
-  [ -d "$lk_t" ] || continue
+while read -r lk_t; do
+  [ -n "$lk_t" ] && [ -d "$lk_t" ] || continue
   for lk_p in $(drivers_under "$lk_t" "$leak_ps"); do leaked="$leaked $lk_p"; done
-done
+done <"$REG_FILE"
 check "no fixture driver outlived its case (#821)" "" "${leaked# }"
 
 echo

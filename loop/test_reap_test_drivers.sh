@@ -31,10 +31,24 @@ export REAP_TEMP_ROOT="$SANDBOX_ROOT"
 sandbox_mktemp() { mktemp -d "$SANDBOX_ROOT/tmp.XXXXXXXX"; }
 
 # This suite spawns spinners of its own, so it owes the same hygiene it is
-# testing for: track every pid and tree, and clear them on ANY exit path.
-spawned=""
+# testing for. Two mechanisms, because the obvious one is not enough:
+#
+#  1. A pid registry in a FILE. A shell VARIABLE cannot work here: every spawn
+#     goes through `p="$(spin ...)"`, and a command substitution runs in a
+#     SUBSHELL, so the append is discarded with it and the parent's list stays
+#     empty. That is not hypothetical -- the first version of this file used a
+#     variable and left ELEVEN orphaned spinners behind, which is the very defect
+#     #821 is about, reproduced by its own test suite.
+#  2. A path-scoped sweep of the process table, which depends on no bookkeeping
+#     at all: anything still running out of the sandbox dies, however it got
+#     there. This is the one that actually guarantees the invariant.
+SPAWN_LOG="$(mktemp)"
 cleanup() {
-  for cl_pid in $spawned; do kill -9 "$cl_pid" 2>/dev/null || true; done
+  while read -r cl_pid; do [ -n "$cl_pid" ] && kill -9 "$cl_pid" 2>/dev/null; done <"$SPAWN_LOG"
+  ps -ww -eo pid=,command= 2>/dev/null | while read -r cl_p cl_cmd; do
+    case "$cl_cmd" in *"$SANDBOX_ROOT"/*) kill -9 "$cl_p" 2>/dev/null || true ;; esac
+  done
+  rm -f "$SPAWN_LOG"
   case "$SANDBOX_ROOT" in /*/tmp.?*) rm -rf "$SANDBOX_ROOT" ;; esac
 }
 trap cleanup EXIT INT TERM
@@ -54,7 +68,7 @@ mk_fixture() { # -> echoes the tree path
 spin() { # $1 = script to run in the background -> echoes its pid
   bash "$1" >/dev/null 2>&1 &
   sp_pid=$!
-  spawned="$spawned $sp_pid"
+  echo "$sp_pid" >>"$SPAWN_LOG"
   # `ps` has to have observed it before any assertion about ps output is honest.
   sp_i=0
   while [ "$sp_i" -lt 25 ]; do
