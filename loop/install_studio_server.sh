@@ -393,8 +393,12 @@ server_healthy() {
 #
 # They diverge exactly when a build succeeded but the unit did not restart onto
 # it. That line is also stricter in one direction and looser in another: it
-# judges currency by commits touching `studio/` (this service is built from
-# `studio/` alone), where the verdict below is plain sha equality.
+# judges currency by comparing the `studio/` TREE OBJECT of the served build
+# against origin/main's (this service is built from `studio/` alone, so a commit
+# changing nothing else cannot alter a byte it serves), where the verdict below
+# is plain sha equality. Deliberately not "commits touching studio/": that count
+# applies git's default history simplification and can read 0 while the two
+# trees genuinely differ.
 report_status() {
   # It FETCHES first, and that is the difference between a drift report and a
   # comforting one. `origin/main` inside the clone is a cached local ref that
