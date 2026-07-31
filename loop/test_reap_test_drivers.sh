@@ -16,15 +16,21 @@ check() { # $1=label $2=expected $3=actual
 # shellcheck source=/dev/null
 . "$HERE/reap_test_drivers.sh"
 
+# SANDBOX $TMPDIR before anything else. `reap_stale_trees` sweeps the whole of
+# `$TMPDIR`, and both gates are defined relative to it -- so a test run against
+# the REAL $TMPDIR would reap the operator's actual leftovers as a side effect of
+# being run. (Found the hard way: on this machine that was 6,768 trees and the
+# suite ran for minutes before it was killed.) Every `mktemp -d` below lands in
+# the sandbox, so the tests are hermetic and each case's "TMPDIR" is one it owns.
+SANDBOX_ROOT="$(mktemp -d)"
+export TMPDIR="$SANDBOX_ROOT"
+
 # This suite spawns spinners of its own, so it owes the same hygiene it is
 # testing for: track every pid and tree, and clear them on ANY exit path.
 spawned=""
-trees=""
 cleanup() {
   for cl_pid in $spawned; do kill -9 "$cl_pid" 2>/dev/null || true; done
-  for cl_t in $trees; do
-    case "$cl_t" in "${TMPDIR:-/tmp}"*) rm -rf "$cl_t" ;; esac
-  done
+  case "$SANDBOX_ROOT" in /*/tmp.?*) rm -rf "$SANDBOX_ROOT" ;; esac
 }
 trap cleanup EXIT INT TERM
 
@@ -32,7 +38,6 @@ trap cleanup EXIT INT TERM
 # under infra/ and the stub bin/ that makes it unmistakably ours.
 mk_fixture() { # -> echoes the tree path
   mf_t="$(mktemp -d)"
-  trees="$trees $mf_t"
   mkdir -p "$mf_t/infra" "$mf_t/bin"
   printf '#!/bin/bash\nwhile true; do sleep 0.2; done\n' >"$mf_t/infra/drive.sh"
   printf '#!/bin/bash\nexit 0\n' >"$mf_t/bin/claude"
@@ -79,7 +84,7 @@ rm -f "$t1/bin/claude"
 check "gate refuses a tree with no bin/claude" "1" \
   "$(fixture_tree_is_ours "$t1" && echo 0 || echo 1)"
 printf '#!/bin/bash\nexit 0\n' >"$t1/bin/claude"   # restore for later cases
-t2="$(mktemp -d)"; trees="$trees $t2"
+t2="$(mktemp -d)"
 check "gate refuses a bare mktemp dir (no infra/drive.sh, no bin/)" "1" \
   "$(fixture_tree_is_ours "$t2" && echo 0 || echo 1)"
 
@@ -147,6 +152,31 @@ check "reap_stale_trees killed the orphaned driver in an aged tree" "gone" "$(se
 
 check "reap_stale_trees refuses a non-numeric age" "1" \
   "$(reap_stale_trees abc >/dev/null 2>&1 && echo 0 || echo 1)"
+
+# --- 8. reap_known_tree: the provenance gate, for trees WE recorded ----------
+# The suite's ad-hoc cases build an `infra/` and no stub `bin/` at all, so the
+# signature gate refuses them -- and an exit trap routed through that gate would
+# leak exactly the trees it exists to clean. reap_known_tree is the second gate.
+t9="$(mktemp -d)"; mkdir -p "$t9/infra"
+printf '#!/bin/bash\nwhile true; do sleep 0.2; done\n' >"$t9/infra/drive.sh"
+p9="$(spin "$t9/infra/drive.sh")"
+check "the SIGNATURE gate refuses an ad-hoc tree (no stub bin/)" "1" \
+  "$(fixture_tree_is_ours "$t9" && echo 0 || echo 1)"
+check "the PROVENANCE gate accepts it" "0" \
+  "$(tree_path_is_disposable "$t9" && echo 0 || echo 1)"
+check "reap_known_tree kills its driver" "gone" \
+  "$(reap_known_tree "$t9" >/dev/null 2>&1; settled "$p9")"
+check "reap_known_tree removed the tree" "1" "$([ -d "$t9" ] && echo 0 || echo 1)"
+# The provenance gate is weaker, NOT absent: it still refuses everything that
+# would make `rm -rf` dangerous.
+check "reap_known_tree refuses an empty path" "1" \
+  "$(reap_known_tree "" >/dev/null 2>&1 && echo 0 || echo 1)"
+check "reap_known_tree refuses /" "1" \
+  "$(reap_known_tree / >/dev/null 2>&1 && echo 0 || echo 1)"
+check "reap_known_tree refuses a directory outside TMPDIR" "1" \
+  "$(reap_known_tree "$HERE" >/dev/null 2>&1 && echo 0 || echo 1)"
+check "refusing an outside directory deleted nothing" "0" \
+  "$([ -f "$HERE/reap_test_drivers.sh" ] && echo 0 || echo 1)"
 
 echo
 if [ "$fails" -eq 0 ]; then echo "ALL PASS"; else echo "$fails FAILED"; exit 1; fi
