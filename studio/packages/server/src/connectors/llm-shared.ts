@@ -1270,11 +1270,18 @@ export const TRUNCATION_STOP_REASONS: ReadonlySet<string> = new Set(['length', '
  * ENTIRELY by invisible reasoning. Before #739 the same config raised a loud
  * provider 400. So this restores the loudness WITHOUT touching the semantics.
  *
- * Gated on the OUTPUT SHAPE, not on `ctx.activityType`, so one site covers the
- * three API adapters' text path and the L10b tool loop. It is NOT reachable from
- * `agent_cli` (which stamps the `unknown` sentinel outright) nor from the
- * structured path (no `text`/`stopReason` outputs at all) — both are correctly
- * skipped by shape, and the detector table pins each.
+ * Gated on the OUTPUT SHAPE, not on `ctx.activityType`, and hooked into the
+ * executor's GENERIC `succeeded` handler — so it is reachable from every adapter,
+ * not only the LLM ones (the executor test fires it through a fake HTTP adapter).
+ *
+ * In practice only the `llm_call` TEXT path across the three API adapters and the
+ * L10b tool loop can satisfy it. `agent_cli` cannot: its `llm_call` path stamps
+ * the `unknown` sentinel, and its `agent_task` paths emit no `text`/`stopReason`
+ * pair at all — two different exclusions, both by shape. The structured paths
+ * yield the AUTHOR's declared fields, so a schema that happened to declare
+ * exactly a `text` + `stopReason` string pair could trip this; that is contrived
+ * and harmless (one spurious inert advisory, no outcome change), but it is a
+ * shape rule rather than a structural guarantee. The detector table pins each.
  *
  * A truncated but NON-empty completion stays silent: partial text is a real,
  * usable result, and warning on every one would be noise. That narrowing is

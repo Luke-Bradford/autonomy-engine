@@ -20,6 +20,7 @@ import {
   runTextWithTools,
   structuredEcho,
   toolCallTelemetry,
+  TRUNCATION_STOP_REASONS,
 } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { LlmToolDef, LlmTurn, StructuredCallOutcome, ToolCallResult } from '../llm-shared.js';
@@ -1196,6 +1197,14 @@ describe('emptyTruncationWarning (#750 — a completion that is EMPTY *and* trun
       }
     });
   }
+
+  it('the table is EXACTLY the two sourced truncation tokens', () => {
+    // A membership pin, mirroring `openai-models.test.ts` / `anthropic-models.test.ts`:
+    // every member must be citable to a provider's documented vocabulary, so adding
+    // one has to argue with this test rather than slip in. `length` = OpenAI
+    // `finish_reason` + Ollama `done_reason`; `max_tokens` = Anthropic `stop_reason`.
+    expect([...TRUNCATION_STOP_REASONS].sort()).toEqual(['length', 'max_tokens']);
+  });
 
   it('quotes ONLY the matched stopReason token — never any of the outputs', () => {
     // The warning rides a durable event, so it must not become a side channel for
