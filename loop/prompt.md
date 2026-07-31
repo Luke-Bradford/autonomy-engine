@@ -139,8 +139,8 @@ loop's PRIMARY spend-guard source and is therefore the operator's call, not your
 anything further for C3, and do not treat its absence as a reason to idle.**
 
 **Go straight to the UI epic (item 10) at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
-This is now the highest-priority available work — ahead of the defect sweep, which as amended above
-counts `[studio]` tickets only.
+This is now the highest-priority available work — ahead of the defect sweep, which as amended in the
+STANDING RULE section below counts `[studio]` tickets only.
 
 **WHY THIS CHANGED (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs and
 **exactly one** of them altered anything a human can see in the app. The rest was `loop/`
@@ -211,11 +211,13 @@ You file good tickets for defects you find mid-ticket, and then they were never 
   counting them is **pinned above its own threshold by its own output** — the sweep never ends, and
   `#439` is never reached. That is not a backlog, it is a fixed point.
   So: **the cap counts `[studio]` tickets only.** `[loop]` tickets are real and stay filed, but they
-  are worked ONLY when no user-facing work-order item is available, or when one of them is SEVERE by
-  the definition above (data loss · silent corruption · security · **a fail-open spend gate**) — the
-  spend guards keep their fast lane, because an unbounded driver is the one failure that cannot be
-  fixed after the fact. A `[loop]` ticket that is merely tidier logging, a duplicated rationale, or a
-  follow-up refinement waits.
+  are worked ONLY when no user-facing work-order item is available, or when one of them is SEVERE —
+  **the definition is the one stated above, unchanged and unnarrowed: data loss · silent corruption ·
+  security · a fail-open gate.** Do not read "gate" there as "spend gate": EVERY fail-open gate keeps
+  the fast lane, the merge gate and the review gate included. The spend guards are merely the most
+  obvious instance, because an unbounded driver is the one failure that cannot be fixed after the
+  fact. A `[loop]` ticket that is merely tidier logging, a duplicated rationale, or a follow-up
+  refinement waits.
   **Corollary, and it is the point of this rule: prefer the change a human can SEE.** When choosing
   between two equally-ready items, take the one that alters the app's behaviour or appearance over
   the one that alters how the loop works. If a fire produces nothing user-visible, that is a
