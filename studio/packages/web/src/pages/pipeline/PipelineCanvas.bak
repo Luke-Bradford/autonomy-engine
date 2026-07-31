@@ -1119,13 +1119,10 @@ export function NodePanel({
 
   function applyForm() {
     if (!fields) return;
-    // The FULL config is the original, `outputs` included — no key is re-attached
-    // afterwards. `assembleConfig` preserves everything no derived field owns, so
-    // the F13 outputs contract is carried by that ONE rule rather than by a
-    // special case beside it. Re-attaching it here would work, and would also
-    // MASK the general rule: a regression that dropped every other undeclared key
-    // would still leave `outputs` intact and look correct.
-    const assembled = assembleConfig(config, fields, inputs);
+    // `editable` (not `config`) is the original: `outputs` is re-attached below,
+    // exactly as the JSON path does, so the two paths agree on the one key no
+    // activity's schema declares.
+    const assembled = assembleConfig(editable, fields, inputs);
     if (!assembled.ok) {
       setError(assembled.message);
       return;
@@ -1136,7 +1133,7 @@ export function NodePanel({
       return;
     }
     setError(null);
-    store.getState().updateNodeConfig(nodeId, assembled.config);
+    store.getState().updateNodeConfig(nodeId, { ...assembled.config, outputs });
   }
 
   // A structural-call activity (`execute_pipeline`) stores its settings in
