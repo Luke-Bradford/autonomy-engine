@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import {
   ClaudeAccountQuotaSchema,
   type ClaudeAccountQuota,
+  type AccountQuotaUnavailableReason,
   type AccountQuotaWindow,
 } from '@autonomy-studio/shared';
 
@@ -353,26 +354,45 @@ export interface ClaudeAccountQuotaReaderOptions {
  * branch and the test-app default are ONE definition rather than two identical
  * literals drifting apart (CLAUDE.md: export once, import everywhere).
  */
-export const UNREADABLE_ACCOUNT_QUOTA_READER: ClaudeAccountQuotaReader = { read: async () => null };
+export const UNREADABLE_ACCOUNT_QUOTA_READER: ClaudeAccountQuotaReader = {
+  read: async () => ({ value: null, unavailable: 'disabled' }),
+};
+
+/**
+ * A reading and, when there ISN'T one, why (#825).
+ *
+ * The two travel together deliberately. An `unavailableReason()` getter read
+ * separately from `read()` could pair a cached reading with a LATER sample's
+ * cause — a number carrying a failure's explanation, which is precisely the
+ * confusion this exists to remove. Returning the pair makes
+ * `value !== null ⟺ unavailable === null` structural rather than a convention
+ * every caller has to honour.
+ */
+export interface AccountQuotaReading {
+  /** The reading, or `null` when it could not be obtained. */
+  value: ClaudeAccountQuota | null;
+  /** Why there is no reading; `null` whenever there IS one. Advisory only. */
+  unavailable: AccountQuotaUnavailableReason | null;
+}
 
 export interface ClaudeAccountQuotaReader {
-  /** The current reading, or `null` when it cannot be obtained. Never throws. */
-  read(): Promise<ClaudeAccountQuota | null>;
+  /** The current reading plus its unavailability cause. Never throws. */
+  read(): Promise<AccountQuotaReading>;
 }
 
 /**
- * One sample's result: the reading (`null` = UNREADABLE) plus whether the
- * provider rate-limited us, which is carried separately because it is the one
- * failure that must change the throttle window rather than just the cache.
+ * One sample's result.
+ *
+ * Rate-limiting is not carried as a separate flag: it is the one failure that
+ * must widen the throttle window rather than only stamp the cache, and
+ * `unavailable === 'rate_limited'` already says so exactly. A boolean beside the
+ * reason would be a second encoding of one fact, free to disagree with it.
  *
  * Module-scoped rather than local to the reader for consistency with
  * `QuotaReaderLogEvent`. Note this is types-only either way — an `interface`
  * erases at compile time, so nesting it cost nothing per construction.
  */
-interface SampleOutcome {
-  value: ClaudeAccountQuota | null;
-  rateLimited: boolean;
-}
+type SampleOutcome = AccountQuotaReading;
 
 /**
  * Builds the reader. One per app instance so two apps in one process never
@@ -389,12 +409,18 @@ export function createClaudeAccountQuotaReader(
   const log = opts.log;
 
   let cachedAt: number | null = null;
-  let cached: ClaudeAccountQuota | null = null;
+  /**
+   * The whole last sample — reading AND cause — stamped as ONE value, so a
+   * cache hit can never hand out a reading from one sample with a cause from
+   * another (#825). `null` means no sample has completed yet; that state is
+   * represented rather than stood in for by a fabricated placeholder reason.
+   */
+  let cached: AccountQuotaReading | null = null;
   /**
    * The CURRENT throttle window. Equal to `ttlMs` normally; widened
    * geometrically while the provider is rate-limiting (#765).
    *
-   * INVARIANT, and the whole reason this is safe: `cached !== null` implies
+   * INVARIANT, and the whole reason this is safe: `cached?.value != null` implies
    * `throttleMs === ttlMs`. The window is raised only by a rate-limited sample,
    * every sample stamps `cached` with its own result (a rate-limited one being
    * `null`), and the window is lowered by every successful one. So a widened
@@ -411,19 +437,34 @@ export function createClaudeAccountQuotaReader(
    */
   let rateLimited = false;
   /** De-dupes concurrent reads so a burst is one subprocess + one request. */
-  let inFlight: Promise<ClaudeAccountQuota | null> | null = null;
+  let inFlight: Promise<AccountQuotaReading> | null = null;
 
+  /**
+   * BRANCH ORDER IS THE ATTRIBUTION (#825). Each `return` names the cause the
+   * step it guards actually rules out, so reordering them would not just
+   * reshuffle labels — a rate-limited sample reached after the `raw === null`
+   * test would report `provider_error`, and the C3 evidence would say "studio
+   * is broken" about a contended account. The value path is unchanged.
+   */
   async function sample(): Promise<SampleOutcome> {
     try {
       const token = await tokenReader();
-      if (!token) return { value: null, rateLimited: false };
+      // Covers a host with no credential store at all, indistinguishably —
+      // `readKeychainToken` returns null off darwin without looking.
+      if (!token) return { value: null, unavailable: 'no_credential' };
       const raw = await fetcher(token);
-      if (raw === RATE_LIMITED) return { value: null, rateLimited: true };
-      return { value: buildQuota(raw), rateLimited: false };
+      if (raw === RATE_LIMITED) return { value: null, unavailable: 'rate_limited' };
+      // `fetchUsage` collapses every non-429 failure to null, so this is
+      // "the call did not come back", distinct from the shape check below.
+      if (raw === null) return { value: null, unavailable: 'provider_error' };
+      const value = buildQuota(raw);
+      // The provider IS serving us and we cannot use what it said: a contract
+      // break to chase, not a bucket to wait out.
+      return value === null ? { value: null, unavailable: 'unrecognized_payload' } : { value, unavailable: null };
     } catch {
       // Fail-safe: ANY unexpected error is UNREADABLE, never a raise (which
       // would 500 the guard's poll) and never a substituted value.
-      return { value: null, rateLimited: false };
+      return { value: null, unavailable: 'reader_error' };
     }
   }
 
@@ -478,7 +519,7 @@ export function createClaudeAccountQuotaReader(
    * either way, and the cap bounds the retry latency at `maxThrottleMs`.
    */
   function applyOutcome(outcome: SampleOutcome): void {
-    if (outcome.rateLimited) {
+    if (outcome.unavailable === 'rate_limited') {
       const next = Math.min(throttleMs * 2, maxThrottleMs);
       // Report the window we ACTUALLY adopted, not `throttleMs * 2` — those
       // differ once the cap binds, and a log line that overstates the backoff is
@@ -509,17 +550,22 @@ export function createClaudeAccountQuotaReader(
       // outliving the window it was taken in), and it would falsify the "at
       // most one minute" bound this TTL is justified by. A backwards step now
       // simply misses the cache and re-samples.
-      if (cachedAt !== null && at >= cachedAt && at - cachedAt < throttleMs) return cached;
+      if (cached !== null && cachedAt !== null && at >= cachedAt && at - cachedAt < throttleMs) {
+        return cached;
+      }
       if (inFlight) return inFlight;
       inFlight = sample()
         .then((outcome) => {
           // Both outcomes stamp the cache: a failure is throttled just like a
           // success, but it REPLACES the previous value rather than letting it
-          // survive — no last-good is ever served after a failed read.
+          // survive — no last-good is ever served after a failed read. The
+          // CAUSE is stamped in the same assignment as the value it explains,
+          // which is what makes the pair a single sample rather than two facts
+          // that can drift (#825).
           cachedAt = at;
-          cached = outcome.value;
+          cached = outcome;
           applyOutcome(outcome);
-          return outcome.value;
+          return outcome;
         })
         .finally(() => {
           inFlight = null;

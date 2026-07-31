@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { type AccountQuotaState } from '@autonomy-studio/shared';
+import type { AccountQuotaReading } from '../quota/claude-quota.js';
 
 /**
  * #440 (C1) — `GET /api/quota`, the machine-readable account-quota surface.
@@ -51,9 +52,9 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
     // `null`, so this catch is for the unforeseeable — but the surface's whole
     // value is that it answers, and an unhandled throw here would answer with a
     // 500 whose body the consumer cannot parse.
-    let claude = null;
+    let reading: AccountQuotaReading = { value: null, unavailable: 'reader_error' };
     try {
-      claude = await fastify.claudeAccountQuota.read();
+      reading = await fastify.claudeAccountQuota.read();
     } catch (err) {
       request.log.warn({ err }, 'account-quota read failed; reporting UNREADABLE');
     }
@@ -66,9 +67,17 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
     // would be untestable dead code. CLAUDE.md: validate at boundaries, trust
     // internal code. Returning the literal also makes "never throws" structural
     // rather than something a `safeParse` has to defend.
+    // `unavailable` is OMITTED when there is a reading, never sent as `null`
+    // (#825). The contract is "present ⟺ no reading", and a key that is always
+    // there with a nullable value invites a consumer to branch on the reason
+    // instead of on the reading — which is the one way an advisory field could
+    // end up gating a fire. The `&&` spread is what makes that structural: the
+    // reason cannot be emitted without a `null` beside it, because it comes off
+    // the same object.
     return {
       generated_at: Math.floor(Date.now() / 1000),
-      account: { claude },
+      account: { claude: reading.value },
+      ...(reading.unavailable !== null ? { unavailable: { claude: reading.unavailable } } : {}),
     } satisfies AccountQuotaState;
   });
 };

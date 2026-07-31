@@ -105,6 +105,57 @@ export const ClaudeAccountQuotaSchema = z
 export type ClaudeAccountQuota = z.infer<typeof ClaudeAccountQuotaSchema>;
 
 /**
+ * WHY a reading could not be obtained (#825). Advisory attribution for a
+ * `null`, never a substitute for a number.
+ *
+ * `account.claude: null` is total by design — every failure collapses to it, so
+ * the guard's two branches stay simple. The cost is that it conflates causes
+ * that mean very different things, which matters because the C3 decision (park
+ * the old engine, #410) is made on a RUN of `quota shadow: studio UNREADABLE`
+ * lines in `loop/logs/driver.log`. Measured 2026-07-31: studio was rate-limited
+ * for ~7.8h straight while the shared account bucket was contended, and the one
+ * probe taken in that window logged a bare UNREADABLE — which reads as "studio's
+ * reader is broken" when the truth was "the account was busy, and the backoff
+ * was correctly declining to make it worse". Opposite errors are available too:
+ * most of that contention DISAPPEARS once the old dashboard's sampler is parked,
+ * so unattributed evidence gathered now is systematically pessimistic about the
+ * world C3 creates. A signal must measure the thing it governs
+ * (`docs/review-prevention-log.md` #28).
+ *
+ * `rate_limited` was already observable, but only as a state TRANSITION
+ * (`QuotaReaderLogEvent`, emitted on entering/leaving the backoff). A reader
+ * stuck limited for eight hours emits nothing at all, so there is no line
+ * co-located with a probe's timestamp to join against. This is the per-read
+ * form of the same fact.
+ *
+ * `no_credential` covers a NON-DARWIN HOST as well as a genuinely absent token:
+ * `readKeychainToken` returns `null` for both, deliberately (it never touches a
+ * credential store off macOS), so the reader cannot tell them apart and this
+ * enum does not pretend to. Distinguishing them would mean threading a platform
+ * signal out of the token reader for a case the one consumer — a macOS build
+ * loop — cannot hit. A Linux deployment reads `no_credential` forever, which is
+ * true as far as it goes: there is no credential to be had there.
+ */
+export const ACCOUNT_QUOTA_UNAVAILABLE_REASONS = [
+  /** The surface is switched off (`CLAUDE_QUOTA_ENABLED=0`); nothing was polled. */
+  'disabled',
+  /** No OAuth token — an absent credential, or a host with no Keychain at all. */
+  'no_credential',
+  /** The provider answered 429. Contended account, not a broken reader. */
+  'rate_limited',
+  /** The provider call failed for any other reason (transport, non-429 status). */
+  'provider_error',
+  /** The provider answered, but the payload did not satisfy the reading's shape. */
+  'unrecognized_payload',
+  /** The reader itself threw. Should not happen; reported rather than hidden. */
+  'reader_error',
+] as const;
+
+export const AccountQuotaUnavailableReasonSchema = z.enum(ACCOUNT_QUOTA_UNAVAILABLE_REASONS);
+
+export type AccountQuotaUnavailableReason = z.infer<typeof AccountQuotaUnavailableReasonSchema>;
+
+/**
  * The `GET /api/quota` response body.
  *
  * `account.claude` is `null` whenever the reading is UNREADABLE — no token, a
@@ -112,6 +163,13 @@ export type ClaudeAccountQuota = z.infer<typeof ClaudeAccountQuotaSchema>;
  * switched off. `generated_at` is epoch SECONDS and always present: it stamps
  * the RESPONSE, not the reading, so it can never be mistaken for freshness
  * evidence about a `null`.
+ *
+ * `unavailable.claude` says WHICH of those it was, and is present IF AND ONLY IF
+ * `account.claude` is `null` (#825). It is a SIBLING of `account` rather than a
+ * union member inside it, so that the consumer's hard-coded parse
+ * (`d['account']['claude']['seven_day']['utilization']`) is untouched — an
+ * advisory field must not be reachable by the path that yields a number, or a
+ * parser bug could promote "why there is no reading" into a reading.
  */
 export const AccountQuotaStateSchema = z
   .object({
@@ -121,6 +179,12 @@ export const AccountQuotaStateSchema = z
         claude: ClaudeAccountQuotaSchema.nullable(),
       })
       .strict(),
+    unavailable: z
+      .object({
+        claude: AccountQuotaUnavailableReasonSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

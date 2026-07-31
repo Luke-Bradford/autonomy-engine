@@ -7,6 +7,8 @@ import {
   readKeychainToken,
   fetchUsage,
   RATE_LIMITED,
+  UNREADABLE_ACCOUNT_QUOTA_READER,
+  type ClaudeAccountQuotaReader,
 } from '../claude-quota.js';
 
 /**
@@ -23,6 +25,14 @@ const LIVE_PAYLOAD = {
   five_hour: { utilization: 8.0, resets_at: '2026-07-29T19:10:00.789612+00:00' },
   seven_day: { utilization: 7.0, resets_at: '2026-08-05T02:00:00.789638+00:00' },
 };
+
+/**
+ * The reading alone. Since #825 `read()` resolves to `{ value, unavailable }`
+ * so the reason and the reading it explains are always the SAME sample; these
+ * tests are about the reading, so they unwrap it here rather than at 28 call
+ * sites. The pairing itself is asserted in its own describe block below.
+ */
+const readValue = async (r: ClaudeAccountQuotaReader) => (await r.read()).value;
 
 function readerWith(payload: unknown, opts: { token?: string | null } = {}) {
   const fetcher = vi.fn(async () => payload);
@@ -164,7 +174,7 @@ describe('the reader and the schema agree on what a valid window is', () => {
 describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () => {
   it('returns null (not a zero reading) when there is no token', async () => {
     const { reader, fetcher } = readerWith(LIVE_PAYLOAD, { token: null });
-    const got = await reader.read();
+    const got = await readValue(reader);
     expect(got).toBeNull();
     // Never speculatively call the provider without a credential.
     expect(fetcher).not.toHaveBeenCalled();
@@ -178,7 +188,7 @@ describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () =>
       },
       now: () => 0,
     });
-    await expect(reader.read()).resolves.toBeNull();
+    await expect(readValue(reader)).resolves.toBeNull();
   });
 
   it('returns null when the token read throws', async () => {
@@ -189,12 +199,12 @@ describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () =>
       fetcher: async () => LIVE_PAYLOAD,
       now: () => 0,
     });
-    await expect(reader.read()).resolves.toBeNull();
+    await expect(readValue(reader)).resolves.toBeNull();
   });
 
   it('never reports a zero utilization as a substitute for unknown', async () => {
     const { reader } = readerWith(null);
-    const got = await reader.read();
+    const got = await readValue(reader);
     expect(got).toBeNull();
     // The distinction the guard depends on: a real 0% reading is an OBJECT
     // with utilization 0; an unknown reading is null. They must not collapse.
@@ -210,9 +220,9 @@ describe('the reading is UNREADABLE, never 0, when it cannot be obtained', () =>
 describe('TTL — throttles BOTH outcomes, but never serves a stale value as fresh', () => {
   it('serves a cached success without re-reading the credential store', async () => {
     const { reader, fetcher, tokenReader, advance } = readerWith(LIVE_PAYLOAD);
-    const first = await reader.read();
+    const first = await readValue(reader);
     advance(30_000);
-    const second = await reader.read();
+    const second = await readValue(reader);
     expect(second).toEqual(first);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(tokenReader).toHaveBeenCalledTimes(1);
@@ -238,9 +248,9 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
       now: () => clock,
       ttlMs: 60_000,
     });
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     clock += 30_000;
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(calls).toBe(1);
   });
 
@@ -253,12 +263,12 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
       now: () => clock,
       ttlMs: 60_000,
     });
-    expect(await reader.read()).not.toBeNull();
+    expect(await readValue(reader)).not.toBeNull();
     payload = null;
     clock += 60_001;
     // A stale low reading served as if current would PERMIT a fire the guard
     // should have refused. Unknown is the honest, fail-safe answer.
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     // THE ASSERTION THAT ACTUALLY BITES. On a TTL miss `read()` returns the
     // FRESH sample, so a grace window is invisible on the failing read itself —
     // it only shows up on the NEXT read, inside the new TTL. Without this line
@@ -267,7 +277,7 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
     // 2026-07-26 shape: 10% cached, provider dies, guard later reads 10% and
     // fires into a window that is really at 98%.
     clock += 1;
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
   });
 
   it('re-samples on a BACKWARDS clock step instead of extending the TTL', async () => {
@@ -287,10 +297,10 @@ describe('TTL — throttles BOTH outcomes, but never serves a stale value as fre
       now: () => clock,
       ttlMs: 60_000,
     });
-    expect((await reader.read())?.seven_day.utilization).toBe(0.1);
+    expect((await readValue(reader))?.seven_day.utilization).toBe(0.1);
     utilization = 98;
     clock -= 3_600_000; // the clock steps back an hour
-    expect((await reader.read())?.seven_day.utilization).toBe(0.98);
+    expect((await readValue(reader))?.seven_day.utilization).toBe(0.98);
   });
 
   it('treats the TTL boundary itself as expired', async () => {
@@ -356,23 +366,23 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
 
   it('doubles the retry window on each rate-limited sample', async () => {
     const { reader, fetcher, advance } = rateLimitedReader();
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(1); // window is now 120s, not 60s
 
     advance(60_000); // the OLD flat TTL — must NOT re-poll a limit we just hit
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     advance(60_000); // t=120s: the doubled window has elapsed
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(2); // window is now 240s
 
     advance(120_000); // t=240s, but the window started at t=120s
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(2);
 
     advance(120_000); // t=360s = 240s after the last sample
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
@@ -413,7 +423,7 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
 
     serve(LIVE_PAYLOAD); // now the provider really is serving again
     advance(120_000);
-    expect(await reader.read()).not.toBeNull();
+    expect(await readValue(reader)).not.toBeNull();
     expect(fetcher).toHaveBeenCalledTimes(4);
     advance(60_000); // and the window is back to the flat TTL
     await reader.read();
@@ -435,17 +445,17 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
   it('never lets the widened window extend the life of a SUCCESSFUL reading', async () => {
     const { reader, advance, serve } = rateLimitedReader();
     serve(LIVE_PAYLOAD);
-    expect(await reader.read()).not.toBeNull();
+    expect(await readValue(reader)).not.toBeNull();
 
     serve(RATE_LIMITED);
     advance(60_000);
-    expect(await reader.read()).toBeNull(); // window widens to 120s here
+    expect(await readValue(reader)).toBeNull(); // window widens to 120s here
 
     // Deep inside the widened window. Under a grace, or under any rule that
     // kept the last-good value while the window grew, this returns the reading
     // taken 100s ago and the guard fires on it.
     advance(40_000);
-    expect(await reader.read()).toBeNull();
+    expect(await readValue(reader)).toBeNull();
   });
 
   it('reports entering and leaving the backoff ONCE each, not on every read', async () => {
@@ -546,14 +556,14 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
       log,
     });
 
-    await expect(reader.read()).resolves.toBeNull();
+    await expect(readValue(reader)).resolves.toBeNull();
     clock += 60_000; // past the flat TTL — only the widened window suppresses this
     await reader.read();
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     clock += 60_000; // the 120s window has now elapsed
     outcome = LIVE_PAYLOAD;
-    await expect(reader.read()).resolves.not.toBeNull(); // recovery log throws too
+    await expect(readValue(reader)).resolves.not.toBeNull(); // recovery log throws too
     expect(log).toHaveBeenCalledTimes(2);
   });
 
@@ -601,10 +611,10 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
         log,
       });
 
-      await expect(reader.read()).resolves.toBeNull(); // 'rate_limited' fires
+      await expect(readValue(reader)).resolves.toBeNull(); // 'rate_limited' fires
       clock += 120_000;
       outcome = LIVE_PAYLOAD;
-      await expect(reader.read()).resolves.not.toBeNull(); // 'rate_limit_cleared'
+      await expect(readValue(reader)).resolves.not.toBeNull(); // 'rate_limit_cleared'
       expect(logCalls).toBe(2);
 
       // A macrotask: Node only reports an unhandled rejection once the microtask
@@ -798,7 +808,7 @@ describe('the credential never escapes', () => {
     // anyone who can reach the port. The reader holds the OAuth token in
     // memory; this pins that it never travels out in the value.
     const { reader } = readerWith(LIVE_PAYLOAD);
-    const got = await reader.read();
+    const got = await readValue(reader);
     expect(got).not.toBeNull();
     expect(JSON.stringify(got)).not.toContain('tok');
   });
@@ -816,8 +826,125 @@ describe('the credential never escapes', () => {
       leaked: 'tok',
       seven_day: { ...(LIVE_PAYLOAD as { seven_day: object }).seven_day, echoed_token: 'tok' },
     });
-    const got = await reader.read();
+    const got = await readValue(reader);
     expect(got).not.toBeNull();
     expect(JSON.stringify(got)).not.toContain('tok');
+  });
+});
+
+/**
+ * #825 — WHY a reading is missing, paired with the missing reading itself.
+ *
+ * `read()` already distinguished these causes internally and then collapsed
+ * them all to `null`. The C3 decision (park the old engine, #410) is made on a
+ * run of `quota shadow: studio UNREADABLE` lines, which cannot tell "this
+ * reader is broken" from "the shared account bucket was contended" — so the
+ * cause has to survive out to the caller. It is ADVISORY: it rides alongside
+ * the reading and can never be one.
+ */
+describe('#825 — unavailable reason', () => {
+  it('is null exactly when a reading was obtained', async () => {
+    const { reader } = readerWith(LIVE_PAYLOAD);
+    const got = await reader.read();
+    expect(got.value).not.toBeNull();
+    expect(got.unavailable).toBeNull();
+  });
+
+  it('reports no_credential when the credential store yields nothing', async () => {
+    const { reader } = readerWith(LIVE_PAYLOAD, { token: null });
+    // Also the non-darwin case: `readKeychainToken` returns null for a host
+    // with no Keychain, indistinguishably, and this enum does not pretend
+    // otherwise (see the schema's doc block).
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'no_credential' });
+  });
+
+  it('reports rate_limited on a 429 — the case the C3 evidence keeps hitting', async () => {
+    const { reader } = readerWith(RATE_LIMITED);
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'rate_limited' });
+  });
+
+  it('reports provider_error when the provider call fails outright', async () => {
+    // `fetchUsage` collapses every non-429 failure to null.
+    const { reader } = readerWith(null);
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'provider_error' });
+  });
+
+  it('reports unrecognized_payload when the provider answers with the wrong shape', async () => {
+    // The distinction that matters operationally: the provider IS serving us,
+    // so this is a contract break to chase, not a bucket to wait out.
+    const { reader } = readerWith({ five_hour: { utilization: 8.0 } });
+    await expect(reader.read()).resolves.toEqual({
+      value: null,
+      unavailable: 'unrecognized_payload',
+    });
+  });
+
+  it('reports reader_error when the reader itself throws', async () => {
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => {
+        throw new Error('keychain timeout');
+      },
+      now: () => 0,
+    });
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'reader_error' });
+  });
+
+  it('the disabled reader says so, rather than blaming the provider', async () => {
+    await expect(UNREADABLE_ACCOUNT_QUOTA_READER.read()).resolves.toEqual({
+      value: null,
+      unavailable: 'disabled',
+    });
+  });
+
+  it('serves the CACHED sample its own reason, not a later one', async () => {
+    // The reason must belong to the sample that produced the served value.
+    // A getter read separately from the value could pair a cached reading with
+    // a fresher failure's cause; stamping both together is what forbids it.
+    let payload: unknown = RATE_LIMITED;
+    let clock = 0;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => payload,
+      now: () => clock,
+      ttlMs: 60_000,
+      maxThrottleMs: 60_000,
+    });
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'rate_limited' });
+    payload = LIVE_PAYLOAD;
+    clock += 30_000; // inside the window: the cached sample must answer, reason included
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'rate_limited' });
+    clock += 30_001; // window elapsed: a fresh sample, and the reason clears with it
+    const fresh = await reader.read();
+    expect(fresh.value).not.toBeNull();
+    expect(fresh.unavailable).toBeNull();
+  });
+
+  it('re-attributes when the cause changes under a widened window', async () => {
+    // The stale-log problem stated at `applyOutcome`: after a rate-limit the
+    // backoff log stays `rate_limited` even once the real cause has become a
+    // missing credential. The PER-READ reason does not inherit that — it is
+    // whatever the last sample actually found.
+    let token: string | null = 'tok';
+    let clock = 0;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => token,
+      fetcher: async () => RATE_LIMITED,
+      now: () => clock,
+      ttlMs: 60_000,
+    });
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'rate_limited' });
+    token = null;
+    clock += 120_001; // past the widened window
+    await expect(reader.read()).resolves.toEqual({ value: null, unavailable: 'no_credential' });
+  });
+
+  it('never lets a reason accompany a reading', async () => {
+    // The one thing this field must never do. Exhaustive over the reader's
+    // outcomes rather than spot-checked: every shape a sample can take.
+    for (const payload of [LIVE_PAYLOAD, RATE_LIMITED, null, { five_hour: {} }, undefined]) {
+      const { reader } = readerWith(payload);
+      const got = await reader.read();
+      expect(got.value === null).toBe(got.unavailable !== null);
+    }
   });
 });
