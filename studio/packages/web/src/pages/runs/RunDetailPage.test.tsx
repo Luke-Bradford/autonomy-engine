@@ -211,10 +211,35 @@ describe('RunDetailPage', () => {
     ).toBeInTheDocument();
   });
 
-  it('U11 — says the overlay is unavailable when the stream errored, and still draws the graph', async () => {
-    // R1 carries no `events`, so the overlay has no source but the socket. That
-    // is stated on screen rather than drawn as an all-blank graph.
-    useRunStreamMock.mockReturnValue(stream({ phase: 'error', error: 'socket closed' }));
+  it('U11 — KEEPS the overlay when the socket errors AFTER a complete replay', async () => {
+    // The error path preserves `events`, so the log in hand is still the whole
+    // run as of the last frame. Discarding a valid projection over a connection
+    // that has merely stopped delivering new frames loses a correct picture; the
+    // stream error is reported separately, as its own alert.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'error',
+        error: 'socket closed',
+        replayComplete: true,
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(screen.queryByText(/cannot be projected/i)).not.toBeInTheDocument();
+    // …and the connection problem is still reported.
+    expect(screen.getByText('socket closed')).toBeInTheDocument();
+  });
+
+  it('U11 — says the overlay is unavailable when the stream errored BEFORE replaying', async () => {
+    // R1 carries no `events`, so an overlay that never got a replay has no
+    // source at all. Stated on screen rather than drawn as an all-blank graph.
+    useRunStreamMock.mockReturnValue(
+      stream({ phase: 'error', error: 'socket closed', replayComplete: false }),
+    );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();

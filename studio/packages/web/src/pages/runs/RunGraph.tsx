@@ -29,9 +29,12 @@ type Overlay = { ready: true; state: RunState } | { ready: false; reason: string
  * only the first node does. A monitor that says "nothing ran" about a run that
  * did is worse than one that says "not yet".
  *
- * On the MARKER, not on `phase`: `closed` is set by any orderly close, including
- * one arriving mid-replay, so gating on the phase would present a truncated log
- * as authoritative — the same lie in a subtler form.
+ * On the MARKER, not on `phase`, in BOTH directions. `closed` is set by any
+ * orderly close, including one arriving mid-replay, so gating on the phase would
+ * present a truncated log as authoritative — the same lie in a subtler form. And
+ * an `error` AFTER a complete replay does not invalidate the log already in
+ * hand, so it must not blank an overlay that is still correct; a live run's
+ * picture simply stops advancing, which the page's own stream alert reports.
  *
  * That gate is also where the deliberate absence of an `events` member on R1 is
  * paid for: the overlay is fed by the WebSocket alone, so a stream that never
@@ -43,19 +46,22 @@ type Overlay = { ready: true; state: RunState } | { ready: false; reason: string
  */
 function useRunProjection(doc: PipelineVersion, stream: RunStreamState): Overlay {
   return useMemo(() => {
-    if (stream.phase === 'error') {
-      return {
-        ready: false,
-        reason: 'The event stream is unavailable, so node state cannot be projected.',
-      };
-    }
+    /* `replayComplete` is asked FIRST, and the order is the point. A socket
+       error AFTER a complete replay leaves `events` untouched — `useRunStream`
+       spreads the previous state on its error path — so the log in hand is
+       still the whole run as of the last frame, and throwing the overlay away
+       for it would lose a valid picture over a connection that has merely
+       stopped delivering NEW frames. The stream error is surfaced separately by
+       the page, as its own alert and phase pill. */
     if (!stream.replayComplete) {
       return {
         ready: false,
         reason:
-          stream.phase === 'closed'
-            ? 'The event stream ended before this run’s history finished loading, so node state cannot be projected.'
-            : 'Loading this run’s history…',
+          stream.phase === 'error'
+            ? 'The event stream is unavailable, so node state cannot be projected.'
+            : stream.phase === 'closed'
+              ? 'The event stream ended before this run’s history finished loading, so node state cannot be projected.'
+              : 'Loading this run’s history…',
       };
     }
 
