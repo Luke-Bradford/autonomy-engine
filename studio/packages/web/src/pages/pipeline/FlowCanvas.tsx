@@ -18,7 +18,6 @@ import {
   type FinalConnectionState,
   type Node as FlowNode,
   type NodeChange,
-  type NodeHandle,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -133,13 +132,11 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   );
 });
 
-
 // Module-level constant: React Flow requires a stable `nodeTypes` identity (a
 // new object each render re-mounts every node and warns).
 const nodeTypes = { activity: ActivityNode, container: ContainerNode };
 
 const IMPLICIT_CHAIN_PREVIEW = 6;
-
 
 /**
  * Canvas CHROME that must not accept a toolbox drop (U5).

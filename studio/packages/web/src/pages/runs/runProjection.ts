@@ -37,70 +37,39 @@ import {
  * arbitrary one, so an unparseable event abandons the whole projection and the
  * page falls back to the doc-free table with the reason on screen.
  */
-export type RunProjection =
-  | { ok: true; state: RunState }
-  | { ok: false; reason: string };
+export type RunProjection = { ok: true; state: RunState } | { ok: false; reason: string };
 
 /**
- * The carry between renders, so a live run does not refold its whole log per
- * frame. `useRunStream` appends a NEW array per event, and both existing folds
- * (`deriveNodeActivity`, `deriveRunLifecycle`) re-run over the full log every
- * time — O(n) per frame, O(n²) over a run. That is tolerable for a switch
- * writing into a mutable accumulator; it is not for `reduce`, which re-spreads
- * `nodes`/`outputs`/`containers` AND derives commands + diagnostics per event,
- * all of which this caller discards.
+ * Fold `events` into a run state.
  *
- * The suffix fold is sound rather than merely faster: `useRunStream` dedupes by
- * `seq` and appends in ascending order, so `events` only ever GROWS by a suffix
- * for a given run. `foldRunProjection` re-checks that assumption (a shrunken log,
- * or a different doc, refolds from the seed) instead of trusting it.
- */
-export interface ProjectionCarry {
-  /** The state as of `count` events, or `null` before the first fold. */
-  state: RunState | null;
-  /** How many of `events` are already folded into `state`. */
-  count: number;
-  /** The doc the carry was folded against — a change invalidates it. */
-  doc: EngineDoc | null;
-}
-
-export const EMPTY_CARRY: ProjectionCarry = { state: null, count: 0, doc: null };
-
-/**
- * Fold `events` into a run state, reusing `carry` when it is a valid prefix.
+ * PURE and complete — the whole log, every call. There is deliberately no
+ * incremental carry, and that was tried: `reduce` re-spreads `nodes`/`outputs`/
+ * `containers` and derives commands + diagnostics per event, all of which this
+ * caller discards, so folding only the new suffix is a real saving on a long
+ * live run. Holding the accumulator is what fails. A ref cannot be read or
+ * written during render, and a React render may be DISCARDED without
+ * committing — a carry advanced by one would fold those events twice, silently,
+ * into a state machine. Moving it to an effect trades that for a `setState`
+ * cascade, which is the same impurity with extra renders.
  *
- * PURE — returns the next carry rather than mutating; the caller holds it in a
- * ref. `engine` must be the one built from `carry.doc`, which is why both are
- * passed together and compared by identity.
+ * So the page refolds, exactly as its two existing folds already do
+ * (`deriveNodeActivity`, `deriveRunLifecycle` — both `useMemo` over the full
+ * log). The cost is a constant factor on a shape the page already has, and
+ * fixing it belongs with those two rather than here: see #849.
  */
-export function foldRunProjection(
-  engine: Engine,
-  doc: EngineDoc,
-  events: RunEvent[],
-  carry: ProjectionCarry,
-): { projection: RunProjection; carry: ProjectionCarry } {
-  const reusable =
-    carry.state !== null && carry.doc === doc && carry.count <= events.length ? carry : EMPTY_CARRY;
-
-  let state = reusable.state ?? engine.seedState();
-  for (let i = reusable.count; i < events.length; i += 1) {
-    const envelope = events[i]!;
+export function projectRun(engine: Engine, events: RunEvent[]): RunProjection {
+  let state = engine.seedState();
+  for (const envelope of events) {
     const parsed = EngineEventSchema.safeParse(envelope.payload);
     if (!parsed.success) {
       return {
-        projection: {
-          ok: false,
-          reason: `event ${envelope.seq} (${envelope.type}) is not a valid engine event, so the graph cannot be projected`,
-        },
-        // The carry is abandoned too: a later render must not resume a fold from
-        // a prefix that stops short of an event we know we cannot apply.
-        carry: EMPTY_CARRY,
+        ok: false,
+        reason: `event ${envelope.seq} (${envelope.type}) is not a valid engine event, so the graph cannot be projected`,
       };
     }
     state = engine.reduce(state, parsed.data).state;
   }
-
-  return { projection: { ok: true, state }, carry: { state, count: events.length, doc } };
+  return { ok: true, state };
 }
 
 /**

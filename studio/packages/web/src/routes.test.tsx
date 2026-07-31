@@ -16,22 +16,32 @@ vi.mock('./api/runs', async (importActual) => ({
   ...(await importActual<typeof import('./api/runs')>()),
   listRuns: vi.fn().mockResolvedValue([]),
   getRunEvents: vi.fn().mockResolvedValue([]),
-  getRun: vi.fn((runId: string) =>
+  // The run detail page reads R1 (`getRunDetail`), which resolves the run AND
+  // the version doc its node overlay needs.
+  getRunDetail: vi.fn((runId: string) =>
     Promise.resolve({
-      id: runId,
-      ownerId: 'local',
-      pipelineVersionId: 'pv_1',
-      triggerId: null,
-      parentRunId: null,
-      params: {},
-      status: 'running',
-      leaseUntil: null,
-      heartbeatAt: null,
-      queuedAt: null,
-      triggerContext: null,
-      rerunOf: null,
-      startedAt: 1,
-      finishedAt: null,
+      pipelineVersion: {
+        id: 'pv_1',
+        nodes: [],
+        edges: [],
+        containers: [],
+      },
+      run: {
+        id: runId,
+        ownerId: 'local',
+        pipelineVersionId: 'pv_1',
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+        status: 'running',
+        leaseUntil: null,
+        heartbeatAt: null,
+        queuedAt: null,
+        triggerContext: null,
+        rerunOf: null,
+        startedAt: 1,
+        finishedAt: null,
+      },
     }),
   ),
 }));
@@ -339,11 +349,14 @@ describe('route tree', () => {
    * would still be showing run_a's error alongside run_b's data.
    */
   it('remounts the run detail page when the run id changes', async () => {
-    const getRun = vi.mocked((await import('./api/runs')).getRun);
-    getRun.mockImplementation((runId: string) =>
+    const getRunDetail = vi.mocked((await import('./api/runs')).getRunDetail);
+    getRunDetail.mockImplementation((runId: string) =>
       runId === 'run_a'
         ? Promise.reject(new Error('run_a exploded'))
-        : Promise.resolve({ id: runId } as never),
+        : Promise.resolve({
+            run: { id: runId },
+            pipelineVersion: { id: 'pv_1', nodes: [], edges: [], containers: [] },
+          } as never),
     );
 
     const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs/run_a'] });

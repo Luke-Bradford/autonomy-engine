@@ -149,9 +149,11 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U8b | Structured per-token diagnostics + badges (gated on R3) | Author |
 | U9 | Command bar: validate-all, save-as-version, zoom/fit/layout | Author |
 | R1 | `GET /api/runs/:id/detail` read-model | Server |
+| | **AS BUILT (2026-07-31):** shipped as `{ run, pipelineVersion }` — the `events` member of the sketch was deliberately NOT built. The page already receives the complete log over the WebSocket (`useRunStream` replays from `seq` 0 before tailing), so a second full copy per page load would have had no reader. The consequence is paid where it bites: the overlay is WS-fed, so it withholds itself (with a reason on screen) rather than drawing an unprojected graph. Ownership is the RUN's and transitive by FK; a version missing for an extant run is a violated DB invariant (`onDelete: 'restrict'`), so it 500s rather than laundering into the ownership 404. | |
 | R2 | `RunSummary` run-list (names + duration) | Server |
 | U10 | Monitor shell + runs DataGrid (concrete filter tabs) | Monitor |
 | U11 | Run detail: live node overlay on the graph (via R1) | Monitor |
+| | **AS BUILT (2026-07-31):** the authored graph is drawn on the run page with the ENGINE's own node/container status over it, from a SEPARATE handler-free `RunCanvas` rather than a `readOnly` `FlowCanvas` (see the section below for why that alternative is wrong, not merely inelegant). Nodes that never dispatched are visible for the first time. The doc-free table + event feed are kept beneath it unchanged. Deferred: the per-node drill-in is U24's, the child-run drill U20's, and the page's three-folds-per-frame cost **#849**. | |
 | U12a | Attempt timeline from events (documented limits) | Monitor |
 | U13a | Connections list | Manage |
 | U13b | Connection create/edit per-kind + secret entry | Manage |
@@ -1352,3 +1354,63 @@ Deferred, with tickets rather than silence: a `json` param whose default is a st
 advisory (runtime accepts any value for `json`, so it is a UX heuristic, not a defect);
 pipeline-level `outputs` get NO static validation at all, because `validatePipelineDoc`'s `Pick`
 excludes them; and the write path has no type-vs-default consistency check.
+
+## U11 — the run monitor's node-state overlay (AS BUILT, 2026-07-31)
+
+The run page showed a table of node activity folded from the event log alone, with its own lossy
+status vocabulary (`running|retrying|waiting|success|failure`). Being doc-free, it structurally
+could not show a node that never dispatched — no event was ever appended for one — and `skipped`
+was not in its vocabulary at all. The engine's `createEngine(doc).projectRunState(events)` is the
+SSOT for what a node's status IS, and it needs the version DOC, which the page had no way to
+reach: a `Run` carries only `pipelineVersionId`, and every version route is pipeline-scoped.
+R1 closes that, and this draws the result on the graph.
+
+| Piece | Lives in |
+|---|---|
+| R1 route + its ownership/invariant posture | `server/src/routes/runs.ts` — `GET /api/runs/:id/detail` |
+| Wire contract (shared FE/BE) | `shared/src/schemas/run-detail.ts` |
+| Engine fold + abandon-on-hole + status→tone maps | `web/src/pages/runs/runProjection.ts` |
+| Doc + state → React Flow arrays (pure) | `web/src/pages/runs/runFlow.ts` |
+| The read-only canvas + its two node components | `web/src/pages/runs/RunCanvas.tsx` |
+| Shared geometry lifted out of the author canvas | `web/src/pages/pipeline/containerLayout.ts` — `containerHandles`, `containerAriaLabel`, `UNMEASURED_NODE_SIZE` |
+| Tones (no new palette vars) | `index.css` — `.run-canvas`, `.run-node-*`, `.run-container-*` |
+| Browser coverage (first spec to drive a REAL run) | `e2e/run-overlay.spec.ts`, helpers `seedVersion`/`fireAndSettle` in `e2e/support/seedDoc.ts` |
+
+Decisions worth not re-deriving:
+
+- **A separate renderer, not `readOnly` on `FlowCanvas`.** Three things make the shared-component
+  route wrong rather than merely inelegant. (1) `loadVersion` is LOSSY BY DESIGN — it lowers nodes
+  through the catalog and DROPS an edge whose endpoint resolves to neither a node nor a container,
+  which is right for an author seeing the contract a save would mint and wrong for a monitor: the
+  projection folds over the SERVER's doc, so an edge the store silently removed would leave a node
+  marked `skipped` with no visible cause, i.e. the overlay disagreeing with the graph beneath it.
+  (2) React Flow's interaction flags never reach a custom node's own DOM, so a `readOnly`
+  `FlowCanvas` would still render the container's ✕ delete button — a live graph EDIT on a monitor.
+  (3) Every future author affordance would have to remember the monitor. What must not diverge is
+  shared as CODE instead: geometry, the edge vocabulary and its one marker def set, port ids, the
+  label rule, and the CSS classes.
+- **"Not projected" is a real state, distinct from "pending".** The engine's seed holds NO nodes
+  until `run.started` folds, so projecting mid-replay would draw a finished run as a graph on which
+  nothing ran. The overlay is withheld until the stream has replayed, and the reason is on screen.
+  This is also where R1's missing `events` member is paid for: the overlay's only source is the
+  socket, so a stream that never connects gets a stated reason rather than a blank graph.
+- **An unparseable event ABANDONS the projection.** `runSummary.ts` skips one, which is safe for a
+  table of independent rows and not for a state machine — drop `run.started` and every later
+  `withNode` spreads an `undefined`, which `createEngine`'s own docblock names as a TypeError out of
+  the pure reducer. A hole folded into a state machine is not a slightly-wrong picture, it is an
+  arbitrary one.
+- **Ten statuses, five hues, and no information lost.** The tones reuse the palette variables the
+  run table's pills already use (`index.css` records the same commitment for the edge hues), so the
+  canvas, the pills and the edges cannot come to disagree; and the exact status WORD is rendered as
+  text on the node, so grouping the four parked statuses into one `holding` amber collapses nothing.
+  `skipped` is grey and DASHED, matching the settled skipped-edge encoding. Status is carried by
+  `outline`, never `border-color`, so it cannot compete with `.flow-node.selected`.
+- **Tones are `Record<NodeRunStatus, …>`, not a `satisfies` array** — the day the engine adds a
+  status, this fails to compile instead of falling through to a default hue. (The engine's own
+  `TERMINAL_NODE` comment records that a `satisfies` array was probed for this and does NOT catch a
+  forgotten member.)
+- **No incremental fold, deliberately** (#849). The suffix fold was written and tested equivalent to
+  a cold refold, then removed: a ref cannot be read or written during render, and a discarded React
+  render would fold its events into the carry twice — silently, into a state machine. An effect
+  trades that for a `setState` cascade. The honest fix belongs with the page's two pre-existing
+  full-log folds, not here.

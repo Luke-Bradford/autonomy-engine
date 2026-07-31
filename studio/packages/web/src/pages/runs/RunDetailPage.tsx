@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { PipelineVersion, Run, RunLifecycleStatus, RunState } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRunDetail } from '../../api/runs';
@@ -6,7 +6,7 @@ import { useRunStream, type RunStreamState, type StreamPhase } from './useRunStr
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
 import { RunCanvas } from './RunCanvas';
-import { EMPTY_CARRY, engineForDoc, foldRunProjection, type ProjectionCarry } from './runProjection';
+import { engineForDoc, projectRun } from './runProjection';
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -34,6 +34,9 @@ function phaseLabel(phase: StreamPhase): string {
  */
 type Overlay = { ready: true; state: RunState } | { ready: false; reason: string };
 
+/** The pre-fetch state — module-level so it is a stable identity. */
+const LOADING_GRAPH: Overlay = { ready: false, reason: 'Loading the pipeline graph…' };
+
 /**
  * U11 — the ENGINE's node state for this run, or the reason there is none.
  *
@@ -49,20 +52,16 @@ type Overlay = { ready: true; state: RunState } | { ready: false; reason: string
  * connects has no fallback source. It says so, in place, and the doc-free table
  * below is unaffected.
  *
- * The carry lives in a ref so a live run folds only the NEW events per frame.
- * Re-running this memo with an unchanged log (React may) re-enters the fold with
- * `count === events.length` and simply returns the same state.
+ * Folds the WHOLE log per render, matching the page's two existing folds —
+ * `projectRun` says why an incremental carry is not the win it looks like here.
  */
 function useRunProjection(doc: PipelineVersion | null, stream: RunStreamState): Overlay {
-  const carry = useRef<ProjectionCarry>(EMPTY_CARRY);
   const engine = useMemo(() => (doc === null ? null : engineForDoc(doc)), [doc]);
 
   return useMemo(() => {
-    if (doc === null || engine === null) {
-      return { ready: false, reason: 'Loading the pipeline graph…' };
-    }
+    if (engine === null) return LOADING_GRAPH;
     if (stream.phase === 'connecting' || stream.phase === 'replaying') {
-      return { ready: false, reason: 'Loading this run’s history…' };
+      return { ready: false, reason: 'Loading this run\u2019s history\u2026' };
     }
     if (stream.phase === 'error') {
       return {
@@ -71,12 +70,11 @@ function useRunProjection(doc: PipelineVersion | null, stream: RunStreamState): 
       };
     }
 
-    const result = foldRunProjection(engine, doc, stream.events, carry.current);
-    carry.current = result.carry;
-    return result.projection.ok
-      ? { ready: true, state: result.projection.state }
-      : { ready: false, reason: `Node state cannot be projected: ${result.projection.reason}.` };
-  }, [doc, engine, stream.events, stream.phase]);
+    const projection = projectRun(engine, stream.events);
+    return projection.ok
+      ? { ready: true, state: projection.state }
+      : { ready: false, reason: `Node state cannot be projected: ${projection.reason}.` };
+  }, [engine, stream.events, stream.phase]);
 }
 
 /**
@@ -178,7 +176,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
       <h3>Graph</h3>
       {doc === null ? (
-        <p>{loadError === null ? 'Loading the pipeline graph…' : 'The pipeline graph is unavailable.'}</p>
+        <p>
+          {loadError === null
+            ? 'Loading the pipeline graph…'
+            : 'The pipeline graph is unavailable.'}
+        </p>
       ) : (
         <>
           {/* The graph is drawn whether or not the run projects onto it — the

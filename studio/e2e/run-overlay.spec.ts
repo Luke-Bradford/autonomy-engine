@@ -22,8 +22,18 @@ import { fluentRootReady } from './support/theme';
 const DOC = {
   nodes: [
     { id: 'start', type: 'fail', config: { message: 'planned' }, position: { x: 0, y: 0 } },
-    { id: 'handled', type: 'fail', config: { message: 'also planned' }, position: { x: 260, y: 0 } },
-    { id: 'neverRan', type: 'fail', config: { message: 'unreachable' }, position: { x: 260, y: 160 } },
+    {
+      id: 'handled',
+      type: 'fail',
+      config: { message: 'also planned' },
+      position: { x: 260, y: 0 },
+    },
+    {
+      id: 'neverRan',
+      type: 'fail',
+      config: { message: 'unreachable' },
+      position: { x: 260, y: 160 },
+    },
   ],
   edges: [
     { from: 'start', to: 'handled', on: 'failure' as const },
@@ -54,10 +64,8 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
      word, its resolved outline colour and style, keyed by the DOC id RF puts on
      the wrapper. */
   const nodes = await page.evaluate(() => {
-    const out: Record<
-      string,
-      { status: string; outline: string; style: string; classes: string }
-    > = {};
+    const out: Record<string, { status: string; outline: string; style: string; classes: string }> =
+      {};
     for (const el of document.querySelectorAll('.react-flow__node')) {
       const inner = el.querySelector('.run-node');
       if (inner === null) continue;

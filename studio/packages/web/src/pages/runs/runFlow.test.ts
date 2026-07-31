@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunState } from '@autonomy-studio/shared';
-import { EMPTY_CARRY, engineForDoc, foldRunProjection } from './runProjection';
+import { engineForDoc, projectRun } from './runProjection';
 import { NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
 
 const DOC: RunDoc = {
@@ -42,7 +42,7 @@ function projected(): RunState {
     type: 'run.started',
     payload: { type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} },
   };
-  const first = foldRunProjection(engine, DOC, [started], EMPTY_CARRY).projection;
+  const first = projectRun(engine, [started]);
   if (!first.ok) throw new Error('fixture: run.started must project');
   const attemptId = first.state.nodes.a!.currentAttemptId!;
 
@@ -73,7 +73,7 @@ function projected(): RunState {
       },
     },
   ];
-  const result = foldRunProjection(engine, DOC, log as never, EMPTY_CARRY).projection;
+  const result = projectRun(engine, log as never);
   if (!result.ok) throw new Error('fixture: log must project');
   return result.state;
 }
