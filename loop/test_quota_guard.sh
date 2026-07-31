@@ -1946,8 +1946,13 @@ ss_tip="$(sscommit loop/y touched)"
 git -C "$sstmp/src" checkout -q dev 2>/dev/null
 ss_diverged="$(sscommit studio/z sidebranch)"
 git -C "$sstmp/src" checkout -q main 2>/dev/null
+# A BRANCH WHOSE NAME IS HEX. `rev-parse` prefers a ref over an abbreviated sha,
+# so a served "bbbbbbb" resolves to whatever this points at and the half would
+# report a confident verdict without ever having resolved a sha. The hex guard
+# constrains SHAPE and cannot catch this; the prefix check is what does.
+git -C "$sstmp/src" branch bbbbbbb main >/dev/null 2>&1
 git -C "$sstmp/src" remote add origin "$sstmp/origin" 2>/dev/null
-git -C "$sstmp/src" push -q origin main dev 2>/dev/null
+git -C "$sstmp/src" push -q origin main dev bbbbbbb 2>/dev/null
 # Worktree-shaped, because production is: `~/Dev/studio-loop-repo/.git` is a
 # FILE holding a gitdir pointer, and case 44 records what gating on `[ -d .git ]`
 # cost when the fixture was shaped differently from the thing it stands in for.
@@ -2070,6 +2075,58 @@ check "...saying it is not an ancestor, rather than inventing a distance" "0" \
   "$(printf '%s' "$ss_div" | grep -q 'not an ancestor' && echo 0 || echo 1)"
 check "...and quotes no commit count at all" "1" \
   "$(printf '%s' "$ss_div" | grep -q 'commit(s) behind' && echo 0 || echo 1)"
+# (c3) a HEX-NAMED REF is not an identity. `bbbbbbb` passes the hex guard and
+#      resolves -- to origin/main itself here, so an unguarded half reports the
+#      strongest possible verdict ("current, identical") about a build it never
+#      identified. The strongest wrong answer is the one worth a case.
+ss_refname="$(ssrun '{"version":"1.0.0","commit":"bbbbbbb"}')"
+check "a hex-NAMED ref is not accepted as a build identity" "0" \
+  "$(printf '%s' "$ss_refname" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never reads as current, which is what it resolves to" "1" \
+  "$(printf '%s' "$ss_refname" | grep -q 'current' && echo 0 || echo 1)"
+# (c4) origin/main resolvable no longer -> UNKNOWN, and NOT the STALE arm with an
+#      empty sha rendered into it. Reached by dropping the remote-tracking ref
+#      and narrowing the refspec so the fetch still SUCCEEDS without recreating
+#      it -- a fetch failure is a different branch, already covered by (i).
+git -C "$sstmp/repo" config remote.origin.fetch '+refs/heads/nothing:refs/remotes/origin/nothing' 2>/dev/null
+git -C "$sstmp/repo" update-ref -d refs/remotes/origin/main 2>/dev/null
+ss_nomain="$(ssrun "$ss_body_tip")"
+check "an unresolvable origin/main reads UNKNOWN after a SUCCESSFUL fetch" "0" \
+  "$(printf '%s' "$ss_nomain" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never renders a verdict with an empty sha in it" "1" \
+  "$(printf '%s' "$ss_nomain" | grep -qE 'ancestor of origin/main \(\)|behind origin/main \(\)' && echo 0 || echo 1)"
+git -C "$sstmp/repo" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' 2>/dev/null
+git -C "$sstmp/repo" fetch -q origin main 2>/dev/null
+# (c5) main with NO studio/ tree -> UNKNOWN, never a free "none touching
+#      studio/". `rev-list --count -- <path>` returns 0 with rc=0 for a pathspec
+#      that matches nothing, so a renamed directory would otherwise read as
+#      permanently current -- green forever, measuring nothing.
+mkdir -p "$sstmp/nostudio-src/loop"
+git init -q --bare "$sstmp/nostudio-origin" 2>/dev/null
+git init -q "$sstmp/nostudio-src" 2>/dev/null
+git -C "$sstmp/nostudio-src" checkout -q -b main 2>/dev/null
+# TWO commits, and the served one is the OLDER: an identical build short-circuits
+# to "current" before any count, so only a build that is BEHIND reaches the
+# pathspec at all. A one-commit fixture here passes vacuously.
+printf 'x\n' >"$sstmp/nostudio-src/loop/y"
+git -C "$sstmp/nostudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" -c user.email=t@t -c user.name=t commit -qm nostudio1 >/dev/null 2>&1
+ss_nostudio_sha="$(git -C "$sstmp/nostudio-src" rev-parse --short HEAD)"
+printf 'z\n' >"$sstmp/nostudio-src/loop/z"
+git -C "$sstmp/nostudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" -c user.email=t@t -c user.name=t commit -qm nostudio2 >/dev/null 2>&1
+git -C "$sstmp/nostudio-src" remote add origin "$sstmp/nostudio-origin" 2>/dev/null
+git -C "$sstmp/nostudio-src" push -q origin main 2>/dev/null
+git -C "$sstmp/nostudio-src" worktree add -q --detach "$sstmp/nostudio" main >/dev/null 2>&1
+check "the no-studio fixture really has no studio/ tree (not vacuous)" "1" \
+  "$(git -C "$sstmp/nostudio" rev-parse --quiet --verify 'origin/main:studio' >/dev/null 2>&1 && echo 0 || echo 1)"
+check "...and the served build really is BEHIND it (else the count is never reached)" "1" \
+  "$([ "$(git -C "$sstmp/nostudio" rev-list --count "$ss_nostudio_sha..origin/main" 2>/dev/null)" = "1" ] && echo 1 || echo 0)"
+ss_nost="$(SS_REPO="$sstmp/nostudio" ssrun '{"version":"1.0.0","commit":"'"$ss_nostudio_sha"'"}')"
+check "a main with no studio/ tree reads UNKNOWN, not a free 'none touching'" "0" \
+  "$(printf '%s' "$ss_nost" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never claims currency for a path it could not count" "1" \
+  "$(printf '%s' "$ss_nost" | grep -q 'current' && echo 0 || echo 1)"
 # (d) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
 #     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
 #     announces a verdict about a build it cannot identify.

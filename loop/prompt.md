@@ -122,8 +122,15 @@ Bucket them:
   main. Those shadow lines are evidence about THAT build, not about main: do not count them for or
   against C3. Refresh with `loop/install_studio_server.sh --update` (a human act by design, #773)
   and start collecting again.
-- `studio server: UNKNOWN` — the line names the cause. Only "nothing answered" is a lifecycle fault
-  to go fix; the rest mean the comparison could not be made, not that anything is wrong.
+- `studio server: UNKNOWN` — the line names the cause, and TWO of them are findings, not shrugs:
+  - **`served no usable build identity`** — the running service predates `/api/version` (#792,
+    `521c4f2`), so it is at LEAST that stale. Its shadow lines are unattributed AND almost certainly
+    about an old build: do not count them, and run `--update`.
+  - **`has no studio/ tree`** — the directory was renamed and nothing can be counted; the verdict is
+    unavailable until this half is taught the new path.
+  - `nothing answered` is a lifecycle fault to go fix (`loop/install_studio_server.sh`). The rest
+    ("could not be refreshed", "not a commit this checkout knows", "could not be counted") mean the
+    comparison could not be made — no finding about studio, but no evidence either.
 - **No `studio server:` line at all** — every shadow line older than #832, and any fire run with
   `DRIFT_REPORT=0`. Unattributed, so **do not count it either way**. That is what voids the three
   lines above.

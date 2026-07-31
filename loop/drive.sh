@@ -1214,7 +1214,16 @@ drift_report_plane() {
     log "plane drift: UNKNOWN -- $REPO is not a git checkout to compare against (#808)"
     return 0
   fi
-  if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
+  # BOUNDED, because nothing else here is. `auth_ok` already records this file's
+  # rule -- macOS has no `timeout`, and a hung probe must never wedge the driver
+  # -- and this fetch runs BEFORE every stop condition, the quota gate and the
+  # fire, with no log line while it hangs. `GIT_TERMINAL_PROMPT=0` stops a
+  # credential helper blocking on a prompt nobody can answer; the `http.*` knobs
+  # abort a stalled transfer (the remote is HTTPS, and `http.lowSpeedLimit` is
+  # unset globally). A bounded fetch that FAILS reads UNKNOWN, which is the safe
+  # direction; an unbounded one that hangs reads as nothing at all.
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.lowSpeedLimit=1000 \
+       -c http.lowSpeedTime=20 fetch --quiet origin main 2>/dev/null; then
     log "plane drift: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the live plane is current (#808)"
     return 0
   fi
@@ -1378,6 +1387,13 @@ drift_report_studio_server() {
   # (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob ids, and the
   # quota cache's UNREADABLE-vs-0). Both sides are checked before comparing.
   ds_have="$(git -C "$REPO" rev-parse --quiet --verify "${ds_commit}^{commit}" 2>/dev/null)"
+  # THE HEX GUARD CONSTRAINS SHAPE, NOT MEANING. `rev-parse` prefers a REF, so a
+  # branch whose name happens to be hex ("bbbbbbb") resolves here and the half
+  # then reports a confident verdict having never resolved an abbreviated sha at
+  # all. Demanding that the resolved commit ACTUALLY BE ABBREVIATED BY the
+  # served value is what closes that: a real short sha is always a prefix of the
+  # full one, and a ref that is not cannot masquerade as one.
+  case "$ds_have" in "$ds_commit"*) : ;; *) ds_have="" ;; esac
   ds_main="$(git -C "$REPO" rev-parse --quiet --verify "origin/main^{commit}" 2>/dev/null)"
   if [ -z "$ds_have" ]; then
     log "studio server: UNKNOWN -- the service reports commit $ds_commit, which is not a commit this checkout knows, so it cannot be placed against origin/main (#832)"
@@ -1393,7 +1409,7 @@ drift_report_studio_server() {
     # renders "origin/main is ." -- a gap in the one line someone is reading at
     # the moment they need it, and one that reads as if there were no such
     # commit rather than as if `rev-parse` had failed.
-    ds_short="$(git -C "$REPO" rev-parse --short origin/main 2>/dev/null)"
+    ds_short="$(git -C "$REPO" rev-parse --short "$ds_main" 2>/dev/null)"
     [ -n "$ds_short" ] || ds_short="$ds_main"
     # THE VERDICT IS ABOUT `studio/`, NOT ABOUT SHA EQUALITY, and that is the
     # difference between a monitor that is read and one that is skipped. This
@@ -1414,6 +1430,16 @@ drift_report_studio_server() {
     # branch-protected so this is unlikely, not impossible.
     if ! git -C "$REPO" merge-base --is-ancestor "$ds_have" "$ds_main" 2>/dev/null; then
       log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is not an ancestor of origin/main ($ds_short), so how far behind it is cannot be stated. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      return 0
+    fi
+    # THE PATHSPEC MUST EXIST BEFORE IT CAN MEAN ANYTHING. `rev-list --count
+    # A..B -- studio/` returns 0 with rc=0 when the path matches nothing, so if
+    # `studio/` were ever renamed every verdict would silently become "current
+    # for studio/" forever -- a check that never fails while looking perfectly
+    # installed, which is the exact shape `drift_report_plane` had to be
+    # rewritten out of. Assert the tree is there rather than trusting a zero.
+    if ! git -C "$REPO" rev-parse --quiet --verify "$ds_main:studio" >/dev/null 2>&1; then
+      log "studio server: UNKNOWN -- origin/main ($ds_short) has no studio/ tree, so 'commits touching studio/' cannot be counted and no currency verdict is possible. Has the directory been renamed? (#832)"
       return 0
     fi
     ds_behind="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" 2>/dev/null)"

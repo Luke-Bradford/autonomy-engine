@@ -201,7 +201,7 @@ cases where one of them reads healthy and another does not:
 | --- | --- | --- |
 | `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
-| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `STALE` ⇒ `--update`. |
+| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `current` = identical, **or behind by nothing touching `studio/`**. `STALE` ⇒ `--update`. |
 
 All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
 path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
@@ -216,6 +216,9 @@ about sha equality: this service is built from `studio/` alone, so a `loop/` or 
 change a byte it serves, and calling it stale for one would make it red most of the day — a monitor
 whose red state is the normal state is a monitor nobody reads. So `current` means *the served build
 carries every `studio/` commit on main*, and the line still discloses the distance it is discounting.
+It is a claim about the served CODE, not about the unit: a plist change (port, node path, env) is
+outside that pathspec, so `--status` remains the authority on whether the installer's own
+configuration is current.
 `drift_report_studio_server`'s header in `drive.sh` is the canonical account of why it exists, why it
 reads the running service rather than the installer's build stamp, and why it stays detection-only;
 the remedy is `install_studio_server.sh --update`, a human act by design (see the drift section
