@@ -1576,6 +1576,10 @@ mkdir -p "$swtmp/infra" "$swtmp/ro"
 # into vacuous passes, which is the failure mode this whole suite exists to avoid.
 printf '%s 11\n' "$(date +%s)" >"$swtmp/ro/.stamp"
 printf '%s probe\n' "$((now - 999999))" >"$swtmp/ro/.shadow"
+# Case (n)'s fixture: a FRESH, LOW cache reading in the same unwritable dir. Low
+# because the drop only fires on old < new -- a high one would take the "keep"
+# branch and prove nothing about the drop.
+printf '%s 10\n' "$(date +%s)" >"$swtmp/ro/.cache"
 # CAPTURED BEFORE the subshell runs. Comparing against a re-read of the file
 # afterwards would be self-referential -- both sides would be the POST state, so
 # the assertion would hold whatever the writer did to it, including destroying
@@ -1614,7 +1618,11 @@ chmod 555 "$swtmp/ro"
   quota_stamped_write "$swtmp/ro/.stamp" 99 && echo "wrote" || echo "refused"
   head -1 "$swtmp/ro/.stamp"
   # (d) ...and leaves no temp behind for the next reader to trip over.
-  ls "$swtmp/ro"/*.tmp.* >/dev/null 2>&1 && echo "dirt" || echo "clean"
+  #     The dot is NAMED, as in 45k: the old `*.tmp.*` could not match, because a
+  #     leading `*` never matches a leading dot and the temp here would be
+  #     `.stamp.tmp.<pid>`. `.stamp` is the only destination attempted in this
+  #     directory before (n), so naming it is exact rather than merely narrower.
+  ls "$swtmp/ro"/.stamp.tmp.* >/dev/null 2>&1 && echo "dirt" || echo "clean"
 
   # (e) a target with prior content is REPLACED, never appended to -- the reader
   #     takes the epoch from line 1 and the value from the LAST line (case 37d),
@@ -1652,7 +1660,14 @@ chmod 555 "$swtmp/ro"
   swd="$swtmp/infra/.asdir"
   mkdir -p "$swd"
   quota_stamped_write "$swd" 42 && echo "wrote" || echo "refused"
-  ls "$swd" | wc -l | tr -d ' '
+  # `ls -A`, not `ls`: the temp is `.asdir.tmp.<pid>` and EVERY destination this
+  # writer handles is a dotfile, so plain `ls` cannot see the leak it is looking
+  # for. Proven vacuous by the correctness lens -- with `ls`, deleting the
+  # `[ -d ]` guard from drive.sh left all 28 section-45 assertions green while a
+  # real temp sat inside the directory. The "refused" half above is produced
+  # independently by the read-back (`[ -f ]` is false on a directory), so this
+  # assertion was the ONLY cover the `[ -d ]` guard had, and it had none.
+  ls -A "$swd" | wc -l | tr -d ' '
 
   # (j) an epoch LONGER than the reader's 11-digit bound is refused. The reader
   #     discards it (`$(( ))` wraps silently on a 64-bit value, so the bound is
@@ -1715,11 +1730,33 @@ chmod 555 "$swtmp/ro"
   swm="$swtmp/infra/.unreadable"
   sw_umask="$(umask)"
   umask 0477
+  # A CANARY under the same umask. The old anti-vacuity check here was
+  # `[ -r "$swm" ]`, and it can no longer do that job: the writer now DISCARDS
+  # the record it could not read back, so $swm is gone and `-r` is false whether
+  # or not the umask ever bit -- i.e. the check would pass under root, which is
+  # exactly the vacuity it was added to rule out. The canary still exists, so it
+  # still measures the umask.
+  : >"$swtmp/infra/.umaskcanary"
   quota_stamped_write "$swm" 42 && echo "wrote" || echo "refused"
   umask "$sw_umask"
-  [ -r "$swm" ] && echo "readable" || echo "unreadable"
+  [ -r "$swtmp/infra/.umaskcanary" ] && echo "readable" || echo "unreadable"
+  # ...and the unreadable record is not left stranded at the destination, where
+  # a mode-derived failure would keep it unreadable to every future reader.
+  [ -e "$swm" ] && echo "record" || echo "nothing"
 
-  # (h) the permission dependency MOVED: a rename needs write on the DIRECTORY
+  # (n) THE CACHE DROP, in the state it actually exists for -- a mode-555 $INFRA
+  #     holding an owner-writable record. An earlier cut dropped with a bare
+  #     `rm -f`, which needs write on the DIRECTORY: measured by the pre-PR
+  #     correctness lens, it left the stale PERMITTING 10 on disk (the cache went
+  #     on serving it into a 95% window) while logging that it had dropped it.
+  #     Truncation needs write on the FILE, which this state grants, so
+  #     `quota_stamped_discard` tries both. Goes red on a revert to bare `rm -f`.
+  export QUOTA_CACHE="$swtmp/ro/.cache"
+  quota_cache_write 95
+  swn="$(quota_stamped_read "$QUOTA_CACHE" 86400)"
+  [ -z "$swn" ] && echo "no-record" || echo "serves:$swn"
+
+  # (o) the permission dependency MOVED: a rename needs write on the DIRECTORY
   #     where `>` needed write on the FILE. So a read-only $INFRA holding a
   #     writable stamp now skips where it used to poll. 29g pins the same skip
   #     via a non-existent parent, which fails under both shapes and so cannot
@@ -1760,7 +1797,13 @@ check "...and cleaning up the temp it had already created" "clean" "$(swout 19)"
 check "a cache reading that cannot be persisted DROPS a lower stale record" "dropped" "$(swout 20)"
 check "...but keeps a HIGHER one, which refuses at least as hard" "98" "$(swout 21)"
 check "a record the SHARED READER cannot accept is a refusal, not a 0 return" "refused" "$(swout 22)"
-check "...and the fixture really did land unreadable (else the case is vacuous)" "unreadable" "$(swout 23)"
+check "...and the umask really did bite (canary; else the case is vacuous)" "unreadable" "$(swout 23)"
+check "...and the unreadable record is discarded, not stranded at the target" "nothing" "$(swout 24)"
+check "a cache drop REACHES the read-only-dir state that motivated it" "no-record" "$(swout 25)"
+check "...and says so honestly, rather than claiming a drop that did not happen" "0" \
+  "$(grep -q 'could not drop the stale' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "...having reported the drop it DID do" "1" \
+  "$(grep -q 'dropped the stale 10% cache' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 check "the cache write announces a failure it can no longer make invisible" "1" \
   "$(grep -q 'WARN: could not persist quota' "$swtmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
 # The muzzles the diff added are justified as "would otherwise print to the
