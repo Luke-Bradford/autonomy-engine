@@ -1503,7 +1503,8 @@ drift_report_studio_server() {
     # difference between a monitor that is read and one that is skipped. This
     # service is built from `studio/` alone (`pnpm -C <clone>/studio build`), so
     # a `loop/` or `docs/` merge cannot change a single byte it serves. Measured
-    # on this repo: 8 of the 19 commits landing on main in 24h touched `studio/`,
+    # on this repo (2026-07-31, tip fcca7b3): 8 of the 20 commits landing on
+    # main in the preceding 24h touched `studio/`,
     # against a probe throttled to one per hour -- so a sha-equality verdict
     # would have read STALE for most of the day while the served reader was
     # perfectly current, and `prompt.md`'s rule ("do not count a STALE build's
