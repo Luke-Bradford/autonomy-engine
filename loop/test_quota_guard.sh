@@ -1968,24 +1968,55 @@ ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
   kill -9 "$ss_pid" 2>/dev/null || true
   sed -n 's/.*\(studio server: .*\)/\1/p' "$sstmp/infra/driver.log" 2>/dev/null | tail -1
 }
+# BODIES ARE BUILT ONCE, BY CONCATENATION, AND NEVER INLINE IN A `check`.
+# `check "..." "$(ssrun "{\"commit\":\"$x\"}" | grep ...)"` nests an escaped
+# double quote inside a command substitution inside a double-quoted argument,
+# and bash delivers a MANGLED body from that -- which parses as no JSON at all,
+# which every UNKNOWN case below then passes on VACUOUSLY while asserting
+# nothing. (It did: the in-sync case was the only one that could notice, and it
+# was the only one that failed.) One quoting level, one body, asserted below.
+ss_body_new='{"version":"0.0.0-dev","commit":"'"$ss_new"'"}'
+ss_body_old='{"version":"0.0.0-dev","commit":"'"$ss_old"'"}'
+# The anti-vacuity gate for the whole case: python, not the parser under test,
+# confirming the fixture's own bodies are well formed and carry the commits the
+# assertions below believe they carry. Without this, a fixture typo turns eleven
+# UNKNOWN assertions green.
+ss_wellformed() { # $1=body $2=expected commit -> "ok" or a diagnostic
+  printf '%s' "$1" | python3 -c "
+import sys, json
+try:
+    print('ok' if json.load(sys.stdin).get('commit') == '$2' else 'wrong-commit')
+except Exception as e:
+    print('unparseable: %s' % e)
+" 2>/dev/null
+}
 check "the fixture REPO is worktree-shaped (.git is a FILE, as in production)" "0" \
   "$([ -f "$sstmp/repo/.git" ] && [ ! -d "$sstmp/repo/.git" ] && echo 0 || echo 1)"
 check "the fixture has two DISTINCT commits (the case is not vacuous)" "1" \
   "$([ -n "$ss_old" ] && [ -n "$ss_new" ] && [ "$ss_old" != "$ss_new" ] && echo 1 || echo 0)"
+check "the in-sync fixture body is well formed and carries origin/main's commit" "ok" \
+  "$(ss_wellformed "$ss_body_new" "$ss_new")"
+check "the stale fixture body is well formed and carries the older commit" "ok" \
+  "$(ss_wellformed "$ss_body_old" "$ss_old")"
 # (a) the running service serves origin/main's commit -> in sync.
+ss_sync="$(ssrun "$ss_body_new")"
 check "a service serving origin/main's commit reads in sync" "0" \
-  "$(ssrun "{\"version\":\"0.0.0-dev\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: in sync' && echo 0 || echo 1)"
+  "$(printf '%s' "$ss_sync" | grep -q 'studio server: in sync' && echo 0 || echo 1)"
+check "...naming the commit it is serving, so the line is evidence on its own" "0" \
+  "$(printf '%s' "$ss_sync" | grep -q "$ss_new" && echo 0 || echo 1)"
 # (b) it serves an OLDER commit -> STALE, naming both shas and the remedy. This
 #     is the 2026-07-31 state, and the whole point of the half.
-ss_stale="$(ssrun "{\"version\":\"0.0.0-dev\",\"commit\":\"$ss_old\"}")"
+ss_stale="$(ssrun "$ss_body_old")"
 check "a service behind origin/main reads STALE" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
 check "...naming the commit it is actually serving" "0" \
   "$(printf '%s' "$ss_stale" | grep -q "$ss_old" && echo 0 || echo 1)"
 check "...and the remedy, so the line is actionable where it is read" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'install_studio_server.sh --update' && echo 0 || echo 1)"
-check "...and saying the C3 evidence below it is answering from that build" "0" \
+check "...and saying the C3 evidence beside it is answering from that build" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'quota shadow' && echo 0 || echo 1)"
+check "...and is never also reported as in sync" "1" \
+  "$(printf '%s' "$ss_stale" | grep -q 'in sync' && echo 0 || echo 1)"
 # (c) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
 #     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
 #     announces a verdict about a build it cannot identify.
@@ -1995,41 +2026,49 @@ check "the 'dev' placeholder reads UNKNOWN, not a verdict" "0" \
 check "...and is NOT resolved against a branch that happens to be named dev" "1" \
   "$(printf '%s' "$ss_dev" | grep -qE 'in sync|STALE' && echo 0 || echo 1)"
 # (d) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
+ss_unk="$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}')"
 check "a commit this checkout does not know reads UNKNOWN" "0" \
-  "$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(printf '%s' "$ss_unk" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and is not guessed at as STALE" "1" \
+  "$(printf '%s' "$ss_unk" | grep -q 'STALE' && echo 0 || echo 1)"
 # (e) nothing answered on the port -> UNKNOWN, and never "in sync". An empty
 #     body and an empty `rev-parse` are both "", so a bare equality test reads a
-#     DOWN SERVER as a healthy one -- the fail-open this whole file keeps
+#     DOWN SERVER as a healthy one -- the fail-open this file keeps
 #     rediscovering (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob
-#     ids). Curl's non-zero status is asserted separately from the empty body
-#     below because they are different faults with the same empty output.
+#     ids). It is also named as a LIFECYCLE fault rather than as drift, because
+#     rebuilding a service that was never up fixes nothing.
 ss_down="$(ssrun '' 7)"
 check "an unreachable service reads UNKNOWN" "0" \
   "$(printf '%s' "$ss_down" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...blaming the LIFECYCLE, not the build it never learned" "0" \
+  "$(printf '%s' "$ss_down" | grep -q 'LIFECYCLE' && echo 0 || echo 1)"
 check "...and is never reported as in sync" "1" \
   "$(printf '%s' "$ss_down" | grep -q 'in sync' && echo 0 || echo 1)"
 # (f) something answered, but not with a version -- an older studio, or any
 #     other service on the port. #765 records a wrong-but-answering server 404ing
 #     and reading as healthy forever.
 check "a body carrying no commit reads UNKNOWN" "0" \
-  "$(ssrun '{"version":"0.0.0-dev"}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(printf '%s' "$(ssrun '{"version":"0.0.0-dev"}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "a non-JSON body reads UNKNOWN rather than crashing" "0" \
-  "$(ssrun '<html>404</html>' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(printf '%s' "$(ssrun '<html>404 not found</html>')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 # (g) an EMPTY commit -- the other half of the empty-equals-empty trap, this one
 #     reachable from a served body rather than from a dead port.
 check "an empty commit string reads UNKNOWN, never in sync" "0" \
-  "$(ssrun '{"version":"1.0.0","commit":""}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(printf '%s' "$(ssrun '{"version":"1.0.0","commit":""}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 # (h) origin/main could not be refreshed -> UNKNOWN. `origin/main` is a CACHED
 #     ref: a failed fetch leaves the last one in place, which compares equal to
 #     whatever was current then and reads "in sync" forever. Same discipline as
 #     drift_report_plane, and the reason both halves fetch for themselves.
 mv "$sstmp/origin" "$sstmp/origin-moved"
+ss_nofetch="$(ssrun "$ss_body_new")"
 check "an unfetchable origin/main reads UNKNOWN, never in sync" "0" \
-  "$(ssrun "{\"version\":\"1.0.0\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(printf '%s' "$ss_nofetch" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and says so about the REFRESH, not about the service" "0" \
+  "$(printf '%s' "$ss_nofetch" | grep -q 'could not be refreshed' && echo 0 || echo 1)"
 mv "$sstmp/origin-moved" "$sstmp/origin"
 # (i) REPO is not a git checkout at all -> UNKNOWN, not a crash.
 check "a REPO that is not a git checkout reads UNKNOWN" "0" \
-  "$(SS_REPO="$sstmp/not-a-repo" ssrun "{\"version\":\"1.0.0\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+  "$(SS_REPO="$sstmp/not-a-repo" ssrun "$ss_body_new" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 # (j) advisory means advisory: nothing on stdout, nothing decided.
 check "the studio-server check emits NOTHING on stdout" "" \
   "$(cat "$sstmp/out" 2>/dev/null)"

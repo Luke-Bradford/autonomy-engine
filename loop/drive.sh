@@ -118,6 +118,13 @@ DASH_URL="${DASH_URL:-http://127.0.0.1:8787/api/state}"
 # copy is `DEFAULT_PORT` in `install_studio_server.sh`, and
 # `test_install_studio_server.sh` asserts the two agree.
 STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
+# DERIVED from the quota URL rather than written out again (#832). The port
+# above already has exactly one other copy, guarded by a test; a third one
+# spelled out here is how the stale 8080 pin survived its own reason, and this
+# URL points at the SAME server by construction -- which is the property the
+# drift half depends on, since a version served by one process says nothing
+# about the build another process is running.
+STUDIO_VERSION_URL="${STUDIO_VERSION_URL:-${STUDIO_QUOTA_URL%/api/quota}/api/version}"
 QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
                                   # last SHADOW poll ATTEMPT. Its own file, its own age, its own
                                   # contract -- see quota_shadow_probe (#765).
@@ -1249,8 +1256,127 @@ drift_report_plane() {
   return 0
 }
 
-# --- drift_report: both halves, once per loop iteration. Advisory; always 0.
-# Named for the pair, not for either half -- the driver-code half is the
+# --- studio_version_commit: stdin=an /api/version body; echoes a commit or "".
+#
+# Total by construction, like every other parser here: absent, unparseable,
+# wrong-type and wrong-shape all print "".
+#
+# THE HEX GUARD IS THE POINT, not a tidiness. `build-info.ts` serves
+# `commit: "dev"` whenever there is no release manifest, and that string is a
+# perfectly good argument to `git rev-parse` -- a checkout with a branch named
+# `dev` resolves it and the half then announces a confident verdict about a
+# build whose identity it never actually learned. Anything that is not a plain
+# abbreviated sha is NOT an identity, and the safe answer to "I do not know what
+# is running" is to say so. The lower bound is git's own 7-character minimum
+# abbreviation; the upper is a full sha.
+studio_version_commit() {
+  python3 -c "
+import sys, json, re
+try:
+    c = json.load(sys.stdin)['commit']
+    print(c if isinstance(c, str) and re.fullmatch(r'[0-9a-f]{7,40}', c) else '')
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+# --- drift_report_studio_server: is the QUOTA SOURCE running merged code?
+#
+# The third process in the same question. The two halves above ask it of this
+# driver's file and of this driver's process; the spend guard's source 3 is a
+# THIRD program -- the supervised `com.autonomy.studio-server` unit, running
+# from an isolated clone under its own state dir -- and nothing moved it forward
+# or said that it had not.
+#
+# WHAT THAT COST, measured 2026-07-31 (#832). The service sat ELEVEN commits
+# behind origin/main, so it predated #825 and served no `unavailable` field at
+# all. Every layer below then behaved exactly as specified: `quota_parse_reason`
+# found no reason, and `quota_shadow_probe` logged a bare UNREADABLE. Three of
+# those lines accumulated as C3 evidence -- and they were not weak evidence,
+# they were VOID, measuring a build from before the code they were supposed to
+# attest. Nothing anywhere said so, so the standing rule ("read an UNREADABLE by
+# its cause") would have read three unattributed lines as a finding about
+# studio's reader. `docs/review-prevention-log.md` #28: a signal must measure
+# the actor it governs.
+#
+# DETECTION-ONLY, AND DELIBERATELY SO. `install_studio_server.sh` (#773) rejects
+# a scheduled updater by name, citing an approved design
+# (`studio/docs/2026-07-30-packaging-and-updates.md`) and measured evidence: an
+# updater interlocked on "a fire is running" would have starved, since the
+# driver run beginning 2026-07-26T02:05Z ran for 74.7 hours. That stands, and
+# this half does not reopen it -- it never fetches into, builds, or restarts the
+# service. #773's own stated goal was to make the drift VISIBLE; what shipped
+# put the visibility in `--status`, a command someone has to think to run, and
+# not in the log that is read every fire and that carries the C3 evidence
+# itself. This is that missing half, and nothing more.
+#
+# IDENTITY COMES FROM THE RUNNING PROCESS, not from the installer's `built.sha`.
+# The stamp answers "what did the installer last compile", which is one
+# indirection away from the question and can read current while the loaded unit
+# still serves an older `dist`. `GET /api/version` is answered BY the unit the
+# guard polls, from a manifest read once at registration, so it cannot disagree
+# with itself. It also avoids hardcoding a second copy of the service state-dir
+# path here, whose failure mode -- an absent stamp reporting UNKNOWN forever
+# while the install looks perfect -- is the same silent-never-runs shape
+# `drift_report_plane` had to be rewritten out of.
+drift_report_studio_server() {
+  if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    log "studio server: UNKNOWN -- $REPO is not a git checkout to compare against (#832)"
+    return 0
+  fi
+  # FETCH FIRST, same discipline and same reason as the plane half: `origin/main`
+  # is a cached local ref, so a report built on an unrefreshed one compares the
+  # service against whatever was current the last time anything fetched and says
+  # "in sync" forever. A failed fetch is UNKNOWN, never in sync.
+  if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
+    log "studio server: UNKNOWN -- origin/main could not be refreshed, so drift is unmeasured. This is NOT a report that the quota source is current (#832)"
+    return 0
+  fi
+  ds_body="$(quota_fetch_url "$STUDIO_VERSION_URL")"
+  ds_rc=$?
+  if [ "$ds_rc" -ne 0 ]; then
+    # A LIFECYCLE fault, and named as one: nothing answered on the port. That is
+    # `install_studio_server.sh`'s territory (the unit is down, or is on another
+    # port), not a statement about which code it would have been running -- and
+    # reporting it as drift would send the operator to rebuild a service that
+    # was never up. The shadow probe reports the same outage from its own side.
+    log "studio server: UNKNOWN -- nothing answered at $STUDIO_VERSION_URL, so which build the quota source is running is unmeasured. That is a LIFECYCLE fault (is com.autonomy.studio-server loaded?), not drift (#832)"
+    return 0
+  fi
+  ds_commit="$(printf '%s' "$ds_body" | studio_version_commit)"
+  if [ -z "$ds_commit" ]; then
+    # Something answered and it was not a studio that knows its own identity: an
+    # older build predating the #792 manifest, or any other service on the port.
+    # #765 records a wrong-but-answering server 404ing and reading as healthy
+    # forever, which is why this is UNKNOWN rather than silence.
+    log "studio server: UNKNOWN -- $STUDIO_VERSION_URL served no usable build identity, so this is either a studio predating the release manifest or something else on the port (#832)"
+    return 0
+  fi
+  # EMPTY IS NOT A MATCH. `rev-parse` prints nothing on failure and so does the
+  # parser above, so a bare `[ "$a" = "$b" ]` reads two failures as agreement --
+  # the fail-open this file has now been bitten by in three separate places
+  # (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob ids, and the
+  # quota cache's UNREADABLE-vs-0). Both sides are checked before comparing.
+  ds_have="$(git -C "$REPO" rev-parse --quiet --verify "${ds_commit}^{commit}" 2>/dev/null)"
+  ds_main="$(git -C "$REPO" rev-parse --quiet --verify "origin/main^{commit}" 2>/dev/null)"
+  if [ -z "$ds_have" ]; then
+    log "studio server: UNKNOWN -- the service reports commit $ds_commit, which is not a commit this checkout knows, so it cannot be placed against origin/main (#832)"
+  elif [ -z "$ds_main" ]; then
+    log "studio server: UNKNOWN -- origin/main could not be resolved in $REPO, so drift is unmeasured (#832)"
+  elif [ "$ds_have" = "$ds_main" ]; then
+    log "studio server: in sync with origin/main (serving $ds_commit)"
+  else
+    # Says which build, not just "differs": the one question the operator asks
+    # next is how far back the answering code is, and the served sha is what
+    # makes every `quota shadow: studio` line above and below this one
+    # attributable after the fact rather than only in the moment.
+    log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, but origin/main is $(git -C "$REPO" rev-parse --short origin/main 2>/dev/null). So the spend guard's source 3, and every 'quota shadow: studio' line beside this one, is answering from SUPERSEDED code -- treat those as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+  fi
+  return 0
+}
+
+# --- drift_report: all three halves, once per loop iteration. Advisory; always 0.
+# Named for the set, not for any one of them -- the driver-code half is the
 # load-bearing one and is not plane drift at all.
 drift_report() {
   # ONLY the documented value disables. `= "1"` would have let `DRIFT_REPORT=no`
@@ -1259,6 +1385,7 @@ drift_report() {
   [ "$DRIFT_REPORT" = "0" ] && return 0
   drift_report_driver_code
   drift_report_plane
+  drift_report_studio_server
   return 0
 }
 
