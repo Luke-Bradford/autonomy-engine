@@ -205,10 +205,44 @@ such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in 
 `driver code` reads `UNKNOWN` for the whole of any run started before #808 landed, because that
 process recorded no boot hash — which is the honest answer, not a gap.
 
-The driver deliberately does **not** re-`exec` itself to adopt new code. Cross-fire state (`fires`,
-`stall`, `blind_fires`, `budget_regrants`) lives in shell variables, so an exec would silently reset
-the counters bounding `MAX_STALL` and `MAX_BUDGET_REGRANTS` — trading a visible staleness for an
-invisible fail-open in the spend and stall guards. Self-adoption needs that state persisted first — filed as #811.
+**Since #811 the driver adopts a merged fix itself.** At the top of each iteration — after the
+drift report, before every gate and fire, so never mid-fire — `drive_self_adopt` compares the file
+against the boot hash and, when it differs, re-`exec`s into it. The manual `kickstart` above is
+still the remedy for every case adoption refuses, and `SELF_ADOPT=0` (only the literal `0`) turns
+the behaviour off entirely.
+
+The load-bearing part is not the exec, it is what the exec carries. `fires`, `stall`,
+`blind_fires`, `budget_regrants`, `crash`, `loops` and `prev_head` live in shell variables, so a
+naive exec would silently reset the bounds behind `MAX_STALL`, `MAX_CRASH`, `QUOTA_UNKNOWN_FIRES`
+and `MAX_BUDGET_REGRANTS` — trading a visible staleness for an invisible fail-open, which is why
+#808 refused to build it. They are handed over in `$INFRA/.driver_handoff`, a single-use
+`"<epoch> <k=v,…>"` record written through the same `quota_stamped_write` that owns every other
+stamped state file here (#806).
+
+**What is deliberately NOT persisted, and why.** #811 as filed asked for the counters to survive
+*any* restart. That would be a worse bug: `MAX_FIRES` is documented as per-run and reset by a
+scheduled start, `blind_fires` and `budget_regrants` are per-run by construction, and a `stall`
+that survived would **permanently wedge the loop** — once it reached `MAX_STALL`, every future
+03:05 run would stop at "nothing more to do" before firing, forever, even after new work was
+queued. The guard that must survive a restart is `quota_gate`, and it already does: it reads the
+live 7-day window, not a counter. So the handoff is *continuation-only*. The discriminator is the
+PID, which `exec` preserves and nothing else does; a record from another PID, or older than
+`HANDOFF_MAX_AGE`, is discarded and the run starts clean exactly as it does today.
+
+Adoption refuses — loudly, and staying on the old code — when the new file does not `bash -n`
+parse (a half-finished sync must not become an exec into garbage that kills the driver outright),
+when the handoff cannot be written or does not read back as written, and after `MAX_SELF_ADOPT`
+attempts in one run (which bounds an adopt-*loop* if the file keeps changing underneath the
+driver). The record's parse degrades per field rather than all-or-nothing, because on an adopt the
+**writer is the old code and the reader is the new one**: a counter the writer did not have resets
+alone and is named in the log; a field the reader does not know is ignored and named.
+
+| knob | default | what it does |
+| --- | --- | --- |
+| `SELF_ADOPT` | `1` | exactly `0` disables self-adoption; any other value still adopts |
+| `MAX_SELF_ADOPT` | `3` | adoption *attempts* per driver run |
+| `HANDOFF_MAX_AGE` | `300` | seconds after which a handoff is no longer a continuation |
+| `DRIVER_HANDOFF` | `$INFRA/.driver_handoff` | where the record is written |
 
 ## Safety model
 
