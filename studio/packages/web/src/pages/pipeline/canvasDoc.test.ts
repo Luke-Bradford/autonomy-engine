@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PipelineVersionSchema,
   type Edge,
   type EdgeOn,
   type Node,
-  type PipelineVersion,
+  type Output,
+  type Param,
 } from '@autonomy-studio/shared';
 import { PipelineVersionWriteSchema } from '../../api/pipelines';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
@@ -17,42 +17,29 @@ function edge(id: string, from: string, to: string, on: EdgeOn = 'success'): Edg
   return { id, from, to, on };
 }
 
-const loaded: PipelineVersion = PipelineVersionSchema.parse({
-  id: 'plv_1',
-  resourceId: 'res_plv1',
-  pipelineId: 'pl_1',
-  version: 2,
-  params: [{ name: 'topic', type: 'string', required: true }],
-  outputs: [{ name: 'result', type: 'string' }],
-  nodes: [],
-  edges: [],
-  containers: [{ id: 'c1', kind: 'stage', children: [] }],
-  catalogVersion: 1,
-  createdAt: 1,
-});
-
 describe('toVersionBody', () => {
+  const params: Param[] = [{ name: 'topic', type: 'string', required: true }];
+  const outputs: Output[] = [{ name: 'result', type: 'string' }];
+
   // #485 — `toVersionBody` is the one HAND-LISTED PipelineVersion builder (the
   // import path spreads). Every `.default()` field is optional in the wire body
-  // (`z.input`), so a future carry-forward field could be dropped here silently,
-  // exactly as `containers` was on import. Beyond the per-field value checks,
-  // this asserts the builder COVERS every field the wire body carries — minus
-  // the ones it deliberately does not send — so a new field added to the schema
-  // fails HERE until it is either carried or explicitly declared an omission.
-  it('carries EVERY carry-forward field from the loaded version — a class guard (#485)', () => {
+  // (`z.input`), so a field could be dropped here silently, exactly as
+  // `containers` was on import. Beyond the per-field value checks, this asserts
+  // the builder COVERS every field the wire body carries — minus the ones it
+  // deliberately does not send — so a new field added to the schema fails HERE
+  // until it is either sent or explicitly declared an omission.
+  it('sends EVERY field the wire body carries — a class guard (#485)', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e', 'a', 'b')];
-    const body = toVersionBody(loaded, nodes, edges, loaded.containers);
+    const containers = [{ id: 'c1', kind: 'stage' as const, children: [] }];
+    const body = toVersionBody(nodes, edges, containers, params, outputs);
 
-    // The distinctive values survive. `containers` is passed here rather than
-    // carried forward — it stopped being a carry-forward in #746 and is the
-    // canvas's own working state now, so the drop-to-`[]` hazard this guard was
-    // written for no longer applies to it. Kept in the value checks because the
-    // CLASS assertion below counts it, and covered as a behaviour by the
-    // 'carries the CANVAS containers' test.
-    expect(body.params).toEqual(loaded.params);
-    expect(body.outputs).toEqual(loaded.outputs);
-    expect(body.containers).toEqual(loaded.containers);
+    // Every value is DISTINCT, so a transposed argument is red rather than
+    // masked by two equal empty arrays. Five positional array parameters is
+    // exactly the shape an ordering slip hides in.
+    expect(body.params).toEqual(params);
+    expect(body.outputs).toEqual(outputs);
+    expect(body.containers).toEqual(containers);
     expect(body.nodes).toEqual(nodes);
     expect(body.edges).toEqual(edges);
 
@@ -70,40 +57,29 @@ describe('toVersionBody', () => {
   });
 
   it('omits catalogVersion so the server stamps the current one on save', () => {
-    const body = toVersionBody(loaded, [], [], []);
-    expect(body).not.toHaveProperty('catalogVersion');
+    expect(toVersionBody([], [], [], [], [])).not.toHaveProperty('catalogVersion');
   });
 
-  // Only `params`/`outputs` are derived from `loaded` — those are what a null
-  // `loaded` can defaults-fill. `containers` is deliberately NOT asserted here:
-  // since #746 it is a straight pass-through of the 4th argument, so asserting
-  // `[]` in and `[]` out would be trivially true no matter what this function
-  // does with a null `loaded`. Its real contract is the next test.
-  it('first-run (no loaded version) yields empty params/outputs', () => {
-    const body = toVersionBody(null, [node('a')], [], []);
+  /**
+   * U16 — the typed contract comes from the CANVAS, and `loaded` is gone.
+   *
+   * `params`/`outputs` were carried forward from the opened version until this
+   * ticket, for want of an editor. That is the same defect shape as #746's
+   * containers: once a UI can edit a field, sourcing it from the version the
+   * canvas was OPENED on discards the operator's edit at the moment they save
+   * it. The regression is now unrepresentable here — `loaded` is not a
+   * parameter — so what this pins is that the body reflects its arguments even
+   * when they are EMPTY, which is the state a carry-forward would have filled.
+   */
+  it('sends empty params/outputs when the canvas declares none', () => {
+    const body = toVersionBody([node('a')], [], [], [], []);
     expect(body.params).toEqual([]);
     expect(body.outputs).toEqual([]);
     expect(body.nodes).toHaveLength(1);
   });
 
-  /**
-   * #746 — containers come from the CANVAS, never from `loaded`.
-   *
-   * The bug was exactly this line reading `loaded?.containers`: the operator
-   * could delete an enclosed activity and the save body still listed it as a
-   * child, because membership was carried forward from the version the canvas
-   * was opened on rather than taken from the graph on screen. `loaded` here is
-   * deliberately non-empty and DIFFERENT from the argument, so a regression to
-   * the carry-forward is red rather than masked by two equal values.
-   */
-  it('carries the CANVAS containers, not the loaded version (#746)', () => {
-    const body = toVersionBody(loaded, [], [], []);
-    expect(loaded.containers).toHaveLength(1); // the carry-forward source is not empty
-    expect(body.containers).toEqual([]);
-  });
-
   it('produces a body that parses cleanly through the shared write schema', () => {
-    const body = toVersionBody(loaded, [node('a'), node('b')], [edge('e', 'a', 'b')], []);
+    const body = toVersionBody([node('a'), node('b')], [edge('e', 'a', 'b')], [], params, outputs);
     expect(() => PipelineVersionWriteSchema.parse(body)).not.toThrow();
   });
 });

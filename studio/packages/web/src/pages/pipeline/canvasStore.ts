@@ -8,12 +8,15 @@ import {
   type ContainerKind,
   type Edge,
   type Node,
+  type Output,
+  type Param,
   type PipelineVersion,
   type Position,
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
 import { retypeCollides, type EdgeCondition } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
+import { blankOutput, blankParam } from './paramRules';
 
 /** What the property panel is currently editing. */
 export interface Selection {
@@ -203,9 +206,13 @@ export function buildContainer(
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
-   * pipeline with no versions). Kept so a save can carry forward the parts of
-   * the doc this slice has no UI for (`params`/`outputs`) and so "Save" rebases
-   * onto the new version it creates.
+   * pipeline with no versions). Kept as the rebase basis for "Save", and as the
+   * un-lowered record of what the server actually stored.
+   *
+   * It is no longer the carry-forward source for `params`/`outputs` (U16): those
+   * are working state below, for the same reason containers stopped being read
+   * off `loaded` in #746 — once a UI can edit a field, reading it from the
+   * version the canvas was OPENED on silently discards the edit.
    */
   loaded: PipelineVersion | null;
   /** The working graph — the store owns its own copy (never the loaded arrays). */
@@ -224,6 +231,17 @@ export interface CanvasState {
    * pipeline`) with no canvas affordance to repair it.
    */
   containers: Container[];
+  /**
+   * The pipeline's typed input contract — WORKING state as of U16.
+   *
+   * Authored from the property panel's nothing-selected slot. Before U16 there
+   * was no UI at all, so a pipeline built on the canvas could never declare a
+   * param: `${params.x}` had nothing to resolve and a trigger had nothing typed
+   * to bind to.
+   */
+  params: Param[];
+  /** The pipeline's declared output contract — WORKING state as of U16. */
+  outputs: Output[];
   selected: Selection | null;
   /** True once the working graph diverges from `loaded`; reset on load/save. */
   dirty: boolean;
@@ -306,6 +324,24 @@ export interface CanvasState {
   updateEdgeCondition(id: string, condition: EdgeCondition): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
+  /**
+   * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
+   * rather than a field patch, for the same reason `createContainer` takes a
+   * whole `Container`: `default` is an absent-or-present key (not a nullable
+   * one), and a field-patch signature cannot express "remove this key" without
+   * a sentinel that JSON cannot carry.
+   *
+   * Addressed by INDEX, not by name: a name is what the operator is editing, so
+   * it is unusable as the identity of the row being edited — a rename would
+   * address a row that no longer exists, and two rows may legitimately share a
+   * name mid-edit (that is precisely the state the save gate reports).
+   */
+  addParam(): void;
+  updateParam(index: number, next: Param): void;
+  removeParam(index: number): void;
+  addOutput(): void;
+  updateOutput(index: number, next: Output): void;
+  removeOutput(index: number): void;
   select(sel: Selection | null): void;
 }
 
@@ -326,6 +362,8 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     nodes: [],
     edges: [],
     containers: [],
+    params: [],
+    outputs: [],
     selected: null,
     dirty: false,
     addCount: 0,
@@ -402,6 +440,18 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         // invariant rather than a bug waiting on U23 — latent sharing
         // that is free to rule out here.
         containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
+        // U16 — seeded as working state, and the copy is DEEPER than the
+        // containers copy above rather than a spread. `children` is a flat array
+        // of strings, so one level covers it; a param's `default` is
+        // `z.unknown()` and a `json` param's can nest arbitrarily, so `{ ...p }`
+        // would alias a live sub-object into the SERVER's version object, which
+        // this store does not own and must never write through.
+        //
+        // `structuredClone` is safe here specifically because the value arrived
+        // as parsed JSON over the wire — there is no function or class instance
+        // it could choke on.
+        params: v ? v.params.map((p) => structuredClone(p)) : [],
+        outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
         selected: null,
         dirty: false,
         addCount: 0,
@@ -670,6 +720,36 @@ export function createCanvasStore(): StoreApi<CanvasState> {
      * again — a loop that the value guard, not a `useEffect` dependency, is what
      * actually stops.
      */
+    addParam() {
+      set((s) => ({ params: [...s.params, blankParam(s.params)], dirty: true }));
+    },
+
+    updateParam(index, next) {
+      set((s) => ({
+        params: s.params.map((p, i) => (i === index ? next : p)),
+        dirty: true,
+      }));
+    },
+
+    removeParam(index) {
+      set((s) => ({ params: s.params.filter((_, i) => i !== index), dirty: true }));
+    },
+
+    addOutput() {
+      set((s) => ({ outputs: [...s.outputs, blankOutput(s.outputs)], dirty: true }));
+    },
+
+    updateOutput(index, next) {
+      set((s) => ({
+        outputs: s.outputs.map((o, i) => (i === index ? next : o)),
+        dirty: true,
+      }));
+    },
+
+    removeOutput(index) {
+      set((s) => ({ outputs: s.outputs.filter((_, i) => i !== index), dirty: true }));
+    },
+
     select(sel) {
       if (sameSelection(get().selected, sel)) return;
       set({ selected: sel });
