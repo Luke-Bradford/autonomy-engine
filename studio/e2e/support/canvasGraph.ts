@@ -227,16 +227,17 @@ export function connectByIdBackwards(page: Page, from: string, to: string): Prom
  * it and select THAT, leaving a spec asserting against the node property panel
  * while reporting an edge failure.
  */
-export async function selectEdge(page: Page): Promise<void> {
-  const point = await page.evaluate(() => {
-    const path = document.querySelector('.react-flow__edge-path') as SVGPathElement | null;
-    if (!path) throw new Error('no edge path on the canvas');
+export async function selectEdge(page: Page, index = 0): Promise<void> {
+  const point = await page.evaluate((i) => {
+    const paths = document.querySelectorAll('.react-flow__edge-path');
+    const path = paths[i] as SVGPathElement | undefined;
+    if (!path) throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
     const mid = path.getPointAtLength(path.getTotalLength() / 2);
     const ctm = path.getScreenCTM();
     if (!ctm) throw new Error('the edge path has no screen transform');
     const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
     return { x: p.x, y: p.y };
-  });
+  }, index);
   await page.mouse.click(point.x, point.y);
   await expect(firesOn(page)).toBeVisible();
 }
