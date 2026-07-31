@@ -921,7 +921,17 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       ),
     );
     expect(events[0]).toMatchObject({ type: 'metered' });
-    expect(events[1]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The DIAGNOSTIC still reaches the failure, even though no pattern is set.
+    // `diagnoseCliExit` builds the stderr+stdout join unconditionally for exactly
+    // this reason: the quota verdict is one consumer, the durable failure detail
+    // is the other, and the latter does not depend on `quota` being configured.
+    // Asserted because its absence makes "short-circuit the join when `quota` is
+    // undefined" look like a free optimization — it would blank this message.
+    expect(events[1]).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: 'llm_call CLI exited 1: usage limit reached',
+    });
   });
 
   it('still REDACTS the injected secret out of a quota (rate_limit) failure error', async () => {
