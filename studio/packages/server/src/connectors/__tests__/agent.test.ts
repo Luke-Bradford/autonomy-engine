@@ -1698,3 +1698,254 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
     });
   });
 });
+
+describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', () => {
+  const PATTERN = 'usage limit reached';
+  /** An `agent_cli` connection whose CLI is declared to speak JSON-per-line. */
+  const jsonLines = (errorEnvelopeTypes: string[], exhaustionPattern = PATTERN) => ({
+    command: 'claude',
+    quota: {
+      exhaustionPattern,
+      resetWindowSeconds: 3600,
+      matchSource: { format: 'json-lines' as const, errorEnvelopeTypes },
+    },
+  });
+  const runTask = async (lines: { stream: 'stdout' | 'stderr'; line: string }[], config: unknown) =>
+    drain(
+      createAgentAdapter(fakeSupervisor(lines, { exitCode: 1 }).supervisor).runActivity(
+        ctx({ connectionConfig: config as Record<string, unknown> }),
+        null,
+      ),
+    );
+  const out = (line: string) => ({ stream: 'stdout' as const, line });
+
+  it('does NOT classify a refusal phrase carried by an agent CONTENT envelope', async () => {
+    // #816's archetype, and this repo's own workload: an agent reading logs that
+    // discuss quota. Before the declaration this failed the run AND armed a
+    // connection-wide admission window.
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'assistant', text: `the log says "${PATTERN}" here` }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('DOES classify the same phrase carried by a declared error envelope', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', message: `Error: ${PATTERN} for this account` }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('never narrows STDERR — a refusal there still classifies under json-lines', async () => {
+    // stderr is CLI/API output, never model content, so the narrowing has no
+    // business touching it. This is also the mitigation for the dropped-line
+    // residual below: a CLI that breaks protocol usually breaks it onto stderr.
+    const events = await runTask(
+      [
+        { stream: 'stderr', line: `Error: ${PATTERN}` },
+        out(JSON.stringify({ type: 'assistant', text: 'unrelated' })),
+      ],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('DROPS a bare non-JSON stdout line — the accepted false-negative residual, pinned', async () => {
+    // Deliberate, not an oversight. Admitting unparseable lines would degrade to
+    // the old behaviour exactly on the transcripts this exists for: a capture
+    // truncated at `maxOutputBytes` ends in an unparseable CHUNK OF CONTENT,
+    // which would then be matched whole.
+    const events = await runTask([out(`Error: ${PATTERN}`)], jsonLines(['error']));
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('ABSENT matchSource still matches the whole transcript — no behaviour change on upgrade', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'assistant', text: `the log says "${PATTERN}" here` }))],
+      { command: 'claude', quota: { exhaustionPattern: PATTERN, resetWindowSeconds: 3600 } },
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('still REPORTS the excluded transcript in the failure detail — it bounds what is SCANNED', async () => {
+    // The narrowing decides what the pattern may READ, never what a failure is
+    // allowed to SAY. Same discipline as `MAX_CLI_MATCH_CHARS`.
+    // On `llm_call`, because that is the shape whose non-zero exit terminalizes
+    // as a failure at all — `agent_task` treats the exit code as data and
+    // succeeds, so it has no failure detail to inspect.
+    const events = await drain(
+      createAgentAdapter(
+        fakeSupervisor(
+          [
+            { stream: 'stderr', line: 'boom' },
+            out(JSON.stringify({ type: 'assistant', text: `chatter about ${PATTERN}` })),
+          ],
+          { exitCode: 1 },
+        ).supervisor,
+      ).runActivity(llmCtx({ connectionConfig: jsonLines(['error']) }), null),
+    );
+    const failure = events.find((e) => e.type === 'failed');
+    expect(failure).toMatchObject({ kind: 'permanent' });
+    expect(JSON.stringify(failure)).toContain(`chatter about ${PATTERN}`);
+  });
+
+  it('matches envelope TYPE exactly — a type that merely CONTAINS a declared one is not admitted', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error_summary', message: PATTERN }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('excludes the top-level TYPE VALUE from the matched text — the selector is not the evidence', async () => {
+    // Otherwise `errorEnvelopeTypes: ['rate_limit_event']` + a `rate.?limit`
+    // pattern fires on claude's routine ALLOWED heartbeat, which carries that
+    // literal in the very field that selected it (claude.sh needs the envelope
+    // AND `rate_limit_info.status == "rejected"`).
+    const heartbeat = await runTask(
+      [out(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }))],
+      jsonLines(['rate_limit_event'], 'rate.?limit'),
+    );
+    expect(heartbeat.at(-1)).toMatchObject({ type: 'succeeded' });
+    // …while the REJECTED state, matched on its own words, still classifies.
+    const rejected = await runTask(
+      [out(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } }))],
+      jsonLines(['rate_limit_event'], 'rejected'),
+    );
+    expect(rejected.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('matches string LEAVES, not keys — a pattern cannot hit the protocol itself', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', message: 'boom' }))],
+      jsonLines(['error'], 'message'),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('matches DECODED text — a pattern needs no JSON escaping to reach it', async () => {
+    // The raw line carries `\"` and `\n`; the pattern is written against what the
+    // CLI actually said. Matching the raw line would silently require the author
+    // to escape for a wire format they never chose.
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', message: `it said "${PATTERN}"\ngiving up` }))],
+      jsonLines(['error'], `said "${PATTERN}"`),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('reaches a leaf nested inside the envelope', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'turn.failed', error: { detail: [{ text: PATTERN }] } }))],
+      jsonLines(['turn.failed']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('refuses a NON-STRING type rather than reaching an `includes` on it', async () => {
+    const events = await runTask(
+      [out(JSON.stringify({ type: 5, code: 'error', message: PATTERN }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('a FORGED envelope on raw stdout still classifies — narrowed, not closed', async () => {
+    // Pinned as accepted residual, not as a win: the filter cuts the accidental
+    // mention (the archetype), never a deliberate forgery by a passthrough tool.
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', message: PATTERN }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('survives an over-cap transcript that would ELIDE the refusal under text matching', async () => {
+    // Narrowing runs BEFORE `MAX_CLI_MATCH_CHARS`, so a huge content body can no
+    // longer push a real envelope into the elided middle. The same input under
+    // `text` (below) loses it — that contrast is the point.
+    const filler = () => out(JSON.stringify({ type: 'assistant', text: 'x'.repeat(1_000) }));
+    const lines = [
+      ...Array.from({ length: 40 }, filler),
+      out(JSON.stringify({ type: 'error', message: PATTERN })),
+      ...Array.from({ length: 40 }, filler),
+    ];
+    expect((await runTask(lines, jsonLines(['error']))).at(-1)).toMatchObject({
+      kind: 'rate_limit',
+    });
+    const asText = await runTask(lines, {
+      command: 'claude',
+      quota: { exhaustionPattern: PATTERN, resetWindowSeconds: 3600 },
+    });
+    expect(asText.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('bounds the parse work — candidate lines are consumed from the END backwards', async () => {
+    // A 10 MB transcript whose every line names a declared type would otherwise be
+    // JSON.parsed in full, synchronously, on the server's only thread. The budget
+    // keeps the envelopes NEAREST the exit, so a refusal beyond it is missed —
+    // stated, tested, and orders of magnitude past any real refusal stream.
+    // The decoy must be a CANDIDATE (an object line carrying a declared type as a
+    // quoted token) so it is charged to the budget; it is excluded only once
+    // parsed, on its real `type`. Note a mention inside a JSON *string* does not
+    // qualify — `JSON.stringify` escapes the quotes — which is itself why the
+    // cheap pre-filter is not the verdict.
+    const decoy = out(
+      JSON.stringify({ type: 'assistant', kind: 'error', text: 'y'.repeat(9_000) }),
+    );
+    const refusal = out(JSON.stringify({ type: 'error', message: PATTERN }));
+    const flood = Array.from({ length: 140 }, () => decoy);
+    expect((await runTask([refusal, ...flood], jsonLines(['error']))).at(-1)).toMatchObject({
+      type: 'succeeded',
+    });
+    // …and the same refusal at the END, inside the budget, still classifies.
+    expect((await runTask([...flood, refusal], jsonLines(['error']))).at(-1)).toMatchObject({
+      kind: 'rate_limit',
+    });
+  });
+
+  it('applies to llm_call too — the source is a fact about the CLI, not about the shape', async () => {
+    const events = await drain(
+      createAgentAdapter(
+        fakeSupervisor([out(JSON.stringify({ type: 'assistant', text: `mentions ${PATTERN}` }))], {
+          exitCode: 1,
+        }).supervisor,
+      ).runActivity(llmCtx({ connectionConfig: jsonLines(['error']) }), null),
+    );
+    expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'permanent' });
+  });
+
+  describe('schema', () => {
+    const schema = createAgentAdapter(fakeSupervisor([], {}).supervisor).configSchema;
+    const parse = (matchSource: unknown) =>
+      schema.safeParse({
+        command: 'claude',
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, matchSource },
+      }).success;
+
+    it('accepts a json-lines source naming its error envelopes', () => {
+      expect(parse({ format: 'json-lines', errorEnvelopeTypes: ['error'] })).toBe(true);
+    });
+
+    it('accepts an explicit text source', () => {
+      expect(parse({ format: 'text' })).toBe(true);
+    });
+
+    it('REFUSES json-lines with no errorEnvelopeTypes — it could never classify', () => {
+      expect(parse({ format: 'json-lines' })).toBe(false);
+      expect(parse({ format: 'json-lines', errorEnvelopeTypes: [] })).toBe(false);
+    });
+
+    it('REFUSES errorEnvelopeTypes on a text source rather than silently stripping it', () => {
+      // `.optional()` alone would admit both incoherent bodies; the discriminated
+      // union of STRICT members refuses them by construction.
+      expect(parse({ format: 'text', errorEnvelopeTypes: ['error'] })).toBe(false);
+    });
+
+    it('REFUSES an unknown format', () => {
+      expect(parse({ format: 'stream-json', errorEnvelopeTypes: ['error'] })).toBe(false);
+    });
+  });
+});

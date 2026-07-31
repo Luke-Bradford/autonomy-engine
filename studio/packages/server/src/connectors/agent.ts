@@ -201,6 +201,86 @@ const agentConnectionConfigSchema = z.object({
             'classifyActivityTypes must name at least one activity type (omit it to mean both)',
         })
         .optional(),
+      /**
+       * #816 — WHICH TEXT of a non-zero exit `exhaustionPattern` is matched
+       * against. ABSENT = `text` = the combined stderr+stdout, i.e. exactly the
+       * #799 behaviour, so this field changes nothing on upgrade.
+       *
+       * `json-lines` declares that the CLI speaks a JSON-per-line protocol on
+       * stdout (`claude --output-format stream-json`, `codex … --json`). Studio
+       * never injects that flag — the operator owns `args` — so this is an
+       * ASSERTION about a command they configured, which is why it is opt-in
+       * rather than sniffed.
+       *
+       * Under `json-lines` the match surface becomes: stderr IN FULL, plus, from
+       * stdout, ONLY the decoded string values carried by envelopes whose
+       * top-level `type` is a member of `errorEnvelopeTypes`. Agent content
+       * (`assistant`/`item.*`/tool output) is excluded, which is #816's whole
+       * point: on `agent_task` stdout is the agent's own transcript, so a session
+       * that merely DISCUSSES a usage limit could produce a `rate_limit` verdict
+       * that fails the run and arms a CONNECTION-WIDE admission window.
+       *
+       * This is the principle both in-repo agent adapters already follow —
+       * `bin/agents/claude.sh` reads `rate_limit_event`, `bin/agents/codex.sh`
+       * reads `error`/`turn.failed`/`stream_error`, and codex.sh states it
+       * outright: "an error envelope is API/CLI output, never model content.
+       * Agent CONTENT (item.* events) is never parsed."
+       *
+       * FOUR residuals, stated rather than sold as pure virtue:
+       *
+       * 1. NARROWED, NOT CLOSED. An agent that PRINTS a well-formed error
+       *    envelope on raw stdout (a passthrough tool, an `echo`, a `cat` of
+       *    codex.sh itself) forges one. The filter cuts the accidental mention,
+       *    which is the archetype; it cannot cut a deliberate forgery.
+       * 2. A stdout line that is not a declared envelope is DROPPED, so a CLI
+       *    that breaks its own protocol to print a bare refusal on stdout is
+       *    missed. stderr is never narrowed and is where such a break lands, and
+       *    the alternative (admit unparseable lines) degrades to the old
+       *    behaviour exactly on the transcripts this exists for — a truncated
+       *    `maxOutputBytes` capture ends in an unparseable CHUNK OF CONTENT.
+       * 3. The top-level `type` VALUE is excluded from the matched text: it is
+       *    the SELECTOR, not the evidence. Otherwise `errorEnvelopeTypes:
+       *    ['rate_limit_event']` with a `rate.?limit` pattern would fire on
+       *    claude's routine ALLOWED heartbeat, which carries that literal in the
+       *    very field that selected it. (claude.sh needs the envelope AND
+       *    `rate_limit_info.status == "rejected"`; the pattern must carry that
+       *    second half — e.g. `"status"` is not visible, so match `rejected`.)
+       * 4. Envelope keys are excluded too — only string LEAVES are matched — so a
+       *    pattern sees `usage limit reached`, not `"type":"error"`, and needs no
+       *    JSON escaping (`\"`, `\n`) to match text inside a string.
+       *
+       * WORKED EXAMPLES. codex: `{format:'json-lines', errorEnvelopeTypes:
+       * ['error','turn.failed','stream_error']}`. claude: `['rate_limit_event']`
+       * with a pattern matching the REJECTED state. Do NOT add claude's `result`
+       * type — `result.result` IS the model's final message, which re-opens the
+       * hole this field closes.
+       *
+       * SCOPED TO QUOTA MATCHING ON PURPOSE. It is named for what it governs and
+       * lives where it is honoured. A connection-level `outputFormat` would be a
+       * broader promise than this delivers: `agent_task`'s success `outputs` and
+       * the sentinel-fenced structured-output mode also read this stdout and are
+       * NOT taught the protocol here (#829).
+       *
+       * Applies to both shapes uniformly. A `json-lines` connection's `llm_call`
+       * completion is raw JSONL rather than prose, so declaring it effectively
+       * declares an agent-shaped connection — but the filter is not special-cased
+       * by shape, because a per-shape carve-out is what `classifyActivityTypes`
+       * already is and two overlapping scopes would be a worse contract.
+       */
+      matchSource: z
+        .discriminatedUnion('format', [
+          z.object({ format: z.literal('text') }).strict(),
+          z
+            .object({
+              format: z.literal('json-lines'),
+              errorEnvelopeTypes: z.array(z.string().min(1)).min(1, {
+                message:
+                  'errorEnvelopeTypes must name at least one envelope type (a json-lines source with no declared error envelope can never classify)',
+              }),
+            })
+            .strict(),
+        ])
+        .optional(),
     })
     .optional(),
 });
@@ -302,10 +382,13 @@ const MAX_CLI_DIAGNOSTIC_CHARS = 1000;
  * diagnostic) and the tail keeps the end of stdout, where a CLI that exits
  * non-zero prints the reason it is exiting.
  *
- * This is a SIZE bound only. WHICH CHANNELS/POSITIONS `agent_task` should match —
- * stderr only, or stderr plus a stdout tail — still stands with #816: the tail
- * narrowing was tried and refuted on in-repo evidence (see `diagnoseCliExit`),
- * and the SHAPE scope that DID ship is `quota.classifyActivityTypes`, not a channel cut. */
+ * This is a SIZE bound only, and it is the LAST gate, not the only one. WHICH
+ * text reaches it is now the operator's to declare: `quota.matchSource:
+ * json-lines` (#816) narrows stdout to declared error envelopes BEFORE this cap
+ * applies, so a huge content body can no longer elide a real refusal into the
+ * middle. ABSENT that declaration this still caps the whole stderr+stdout join,
+ * exactly as under #799. The stdout-TAIL cut was tried and refuted on in-repo
+ * evidence (see `diagnoseCliExit`); the SHAPE scope is `quota.classifyActivityTypes`. */
 const MAX_CLI_MATCH_CHARS = 64_000;
 
 /**
@@ -326,6 +409,123 @@ function headTailExcerpt(text: string, cap: number): string {
 
 /** The validated `quota` block of an `agent_cli` connection config. */
 type AgentQuotaHint = NonNullable<AgentConnectionConfig['quota']>;
+
+/**
+ * The per-line ceiling on what `json-lines` narrowing will hand to `JSON.parse`
+ * (#816). A refusal envelope is a few hundred bytes in every CLI this repo reads;
+ * a line orders of magnitude larger is a content blob that happens to name a
+ * declared type. Skipping it is an AVAILABILITY bound of the same family as
+ * `MAX_CLI_MATCH_CHARS` — parsing is synchronous on the server's only thread. */
+const MAX_ENVELOPE_LINE_CHARS = 16_000;
+
+/**
+ * The total ceiling on characters handed to `JSON.parse` while narrowing ONE
+ * exit (#816).
+ *
+ * Without it the narrowing would be a worse stall than the one `MAX_CLI_MATCH_CHARS`
+ * exists to prevent: a 10 MB `agent_task` transcript whose every line names a
+ * declared type (this repo's own workload literally discusses `rate_limit_event`)
+ * would be parsed in full, and `JSON.parse` over megabytes costs far more than the
+ * bounded `RegExp.test` it feeds.
+ *
+ * Candidate lines are consumed from the END of the stream BACKWARDS, so the
+ * envelopes nearest the exit are the ones that survive an exhausted budget. That
+ * is NOT the stdout-tail cut #816 rejected: that cut discarded whole channels
+ * positionally at every size, whereas this only bites above 1 MB of *candidate
+ * envelope* text — orders of magnitude past any real refusal stream — and the
+ * kept envelopes are re-ordered into stream order before matching. */
+const MAX_ENVELOPE_PARSE_CHARS = 1_000_000;
+
+/** Recursion ceiling for the string-leaf walk of one envelope (#816). Bounds a
+ * pathological nesting depth; no real envelope approaches it. */
+const MAX_ENVELOPE_LEAF_DEPTH = 8;
+
+/** Every string LEAF reachable in `value`, depth-bounded. Keys are never
+ * collected — the pattern should see the CLI's words, not the protocol's. */
+function collectStringLeaves(value: unknown, depth: number, out: string[]): void {
+  if (depth > MAX_ENVELOPE_LEAF_DEPTH) return;
+  if (typeof value === 'string') {
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringLeaves(item, depth + 1, out);
+    return;
+  }
+  if (typeof value === 'object' && value !== null) {
+    for (const nested of Object.values(value)) collectStringLeaves(nested, depth + 1, out);
+  }
+}
+
+/**
+ * Whether a trimmed stdout line is worth handing to `JSON.parse` at all (#816):
+ * it must open an object AND already carry a declared type as a quoted token.
+ * A content line that passes this still costs only one parse, and the parsed
+ * `type` is what actually decides — this is a cost filter, never the verdict. */
+function isCandidateEnvelopeLine(trimmed: string, types: readonly string[]): boolean {
+  if (!trimmed.startsWith('{')) return false;
+  return types.some((type) => trimmed.includes(`"${type}"`));
+}
+
+/**
+ * The matchable text of ONE candidate stdout line under a `json-lines` source
+ * (#816), or `undefined` if it is not in fact a declared error envelope.
+ *
+ * The type guards are the fail direction, not ceremony: `JSON.parse('null')`
+ * yields `null` whose `typeof` is `'object'`, arrays parse to objects, and
+ * `{"type": 5}` must not reach an `includes` on a non-string. Each of those
+ * admits a line the contract says is not an envelope. */
+function errorEnvelopeText(trimmed: string, types: readonly string[]): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const envelope = parsed as Record<string, unknown>;
+  const type = envelope.type;
+  if (typeof type !== 'string' || !types.includes(type)) return undefined;
+  const leaves: string[] = [];
+  for (const [key, value] of Object.entries(envelope)) {
+    // The selector is not the evidence — see residual 3 on `quota.matchSource`.
+    if (key === 'type') continue;
+    collectStringLeaves(value, 1, leaves);
+  }
+  return leaves.join('\n');
+}
+
+/**
+ * The text `exhaustionPattern` is matched against under a `json-lines` source
+ * (#816): stderr IN FULL (it is CLI/API output, never model content), plus the
+ * decoded string leaves of stdout's declared error envelopes, in stream order.
+ *
+ * The FULL diagnostic is unaffected — this bounds what the pattern SCANS, never
+ * what the failure event REPORTS, exactly as `MAX_CLI_MATCH_CHARS` does. */
+function narrowedQuotaSurface(
+  stderr: readonly string[],
+  stdout: readonly string[],
+  types: readonly string[],
+): string {
+  const envelopes: string[] = [];
+  let budget = MAX_ENVELOPE_PARSE_CHARS;
+  for (let i = stdout.length - 1; i >= 0 && budget > 0; i -= 1) {
+    const line = stdout[i] ?? '';
+    if (line.length > MAX_ENVELOPE_LINE_CHARS) continue;
+    const trimmed = line.trim();
+    if (!isCandidateEnvelopeLine(trimmed, types)) continue;
+    // Charged only for text actually parsed, so the budget measures the cost it
+    // exists to bound rather than the size of the stream it walks.
+    budget -= trimmed.length;
+    const text = errorEnvelopeText(trimmed, types);
+    if (text !== undefined && text !== '') envelopes.push(text);
+  }
+  envelopes.reverse();
+  return [stderr.join('\n'), envelopes.join('\n')]
+    .map((s) => s.trim())
+    .filter((s) => s !== '')
+    .join('\n');
+}
 
 /** The two invocation shapes this adapter serves. A closed union rather than a
  * bare `string` so the label a failure is built with cannot drift from the one
@@ -390,16 +590,19 @@ type CliTerminal = CliClassification['terminal'];
  * can sit arbitrarily far from the end, behind recovery turns and teardown, and a
  * tail cut would miss it and reopen #799's hot-loop.
  *
- * THE LIVE CANDIDATE — narrow by SOURCE, not by position or channel. Both engine
- * adapters converge on it independently: each parses ONLY structured error
- * envelopes (claude's `rate_limit_event`, codex's `error`/`turn.failed`/
- * `stream_error`) and NEITHER greps agent content — codex.sh states the principle
- * outright ("an error envelope is API/CLI output, never model content. Agent
- * CONTENT (item.* events) is never parsed"). That is exactly #816's concern
- * answered, and it is a real design option this adapter does not have today
- * because it matches a flat text blob rather than a parsed event stream. Carried
- * forward on #816; it needs a per-CLI output-format contract, which is a bigger
- * change than a regex tweak.
+ * SHIPPED — narrow by SOURCE, not by position or channel: `quota.matchSource:
+ * json-lines` (#816), where the operator declares that their CLI speaks a
+ * JSON-per-line protocol and names its error-envelope types. stdout then
+ * contributes ONLY those envelopes' decoded string leaves; agent content is
+ * excluded. Both engine adapters converged on this principle independently —
+ * claude.sh reads `rate_limit_event`, codex.sh reads `error`/`turn.failed`/
+ * `stream_error`, and codex.sh states it outright ("an error envelope is API/CLI
+ * output, never model content. Agent CONTENT (item.* events) is never parsed").
+ *
+ * It is OPT-IN and it NARROWS rather than CLOSES: studio never injects the format
+ * flag (the operator owns `args`), an agent that PRINTS a well-formed envelope
+ * forges one, and an un-declared connection matches the flat blob exactly as it
+ * did under #799. The residuals are enumerated on the `matchSource` field.
  *
  * A JUDGEMENT, not a measurement: the false positive a tail cut WOULD have
  * suppressed is mid-transcript tool output (#816's own archetype — an agent
@@ -432,12 +635,21 @@ function diagnoseCliExit(
   if (quota === undefined) return { diagnostic, quotaHit: undefined };
   const scope = quota.classifyActivityTypes;
   if (scope !== undefined && !scope.includes(shape)) return { diagnostic, quotaHit: undefined };
+  // #816 — the SOURCE narrowing, built LAZILY here rather than alongside the
+  // `diagnostic`: everything above returns before it, so a connection with no
+  // quota hint (or a scoped-out shape) never pays for a parse it cannot use.
+  // ABSENT/`text` reuses the `diagnostic` verbatim — the default path is
+  // provably byte-identical to #799's, not merely equivalent.
+  const surface: string =
+    quota.matchSource?.format === 'json-lines'
+      ? narrowedQuotaSurface(stderr, stdout, quota.matchSource.errorEnvelopeTypes)
+      : diagnostic;
   // Match against a BOUNDED excerpt (`MAX_CLI_MATCH_CHARS`) — an `agent_task`
   // transcript can be megabytes and this `test` is synchronous. The FULL
   // `diagnostic` is still returned: the excerpt bounds what the pattern scans,
   // not what the failure event reports.
   const quotaHit = new RegExp(quota.exhaustionPattern).test(
-    headTailExcerpt(diagnostic, MAX_CLI_MATCH_CHARS),
+    headTailExcerpt(surface, MAX_CLI_MATCH_CHARS),
   )
     ? quota
     : undefined;
