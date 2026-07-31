@@ -1394,6 +1394,35 @@ check "an unreadable file reads UNKNOWN, not live and not STALE" "0" \
   "$(sed -n '4p' "$dclog" 2>/dev/null | grep -q 'driver code: UNKNOWN' && echo 0 || echo 1)"
 check "the driver-code check emits NOTHING on stdout (a stray echo corrupts callers)" "" \
   "$(cat "$dctmp/out" 2>/dev/null)"
+
+# --- 30b. a RELATIVE self-path survives drive.sh's own `cd "$REPO"` -----------
+# `$0` is `./drive.sh` for any manual run, and the hash is re-taken every fire --
+# by which time the driver has cd'd to the repo, so a relative path hashes
+# nothing and the check reads UNKNOWN for the rest of the run. Safe rather than
+# open, but silently gone, which is the failure class this ticket is about.
+: >"$dctmp/infra/driver.log"
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$dctmp/infra"
+  export DLOG="$dctmp/infra/driver.log"
+  export DRIVE_SELF="./fake_drive.sh"
+  export DRIVE_BOOT_HASH
+  # cd FIRST, so the relative path is meaningful when drive.sh resolves it.
+  cd "$dctmp" || exit 1
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  DRIVE_BOOT_HASH="$(drive_self_hash)"
+  cd / || exit 1   # stand in for drive.sh's own `cd "$REPO"` between boot and fire
+  drift_report_driver_code
+) >"$dctmp/out2" 2>&1 &
+dcr_pid=$!
+dcr_i=0
+while [ "$dcr_i" -lt 15 ]; do kill -0 "$dcr_pid" 2>/dev/null || break; sleep 1; dcr_i=$((dcr_i + 1)); done
+kill -9 "$dcr_pid" 2>/dev/null || true
+check "a relative self-path still reads live after a cd, not UNKNOWN" "0" \
+  "$(grep -q 'driver code: live' "$dclog" 2>/dev/null && echo 0 || echo 1)"
 rm -rf "$dctmp"
 
 # --- 31. #808 PLANE drift: is the live plane the code that merged? ------------

@@ -127,6 +127,22 @@ PLANE_DRIFT_REPORT="${PLANE_DRIFT_REPORT:-1}"  # 0 silences the #808 drift repor
 DRIVE_SELF="${DRIVE_SELF:-${BASH_SOURCE[0]}}"  # the file THIS process was started from. Overridable
                                   # so the drift checks are unit-testable against a scratch file
                                   # instead of against drive.sh itself.
+# Resolved to an ABSOLUTE path here, while the cwd is still the one this process
+# was launched in. `drive.sh` does `cd "$REPO"` further down, and the hash is
+# re-taken on every fire -- so a relative `$0` (`./drive.sh`, as any manual run
+# produces) would resolve against the repo by then and hash nothing. Verified:
+# it yields an empty hash, i.e. `driver code: UNKNOWN` forever. That direction is
+# at least safe rather than open, but the check is silently gone, which is the
+# same class of quiet loss #808 exists to end. launchd passes an absolute path,
+# so this is about the manual path, not the scheduled one.
+case "$DRIVE_SELF" in
+  /*) ;;
+  *) ds_dir="$(cd "$(dirname "$DRIVE_SELF")" 2>/dev/null && pwd)"
+     # An unresolvable dirname leaves DRIVE_SELF alone rather than building a
+     # bogus "/name": the later shasum then fails and reads UNKNOWN, which is
+     # the honest answer. Never invent a path that might hash some other file.
+     [ -n "$ds_dir" ] && DRIVE_SELF="$ds_dir/$(basename "$DRIVE_SELF")" ;;
+esac
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
