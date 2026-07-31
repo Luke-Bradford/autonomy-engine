@@ -40,9 +40,10 @@ import { createAgentAdapter } from '../../connectors/agent.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
-// A no-op supervisor: these tests exercise `http`/fake adapters, never
-// `agent_cli`, so its spawn/reap are never called — it only satisfies the
-// registry's dependency shape.
+// A no-op supervisor: no test drives a real subprocess, so its spawn/reap are
+// never called — it only satisfies the registry's dependency shape. (The one
+// place the REAL `agent_cli` adapter runs, `realAgentCliAdapter`, injects its own
+// stub supervisor rather than this one.)
 const noopSupervisor: Supervisor = {
   spawnSupervised: () => {
     throw new Error('noopSupervisor.spawnSupervised should not be called in these tests');
@@ -2001,7 +2002,9 @@ function realAgentCliAdapter(stderrLine: string, exitCode: number): ConnectorReg
     }),
     reapAllSupervised: () => Promise.resolve(),
   };
-  return new Map([['agent_cli', createAgentAdapter(supervisor)]]);
+  // Build the REAL registry rather than hand-mapping the adapter, so these tests
+  // also prove the registry binds `agent_cli` to this adapter.
+  return createConnectorRegistry({ supervisor });
 }
 
 /** A fake `agent_cli` adapter yielding a caller-supplied terminal, so the quota
@@ -2145,6 +2148,27 @@ describe('#2 L14c / #799 — an agent_task refusal ARMS the window (real adapter
 
     const finished = loadEngineEvents(db, run.id).find((e) => e.type === 'run.finished');
     expect(finished).toMatchObject({ outcome: 'failure' });
+  });
+
+  it('WITH a retry policy: the same refusal arms the window AND schedules a retry', async () => {
+    // The other half of the fork. The pre-existing L7 test drives the FAKE adapter
+    // over a pre-seeded window, so nothing covered real-refusal → window + alarm
+    // together. Both must hold: the window is what stops the hot-loop for every
+    // other node on the connection, the alarm is what makes THIS node wait it out.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', QUOTA_CONN, null);
+    const pvId = seedVersion(db, [
+      agentTaskNode('n1', connId, { retry: 1, retryIntervalSeconds: 30 }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1), alarms: stubAlarms() }),
+      run,
+    );
+
+    expect(getConnectionQuotaResetEpoch(db, connId)).not.toBeNull();
+    expect(eventTypes(db, run.id)).toContain('node.retryScheduled');
   });
 
   it('a NON-matching non-zero exit still succeeds and arms NOTHING', async () => {

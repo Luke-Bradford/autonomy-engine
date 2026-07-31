@@ -981,8 +981,10 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
     const events = await drain(
       createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
     );
-    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'failed']);
-    expect(events[1]).toEqual({
+    // Metered too — this shape does NOT apply `llm_call`'s refusal exclusion (a
+    // multi-turn session burns quota before it learns it is out).
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'failed']);
+    expect(events[2]).toEqual({
       type: 'failed',
       kind: 'rate_limit',
       error:
@@ -1003,7 +1005,55 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
     const events = await drain(
       createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
     );
-    expect(events[1]).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+    expect(events[2]).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('REDACTS a secret straddling the truncation boundary (redact-then-truncate order)', async () => {
+    // The load-bearing ordering inside `cliFailureDetail`: redact the FULL text,
+    // THEN elide the middle. Truncating first would cut the secret in half and
+    // leave a surviving fragment in a durable, API-served `node.failed`. Sized so
+    // the secret sits exactly across the `MAX_CLI_DIAGNOSTIC_CHARS / 2` head
+    // boundary, which is the only place the two orderings differ.
+    const SECRET = 'sk-straddle-0123456789';
+    const PREFIX = 'usage limit reached ';
+    // Place the secret's MIDPOINT exactly on the head boundary (half of the 1000
+    // cap), so truncate-first would slice it in two and keep the leading half.
+    const head = 'A'.repeat(500 - PREFIX.length - Math.floor(SECRET.length / 2));
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: `${PREFIX}${head}${SECRET}${'B'.repeat(900)}` }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: { ...quotaTaskConfig, secretEnv: 'ANTHROPIC_API_KEY' },
+        }),
+        SECRET,
+      ),
+    );
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(SECRET);
+    // …and no ≥8-char fragment of it survived the cut either.
+    for (let i = 0; i + 8 <= SECRET.length; i += 1) {
+      expect(serialized).not.toContain(SECRET.slice(i, i + 8));
+    }
+    expect(serialized).toContain('***');
+  });
+
+  it('orders the diagnostic stderr-BEFORE-stdout', async () => {
+    // Documented as deliberate (stderr is the conventional error channel), so the
+    // real error leads even when a CLI also printed noise to stdout.
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: 'transcript tail' },
+        { stream: 'stderr', line: 'usage limit reached' },
+      ],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect((events[2] as { error: string }).error).toMatch(/usage limit reached[\s\S]*transcript tail/);
   });
 
   it('leaves a NON-matching non-zero exit as succeeded — the carve-out stays narrow', async () => {
@@ -1048,7 +1098,7 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
         null,
       ),
     );
-    expect(events[1]).toMatchObject({ kind: 'rate_limit' });
+    expect(events[2]).toMatchObject({ kind: 'rate_limit' });
     expect(JSON.stringify(events)).not.toContain('structured output block');
   });
 
@@ -1068,7 +1118,7 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
         'sk-agent-secret',
       ),
     );
-    expect(events[1]).toMatchObject({ kind: 'rate_limit' });
+    expect(events[2]).toMatchObject({ kind: 'rate_limit' });
     expect(JSON.stringify(events)).not.toContain('sk-agent-secret');
   });
 
@@ -1314,12 +1364,16 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
       expect(events.find((e) => e.type === 'metered')).toEqual(UNPRICED_CLI);
     });
 
-    it('leaves a quota-refused agent_task UNMETERED — the #799 asymmetry is closed', async () => {
-      // Was "METERS a quota-refused agent_task — the documented divergence from
-      // llm_call", pinning an asymmetry whose stated cause ("this shape discards
-      // stderr and maps every exit code to a COMPLETED run") #799 removed. Same
-      // connection, same refusal, and now the SAME metering outcome as the
-      // `llm_call` case pinned below: a refused call was never served.
+    it('METERS a quota-refused agent_task — a session burns quota before it learns it is out', async () => {
+      // The asymmetry with `llm_call` (pinned below as UNMETERED) SURVIVES #799,
+      // but on a corrected cause. The old rationale was plumbing — "this shape
+      // discards stderr and maps every exit code to a COMPLETED run" — and #799
+      // removed it: the refusal is classified now. The real reason is the shape:
+      // `llm_call` is single-shot and a refusal means nothing was served, whereas
+      // an `agent_task` drives a multi-turn session that typically hits the limit
+      // MID-session, after real spend. Since the adapter cannot tell that from an
+      // already-exhausted t=0 refusal, it errs toward marking: an over-mark costs
+      // one spurious `unpriced` response, an under-mark hides real spend.
       const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
         exitCode: 1,
       });
@@ -1334,11 +1388,11 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
           null,
         ),
       );
-      // The exact emitted SEQUENCE, so the exclusion and the retained telemetry
-      // fact are pinned together: telemetry survives (a subprocess did run and its
-      // shape is still observable), metering does not, and the terminal is the
-      // classified throttle rather than a success.
-      expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'failed']);
+      // The exact emitted SEQUENCE: telemetry, the spend mark, then the classified
+      // throttle. Metering and classification are independent decisions here and
+      // this pins both — the refusal is metered AND is not a success.
+      expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'failed']);
+      expect(events[1]).toEqual(UNPRICED_CLI);
       expect(events.find((e) => e.type === 'succeeded')).toBeUndefined();
     });
   });

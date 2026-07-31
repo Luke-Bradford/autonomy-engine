@@ -45,7 +45,7 @@ import { MASTER_KEY_ENV_VARS } from '../secrets/secrets.js';
  * BOTH shapes meter (#797), on success AND on the failure paths — a subprocess
  * that RAN burned the subscription's quota either way. The fact is `unpriced`
  * with no tokens; `cliSpendFact` below carries the full argument, and each call
- * site states the exclusions it can enforce.
+ * site states the exclusions it applies (they differ, deliberately — see #799).
  *
  * The `agent_task` activity supplies the `task`
  * (and an optional `cwd`); the Connection's non-secret `config` supplies the
@@ -131,9 +131,13 @@ const agentConnectionConfigSchema = z.object({
    * silently clamped down (a clamp would fire the retry while still exhausted).
    * The persisted per-connection window + admission gate (#609) HAS since shipped
    * (`executor.ts`, the L14c pre-flight), so a > 24h window is no longer blocked
-   * on a missing mechanism — only on this schema cap, which exists because the
-   * field doubles as the L7 `retryAfterSeconds` and that ceiling is
-   * `MAX_RETRY_INTERVAL_SECONDS` (24h).
+   * on a missing MECHANISM. It is blocked on TWO caps, and lifting this one alone
+   * would not do it: the window reaches the persister solely via
+   * `node.failed.retryAfterSeconds`, which the durable event schema caps at the
+   * same 24h (`MAX_RETRY_INTERVAL_SECONDS`, of which `MAX_RETRY_AFTER_SECONDS`
+   * here is an alias). Raising only this one mints an event that fails validation
+   * at append. A weekly quota needs a window carried independently of the L7
+   * retry hint.
    */
   quota: z
     .object({
@@ -184,9 +188,11 @@ const CLI_MODEL_FALLBACK = 'cli';
  *
  * Emitted for a subprocess that RAN, whether or not it produced a completion —
  * a tree-killed CLI burned the subscription's quota just the same, and that is
- * the only spend signal there is on this transport. Since #799 the two call sites
- * apply an IDENTICAL predicate — `spawnFailed` and a quota EXHAUSTION are both
- * excluded on both shapes; see either site for why each exclusion holds.
+ * the only spend signal there is on this transport. The two call sites do NOT
+ * apply an identical predicate — `llm_call` also excludes a quota refusal and
+ * `agent_task` does not, because single-shot and multi-turn-session refusals are
+ * opposite evidence about whether spend occurred (#799 restated this asymmetry on
+ * its real cause; see each site).
  *
  * The rule deliberately DIVERGES from the HTTP adapters' (#725 `spendFact`),
  * which leave a timeout unmarked because a timeout cannot distinguish a slow
@@ -219,13 +225,22 @@ function cliSpendFact(model: string): Extract<ActivityEvent, { type: 'metered' }
  * the cap, the head and tail (half each) are kept with a middle elision.
  *
  * Named for the DIAGNOSTIC, not for stderr (#799): it bounds the COMBINED
- * stderr+stdout text, and the old `MAX_STDERR_DETAIL_CHARS` spelling invited the
- * reading that only stderr is in play — the exact confusion that let the
- * `agent_task` quota gap sit unnoticed. */
+ * stderr+stdout text, so the old `MAX_STDERR_DETAIL_CHARS` spelling named the
+ * wrong half of what it measures. (Plain accuracy — it was never referenced from
+ * `runAgentTask`, so it played no part in the gap #799 fixed.) */
 const MAX_CLI_DIAGNOSTIC_CHARS = 1000;
 
 /** The validated `quota` block of an `agent_cli` connection config. */
 type AgentQuotaHint = NonNullable<AgentConnectionConfig['quota']>;
+
+/** The two invocation shapes this adapter serves. A closed union rather than a
+ * bare `string` so the label a failure is built with cannot drift from the one
+ * `classifyCliOutcome` was given. */
+type CliShapeLabel = 'llm_call' | 'agent_task';
+
+/** The terminal half of a `classifyCliOutcome` result: either a ready-made
+ * `failed` event, or the exit code of a subprocess that completed on its own. */
+type CliTerminal = CliClassification['terminal'];
 
 /**
  * #2 L14c — the combined stderr+stdout diagnostic for a COMPLETED non-zero exit,
@@ -237,29 +252,44 @@ type AgentQuotaHint = NonNullable<AgentConnectionConfig['quota']>;
  * `codex exec`) print their error to STDOUT, so a failure is never a bare
  * "exited N" with no context. Matched PRE-redaction, for detection accuracy.
  *
- * LAZY: an outcome that is not a completed non-zero exit yields `''` and no
- * verdict, so the success path never pays to join a whole completion it will not
- * read. That laziness is also the reason a quota pattern is never consulted on a
- * clean (exit 0) run.
+ * A COMPLETED NON-ZERO EXIT is the only outcome that carries a verdict, and that
+ * is a CORRECTNESS rule, not an optimization: a clean (exit 0) run whose
+ * transcript merely discusses rate limits is not a refusal, and neither is a CLI
+ * that printed its refusal and then hung until the wall-clock kill (that one is a
+ * timeout, and is deliberately still metered). Returning `''` early also happens
+ * to spare the success path a join it would never read, but do not re-derive the
+ * gate from that: the laziness is the by-product, the rule is the point.
+ *
+ * FALSE-POSITIVE SURFACE, stated where the matching lives: on `llm_call` the
+ * stdout half is a single completion, but on `agent_task` it is the ENTIRE agent
+ * transcript — tool output, file contents the agent printed, its own prose — up
+ * to the connection's `maxOutputBytes` (10 MB by default). So a non-zero exit
+ * whose transcript merely MENTIONS the pattern both fails the node and arms a
+ * connection-wide window that admission-gates every other run bound to that
+ * connection until it elapses. A self-referential agent (one reading logs that
+ * discuss quota) is a plausible trip. Bounded by the pattern being operator-
+ * authored and opt-in; narrowing the `agent_task` match surface is tracked
+ * separately. The same size note applies to the regex itself — it runs
+ * synchronously over that transcript, so a backtracking-prone pattern is an
+ * event-loop hazard.
  *
  * The pattern is boundary-validated compilable by `agentConnectionConfigSchema`
  * (re-parsed on every dispatch), so `new RegExp` here cannot throw.
  */
 function diagnoseCliExit(
-  config: AgentConnectionConfig,
-  exitedNonZero: boolean,
+  quota: AgentQuotaHint | undefined,
+  terminal: CliTerminal,
   stderr: readonly string[],
   stdout: readonly string[],
 ): { diagnostic: string; quotaHit: AgentQuotaHint | undefined } {
-  if (!exitedNonZero) return { diagnostic: '', quotaHit: undefined };
+  if ('failed' in terminal || terminal.exitCode === 0)
+    return { diagnostic: '', quotaHit: undefined };
   const diagnostic = [stderr.join('\n'), stdout.join('\n')]
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .join('\n');
   const quotaHit =
-    config.quota !== undefined && new RegExp(config.quota.exhaustionPattern).test(diagnostic)
-      ? config.quota
-      : undefined;
+    quota !== undefined && new RegExp(quota.exhaustionPattern).test(diagnostic) ? quota : undefined;
   return { diagnostic, quotaHit };
 }
 
@@ -287,8 +317,9 @@ function cliFailureDetail(diagnostic: string, secret: string | null): string {
 
 /**
  * #2 L14c — the `rate_limit` terminal for a subscription-quota refusal, built
- * identically for both invocation shapes (#799); `label` is the shape name, so
- * the two cannot drift on wording (mirroring `classifyCliOutcome`'s `label`).
+ * identically for both invocation shapes (#799), so the message FORMAT cannot
+ * drift between them; `label` names the shape (mirroring `classifyCliOutcome`'s
+ * `label`, and closed to the same union so the two cannot disagree on spelling).
  *
  * A quota exhaustion is a THROTTLE, not a permanent error: `rate_limit` maps to
  * an engine transient + `code:'rate_limit'` and carries the reset window as the
@@ -299,12 +330,12 @@ function cliFailureDetail(diagnostic: string, secret: string | null): string {
  * failure only schedules a retry when the node carries a `policy.retry` budget.
  * With no retry policy the node settles to a plain terminal failure (merely
  * tagged `code:'rate_limit'`). Persisting the connection's quota WINDOW does not
- * depend on that: the driver's writer folds the appended `node.failed` before
- * and independently of the retry decision, so an un-retried refusal still arms
- * the admission gate for every later dispatch on that connection.
+ * depend on that: the driver's writer runs on every fold, unconditioned by the
+ * reducer's retry decision, so an un-retried refusal still arms the admission
+ * gate for every later dispatch on that connection.
  */
 function quotaRefusedFailure(
-  label: string,
+  label: CliShapeLabel,
   exitCode: number,
   detail: string,
   quotaHit: AgentQuotaHint,
@@ -488,13 +519,16 @@ function classifyCliOutcome(
  *
  * #2 L14c / #799 — the ONE carve-out, opt-in per connection: a non-zero exit whose
  * combined stderr+stdout matches `quota.exhaustionPattern` is a `rate_limit`
- * failure carrying `resetWindowSeconds`, NOT a success. It is also excluded from
- * metering, and it ARMS the connection's quota window through the driver's
- * existing writer — which is the point: before #799 only `llm_call` could arm that
- * window, so a connection consumed solely by `agent_task` nodes never learned it
- * was spent and hot-looped refused spawns forever. Note the read side was never
- * the gap: the L14c admission gate keys on connection KIND, so `agent_task` nodes
- * were always THROTTLED by a window a sibling `llm_call` had armed.
+ * failure carrying `resetWindowSeconds`, NOT a success. That is what lets it ARM
+ * the connection's quota window through the driver's existing writer — the point
+ * of #799: before it, only `llm_call` could arm that window, so a connection
+ * consumed solely by `agent_task` nodes never learned it was spent and hot-looped
+ * refused spawns. Note the read side was never the gap: the L14c admission gate
+ * keys on connection KIND, so `agent_task` nodes were always THROTTLED by a window
+ * a sibling `llm_call` had armed.
+ *
+ * The refusal is STILL METERED, unlike `llm_call`'s — a multi-turn session usually
+ * burns real quota before it learns it is out (see the metering site).
  *
  * #2 L11b — OPT-IN STRUCTURED output: when the node declares an `outputSchema`, the
  * `task` gains an appended instruction directing the agent to emit its final result
@@ -546,13 +580,12 @@ async function* runAgentTask(
   const latencyMs = Date.now() - started;
   const classification = classifyCliOutcome(result, config.command, 'agent_task');
   const output = stdout.join('\n');
-  // #2 L14c / #799 — a COMPLETED subprocess that exited non-zero is the only
-  // outcome that can carry a quota verdict. Computed HERE, ahead of every yield,
-  // because the metering decision below needs it and the terminal branch further
-  // down does too — the same hoist `llm_call` makes.
+  // #2 L14c / #799 — the quota verdict, computed HERE (ahead of every yield)
+  // because the terminal branch further down keys off it — the same hoist
+  // `llm_call` makes. `diagnoseCliExit` decides for itself which outcomes can
+  // carry a verdict, so neither shape restates that rule.
   const { terminal } = classification;
-  const exitedNonZero = !('failed' in terminal) && terminal.exitCode !== 0;
-  const { diagnostic, quotaHit } = diagnoseCliExit(config, exitedNonZero, stderr, stdout);
+  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, terminal, stderr, stdout);
   // #2 L11a — emit the subprocess TELEMETRY fact BEFORE the terminal (mirroring
   // `metered`/`captured`), so the exit code + summary + latency + stdout SHAPE are
   // observable regardless of outcome — including the FAILURE paths, where the
@@ -575,20 +608,36 @@ async function* runAgentTask(
   // so it covers every outcome uniformly: a completed run, a structured-mode
   // block that fails validation after a clean exit, and an abnormal termination.
   //
-  // THE PREDICATE — two exclusions, IDENTICAL to `llm_call`'s since #799:
-  //  - `spawnFailed` — no subprocess ever started, so nothing was billed and
-  //    marking it would manufacture spend (the pre-spawn config failures return
-  //    earlier still and never reach here).
-  //  - a quota EXHAUSTION — the service refused the call, the one CLI outcome
-  //    that positively establishes no exchange was served.
-  // Before #799 this shape could enforce only the first, because it discarded
-  // stderr and mapped every exit code to a COMPLETED run; it now classifies the
-  // refusal (below), so the asymmetry that comment described is closed.
+  // THIS SHAPE'S PREDICATE — `spawnFailed` is the ONE exclusion: no subprocess
+  // ever started, so nothing was billed and marking it would manufacture spend
+  // (the pre-spawn config failures return earlier still and never reach here).
+  //
+  // It deliberately does NOT exclude a quota refusal, where `llm_call` does — and
+  // #799 corrected the REASON for that asymmetry rather than removing it. The old
+  // reason ("this shape discards stderr and never classifies a refusal") was pure
+  // plumbing and is gone: this shape now classifies the refusal, immediately
+  // below. The real reason is the SHAPE difference, and it survives:
+  //
+  //   `llm_call` is SINGLE-SHOT — one prompt in, one completion out. A refusal
+  //   means the service declined at t=0, which positively establishes no exchange
+  //   was served, so metering it would invent spend.
+  //
+  //   `agent_task` drives a whole multi-turn agent SESSION. It typically hits the
+  //   usage limit MID-SESSION, after real turns have been served — that is HOW it
+  //   learns it is exhausted. A refusal here establishes the opposite: quota was
+  //   burned, and burning it is what produced the refusal.
+  //
+  // The adapter cannot tell a mid-session exhaustion from an already-exhausted
+  // t=0 refusal (both are a regex hit on the diagnostic), so it must choose which
+  // way to err. `cliSpendFact`'s doctrine settles it: an over-mark costs exactly
+  // one spurious `unpriced` response and can never flip a run's cost to
+  // INCOMPLETE or produce a wrong dollar figure, whereas an under-mark silently
+  // hides real spend on the one transport that has no other spend signal. Mark.
   //
   // `resolveModel` (not `??`) so an empty-string connection `model` resolves to
   // the fallback exactly as it does on the `llm_call` path — one precedence rule,
   // one label, whichever shape ran. `agent_task` has no node-level model leg.
-  if (classification.summary !== 'spawnFailed' && quotaHit === undefined) {
+  if (classification.summary !== 'spawnFailed') {
     yield cliSpendFact(resolveModel({}, config, CLI_MODEL_FALLBACK) ?? CLI_MODEL_FALLBACK);
   }
   if ('failed' in terminal) {
@@ -608,9 +657,16 @@ async function* runAgentTask(
   // refused agent produced none. Left as `succeeded`, the CLI's refusal TEXT
   // flows into `${nodes.x.output}` for every downstream node and the pipeline
   // runs to completion on garbage — a silent-wrong data path. A classified,
-  // retryable failure is loud. Strictly OPT-IN: nothing changes unless the
-  // operator set `quota.exhaustionPattern` on this connection, and an operator
-  // who genuinely wants to branch on quota text simply leaves it unset.
+  // retryable failure is loud. It is also the ONLY way to get quota-aware retry
+  // here at all: `retryEligible` gates on the engine `transient` kind, which only
+  // a `failed` event can carry, so a node left `succeeded` could never schedule
+  // one and the hot-loop would survive.
+  //
+  // OPT-IN, but note the granularity: nothing changes unless the operator set
+  // `quota.exhaustionPattern`, and that toggle is per-CONNECTION, not per-shape.
+  // On a connection consumed by both shapes, unsetting it to keep `agent_task`'s
+  // exit-code-is-data behaviour ALSO disarms `llm_call`'s classification and the
+  // admission gate for that connection. There is no per-shape opt-out today.
   if (quotaHit !== undefined) {
     yield quotaRefusedFailure(
       'agent_task',
@@ -740,15 +796,11 @@ async function* runLlmCall(
   );
   const classification = classifyCliOutcome(result, config.command, 'llm_call');
   const { terminal } = classification;
-  // A COMPLETED subprocess that exited non-zero — the only outcome that can
-  // carry a diagnostic or a quota verdict. Hoisted to a name because BOTH the
-  // metering decision below and the failure branch further down key off it.
-  const exitedNonZero = !('failed' in terminal) && terminal.exitCode !== 0;
   // #2 L14c — the combined stderr+stdout diagnostic and the quota verdict read
   // off it, both LAZY. Computed HERE rather than inside the non-zero-exit branch
   // because the metering decision below needs the quota match. Shared with
   // `agent_task` since #799 (rationale: `diagnoseCliExit`).
-  const { diagnostic, quotaHit } = diagnoseCliExit(config, exitedNonZero, stderr, stdout);
+  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, terminal, stderr, stdout);
   // #797 — meter BEFORE any terminal, so an abnormal termination is accounted for
   // rather than silently free (rationale: `cliSpendFact`).
   //
