@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_OPENAI_BASE_URL,
+  MODELS_REJECTING_REASONING_EFFORT,
   MODELS_REJECTING_SAMPLING_PARAMS,
   isOpenAiFirstParty,
   openAiUsesMaxCompletionTokens,
@@ -8,7 +9,7 @@ import {
 } from '../openai-models.js';
 import { normalizeModelId } from '../llm-shared.js';
 
-const NONE = { hasTemperature: false, hasTopP: false };
+const NONE = { hasTemperature: false, hasTopP: false, hasReasoningEffort: false };
 
 describe('unsupportedOpenAiParams (#730)', () => {
   it('returns nothing when the author set neither sampling param', () => {
@@ -164,6 +165,79 @@ describe('openAiUsesMaxCompletionTokens (#739)', () => {
     // a fixed point is unreachable. It would fire if a dated snapshot
     // (`o3-2025-04-16`) were ever added to the set instead of its alias.
     for (const model of MODELS_REJECTING_SAMPLING_PARAMS) {
+      expect(normalizeModelId(model)).toBe(model);
+    }
+  });
+});
+
+describe('unsupportedOpenAiParams — reasoningEffort (#752)', () => {
+  const EFFORT = { hasTemperature: false, hasTopP: false, hasReasoningEffort: true };
+
+  it('refuses reasoningEffort on o1-mini, the one reasoning model that takes none', () => {
+    expect(unsupportedOpenAiParams('o1-mini', EFFORT)).toEqual([
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('is `unavailable`, NOT `removed` — the remedy points at a NEWER model', () => {
+    // The direction is the OPPOSITE of temperature's on this same model, and
+    // that is the whole reason the cause is typed. `o1-mini` predates the knob;
+    // `o3-mini`/`o4-mini` accept it. `removed` would render "select a model that
+    // still accepts reasoningEffort", pointing backwards at older models that
+    // are even less likely to have it.
+    const [param] = unsupportedOpenAiParams('o1-mini', EFFORT);
+    expect(param?.cause).toBe('unavailable');
+  });
+
+  it('permits reasoningEffort on every OTHER reasoning model', () => {
+    // The source restricts exactly one id. Refusing the rest would be the
+    // manufactured refusal the module's FAIL DIRECTION rule forbids.
+    for (const model of ['o1', 'o3', 'o3-mini', 'o4-mini', 'gpt-5', 'gpt-5.1']) {
+      expect(unsupportedOpenAiParams(model, EFFORT)).toEqual([]);
+    }
+  });
+
+  it('permits reasoningEffort on a NON-reasoning model (#752 problem 1 — a deliberate no-op)', () => {
+    // The ticket's first defect is `reasoning_effort` reaching models that are
+    // not reasoning models at all. The decision recorded in the module is to
+    // send it: the source names no non-reasoning model that REJECTS the key,
+    // and an absent fact must not become a local refusal.
+    expect(unsupportedOpenAiParams('gpt-4o', EFFORT)).toEqual([]);
+  });
+
+  it('says nothing when the author set no reasoningEffort', () => {
+    expect(unsupportedOpenAiParams('o1-mini', NONE)).toEqual([]);
+  });
+
+  it('classifies a DATED o1-mini snapshot like the alias it is a snapshot of (#751)', () => {
+    expect(unsupportedOpenAiParams('o1-mini-2024-09-12', EFFORT)).toEqual([
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('yields BOTH causes when o1-mini is asked for temperature AND reasoningEffort', () => {
+    // Unlike the anthropic sibling — where the equivalent case is unreachable
+    // and its test had to synthesise a model in both sets — `o1-mini` is
+    // genuinely in both sets here, so an author setting both fields really does
+    // get two remedies pointing in opposite directions. Pinned so the combined
+    // message is a decision rather than a surprise.
+    expect(
+      unsupportedOpenAiParams('o1-mini', {
+        hasTemperature: true,
+        hasTopP: false,
+        hasReasoningEffort: true,
+      }),
+    ).toEqual([
+      { name: 'temperature', cause: 'removed' },
+      { name: 'reasoningEffort', cause: 'unavailable' },
+    ]);
+  });
+
+  it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
+    // Same invariant as the sampling set's, pinned SEPARATELY because this set
+    // is maintained separately: lookups normalise first, so a member that is not
+    // a fixed point can never be reached.
+    for (const model of MODELS_REJECTING_REASONING_EFFORT) {
       expect(normalizeModelId(model)).toBe(model);
     }
   });

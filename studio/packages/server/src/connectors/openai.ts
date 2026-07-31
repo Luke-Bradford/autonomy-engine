@@ -174,6 +174,9 @@ export const openaiAdapter: ConnectorAdapter = {
         unsupportedOpenAiParams(model, {
           hasTemperature: sampling.temperature !== undefined,
           hasTopP: sampling.topP !== undefined,
+          // #752 — `reasoning_effort` was the one author-set key on this
+          // request surface with no per-model gate at all.
+          hasReasoningEffort: reasoningEffort !== undefined,
         }),
       );
       if (refusal !== null) {

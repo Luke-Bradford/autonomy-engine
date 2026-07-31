@@ -16,9 +16,22 @@ import type { UnsupportedParam } from './llm-shared.js';
  * with reasoning models: `temperature`, `top_p`, `presence_penalty`,
  * `frequency_penalty`, `logprobs`, `top_logprobs`, `logit_bias`, `max_tokens`".
  * Membership below is that page's two enumerated reasoning-model feature tables
- * (o-series and GPT-5 series). Corroborated by the 400 text operators actually
- * report: "Unsupported parameter: 'temperature' is not supported with this
- * model".
+ * (o-series and GPT-5 series), PLUS its prose — and the "plus" is not a
+ * formality. #752 found that `o1-mini` sits in NEITHER table, so the
+ * tables-only claim this sentence used to make did not actually cover one of
+ * the ids listed under it. Its membership rests on the page's `reasoning_effort`
+ * sentence ("for all reasoning models except `o1-mini`"), which names it as a
+ * reasoning model in the present tense.
+ *
+ * An ABSENT feature-table row therefore has two readings here, and this module
+ * takes a different one for `o1-mini` than for `o1-preview` (excluded below as
+ * "Retired") on purpose: prose that speaks of a model in the present tense is
+ * evidence it is still served, where silence in every table and sentence alike
+ * is evidence it is gone. The two are consistent, not contradictory — the
+ * distinction is whether ANY live text names the id.
+ *
+ * Corroborated by the 400 text operators actually report: "Unsupported
+ * parameter: 'temperature' is not supported with this model".
  *
  * SCOPE, and it is NOT the whole quoted list: this connector emits THREE of
  * those eight from author config — `temperature`, `top_p`, and `max_tokens`
@@ -136,6 +149,61 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
   'gpt-5.5',
 ]);
 
+/**
+ * #752 — OpenAI models that accept NO `reasoning_effort` at any value.
+ *
+ * SOURCE: the same Microsoft Learn page, whose sentence is a single explicit
+ * exception rather than a table: "`reasoning_effort` can be set to `low`,
+ * `medium`, or `high` for all reasoning models EXCEPT `o1-mini`". One id, named
+ * outright, so this set is one id long and the fail-direction rule keeps it
+ * that way — every model the source does not except stays permitted.
+ *
+ * A SEPARATE set from `MODELS_REJECTING_SAMPLING_PARAMS`, not a reuse of it,
+ * because the two facts point OPPOSITE ways. Sampling is rejected by the whole
+ * reasoning class; `reasoning_effort` is accepted by the whole reasoning class
+ * save one member. Reusing the sampling set would refuse the knob on all 23 ids
+ * — the precise inversion of the fact. (`openAiUsesMaxCompletionTokens` DOES
+ * reuse that set, for the reason given there: it is the same fact about the
+ * same class. This is not.)
+ *
+ * `o1-mini` is in BOTH sets, and that is the first genuinely reachable
+ * two-cause case in either provider module — an author setting `temperature`
+ * and `reasoningEffort` on `o1-mini` is told to pick an OLDER model for one and
+ * a NEWER one for the other. Both remedies are individually correct and the
+ * message builder groups them by cause; pinned by test so the combined output
+ * is a decision rather than a discovery.
+ *
+ * TWO THINGS #752 ASKED ABOUT ARE DELIBERATELY NOT HERE, so they are not
+ * silently re-opened:
+ *
+ *  - NON-REASONING models (the ticket's first defect — `reasoning_effort`
+ *    emitted to every model). DECISION: send it, i.e. a documented no-op. The
+ *    source names no non-reasoning model that REJECTS the key, and its
+ *    `gpt-5.1-chat` row — the non-reasoning member of a reasoning family —
+ *    carries reasoning-effort support outright. Under the fail direction an
+ *    absent fact must not become a local refusal, and the cost of being wrong
+ *    is the pre-existing provider 400. A model later found to reject it belongs
+ *    in the set above, which is why the set is keyed on the fact and not on
+ *    "is a reasoning model".
+ *  - PER-VALUE constraints (`gpt-5-pro` accepts only `high`, footnote 5).
+ *    DEFERRED, because the constraint is UNREACHABLE through this adapter and a
+ *    refusal for it would be dead code that misdiagnoses a live failure. The
+ *    same page marks `gpt-5-pro` Chat-Completions `-` (Responses-API only), and
+ *    this adapter posts only to `/chat/completions` — the identical argument
+ *    `openAiUsesMaxCompletionTokens` already makes for the `-pro` ids. Such a
+ *    call fails at the ENDPOINT, so an error blaming the author's effort VALUE
+ *    would point at the wrong thing. Every other value constraint the page
+ *    states is out of reach too: `minimal`/`xhigh`/`none` are not in studio's
+ *    enum or not emitted, and `max` is Responses-API-only (see
+ *    `openAiReasoningEffort`, which lowers it away regardless). Recording a
+ *    value dimension would also mean a third `UnsupportedParamCause` on the
+ *    PROVIDER-GENERIC type in `llm-shared.ts`, whose message builder groups
+ *    strictly by cause and renders one sentence per cause — a shape no
+ *    per-value message fits. Tracked separately; build it when a reachable
+ *    member exists.
+ */
+export const MODELS_REJECTING_REASONING_EFFORT: ReadonlySet<string> = new Set(['o1-mini']);
+
 /** The OpenAI base URL the adapter uses when the connection sets none. */
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -214,35 +282,57 @@ export interface OpenAiRequestedParams {
   hasTemperature: boolean;
   /** `sampling.topP` — set by the author. */
   hasTopP: boolean;
+  /** `reasoningEffort` — set by the author. */
+  hasReasoningEffort: boolean;
 }
 
 /**
- * The AUTHOR-FACING names of the sampling parameters `model` is known to reject,
- * in a stable order. Empty (the overwhelmingly common case) means "nothing known
- * to be unsupported".
+ * The AUTHOR-FACING names of the parameters `model` is known to reject, in a
+ * stable order. Empty (the overwhelmingly common case) means "nothing known to
+ * be unsupported".
  *
- * `removed`, NOT `unavailable`, and the distinction is the opposite of the
- * Anthropic module's: `unavailable` renders "not available on this model, which
- * predates it … select a NEWER model", which points backwards here. A reasoning
- * model is the newer thing; the knob exists on OpenAI's other models and is gone
- * on this class, so `removed`'s "select a model that still accepts temperature"
- * is the remedy that actually resolves it.
+ * BOTH causes occur here, pointing opposite ways, and #752 is what made that
+ * true — before it this function only ever said `removed`:
+ *
+ *  - `temperature`/`topP` are `removed`. The knob exists on OpenAI's other
+ *    models and is gone on the reasoning class, which is the NEWER thing, so
+ *    `removed`'s "select a model that still accepts temperature" is the remedy
+ *    that resolves it. `unavailable` ("predates it … select a NEWER model")
+ *    would point backwards.
+ *  - `reasoningEffort` is `unavailable`. `o1-mini` PREDATES the adaptive
+ *    surface that `o3-mini`/`o4-mini` have, so here it is "newer" that
+ *    resolves — the same direction the Anthropic module uses for the same
+ *    knob, and the opposite of the line above it.
+ *
+ * Getting either backwards sends the author hunting in the wrong direction,
+ * which is the whole reason `UnsupportedParamCause` is typed rather than prose.
  *
  * PRESENCE, not value — same reasoning as `unsupportedAnthropicParams`: the
- * authored intent is to steer sampling, which a model with no sampling knobs
- * cannot honour at any value.
+ * authored intent is to steer sampling (or reasoning depth), which a model
+ * lacking the knob cannot honour at any value. The one per-VALUE fact the
+ * source states is unreachable through this adapter; see
+ * `MODELS_REJECTING_REASONING_EFFORT`.
  */
 export function unsupportedOpenAiParams(
   model: string,
   requested: OpenAiRequestedParams,
 ): readonly UnsupportedParam[] {
-  // #751 — on the BASE id: a dated snapshot rejects sampling exactly as its
-  // alias does. Sibling ids (`o3-mini` vs `o3`) are NOT merged; see
+  const unsupported: UnsupportedParam[] = [];
+  // #751 — on the BASE id: a dated snapshot classifies exactly as its alias
+  // does. Sibling ids (`o3-mini` vs `o3`) are NOT merged; see
   // `normalizeModelId`. Reached only behind the caller's `isOpenAiFirstParty`
   // gate, so this never widens refusals onto an OpenAI-compatible gateway.
-  if (!MODELS_REJECTING_SAMPLING_PARAMS.has(normalizeModelId(model))) return [];
-  const unsupported: UnsupportedParam[] = [];
-  if (requested.hasTemperature) unsupported.push({ name: 'temperature', cause: 'removed' });
-  if (requested.hasTopP) unsupported.push({ name: 'topP', cause: 'removed' });
+  const id = normalizeModelId(model);
+  // Sampling knobs exist elsewhere and are gone on this class → `removed`.
+  if (MODELS_REJECTING_SAMPLING_PARAMS.has(id)) {
+    if (requested.hasTemperature) unsupported.push({ name: 'temperature', cause: 'removed' });
+    if (requested.hasTopP) unsupported.push({ name: 'topP', cause: 'removed' });
+  }
+  // #752 — a SEPARATE membership test, not an `else`: the two sets overlap on
+  // `o1-mini`, and the early return this replaced would have made the
+  // reasoning-effort fact reachable only for models that also reject sampling.
+  if (MODELS_REJECTING_REASONING_EFFORT.has(id) && requested.hasReasoningEffort) {
+    unsupported.push({ name: 'reasoningEffort', cause: 'unavailable' });
+  }
   return unsupported;
 }

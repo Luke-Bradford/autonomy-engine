@@ -679,6 +679,58 @@ describe('openaiAdapter unsupported-parameter preflight (#730)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  // #752 — the reasoning-effort half of the same preflight. `o1-mini` is the one
+  // reasoning model that accepts NO `reasoning_effort`, so the key was a
+  // guaranteed 400 that only the author's opt-in reached.
+  it('refuses reasoningEffort on o1-mini instead of sending a guaranteed 400', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'o1-mini', reasoningEffort: 'low' } }),
+        'sk',
+      ),
+    );
+    expect(events[0]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    const failure = events[0] as Extract<ActivityEvent, { type: 'failed' }>;
+    expect(failure.error).toContain('o1-mini');
+    expect(failure.error).toContain('reasoningEffort');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('still SENDS reasoningEffort to a gateway serving the same id — these are facts about OpenAI', async () => {
+    // The first-party gate the sibling facts already carry. An
+    // OpenAI-COMPATIBLE server reusing the name `o1-mini` is someone else's
+    // request surface, and refusing there is the manufactured refusal the
+    // module's fail-direction rule forbids.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'o1-mini', reasoningEffort: 'low' },
+          connectionConfig: { baseUrl: 'https://api.groq.com/openai/v1' },
+        }),
+        'sk',
+      ),
+    );
+    expect(events[0]).not.toMatchObject({ type: 'failed' });
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).reasoning_effort,
+    ).toBe('low');
+  });
+
+  it('does NOT refuse reasoningEffort on a reasoning model that accepts it', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    await drain(
+      openaiAdapter.runActivity(
+        ctx({ input: { prompt: 'p', model: 'o4-mini', reasoningEffort: 'high' } }),
+        'sk',
+      ),
+    );
+    expect(
+      JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string).reasoning_effort,
+    ).toBe('high');
+  });
+
   it('resolves the model from the CONNECTION default, which node config cannot see', async () => {
     // The case that cannot be caught by author-time Zod validation: the node
     // sets only `temperature`, and the rejecting model arrives from the
