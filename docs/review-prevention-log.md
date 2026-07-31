@@ -585,3 +585,63 @@ and it was false across a long block. Before writing a safety property into a PR
 body, name the test that pins it; if there is no such test, either write it or
 downgrade the sentence to what is actually true. Same family as #25 — the guard
 your comment argues for is the one nothing tests.
+
+## 28. A health/progress signal must measure the ACTOR IT GOVERNS — not "is anything happening"
+
+*Origin: #805 (PR #807, 2026-07-31), where ONE supervisor PR corrupted three
+independent signals at once, two of which were written by the same author who
+then relied on them.*
+
+`loop/drive.sh` decides "has the loop made progress?" from three signals. All
+three were implemented as "is something happening in this repo?" — a question
+that is *adjacent* to the real one and looks identical while the operator is
+idle. The operator works in the same repo, on the same `main`, so their activity
+read as the loop's:
+
+- **branch-ahead** matched `feat/loop*|fix/loop*` — prefixes under which the loop
+  had **never pushed a single branch**. All five ever pushed were the operator's.
+  Introduced by the author's own earlier stall fix (#775).
+- **open-PR count** counted every open PR in the repo, and — unlike the branch
+  check — had **no age bound**, so it masked a stall indefinitely.
+- **gate-wait** waited on whichever PR was open, whoever's it was.
+
+The live log carried all three in four consecutive lines, which is what made it
+findable at all:
+
+```
+open PR #803 present -- waiting for its gate to settle
+PR #803 gate settled (or waited 0x30s)
+'fix/loop-commit-before-long-wait' is ahead of main -- work in flight, not a stall
+=== FIRE 11 (main=ce88319 openPR=1) ===
+```
+
+Consequence: while the operator held one open PR, a genuinely stalled loop could
+not reach `MAX_STALL` and kept firing at real spend — the exact failure the
+detector exists to prevent.
+
+**Why it survived review three times:** every one of these is *correct* in the
+common case. A repo where only the loop works gives the same answer to both
+questions, so the test that would discriminate ("the OPERATOR does something —
+does the loop still count itself as stalled?") is one nobody writes, because it
+requires modelling a second actor. Same family as #25: the happy path passes
+either way.
+
+**Rule: for any signal that gates an autonomous actor's behaviour, name the actor
+in the predicate and test it against a DIFFERENT actor's activity.** Concretely:
+one shared predicate (`is_loop_ref`) rather than the same `case` pasted at three
+call sites — three copies is three chances to fix two — and at least one test per
+signal where the *other* actor is the one moving. Pick the fail-safe polarity
+deliberately and say which it is: here a misnamed loop branch under-counts
+progress and can trip a FALSE stall, which *stops* the loop, while the opposite
+error *spends*. Stopping is the cheap mistake.
+
+**Corollary, same PR: a file format is not a risk class.** `is_doc_only()`
+classified by extension, so `loop/prompt.md` — the loop's **work order**, whose
+edits change what an unattended agent does overnight — counted as documentation
+for both the merge gate and the review-bot skip. PR #803 changed it and got
+*"Doc-only diff — engineering review skipped to save tokens."* Ask what a file
+DOES, not what it is named: in a repo where control planes are written in
+Markdown, "is it a doc?" and "is it safe to skip review?" stopped being the same
+question. Fixed at the shared predicate (`merge_gate.doc_only_exclude_paths`,
+checked FIRST), never by forking it per-consumer — the divergence #192 exists to
+prevent.
