@@ -20,11 +20,14 @@ run_case() {
   # No operator signals. GH_OPEN_PR=1 puts an open PR in front of the driver so
   # the gate-wait path is reachable; `pr checks` then always reports pending, so
   # the driver waits its full GATE_WAIT_TRIES.
+  # #805: the driver now asks for `number headRefName` pairs and filters them
+  # ITSELF, so the stub reports the head branch too. GH_OPEN_PR_REF overrides it
+  # — an operator PR (a ref outside the loop's convention) must not register as
+  # the loop's work at any of the three sites that read this.
   cat >"$bin/gh" <<'EOS'
 #!/bin/bash
 case "$*" in
-  *"pr list"*length*)  [ -n "${GH_OPEN_PR:-}" ] && echo 1 || echo 0 ;;
-  *"pr list"*)         [ -n "${GH_OPEN_PR:-}" ] && echo 7 || echo "" ;;
+  *"pr list"*)         [ -n "${GH_OPEN_PR:-}" ] && echo "7 ${GH_OPEN_PR_REF:-fix/studio-open-pr}" || echo "" ;;
   *"pr checks"*)       echo 1 ;;
   *"issue list"*)      echo "0" ;;
   *) echo "" ;;
@@ -1054,6 +1057,42 @@ check "the reason is stated on the FIRST iteration as well" "0" \
 # A tip older than AHEAD_MAX_AGE is abandonment, not work in flight.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-abandoned BRANCH_AGE_H=48)"
 check "a 48h-old branch does NOT mask the stall -> stops after 3" "3" "$(fires_of "$r")"
+
+# --- 27b. #805 the progress signals must measure THE LOOP, not the repo ------
+# All three read "is something happening here?" when the question is "is the
+# LOOP making progress?" The operator works in the same repo on the same main,
+# so their branch and their PR were both counted as the loop's work.
+#
+# Measured 2026-07-31: ONE supervisor PR (#803, branch
+# `fix/loop-commit-before-long-wait`) corrupted all three simultaneously — the
+# branch reset the stall counter, `openPR=1` suppressed the stall condition
+# independently of it, and the driver sat waiting on a gate that was not its
+# own ("PR #803 gate settled"). Each is asserted separately below, because any
+# ONE of them surviving is enough to keep a stalled loop firing.
+#
+# The supervisor-branch case is the discriminating one for the branch signal:
+# the pre-#805 pattern matched `feat/loop*|fix/loop*` explicitly, and every
+# branch ever pushed under those prefixes was the operator's.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/loop-supervisor-work)"
+check "a SUPERVISOR branch does NOT mask the stall -> stops after 3" "3" "$(fires_of "$r")"
+check "...and it is never named as work in flight" "1" \
+  "$(grep -q "fix/loop-supervisor-work' is ahead" "$(logof "$r")" && echo 0 || echo 1)"
+
+# The open-PR signal, isolated: no branch ahead at all, only an operator PR.
+# It carries no age bound, so before #805 it masked a stall indefinitely.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 \
+      GH_OPEN_PR=1 GH_OPEN_PR_REF=fix/loop-supervisor-work)"
+check "a SUPERVISOR open PR does NOT mask the stall -> stops after 3" "3" "$(fires_of "$r")"
+check "...and the driver does not wait on that PR's gate" "1" \
+  "$(grep -q 'open PR #7 present' "$(logof "$r")" && echo 0 || echo 1)"
+
+# Both regression guards: the loop's OWN branch and PR must still register, or
+# the fix trades a spend bug for a false "queue is drained" stop.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 \
+      GH_OPEN_PR=1 GH_OPEN_PR_REF=fix/studio-812-real-work)"
+check "the LOOP's own open PR still suppresses the stall" "12" "$(fires_of "$r")"
+check "...and the driver still waits on ITS gate" "0" \
+  "$(grep -q 'open PR #7 present' "$(logof "$r")" && echo 0 || echo 1)"
 
 # --- 28. #774 classify a failed fire from its TERMINAL RESULT, not the log ---
 # The classifier grepped the ENTIRE fire log for limit markers. A fire log is a
