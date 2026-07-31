@@ -1792,8 +1792,11 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
   });
 
   it('matches envelope TYPE exactly — a type that merely CONTAINS a declared one is not admitted', async () => {
+    // `code` carries the declared token verbatim, so the line PASSES the cheap
+    // pre-filter and the exact `type` membership is what actually rejects it.
+    // Without that second gate this line classifies.
     const events = await runTask(
-      [out(JSON.stringify({ type: 'error_summary', message: PATTERN }))],
+      [out(JSON.stringify({ type: 'error_summary', code: 'error', message: PATTERN }))],
       jsonLines(['error']),
     );
     expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
@@ -1844,10 +1847,16 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
     expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
   });
 
-  it('refuses a NON-STRING type rather than reaching an `includes` on it', async () => {
+  it('requires the type to BE a declared string, not merely to stringify to one', async () => {
+    // The declared type is spelled `'5'` on purpose: it is the only shape under
+    // which the non-string guard is observable at all. `types.includes(type)`
+    // already rejects every other non-string, so a test using an ordinary type
+    // name would pass with the guard deleted — it would certify nothing.
+    // `code` carries `"5"` so the line clears the pre-filter and the guard is
+    // what decides — otherwise the unquoted `"type":5` never reaches it.
     const events = await runTask(
-      [out(JSON.stringify({ type: 5, code: 'error', message: PATTERN }))],
-      jsonLines(['error']),
+      [out(JSON.stringify({ type: 5, code: '5', message: PATTERN }))],
+      jsonLines(['5']),
     );
     expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
   });

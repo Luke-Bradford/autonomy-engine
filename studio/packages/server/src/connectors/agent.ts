@@ -259,7 +259,7 @@ const agentConnectionConfigSchema = z.object({
        * lives where it is honoured. A connection-level `outputFormat` would be a
        * broader promise than this delivers: `agent_task`'s success `outputs` and
        * the sentinel-fenced structured-output mode also read this stdout and are
-       * NOT taught the protocol here (#829).
+       * NOT taught the protocol here (#830).
        *
        * Applies to both shapes uniformly. A `json-lines` connection's `llm_call`
        * completion is raw JSONL rather than prose, so declaring it effectively
@@ -471,10 +471,12 @@ function isCandidateEnvelopeLine(trimmed: string, types: readonly string[]): boo
  * The matchable text of ONE candidate stdout line under a `json-lines` source
  * (#816), or `undefined` if it is not in fact a declared error envelope.
  *
- * The type guards are the fail direction, not ceremony: `JSON.parse('null')`
- * yields `null` whose `typeof` is `'object'`, arrays parse to objects, and
- * `{"type": 5}` must not reach an `includes` on a non-string. Each of those
- * admits a line the contract says is not an envelope. */
+ * On the type guards, honestly: the object/null/array trio is this function's own
+ * contract, NOT a live path — `isCandidateEnvelopeLine`'s `{` prefix already
+ * makes `null` and arrays unreachable from the only caller. The load-bearing one
+ * is `typeof type !== 'string'`: it keeps membership an identity test, so an
+ * envelope whose `type` merely STRINGIFIES to a declared name (`5` against `'5'`)
+ * is not admitted. */
 function errorEnvelopeText(trimmed: string, types: readonly string[]): string | undefined {
   let parsed: unknown;
   try {
