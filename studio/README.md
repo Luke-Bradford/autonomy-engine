@@ -52,11 +52,15 @@ macOS Keychain **on request only** — a lazy read, so an install that never cal
 the route never touches the credential store — and queries the provider's usage
 endpoint, caching the result for 60s. The token is never logged, never placed on
 a command line, and never appears in the response; the body carries only two
-utilization fractions and two reset timestamps. The route is **unauthenticated**
+utilization fractions and two reset timestamps, plus — when there is no reading —
+an `unavailable.claude` field naming WHY. That field is a fixed enum
+(`rate_limited`, `no_credential`, …) carrying no host detail, no path and no
+provider text; it is advisory, and is present only alongside a `null` reading.
+The route is **unauthenticated**
 like everything else here, so on an exposed instance that figure is readable by
 anyone who can reach the port. Set `CLAUDE_QUOTA_ENABLED=0` to switch it off
-entirely, after which it always reports `null` and the credential store is never
-touched. Note that only the exact string `0` disables it — the flag fails
+entirely, after which it always reports `null` (with `unavailable.claude:
+"disabled"`) and the credential store is never touched. Note that only the exact string `0` disables it — the flag fails
 towards _armed_, since a typo that silently disarmed the spend guard would be
 the worse outcome.
 

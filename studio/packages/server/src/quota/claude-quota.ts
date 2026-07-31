@@ -367,13 +367,17 @@ export const UNREADABLE_ACCOUNT_QUOTA_READER: ClaudeAccountQuotaReader = {
  * confusion this exists to remove. Returning the pair makes
  * `value !== null ⟺ unavailable === null` structural rather than a convention
  * every caller has to honour.
+ *
+ * A DISCRIMINATED UNION, not two independent nullable fields. Two fields would
+ * let `{ value: aReading, unavailable: 'rate_limited' }` type-check — a number
+ * carrying an explanation for its own absence — and equally let a failure be
+ * reported with the explanation dropped. The union makes the iff a thing the
+ * compiler checks at every construction site rather than a comment every future
+ * author has to notice.
  */
-export interface AccountQuotaReading {
-  /** The reading, or `null` when it could not be obtained. */
-  value: ClaudeAccountQuota | null;
-  /** Why there is no reading; `null` whenever there IS one. Advisory only. */
-  unavailable: AccountQuotaUnavailableReason | null;
-}
+export type AccountQuotaReading =
+  | { value: ClaudeAccountQuota; unavailable: null }
+  | { value: null; unavailable: AccountQuotaUnavailableReason };
 
 export interface ClaudeAccountQuotaReader {
   /** The current reading plus its unavailability cause. Never throws. */
@@ -381,16 +385,14 @@ export interface ClaudeAccountQuotaReader {
 }
 
 /**
- * One sample's result.
+ * One sample's result — the same shape a caller gets, because it IS what the
+ * caller gets: a sample is stamped into the cache and returned unchanged.
  *
- * Rate-limiting is not carried as a separate flag: it is the one failure that
- * must widen the throttle window rather than only stamp the cache, and
- * `unavailable === 'rate_limited'` already says so exactly. A boolean beside the
- * reason would be a second encoding of one fact, free to disagree with it.
- *
- * Module-scoped rather than local to the reader for consistency with
- * `QuotaReaderLogEvent`. Note this is types-only either way — an `interface`
- * erases at compile time, so nesting it cost nothing per construction.
+ * Rate-limiting is no longer carried as a separate flag alongside it: it is the
+ * one failure that must widen the throttle window rather than only stamp the
+ * cache, and `unavailable === 'rate_limited'` already says so exactly. A boolean
+ * beside the reason would be a second encoding of one fact, free to disagree
+ * with it.
  */
 type SampleOutcome = AccountQuotaReading;
 
@@ -456,6 +458,11 @@ export function createClaudeAccountQuotaReader(
       if (raw === RATE_LIMITED) return { value: null, unavailable: 'rate_limited' };
       // `fetchUsage` collapses every non-429 failure to null, so this is
       // "the call did not come back", distinct from the shape check below.
+      // ONE ambiguity, accepted: a 200 whose body is the literal JSON `null`
+      // parses to `null` too and is reported here as a transport failure rather
+      // than as an unusable payload. Distinguishing it would mean a second
+      // sentinel through `fetchUsage` for a body no real provider sends, and
+      // both labels lead an operator to the same place — the provider.
       if (raw === null) return { value: null, unavailable: 'provider_error' };
       const value = buildQuota(raw);
       // The provider IS serving us and we cannot use what it said: a contract

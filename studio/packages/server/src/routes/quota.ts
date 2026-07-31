@@ -71,13 +71,22 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
     // (#825). The contract is "present ⟺ no reading", and a key that is always
     // there with a nullable value invites a consumer to branch on the reason
     // instead of on the reading — which is the one way an advisory field could
-    // end up gating a fire. The `&&` spread is what makes that structural: the
-    // reason cannot be emitted without a `null` beside it, because it comes off
-    // the same object.
+    // end up gating a fire.
+    //
+    // Keyed on `reading.value === null`, i.e. on the READING, which is what the
+    // contract is stated in terms of. Keying it on the reason instead would make
+    // the wire shape agree with the contract only for as long as the reader
+    // honours the pairing — and `claudeAccountQuotaReader` is an injectable
+    // seam, so that is an assumption about code this route does not own. The
+    // `?? 'reader_error'` is unreachable through the union but is what stops an
+    // ill-behaved reader turning "no reading" into an unattributed one; the
+    // schema's `superRefine` pins the same iff from the other side.
     return {
       generated_at: Math.floor(Date.now() / 1000),
       account: { claude: reading.value },
-      ...(reading.unavailable !== null ? { unavailable: { claude: reading.unavailable } } : {}),
+      ...(reading.value === null
+        ? { unavailable: { claude: reading.unavailable ?? 'reader_error' } }
+        : {}),
     } satisfies AccountQuotaState;
   });
 };

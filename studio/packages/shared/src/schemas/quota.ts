@@ -158,18 +158,26 @@ export type AccountQuotaUnavailableReason = z.infer<typeof AccountQuotaUnavailab
 /**
  * The `GET /api/quota` response body.
  *
- * `account.claude` is `null` whenever the reading is UNREADABLE — no token, a
- * non-darwin host, a provider error, a malformed payload, or the surface
- * switched off. `generated_at` is epoch SECONDS and always present: it stamps
- * the RESPONSE, not the reading, so it can never be mistaken for freshness
- * evidence about a `null`.
+ * `account.claude` is `null` whenever the reading is UNREADABLE. `generated_at`
+ * is epoch SECONDS and always present: it stamps the RESPONSE, not the reading,
+ * so it can never be mistaken for freshness evidence about a `null`.
  *
- * `unavailable.claude` says WHICH of those it was, and is present IF AND ONLY IF
- * `account.claude` is `null` (#825). It is a SIBLING of `account` rather than a
- * union member inside it, so that the consumer's hard-coded parse
+ * `unavailable.claude` says which failure it was, to the resolution the reader
+ * can actually distinguish (`ACCOUNT_QUOTA_UNAVAILABLE_REASONS` — note it does
+ * NOT separate a non-darwin host from a missing token), and is present IF AND
+ * ONLY IF `account.claude` is `null` (#825). It is a SIBLING of `account` rather
+ * than a union member inside it, so that the consumer's hard-coded parse
  * (`d['account']['claude']['seven_day']['utilization']`) is untouched — an
  * advisory field must not be reachable by the path that yields a number, or a
  * parser bug could promote "why there is no reading" into a reading.
+ *
+ * The iff is ENFORCED here, not merely asserted in prose. `.optional()` alone
+ * admits both incoherent shapes: a reading carrying an explanation for its own
+ * absence, and a `null` with the explanation dropped — the latter being a silent
+ * reversion to the unattributed UNREADABLE this field exists to remove. Neither
+ * is reachable from the shipped reader, but the reader is an injectable seam
+ * (`claudeAccountQuotaReader`), and a contract a schema does not check is one a
+ * future implementation is free to break.
  */
 export const AccountQuotaStateSchema = z
   .object({
@@ -186,6 +194,22 @@ export const AccountQuotaStateSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((state, ctx) => {
+    if (state.account.claude === null && state.unavailable === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailable'],
+        message: 'an UNREADABLE reading must say why (#825)',
+      });
+    }
+    if (state.account.claude !== null && state.unavailable !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailable'],
+        message: 'a reading cannot also carry a reason for its absence (#825)',
+      });
+    }
+  });
 
 export type AccountQuotaState = z.infer<typeof AccountQuotaStateSchema>;

@@ -88,13 +88,31 @@ backs off geometrically on a 429 instead.
   dashboard was perfectly capable of answering, and studio returned a real figure. This answers the
   question the gate is actually asking — *can source 3 serve a reading at fire time?* — without
   needing an outage first. It is the WEAKER of the two: it says studio COULD have answered, not that
-  the fallthrough reached it. `quota shadow: studio UNREADABLE` is evidence in the other direction
-  and is equally real; a run of those means C3 is NOT ready.
+  the fallthrough reached it. `quota shadow: studio UNREADABLE (<cause>)` is evidence in the other
+  direction — but **only for some causes**, which is why the cause is on the line (#825).
+
+**READ AN UNREADABLE BY ITS CAUSE, NOT BY ITS COUNT.** A bare tally of UNREADABLE lines is not a
+finding about studio, and treating it as one would get C3 exactly backwards: most of the contention
+producing them is the OLD DASHBOARD's sampler holding the shared account bucket, and that
+contention is removed BY C3. Measured 2026-07-31: studio sat rate-limited for ~7.8h straight, and
+the single probe taken in that window logged an UNREADABLE that said nothing about studio at all.
+Bucket them:
+
+- `(rate_limited)` — the shared account bucket was empty. **Not evidence against studio.** Expect
+  these to be common while the dashboard still samples, and to become rare once it stops.
+- `(unreachable)` — nothing answered. A LIFECYCLE fault (`com.autonomy.studio-server` down, wrong
+  port), not a reader fault. Fix it — `loop/install_studio_server.sh` — do not count it.
+- `(no_credential)` · `(provider_error)` · `(unrecognized_payload)` · `(reader_error)` ·
+  `(disabled)` — **these ARE evidence against studio**, and a run of any of them means C3 is NOT
+  ready. They say the reader could not do its job on a call the provider was willing to serve.
+- A bare `UNREADABLE` with no cause — an old studio, or something that is not studio, on the port.
+  Investigate rather than count.
 
 So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
-reading** (a `quota source: studio` line is better still if one ever occurs). Count them with
-`grep 'quota shadow: studio' loop/logs/driver.log` — and remember only `logs/driver.log` counts;
-agent transcripts are full of false hits.
+reading**, with **no run of reader-fault causes** against them (a `quota source: studio` line is
+better still if one ever occurs). Count both sides with
+`grep 'quota shadow: studio' loop/logs/driver.log | sort | uniq -c` — and remember only
+`logs/driver.log` counts; agent transcripts are full of false hits.
 Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
 `loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
 polls of one shared, rate-limited budget, sharing one Keychain credential and one macOS-only

@@ -355,30 +355,48 @@ except Exception:
 }
 
 # --- quota_parse_reason: stdin=a quota JSON body; echoes studio's `unavailable`
-# reason (#825), or "" when there is none or it is not a shape we recognise.
+# reason (#825), or "" when there is none or it is not one this loop knows.
 #
 # DIAGNOSTIC ONLY. This value reaches a LOG LINE and nothing else -- never the
-# guard's arithmetic, never `quota_pct`'s stdout. Sanitised HERE, in python,
-# rather than after it crosses into the shell: the enum is `[a-z_]` by contract,
-# so anything else is either a server that has drifted or a body that is not
-# studio's at all (a wrong-port service 404 answering in some other JSON), and
-# neither should reach a `log` line that an operator reads and a human quotes.
-# Bounded length for the same reason -- an unbounded string in a log line is a
-# way to make the rest of the line unreadable.
+# guard's arithmetic, never `quota_pct`'s stdout.
+#
+# MEMBERSHIP, not shape. The reason is a CLOSED enum
+# (`ACCOUNT_QUOTA_UNAVAILABLE_REASONS` in studio's shared schema), so accepting
+# any lowercase token would let a non-studio service on the port -- or a studio
+# that has drifted -- write an invented cause into the very log the C3 decision
+# is read from, indistinguishable from a real one. The list is duplicated here
+# because there is no way to import a TypeScript const into a bash driver; the
+# cost of that copy is a reason going unrecognised (degrading to the bare line,
+# the safe direction), never a wrong one being believed.
+#
+# Checked HERE, in python, rather than after it crosses into the shell: an
+# unvalidated string that reaches a `log` line an operator reads is a
+# log-injection surface, and the shell is a worse place to discover that.
 quota_parse_reason() {
   python3 -c "
-import sys, json, re
+import sys, json
+KNOWN = ('disabled', 'no_credential', 'rate_limited', 'provider_error',
+         'unrecognized_payload', 'reader_error')
 try:
     r = json.load(sys.stdin)['unavailable']['claude']
-    print(r if isinstance(r, str) and re.fullmatch(r'[a-z_]{1,32}', r) else '')
+    print(r if r in KNOWN else '')
 except Exception:
     print('')
 " 2>/dev/null
 }
 
+# --- quota_body_pct: stdin=a quota JSON body; echoes the percent the GUARD would
+# accept, or "". Parse + totality guard as one step, so the decision path and the
+# #825 shadow probe cannot drift apart -- the same reason this file keeps ONE
+# parser for both HTTP sources.
+quota_body_pct() {
+  quota_sane "$(quota_parse_pct)"
+}
+
 quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
-  qr_out="$(quota_fetch_url "$1" | quota_parse_pct)"
-  # TOTALITY GUARD, applied per-read at the boundary the value crosses.
+  # TOTALITY GUARD, applied per-read at the boundary the value crosses -- and
+  # since #825 it lives in `quota_body_pct`, shared with the shadow probe, so
+  # the probe cannot log a percent the guard would have refused.
   #
   # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
   # with an operand `test` cannot parse returns 2 -- which is NEITHER branch, so
@@ -399,7 +417,7 @@ quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   # so no fallthrough) and only then blank it -- fail-safe in direction, but it
   # skips a working fallback. Validating where the value enters is what makes
   # "validate at boundaries" actually true here.
-  quota_sane "$qr_out"
+  quota_fetch_url "$1" | quota_body_pct
 }
 
 quota_pct() {
@@ -927,7 +945,8 @@ quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
 #
 # WHAT IT MAY NEVER DO is influence a decision, and that is structural rather than
 # careful:
-#   * it calls `quota_read_url` DIRECTLY, not `quota_pct`. `quota_cache_write` and
+#   * it parses a body it fetched itself (`quota_fetch_url` + `quota_body_pct`),
+#     never `quota_pct`. `quota_cache_write` and
 #     `quota_poll_memo_write` live only in `quota_pct`'s body, so the shadow cannot
 #     poison the refuse-only 24h cache or the source-2 throttle -- there is no code
 #     path from here to either. A shadow-written cache entry would be especially
@@ -1016,9 +1035,16 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
   # `quota_fetch_url`: a second poll is a second sample, and a reason from a
   # different sample than the reading it explains is worse than no reason.
   qsp_body="$(quota_fetch_url "$STUDIO_QUOTA_URL")"
-  # Through `quota_sane` exactly as the DECISION path is, so the probe can never
-  # log a percent the guard would have refused to use.
-  qsp_pct="$(quota_sane "$(printf '%s' "$qsp_body" | quota_parse_pct)")"
+  qsp_rc=$?  # curl's own status: 0 even for a 404, non-zero only if the REQUEST failed
+  # Through `quota_body_pct` -- the SAME parse+totality guard the decision path
+  # uses -- so the probe can never log a percent the guard would have refused.
+  # (One asymmetry, small and stated rather than hidden: the body crosses a shell
+  # variable here, and bash 3.2 command substitution silently drops NUL bytes, so
+  # a body that is only unparseable because of an embedded NUL would read as a
+  # percent in the probe and as UNREADABLE in the guard. The probe writes no
+  # cache, no memo and nothing to stdout, so it cannot move that difference
+  # anywhere that decides a fire.)
+  qsp_pct="$(printf '%s' "$qsp_body" | quota_body_pct)"
   if [ -n "$qsp_pct" ]; then
     log "quota shadow: studio ${qsp_pct}% (diagnostic only -- the guard used $1; #765 C3 evidence)"
   else
@@ -1034,6 +1060,13 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
     # is OPTIONAL by design -- an older studio, or any non-studio service on the
     # port, simply yields no reason and the line degrades to what it always was.
     qsp_reason="$(printf '%s' "$qsp_body" | quota_parse_reason)"
+    # `unreachable` is derived LOCALLY, from curl's exit status, and it is the
+    # bucket C3 most needs separated: "no studio server answered" says nothing
+    # about studio's reader, and #765 Defect 2 exists precisely because the probe
+    # used to be connection-refused at fire time. Only when the server gave us no
+    # usable reason of its own -- a served body always wins, since the server
+    # knows more than curl's status does.
+    [ -z "$qsp_reason" ] && [ "$qsp_rc" -ne 0 ] && qsp_reason="unreachable"
     [ -n "$qsp_reason" ] && qsp_reason=" ($qsp_reason)"
     log "quota shadow: studio UNREADABLE${qsp_reason} (diagnostic only -- the guard used $1; #765 C3 evidence)"
   fi
