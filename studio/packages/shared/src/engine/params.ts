@@ -2804,14 +2804,19 @@ export type BackEdgeDefect = 'ancestry' | 'no-progress' | 'parallel-body';
  * savable from the moment it exists.
  *
  * A DELTA, judged against `[...doc.edges, candidate]` rather than against
- * `doc.edges`. That is load-bearing in both halves and for opposite reasons.
- * `forwardReach` reads the raw edge list, but the reset body reads
- * `effectiveEdges`, which SYNTHESIZES a success-chain over node order when a
- * doc declares NO edges — so on an edge-less doc a predicate reading the
- * current edges would answer about an implicit chain that stops existing the
- * instant the operator accepts the offer. The candidate carries `back: true`,
- * so it adds nothing to either forward graph; including it is what removes the
- * synthesized one.
+ * `doc.edges` — but that difference is currently UNOBSERVABLE, and the comment
+ * says so rather than claiming a guard it does not provide (both mutants
+ * survive: `back-edge-delta.test.ts` cannot tell `withProbe` from `doc`). The
+ * hazard it is written against is real — the reset body reads `effectiveEdges`,
+ * which SYNTHESIZES a success-chain over node order when a doc declares NO
+ * edges, so an implicit chain can flatter a candidate that destroys it — but
+ * two facts close that path already: the probe carries `back: true`, which
+ * `forwardReach` skips, and the ancestry arm runs FIRST and needs a real
+ * forward edge, so an edge-less doc is refused before the reset body is ever
+ * computed. What actually catches the edge-less case is that `forwardReach`
+ * reads `doc.edges` RAW and never synthesizes.
+ * The probe is kept because it states honestly what is being judged, and
+ * because the two facts above are the kind that quietly stop holding.
  *
  * PUBLISHED API: `engine/index.ts` re-exports this module with `export *`.
  */

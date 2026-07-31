@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backEdgeDefect,
   closesForwardCycle,
   containerMembership,
   crossesContainerBoundary,
@@ -264,11 +265,28 @@ describe('connectRejection — container boundaries', () => {
    * continue`). The exemption is the CALLER's, because the shared predicate is
    * condition-only, so it has to be pinned at this level too.
    */
-  it('exempts a back-edge', () => {
+  it('exempts a back-edge to the ENCLOSING container', () => {
+    const pre = precomputeConnect(CONTAINED);
+    const candidate = { from: 'inside', to: 'C', condition: { on: 'success' } as const };
+    expect(connectRejection(pre, candidate)?.reason).toBe('container-boundary');
+    expect(connectRejection(pre, { ...candidate, back: true })).toBeNull();
+  });
+
+  /**
+   * The exemption is from the BOUNDARY rule, not a blanket pass (U6e).
+   *
+   * This case is why the assertion above had to change its target: it used to
+   * cross to a sibling-level node (`inside` → `outside`) and expect `null`,
+   * which pinned the INCOMPLETENESS — `back: true` turned two rules off and
+   * nothing back on, so the canvas would have been free to author an edge the
+   * save gate refuses for ancestry. The docblock above always described the
+   * enclosing-container idiom; the fixture just never matched it.
+   */
+  it('does not let back-ness excuse a crossing that is no loop at all', () => {
     const pre = precomputeConnect(CONTAINED);
     const candidate = { from: 'inside', to: 'outside', condition: { on: 'success' } as const };
     expect(connectRejection(pre, candidate)?.reason).toBe('container-boundary');
-    expect(connectRejection(pre, { ...candidate, back: true })).toBeNull();
+    expect(connectRejection(pre, { ...candidate, back: true })?.reason).toBe('back-ancestry');
   });
 
   /**
@@ -408,6 +426,133 @@ describe('connectRejection — container boundaries', () => {
       const shared = crossesContainerBoundary(owner, from, to);
       const local = reject(CONTAINED, from, to)?.reason === 'container-boundary';
       expect(local).toBe(shared);
+    }
+  });
+});
+
+/**
+ * U6e — a `back: true` CANDIDATE.
+ *
+ * Until this ticket the flag only ever EXEMPTED a candidate: it turned off the
+ * container-boundary and forward-DAG rules and then accepted whatever was left,
+ * with no back-edge rule of its own. That was harmless while nothing could
+ * author one; it stops being harmless the moment the canvas offers to.
+ *
+ * The only caller is the offer's enabled-ness check in `FlowCanvas` — a DRAG
+ * always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these reasons
+ * look unreachable from a gesture and are not. Deleting them as dead would put
+ * back the ability to author an unsavable version.
+ */
+describe('connectRejection — back-edge candidates (U6e)', () => {
+  /** The rejection for a candidate the operator has asked to make a back-edge. */
+  function rejectBack(g: ConnectGraph, from: string, to: string) {
+    return connectRejection(precomputeConnect(g), {
+      from,
+      to,
+      condition: { on: 'success' },
+      back: true,
+    });
+  }
+
+  it('accepts the retry loop the forward rule refuses', () => {
+    expect(reject(CHAIN, 'c', 'a')?.reason).toBe('forward-cycle');
+    expect(rejectBack(CHAIN, 'c', 'a')).toBeNull();
+  });
+
+  it('accepts a child back-edging to its own enclosing container', () => {
+    const g = graph(
+      [node('w'), node('after')],
+      [edge('L', 'after')],
+      [{ id: 'L', kind: 'loop', exitWhen: '${true}', children: ['w'] }],
+    );
+    // The forward candidate is refused for crossing the boundary; the back one
+    // is the loop idiom, and is the ONLY way to author it.
+    expect(reject(g, 'w', 'L')?.reason).toBe('container-boundary');
+    expect(rejectBack(g, 'w', 'L')).toBeNull();
+  });
+
+  it('refuses a target that is not an ancestor, naming both ends', () => {
+    const g = graph([node('a'), node('b'), node('c')], [edge('a', 'b')]);
+    const r = rejectBack(g, 'b', 'c');
+    expect(r?.reason).toBe('back-ancestry');
+    expect(r?.message).toContain('c');
+  });
+
+  /**
+   * Cycle-closure implies ancestry but NOT progress: the reset body is computed
+   * over a NODE-only adjacency, so a cycle whose path runs through a container
+   * endpoint leaves the source out of its own reset body. Without this arm the
+   * offer would author a doc the save gate refuses.
+   */
+  it('refuses a container-mediated cycle whose bounce would reset nothing', () => {
+    const g = graph(
+      [node('a'), node('b'), node('x')],
+      [edge('a', 'C'), edge('C', 'b')],
+      [{ id: 'C', kind: 'stage', children: ['x'] }],
+    );
+    expect(reject(g, 'b', 'a')?.reason).toBe('forward-cycle');
+    expect(rejectBack(g, 'b', 'a')?.reason).toBe('back-no-progress');
+  });
+
+  it('refuses a back-edge touching a PARALLEL foreach body', () => {
+    const g = graph(
+      [node('a'), node('item')],
+      [edge('a', 'F')],
+      [
+        {
+          id: 'F',
+          kind: 'foreach',
+          items: '${params.xs}',
+          batchCount: 2,
+          children: ['item'],
+        } as Container,
+      ],
+    );
+    expect(rejectBack(g, 'item', 'F')?.reason).toBe('back-parallel-body');
+  });
+
+  it('still refuses a self-loop, which back-ness cannot excuse', () => {
+    // The ancestry rule would refuse this too, but the self-loop reason is the
+    // one that can suggest a loop container, so it must stay the narrower answer.
+    expect(rejectBack(CHAIN, 'a', 'a')?.reason).toBe('self-loop');
+  });
+
+  /**
+   * A back-edge is NOT a duplicate of its forward twin — `authoringEdgeKey`
+   * keys back-ness, deliberately, because the two are different edges (one is
+   * in the forward graph, one is not) and `a → b` plus `b →back a` is the
+   * ordinary retry loop. The duplicate rule still applies BETWEEN back-edges.
+   */
+  it('does not read a back-edge as a duplicate of its forward twin, but does of another back-edge', () => {
+    expect(rejectBack(CHAIN, 'c', 'a')).toBeNull();
+    const withBack = graph(
+      CHAIN.nodes,
+      [...CHAIN.edges, edge('c', 'a', 'success', { back: true, maxBounces: 3 })],
+      [],
+    );
+    expect(rejectBack(withBack, 'c', 'a')?.reason).toBe('duplicate');
+  });
+
+  /**
+   * Anti-drift, the shape the cycle and boundary rules already carry: this
+   * module must never grow a second opinion about what a legal back-edge is.
+   */
+  it('its back-edge verdict IS the shared predicate', () => {
+    const g = graph(
+      [node('a'), node('b'), node('x')],
+      [edge('a', 'C'), edge('C', 'b')],
+      [{ id: 'C', kind: 'stage', children: ['x'] }],
+    );
+    const pairs: [string, string][] = [
+      ['b', 'a'],
+      ['b', 'x'],
+      ['x', 'C'],
+      ['a', 'b'],
+    ];
+    for (const [from, to] of pairs) {
+      const shared = backEdgeDefect(g, g.containers, from, to);
+      const local = rejectBack(g, from, to);
+      expect(local === null, `${from}->${to} shared=${String(shared)}`).toBe(shared === null);
     }
   });
 });

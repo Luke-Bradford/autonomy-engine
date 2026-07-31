@@ -1,4 +1,5 @@
 import {
+  backEdgeDefect,
   closesForwardCycle,
   containerMembership,
   crossesContainerBoundary,
@@ -27,7 +28,16 @@ import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition
 
 /** Why a candidate connection was refused. */
 export type ConnectRejectionReason =
-  'self-loop' | 'unknown-endpoint' | 'duplicate' | 'container-boundary' | 'forward-cycle';
+  | 'self-loop'
+  | 'unknown-endpoint'
+  | 'duplicate'
+  | 'container-boundary'
+  | 'forward-cycle'
+  /* U6e — the three back-edge rules, reachable only for a `back: true`
+     candidate. See the block at the foot of `connectRejection`. */
+  | 'back-ancestry'
+  | 'back-no-progress'
+  | 'back-parallel-body';
 
 export interface ConnectRejection {
   reason: ConnectRejectionReason;
@@ -270,6 +280,54 @@ export function connectRejection(
         `'${fromName}'. The forward graph must stay a DAG — a loop is expressed as a back-edge ` +
         `with a maxBounces cap`,
     };
+  }
+
+  /* U6e — the back-edge's OWN rules, now that the canvas can author one.
+     Until this ticket `back: true` only ever EXEMPTED a candidate (from the two
+     rules above) and then accepted whatever was left, with no rule of its own.
+     That was harmless while nothing could author one; it stops being harmless
+     the moment the offer exists, because every one of these three is a refusal
+     the #444 write gate makes — and a version is IMMUTABLE, so a doc the canvas
+     let the operator author is a doc that can only be refused at save, never
+     repaired.
+
+     Delegated to the shared predicate rather than restated, the same anti-drift
+     shape the cycle and boundary rules use: `validateDoc`'s back-edge block and
+     this one read the same helpers, so they cannot grow separate opinions.
+
+     Reachable ONLY from the offer's enabled-ness check in `FlowCanvas` — a DRAG
+     always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these will read
+     as dead code to anyone who greps for a caller that passes `back`. They are
+     not: they are what decides whether the offer is shown at all. */
+  if (candidate.back === true) {
+    const defect = backEdgeDefect(pre.graph, pre.graph.containers, from, to);
+    if (defect === 'parallel-body') {
+      return {
+        reason: 'back-parallel-body',
+        message:
+          `'${fromName}' → '${toName}' cannot be a back-edge: it touches a foreach body that ` +
+          `runs its items in parallel, where the bounce counter — which is keyed by activity, ` +
+          `not by item — would never fire and never cap`,
+      };
+    }
+    if (defect === 'ancestry') {
+      return {
+        reason: 'back-ancestry',
+        message:
+          `'${fromName}' → '${toName}' cannot be a back-edge: a loop has to go BACK, and ` +
+          `'${toName}' does not lead to '${fromName}'. Pick a step that already runs before ` +
+          `'${fromName}', or the container enclosing it`,
+      };
+    }
+    if (defect === 'no-progress') {
+      return {
+        reason: 'back-no-progress',
+        message:
+          `'${fromName}' → '${toName}' cannot be a back-edge: bouncing it would not re-run ` +
+          `'${fromName}' itself, so the loop would repeat forever without making progress. ` +
+          `Target a step on the path INTO '${fromName}'`,
+      };
+    }
   }
 
   return null;
