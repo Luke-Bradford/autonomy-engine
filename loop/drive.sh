@@ -135,10 +135,11 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #   - the driver waited on #803's gate ("PR #803 gate settled") -- a gate that
 #     was never the loop's to wait for.
 #
-# The convention this keys on is stated in prompt.md rule 2 and holds over
-# every branch the loop has ever pushed (checked 2026-07-31 across 40 merged
-# PRs: 22 `*/studio-*` from the loop, and every `*/loop-*`, `attended/*` and
-# `docs/*` branch was the operator's).
+# The convention this keys on is prompt.md rule 0's own words -- "the
+# supervisor opens its OWN PRs ... on non-`studio` branches" -- so the driver
+# was the one part of this loop not honouring its own work order. Checked
+# 2026-07-31: of the last 30 merged PRs, 22 were `*/studio-*` (the loop's), and
+# across the last 40 every `*/loop-*` branch was the operator's.
 #
 # Fail-safe direction: a loop branch misnamed outside the convention reads as
 # "not the loop's", which under-counts progress and can trip a false stall. A
