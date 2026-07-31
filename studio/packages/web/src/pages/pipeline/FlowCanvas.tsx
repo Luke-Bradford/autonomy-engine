@@ -413,10 +413,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * breaks it by construction: container geometry depends only on ACTIVITY
    * geometry, never on its own.
    *
-   * `containers` are the store's working membership — the canvas cannot CREATE
-   * one or move a node in or out yet (U6d), but a delete prunes membership
-   * (#746), so what is drawn tracks the graph on screen rather than the version
-   * it was opened on.
+   * `containers` are the store's working membership — created and re-parented
+   * from the property panel (U6d), pruned by a delete (#746) — so what is drawn
+   * tracks the graph on screen rather than the version it was opened on.
    */
   /**
    * #748 — confirm, then remove the container.
@@ -563,9 +562,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            `e2e/container-rendering.spec.ts` mutation-proves against this line.
            The button opts back into hit-testing on its own instead.
 
-           Creating a container and dragging nodes in and out is still U6d/#425,
-           and the RF `parentId` mapping that would make a container draggable as
-           a group is U23's. */
+           Creating a container and moving a node in or out is the property
+           panel's, as of U6d — a `<select>` on the NODE, precisely because the box
+           itself cannot be selected. DRAGGING one in, and the RF `parentId`
+           mapping that would make a container draggable as a group, is U23's. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one

@@ -71,7 +71,9 @@ export interface ContainerEditConsequence {
   routingChange: { from: RoutingSource; to: RoutingSource } | null;
 }
 
-function routingSource(doc: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>): RoutingSource {
+function routingSource(
+  doc: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
+): RoutingSource {
   return implicitRouting(doc)?.kind ?? 'authored';
 }
 

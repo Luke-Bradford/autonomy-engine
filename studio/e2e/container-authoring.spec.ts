@@ -42,7 +42,11 @@ async function captureConfirm(
   response: 'accept' | 'dismiss' = 'accept',
 ): Promise<string | null> {
   let seen: string | null = null;
-  const handler = async (dialog: { message: () => string; accept: () => Promise<void>; dismiss: () => Promise<void> }) => {
+  const handler = async (dialog: {
+    message: () => string;
+    accept: () => Promise<void>;
+    dismiss: () => Promise<void>;
+  }) => {
     seen = dialog.message();
     await (response === 'accept' ? dialog.accept() : dialog.dismiss());
   };

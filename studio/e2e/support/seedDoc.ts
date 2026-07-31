@@ -6,11 +6,12 @@ import { fluentRootReady } from './theme';
  * Seeding a canvas from a DOC, rather than authoring one through the UI.
  *
  * `support/canvas.ts`'s `openCanvas` is the right tool whenever the doc under
- * test is one the canvas can author. A CONTAINER is not: U6c draws a container
- * and refuses edges that cross its boundary, but creating one is U6d's ticket
- * and dragging nodes in and out of one is U23's. So the only way to put a
- * `loop`/`stage`/`foreach` on screen today is to mint a pipeline version through
- * the API and open it — which is also, exactly, the path a real operator's doc
+ * test is one the canvas can author. A container now IS one — U6d added the
+ * create-and-assign gesture, and `container-authoring.spec.ts` walks it. These
+ * helpers stay, and are still the right tool for a doc whose SHAPE the canvas
+ * cannot reach in a few clicks (a specific back-edge, a `foreach` with a
+ * batchCount, a doc with a pre-existing defect): they mint the version through
+ * the API and open it, which is also, exactly, the path a real operator's doc
  * takes when it arrives from an import or a git checkout.
  *
  * The mint goes through the REAL write gate, so a doc these helpers can seed is

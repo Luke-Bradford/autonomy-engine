@@ -184,16 +184,16 @@ export function buildContainer(
     id: newLocalId(kind),
     kind,
     children: [firstChildId],
-    ...(config.exitWhen !== undefined && config.exitWhen !== '' ? { exitWhen: config.exitWhen } : {}),
+    ...(config.exitWhen !== undefined && config.exitWhen !== ''
+      ? { exitWhen: config.exitWhen }
+      : {}),
     ...(config.maxRounds !== undefined ? { maxRounds: config.maxRounds } : {}),
     ...(config.items !== undefined && config.items !== '' ? { items: config.items } : {}),
   };
   const parsed = ContainerSchema.safeParse(candidate);
   if (!parsed.success) {
     return {
-      error: parsed.error.issues
-        .map((i) => `${i.path.join('.') || kind}: ${i.message}`)
-        .join('; '),
+      error: parsed.error.issues.map((i) => `${i.path.join('.') || kind}: ${i.message}`).join('; '),
     };
   }
   return { container: parsed.data };

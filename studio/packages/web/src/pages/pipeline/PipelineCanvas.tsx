@@ -21,11 +21,7 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
-import {
-  consequenceMessage,
-  containerEditConsequence,
-  containerLabels,
-} from './containerRules';
+import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import {
   branchOptionsFor,

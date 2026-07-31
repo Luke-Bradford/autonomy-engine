@@ -40,12 +40,11 @@ export interface ConnectGraph {
   nodes: Node[];
   edges: Edge[];
   /**
-   * The doc's containers. Not authorable on the canvas yet (U6d) — the store
-   * seeds them from the version the canvas was opened on and only PRUNES
-   * membership, when a node is deleted (#746) — but they are legal EDGE
-   * ENDPOINTS, so leaving them out would
-   * make an existing container edge invisible to both the endpoint and the
-   * cycle rule.
+   * The doc's containers — the store's working membership: seeded on load,
+   * pruned when a node is deleted (#746), and created/re-parented by the
+   * property panel (U6d). They are also legal EDGE ENDPOINTS, so leaving them
+   * out would make an existing container edge invisible to both the endpoint and
+   * the cycle rule.
    */
   containers: Container[];
 }

@@ -1052,7 +1052,11 @@ describe('canvasStore — container membership (U6d)', () => {
     });
 
     it('un-groups the node when the target is null', () => {
-      const out = assignContainerChild([{ id: 'c_1', kind: 'stage', children: ['n_a'] }], 'n_a', null);
+      const out = assignContainerChild(
+        [{ id: 'c_1', kind: 'stage', children: ['n_a'] }],
+        'n_a',
+        null,
+      );
       expect(out[0]!.children).toEqual([]);
     });
 
