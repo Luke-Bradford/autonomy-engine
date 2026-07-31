@@ -119,8 +119,9 @@ Do not re-add it.
 ## Runtime state is NOT tracked
 
 `loop/logs/` (one multi-MB stream-json file per fire — ~546MB and growing), `loop/.last_quota` (the
-last-known 7-day reading) and `loop/.last_quota_poll` (the source-2 poll memo, #777) are gitignored.
-All three are per-machine and meaningless in another checkout. Nothing here should ever write into a
+last-known 7-day reading), `loop/.last_quota_poll` (the source-2 poll memo, #777) and
+`loop/.last_quota_shadow` (the diagnostic probe's rate stamp, #765) are gitignored.
+All four are per-machine and meaningless in another checkout. Nothing here should ever write into a
 tracked path — and keep this list in step with `.gitignore`, because it is what a live-control-plane
 sync is checked against.
 
@@ -185,15 +186,29 @@ Three independent bounds, checked before every fire, each with its own test in
   direct polling. Only the dashboard rides through it, because it samples in the background and
   answers from a warm cache; the other two are direct polls from a cold start and both return ""
   under a 429. Between those two the *proven* one goes first — #766 measured the loop reader
-  returning a real figure, while studio has never once returned a number here (#765). **Do not read
-  that as "the reader works and studio does not"**: re-measured 2026-07-29, the loop reader's token
-  read succeeded and the endpoint 429'd too — the same failure studio reports. Whichever process
-  holds the bucket answers, and that is currently the dashboard's 60s sampler, continuously. The
-  contrast is confounded; `drive.sh` spells this out at the `quota_pct` header. Studio last is
-  what makes it free: it is polled only when both others failed, so it adds no upstream load in the
-  common case and cannot starve the sampler the primary depends on. Every read logs
-  `quota source: <dashboard|loop|loop-memo|studio>`, which is the evidence for promoting studio.
-  **Do not reorder** until that evidence exists. `loop-memo` (#777) means source 2 answered from its
+  returning a real figure, while studio had not returned one *through this path* (#765). **Do not
+  read that as "the reader works and studio does not"**: re-measured 2026-07-29, the loop reader's
+  token read succeeded and the endpoint 429'd too — the same failure studio reports. Whichever
+  process holds the bucket answers, and that is currently the dashboard's 60s sampler, continuously.
+  The contrast is confounded; `drive.sh` spells this out at the `quota_pct` header. (Studio has
+  since answered for real: an attended probe on 2026-07-30 returned 0.16, matching the dashboard.)
+  Studio last is what keeps the SELECTION path free: it is reached only when both others failed, so
+  it cannot starve the sampler the primary depends on. Every read logs
+  `quota source: <dashboard|loop|loop-memo|studio>`. **Do not reorder** until the promotion evidence
+  exists.
+- **A once-per-hour DIAGNOSTIC probe of studio** (`quota_shadow_probe`, `QUOTA_SHADOW_MIN_INTERVAL`,
+  default 3600s; #765) — because the promotion evidence above was **unobtainable**. `quota source:
+  studio` can only be logged when sources 1 and 2 have BOTH failed, so while the dashboard is
+  healthy studio is never asked and C3 waits on an outage of the source it replaces. The probe asks
+  anyway and logs `quota shadow: studio <n>%` — a **second, non-interchangeable** evidence line:
+  `source` means the guard USED studio, `shadow` means studio COULD have answered. It decides
+  nothing (it calls `quota_read_url` directly, so there is no code path from it to the quota cache or
+  the source-2 memo; it writes nothing to stdout; the call site redirects anyway). **This does mean
+  studio is now polled in the common case** — a deliberate reversal, priced at one request per hour
+  per active driver, and not the standing ~1/min sampler #770 rejected. `QUOTA_SHADOW_MIN_INTERVAL=0`
+  turns it off. Its rate stamp is `.last_quota_shadow` (gitignored), written on the **attempt** so a
+  failing studio cannot un-throttle it; if that stamp cannot be written the probe **skips** rather
+  than polling un-throttled. `loop-memo` (#777) means source 2 answered from its
   poll memo rather than polling — counted separately on purpose, because a throttle that logged the
   same string either way would hide a source-2 death the way #766 hid for its whole life. **Anchor
   the grep** when counting real source-2 polls: `'quota source: loop ('`, since a bare
@@ -212,7 +227,11 @@ Three independent bounds, checked before every fire, each with its own test in
   do. `QUOTA_POLL_MIN_INTERVAL=0` disables it; anything over the **300s ceiling is clamped**, and an
   unparseable value falls back to the default with a `WARN` — same for `QUOTA_CACHE_MAX_AGE`, because
   an operand `test` cannot parse returns 2, which is *neither* branch, so the age comparison used to
-  fall through and make every stamped record look fresh.
+  fall through and make every stamped record look fresh. `QUOTA_SHADOW_MIN_INTERVAL` goes through the
+  same normaliser but has **no ceiling**, deliberately: a ceiling exists where an over-wide value is a
+  *fail-open* (it bounds how stale a reading may be when it **permits** a fire), and the shadow probe
+  never feeds the guard — a wide value buys less load and less evidence, which is useless but never
+  unsafe.
   It is a *ceiling* on the poll rate, not a measured reduction of it — in production those three
   reads are usually minutes apart (`ensure_auth` backs off 30→600s), so the memo mostly bites on
   adjacent reads, a restart mid-iteration, or a manual run racing the scheduled one.
