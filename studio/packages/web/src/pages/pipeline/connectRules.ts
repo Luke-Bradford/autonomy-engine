@@ -287,9 +287,15 @@ export function connectRejection(
      rules above) and then accepted whatever was left, with no rule of its own.
      That was harmless while nothing could author one; it stops being harmless
      the moment the offer exists, because every one of these three is a refusal
-     the #444 write gate makes — and a version is IMMUTABLE, so a doc the canvas
-     let the operator author is a doc that can only be refused at save, never
-     repaired.
+     the #444 write gate makes.
+
+     These cover the edge's own TOPOLOGY, and only that. A back-edge also has a
+     doc-wide consequence no per-candidate rule can see — the first `back: true`
+     edge flips `canReRunNodes`, disabling `settled`, so every
+     `${nodes.x.status}` ref in the doc newly fails `validateRefs`. That one is
+     left to the canvas' validation badge (and the Save gate) deliberately: it is
+     reversible by deleting the edge, so refusing it here would make a legitimate
+     loop unauthorable because of an expression in an unrelated node.
 
      Delegated to the shared predicate rather than restated, the same anti-drift
      shape the cycle and boundary rules use: `validateDoc`'s back-edge block and

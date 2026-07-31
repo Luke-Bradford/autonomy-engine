@@ -279,9 +279,19 @@ describe('back-edge labelling', () => {
     expect(edgeAriaLabel(back())).toBe('Edge from b to a, back-edge on success, up to 3 bounces');
   });
 
-  it('isMaxBounces mirrors EdgeSchema — non-negative integers, zero included', () => {
-    expect([0, 1, 10_000].every(isMaxBounces)).toBe(true);
-    expect([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY].some(isMaxBounces)).toBe(false);
+  it.each([
+    [0, true],
+    [1, true],
+    [10_000, true],
+    [-1, false],
+    [1.5, false],
+    [Number.NaN, false],
+    [Number.POSITIVE_INFINITY, false],
+    // Beyond zod's safe-integer ceiling: accepted by a hand-rolled
+    // `Number.isInteger(n) && n >= 0`, refused by the schema.
+    [1e16, false],
+  ])('isMaxBounces(%p) is %p, mirroring EdgeSchema', (n, expected) => {
+    expect(isMaxBounces(n)).toBe(expected);
   });
 });
 
@@ -301,7 +311,9 @@ describe('a back-edge with no declared cap', () => {
   });
 
   it('says so in the aria-label, in the same terms', () => {
-    expect(edgeAriaLabel(capless)).toBe('Edge from b to a, back-edge on success, no bounce cap declared');
+    expect(edgeAriaLabel(capless)).toBe(
+      'Edge from b to a, back-edge on success, no bounce cap declared',
+    );
   });
 
   it('a declared cap of ZERO is reported as the real value it is', () => {

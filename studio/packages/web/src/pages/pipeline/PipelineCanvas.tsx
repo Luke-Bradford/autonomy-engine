@@ -39,7 +39,6 @@ import {
   branchOptionsFor,
   conditionOf,
   decodeConditionValue,
-  DEFAULT_MAX_BOUNCES,
   edgeLabel,
   encodeCondition,
   isMaxBounces,
@@ -732,7 +731,17 @@ function BounceCapField({
   store: ReturnType<typeof createCanvasStore>;
   edge: Edge;
 }) {
-  const stored = String(edge.maxBounces ?? DEFAULT_MAX_BOUNCES);
+  /* An edge with NO cap renders EMPTY, not `DEFAULT_MAX_BOUNCES`.
+     Showing `10` for an absent value was wrong twice over. It stated a cap the
+     doc does not hold — a third answer for one undefined value, against the
+     canvas label's `×?` and the aria-label's "no bounce cap declared" — and,
+     because `commit` early-returns on `text === stored`, it made the field a
+     DEAD END: the operator sees `10`, types `10`, and nothing is written, so
+     the doc stays unsavable ("must declare maxBounces") and the only way out is
+     to type some other number and then type 10 back. Reachable for exactly the
+     imported / pre-#444 doc this feature keeps invoking. Empty is the honest
+     rendering, and the blank branch of `commit` already says a cap is required. */
+  const stored = edge.maxBounces === undefined ? '' : String(edge.maxBounces);
   const [draft, setDraft] = useState(stored);
   const [error, setError] = useState<string | null>(null);
 

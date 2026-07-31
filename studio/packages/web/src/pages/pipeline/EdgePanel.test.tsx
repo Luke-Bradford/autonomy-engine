@@ -319,6 +319,30 @@ describe('EdgePanel — a back-edge bounce cap', () => {
     expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(6);
   });
 
+  /**
+   * A back-edge that declares NO cap — the imported / pre-#444 doc this feature
+   * keeps invoking. The field must not show `10` for it: that states a cap the
+   * doc does not hold (against the canvas' own `×?` and the aria-label's "no
+   * bounce cap declared"), and because `commit` early-returns on
+   * `text === stored` it made the field a DEAD END — the operator sees `10`,
+   * types `10`, nothing is written, and the doc stays unsavable.
+   */
+  describe('a back-edge with no declared cap', () => {
+    const capless = { id: 'e_back', from: 'b', to: 'a', on: 'success', back: true } as Edge;
+
+    it('renders empty rather than inventing the default', () => {
+      const { field } = mountBack(capless);
+      expect(field.value).toBe('');
+    });
+
+    it('accepts the default typed in — the field is not a dead end', () => {
+      const { store, field } = mountBack(capless);
+      fireEvent.change(field, { target: { value: '10' } });
+      fireEvent.blur(field, { target: { value: '10' } });
+      expect(store.getState().edges.find((e) => e.id === 'e_back')?.maxBounces).toBe(10);
+    });
+  });
+
   it('a blur that changed nothing does not dirty the doc', () => {
     const { store, field } = mountBack(back(6));
     store.setState({ dirty: false });

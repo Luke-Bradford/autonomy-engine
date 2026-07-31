@@ -1416,8 +1416,9 @@ describe('canvasStore — back-edges (U6e)', () => {
 
   it('connect still REFUSES a back candidate the save gate would refuse', () => {
     const s = loaded();
-    // `n_a` does not lead back to `n_b`'s... `n_b` reaches nothing, so a
-    // back-edge from `n_a` to `n_b` has no loop to close.
+    // The doc is `n_a -> n_b`, so a back-edge must run `n_b -> n_a`. The
+    // reverse of that (`n_a -> n_b` with `back: true`) fails the ancestry rule:
+    // `n_b` leads nowhere, so there is no loop for it to close.
     s.getState().connect('n_a', 'n_b', { on: 'failure' }, { back: true });
     expect(s.getState().edges.some((e) => e.back === true)).toBe(false);
   });
@@ -1477,6 +1478,78 @@ describe('canvasStore — back-edges (U6e)', () => {
       s.getState().updateEdgeBounces('nope', 4);
       expect(s.getState().dirty).toBe(false);
     });
+  });
+
+  /**
+   * A retype must not drop back-ness. `retypeEdge` destructures `on`/`branch`
+   * and rest-spreads the remainder, which is exactly the shape that has
+   * silently dropped a field three times before — and the panel now exposes the
+   * condition picker and the cap on the SAME edge, so the two controls meet.
+   */
+  it('retyping a back-edge keeps its back-ness and its cap', () => {
+    const s = loaded();
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const id = s.getState().edges.find((e) => e.back === true)!.id;
+    s.getState().updateEdgeCondition(id, { on: 'skipped' });
+    const retyped = s.getState().edges.find((e) => e.id === id);
+    expect(retyped).toMatchObject({ on: 'skipped', back: true, maxBounces: DEFAULT_MAX_BOUNCES });
+  });
+
+  /**
+   * `updateEdgeBounces` re-committing the SAME cap must not dirty the doc.
+   * Reachable through the panel, whose only no-op guard is a STRING compare:
+   * `10.0` / ` 10` / `+10` over a stored `10` all arrive here numerically equal.
+   */
+  it('does not dirty the doc when the cap is re-committed unchanged', () => {
+    const s = loaded();
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const id = s.getState().edges.find((e) => e.back === true)!.id;
+    s.setState({ dirty: false });
+    s.getState().updateEdgeBounces(id, DEFAULT_MAX_BOUNCES);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  /**
+   * The offer's gate answers about the EDGE's topology, NOT about whether the
+   * doc will save. The first `back: true` edge flips `canReRunNodes`, disabling
+   * `settled`, so an unrelated `${nodes.x.status}` ref newly fails
+   * `validateRefs`. Pinned so the limitation is a documented, tested fact
+   * rather than a latent surprise — and so a future change that DID make the
+   * gate doc-wide has to come here and say so.
+   */
+  it('authoring a back-edge can invalidate an unrelated ${nodes.x.status} ref', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          {
+            id: 'n_b',
+            type: 'llm_call',
+            config: { note: '${nodes.n_a.status}' },
+            position: { x: 100, y: 0 },
+          },
+        ],
+      }),
+    );
+    const before = s.getState();
+    expect(validateCanvas(before.nodes, before.edges, before.containers, before.params)).toEqual(
+      [],
+    );
+
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const after = s.getState();
+    // The edge IS authored — the offer is not refused for this...
+    expect(after.edges.some((e) => e.back === true)).toBe(true);
+    // ...and the canvas badge is what says the doc no longer validates.
+    const issues = validateCanvas(after.nodes, after.edges, after.containers, after.params);
+    expect(issues.join('\n')).toContain('is not settled here');
+    // Reversible by the same control, which is why it warns instead of refusing.
+    s.getState().deleteEdge(after.edges.find((e) => e.back === true)!.id);
+    const repaired = s.getState();
+    expect(
+      validateCanvas(repaired.nodes, repaired.edges, repaired.containers, repaired.params),
+    ).toEqual([]);
   });
 
   /**

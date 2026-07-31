@@ -132,20 +132,45 @@ test.describe('U6e back-edge authoring', () => {
 
   /**
    * The offer is gated on the whole back-edge rule set, not on the refusal's
-   * REASON. A self-loop is refused and can never be a back-edge — the ancestry
-   * rule needs the target to forward-reach the source, which a node cannot do
-   * for itself — so offering one would author a version the save gate refuses.
+   * REASON — so a refusal whose back shape is ALSO illegal gets no offer.
+   *
+   * The rule doing the suppressing here is ANCESTRY, not the duplicate rule
+   * that produced the refusal: `authoringEdgeKey` keys back-ness deliberately,
+   * so `a →back b` is not a duplicate of `a → b`. It is refused because `b`
+   * leads nowhere, so there is no loop for it to close. Naming that precisely
+   * matters — an earlier version of this comment credited the duplicate rule,
+   * which `connectRules.test.ts` pins as exactly the wrong answer.
    */
   test('no offer is made where a back-edge would also be illegal', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'u6e-no-offer');
     await seedChain(page);
 
-    // A DUPLICATE of the existing forward edge: refused, and back-ness is no
-    // answer to it (the two ends are already connected that way round).
+    // Re-drawing the existing forward edge: refused as a duplicate, and the
+    // back shape of it fails ancestry, so there is nothing to offer.
     await connectNodes(page, 0, 1);
     const refusal = page.locator(REFUSAL);
     await expect(refusal).toContainText('already has');
+    await expect(refusal.getByRole('button', { name: OFFER })).toHaveCount(0);
+    await expect(edgeGroup(page)).toHaveCount(1);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The other shape with no offer, and the one whose docblock the test above
+   * used to carry: a SELF-loop can never be a back-edge, because the ancestry
+   * rule needs the target to forward-reach the source and no node reaches
+   * itself. A repeated single activity is a loop CONTAINER (U6d), not an edge.
+   */
+  test('a self-connection is refused with no back-edge offer', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openCanvas(page, 'u6e-self');
+    await seedChain(page);
+
+    await connectNodes(page, 0, 0);
+    const refusal = page.locator(REFUSAL);
+    await expect(refusal).toContainText('cannot connect to itself');
     await expect(refusal.getByRole('button', { name: OFFER })).toHaveCount(0);
     await expect(edgeGroup(page)).toHaveCount(1);
 

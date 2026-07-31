@@ -2786,10 +2786,28 @@ export type BackEdgeDefect = 'ancestry' | 'no-progress' | 'parallel-body';
  *
  * The canvas OFFERS to turn a refused connection into a back-edge, and has to
  * decide whether that offer is legal before the edge exists. Answering it here,
- * from the same helpers `validateDoc`'s back-edge block reads, is what stops the
- * offer authoring a doc the #444 write gate then refuses — a control that
- * creates an unsavable version is the #748/U16 trap, and on an IMMUTABLE doc it
- * can only be refused at write, never repaired later.
+ * from the same helpers `validateDoc`'s back-edge block reads, is what keeps the
+ * connect-time answer and the #444 write gate from drifting apart.
+ *
+ * SCOPE, stated because the first draft of this comment overclaimed it: this
+ * answers about the EDGE's TOPOLOGY — `validateDoc`'s three back-edge rules and
+ * nothing else. A `null` here does NOT mean the resulting doc validates. The
+ * first `back: true` edge in a doc flips `canReRunNodes`, which disables
+ * `settled`, so every `${nodes.x.status}` ref in that doc newly fails
+ * `validateRefs` — a doc-wide consequence no per-candidate predicate can see.
+ * The canvas leaves that one to its validation badge, since deleting the edge
+ * reverses it.
+ *
+ * PRECONDITIONS the caller owns, both of which `connectRejection` checks first:
+ * the endpoints must EXIST, and the pair must not already hold this edge.
+ * `validateDoc` SKIPS the ancestry and progress rules for a dangling endpoint so
+ * it can report the dangling id instead (#786); here an absent id simply reaches
+ * nothing and comes back `'ancestry'`, which is a derived misdiagnosis if a
+ * direct caller has not checked.
+ *
+ * The probe is built with `on: 'success'`, and no rule reads `on` today. A
+ * future rule that DID (a `skipped` back-edge, say) would silently be answered
+ * about a `success` one — at which point this needs the condition passed in.
  *
  * The three arms are `validateDoc`'s own three back-edge refusals, in the order
  * that explains the most first:

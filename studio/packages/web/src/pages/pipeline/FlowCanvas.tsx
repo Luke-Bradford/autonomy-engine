@@ -839,13 +839,30 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * to its enclosing container), so a silent promotion would have to guess which
    * of two meanings the operator had.
    *
-   * Gated on the whole rule set for the edge that would actually be authored,
-   * not on the refusal's reason: cycle-closure implies the back-edge ANCESTRY
-   * rule but not its PROGRESS rule (the reset body is computed over a node-only
+   * Gated on the whole BACK-EDGE rule set for the edge that would actually be
+   * authored, not on the refusal's REASON: cycle-closure implies the ancestry
+   * rule but not the PROGRESS rule (the reset body is computed over a node-only
    * adjacency, so a cycle running through a container endpoint leaves the source
-   * out of its own body). An offer shown on reason alone would author a version
-   * the save gate refuses — and a version is IMMUTABLE, so that is a doc which
-   * can only be refused at write, never repaired.
+   * out of its own body). An offer shown on reason alone would author a doc the
+   * save gate refuses on topology.
+   *
+   * That gate is NOT a guarantee the resulting doc SAVES, and the distinction is
+   * stated because the first version of this comment claimed otherwise.
+   * `backEdgeDefect` answers about the EDGE; a back-edge also has a doc-wide
+   * consequence it cannot see — the first `back: true` edge flips
+   * `canReRunNodes`, which disables `settled`, so every `${nodes.x.status}` ref
+   * in the doc newly fails `validateRefs`. Reproduced: `a → b → c` with `c`'s
+   * config holding `${nodes.a.status}` accepts the offer and then badges invalid.
+   *
+   * The offer is still shown, and that is U6d's rule rather than a concession: a
+   * consequence REVERSIBLE BY THE SAME CONTROL is warned about, not refused.
+   * Deleting the edge fully repairs it, the validation badge names the exact
+   * ref, and Save is already gated on the badge — so nothing is destroyed and
+   * nothing is silent. Refusing instead would make a legitimate loop
+   * unauthorable because of an expression in an unrelated node, which is the
+   * "control that silently does nothing" defect this panel exists to fix. The
+   * #748/U16 traps this feature guards against are the ones with NO way back;
+   * this is not one of them.
    */
   const backOffer: { from: string; to: string } | null = useMemo(() => {
     if (attempted === null || refusal === null) return null;

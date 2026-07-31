@@ -220,7 +220,13 @@ export function connectByIdBackwards(page: Page, from: string, to: string): Prom
 }
 
 /**
- * Select the one edge by clicking the MIDPOINT of its rendered path.
+ * Select an edge by clicking the MIDPOINT of its rendered path — the first by
+ * default, or the one at `index` in DOM order.
+ *
+ * The index addresses `.react-flow__edge-path` in render order, which is fine
+ * for the small authored graphs these specs build but is NOT a stable identity:
+ * `onlyRenderVisibleElements` is on, so a culled edge is absent from the DOM
+ * entirely. A spec that can name its edge should prefer a selector.
  *
  * Not `edgeGroup(page).click()`: that targets the `<g>`'s bounding-box centre,
  * which for a bezier need not lie on the curve — it can land on a node behind

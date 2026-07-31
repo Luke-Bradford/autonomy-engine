@@ -693,6 +693,13 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       if (!isMaxBounces(maxBounces)) return;
       const current = get().edges.find((e) => e.id === id);
       if (current === undefined || current.back !== true) return;
+      // Re-committing the cap it already holds must not mark the canvas dirty —
+      // `setNodeContainer`'s rule, for its reason: an unchanged graph that
+      // reports itself as edited is how a "you have unsaved changes" prompt
+      // loses the operator's trust. The panel's own guard is a STRING compare
+      // (`text === stored`), so `10.0`, ` 10` and `+10` over a stored `10` all
+      // reach here as a numerically identical write.
+      if (current.maxBounces === maxBounces) return;
       set((s) => ({
         edges: s.edges.map((e) => (e.id === id ? { ...e, maxBounces } : e)),
         dirty: true,
