@@ -123,7 +123,10 @@ QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch
                                   # contract -- see quota_shadow_probe (#765).
 QUOTA_SHADOW_MIN_INTERVAL="${QUOTA_SHADOW_MIN_INTERVAL:-3600}"  # min seconds between DIAGNOSTIC
                                   # polls of studio. 0 disables the probe entirely.
-PLANE_DRIFT_REPORT="${PLANE_DRIFT_REPORT:-1}"  # 0 silences the #808 drift report entirely.
+DRIFT_REPORT="${DRIFT_REPORT:-1}"  # set to exactly "0" to silence the #808 drift report. Any OTHER
+                                  # value still reports: a monitor a typo can switch off without
+                                  # saying so fails in the monitored direction, and `DRIFT_REPORT=no`
+                                  # reading as "off" is the same silence this ticket exists to end.
 DRIVE_SELF="${DRIVE_SELF:-${BASH_SOURCE[0]}}"  # the file THIS process was started from. Overridable
                                   # so the drift checks are unit-testable against a scratch file
                                   # instead of against drive.sh itself.
@@ -801,9 +804,9 @@ drift_report_driver_code() {
   if [ -z "$dc_now" ]; then
     log "driver code: UNKNOWN -- $DRIVE_SELF is unreadable now, so drift is unmeasured (#808)"
   elif [ "$dc_now" = "$DRIVE_BOOT_HASH" ]; then
-    log "driver code: live ($DRIVE_SELF is unchanged since this driver booted)"
+    log "driver code: live ($DRIVE_SELF is unchanged since this driver booted; #808)"
   else
-    log "driver code: STALE -- $DRIVE_SELF changed since this driver booted, so this process is running SUPERSEDED code and every merged loop/ fix is inert until it restarts: launchctl kickstart -k gui/\$(id -u)/com.autonomy.studio-build-driver (#808)"
+    log "driver code: STALE -- $DRIVE_SELF changed since this driver booted, so this process is running SUPERSEDED code and every merged loop/ fix is inert until it restarts: launchctl kickstart -k gui/\$(id -u)/com.autonomy.studio-build-driver -- and \`-k\` kills a fire in flight, so restart BETWEEN fires (#808)"
   fi
   return 0
 }
@@ -827,8 +830,13 @@ drift_report_driver_code() {
 # live plane's `.bak-*` clutter and its unversioned state (`logs/`, `.last_*`)
 # for free, without needing globstar (bash 3.2).
 drift_report_plane() {
-  if [ ! -d "$REPO/.git" ]; then
-    log "plane drift: UNKNOWN -- no git checkout at $REPO to compare against (#808)"
+  # `git rev-parse`, NOT `[ -d "$REPO/.git" ]`. This checkout is a git WORKTREE,
+  # whose `.git` is a FILE holding a gitdir pointer rather than a directory, so
+  # the `-d` test the first draft used was false in production on every fire --
+  # the whole half returned UNKNOWN forever. Safe direction, but a check that
+  # silently never runs while looking installed is precisely what #808 is about.
+  if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+    log "plane drift: UNKNOWN -- $REPO is not a git checkout to compare against (#808)"
     return 0
   fi
   if ! git -C "$REPO" fetch --quiet origin main 2>/dev/null; then
@@ -837,30 +845,42 @@ drift_report_plane() {
   fi
   dp_names=""
   dp_listed=0
-  # Fed by a here-doc rather than a pipe: a `... | while` loop runs its body in a
-  # SUBSHELL under bash 3.2, so every name accumulated into dp_names would be
-  # discarded at the `done` and the plane would always read "in sync".
-  while IFS= read -r dp_path; do
+  # Blob ids from git on BOTH sides -- `rev-parse` for what is on main and
+  # `hash-object` for the live file -- rather than piping `git show` into
+  # `shasum`. That pipeline could not fail visibly: a failed `git show` yields
+  # empty output, which `shasum` happily hashes to the sha1 of the empty string,
+  # so the "(unreadable)" branch was unreachable and a git failure against a
+  # 0-byte live file would have compared EQUAL and read "in sync". Both commands
+  # here return EMPTY on failure, which is what makes that guard real.
+  while IFS= read -r -d '' dp_path; do
     [ -n "$dp_path" ] || continue
     dp_listed=1
     dp_name="${dp_path#loop/}"
-    # loop/ is flat today. A future subdirectory is skipped rather than guessed
-    # at, because the live plane has no such nesting to compare it to.
-    case "$dp_name" in */*) continue ;; esac
     if [ ! -f "$INFRA/$dp_name" ]; then
       dp_names="$dp_names $dp_name(never synced)"
       continue
     fi
-    dp_main="$(git -C "$REPO" show "origin/main:$dp_path" 2>/dev/null | shasum | awk '{print $1}')"
-    dp_live="$(shasum "$INFRA/$dp_name" 2>/dev/null | awk '{print $1}')"
+    dp_main="$(git -C "$REPO" rev-parse --quiet --verify "origin/main:$dp_path" 2>/dev/null)"
+    dp_live="$(git -C "$REPO" hash-object "$INFRA/$dp_name" 2>/dev/null)"
     if [ -z "$dp_main" ] || [ -z "$dp_live" ]; then
       dp_names="$dp_names $dp_name(unreadable)"
     elif [ "$dp_main" != "$dp_live" ]; then
       dp_names="$dp_names $dp_name"
     fi
-  done <<EOF
-$(git -C "$REPO" ls-tree --name-only origin/main loop/ 2>/dev/null)
-EOF
+    # `-r` because ls-tree is NOT recursive by default: a subdirectory emerges as
+    # the TREE `loop/sub`, which is not a file in the plane, so it read
+    # `sub(never synced)` on a perfectly synced plane -- permanently, and with
+    # its contents never compared at all.
+    # `-z` because the default output C-QUOTES a non-ASCII path
+    # (`"loop/caf\303\251.sh"`); the leading quote defeats the `loop/` strip and
+    # the file was skipped in silence, i.e. an unmeasured file reported as "in
+    # sync". NUL-terminated output is never quoted.
+    # Process substitution rather than a pipe: `... | while` runs the body in a
+    # SUBSHELL under bash 3.2 (verified), so every name accumulated into
+    # dp_names would be discarded at the `done` and the plane would ALWAYS read
+    # "in sync". A here-doc cannot serve here -- command substitution strips the
+    # NULs that `-z` depends on.
+  done < <(git -C "$REPO" ls-tree -r -z --name-only origin/main loop/ 2>/dev/null)
   if [ "$dp_listed" = 0 ]; then
     log "plane drift: UNKNOWN -- could not list loop/ on origin/main (#808)"
   elif [ -n "$dp_names" ]; then
@@ -871,9 +891,14 @@ EOF
   return 0
 }
 
-# --- plane_drift_report: both halves, once per fire. Advisory; returns 0 always.
-plane_drift_report() {
-  [ "$PLANE_DRIFT_REPORT" = "1" ] || return 0
+# --- drift_report: both halves, once per loop iteration. Advisory; always 0.
+# Named for the pair, not for either half -- the driver-code half is the
+# load-bearing one and is not plane drift at all.
+drift_report() {
+  # ONLY the documented value disables. `= "1"` would have let `DRIFT_REPORT=no`
+  # or `=true` silence the whole thing without a word, and a monitor a typo can
+  # switch off invisibly fails in the direction it is monitoring.
+  [ "$DRIFT_REPORT" = "0" ] && return 0
   drift_report_driver_code
   drift_report_plane
   return 0
@@ -1271,6 +1296,15 @@ while true; do
   fi
   git fetch origin --quiet 2>>"$DLOG"
 
+  # #808. Per ITERATION, not per fire, and deliberately ahead of every stop
+  # condition below: a run that never fires -- stopped by the quota gate, an
+  # operator signal, or MAX_STALL -- is exactly a run that might be stopping
+  # BECAUSE it is executing superseded code, and reporting only alongside a fire
+  # would say nothing in the one case where it matters most. Iterations are
+  # roughly one per fire (auth backoff and the PR gate wait loop internally), so
+  # this costs no extra log volume.
+  drift_report
+
   # --- STOP: operator signal ([operator-decision]/[mvp-ready]) or a real block.
   #     [loop-paused] is deliberately NOT matched here -- it never stops. -------
   sig="$(gh issue list --state open --search 'in:title [operator-decision]' --json number -q 'length' 2>/dev/null || echo 0)"
@@ -1463,11 +1497,6 @@ EOF
   fires=$((fires + 1))
   # Charge the blind allowance HERE, once, for the fire it actually authorised.
   [ "$gate_blind" = "1" ] && blind_fires=$((blind_fires + 1))
-  # #808, immediately BEFORE the fire rather than at DRIVER START: a fire is what
-  # spends, so "was this fire run by the code that merged?" is the question worth
-  # a log line, and a driver that has been up for days would otherwise have
-  # answered it once, long ago, and never again.
-  plane_drift_report
   log "=== FIRE $fires (main=$(echo "$head" | cut -c1-7) openPR=$openpr) ==="
   bash "$INFRA/run.sh"
   rc=$?
