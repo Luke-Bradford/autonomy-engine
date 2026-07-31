@@ -124,7 +124,17 @@ STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
 # URL points at the SAME server by construction -- which is the property the
 # drift half depends on, since a version served by one process says nothing
 # about the build another process is running.
-STUDIO_VERSION_URL="${STUDIO_VERSION_URL:-${STUDIO_QUOTA_URL%/api/quota}/api/version}"
+# The trailing-slash strip runs FIRST: without it a quota URL written
+# `.../api/quota/` fails to match the suffix and derives `.../api/quota//api/version`,
+# which degrades to UNKNOWN -- the safe direction, but silently, and the whole
+# point here is that the two URLs address the SAME process.
+# An `if` rather than a one-line `${VAR:-...}`: the derivation is two strips, and
+# chaining them onto the default would also strip and re-suffix an EXPLICIT
+# override, turning `STUDIO_VERSION_URL=http://host/v` into `http://host/v/api/version`.
+if [ -z "${STUDIO_VERSION_URL:-}" ]; then
+  STUDIO_VERSION_BASE="${STUDIO_QUOTA_URL%/}"
+  STUDIO_VERSION_URL="${STUDIO_VERSION_BASE%/api/quota}/api/version"
+fi
 QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
                                   # last SHADOW poll ATTEMPT. Its own file, its own age, its own
                                   # contract -- see quota_shadow_probe (#765).
@@ -1364,12 +1374,10 @@ drift_report_studio_server() {
   elif [ -z "$ds_main" ]; then
     log "studio server: UNKNOWN -- origin/main could not be resolved in $REPO, so drift is unmeasured (#832)"
   elif [ "$ds_have" = "$ds_main" ]; then
-    log "studio server: in sync with origin/main (serving $ds_commit)"
+    # Both countable verdicts open with `studio server: current`, so the C3
+    # evidence rule in prompt.md is one grep rather than a list of spellings.
+    log "studio server: current -- serving $ds_commit, identical to origin/main"
   else
-    # Says which build, not just "differs": the one question the operator asks
-    # next is how far back the answering code is, and the served sha is what
-    # makes every `quota shadow: studio` line above and below this one
-    # attributable after the fact rather than only in the moment.
     # The abbreviation is computed BEFORE the message and falls back to the full
     # sha, rather than being substituted inline. An inline `$(...)` that fails
     # renders "origin/main is ." -- a gap in the one line someone is reading at
@@ -1377,7 +1385,42 @@ drift_report_studio_server() {
     # commit rather than as if `rev-parse` had failed.
     ds_short="$(git -C "$REPO" rev-parse --short origin/main 2>/dev/null)"
     [ -n "$ds_short" ] || ds_short="$ds_main"
-    log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, but origin/main is $ds_short. So the spend guard's source 3, and every 'quota shadow: studio' line beside this one, is answering from SUPERSEDED code -- treat those as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+    # THE VERDICT IS ABOUT `studio/`, NOT ABOUT SHA EQUALITY, and that is the
+    # difference between a monitor that is read and one that is skipped. This
+    # service is built from `studio/` alone (`pnpm -C <clone>/studio build`), so
+    # a `loop/` or `docs/` merge cannot change a single byte it serves. Measured
+    # on this repo: 8 of the 19 commits landing on main in 24h touched `studio/`,
+    # against a probe throttled to one per hour -- so a sha-equality verdict
+    # would have read STALE for most of the day while the served reader was
+    # perfectly current, and `prompt.md`'s rule ("do not count a STALE build's
+    # evidence") would then have discarded almost every reading. A gate nothing
+    # can satisfy is the failure this whole cutover has already hit once (the
+    # original C3 entry gate), and it is not worth repeating for tidiness.
+    #
+    # ANCESTRY IS CHECKED BEFORE ANY COUNT. `rev-list A..B` on a commit that is
+    # not an ancestor counts the commits B has that A lacks, which for a
+    # force-pushed or rebased-out build is a number with no meaning -- and a
+    # meaningless number stated confidently is worse than no number. main is
+    # branch-protected so this is unlikely, not impossible.
+    if ! git -C "$REPO" merge-base --is-ancestor "$ds_have" "$ds_main" 2>/dev/null; then
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is not an ancestor of origin/main ($ds_short), so how far behind it is cannot be stated. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      return 0
+    fi
+    ds_behind="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" 2>/dev/null)"
+    ds_behind_studio="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
+    # An unmeasurable count must not silently become 0 -- "none touching studio/"
+    # is the CURRENT verdict, so a failed `rev-list` defaulting to empty would
+    # turn a measurement failure into a clean bill of health. Refuse instead.
+    if [ -z "$ds_behind" ] || [ -z "$ds_behind_studio" ]; then
+      log "studio server: UNKNOWN -- the distance from $ds_commit to origin/main ($ds_short) could not be counted, so whether the served build carries every studio/ change is unmeasured (#832)"
+    elif [ "$ds_behind_studio" = "0" ]; then
+      # Behind, but only by commits that cannot have changed what it serves. The
+      # count is still reported: "current" is a claim about `studio/`, and an
+      # operator reading it is entitled to see the distance it is discounting.
+      log "studio server: current for studio/ -- serving $ds_commit, behind origin/main ($ds_short) by $ds_behind commit(s), none touching studio/"
+    else
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is $ds_behind commit(s) behind origin/main ($ds_short), $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the 'quota shadow: studio' lines it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+    fi
   fi
   return 0
 }

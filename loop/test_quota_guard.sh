@@ -170,12 +170,13 @@ case "$*" in
   # adding the drift half turned a 4-fire case into 3.) Returns early and never
   # touches `curlcalls`, exactly as the studio arm above does.
   #
-  # Defaults to the `dev` PLACEHOLDER -- what a checkout with no release
-  # manifest serves -- so the drift half reads UNKNOWN and the pre-existing
-  # cases stay tests of what they were written to test.
-  # STUDIO_VERSION_COMMIT=<sha> is the opt-in for a case that wants a verdict.
+  # Serves the `dev` PLACEHOLDER -- what a checkout with no release manifest
+  # serves -- so the drift half reads UNKNOWN and the pre-existing cases stay
+  # tests of what they were written to test. No knob to vary it: case 44c drives
+  # every verdict directly against a real git fixture, and an unused knob here
+  # would be a second, weaker way to do the same thing.
   */api/version*)
-    echo '{"version":"0.0.0-dev","commit":"'"${STUDIO_VERSION_COMMIT:-dev}"'"}'
+    echo '{"version":"0.0.0-dev","commit":"dev"}'
     exit 0 ;;
 esac
 EOS
@@ -1903,57 +1904,55 @@ check "...but an undocumented value still REPORTS rather than silently disabling
 rm -rf "$pdtmp"
 
 # --- 44c. #832 STUDIO-SERVER drift: is the QUOTA SOURCE running merged code? --
-# The THIRD half of the same question, about the third process in it. #808 asks
-# it of the driver's file and of the driver's process; nobody asked it of the
-# service the spend guard's source 3 actually polls, which is provisioned from
-# an isolated clone that nothing moves forward (#773 rejected a scheduled
-# updater on measured starvation evidence, and that stands -- this half is
-# DETECTION-ONLY and updates nothing).
-#
-# Measured 2026-07-31, and the reason this exists: the service sat ELEVEN
-# commits behind origin/main, so it predated #825 and served no `unavailable`
-# field at all. Every layer then behaved exactly as specified -- the reader
-# found no reason, the probe logged a bare UNREADABLE -- and the C3 evidence
-# quietly became a measurement of the WRONG BUILD, with nothing anywhere saying
-# so. Prevention-log #28: a signal must measure the actor it governs.
-#
-# IDENTITY COMES FROM THE RUNNING PROCESS (`GET /api/version`.commit, read once
-# at registration), NOT from the installer's `built.sha`. The stamp answers
-# "what did the installer last compile", which is one indirection from the
-# question -- it can read current while the loaded unit still serves an older
-# dist. It would also hardcode a second copy of the service state-dir path,
-# whose failure mode is an absent stamp reporting UNKNOWN forever while looking
-# perfectly installed: the same silent-never-runs shape `drift_report_plane` had
-# to be rewritten out of.
+# The THIRD half of the same question, about the third process in it. WHY it
+# exists, why identity comes from the running service rather than the
+# installer's build stamp, and why it is detection-only rather than an updater:
+# `drift_report_studio_server`'s header in drive.sh is the canonical statement
+# and this file does not restate it (#776).
 #
 # A REAL git repo (the comparison under test is a git one; stubbing git would
 # assert on the mock) plus a stubbed curl (the served body has to be controlled
 # exactly, including the shapes a live server will not produce on demand).
 sstmp="$(mk_tmp)"
 git init -q --bare "$sstmp/origin" 2>/dev/null
-mkdir -p "$sstmp/src" "$sstmp/bin" "$sstmp/infra"
+mkdir -p "$sstmp/src/studio" "$sstmp/src/loop" "$sstmp/bin" "$sstmp/infra"
 git init -q "$sstmp/src" 2>/dev/null
 git -C "$sstmp/src" checkout -q -b main 2>/dev/null
-printf 'old\n' >"$sstmp/src/f"
-git -C "$sstmp/src" add -A >/dev/null 2>&1
-git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm old >/dev/null 2>&1
-ss_old="$(git -C "$sstmp/src" rev-parse --short HEAD)"
+sscommit() { # $1=path $2=content -> commits and echoes the short sha
+  printf '%s\n' "$2" >"$sstmp/src/$1"
+  git -C "$sstmp/src" add -A >/dev/null 2>&1
+  git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm "$1" >/dev/null 2>&1
+  git -C "$sstmp/src" rev-parse --short HEAD
+}
+# THREE commits, and the ORDER is the case: a `studio/` change in the middle and
+# a `loop/`-only change at the tip. That is what makes "behind, but by nothing
+# that could have changed what it serves" reachable -- the verdict this half
+# turns on, and the one a sha-equality check cannot express.
+ss_old="$(sscommit studio/x old)"
 # A BRANCH LITERALLY NAMED `dev`. `build-info.ts` serves `commit: 'dev'` as its
 # no-manifest placeholder, and a reader that hands that straight to `rev-parse`
 # resolves it against this ref and reports a confident verdict about a build
 # whose identity it never learned. The hex guard is what stops that, and this
 # ref is what makes the case able to fail.
 git -C "$sstmp/src" branch dev >/dev/null 2>&1
-printf 'new\n' >"$sstmp/src/f"
-git -C "$sstmp/src" add -A >/dev/null 2>&1
-git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm new >/dev/null 2>&1
+ss_studio="$(sscommit studio/x new)"
+ss_tip="$(sscommit loop/y touched)"
+# A commit that DIVERGES from main rather than trailing it. `rev-list A..B` on a
+# non-ancestor counts what B has that A lacks, which for a rebased-out or
+# force-pushed build is a number with no meaning -- and a meaningless number
+# stated confidently is worse than none. main is branch-protected, so this is
+# unlikely rather than impossible, and the guard is only real if something
+# reaches it.
+git -C "$sstmp/src" checkout -q dev 2>/dev/null
+ss_diverged="$(sscommit studio/z sidebranch)"
+git -C "$sstmp/src" checkout -q main 2>/dev/null
 git -C "$sstmp/src" remote add origin "$sstmp/origin" 2>/dev/null
 git -C "$sstmp/src" push -q origin main dev 2>/dev/null
 # Worktree-shaped, because production is: `~/Dev/studio-loop-repo/.git` is a
 # FILE holding a gitdir pointer, and case 44 records what gating on `[ -d .git ]`
 # cost when the fixture was shaped differently from the thing it stands in for.
 git -C "$sstmp/src" worktree add -q --detach "$sstmp/repo" main >/dev/null 2>&1
-ss_new="$(git -C "$sstmp/repo" rev-parse --short origin/main 2>/dev/null)"
+ss_tipsha="$(git -C "$sstmp/repo" rev-parse --short origin/main 2>/dev/null)"
 ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
   {
     echo '#!/bin/bash'
@@ -1966,7 +1965,7 @@ ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
     echo "exit ${2:-0}"
   } >"$sstmp/bin/curl"
   chmod +x "$sstmp/bin/curl"
-  rm -f "$sstmp/infra/driver.log"
+  rm -f "$sstmp/infra/driver.log" "$sstmp/out" "$sstmp/err"
   (
     set -uo pipefail
     export INFRA="$sstmp/infra"
@@ -1990,12 +1989,14 @@ ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
 # which every UNKNOWN case below then passes on VACUOUSLY while asserting
 # nothing. (It did: the in-sync case was the only one that could notice, and it
 # was the only one that failed.) One quoting level, one body, asserted below.
-ss_body_new='{"version":"0.0.0-dev","commit":"'"$ss_new"'"}'
+ss_body_tip='{"version":"0.0.0-dev","commit":"'"$ss_tipsha"'"}'
+ss_body_studio='{"version":"0.0.0-dev","commit":"'"$ss_studio"'"}'
 ss_body_old='{"version":"0.0.0-dev","commit":"'"$ss_old"'"}'
+ss_body_div='{"version":"0.0.0-dev","commit":"'"$ss_diverged"'"}'
 # The anti-vacuity gate for the whole case: python, not the parser under test,
 # confirming the fixture's own bodies are well formed and carry the commits the
-# assertions below believe they carry. Without this, a fixture typo turns eleven
-# UNKNOWN assertions green.
+# assertions below believe they carry. Without this, a fixture typo turns every
+# UNKNOWN assertion green.
 ss_wellformed() { # $1=body $2=expected commit -> "ok" or a diagnostic
   printf '%s' "$1" | python3 -c "
 import sys, json
@@ -2007,85 +2008,121 @@ except Exception as e:
 }
 check "the fixture REPO is worktree-shaped (.git is a FILE, as in production)" "0" \
   "$([ -f "$sstmp/repo/.git" ] && [ ! -d "$sstmp/repo/.git" ] && echo 0 || echo 1)"
-check "the fixture has two DISTINCT commits (the case is not vacuous)" "1" \
-  "$([ -n "$ss_old" ] && [ -n "$ss_new" ] && [ "$ss_old" != "$ss_new" ] && echo 1 || echo 0)"
-check "the in-sync fixture body is well formed and carries origin/main's commit" "ok" \
-  "$(ss_wellformed "$ss_body_new" "$ss_new")"
-check "the stale fixture body is well formed and carries the older commit" "ok" \
+check "the fixture's three commits are distinct (the case is not vacuous)" "1" \
+  "$([ -n "$ss_old" ] && [ -n "$ss_studio" ] && [ -n "$ss_tipsha" ] &&
+     [ "$ss_old" != "$ss_studio" ] && [ "$ss_studio" != "$ss_tipsha" ] && echo 1 || echo 0)"
+check "the fixture tip is the loop/-only commit (so 'behind but current' is reachable)" "1" \
+  "$([ "$ss_tipsha" = "$ss_tip" ] && echo 1 || echo 0)"
+check "the tip fixture body is well formed and carries origin/main's commit" "ok" \
+  "$(ss_wellformed "$ss_body_tip" "$ss_tipsha")"
+check "the studio-commit fixture body is well formed" "ok" \
+  "$(ss_wellformed "$ss_body_studio" "$ss_studio")"
+check "the oldest fixture body is well formed" "ok" \
   "$(ss_wellformed "$ss_body_old" "$ss_old")"
-# (a) the running service serves origin/main's commit -> in sync.
-ss_sync="$(ssrun "$ss_body_new")"
-check "a service serving origin/main's commit reads in sync" "0" \
-  "$(printf '%s' "$ss_sync" | grep -q 'studio server: in sync' && echo 0 || echo 1)"
+check "the diverged fixture body is well formed" "ok" \
+  "$(ss_wellformed "$ss_body_div" "$ss_diverged")"
+check "the diverged commit really is NOT an ancestor of main (not vacuous)" "1" \
+  "$(git -C "$sstmp/repo" merge-base --is-ancestor "$ss_diverged" origin/main 2>/dev/null && echo 0 || echo 1)"
+# (a) the running service serves origin/main's commit -> current, identical.
+ss_sync="$(ssrun "$ss_body_tip")"
+check "a service serving origin/main's commit reads current" "0" \
+  "$(printf '%s' "$ss_sync" | grep -q 'studio server: current' && echo 0 || echo 1)"
 check "...naming the commit it is serving, so the line is evidence on its own" "0" \
-  "$(printf '%s' "$ss_sync" | grep -q "$ss_new" && echo 0 || echo 1)"
-# (b) it serves an OLDER commit -> STALE, naming both shas and the remedy. This
-#     is the 2026-07-31 state, and the whole point of the half.
+  "$(printf '%s' "$ss_sync" | grep -q "$ss_tipsha" && echo 0 || echo 1)"
+check "...and the in-sync path emits NOTHING on stdout" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+# (b) BEHIND, but only by a loop/-only commit -> still CURRENT for what it
+#     serves. This service is built from `studio/` alone, and a sha-equality
+#     verdict would call it stale here -- which, with prompt.md's rule that a
+#     stale build's evidence does not count, would discard readings from a
+#     perfectly current reader. Measured on this repo: 8 of 19 commits in 24h
+#     touched studio/, against a probe throttled to one an hour.
+ss_near="$(ssrun "$ss_body_studio")"
+check "a service behind by a loop/-only commit still reads current for studio/" "0" \
+  "$(printf '%s' "$ss_near" | grep -q 'studio server: current for studio/' && echo 0 || echo 1)"
+check "...and is NOT called STALE" "1" \
+  "$(printf '%s' "$ss_near" | grep -q 'STALE' && echo 0 || echo 1)"
+check "...while still disclosing the distance it is discounting" "0" \
+  "$(printf '%s' "$ss_near" | grep -q 'by 1 commit(s), none touching studio/' && echo 0 || echo 1)"
+# (c) behind by a commit that DOES touch studio/ -> STALE, naming the counts and
+#     the remedy. This is the 2026-07-31 state, and the point of the half.
 ss_stale="$(ssrun "$ss_body_old")"
-check "a service behind origin/main reads STALE" "0" \
+check "a service behind by a studio/ commit reads STALE" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
 check "...naming the commit it is actually serving" "0" \
   "$(printf '%s' "$ss_stale" | grep -q "$ss_old" && echo 0 || echo 1)"
+check "...and how many of the commits behind touch studio/" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q '2 commit(s) behind' && printf '%s' "$ss_stale" | grep -q '1 of them touching studio/' && echo 0 || echo 1)"
 check "...and the remedy, so the line is actionable where it is read" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'install_studio_server.sh --update' && echo 0 || echo 1)"
-check "...and saying the C3 evidence beside it is answering from that build" "0" \
+check "...and saying the C3 evidence it produced is about that build" "0" \
   "$(printf '%s' "$ss_stale" | grep -q 'quota shadow' && echo 0 || echo 1)"
-check "...and is never also reported as in sync" "1" \
-  "$(printf '%s' "$ss_stale" | grep -q 'in sync' && echo 0 || echo 1)"
-# (c) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
+check "...and is never also reported as current" "1" \
+  "$(printf '%s' "$ss_stale" | grep -q 'current' && echo 0 || echo 1)"
+check "...and the STALE path emits NOTHING on stdout" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+# (c2) a DIVERGED build -> STALE, but with no count offered. The remedy is the
+#      same; the distance is not a thing that can be stated.
+ss_div="$(ssrun "$ss_body_div")"
+check "a diverged build reads STALE" "0" \
+  "$(printf '%s' "$ss_div" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...saying it is not an ancestor, rather than inventing a distance" "0" \
+  "$(printf '%s' "$ss_div" | grep -q 'not an ancestor' && echo 0 || echo 1)"
+check "...and quotes no commit count at all" "1" \
+  "$(printf '%s' "$ss_div" | grep -q 'commit(s) behind' && echo 0 || echo 1)"
+# (d) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
 #     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
 #     announces a verdict about a build it cannot identify.
 ss_dev="$(ssrun '{"version":"0.0.0-dev","commit":"dev"}')"
 check "the 'dev' placeholder reads UNKNOWN, not a verdict" "0" \
   "$(printf '%s' "$ss_dev" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and is NOT resolved against a branch that happens to be named dev" "1" \
-  "$(printf '%s' "$ss_dev" | grep -qE 'in sync|STALE' && echo 0 || echo 1)"
-# (d) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
+  "$(printf '%s' "$ss_dev" | grep -qE 'current|STALE' && echo 0 || echo 1)"
+# (e) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
 ss_unk="$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}')"
 check "a commit this checkout does not know reads UNKNOWN" "0" \
   "$(printf '%s' "$ss_unk" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and is not guessed at as STALE" "1" \
   "$(printf '%s' "$ss_unk" | grep -q 'STALE' && echo 0 || echo 1)"
-# (e) nothing answered on the port -> UNKNOWN, and never "in sync". An empty
-#     body and an empty `rev-parse` are both "", so a bare equality test reads a
-#     DOWN SERVER as a healthy one -- the fail-open this file keeps
-#     rediscovering (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob
-#     ids). It is also named as a LIFECYCLE fault rather than as drift, because
-#     rebuilding a service that was never up fixes nothing.
+# (f) nothing answered on the port -> UNKNOWN, and never current. An empty body
+#     and an empty `rev-parse` are both "", so a bare equality test reads a DOWN
+#     SERVER as a healthy one -- the fail-open this file keeps rediscovering
+#     (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob ids). It is
+#     also named as a LIFECYCLE fault rather than as drift, because rebuilding a
+#     service that was never up fixes nothing.
 ss_down="$(ssrun '' 7)"
 check "an unreachable service reads UNKNOWN" "0" \
   "$(printf '%s' "$ss_down" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...blaming the LIFECYCLE, not the build it never learned" "0" \
   "$(printf '%s' "$ss_down" | grep -q 'LIFECYCLE' && echo 0 || echo 1)"
-check "...and is never reported as in sync" "1" \
-  "$(printf '%s' "$ss_down" | grep -q 'in sync' && echo 0 || echo 1)"
-# (f) something answered, but not with a version -- an older studio, or any
+check "...and is never reported as current" "1" \
+  "$(printf '%s' "$ss_down" | grep -q 'current' && echo 0 || echo 1)"
+# (g) something answered, but not with a version -- an older studio, or any
 #     other service on the port. #765 records a wrong-but-answering server 404ing
 #     and reading as healthy forever.
 check "a body carrying no commit reads UNKNOWN" "0" \
   "$(printf '%s' "$(ssrun '{"version":"0.0.0-dev"}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "a non-JSON body reads UNKNOWN rather than crashing" "0" \
   "$(printf '%s' "$(ssrun '<html>404 not found</html>')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
-# (g) an EMPTY commit -- the other half of the empty-equals-empty trap, this one
+# (h) an EMPTY commit -- the other half of the empty-equals-empty trap, this one
 #     reachable from a served body rather than from a dead port.
-check "an empty commit string reads UNKNOWN, never in sync" "0" \
+check "an empty commit string reads UNKNOWN, never current" "0" \
   "$(printf '%s' "$(ssrun '{"version":"1.0.0","commit":""}')" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
-# (h) origin/main could not be refreshed -> UNKNOWN. `origin/main` is a CACHED
+# (i) origin/main could not be refreshed -> UNKNOWN. `origin/main` is a CACHED
 #     ref: a failed fetch leaves the last one in place, which compares equal to
-#     whatever was current then and reads "in sync" forever. Same discipline as
+#     whatever was current then and reads healthy forever. Same discipline as
 #     drift_report_plane, and the reason both halves fetch for themselves.
 mv "$sstmp/origin" "$sstmp/origin-moved"
-ss_nofetch="$(ssrun "$ss_body_new")"
-check "an unfetchable origin/main reads UNKNOWN, never in sync" "0" \
+ss_nofetch="$(ssrun "$ss_body_tip")"
+check "an unfetchable origin/main reads UNKNOWN, never current" "0" \
   "$(printf '%s' "$ss_nofetch" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and says so about the REFRESH, not about the service" "0" \
   "$(printf '%s' "$ss_nofetch" | grep -q 'could not be refreshed' && echo 0 || echo 1)"
 mv "$sstmp/origin-moved" "$sstmp/origin"
-# (i) REPO is not a git checkout at all -> UNKNOWN, not a crash.
+# (j) REPO is not a git checkout at all -> UNKNOWN, not a crash.
 check "a REPO that is not a git checkout reads UNKNOWN" "0" \
-  "$(SS_REPO="$sstmp/not-a-repo" ssrun "$ss_body_new" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
-# (j) advisory means advisory: nothing on stdout, nothing decided.
-check "the studio-server check emits NOTHING on stdout" "" \
+  "$(SS_REPO="$sstmp/not-a-repo" ssrun "$ss_body_tip" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and that path emits NOTHING on stdout either" "" \
   "$(cat "$sstmp/out" 2>/dev/null)"
 rm -rf "$sstmp"
 
