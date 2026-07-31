@@ -127,6 +127,22 @@ DRIFT_REPORT="${DRIFT_REPORT:-1}"  # set to exactly "0" to silence the #808 drif
                                   # value still reports: a monitor a typo can switch off without
                                   # saying so fails in the monitored direction, and `DRIFT_REPORT=no`
                                   # reading as "off" is the same silence this ticket exists to end.
+SELF_ADOPT="${SELF_ADOPT:-1}"     # set to exactly "0" to refuse self-adoption of merged code and
+                                  # go back to "report STALE and wait for a human kickstart" (#811).
+                                  # Same rule as DRIFT_REPORT above and for the same reason: any
+                                  # OTHER value still adopts, so a typo cannot silently disarm it.
+MAX_SELF_ADOPT="${MAX_SELF_ADOPT:-3}"  # adoptions per driver run. Bounds an adopt-LOOP: if the file
+                                  # kept changing under the driver (a sync in progress, an editor
+                                  # writing every few seconds) an unbounded driver would exec on
+                                  # every iteration and never fire. Carried across the exec in the
+                                  # handoff, so the bound is on the RUN, not on each process.
+DRIVER_HANDOFF="${DRIVER_HANDOFF:-$INFRA/.driver_handoff}"  # "<epoch> <k=v,...>" carrying the
+                                  # cross-fire counters across a self-adopt exec. Consumed once,
+                                  # by the process that wrote it (#811).
+HANDOFF_MAX_AGE="${HANDOFF_MAX_AGE:-300}"  # a handoff older than this is not a continuation. The
+                                  # exec is immediate, so this is generous by two orders of
+                                  # magnitude; it exists so a record left behind by a process that
+                                  # died between the write and the exec cannot be picked up later.
 DRIVE_SELF="${DRIVE_SELF:-${BASH_SOURCE[0]}}"  # the file THIS process was started from. Overridable
                                   # so the drift checks are unit-testable against a scratch file
                                   # instead of against drive.sh itself.
@@ -995,12 +1011,16 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
 # OPERATOR's to fix (see the deliberate non-goal below), and a plane that is
 # temporarily AHEAD of main is a normal state during a deploy, not a fault.
 #
-# DELIBERATE NON-GOAL: the driver does not re-`exec` itself to adopt new code.
-# Cross-fire state -- `fires`, `stall`, `blind_fires`, `budget_regrants` -- lives
-# in shell variables, so an exec would silently reset the counters that bound
-# MAX_STALL and MAX_BUDGET_REGRANTS. Trading a visible staleness for an invisible
-# fail-open in the spend/stall guards is a bad trade. Self-adoption needs that
-# state persisted first (#811); until then, report and let a human restart.
+# SINCE #811 THE DRIVER DOES ADOPT NEW CODE ITSELF -- see `drive_self_adopt`
+# below. This used to read "DELIBERATE NON-GOAL: the driver does not re-`exec`
+# itself", because cross-fire state (`fires`, `stall`, `blind_fires`,
+# `budget_regrants`) lives in shell variables and a naive exec would silently
+# reset the counters bounding MAX_STALL and MAX_BUDGET_REGRANTS -- trading a
+# visible staleness for an invisible fail-open in the spend/stall guards. That
+# objection was correct and is what #811 had to solve, not a reason it stayed
+# unsolved: the counters are handed over explicitly. The report above stays
+# DETECTION-ONLY regardless, and its `kickstart` remedy is still the right one
+# for every path adoption refuses.
 
 # --- drive_self_hash: content hash of the driver's own source, "" if unreadable.
 # Unreadable must stay distinguishable from "unchanged", so this returns EMPTY
@@ -1032,7 +1052,7 @@ drift_report_driver_code() {
   elif [ "$dc_now" = "$DRIVE_BOOT_HASH" ]; then
     log "driver code: live ($DRIVE_SELF is unchanged since this driver booted; #808)"
   else
-    log "driver code: STALE -- $DRIVE_SELF changed since this driver booted, so this process is running SUPERSEDED code and every merged loop/ fix is inert until it restarts: launchctl kickstart -k gui/\$(id -u)/com.autonomy.studio-build-driver -- and \`-k\` kills a fire in flight, so restart BETWEEN fires (#808)"
+    log "driver code: STALE -- $DRIVE_SELF changed since this driver booted, so this process is running SUPERSEDED code and every merged loop/ fix is inert until it restarts: launchctl kickstart -k gui/\$(id -u)/com.autonomy.studio-build-driver -- and \`-k\` kills a fire in flight, so restart BETWEEN fires. Since #811 self-adoption may do that for you on the very next line -- this report is detection-only and runs before that decision, so it cannot know (#808)"
   fi
   return 0
 }
@@ -1130,6 +1150,359 @@ drift_report() {
   return 0
 }
 
+# --- #811: SELF-ADOPTION -- how a merged loop/ fix actually starts running.
+#
+# #808 made staleness VISIBLE; it did not fix it. `drift_report_driver_code`
+# above is deliberately left DETECTION-ONLY and its remedy line still names
+# `launchctl kickstart`, because it runs BEFORE the adopt decision and cannot
+# know the outcome -- adoption can be disabled, capped out, or refused on an
+# unparseable file, and in every one of those cases a human restart IS still the
+# remedy. The whole adoption narrative lives here instead, on the line after.
+#
+# WHAT IS AND IS NOT PERSISTED, because the ticket asked for the wrong thing.
+# #811 proposed persisting the cross-fire counters so that ANY restart -- crash,
+# `launchctl`, exec -- resumes the bounds. That is a worse bug than the one it
+# fixes. `MAX_FIRES` is documented as per-run and RESET by a scheduled start
+# (":52/:78, and the stop message says so"); `blind_fires` and `budget_regrants`
+# are per-run by construction; and `stall` persisted across scheduled starts
+# would PERMANENTLY WEDGE the loop -- once it reached MAX_STALL, every future
+# 03:05 run would stop at "nothing more to do" before firing, forever, even
+# after the operator queued more work. The spend guard that must survive a
+# restart is `quota_gate`, and it already does: it reads the live 7-day window,
+# not a counter.
+#
+# PRIOR ART, and where this deliberately differs. `bin/supervisor.sh` has shipped
+# self-re-exec since #294 (`engine_update_ready`/`should_reexec`/`reexec_engine`).
+# It is a different process under different rules -- the engine half of the repo,
+# which cutover C3 parks -- so this is not a shared abstraction, but three of its
+# choices were considered and two rejected:
+#   * it re-execs with RESOLVED args rather than raw argv. Same conclusion here,
+#     reached by deletion: drive.sh parses no arguments at all (the plist passes
+#     none), so this execs with none and there is no argv to get wrong.
+#   * it bounds re-exec looping with a BOOLEAN `reexec_disabled`, which needs no
+#     cross-exec transport. A counter needs teleporting and is therefore more
+#     complex -- but it is also the only shape that permits a SECOND legitimate
+#     adoption in one run, which a driver that may run for many hours wants.
+#   * it restores `execfail` after a failed exec. Not mirrored: everything below
+#     the exec here is the process's last few lines anyway.
+#
+# ONE UNAVOIDABLE HOLE, named rather than papered over: adopting a ROLLBACK to a
+# drive.sh from before #811 resets every bound, because the code being adopted
+# knows nothing about the handoff. Nothing this side can do about that.
+#
+# So the scope here is CONTINUATION-ONLY. An `exec` is the same driver run
+# carrying on in new code, and it must carry its bounds. A launchd start, a
+# crash restart and a manual kickstart are NEW runs and reset them, exactly as
+# today. The discriminator is the PID: `exec` preserves it, and nothing else
+# does. Its failure directions are asymmetric, which is why it is enough --
+# a false RESET (the fail-open one) cannot happen, since exec is by definition
+# the same process; a false RESUME needs a foreign process to land on a recycled
+# PID inside HANDOFF_MAX_AGE, and its effect would be "the bounds stay armed",
+# which is the safe direction.
+HANDOFF_FORMAT=1
+
+# --- drive_is_count: is $1 a counter this file may do arithmetic on?
+#
+# LEADING ZEROS ARE THE POINT, not the digit check. `$(( ))` reads a leading zero
+# as OCTAL, and both outcomes are silent: `fires=012` increments to 11, and
+# `fires=08` is "value too great for base" -- non-fatal, so `fires` STAYS "08"
+# and never increments again, which means MAX_FIRES, QUOTA_UNKNOWN_FIRES,
+# MAX_CRASH and MAX_STALL never trip for the rest of the run. A full fail-open on
+# every bounded guard, from one padded field. `quota_stamped_read`'s own `10#`
+# comment is this file's record of having been burned by exactly this.
+#
+# It matters here specifically because this parser's job is reading records
+# written by OTHER VERSIONS of drive.sh, so "a future writer emits a padded
+# field" is the normal case, not an exotic one.
+#
+# 9 digits is the same bound `quota_knob_secs` uses: past that it is not a
+# counter, and it is where `test`'s arithmetic starts approaching the signed-64
+# range this file has already been bitten in.
+drive_is_count() {
+  case "$1" in ""|*[!0-9]*) return 1 ;; esac
+  case "$1" in 0[0-9]*) return 1 ;; esac
+  [ "${#1}" -gt 9 ] && return 1
+  return 0
+}
+
+# --- drive_handoff_encode: the counters as one whitespace-free token, or "".
+# Whitespace-free because `quota_stamped_write` refuses anything else -- the
+# record's VALUE is one field of a "<epoch> <value>" line (#806).
+drive_handoff_encode() {
+  dhe_head="${prev_head:--}"
+  # `head` is the only free-form field and it goes into a comma/equals-delimited
+  # token, so a stray `,` or `=` would split the record into fields that parse as
+  # something else entirely.
+  #
+  # An unencodable head REFUSES THE WHOLE RECORD rather than degrading to the "-"
+  # sentinel, which is what the first cut did on the reasoning that "an absent
+  # prev_head costs at most one iteration of stall detection". That reasoning was
+  # WRONG, and the review lens that measured it was right: the stall test is
+  # `[ -n "$prev_head" ] && …`, so an empty prev_head takes the ELSE branch and
+  # sets `stall=0`. Degrading the head would therefore have silently wiped the
+  # very counter the handoff exists to preserve -- a faithfully carried
+  # `stall=2` zeroed on the first iteration after the exec. Refusing costs one
+  # adoption attempt and keeps every bound honest.
+  case "$dhe_head" in
+    "-") ;;
+    ""|*[!0-9a-zA-Z]*) return 1 ;;
+  esac
+  [ "${#dhe_head}" -gt 64 ] && return 1
+  # `$$` is the ORIGINAL shell's pid even inside this command substitution's
+  # subshell (bash keeps $$ stable; BASHPID is the one that changes) -- which is
+  # what makes it comparable against `$$` in the exec'd process.
+  printf 'v=%s,pid=%s,fires=%s,stall=%s,blind=%s,regrants=%s,crash=%s,loops=%s,adopt=%s,head=%s' \
+    "$HANDOFF_FORMAT" "$$" "$fires" "$stall" "$blind_fires" "$budget_regrants" \
+    "$crash" "$loops" "$adoptions" "$dhe_head"
+}
+
+# --- drive_handoff_parse: $1=record value -> 0 and dh_* set; non-zero = refuse.
+#
+# THE WRITER IS THE OLD CODE AND THE READER IS THE NEW CODE. That is the whole
+# point of the exec, and it means the two sides can disagree about the format in
+# a way no other state file here can. The degradation is therefore per-FIELD and
+# not per-record: a counter the writer did not know about defaults to 0 (that ONE
+# bound restarts; the rest stay armed) and is NAMED in the log, and a field the
+# reader does not know about is ignored and named. A field that is PRESENT but
+# malformed still refuses the whole record -- a corrupt digit string must never
+# be coerced into a bound. `v` guards the case where that per-field tolerance is
+# not enough and the meaning of a field has changed.
+drive_handoff_parse() {
+  dh_v=""; dh_pid=""; dh_fires=""; dh_stall=""; dh_blind=""; dh_regrants=""
+  dh_crash=""; dh_loops=""; dh_adopt=""; dh_head=""
+  dh_missing=""; dh_unknown=""
+  dh_rest="$1"
+  [ -n "$dh_rest" ] || return 1
+  while [ -n "$dh_rest" ]; do
+    case "$dh_rest" in
+      *,*) dh_kv="${dh_rest%%,*}"; dh_rest="${dh_rest#*,}" ;;
+      *)   dh_kv="$dh_rest"; dh_rest="" ;;
+    esac
+    case "$dh_kv" in *=*) ;; *) return 1 ;; esac
+    dh_k="${dh_kv%%=*}"; dh_val="${dh_kv#*=}"
+    case "$dh_k" in
+      v)        dh_v="$dh_val" ;;
+      pid)      dh_pid="$dh_val" ;;
+      fires)    dh_fires="$dh_val" ;;
+      stall)    dh_stall="$dh_val" ;;
+      blind)    dh_blind="$dh_val" ;;
+      regrants) dh_regrants="$dh_val" ;;
+      crash)    dh_crash="$dh_val" ;;
+      loops)    dh_loops="$dh_val" ;;
+      adopt)    dh_adopt="$dh_val" ;;
+      head)     dh_head="$dh_val" ;;
+      *)        dh_unknown="$dh_unknown $dh_k" ;;
+    esac
+  done
+  [ "$dh_v" = "$HANDOFF_FORMAT" ] || return 1
+  drive_is_count "$dh_pid" || return 1
+  [ -n "$dh_fires" ]    || { dh_fires=0;    dh_missing="$dh_missing fires"; }
+  [ -n "$dh_stall" ]    || { dh_stall=0;    dh_missing="$dh_missing stall"; }
+  [ -n "$dh_blind" ]    || { dh_blind=0;    dh_missing="$dh_missing blind"; }
+  [ -n "$dh_regrants" ] || { dh_regrants=0; dh_missing="$dh_missing regrants"; }
+  [ -n "$dh_crash" ]    || { dh_crash=0;    dh_missing="$dh_missing crash"; }
+  [ -n "$dh_loops" ]    || { dh_loops=0;    dh_missing="$dh_missing loops"; }
+  [ -n "$dh_adopt" ]    || { dh_adopt=0;    dh_missing="$dh_missing adopt"; }
+  for dh_n in "$dh_fires" "$dh_stall" "$dh_blind" "$dh_regrants" "$dh_crash" "$dh_loops" "$dh_adopt"; do
+    drive_is_count "$dh_n" || return 1
+  done
+  # Kept in step with the encoder's own check, deliberately: it emits `-` for an
+  # absent head and refuses anything else non-alphanumeric, so anything the
+  # encoder can write, this accepts, and nothing more.
+  case "$dh_head" in
+    ""|"-") dh_head="" ;;
+    *[!0-9a-zA-Z]*) return 1 ;;
+  esac
+  [ "${#dh_head}" -gt 64 ] && return 1
+  return 0
+}
+
+# --- drive_handoff_resume: consume a handoff written by THIS pid, or start clean.
+# Called once at startup. Every path is best-effort: the worst case is the
+# counters this run already had, which is exactly today's behaviour.
+drive_handoff_resume() {
+  dhr_rec="$(quota_stamped_read "$DRIVER_HANDOFF" "$HANDOFF_MAX_AGE")"
+  # CONSUME FIRST, and unconditionally. A handoff is valid for exactly one
+  # startup: leaving a consumed or stale one on disk is how a much later restart
+  # would resume bounds from a run that ended hours ago. (Two drivers starting
+  # inside the same microsecond could in principle have one eat the other's
+  # record; the cost is that the other's bounds reset, which is today's
+  # behaviour, and the alternative -- leaving records lying around -- fails in
+  # the direction that resumes something it should not.)
+  if [ -e "$DRIVER_HANDOFF" ]; then
+    quota_stamped_discard "$DRIVER_HANDOFF" ||
+      log "WARN: could not clear the driver handoff at $DRIVER_HANDOFF -- a later restart could resume stale counters from it (#811)"
+  fi
+  [ -n "$dhr_rec" ] || return 0
+  if ! drive_handoff_parse "$dhr_rec"; then
+    log "WARN: a driver handoff was present but UNREADABLE. If this process was exec'd, the cross-fire bounds (MAX_STALL, MAX_CRASH, QUOTA_UNKNOWN_FIRES, MAX_BUDGET_REGRANTS) it had already spent are lost and restart from zero; if this is a fresh scheduled start they were zero anyway and only the leftover record is odd. Either way SELF-ADOPTION IS NOW OFF for the rest of this run so the loss cannot repeat -- a human restart is the remedy (#811)"
+    adoptions="$MAX_SELF_ADOPT"
+    return 0
+  fi
+  if [ "$dh_pid" != "$$" ]; then
+    log "driver handoff: IGNORED -- written by pid $dh_pid, this process is $$, so this is a new driver run and not an exec continuation. Counters start at zero, as every scheduled start does (#811)"
+    return 0
+  fi
+  fires="$dh_fires"; stall="$dh_stall"; blind_fires="$dh_blind"
+  budget_regrants="$dh_regrants"; crash="$dh_crash"; loops="$dh_loops"
+  adoptions="$dh_adopt"; prev_head="$dh_head"
+  log "driver handoff: RESUMED after a self-adopt exec (fires=$fires stall=$stall blind=$blind_fires regrants=$budget_regrants crash=$crash loops=$loops adopt=$adoptions) -- the bounds this run has already spent are still armed (#811)"
+  [ -n "$dh_missing" ] && log "WARN: the handoff carried no$dh_missing -- written by a drive.sh that did not have that counter, so that bound restarts from zero (#811)"
+  [ -n "$dh_unknown" ] && log "driver handoff: ignored unknown field(s)$dh_unknown -- written by a NEWER drive.sh than the one now running (#811)"
+  return 0
+}
+
+# --- drive_adopt_floor: the adopt cap must not depend on the handoff surviving.
+#
+# MEASURED, not theorised. Mutating `drive_handoff_resume` into a no-op and
+# running case 44c did not merely turn assertions red -- it HUNG the suite in an
+# infinite adopt-exec loop: every exec'd process started at adoptions=0, so a
+# file that kept changing was adopted forever and no fire ever completed. That is
+# the one failure mode MAX_SELF_ADOPT exists to prevent, and it was resting
+# entirely on the same handoff record whose loss it has to survive.
+#
+# So the count is ALSO carried in the environment, which `exec` preserves for
+# free and which no other restart can supply. The two carriers are combined by
+# MAX, never by preference: whichever remembers MORE adoptions is the one that
+# keeps the cap honest, and a lost carrier can then only tighten it.
+#
+# UNSET after reading, so no child -- run.sh, and through it the agent itself --
+# ever inherits it. A stray DRIVE_ADOPT_COUNT in a fire's environment would be
+# read back by a nested driver as an adoption that never happened.
+drive_adopt_floor() {
+  daf_env="${DRIVE_ADOPT_COUNT:-}"
+  unset DRIVE_ADOPT_COUNT
+  drive_is_count "$daf_env" || return 0
+  [ "$daf_env" -gt "$adoptions" ] || return 0
+  # Reached whenever the handoff was lost, refused or never written, on a process
+  # that WAS exec'd -- i.e. exactly the case the hang above came from.
+  log "driver handoff: adopt count $daf_env recovered from the environment (the handoff record carried $adoptions) -- the MAX_SELF_ADOPT cap stays armed even when the record does not survive (#811)"
+  adoptions="$daf_env"
+  return 0
+}
+
+# --- drive_self_adopt: re-exec into merged code, between fires, or say why not.
+#
+# Called at the TOP of the loop iteration, after `drift_report` and ahead of the
+# quota gate, the auth probe, the PR gate-wait and the fire itself. Every
+# `continue` in the body returns there, so this point is always BETWEEN fires:
+# it cannot interrupt a fire, a backoff sleep, an auth-retry loop or a gate wait.
+# Nothing is orphaned by the exec -- there are no traps, no background jobs and
+# no long-lived descriptors (`log` opens the file per call), the cwd is
+# re-established by the new process's own `cd "$REPO"`, launchd tracks the job by
+# a pid that exec preserves, and the [loop-paused] issues are idempotent.
+#
+# EVERY REFUSAL LEAVES THE DRIVER RUNNING THE OLD CODE, which is the same state
+# it is in today and therefore always safe. The one thing that must never happen
+# is an exec into a process whose bounds come back zeroed, so the handoff is
+# written AND read back AND re-parsed before the exec -- the contract enforced,
+# not asserted, the same way `quota_stamped_write` enforces its own.
+drive_self_adopt() {
+  [ "$SELF_ADOPT" = "0" ] && return 0
+  # No boot hash, or an unreadable file now: `drift_report_driver_code` has
+  # already said UNKNOWN. Unmeasured is not a licence to exec.
+  [ -n "${DRIVE_BOOT_HASH:-}" ] || return 0
+  dsa_now="$(drive_self_hash)"
+  [ -n "$dsa_now" ] || return 0
+  [ "$dsa_now" = "$DRIVE_BOOT_HASH" ] && return 0
+  if [ "$adoptions" -ge "$MAX_SELF_ADOPT" ]; then
+    log "driver code: NOT adopting -- $adoptions self-adoption(s) already attempted this run (cap MAX_SELF_ADOPT=$MAX_SELF_ADOPT). The file keeps changing underneath the driver; a human restart is the remedy (#811)"
+    return 0
+  fi
+  # A truncated or half-written sync must not become an exec into garbage, which
+  # would kill the driver outright and leave nothing running until 03:05. This is
+  # the same trust boundary a human `kickstart` has -- it too adopts whatever was
+  # synced -- and no weaker.
+  # `${BASH:-/bin/bash}` and not a bare `bash`, so the file is validated by the
+  # SAME interpreter that is about to run it rather than by whatever `PATH`
+  # resolves to.
+  if ! "${BASH:-/bin/bash}" -n "$DRIVE_SELF" 2>/dev/null; then
+    log "driver code: NOT adopting -- $DRIVE_SELF does not PARSE, so exec'ing it would kill the driver. A half-finished sync or a manual edit; still running the old code, which is the safe direction (#811)"
+    return 0
+  fi
+  # A TRUNCATION THAT PARSES needs its own check, and this is the cheap one that
+  # works. `bash -n` accepts any syntactically valid PREFIX -- a non-atomic copy
+  # caught mid-write yields exactly that -- and the exec then succeeds, runs the
+  # config and the function definitions, never reaches the loop, and exits. Same
+  # outcome as a dead exec: nothing running until the next scheduled start.
+  # Requiring a string from the file's LAST line proves the tail arrived, and
+  # requiring it IN the tail rather than anywhere in the file is the stronger
+  # form (review NITPICK): an unanchored match would also be satisfied by a
+  # corrupt copy that happened to retain the substring mid-file. `tail -5` rather
+  # than `tail -1` so a future drive.sh may gain a line or two after the marker
+  # without adoption silently refusing forever -- and a refusal is announced and
+  # fail-safe in any case, since the driver simply stays on the old code.
+  if ! tail -5 "$DRIVE_SELF" 2>/dev/null | grep -q 'DRIVER DONE'; then
+    log "driver code: NOT adopting -- $DRIVE_SELF parses but is missing its tail, so it is a TRUNCATED copy (a sync caught mid-write). Exec'ing it would run the definitions and exit without ever reaching the loop (#811)"
+    return 0
+  fi
+  # Counted BEFORE the write, and never uncounted. An ATTEMPT is what the cap
+  # bounds: a refusal path that left the count alone would retry a failing write
+  # on every iteration for the life of the run.
+  adoptions=$((adoptions + 1))
+  dsa_rec="$(drive_handoff_encode)"
+  if [ -z "$dsa_rec" ]; then
+    log "driver code: NOT adopting -- the cross-fire counters could not be ENCODED (a prev_head this record's format cannot carry), and an exec that dropped them would zero the bounds. Staying on the old code (#811)"
+    return 0
+  fi
+  if ! quota_stamped_write "$DRIVER_HANDOFF" "$dsa_rec"; then
+    log "driver code: NOT adopting -- the cross-fire counters could not be written to $DRIVER_HANDOFF, and an exec without them would silently reset MAX_STALL / MAX_CRASH / QUOTA_UNKNOWN_FIRES / MAX_BUDGET_REGRANTS to zero. Staying on the old code (#811)"
+    return 0
+  fi
+  dsa_back="$(quota_stamped_read "$DRIVER_HANDOFF" "$HANDOFF_MAX_AGE")"
+  if [ "$dsa_back" != "$dsa_rec" ] || ! drive_handoff_parse "$dsa_back"; then
+    log "driver code: NOT adopting -- the handoff at $DRIVER_HANDOFF does not read back as what was written, so the exec'd process would start with zeroed bounds (#811)"
+    quota_stamped_discard "$DRIVER_HANDOFF" || true
+    return 0
+  fi
+  # LAST CHECK, and it has to be last. Everything above -- the encode, the
+  # stamped write with its internal date/mv/read-back, this function's own log
+  # calls -- is several forks' worth of wall clock after `bash -n` ran, and the
+  # trigger for all of it is "the file just changed", i.e. maximally correlated
+  # with a sync still in flight. Re-hashing here closes that window: if the file
+  # moved again since it was validated, the validation was of a different file.
+  if [ "$(drive_self_hash)" != "$dsa_now" ]; then
+    log "driver code: NOT adopting -- $DRIVE_SELF changed AGAIN between validation and exec, so what was checked is not what would run. A sync is probably still in flight; the next iteration will re-check (#811)"
+    quota_stamped_discard "$DRIVER_HANDOFF" || true
+    return 0
+  fi
+  log "driver code: ADOPTING -- $DRIVE_SELF changed since this driver booted; re-exec'ing into the merged code between fires, carrying (fires=$fires stall=$stall blind=$blind_fires regrants=$budget_regrants crash=$crash loops=$loops adopt=$adoptions) (#811)"
+  # The second carrier for the cap (see drive_adopt_floor). Exported HERE and
+  # nowhere else: between this line and the exec there is no child to inherit it,
+  # and the exec'd process unsets it before its first fire.
+  DRIVE_ADOPT_COUNT="$adoptions"
+  export DRIVE_ADOPT_COUNT
+  # `bash "$DRIVE_SELF"` rather than `"$DRIVE_SELF"`, mirroring the plist's own
+  # `/bin/bash drive.sh`: a synced file that lost its exec bit (`git show >file`
+  # drops it) must still adopt.
+  #
+  # `execfail` COVERS LESS THAN IT LOOKS LIKE, and the honest statement of what
+  # happens matters more here than a comforting one. It governs the COMMAND WORD
+  # only -- `${BASH:-/bin/bash}`. Measured on 3.2.57:
+  #
+  #   exec /no-such-bash file    -> recovered, the lines below RUN
+  #   exec /bin/bash /missing.sh -> process GONE, exit 127
+  #   exec /bin/bash /unreadable -> process GONE, exit 126
+  #
+  # So every way $DRIVE_SELF itself can fail is a SUCCESSFUL exec followed by the
+  # new bash dying, and nothing below runs: no driver at all until the next
+  # scheduled start, with `ADOPTING` as the last line in the log and the 126/127
+  # going to launchd's stderr instead. That is why the checks above are the real
+  # net and this is only the residue -- an interpreter that cannot be exec'd.
+  # State is not corrupted on that path either way: the orphaned handoff carries
+  # a pid no later start can match, so it is ignored and discarded.
+  shopt -s execfail 2>/dev/null || true
+  # shellcheck disable=SC2093
+  # SC2093 assumes the lines after `exec` are dead. Under `execfail` the
+  # command-word failure above reaches them (prevention-log #19: CI's shellcheck
+  # flags this and the disable belongs here, at write time, not after a red run).
+  exec "${BASH:-/bin/bash}" "$DRIVE_SELF"
+  log "driver code: adoption FAILED -- ${BASH:-/bin/bash} could not be exec'd at all. Discarding the handoff and continuing on the OLD code (#811)"
+  unset DRIVE_ADOPT_COUNT
+  quota_stamped_discard "$DRIVER_HANDOFF" || true
+  return 0
+}
+
 # --- quota_knob_secs: normalise a "how old may a reading be" knob, because BOTH of
 # them are fed straight to `test` and an operand `test` cannot parse returns 2 --
 # NEITHER branch -- so `[ age -gt bound ]` falls through and EVERY record looks fresh
@@ -1148,14 +1521,23 @@ drift_report() {
 #     to the gate with zero polls.)
 #   * QUOTA_CACHE_MAX_AGE bounds a REFUSE-ONLY cache, so a large valid value can only
 #     ever over-refuse. No ceiling; it just has to be a number.
-quota_knob_secs() {  # $1=name $2=value $3=default $4=ceiling (0 = none)
+#
+# The NAME is historical. It normalises any non-negative integer knob, and #811's
+# MAX_SELF_ADOPT needs exactly the same treatment for exactly the same reason --
+# it is fed to `[ "$adoptions" -ge "$MAX_SELF_ADOPT" ]`, so an unparseable value
+# returns 2 from `test`, takes NEITHER branch, and leaves the adopt cap silently
+# unarmed. Hence $5: the only seconds-specific thing here was the WARN's wording,
+# and a second near-identical normaliser would be the duplication this file keeps
+# paying for. Callers that omit it read "seconds", as all three original ones do.
+quota_knob_secs() {  # $1=name $2=value $3=default $4=ceiling (0 = none) $5=unit noun (default seconds)
+  qk_unit="${5:-seconds}"
   qk_v="$2"
   case "$qk_v" in ""|*[!0-9]*) qk_v="" ;; esac
   # 9 digits is ~31 years in seconds. Past that it is a typo, and it is also where
   # `test` starts approaching the signed-64 range that already burned this file once.
   [ "${#qk_v}" -gt 9 ] && qk_v=""
   if [ -z "$qk_v" ]; then
-    log "WARN: $1='$2' is not a usable number of seconds -- using the default $3 instead (an unparseable bound makes every stamped record look fresh, which is the one polarity this guard may not have)"
+    log "WARN: $1='$2' is not a usable number of $qk_unit -- using the default $3 instead (an operand the shell's test builtin cannot parse returns 2 and takes NEITHER branch, so an unparseable bound silently stops bounding anything -- for an age that means every stamped record looks fresh, for a cap that means no cap)"
     qk_v="$3"
   fi
   if [ "$4" -gt 0 ] && [ "$qk_v" -gt "$4" ]; then
@@ -1477,6 +1859,7 @@ auth_block_retries=0      # length of the auth block ensure_auth just cleared (s
 budget_regrants=0         # re-grants spent this run; bounded by MAX_BUDGET_REGRANTS
 blind_fires=0             # fires spent while quota was UNREADABLE; bounded by QUOTA_UNKNOWN_FIRES
 gate_blind=0              # last quota_gate decision was blind (set -u: must exist)
+adoptions=0               # self-adopt exec ATTEMPTS this run; bounded by MAX_SELF_ADOPT (#811)
 prev_head=""
 
 # Normalised HERE and not at declaration, because complaining needs `log` and the log
@@ -1490,6 +1873,13 @@ QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE
 # never unsafe. It is normalised anyway so an unparseable knob is announced rather
 # than silently making every stamp look fresh (i.e. the probe quietly never running).
 QUOTA_SHADOW_MIN_INTERVAL="$(quota_knob_secs QUOTA_SHADOW_MIN_INTERVAL "$QUOTA_SHADOW_MIN_INTERVAL" 3600 0)"
+# Both #811 knobs go through the same normaliser, and for the same reason it was
+# written: each is fed straight to `test`, where an operand it cannot parse
+# returns 2 and takes NEITHER branch. An unparseable HANDOFF_MAX_AGE would make
+# every handoff record look fresh forever; an unparseable MAX_SELF_ADOPT would
+# leave the adopt cap silently unarmed, which is an adopt LOOP.
+HANDOFF_MAX_AGE="$(quota_knob_secs HANDOFF_MAX_AGE "$HANDOFF_MAX_AGE" 300 0)"
+MAX_SELF_ADOPT="$(quota_knob_secs MAX_SELF_ADOPT "$MAX_SELF_ADOPT" 3 0 adoptions)"
 
 log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA_STOP_PCT%; stop on operator/nothing-to-do/quota; backoff on limits) ==="
 
@@ -1498,6 +1888,16 @@ log "=== DRIVER START (repo=$REPO -- MAX_FIRES=$MAX_FIRES, QUOTA_STOP_PCT=$QUOTA
 # are known to be the same thing. Every later comparison is against this.
 DRIVE_BOOT_HASH="$(drive_self_hash)"
 [ -n "$DRIVE_BOOT_HASH" ] || log "WARN: could not hash $DRIVE_SELF at start -- the driver-code drift check will read UNKNOWN for this whole run (#808)"
+
+# #811. AFTER the boot hash, and that order is load-bearing: the hash must be
+# taken from the file THIS process is running, so an adopted process reads `live`
+# rather than inheriting the predecessor's idea of what it booted from. Before
+# the loop, because every counter it restores bounds the first iteration.
+drive_handoff_resume
+# AFTER the resume, because it is a FLOOR on what that record said rather than an
+# alternative to it -- and unconditional, because its whole job is the case where
+# the record did not survive.
+drive_adopt_floor
 
 # Is the quota guard's fallback reader actually THERE? A missing reader and a
 # rate-limited one are indistinguishable downstream -- both yield "" and the fire
@@ -1530,6 +1930,14 @@ while true; do
   # roughly one per fire (auth backoff and the PR gate wait loop internally), so
   # this costs no extra log volume.
   drift_report
+
+  # #811. Immediately after the report that measures it, and ahead of every stop
+  # condition, gate and fire below -- so a merged fix is adopted BEFORE the run
+  # it was merged to change. `loops` has already been incremented above and is
+  # carried in the handoff. That keeps MAX_LOOPS bounding the run across the
+  # exec -- which in production is inert (it defaults to 0, uncapped) but is
+  # exactly the lever the tests use to observe that the carry happened at all.
+  drive_self_adopt
 
   # --- STOP: operator signal ([operator-decision]/[mvp-ready]) or a real block.
   #     [loop-paused] is deliberately NOT matched here -- it never stops. -------
