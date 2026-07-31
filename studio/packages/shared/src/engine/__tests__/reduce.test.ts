@@ -1525,7 +1525,10 @@ describe('activity.warned is inert (#750)', () => {
     }).state;
     const r = eng.reduce(s, succeeded('a', attempt('a'), {}));
     expect(r.state.nodes['a']?.status).toBe('success');
-    expect(r.state.status).toBe('success');
+    // The run settles green: `finishRun{success}` is the command the driver acts
+    // on (the run's own `status` flips when that command is applied, not in this
+    // fold), so THIS is where "the warning changed no outcome" is provable.
+    expect(r.commands).toContainEqual({ type: 'finishRun', outcome: 'success' });
   });
 
   it('an UNRECOGNISED code still folds — `code` is open by durability contract', () => {
