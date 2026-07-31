@@ -1533,7 +1533,7 @@ quota_knob_secs() {  # $1=name $2=value $3=default $4=ceiling (0 = none) $5=unit
   # `test` starts approaching the signed-64 range that already burned this file once.
   [ "${#qk_v}" -gt 9 ] && qk_v=""
   if [ -z "$qk_v" ]; then
-    log "WARN: $1='$2' is not a usable number of $qk_unit -- using the default $3 instead (an operand `test` cannot parse returns 2 and takes NEITHER branch, so an unparseable bound silently stops bounding anything -- for an age that means every stamped record looks fresh, for a cap that means no cap)"
+    log "WARN: $1='$2' is not a usable number of $qk_unit -- using the default $3 instead (an operand the shell's test builtin cannot parse returns 2 and takes NEITHER branch, so an unparseable bound silently stops bounding anything -- for an age that means every stamped record looks fresh, for a cap that means no cap)"
     qk_v="$3"
   fi
   if [ "$4" -gt 0 ] && [ "$qk_v" -gt "$4" ]; then
