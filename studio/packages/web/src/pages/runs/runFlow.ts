@@ -133,6 +133,29 @@ export function runFlowEdges(doc: RunDoc): FlowEdge[] {
 }
 
 /**
+ * Is every rendered field of these two `data` objects equal?
+ *
+ * A SHALLOW compare over all keys, rather than the named-field list this
+ * started as. Both node kinds' data are flat records of primitives (`title`,
+ * `status`, `tone`, `kind`, `round`), and a named list silently under-compared
+ * the moment a second kind arrived: it checked `title`/`status`/`tone` only, so
+ * a LOOPING container — which the engine keeps `active` across re-rounds while
+ * only `round` advances — matched as unchanged and kept its stale object, and
+ * the "· round N" label froze on screen for the whole loop.
+ *
+ * Enumerating what a node renders is exactly the thing that goes out of date, so
+ * it is no longer enumerated. Should a non-primitive field ever be added to
+ * either data type, this returns `false` for it every time — a redundant rebuild
+ * (the pre-`mergeRunNodes` behaviour, plus the carried-forward measurement),
+ * never a frozen one.
+ */
+function sameRenderedData(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => Object.is(a[k], b[k]));
+}
+
+/**
  * Merge a freshly-built node array into the one React Flow currently holds,
  * PRESERVING object identity wherever nothing on screen changed.
  *
@@ -149,19 +172,22 @@ export function runFlowEdges(doc: RunDoc): FlowEdge[] {
  * their own `measured` + `handles`.)
  *
  * So: a node whose rendered data is unchanged is returned AS THE SAME OBJECT,
- * and one whose status did change carries the measurement forward.
+ * and one whose data did change carries the measurement forward.
  */
+
 export function mergeRunNodes(prev: FlowNode[], next: FlowNode[]): FlowNode[] {
   const before = new Map(prev.map((n) => [n.id, n]));
   return next.map((n) => {
     const old = before.get(n.id);
     if (old === undefined) return n;
-    const a = old.data as RunNodeData;
-    const b = n.data as RunNodeData;
-    // Compared field-by-field rather than by a deep equal: these ARE the fields
-    // the node renders, so a new one added here must be considered deliberately.
-    const sameData = a.title === b.title && a.status === b.status && a.tone === b.tone;
-    if (sameData && old.position.x === n.position.x && old.position.y === n.position.y) return old;
+    if (
+      old.type === n.type &&
+      sameRenderedData(old.data, n.data) &&
+      old.position.x === n.position.x &&
+      old.position.y === n.position.y
+    ) {
+      return old;
+    }
     // Changed — keep whatever React Flow measured, so the node does not fall
     // back to uninitialised and take its edges with it for a frame.
     return { ...n, measured: n.measured ?? old.measured, handles: n.handles ?? old.handles };

@@ -211,6 +211,27 @@ describe('mergeRunNodes', () => {
     expect(a.measured).toEqual({ width: 150, height: 52 });
   });
 
+  it('REBUILDS a looping container whose round advanced but whose status did not', () => {
+    // The engine keeps a looping container `active` across re-rounds, so
+    // `status` and `tone` are identical between folds and only `round` moves.
+    // A merge that compared a NAMED list of fields matched this as unchanged and
+    // froze the "· round N" label on screen for the whole loop.
+    const active = (round: number) =>
+      runFlowNodes(CONTAINER_DOC, {
+        ...projected(),
+        containers: { stg: { status: 'active', round, outputs: {} } },
+      });
+
+    const first = active(1).map((n) => ({ ...n, measured: { width: 10, height: 10 } }));
+    const merged = mergeRunNodes(first, active(2));
+
+    const box = merged.find((n) => n.id === 'stg')!;
+    expect(box.data.round).toBe(2);
+    expect(box).not.toBe(first.find((n) => n.id === 'stg'));
+    // …and it is still initialised, so its edges keep their endpoints.
+    expect(box.measured).toBeDefined();
+  });
+
   it('keeps a node it has never seen before exactly as built', () => {
     const next = runFlowNodes(DOC, null);
     expect(mergeRunNodes([], next)).toEqual(next);
