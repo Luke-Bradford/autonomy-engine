@@ -1883,9 +1883,157 @@ while [ "$ks_i" -lt 15 ]; do kill -0 "$ks_pid" 2>/dev/null || break; sleep 1; ks
 kill -9 "$ks_pid" 2>/dev/null || true
 check "DRIFT_REPORT=0 silences the report entirely" "1" \
   "$([ -s "$pdtmp/infra/off.log" ] && echo 0 || echo 1)"
-check "...but an undocumented value still REPORTS rather than silently disabling" "2" \
-  "$(grep -cE 'driver code:|plane drift:' "$pdtmp/infra/typo.log" 2>/dev/null || echo 0)"
+check "...but an undocumented value still REPORTS rather than silently disabling" "3" \
+  "$(grep -cE 'driver code:|plane drift:|studio server:' "$pdtmp/infra/typo.log" 2>/dev/null || echo 0)"
 rm -rf "$pdtmp"
+
+# --- 44c. #832 STUDIO-SERVER drift: is the QUOTA SOURCE running merged code? --
+# The THIRD half of the same question, about the third process in it. #808 asks
+# it of the driver's file and of the driver's process; nobody asked it of the
+# service the spend guard's source 3 actually polls, which is provisioned from
+# an isolated clone that nothing moves forward (#773 rejected a scheduled
+# updater on measured starvation evidence, and that stands -- this half is
+# DETECTION-ONLY and updates nothing).
+#
+# Measured 2026-07-31, and the reason this exists: the service sat ELEVEN
+# commits behind origin/main, so it predated #825 and served no `unavailable`
+# field at all. Every layer then behaved exactly as specified -- the reader
+# found no reason, the probe logged a bare UNREADABLE -- and the C3 evidence
+# quietly became a measurement of the WRONG BUILD, with nothing anywhere saying
+# so. Prevention-log #28: a signal must measure the actor it governs.
+#
+# IDENTITY COMES FROM THE RUNNING PROCESS (`GET /api/version`.commit, read once
+# at registration), NOT from the installer's `built.sha`. The stamp answers
+# "what did the installer last compile", which is one indirection from the
+# question -- it can read current while the loaded unit still serves an older
+# dist. It would also hardcode a second copy of the service state-dir path,
+# whose failure mode is an absent stamp reporting UNKNOWN forever while looking
+# perfectly installed: the same silent-never-runs shape `drift_report_plane` had
+# to be rewritten out of.
+#
+# A REAL git repo (the comparison under test is a git one; stubbing git would
+# assert on the mock) plus a stubbed curl (the served body has to be controlled
+# exactly, including the shapes a live server will not produce on demand).
+sstmp="$(mk_tmp)"
+git init -q --bare "$sstmp/origin" 2>/dev/null
+mkdir -p "$sstmp/src" "$sstmp/bin" "$sstmp/infra"
+git init -q "$sstmp/src" 2>/dev/null
+git -C "$sstmp/src" checkout -q -b main 2>/dev/null
+printf 'old\n' >"$sstmp/src/f"
+git -C "$sstmp/src" add -A >/dev/null 2>&1
+git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm old >/dev/null 2>&1
+ss_old="$(git -C "$sstmp/src" rev-parse --short HEAD)"
+# A BRANCH LITERALLY NAMED `dev`. `build-info.ts` serves `commit: 'dev'` as its
+# no-manifest placeholder, and a reader that hands that straight to `rev-parse`
+# resolves it against this ref and reports a confident verdict about a build
+# whose identity it never learned. The hex guard is what stops that, and this
+# ref is what makes the case able to fail.
+git -C "$sstmp/src" branch dev >/dev/null 2>&1
+printf 'new\n' >"$sstmp/src/f"
+git -C "$sstmp/src" add -A >/dev/null 2>&1
+git -C "$sstmp/src" -c user.email=t@t -c user.name=t commit -qm new >/dev/null 2>&1
+git -C "$sstmp/src" remote add origin "$sstmp/origin" 2>/dev/null
+git -C "$sstmp/src" push -q origin main dev 2>/dev/null
+# Worktree-shaped, because production is: `~/Dev/studio-loop-repo/.git` is a
+# FILE holding a gitdir pointer, and case 44 records what gating on `[ -d .git ]`
+# cost when the fixture was shaped differently from the thing it stands in for.
+git -C "$sstmp/src" worktree add -q --detach "$sstmp/repo" main >/dev/null 2>&1
+ss_new="$(git -C "$sstmp/repo" rev-parse --short origin/main 2>/dev/null)"
+ssrun() {  # $1 = the /api/version body curl echoes; $2 = curl's exit status
+  {
+    echo '#!/bin/bash'
+    echo 'cat <<'\''BODY'\'''
+    echo "$1"
+    echo 'BODY'
+    # A curl that failed must still exit non-zero: "nothing answered on the
+    # port" is a LIFECYCLE fault, and reporting it as a drift verdict would
+    # blame the wrong thing entirely.
+    echo "exit ${2:-0}"
+  } >"$sstmp/bin/curl"
+  chmod +x "$sstmp/bin/curl"
+  rm -f "$sstmp/infra/driver.log"
+  (
+    set -uo pipefail
+    export INFRA="$sstmp/infra"
+    export REPO="${SS_REPO:-$sstmp/repo}"
+    export DLOG="$sstmp/infra/driver.log"
+    export PATH="$sstmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    drift_report_studio_server
+  ) >"$sstmp/out" 2>"$sstmp/err" &
+  ss_pid=$!
+  ss_i=0
+  while [ "$ss_i" -lt 20 ]; do kill -0 "$ss_pid" 2>/dev/null || break; sleep 1; ss_i=$((ss_i + 1)); done
+  kill -9 "$ss_pid" 2>/dev/null || true
+  sed -n 's/.*\(studio server: .*\)/\1/p' "$sstmp/infra/driver.log" 2>/dev/null | tail -1
+}
+check "the fixture REPO is worktree-shaped (.git is a FILE, as in production)" "0" \
+  "$([ -f "$sstmp/repo/.git" ] && [ ! -d "$sstmp/repo/.git" ] && echo 0 || echo 1)"
+check "the fixture has two DISTINCT commits (the case is not vacuous)" "1" \
+  "$([ -n "$ss_old" ] && [ -n "$ss_new" ] && [ "$ss_old" != "$ss_new" ] && echo 1 || echo 0)"
+# (a) the running service serves origin/main's commit -> in sync.
+check "a service serving origin/main's commit reads in sync" "0" \
+  "$(ssrun "{\"version\":\"0.0.0-dev\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: in sync' && echo 0 || echo 1)"
+# (b) it serves an OLDER commit -> STALE, naming both shas and the remedy. This
+#     is the 2026-07-31 state, and the whole point of the half.
+ss_stale="$(ssrun "{\"version\":\"0.0.0-dev\",\"commit\":\"$ss_old\"}")"
+check "a service behind origin/main reads STALE" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...naming the commit it is actually serving" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q "$ss_old" && echo 0 || echo 1)"
+check "...and the remedy, so the line is actionable where it is read" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'install_studio_server.sh --update' && echo 0 || echo 1)"
+check "...and saying the C3 evidence below it is answering from that build" "0" \
+  "$(printf '%s' "$ss_stale" | grep -q 'quota shadow' && echo 0 || echo 1)"
+# (c) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
+#     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
+#     announces a verdict about a build it cannot identify.
+ss_dev="$(ssrun '{"version":"0.0.0-dev","commit":"dev"}')"
+check "the 'dev' placeholder reads UNKNOWN, not a verdict" "0" \
+  "$(printf '%s' "$ss_dev" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and is NOT resolved against a branch that happens to be named dev" "1" \
+  "$(printf '%s' "$ss_dev" | grep -qE 'in sync|STALE' && echo 0 || echo 1)"
+# (d) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
+check "a commit this checkout does not know reads UNKNOWN" "0" \
+  "$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (e) nothing answered on the port -> UNKNOWN, and never "in sync". An empty
+#     body and an empty `rev-parse` are both "", so a bare equality test reads a
+#     DOWN SERVER as a healthy one -- the fail-open this whole file keeps
+#     rediscovering (`quota_stamped_read`'s `10#`, `drift_report_plane`'s blob
+#     ids). Curl's non-zero status is asserted separately from the empty body
+#     below because they are different faults with the same empty output.
+ss_down="$(ssrun '' 7)"
+check "an unreachable service reads UNKNOWN" "0" \
+  "$(printf '%s' "$ss_down" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and is never reported as in sync" "1" \
+  "$(printf '%s' "$ss_down" | grep -q 'in sync' && echo 0 || echo 1)"
+# (f) something answered, but not with a version -- an older studio, or any
+#     other service on the port. #765 records a wrong-but-answering server 404ing
+#     and reading as healthy forever.
+check "a body carrying no commit reads UNKNOWN" "0" \
+  "$(ssrun '{"version":"0.0.0-dev"}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "a non-JSON body reads UNKNOWN rather than crashing" "0" \
+  "$(ssrun '<html>404</html>' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (g) an EMPTY commit -- the other half of the empty-equals-empty trap, this one
+#     reachable from a served body rather than from a dead port.
+check "an empty commit string reads UNKNOWN, never in sync" "0" \
+  "$(ssrun '{"version":"1.0.0","commit":""}' | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (h) origin/main could not be refreshed -> UNKNOWN. `origin/main` is a CACHED
+#     ref: a failed fetch leaves the last one in place, which compares equal to
+#     whatever was current then and reads "in sync" forever. Same discipline as
+#     drift_report_plane, and the reason both halves fetch for themselves.
+mv "$sstmp/origin" "$sstmp/origin-moved"
+check "an unfetchable origin/main reads UNKNOWN, never in sync" "0" \
+  "$(ssrun "{\"version\":\"1.0.0\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+mv "$sstmp/origin-moved" "$sstmp/origin"
+# (i) REPO is not a git checkout at all -> UNKNOWN, not a crash.
+check "a REPO that is not a git checkout reads UNKNOWN" "0" \
+  "$(SS_REPO="$sstmp/not-a-repo" ssrun "{\"version\":\"1.0.0\",\"commit\":\"$ss_new\"}" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+# (j) advisory means advisory: nothing on stdout, nothing decided.
+check "the studio-server check emits NOTHING on stdout" "" \
+  "$(cat "$sstmp/out" 2>/dev/null)"
+rm -rf "$sstmp"
 
 # --- 45. #806 quota_stamped_write: ONE owner for the "<epoch> <value>" format --
 # The reader was shared; the writer was hand-rolled at three sites, each with `>`.
