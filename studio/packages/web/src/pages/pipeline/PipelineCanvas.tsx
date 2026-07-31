@@ -26,6 +26,13 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
+import {
+  assembleConfig,
+  deriveConfigFields,
+  formatFieldValue,
+  unrepresentableFields,
+  type ConfigField,
+} from './configForm';
 import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
 import {
   coerceDefaultInput,
@@ -1041,6 +1048,31 @@ export function NodePanel({
   const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
   const [error, setError] = useState<string | null>(null);
 
+  // U7 — the per-activity form, derived from the activity's own `configSchema`
+  // (see `configForm.ts` for why the schema, not hand-written metadata, is the
+  // source). `null` when the schema is not object-rooted.
+  const fields = useMemo(() => (entry ? deriveConfigFields(entry.configSchema) : null), [entry]);
+  // A stored value whose type disagrees with its schema-derived control cannot
+  // round-trip through that control, so the whole node falls back to the JSON
+  // editor rather than corrupting the doc on an apply the author thinks touched
+  // one other field. Computed from the config as MOUNTED (the panel is keyed by
+  // node id), so it cannot flip mid-edit.
+  const unrenderable = useMemo(
+    () => (fields ? unrepresentableFields(fields, editable) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seeded once per node; the panel is keyed by node id
+    [fields],
+  );
+  const formAvailable = fields !== null && unrenderable.length === 0;
+  const [jsonMode, setJsonMode] = useState(!formAvailable);
+  const [inputs, setInputs] = useState<Record<string, string | boolean>>(() => {
+    const seeded: Record<string, string | boolean> = {};
+    for (const field of fields ?? []) {
+      const rendered = formatFieldValue(field, editable[field.name]);
+      seeded[field.name] = rendered.ok ? rendered.value : '';
+    }
+    return seeded;
+  });
+
   // Kinds this activity accepts, PLUS whatever is currently bound — so a node
   // bound to an off-kind connection (e.g. loaded from an older doc) still shows
   // its real binding instead of silently reading as "— none —".
@@ -1048,7 +1080,22 @@ export function NodePanel({
     ? connections.filter((c) => entry.connectionKinds.includes(c.kind) || c.id === connectionId)
     : connections;
 
-  function apply() {
+  /**
+   * Validate a candidate settings blob against the activity's own schema.
+   *
+   * A UX PRE-CHECK, never the gate. Several activities' `configSchema` is palette
+   * metadata whose real constraints live server-side in `validateDoc`, so a clean
+   * result here does not mean the version will save — it only spares the author a
+   * round-trip to a 400 they were going to get anyway.
+   */
+  function schemaIssues(candidate: unknown): string | null {
+    if (!entry) return null;
+    const check = entry.configSchema.safeParse(candidate);
+    if (check.success) return null;
+    return check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+  }
+
+  function applyJson() {
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1060,16 +1107,33 @@ export function NodePanel({
       setError('Config must be a JSON object.');
       return;
     }
-    if (entry) {
-      const check = entry.configSchema.safeParse(parsed);
-      if (!check.success) {
-        setError(check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
-        return;
-      }
+    const issues = schemaIssues(parsed);
+    if (issues) {
+      setError(issues);
+      return;
     }
     setError(null);
     // Preserve the seeded `outputs` contract, which is edited elsewhere.
     store.getState().updateNodeConfig(nodeId, { ...(parsed as Record<string, unknown>), outputs });
+  }
+
+  function applyForm() {
+    if (!fields) return;
+    // `editable` (not `config`) is the original: `outputs` is re-attached below,
+    // exactly as the JSON path does, so the two paths agree on the one key no
+    // activity's schema declares.
+    const assembled = assembleConfig(editable, fields, inputs);
+    if (!assembled.ok) {
+      setError(assembled.message);
+      return;
+    }
+    const issues = schemaIssues(assembled.owned);
+    if (issues) {
+      setError(issues);
+      return;
+    }
+    setError(null);
+    store.getState().updateNodeConfig(nodeId, { ...assembled.config, outputs });
   }
 
   // A structural-call activity (`execute_pipeline`) stores its settings in
@@ -1117,22 +1181,58 @@ export function NodePanel({
         </label>
       )}
       <ContainerSection store={store} nodeId={nodeId} />
-      <label>
-        Config (JSON)
-        <textarea
-          value={text}
-          rows={10}
-          spellCheck={false}
-          onChange={(e) => setText(e.target.value)}
-        />
-      </label>
+
+      {formAvailable && (
+        <label className="contract-check">
+          <input
+            type="checkbox"
+            checked={jsonMode}
+            onChange={(e) => setJsonMode(e.target.checked)}
+          />
+          Edit as JSON
+        </label>
+      )}
+
+      {/* Not a preference the author can dismiss: the form genuinely cannot
+          round-trip what is saved, so saying which fields is the only way they
+          can repair it in the JSON editor they have been given instead. */}
+      {fields !== null && unrenderable.length > 0 && (
+        <p className="contract-advisory">
+          {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
+        </p>
+      )}
+
+      {jsonMode || fields === null ? (
+        <label>
+          Config (JSON)
+          <textarea
+            value={text}
+            rows={10}
+            spellCheck={false}
+            onChange={(e) => setText(e.target.value)}
+          />
+        </label>
+      ) : (
+        <div className="contract-section">
+          {fields.length === 0 && <p className="page-hint">This activity has no settings.</p>}
+          {fields.map((field) => (
+            <ConfigFieldControl
+              key={field.name}
+              field={field}
+              value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+              onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+            />
+          ))}
+        </div>
+      )}
+
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
       <div className="form-actions">
-        <button type="button" onClick={apply}>
+        <button type="button" onClick={jsonMode || fields === null ? applyJson : applyForm}>
           Apply config
         </button>
         <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
@@ -1140,5 +1240,97 @@ export function NodePanel({
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * One derived config control (U7).
+ *
+ * Every string field renders as a `<textarea>` rather than an `<input>`,
+ * deliberately and uniformly: ANY string setting here may hold a multi-line `${}`
+ * expression or prose (`prompt`, `body`, `content`, `task`), and the only
+ * alternative — a per-field-name list of which ones are "long" — would be exactly
+ * the magic-string table that deriving the form from the schema exists to avoid.
+ *
+ * The label carries the field NAME, not a prettified one: the name is what the
+ * author writes in a `${nodes.x.config…}` reference and what the server's
+ * validation errors cite, so renaming it for display would break the one thread
+ * connecting the form, the doc and the error message.
+ */
+function ConfigFieldControl({
+  field,
+  value,
+  onChange,
+}: {
+  field: ConfigField;
+  value: string | boolean;
+  onChange: (next: string | boolean) => void;
+}) {
+  const label = field.optional ? `${field.name} (optional)` : field.name;
+
+  if (field.kind === 'boolean') {
+    return (
+      <label className="contract-check">
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {label}
+      </label>
+    );
+  }
+
+  if (field.kind === 'enum') {
+    return (
+      <label>
+        {label}
+        <select
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">— none —</option>
+          {(field.enumOptions ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  if (field.kind === 'number') {
+    // A TEXT input, not `type="number"`: a number input reports an unparseable
+    // entry as the empty string, which this form reads as "not set" — so a typo
+    // would silently DELETE the setting instead of reporting "must be a number".
+    return (
+      <label>
+        {`${label} — number`}
+        <input
+          type="text"
+          inputMode="decimal"
+          value={typeof value === 'string' ? value : ''}
+          spellCheck={false}
+          placeholder={field.defaultText}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+    );
+  }
+
+  const hint = field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
+
+  return (
+    <label>
+      {hint === null ? label : `${label} — ${hint}`}
+      <textarea
+        value={typeof value === 'string' ? value : ''}
+        rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+        spellCheck={false}
+        placeholder={field.defaultText}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
   );
 }

@@ -171,7 +171,13 @@ export function deriveConfigFields(schema: z.ZodType): ConfigField[] | null {
   return Object.entries(shape as Record<string, unknown>).map(([name, fieldSchema]) => {
     const { inner, optional, defaultText } = unwrap(fieldSchema);
     const { kind, enumOptions } = classify(inner);
-    return { name, kind, optional, ...(enumOptions && { enumOptions }), ...(defaultText !== undefined && { defaultText }) };
+    return {
+      name,
+      kind,
+      optional,
+      ...(enumOptions && { enumOptions }),
+      ...(defaultText !== undefined && { defaultText }),
+    };
   });
 }
 
@@ -203,7 +209,9 @@ export function formatFieldValue(field: ConfigField, value: unknown): FieldRende
     case 'json': {
       const text = JSON.stringify(value, null, 2);
       // `undefined` back from stringify means the value has no JSON form at all.
-      return typeof text === 'string' ? { ok: true, value: text } : { ok: false, reason: 'not JSON' };
+      return typeof text === 'string'
+        ? { ok: true, value: text }
+        : { ok: false, reason: 'not JSON' };
     }
   }
 }
@@ -273,8 +281,8 @@ export function parseFieldInput(field: ConfigField, raw: string | boolean): Fiel
       } catch {
         return { ok: false, message: 'is not valid JSON' };
       }
-    case 'boolean':
-      return { ok: false, message: 'expected a checkbox value' };
+    // No `boolean` case: the guard above returns for it, and the compiler proves
+    // this switch is exhaustive without one.
   }
 }
 

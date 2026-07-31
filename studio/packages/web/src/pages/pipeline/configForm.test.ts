@@ -203,11 +203,19 @@ describe('parseFieldInput', () => {
   });
 
   it('parses each kind back out of its control', () => {
-    expect(parseFieldInput(text, 'https://x')).toEqual({ ok: true, omit: false, value: 'https://x' });
+    expect(parseFieldInput(text, 'https://x')).toEqual({
+      ok: true,
+      omit: false,
+      value: 'https://x',
+    });
     expect(parseFieldInput(num, '512')).toEqual({ ok: true, omit: false, value: 512 });
     expect(parseFieldInput(num, '0.5')).toEqual({ ok: true, omit: false, value: 0.5 });
     expect(parseFieldInput(en, 'b')).toEqual({ ok: true, omit: false, value: 'b' });
-    expect(parseFieldInput(list, 'a\n\n b \n')).toEqual({ ok: true, omit: false, value: ['a', 'b'] });
+    expect(parseFieldInput(list, 'a\n\n b \n')).toEqual({
+      ok: true,
+      omit: false,
+      value: ['a', 'b'],
+    });
     expect(parseFieldInput(json, '{"a":1}')).toEqual({ ok: true, omit: false, value: { a: 1 } });
   });
 
@@ -249,10 +257,14 @@ describe('assembleConfig', () => {
     // undeclared key an API-authored or imported doc carries is preserved by the
     // same rule. Storing a `safeParse` OUTPUT here would drop them all silently:
     // a plain `z.object` STRIPS unknown keys (verified against zod 4.4.3).
-    const result = assembleConfig({ url: 'old', outputs: [{ name: 'r', type: 'string' }], extra: 7 }, fields, {
-      url: 'new',
-      body: '',
-    });
+    const result = assembleConfig(
+      { url: 'old', outputs: [{ name: 'r', type: 'string' }], extra: 7 },
+      fields,
+      {
+        url: 'new',
+        body: '',
+      },
+    );
 
     expect(result).toEqual({
       ok: true,
