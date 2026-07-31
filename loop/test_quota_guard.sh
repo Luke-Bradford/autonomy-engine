@@ -1882,7 +1882,7 @@ check "...and that branch cleans up its temp too (45d could not see this)" "clea
 chmod 755 "$swtmp/ro" 2>/dev/null || true
 rm -rf "$swtmp"
 
-# --- 44. #811 SELF-ADOPTION: a merged loop/ fix actually starts running -------
+# --- 46. #811 SELF-ADOPTION: a merged loop/ fix actually starts running -------
 # #808 made "this process is running superseded code" VISIBLE; the fix stayed
 # inert until a human ran `launchctl kickstart`. These cases drive the REAL
 # drive.sh and mutate the copy it is running from, exactly as a sync does.
@@ -1900,52 +1900,52 @@ rm -rf "$swtmp"
 # resumes at 2 and has iterations 3 and 4 left, i.e. 3 fires in total. Had
 # `loops` reset to 0 it would have had FOUR more iterations and fired 5 times.
 # The fire COUNT is therefore the assertion, and 3-vs-5 is the whole point.
-r44="$(run_case 0.10 MUTATE_DRIVE=comment MAX_LOOPS=4)"
-l44="$(logof "$r44")"
+r46="$(run_case 0.10 MUTATE_DRIVE=comment MAX_LOOPS=4)"
+l46="$(logof "$r46")"
 check "a driver whose file changed under it ADOPTS the new code (#811)" "1" \
-  "$(grep -c 'driver code: ADOPTING' "$l44" 2>/dev/null || echo 0)"
+  "$(grep -c 'driver code: ADOPTING' "$l46" 2>/dev/null || echo 0)"
 check "...and the exec'd process RESUMES the handoff rather than starting clean" "1" \
-  "$(grep -c 'driver handoff: RESUMED' "$l44" 2>/dev/null || echo 0)"
+  "$(grep -c 'driver handoff: RESUMED' "$l46" 2>/dev/null || echo 0)"
 check "...carrying MAX_LOOPS across the exec (3 fires, not the 5 a reset gives)" "3" \
-  "$(fires_of "$r44")"
+  "$(fires_of "$r46")"
 # The fire NUMBERING across both processes, not merely "FIRE 2 exists" -- that
 # weaker form is vacuous, because a driver that reset its counters still reaches
 # FIRE 2 eventually. A reset shows up here as a repeat: "1 1 2 3 4".
 check "...and the fire counter continues across the exec (1 2 3, never a repeat)" "1 2 3" \
-  "$(grep -o '=== FIRE [0-9]* ' "$l44" 2>/dev/null | awk '{print $3}' | tr '\n' ' ' | sed 's/ $//')"
+  "$(grep -o '=== FIRE [0-9]* ' "$l46" 2>/dev/null | awk '{print $3}' | tr '\n' ' ' | sed 's/ $//')"
 # The handoff is single-use. A record left on disk is one a much later restart
 # could resume bounds from -- the failure this file cares about, arriving late.
 check "...and the handoff record is CONSUMED, never left for a later restart" "0" \
-  "$([ -f "$(tmpof "$r44")/infra/.driver_handoff" ] && echo 1 || echo 0)"
+  "$([ -f "$(tmpof "$r46")/infra/.driver_handoff" ] && echo 1 || echo 0)"
 
 # (b) a new file that does not PARSE must never be exec'd into. This is the
 # half-finished-sync case, and exec'ing it would kill the driver outright --
 # nothing would run until the next scheduled start.
-r44b="$(run_case 0.10 MUTATE_DRIVE=broken MAX_LOOPS=3)"
-l44b="$(logof "$r44b")"
+r46b="$(run_case 0.10 MUTATE_DRIVE=broken MAX_LOOPS=3)"
+l46b="$(logof "$r46b")"
 # `grep -q`, not `grep -c ... || echo 0`: on NO match `grep -c` prints 0 AND exits
 # 1, so the `||` fires too and the value is "0\n0" -- which never equals "0" and
 # makes an expected-ABSENT assertion permanently red (this file's own lesson,
 # and it caught this case on the first run).
 check "a syntactically broken new file is REFUSED, not exec'd (#811)" "0" \
-  "$(grep -q 'driver code: ADOPTING' "$l44b" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'driver code: ADOPTING' "$l46b" 2>/dev/null && echo 1 || echo 0)"
 check "...and the refusal says so instead of failing silently" "1" \
-  "$(grep -q 'NOT adopting -- .* does not PARSE' "$l44b" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'NOT adopting -- .* does not PARSE' "$l46b" 2>/dev/null && echo 1 || echo 0)"
 check "...and the driver carries on running the OLD code (all 3 fires)" "3" \
-  "$(fires_of "$r44b")"
+  "$(fires_of "$r46b")"
 
 # (c) a file that keeps changing must not adopt-loop forever. MAX_SELF_ADOPT
 # bounds it, and the bound has to survive the exec or it bounds nothing.
-r44c="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 MAX_LOOPS=5)"
-l44c="$(logof "$r44c")"
+r46c="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 MAX_LOOPS=5)"
+l46c="$(logof "$r46c")"
 check "the adopt cap survives the exec -- exactly ONE adoption, not one per fire" "1" \
-  "$(grep -c 'driver code: ADOPTING' "$l44c" 2>/dev/null || echo 0)"
+  "$(grep -c 'driver code: ADOPTING' "$l46c" 2>/dev/null || echo 0)"
 check "...and says the cap is why it stopped adopting" "1" \
-  "$(grep -q 'cap MAX_SELF_ADOPT=1' "$l44c" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'cap MAX_SELF_ADOPT=1' "$l46c" 2>/dev/null && echo 1 || echo 0)"
 # The marker must never reach a fire. Every line is "[]" or the driver leaked it
 # into the agent's environment.
 check "...and no fire ever inherits DRIVE_ADOPT_COUNT (it is unset before the loop)" "0" \
-  "$(grep -cv '^\[\]$' "$(tmpof "$r44c")/adoptmarker.txt" 2>/dev/null | head -1)"
+  "$(grep -cv '^\[\]$' "$(tmpof "$r46c")/adoptmarker.txt" 2>/dev/null | head -1)"
 
 # (c2) the cap must not rest on the handoff RECORD surviving. Mutating
 # `drive_handoff_resume` to a no-op did not just turn (c) red -- it HUNG the
@@ -1954,20 +1954,40 @@ check "...and no fire ever inherits DRIVE_ADOPT_COUNT (it is unset before the lo
 # too, and starting AT the cap is the cheapest way to prove that carrier is read:
 # the driver must refuse from its very first iteration, with a file that changes
 # under it on every fire.
-r44c2="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 DRIVE_ADOPT_COUNT=1 MAX_LOOPS=3)"
-l44c2="$(logof "$r44c2")"
+r46c2="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 DRIVE_ADOPT_COUNT=1 MAX_LOOPS=3)"
+l46c2="$(logof "$r46c2")"
 check "an adopt count inherited from the environment is honoured (#811)" "0" \
-  "$(grep -q 'driver code: ADOPTING' "$l44c2" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'driver code: ADOPTING' "$l46c2" 2>/dev/null && echo 1 || echo 0)"
 check "...and the run still makes progress rather than looping (all 3 fires)" "3" \
-  "$(fires_of "$r44c2")"
+  "$(fires_of "$r46c2")"
 
 # (d) SELF_ADOPT=0 returns the driver to #808's report-and-wait behaviour.
-r44d="$(run_case 0.10 MUTATE_DRIVE=comment SELF_ADOPT=0 MAX_LOOPS=3)"
-l44d="$(logof "$r44d")"
+r46d="$(run_case 0.10 MUTATE_DRIVE=comment SELF_ADOPT=0 MAX_LOOPS=3)"
+l46d="$(logof "$r46d")"
 check "SELF_ADOPT=0 refuses to adopt at all (#811)" "0" \
-  "$(grep -q 'driver code: ADOPTING' "$l44d" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'driver code: ADOPTING' "$l46d" 2>/dev/null && echo 1 || echo 0)"
 check "...and the #808 STALE report still names the manual remedy" "1" \
-  "$(grep -q 'driver code: STALE' "$l44d" 2>/dev/null && echo 1 || echo 0)"
+  "$(grep -q 'driver code: STALE' "$l46d" 2>/dev/null && echo 1 || echo 0)"
+
+# (d2) the handoff cannot be WRITTEN at all. This is the branch whose entire
+# purpose is "never exec with zeroed bounds", and it was the one refusal path
+# with no coverage. A DIRECTORY as the destination is the cheapest way to reach
+# it that is not a permission trick: `quota_stamped_write` refuses one up front,
+# because `mv -f tmp DIR` SUCCEEDS by moving the temp INSIDE it.
+# A dedicated directory, not `/tmp`: the resume path also calls
+# `quota_stamped_discard` on this destination, and pointing that at a shared
+# system directory -- even though `rm -f` refuses a directory -- is not something
+# a test should read as normal.
+r46edir="$(mktemp -d)"
+r46e="$(run_case 0.10 MUTATE_DRIVE=comment DRIVER_HANDOFF="$r46edir" MAX_LOOPS=3)"
+l46e="$(logof "$r46e")"
+check "a handoff that cannot be WRITTEN refuses the exec (#811)" "0" \
+  "$(grep -q 'driver code: ADOPTING' "$l46e" 2>/dev/null && echo 1 || echo 0)"
+check "...and says the counters were the reason, not the file" "1" \
+  "$(grep -q 'NOT adopting -- the cross-fire counters could not be written' "$l46e" 2>/dev/null && echo 1 || echo 0)"
+check "...and the driver keeps firing on the old code" "3" \
+  "$(fires_of "$r46e")"
+rmdir "$r46edir" 2>/dev/null || true
 
 # (e) the handoff RECORD itself: who may consume it, and when. Sourced rather
 # than driven, because the discriminating inputs (a foreign pid, a stale stamp)
@@ -1988,6 +2008,16 @@ printf '%s v=1,pid=%s,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1
   "$((hfnow - 4000))" "$$" >"$hftmp/infra/.stale"
 printf '%s v=1,pid=%s,fires=seven,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
   "$hfnow" "$$" >"$hftmp/infra/.corrupt"
+# A record whose FORMAT version this drive.sh does not know. `v` exists for
+# exactly the writer-old/reader-new skew this feature creates, so it needs a case.
+printf '%s v=2,pid=%s,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$hfnow" "$$" >"$hftmp/infra/.badversion"
+# A counter with a LEADING ZERO. `$(( ))` reads it as octal: `fires=012`
+# increments to 11, and `fires=08` is "value too great for base" -- non-fatal, so
+# the counter STAYS "08" and never increments again, which silently disarms every
+# bound that reads it for the rest of the run.
+printf '%s v=1,pid=%s,fires=08,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$hfnow" "$$" >"$hftmp/infra/.octal"
 # A record from a drive.sh that had no `blind` counter yet -- the version skew an
 # adopt exec makes possible, since the OLD code writes what the NEW code reads.
 printf '%s v=1,pid=%s,fires=7,stall=2,regrants=1,crash=3,loops=9,adopt=1,head=abc123,newfield=x\n' \
@@ -2004,7 +2034,7 @@ printf '%s v=1,pid=%s,fires=7,stall=2,regrants=1,crash=3,loops=9,adopt=1,head=ab
   export HANDOFF_MAX_AGE=300
   # shellcheck source=/dev/null
   . "$HERE/drive.sh"
-  for hf_case in mine foreign stale corrupt skewed; do
+  for hf_case in mine foreign stale corrupt skewed badversion octal; do
     fires=0; stall=0; blind_fires=0; budget_regrants=0; crash=0; loops=0
     adoptions=0; prev_head=""
     cp "$hftmp/infra/.$hf_case" "$hftmp/infra/.driver_handoff"
@@ -2012,6 +2042,21 @@ printf '%s v=1,pid=%s,fires=7,stall=2,regrants=1,crash=3,loops=9,adopt=1,head=ab
     drive_handoff_resume
     echo "$hf_case fires=$fires stall=$stall blind=$blind_fires regrants=$budget_regrants crash=$crash loops=$loops adopt=$adoptions head=$prev_head consumed=$([ -f "$DRIVER_HANDOFF" ] && echo 0 || echo 1)"
   done
+  # The env carrier, which no run_case can reach: `run_case` can only SUPPLY
+  # DRIVE_ADOPT_COUNT from outside, so deleting the `export` before the exec left
+  # every case green. This exercises the read side and the unset directly.
+  fires=0; stall=0; blind_fires=0; budget_regrants=0; crash=0; loops=0
+  adoptions=0; prev_head=""
+  DRIVE_ADOPT_COUNT=2; export DRIVE_ADOPT_COUNT
+  drive_adopt_floor
+  echo "floor adopt=$adoptions leaked=${DRIVE_ADOPT_COUNT:-none}"
+  # ...and it is a FLOOR, never a ceiling: a record that remembers MORE
+  # adoptions than the environment must win, or a lost carrier could LOOSEN the
+  # cap instead of tightening it.
+  adoptions=5
+  DRIVE_ADOPT_COUNT=2; export DRIVE_ADOPT_COUNT
+  drive_adopt_floor
+  echo "ceiling adopt=$adoptions leaked=${DRIVE_ADOPT_COUNT:-none}"
 ) >"$hftmp/out" 2>"$hftmp/err" &
 hf_pid=$!
 hf_i=0
@@ -2040,8 +2085,19 @@ check "a record missing one counter keeps the others armed (writer=old, reader=n
   "$(hfout skewed)"
 check "...and NAMES the counter it could not carry, rather than silently zeroing it" "1" \
   "$(grep -q 'the handoff carried no blind' "$hftmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "an unknown FORMAT version refuses the record (v exists for exactly this)" \
+  "badversion fires=0 stall=0 blind=0 regrants=0 crash=0 loops=0 adopt=3 head= consumed=1" \
+  "$(hfout badversion)"
+# The direction matters: coerced, `08` would disarm every bound reading it.
+check "a leading-zero counter is refused, never coerced through octal \$(( ))" \
+  "octal fires=0 stall=0 blind=0 regrants=0 crash=0 loops=0 adopt=3 head= consumed=1" \
+  "$(hfout octal)"
 check "...and names the field it did not recognise" "1" \
   "$(grep -q 'ignored unknown field(s) newfield' "$hftmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "an adopt count in the ENVIRONMENT raises the cap's counter (#811)" \
+  "floor adopt=2 leaked=none" "$(hfout floor)"
+check "...and it is a floor, not a ceiling -- a bigger remembered count wins" \
+  "ceiling adopt=5 leaked=none" "$(hfout ceiling)"
 check "the handoff resume emits NOTHING on stderr (it runs before every fire)" "" \
   "$(cat "$hftmp/err" 2>/dev/null)"
 rm -rf "$hftmp"

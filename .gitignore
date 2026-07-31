@@ -22,12 +22,15 @@ __pycache__/
 # multi-MB each), .last_quota is a per-machine cache of the last readable
 # 7-day utilization reading, and .last_quota_poll is the source-2 poll throttle's
 # memo (#777) -- both per-machine, both meaningless in another checkout. And
-# .last_quota_shadow is the #765 shadow probe's rate stamp, same story.
+# .last_quota_shadow is the #765 shadow probe's rate stamp, same story, and
+# .driver_handoff is the #811 self-adopt record -- single-use, and it exists only
+# in the microseconds between a driver writing it and its exec'd self eating it.
 # Anchored to the repo root.
 /loop/logs/
 /loop/.last_quota
 /loop/.last_quota_poll
 /loop/.last_quota_shadow
+/loop/.driver_handoff
 
 # Page snapshots / traces the playwright MCP server writes into its launch CWD.
 # Unattended this is git-VISIBLE dirt: the supervisor's "tree clean on

@@ -120,7 +120,8 @@ Do not re-add it.
 
 `loop/logs/` (one multi-MB stream-json file per fire — ~546MB and growing), `loop/.last_quota` (the
 last-known 7-day reading), `loop/.last_quota_poll` (the source-2 poll memo, #777) and
-`loop/.last_quota_shadow` (the diagnostic probe's rate stamp, #765) are gitignored.
+`loop/.last_quota_shadow` (the diagnostic probe's rate stamp, #765) and `loop/.driver_handoff`
+(the #811 self-adopt handoff) are gitignored.
 All four are per-machine and meaningless in another checkout. Nothing here should ever write into a
 tracked path — and keep this list in step with `.gitignore`, because it is what a live-control-plane
 sync is checked against.
@@ -169,10 +170,14 @@ source, which is the exact failure #764 exists to prevent, just re-created by ha
 write `drive.sh` via a sibling temp file + `mv` rather than `cp` — the live file is being *executed* while you edit it, and an
 in-place overwrite corrupts a running fire.
 
-**A sync is not a deploy. Restart the driver, or the merged fix does not run.** `drive.sh`'s body
-is a plain `while true` with no `exec` and no re-source, and bash holds its script open by
-descriptor — so replacing the file stages the new code for the *next* start and changes nothing
-about the process now running. Measured 2026-07-31 (#808): the live `drive.sh` was byte-identical
+**A sync is not a deploy — though since #811 the driver usually finishes the job itself.** Read the
+self-adoption section below before relying on either half of that sentence. `drive.sh`'s body is a
+`while true` loop and bash holds its script open by descriptor, so replacing the file does not
+change the process now running; what #811 added is that the driver notices and re-`exec`s itself
+between fires. It **refuses** to do so in several cases (a file that does not parse, a truncated
+sync, a handoff it cannot write, `SELF_ADOPT=0`, or once `MAX_SELF_ADOPT` is spent), and the manual
+restart below is the remedy for every one of them — so it is still the thing to reach for when
+`driver code: STALE` persists across iterations. Measured 2026-07-31 (#808): the live `drive.sh` was byte-identical
 to `origin/main`, and PID 74021 — booted ~15h earlier — was still executing a 13KB-older inode.
 #765's quota shadow probe had been merged, synced, and had *never once run*; C3's evidence gate was
 therefore accumulating nothing while looking perfectly healthy. After any `loop/` sync:
@@ -243,6 +248,18 @@ alone and is named in the log; a field the reader does not know is ignored and n
 | `MAX_SELF_ADOPT` | `3` | adoption *attempts* per driver run |
 | `HANDOFF_MAX_AGE` | `300` | seconds after which a handoff is no longer a continuation |
 | `DRIVER_HANDOFF` | `$INFRA/.driver_handoff` | where the record is written |
+
+The adopt count rides in the environment as `DRIVE_ADOPT_COUNT` as well as in the record, because
+the cap has to survive the record's loss — a mutation test that disabled the record did not turn
+assertions red so much as **hang the suite**, adopting forever and never firing. The two combine by
+MAX, so a lost carrier can only tighten the cap, and it is `unset` before the loop so no fire ever
+inherits it.
+
+Two operator-visible consequences worth knowing at 3am. A handoff that is **present but
+unreadable** turns self-adoption **off for the rest of that run** (the bounds it carried are already
+lost; refusing further adoption stops the loss repeating) — the log says so, and a restart is the
+remedy. And adopting a **rollback** to a `drive.sh` from before #811 resets every bound, because the
+code being adopted knows nothing about the handoff.
 
 ## Safety model
 
