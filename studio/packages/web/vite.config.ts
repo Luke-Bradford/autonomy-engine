@@ -63,6 +63,14 @@ export default defineConfig({
         // barrel the entry already holds. Not worth a package-boundary change
         // for 11 kB today; recorded so the next person does not re-derive it.
         //
+        // U7 measured (per-activity node config form) — gzip: entry 122.62 kB
+        // UNCHANGED · index css 3.99 kB UNCHANGED · `PipelineCanvasRoute`
+        // 11.07 -> 12.38 kB. The whole +1.31 kB lands in the LAZY canvas chunk,
+        // which is the property being checked: `configForm.ts` is imported only
+        // by `PipelineCanvas`, and it pulls in nothing new — it reads Zod's
+        // introspection surface off schemas the canvas chunk already holds, so
+        // there is no second copy of `zod` and no new dependency edge.
+        //
         // Only the canvas route is lazy. The other pages are ordinary React +
         // Fluent and would each buy back single-digit kB for a Suspense
         // boundary apiece — measure before adding more, rather than lazying
