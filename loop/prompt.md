@@ -130,9 +130,23 @@ rule fires immediately and would send you into a sweep instead of the cutover. I
 C1-C3. The operator prioritised the cutover on 2026-07-29 knowing the backlog was over the cap, and
 the defects are not what blocks retiring the engine. Do the cutover.
 
-**Then resume the numbered WORK ORDER** — the UI epic (item 10) at U6d, per the standing order.
-`#425`/`#429`/`#748` are the known canvas gaps. The defect-backlog sweep rule resumes AT THAT POINT,
-and it will almost certainly fire on the first fire after C3: expect to sweep before U6d.
+**C3 IS NOW BLOCKED ON AN OPERATOR DECISION — DO NOT WAIT ON IT (operator, 2026-07-31).** #765 is
+answered: the shadow probe has logged four scheduled-fire readings, all `UNREADABLE`, the latest
+attributed `rate_limited`. Studio's reader is NOT broken — it is losing the account rate-limit
+budget to the prototype dashboard's continuous 60s sampler, i.e. C3's evidence gate is throttled by
+the very component C3 retires. The remaining lever is that sampler's cadence, which touches the
+loop's PRIMARY spend-guard source and is therefore the operator's call, not yours. **Do not build
+anything further for C3, and do not treat its absence as a reason to idle.**
+
+**Go straight to the UI epic (item 10) at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+This is now the highest-priority available work — ahead of the defect sweep, which as amended in the
+STANDING RULE section below counts `[studio]` tickets only.
+
+**WHY THIS CHANGED (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs and
+**exactly one** of them altered anything a human can see in the app. The rest was `loop/`
+infrastructure and backend quota semantics. The operator's words: *"The app doesn't appear to have
+anything new to show."* The engineering was sound; the direction was not. The product is the point,
+and the loop exists to build it — not to build the loop.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
@@ -186,8 +200,28 @@ You file good tickets for defects you find mid-ticket, and then they were never 
 - **SEVERE = DATA LOSS · silent corruption · security · a fail-open gate.** It jumps to the FRONT of the queue — but at the next **SAFE BOUNDARY**, not mid-chain: finish the ticket in flight and any ticket it is *inseparable* from (e.g. F2b+F2c must land together — F2b alone HANGS), then fix the defect BEFORE starting the next work-order item. Do NOT split a multi-ticket reducer/semantics chain to chase a bug; do NOT let a severe defect wait a whole phase either. Say in the PR body which work-order item you pre-empted and why.
 - **EVERYTHING ELSE** → file the ticket (as you do now), keep going, and **drain it in a BUG SWEEP.** State in each sweep PR which you fixed and which you deliberately left, with the reason. A ticket nobody will ever schedule is a silent discard wearing a ticket number. **Sweep cadence — fire a sweep at the EARLIEST of:**
   - **each SERIES boundary** — within the long breadth item (item 8), treat every series (S / L / A / G / RS) as its own boundary: when a series' tickets are done, sweep the defects THAT series raised before starting the next series. Do NOT wait for all of item 8 (it is ~50+ tickets / weeks — bugs would pile up the whole time). For the short items (F/E/secrets/UI) the item boundary is the series boundary.
-  - **a backlog CAP** — whenever OPEN loop-filed found-defect tickets reach **~8**, sweep before the next feature regardless of where you are, so the heap is bounded even mid-series.
+  - **a backlog CAP** — whenever OPEN loop-filed `[studio]` found-defect tickets reach **~8**, sweep before the next feature regardless of where you are, so the heap is bounded even mid-series.
   - Whichever comes first. A sweep need not clear ALL open tickets — fix what's cheap/ready, DEFER the rest with a reason, but knock the count back down.
+
+  **`[loop]` TICKETS DO NOT COUNT TOWARD THE CAP (operator, 2026-07-31).** Measured over the
+  preceding 24h: 19 merges, of which **11 were `loop/` infrastructure and exactly 1 was visible in
+  the app**; 26 tickets were opened against ~12 closed, and 11 of the new ones were `[loop]`
+  follow-ups to that same night's `loop/` work (#819 from #811; #833 and #834 opened 39 minutes
+  after #832). Because `loop/` work reliably files more `[loop]` defects than a sweep drains, a cap
+  counting them is **pinned above its own threshold by its own output** — the sweep never ends, and
+  `#439` is never reached. That is not a backlog, it is a fixed point.
+  So: **the cap counts `[studio]` tickets only.** `[loop]` tickets are real and stay filed, but they
+  are worked ONLY when no user-facing work-order item is available, or when one of them is SEVERE —
+  **the definition is the one stated above, unchanged and unnarrowed: data loss · silent corruption ·
+  security · a fail-open gate.** Do not read "gate" there as "spend gate": EVERY fail-open gate keeps
+  the fast lane, the merge gate and the review gate included. The spend guards are merely the most
+  obvious instance, because an unbounded driver is the one failure that cannot be fixed after the
+  fact. A `[loop]` ticket that is merely tidier logging, a duplicated rationale, or a follow-up
+  refinement waits.
+  **Corollary, and it is the point of this rule: prefer the change a human can SEE.** When choosing
+  between two equally-ready items, take the one that alters the app's behaviour or appearance over
+  the one that alters how the loop works. If a fire produces nothing user-visible, that is a
+  legitimate outcome, but two in a row is a signal to re-read the work order rather than keep going.
 - **Judge severity by the FAILURE, not the fix size.** "A one-line default masks destroyed user data" is SEVERE. "A missing tie-breaker makes ordering non-deterministic" is not.
 - If severity is genuinely ambiguous, DON'T open an `[operator-decision]` for it — file it as normal, and say in the ticket why you nearly escalated. Escalation is for irreducible DESIGN forks, not for prioritisation you can reason about.
 
