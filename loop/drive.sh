@@ -771,7 +771,7 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
 # in shell variables, so an exec would silently reset the counters that bound
 # MAX_STALL and MAX_BUDGET_REGRANTS. Trading a visible staleness for an invisible
 # fail-open in the spend/stall guards is a bad trade. Self-adoption needs that
-# state persisted first; until then, report and let a human restart.
+# state persisted first (#811); until then, report and let a human restart.
 
 # --- drive_self_hash: content hash of the driver's own source, "" if unreadable.
 # Unreadable must stay distinguishable from "unchanged", so this returns EMPTY

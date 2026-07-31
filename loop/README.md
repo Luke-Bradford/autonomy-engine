@@ -204,7 +204,7 @@ process recorded no boot hash — which is the honest answer, not a gap.
 The driver deliberately does **not** re-`exec` itself to adopt new code. Cross-fire state (`fires`,
 `stall`, `blind_fires`, `budget_regrants`) lives in shell variables, so an exec would silently reset
 the counters bounding `MAX_STALL` and `MAX_BUDGET_REGRANTS` — trading a visible staleness for an
-invisible fail-open in the spend and stall guards. Self-adoption needs that state persisted first.
+invisible fail-open in the spend and stall guards. Self-adoption needs that state persisted first — filed as #811.
 
 ## Safety model
 
