@@ -1332,6 +1332,132 @@ check "...and says so in the log, rather than skipping silently" "0" \
   "$(grep -q 'quota shadow: skipped' "$sgtmp/bad/driver.log" && echo 0 || echo 1)"
 rm -rf "$sgtmp"
 
+# --- 30. #808 DRIVER-CODE drift: is the running process the code that merged? --
+# The live plane is an unversioned hand-synced copy, and drive.sh's body is a
+# plain `while true` with no exec and no re-source -- so replacing the file does
+# NOT deploy it. Verified on 2026-07-31: the live drive.sh was byte-identical to
+# origin/main while the running driver held a 13KB-older inode, and #765's shadow
+# probe had therefore never executed despite being merged AND synced.
+#
+# Hashing the file against origin/main cannot see this: it reports GREEN. The
+# only thing that can is comparing the file NOW against what it was when this
+# process booted. Every failure path must read UNKNOWN, never `live` -- the same
+# rule that keeps UNREADABLE distinct from 0% in the quota guard.
+dctmp="$(mktemp -d)"
+mkdir -p "$dctmp/infra"
+printf '#!/bin/bash\necho boot\n' >"$dctmp/fake_drive.sh"
+# Bounded exactly like case 17: a broken source guard turns `.` into an
+# unconditional `while true` and would hang the suite forever.
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$dctmp/infra"
+  export DLOG="$dctmp/infra/driver.log"
+  export DRIVE_SELF="$dctmp/fake_drive.sh"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  # (a) no boot hash recorded at all -- the pre-#808 driver, and any run whose
+  #     startup hash failed. UNKNOWN, never a clean bill of health.
+  drift_report_driver_code
+  # (b) file unchanged since boot -> live.
+  DRIVE_BOOT_HASH="$(drive_self_hash)"
+  drift_report_driver_code
+  # (c) the file changed underneath the running process -> STALE. Mutated by
+  #     APPENDING, never by `git checkout --`/`restore`/`stash` (loop rule: those
+  #     destroy uncommitted work). This file was created by this case.
+  printf 'echo synced\n' >>"$dctmp/fake_drive.sh"
+  drift_report_driver_code
+  # (d) the file is gone/unreadable now -> UNKNOWN, not STALE and not live.
+  DRIVE_SELF="$dctmp/never_existed.sh"
+  drift_report_driver_code
+) >"$dctmp/out" 2>"$dctmp/err" &
+dc_pid=$!
+dc_i=0
+while [ "$dc_i" -lt 15 ]; do kill -0 "$dc_pid" 2>/dev/null || break; sleep 1; dc_i=$((dc_i + 1)); done
+kill -9 "$dc_pid" 2>/dev/null || true
+dclog="$dctmp/infra/driver.log"
+# Ran at all? Every absence below is meaningless if it did not.
+check "the driver-code check emitted all four verdicts (the case is not vacuous)" "4" \
+  "$(grep -c 'driver code:' "$dclog" 2>/dev/null || echo 0)"
+check "no boot hash reads UNKNOWN, never live" "0" \
+  "$(sed -n '1p' "$dclog" 2>/dev/null | grep -q 'driver code: UNKNOWN' && echo 0 || echo 1)"
+check "an unchanged file reads live" "0" \
+  "$(sed -n '2p' "$dclog" 2>/dev/null | grep -q 'driver code: live' && echo 0 || echo 1)"
+check "a file changed since boot reads STALE -- the merged fix is NOT running" "0" \
+  "$(sed -n '3p' "$dclog" 2>/dev/null | grep -q 'driver code: STALE' && echo 0 || echo 1)"
+check "...and names the restart as the remedy, since a sync alone does nothing" "0" \
+  "$(sed -n '3p' "$dclog" 2>/dev/null | grep -q 'kickstart' && echo 0 || echo 1)"
+check "an unreadable file reads UNKNOWN, not live and not STALE" "0" \
+  "$(sed -n '4p' "$dclog" 2>/dev/null | grep -q 'driver code: UNKNOWN' && echo 0 || echo 1)"
+check "the driver-code check emits NOTHING on stdout (a stray echo corrupts callers)" "" \
+  "$(cat "$dctmp/out" 2>/dev/null)"
+rm -rf "$dctmp"
+
+# --- 31. #808 PLANE drift: is the live plane the code that merged? ------------
+# The other half of the same question, and the half that is USELESS ALONE (in
+# the 2026-07-31 incident the plane was in sync and the process was not). Uses a
+# REAL git repo rather than a stubbed one: the thing under test is a git
+# comparison, so stubbing git would assert on the mock.
+pdtmp="$(mktemp -d)"
+git init -q --bare "$pdtmp/origin" 2>/dev/null
+mkdir -p "$pdtmp/repo/loop" "$pdtmp/infra"
+git init -q "$pdtmp/repo" 2>/dev/null
+git -C "$pdtmp/repo" checkout -q -b main 2>/dev/null
+printf 'A\n' >"$pdtmp/repo/loop/drive.sh"
+printf 'B\n' >"$pdtmp/repo/loop/run.sh"
+printf 'C\n' >"$pdtmp/repo/loop/claude_usage.py"
+git -C "$pdtmp/repo" add -A >/dev/null 2>&1
+git -C "$pdtmp/repo" -c user.email=t@t -c user.name=t commit -qm init >/dev/null 2>&1
+git -C "$pdtmp/repo" remote add origin "$pdtmp/origin" 2>/dev/null
+git -C "$pdtmp/repo" push -q origin main 2>/dev/null
+cp "$pdtmp/repo/loop/drive.sh" "$pdtmp/repo/loop/run.sh" \
+   "$pdtmp/repo/loop/claude_usage.py" "$pdtmp/infra/"
+(
+  set -uo pipefail
+  # exported because the SOURCED file is what reads them; shellcheck cannot see
+  # across the `.` and would otherwise call them unused.
+  export INFRA="$pdtmp/infra"
+  export REPO="$pdtmp/repo"
+  export DLOG="$pdtmp/infra/driver.log"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  # (a) every tracked loop/ file present and identical -> in sync.
+  drift_report_plane
+  # (b) a live file whose CONTENT differs from origin/main -> named.
+  printf 'A-modified\n' >"$pdtmp/infra/drive.sh"
+  drift_report_plane
+  # (c) a file on main that was never synced at all -> named, NOT skipped. The
+  #     naive "for each file present in both" enumeration reports this as
+  #     nothing, which is the strongest drift signal read as silence.
+  rm -f "$pdtmp/infra/run.sh"
+  drift_report_plane
+  # (d) origin/main cannot be refreshed -> UNKNOWN. A cached ref that a failed
+  #     fetch left unrefreshed must never be reported as "in sync".
+  mv "$pdtmp/origin" "$pdtmp/origin-moved"
+  drift_report_plane
+) >"$pdtmp/out" 2>"$pdtmp/err" &
+pd_pid=$!
+pd_i=0
+while [ "$pd_i" -lt 20 ]; do kill -0 "$pd_pid" 2>/dev/null || break; sleep 1; pd_i=$((pd_i + 1)); done
+kill -9 "$pd_pid" 2>/dev/null || true
+pdlog="$pdtmp/infra/driver.log"
+check "the plane check emitted all four verdicts (the case is not vacuous)" "4" \
+  "$(grep -c 'plane drift:' "$pdlog" 2>/dev/null || echo 0)"
+check "an identical live plane reads in sync" "0" \
+  "$(sed -n '1p' "$pdlog" 2>/dev/null | grep -q 'plane drift: in sync' && echo 0 || echo 1)"
+check "a live file differing from origin/main is NAMED" "0" \
+  "$(sed -n '2p' "$pdlog" 2>/dev/null | grep -q 'drive.sh' && echo 0 || echo 1)"
+check "...and is not still reported as in sync" "1" \
+  "$(sed -n '2p' "$pdlog" 2>/dev/null | grep -q 'in sync' && echo 0 || echo 1)"
+check "a file on main but ABSENT from the live plane is drift, not silence" "0" \
+  "$(sed -n '3p' "$pdlog" 2>/dev/null | grep -q 'run.sh' && echo 0 || echo 1)"
+check "an unfetchable origin/main reads UNKNOWN, never in sync" "0" \
+  "$(sed -n '4p' "$pdlog" 2>/dev/null | grep -q 'plane drift: UNKNOWN' && echo 0 || echo 1)"
+check "the plane check emits NOTHING on stdout" "" \
+  "$(cat "$pdtmp/out" 2>/dev/null)"
+rm -rf "$pdtmp"
+
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
 # same commit added -- so sourcing the file to unit-test its functions created
