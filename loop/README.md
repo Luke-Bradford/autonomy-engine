@@ -190,7 +190,7 @@ launchctl kickstart -k gui/$(id -u)/com.autonomy.studio-build-driver   # -k: res
 
 `-k` terminates the current process, so do it between fires, not during one.
 
-**The driver now measures both gaps itself** (#808), once per loop iteration, right after the
+**The driver now measures these gaps itself** (#808, extended by #832), once per loop iteration, right after the
 iteration's `git fetch` and *ahead of every stop condition* — a run that never fires because the
 quota gate, an operator signal or `MAX_STALL` stopped it is exactly a run that might be stopping
 because it is executing superseded code, so reporting only alongside a fire would go quiet in the
@@ -315,7 +315,11 @@ Three independent bounds, checked before every fire, each with its own test in
   `source` means the guard USED studio, `shadow` means studio COULD have answered. When it cannot,
   the line names the CAUSE — `quota shadow: studio UNREADABLE (rate_limited)` (#825) — because a
   bare UNREADABLE conflates a broken reader with a merely contended account, and only the first is
-  evidence about studio. The cause is studio's own `unavailable.claude`, checked against the known
+  evidence about studio. **A shadow line is evidence about `main` only if the `studio server:` line
+  in the same iteration reads `current`** (#832) — the service is deployed separately and drifted 16
+  commits behind once already, voiding three readings that named no cause because they came from a
+  build predating the cause channel. Read the two interleaved and in order; a `sort | uniq -c` tally
+  destroys the pairing and mixes every build the service has ever run into one number. The cause is studio's own `unavailable.claude`, checked against the known
   enum, except `unreachable`, which this driver derives from curl's exit status when nothing
   answered at all. An unrecognised or absent cause degrades to the bare line. It decides
   nothing (it parses a body it fetched itself, so there is no code path from it to the quota cache or

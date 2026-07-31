@@ -107,7 +107,9 @@ Bucket them:
   ready. They say the reader could not do its job on a call the provider was willing to serve.
 - A bare `UNREADABLE` with no cause — an old studio, or something that is not studio, on the port.
   Investigate rather than count. **This was measured and resolved on 2026-07-31 (#832): the
-  supervised service was ELEVEN commits behind main (#773's drift, never reported at fire time), so
+  supervised service was SIXTEEN commits behind main (`ce88319..fcca7b3`), SIX of them touching
+  `studio/` — #773's drift, never reported at fire time. (#832's own body says eleven; that figure
+  was wrong, and under the `studio/`-tree rule below it is the six that decide the verdict.) So
   it predated #825 and served no cause field at all. The three bare lines it produced (`10:53:51Z`, `12:45:12Z`, `14:25:20Z`) are VOID — they
   measure a build from before the code they were meant to attest. Do not count them on either side.**
 
@@ -121,7 +123,10 @@ Bucket them:
 - `studio server: STALE` — its `studio/` tree differs from main's, or it has diverged from
   main. Those shadow lines are evidence about THAT build, not about main: do not count them for or
   against C3. Refresh with `loop/install_studio_server.sh --update` (a human act by design, #773)
-  and start collecting again.
+  and start collecting again. (The `not an ancestor` wording also covers a build *ahead* of the
+  checkout's `origin/main` — only reachable in the seconds between the drift fetch and a merge, and
+  harmless: `--update` just resets it to `origin/main`. Unlike `plane drift`, being ahead is not a
+  normal state here, because the installer only ever builds from `origin/main`.)
 - `studio server: UNKNOWN` — the line names the cause, and TWO of them demand action rather than a
   shrug:
   - **`served no usable build identity`** — something answered and it could not name itself. Do not
@@ -131,7 +136,8 @@ Bucket them:
     because it was built with no release manifest — also `--update`, but nothing was stale; a
     non-JSON or empty body; or **something that is not studio at all owning the port** — where
     `--update` is the wrong move entirely and `install_studio_server.sh --status` is where to look.
-    `curl -s $STUDIO_VERSION_URL` tells you which in one call.
+    `curl -s http://127.0.0.1:8788/api/version` tells you which in one call (the log line names the
+    URL it used — use that one if it differs).
   - **`has no studio/ tree`** — said of `origin/main`, the directory was renamed and the verdict is
     unavailable until this half is taught the new path; said of *the served build*, that build
     predates `studio/` existing (or was built from a tree without it), which is itself a reason to
@@ -140,9 +146,13 @@ Bucket them:
     remaining causes ("is not a git checkout to compare against", "could not be refreshed", "not a
     commit this checkout knows", "could not be resolved in") mean the comparison could not be made
     — no finding about studio, but no evidence either.
-- **No `studio server:` line at all** — every shadow line older than #832, and any fire run with
-  `DRIFT_REPORT=0`. Unattributed, so **do not count it either way**. That is what voids the three
-  lines above.
+- **No `studio server:` line at all** — unattributed, so **do not count it either way**. That is what
+  voids the three lines above. **Apply this STRUCTURALLY, never by date: "any shadow line with no
+  `studio server:` line above it in the same iteration."** A merge is not a deploy (#808) — a driver
+  still executing a pre-#832 `drive.sh` keeps logging bare shadow lines for as long as it runs, and
+  the 2026-07-26 run lasted 74.7 hours. So "logged after #832 merged" does NOT imply attributed, and
+  reading the rule by timestamp reintroduces exactly the mis-attribution it exists to stop. Also
+  covers any fire run with `DRIFT_REPORT=0`.
 
 So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
 reading while the `studio server:` line for that same fire read `current`**, with **no run of

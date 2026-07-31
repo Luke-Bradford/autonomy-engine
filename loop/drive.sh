@@ -1212,9 +1212,24 @@ drift_report_driver_code() {
 # -- and this runs BEFORE every stop condition, the quota gate and the fire,
 # with no log line while it hangs. `GIT_TERMINAL_PROMPT=0` stops a credential
 # helper blocking on a prompt nobody can answer; the `http.*` knobs abort a
-# stalled transfer (the remote is HTTPS, and `http.lowSpeedLimit` is unset
-# globally). A bounded fetch that FAILS reads UNKNOWN, which is the safe
+# stalled transfer (the remote is HTTPS, and none of these are set globally --
+# verified). A bounded fetch that FAILS reads UNKNOWN, which is the safe
 # direction; an unbounded one that hangs reads as nothing at all.
+#
+# `http.connectTimeout` IS PART OF THE BOUND, not belt-and-braces (#832 pre-PR
+# review). `lowSpeedLimit`/`lowSpeedTime` only arm once bytes are flowing, and
+# git sets no connect timeout of its own, so the pair bounds a STALLED transfer
+# and not a connect that never completes. Measured against a black-holed address
+# with exactly the two knobs above: rc=128 after 75s, 3.7x the intended bound,
+# and twice per iteration because each half fetches for itself. NXDOMAIN returns
+# at once; it is a black-holed resolver or route that hangs.
+#
+# TWO OTHER FETCHES ON THIS PATH ARE STILL UNBOUNDED and are NOT fixed here --
+# the top-of-loop `git fetch origin` a few lines above `drift_report`, and
+# `install_studio_server.sh`'s `report_status`. Both pre-date this ticket, and
+# the first is on the core loop path where changing failure behaviour deserves
+# its own change rather than a ride-along. Filed as #836. Until it lands, this
+# helper bounds ITS OWN stall and no more -- read the claim above that narrowly.
 #
 # SHARED RATHER THAN COPIED, and that is not tidiness (#832 review). The copy
 # had ALREADY diverged inside the PR that made it: the bounds
@@ -1233,8 +1248,9 @@ drift_report_driver_code() {
 # must still fetch"). Leaving one helper for it to memoise makes that change
 # smaller; it does not make it done.
 drift_fetch_origin() {
-  GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.lowSpeedLimit=1000 \
-    -c http.lowSpeedTime=20 fetch --quiet origin main 2>/dev/null
+  GIT_TERMINAL_PROMPT=0 git -C "$REPO" -c http.connectTimeout=10 \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 \
+    fetch --quiet origin main 2>/dev/null
 }
 
 # --- drift_report_plane: does the live plane match what is on origin/main?
@@ -1248,6 +1264,15 @@ drift_fetch_origin() {
 # discipline, not the code: the subject there is a git clone, here it is a
 # hand-copied directory, and a shared abstraction over the two would be a
 # coupling that buys nothing.
+#
+# ITS FETCH IS NOW BOUNDED (#832 -- it goes through `drift_fetch_origin`, which
+# see). That is a behaviour change to THIS half and worth stating plainly: a
+# link that cannot connect within 10s, or that delivers under 1 KB/s for 20s,
+# now reads `UNKNOWN` where it previously succeeded slowly. Deliberate, and the
+# safe direction -- an unmeasured plane must never be indistinguishable from a
+# current one, and this runs ahead of every stop condition where a stall is
+# invisible -- but a `UNKNOWN -- origin/main could not be refreshed` on a slow
+# link is now an expected reading rather than a broken remote.
 #
 # Enumerates from `git ls-tree origin/main loop/` -- the set of files that are ON
 # MAIN -- rather than from what happens to exist in both places. A file on main
@@ -1349,8 +1374,12 @@ except Exception:
 # from an isolated clone under its own state dir -- and nothing moved it forward
 # or said that it had not.
 #
-# WHAT THAT COST, measured 2026-07-31 (#832). The service sat ELEVEN commits
-# behind origin/main, so it predated #825 and served no `unavailable` field at
+# WHAT THAT COST, measured 2026-07-31 (#832 -- and re-measured during its
+# pre-PR review, which is where the figure below was corrected). The service sat
+# SIXTEEN commits behind origin/main (`ce88319..fcca7b3`), SIX of them touching
+# `studio/` -- and it is the six that matter under the tree comparison below,
+# since the other ten could not change a byte it serves. The ticket body says
+# eleven; that number was wrong. It predated #825 and served no `unavailable` field at
 # all. Every layer below then behaved exactly as specified: `quota_parse_reason`
 # found no reason, and `quota_shadow_probe` logged a bare UNREADABLE. Three of
 # those lines accumulated as C3 evidence -- and they were not weak evidence,
@@ -1420,7 +1449,15 @@ drift_report_studio_server() {
     # port), not a statement about which code it would have been running -- and
     # reporting it as drift would send the operator to rebuild a service that
     # was never up. The shadow probe reports the same outage from its own side.
-    log "studio server: UNKNOWN -- nothing answered at $STUDIO_VERSION_URL, so which build the quota source is running is unmeasured. That is a LIFECYCLE fault (is com.autonomy.studio-server loaded?), not drift (#832)"
+    #
+    # "OR TOO SLOWLY" IS NOT PADDING (#832 pre-PR review). `quota_fetch_url` is
+    # `curl --max-time 8`, so this branch also catches a unit that IS loaded and
+    # simply took longer than eight seconds -- curl 28, and likewise 52/56 for a
+    # connection dropped mid-answer. Safe in direction either way (never a
+    # currency claim), but a message saying flatly "nothing answered" sends the
+    # operator to check whether the unit is loaded when it demonstrably is. The
+    # remedy differs, so the message has to admit both.
+    log "studio server: UNKNOWN -- nothing answered at $STUDIO_VERSION_URL within curl's 8s bound, so which build the quota source is running is unmeasured. That is a LIFECYCLE fault (is com.autonomy.studio-server loaded, and answering promptly?), not drift (#832)"
     return 0
   fi
   ds_commit="$(printf '%s' "$ds_body" | studio_version_commit)"
@@ -1528,7 +1565,7 @@ drift_report_studio_server() {
     else
       ds_behind_studio="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
       [ -n "$ds_behind_studio" ] || ds_behind_studio="an unknown number"
-      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the 'quota shadow: studio' lines it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
     fi
   fi
   return 0

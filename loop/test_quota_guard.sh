@@ -2127,6 +2127,44 @@ check "a main with no studio/ tree reads UNKNOWN, not a free 'none touching'" "0
   "$(printf '%s' "$ss_nost" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and never claims currency for a path it could not count" "1" \
   "$(printf '%s' "$ss_nost" | grep -q 'current' && echo 0 || echo 1)"
+# (c5b) `studio` is a FILE, not a directory -> UNKNOWN. Pins the `cat-file -t`
+#       half of the guard above, which survived mutation in #832's pre-PR review:
+#       deleting the type check left the whole suite green. `rev-parse
+#       <sha>:studio` resolves a BLOB perfectly happily, so with `studio` as a
+#       file of the same content in both commits the two ids are EQUAL and the
+#       half reports "current for studio/" for a build with no studio directory
+#       at all -- a currency claim about a tree that does not exist. Same shape
+#       as (c5): the id being comparable is exactly what makes it dangerous.
+#       Two commits again, the served one OLDER, so an identical build cannot
+#       short-circuit before the comparison is reached.
+mkdir -p "$sstmp/blobstudio-src/loop"
+git init -q --bare "$sstmp/blobstudio-origin" 2>/dev/null
+git init -q "$sstmp/blobstudio-src" 2>/dev/null
+git -C "$sstmp/blobstudio-src" checkout -q -b main 2>/dev/null
+printf 'not a directory\n' >"$sstmp/blobstudio-src/studio"
+printf 'x\n' >"$sstmp/blobstudio-src/loop/y"
+git -C "$sstmp/blobstudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" -c user.email=t@t -c user.name=t commit -qm blob1 >/dev/null 2>&1
+ss_blob_sha="$(git -C "$sstmp/blobstudio-src" rev-parse --short HEAD)"
+printf 'z\n' >"$sstmp/blobstudio-src/loop/z"
+git -C "$sstmp/blobstudio-src" add -A >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" -c user.email=t@t -c user.name=t commit -qm blob2 >/dev/null 2>&1
+git -C "$sstmp/blobstudio-src" remote add origin "$sstmp/blobstudio-origin" 2>/dev/null
+git -C "$sstmp/blobstudio-src" push -q origin main 2>/dev/null
+git -C "$sstmp/blobstudio-src" worktree add -q --detach "$sstmp/blobstudio" main >/dev/null 2>&1
+check "the blob fixture really has studio as a BLOB (not vacuous)" "blob" \
+  "$(git -C "$sstmp/blobstudio" cat-file -t 'origin/main:studio' 2>/dev/null)"
+check "...and the served build's studio id EQUALS main's (so -z alone cannot save it)" "0" \
+  "$([ "$(git -C "$sstmp/blobstudio" rev-parse --quiet --verify "$ss_blob_sha:studio" 2>/dev/null)" \
+     = "$(git -C "$sstmp/blobstudio" rev-parse --quiet --verify 'origin/main:studio' 2>/dev/null)" ] \
+     && echo 0 || echo 1)"
+check "...and the served build really is BEHIND it (else the compare is never reached)" "1" \
+  "$([ "$(git -C "$sstmp/blobstudio" rev-list --count "$ss_blob_sha..origin/main" 2>/dev/null)" = "1" ] && echo 1 || echo 0)"
+ss_blob="$(SS_REPO="$sstmp/blobstudio" ssrun '{"version":"1.0.0","commit":"'"$ss_blob_sha"'"}')"
+check "a studio/ that is a FILE reads UNKNOWN, not 'current for studio/'" "0" \
+  "$(printf '%s' "$ss_blob" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
+check "...and never claims currency for a tree that does not exist" "1" \
+  "$(printf '%s' "$ss_blob" | grep -q 'current' && echo 0 || echo 1)"
 # (c6) THE EVIL MERGE (#832 pre-PR review). `rev-list --count A..B -- studio/`
 #      applies git's default history simplification, so a merge whose RESOLUTION
 #      changes studio/ is not counted as a commit touching studio/. The count
