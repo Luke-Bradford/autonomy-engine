@@ -1053,7 +1053,9 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
     const events = await drain(
       createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
     );
-    expect((events[2] as { error: string }).error).toMatch(/usage limit reached[\s\S]*transcript tail/);
+    expect((events[2] as { error: string }).error).toMatch(
+      /usage limit reached[\s\S]*transcript tail/,
+    );
   });
 
   it('leaves a NON-matching non-zero exit as succeeded — the carve-out stays narrow', async () => {

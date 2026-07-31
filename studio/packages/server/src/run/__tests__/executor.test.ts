@@ -36,7 +36,6 @@ import {
 } from '../../repo/connection-quota.js';
 import type { ActivityEvent, ConnectorAdapter } from '../../connectors/types.js';
 import type { Supervisor } from '../../workers/process-supervisor.js';
-import { createAgentAdapter } from '../../connectors/agent.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
@@ -2163,7 +2162,10 @@ describe('#2 L14c / #799 — an agent_task refusal ARMS the window (real adapter
     const run = seedRun(db, pvId);
 
     await startRun(
-      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1), alarms: stubAlarms() }),
+      deps(db, {
+        adapters: realAgentCliAdapter('Error: usage limit reached', 1),
+        alarms: stubAlarms(),
+      }),
       run,
     );
 
