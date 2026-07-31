@@ -2074,6 +2074,34 @@ check "the studio-server check emits NOTHING on stdout" "" \
   "$(cat "$sstmp/out" 2>/dev/null)"
 rm -rf "$sstmp"
 
+# --- 44d. #832 the version URL is DERIVED, so the port keeps one owner --------
+# The service port already has exactly two copies (`STUDIO_QUOTA_URL` here,
+# `DEFAULT_PORT` in install_studio_server.sh) and a test asserting they agree.
+# A third, spelled out for /api/version, is how the stale 8080 pin outlived its
+# own reason -- and the failure would be quiet in the worst way: the drift half
+# would ask a DIFFERENT process than the guard polls and report a build nobody
+# was running. These assert the derivation is real, not that a literal is typed
+# correctly.
+vurl() { # $1 = STUDIO_QUOTA_URL override ("" = default) -> the derived version URL
+  ( set -uo pipefail
+    [ -n "$1" ] && export STUDIO_QUOTA_URL="$1"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    printf '%s' "$STUDIO_VERSION_URL" )
+}
+check "the default version URL sits on the quota URL's own host and port" "0" \
+  "$([ "$(vurl '')" = "http://127.0.0.1:8788/api/version" ] && echo 0 || echo 1)"
+# The load-bearing one: move the quota URL and the version URL MUST follow. A
+# hardcoded literal passes the case above and fails this one.
+check "a moved quota URL carries the version URL with it" "0" \
+  "$([ "$(vurl 'http://127.0.0.1:9999/api/quota')" = "http://127.0.0.1:9999/api/version" ] && echo 0 || echo 1)"
+check "an explicit STUDIO_VERSION_URL still wins" "0" \
+  "$( ( set -uo pipefail
+        export STUDIO_VERSION_URL="http://elsewhere/v"
+        # shellcheck source=/dev/null
+        . "$HERE/drive.sh"
+        [ "$STUDIO_VERSION_URL" = "http://elsewhere/v" ] && echo 0 || echo 1 ) )"
+
 # --- 45. #806 quota_stamped_write: ONE owner for the "<epoch> <value>" format --
 # The reader was shared; the writer was hand-rolled at three sites, each with `>`.
 # `>` truncates BEFORE writing, so a racing reader (a second driver, or an
