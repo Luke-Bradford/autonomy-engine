@@ -2,7 +2,12 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../../quota/claude-quota.js';
-import type { ClaudeAccountQuota } from '@autonomy-studio/shared';
+import {
+  ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
+  AccountQuotaStateSchema,
+  type AccountQuotaUnavailableReason,
+  type ClaudeAccountQuota,
+} from '@autonomy-studio/shared';
 
 /**
  * #440 (C1) — `GET /api/quota`, the spend guard's source.
@@ -28,9 +33,18 @@ const READING: ClaudeAccountQuota = {
 
 const apps: FastifyInstance[] = [];
 
-async function appReading(claude: ClaudeAccountQuota | null): Promise<FastifyInstance> {
+async function appReading(
+  claude: ClaudeAccountQuota | null,
+  unavailable: AccountQuotaUnavailableReason = 'provider_error',
+): Promise<FastifyInstance> {
+  // Constructed as the discriminated union it is, so the fixture cannot express
+  // a pairing the reader could not produce.
+  const reading =
+    claude === null
+      ? ({ value: null, unavailable } as const)
+      : ({ value: claude, unavailable: null } as const);
   const { app } = await buildTestAppWithContext({
-    claudeAccountQuotaReader: { read: async () => claude },
+    claudeAccountQuotaReader: { read: async () => reading },
   });
   apps.push(app);
   return app;
@@ -142,5 +156,93 @@ describe('GET /api/quota', () => {
     // honest answer and keeps the surface's contract total.
     expect(res.statusCode).toBe(200);
     expect(res.json().account.claude).toBeNull();
+    // …and it says WHICH failure it was, rather than presenting an internal
+    // fault as though the provider had answered.
+    expect(res.json().unavailable.claude).toBe('reader_error');
+  });
+});
+
+/**
+ * #825 — WHY a reading is missing, on the same response as the missing reading.
+ *
+ * The C3 decision (park the old engine, #410) is made on a run of
+ * `quota shadow: studio UNREADABLE` lines. Without attribution those lines
+ * cannot distinguish "studio's reader is broken" (a real finding about studio)
+ * from "the shared account bucket was contended at that instant" (a fact about
+ * the account, which C3 itself largely removes). These tests pin the attribution
+ * and — more importantly — pin that it can never be mistaken for a reading.
+ */
+describe('GET /api/quota — UNREADABLE attribution', () => {
+  it('omits `unavailable` entirely when a reading was obtained', async () => {
+    const body = (
+      await (await appReading(READING)).inject({ method: 'GET', url: '/api/quota' })
+    ).json();
+    // Absent, not `null`: the iff-contract is "present ⟺ no reading", and a
+    // key that is always present with a nullable value invites a consumer to
+    // branch on it instead of on the reading.
+    expect(body).not.toHaveProperty('unavailable');
+  });
+
+  // Driven off the exported enum, not a copy of it: the route is value-agnostic,
+  // so no single row can fail alone — what this table is actually worth is being
+  // EXHAUSTIVE, and a hand-written copy stops being exhaustive the day someone
+  // adds a seventh reason.
+  it.each(ACCOUNT_QUOTA_UNAVAILABLE_REASONS)(
+    'reports `%s` alongside the null reading',
+    async (reason) => {
+      const body = (
+        await (await appReading(null, reason)).inject({ method: 'GET', url: '/api/quota' })
+      ).json();
+      expect(body.account.claude).toBeNull();
+      expect(body.unavailable.claude).toBe(reason);
+    },
+  );
+
+  it('leaves the guard parse yielding UNREADABLE — a reason is never a number', async () => {
+    // The failure this whole field must not cause: an advisory string leaking
+    // onto the path that yields a percent. `consumerPercent` walks the exact
+    // hard-coded path `loop/drive.sh` walks.
+    const body = (
+      await (await appReading(null, 'rate_limited')).inject({ method: 'GET', url: '/api/quota' })
+    ).json();
+    expect(consumerPercent(body)).toBe('');
+    expect(JSON.stringify(body.account)).not.toContain('rate_limited');
+  });
+
+  it('satisfies the strict wire schema in both shapes', async () => {
+    // `.strict()` both ways: an unexpected key is a contract break, and the
+    // schema is what the loop-side parser is written against.
+    for (const app of [await appReading(READING), await appReading(null, 'rate_limited')]) {
+      const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+      expect(AccountQuotaStateSchema.safeParse(body).success).toBe(true);
+    }
+  });
+
+  it.each([
+    [
+      'a reading that also explains its own absence',
+      { account: { claude: READING }, unavailable: { claude: 'rate_limited' } },
+    ],
+    ['an UNREADABLE with the reason dropped', { account: { claude: null } }],
+  ])('the schema REJECTS %s', (_label, partial) => {
+    // The iff, enforced rather than asserted in prose. Without the superRefine
+    // both of these parse: the first is a number carrying a failure's
+    // explanation, the second a silent reversion to the unattributed UNREADABLE
+    // this field exists to remove. `.optional()` alone admits both.
+    expect(
+      AccountQuotaStateSchema.safeParse({ generated_at: 1_785_495_913, ...partial }).success,
+    ).toBe(false);
+  });
+
+  it('reports `disabled` — not a provider fault — when the surface is switched off', async () => {
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaEnabled: false,
+      claudeAccountQuotaReader: undefined,
+    });
+    apps.push(app);
+    const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+    // The distinction that matters for C3: a deployment that never asks looks
+    // exactly like one whose provider is failing, unless this says otherwise.
+    expect(body.unavailable.claude).toBe('disabled');
   });
 });

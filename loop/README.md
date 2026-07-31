@@ -295,8 +295,13 @@ Three independent bounds, checked before every fire, each with its own test in
   studio` can only be logged when sources 1 and 2 have BOTH failed, so while the dashboard is
   healthy studio is never asked and C3 waits on an outage of the source it replaces. The probe asks
   anyway and logs `quota shadow: studio <n>%` — a **second, non-interchangeable** evidence line:
-  `source` means the guard USED studio, `shadow` means studio COULD have answered. It decides
-  nothing (it calls `quota_read_url` directly, so there is no code path from it to the quota cache or
+  `source` means the guard USED studio, `shadow` means studio COULD have answered. When it cannot,
+  the line names the CAUSE — `quota shadow: studio UNREADABLE (rate_limited)` (#825) — because a
+  bare UNREADABLE conflates a broken reader with a merely contended account, and only the first is
+  evidence about studio. The cause is studio's own `unavailable.claude`, checked against the known
+  enum, except `unreachable`, which this driver derives from curl's exit status when nothing
+  answered at all. An unrecognised or absent cause degrades to the bare line. It decides
+  nothing (it parses a body it fetched itself, so there is no code path from it to the quota cache or
   the source-2 memo; it writes nothing to stdout; the call site redirects anyway). **This does mean
   studio is now polled in the common case** — a deliberate reversal, priced at one request per hour
   per active driver, and not the standing ~1/min sampler #770 rejected. `QUOTA_SHADOW_MIN_INTERVAL=0`

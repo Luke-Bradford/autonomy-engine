@@ -1416,6 +1416,158 @@ check "the shadow emits NOTHING on stdout (a stray echo fails the gate OPEN)" ""
   "$(cat "$shtmp/out")"
 rm -rf "$shtmp"
 
+# --- 29h-29k. #825: the shadow line says WHY, not just that it failed ---------
+#
+# C3 (#410) is decided on a run of these lines, and the work order reads a run of
+# UNREADABLE as "studio is not ready". That inference is only sound if UNREADABLE
+# is attributable: measured 2026-07-31, studio sat rate-limited for ~7.8h while
+# the old dashboard's sampler held the shared account bucket, and the one probe
+# taken in that window logged a bare UNREADABLE -- a fact about the ACCOUNT being
+# recorded as a fact about STUDIO. These cases pin the attribution, and pin the
+# two things it must never do: reach the decision path, or invent a reason.
+#
+# Direct-call for the same reason 29f is: the body has to be controlled exactly,
+# and an end-to-end run cannot vary studio's failure SHAPE.
+shrun() {  # $1 = the body curl should echo; $2 = curl's exit status (default 0).
+  # Echoes the driver.log line.
+  shrtmp="$(mk_tmp)"
+  mkdir -p "$shrtmp/bin" "$shrtmp/infra"
+  # `cat`, not printf: the bodies below carry `%` and backslash-free JSON, and a
+  # format string would be one escaping bug away from testing the wrong body.
+  {
+    echo '#!/bin/bash'
+    # Append-based call counter: the probe must take ONE sample, and a suite that
+    # cannot count polls cannot tell one from two.
+    echo "echo 1 >>\"$shrtmp/polls\""
+    echo 'cat <<'\''BODY'\'''
+    echo "$1"
+    echo 'BODY'
+    # A curl that FAILED still has to exit non-zero, which is the whole signal
+    # the `unreachable` attribution rests on.
+    echo "exit ${2:-0}"
+  } >"$shrtmp/bin/curl"
+  chmod +x "$shrtmp/bin/curl"
+  (
+    set -uo pipefail
+    export INFRA="$shrtmp/infra"
+    export DLOG="$shrtmp/infra/driver.log"
+    export QUOTA_SHADOW_STAMP="$shrtmp/infra/.last_quota_shadow"
+    export QUOTA_SHADOW_MIN_INTERVAL=3600
+    export PATH="$shrtmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    quota_shadow_probe dashboard
+  ) >"$shrtmp/out" 2>"$shrtmp/err" &
+  shr_pid=$!
+  shr_i=0
+  while [ "$shr_i" -lt 15 ]; do kill -0 "$shr_pid" 2>/dev/null || break; sleep 1; shr_i=$((shr_i + 1)); done
+  kill -9 "$shr_pid" 2>/dev/null || true
+  # Cut at " (diagnostic", NOT at the first "(" -- the reason suffix is itself
+  # parenthesised, so a `[^(]*` capture silently swallows the very thing these
+  # cases assert and every one of them passes vacuously. (It did; that is why
+  # this comment exists.)
+  sed -n 's/.*\(quota shadow: studio .*\) (diagnostic.*/\1/p' "$shrtmp/infra/driver.log" 2>/dev/null | tail -1
+  # To a FILE, not a variable: every caller runs `shrun` inside `$(...)`, and a
+  # subshell's variable assignment dies with it -- the same trap that ate two
+  # registries during #821. A file crosses the boundary.
+  wc -l <"$shrtmp/polls" 2>/dev/null | tr -d ' \n' >"$SHR_POLLS"
+  rm -rf "$shrtmp"
+}
+SHR_POLLS="$(mk_tmp)/polls"
+
+# 29h. The reason rides the line. `rate_limited` specifically, because that is
+# the one the C3 evidence keeps hitting and the one most wrongly read as a studio
+# fault.
+check "the shadow names a rate-limited account rather than blaming studio (#825)" \
+  "quota shadow: studio UNREADABLE (rate_limited)" \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}')"
+
+# 29i. ...and it is the SERVER's reason, not a constant. Without this, hardcoding
+# the string above would pass 29h.
+check "...and reports the cause it was actually given (#825)" \
+  "quota shadow: studio UNREADABLE (no_credential)" \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"no_credential"}}')"
+
+# 29j. A READING carries no reason suffix. The iff-contract, seen from the
+# consumer: a line that both quotes a percent and explains its absence is
+# incoherent, and would mean the server emitted both.
+check "a readable probe logs the percent with no reason attached (#825)" \
+  "quota shadow: studio 97%" \
+  "$(shrun '{"account":{"claude":{"seven_day":{"utilization":0.97}}},"unavailable":{"claude":"rate_limited"}}')"
+
+# 29k. Anything that is not a MEMBER of the contract's enum degrades to the OLD
+# line rather than to a corrupted one. Five shapes, each a real way this could
+# arrive: an older studio (no key at all), a wrong service on the port, a body
+# trying to get its own text into an operator's log, an unbounded string, and --
+# the one a shape-only check would have let through -- a well-formed lowercase
+# token that simply is not one of the six causes. That last row is why this
+# validates membership and not `[a-z_]`: an invented cause written into the log
+# the C3 decision is read from is indistinguishable from a real one.
+for sh_body in \
+  '{"account":{"claude":null}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":null}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":"RATE LIMITED; rm -rf /"}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}' \
+  '{"account":{"claude":null},"unavailable":{"claude":"ok"}}'; do
+  check "an unrecognised reason degrades to the bare line, never a corrupt one (#825)" \
+    "quota shadow: studio UNREADABLE" "$(shrun "$sh_body")"
+done
+
+# 29l. ONE sample, not two. The percent and the reason must come from the SAME
+# response: studio re-polls its provider once its throttle window elapses, so a
+# second call can legitimately answer differently, and the probe would then
+# attribute a cause that belongs to a reading it did not log. Reading the body
+# once is what forbids that, and this is the assertion that keeps it true -- a
+# refactor back to two `quota_read_url`-style calls goes red here.
+check "the probe takes ONE sample, so the reason belongs to the reading (#825)" "1" \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}' >/dev/null; cat "$SHR_POLLS")"
+
+# 29m. The reason NEVER reaches the decision path. `quota_read_url` is what
+# `quota_pct` reads, and a stray token on its stdout makes `[ "$x" -ge "$y" ]`
+# return 2 -- neither branch, so the gate logs "quota ok" and FIRES. The one
+# polarity this guard may not have, and the reason the parse is split rather than
+# widened.
+shdrun() {  # $1 = body; echoes what the DECISION path makes of it
+  shdtmp="$(mk_tmp)"
+  mkdir -p "$shdtmp/bin"
+  {
+    echo '#!/bin/bash'
+    echo 'cat <<'\''BODY'\'''
+    echo "$1"
+    echo 'BODY'
+  } >"$shdtmp/bin/curl"
+  chmod +x "$shdtmp/bin/curl"
+  (
+    set -uo pipefail
+    export PATH="$shdtmp/bin:$PATH"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    quota_read_url http://studio.invalid/api/quota
+  )
+  rm -rf "$shdtmp"
+}
+# The POSITIVE control FIRST. The assertion below is an absence, and an absence
+# proves nothing if the harness never reached the code -- an unsourced drive.sh
+# or an unconsulted stub would satisfy it just as well. This says the same
+# harness does produce a percent when there is one to produce.
+check "the decision path still reads a percent through the split parse (#825)" "97" \
+  "$(shdrun '{"account":{"claude":{"seven_day":{"utilization":0.97}}},"unavailable":{"claude":"rate_limited"}}')"
+check "an attributed UNREADABLE still reads as UNREADABLE on the decision path (#825)" "" \
+  "$(shdrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}')"
+
+# 29n. An UNREACHABLE studio is named as such, not left bare. The bucket C3 most
+# needs separated: "nothing answered" is a lifecycle fault (#765 Defect 2), not
+# evidence that studio's reader cannot do its job. Derived from curl's exit
+# status, so it is the one cause this driver knows without being told.
+check "nothing answering on the port is logged as unreachable, not as a bare UNREADABLE (#825)" \
+  "quota shadow: studio UNREADABLE (unreachable)" "$(shrun '' 7)"
+
+# ...and a SERVED body wins over curl's status, so a server that answered and
+# explained itself is never relabelled by the weaker local signal.
+check "a served reason outranks the locally-derived unreachable (#825)" \
+  "quota shadow: studio UNREADABLE (rate_limited)" \
+  "$(shrun '{"account":{"claude":null},"unavailable":{"claude":"rate_limited"}}' 7)"
+
 # 29g. An UNWRITABLE rate stamp SKIPS the poll -- it does not silently UN-THROTTLE
 # it. Every other writer in this file can afford `|| true` because a lost write
 # fails SAFE: no cache entry means the guard takes the blind path, no memo means
