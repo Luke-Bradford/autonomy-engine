@@ -1898,6 +1898,23 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
     });
   });
 
+  it('does not let UNRELATED protocol lines starve the budget of real envelopes', async () => {
+    // `"error"` is an ordinary KEY in events that are not error envelopes
+    // (`{"type":"item.completed","error":null}`). Keying the pre-filter on the
+    // `type` POSITION is what keeps them off the parse budget — otherwise a long
+    // transcript charges 1 MB of non-envelopes and the real refusal at the head is
+    // dropped, turning a cost bound into a wrong verdict.
+    const noise = out(
+      JSON.stringify({ type: 'item.completed', error: null, text: 'y'.repeat(9_000) }),
+    );
+    const refusal = out(JSON.stringify({ type: 'error', message: PATTERN }));
+    const events = await runTask(
+      [refusal, ...Array.from({ length: 140 }, () => noise)],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
   it('applies to llm_call too — the source is a fact about the CLI, not about the shape', async () => {
     const events = await drain(
       createAgentAdapter(
