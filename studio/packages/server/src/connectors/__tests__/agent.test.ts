@@ -1207,7 +1207,7 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
 // #2 L14c — the connection `config.quota` hint is validated at the boundary (save /
 // dispatch): an un-compilable regex or an out-of-range window is refused with a clear
 // error rather than throwing later at the failure emit.
-describe('#816 — per-shape quota classification scope (quota.classifyShapes)', () => {
+describe('#816 — per-shape quota classification scope (quota.classifyActivityTypes)', () => {
   const PATTERN = 'usage limit reached';
   /** A quota hint scoped to `shapes`; omit `shapes` for the unscoped default. */
   function quotaConfig(shapes?: readonly string[]) {
@@ -1216,7 +1216,7 @@ describe('#816 — per-shape quota classification scope (quota.classifyShapes)',
       quota: {
         exhaustionPattern: PATTERN,
         resetWindowSeconds: 3600,
-        ...(shapes !== undefined ? { classifyShapes: shapes } : {}),
+        ...(shapes !== undefined ? { classifyActivityTypes: shapes } : {}),
       },
     };
   }
@@ -1266,7 +1266,7 @@ describe('#816 — per-shape quota classification scope (quota.classifyShapes)',
     expect(events.some((e) => e.type === 'metered')).toBe(true);
   });
 
-  it('ABSENT classifyShapes: BOTH shapes still classify — no behaviour change on upgrade', async () => {
+  it('ABSENT classifyActivityTypes: BOTH shapes still classify — no behaviour change on upgrade', async () => {
     const agentEvents = await drain(
       createAgentAdapter(refusingSupervisor().supervisor).runActivity(
         ctx({ connectionConfig: quotaConfig() }),
@@ -1351,33 +1351,33 @@ describe('agent_cli config quota hint validation', () => {
     ).toBe(true);
   });
 
-  it('accepts a classifyShapes scope naming either shape (#816)', () => {
-    for (const classifyShapes of [['llm_call'], ['agent_task'], ['llm_call', 'agent_task']]) {
+  it('accepts a classifyActivityTypes scope naming either shape (#816)', () => {
+    for (const classifyActivityTypes of [['llm_call'], ['agent_task'], ['llm_call', 'agent_task']]) {
       const r = schema.safeParse({
         command: 'claude',
-        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyShapes },
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes },
       });
       expect(r.success).toBe(true);
     }
   });
 
-  it('REFUSES an EMPTY classifyShapes — "classify nothing" must not be spelled obliquely (#816)', () => {
+  it('REFUSES an EMPTY classifyActivityTypes — "classify nothing" must not be spelled obliquely (#816)', () => {
     // An empty scope is an obscure way of writing "delete the quota block", and
     // it silently disarms the hot-loop guard on BOTH shapes. Refuse at the
     // boundary rather than honour a config whose intent cannot be read.
     expect(
       schema.safeParse({
         command: 'claude',
-        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyShapes: [] },
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes: [] },
       }).success,
     ).toBe(false);
   });
 
-  it('rejects an unknown member of classifyShapes (#816)', () => {
+  it('rejects an unknown member of classifyActivityTypes (#816)', () => {
     expect(
       schema.safeParse({
         command: 'claude',
-        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyShapes: ['http_request'] },
+        quota: { exhaustionPattern: 'x', resetWindowSeconds: 60, classifyActivityTypes: ['http_request'] },
       }).success,
     ).toBe(false);
   });

@@ -2205,7 +2205,7 @@ describe('#2 L14c / #799 — an agent_task refusal ARMS the window (real adapter
   });
 });
 
-describe('#816 — classifyShapes scopes the WRITE side only', () => {
+describe('#816 — classifyActivityTypes scopes the WRITE side only', () => {
   it('an agent_task refusal on a connection scoped to llm_call arms NO window and the run SUCCEEDS', async () => {
     // The end-to-end form of the #816 escape hatch: an operator who wants
     // `llm_call` quota-classified but not `agent_task` gets the pre-#799
@@ -2220,7 +2220,7 @@ describe('#816 — classifyShapes scopes the WRITE side only', () => {
         quota: {
           exhaustionPattern: 'usage limit reached',
           resetWindowSeconds: 300,
-          classifyShapes: ['llm_call'],
+          classifyActivityTypes: ['llm_call'],
         },
       },
       null,
@@ -2237,8 +2237,75 @@ describe('#816 — classifyShapes scopes the WRITE side only', () => {
     expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
   });
 
+  it('an EXPLICITLY scoped-IN agent_task still arms the window end to end', async () => {
+    // The positive leg at the executor level: naming the shape must behave
+    // identically to omitting `classifyActivityTypes`, or the scope would be a
+    // silent opt-OUT wearing an opt-in's clothes.
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'agent_cli',
+      {
+        command: 'claude',
+        quota: {
+          exhaustionPattern: 'usage limit reached',
+          resetWindowSeconds: 300,
+          classifyActivityTypes: ['agent_task'],
+        },
+      },
+      null,
+    );
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      code: 'rate_limit',
+      connectionId: connId,
+    });
+    expect(getConnectionQuotaResetEpoch(db, connId)).not.toBeNull();
+  });
+
+  it('an EMPTY classifyActivityTypes fails the node at DISPATCH — the refusal is not a save gate', async () => {
+    // Where the boundary refusal actually lands. The adapter `configSchema` is not
+    // run when a Connection is saved, so an empty array persists fine and is
+    // rejected on every dispatch instead. Pinned because the schema unit test
+    // (`safeParse`) cannot see this path, and "refused at the boundary" would
+    // otherwise read as "rejected at save".
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'agent_cli',
+      {
+        command: 'claude',
+        quota: {
+          exhaustionPattern: 'usage limit reached',
+          resetWindowSeconds: 300,
+          classifyActivityTypes: [],
+        },
+      },
+      null,
+    );
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ kind: 'permanent' });
+    // …and no quota window was armed off a config the adapter refused to read.
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
+  });
+
   it('a scoped-OUT shape is STILL admission-gated by a window the OTHER shape armed', async () => {
-    // The asymmetry, pinned so nobody reads `classifyShapes` as immunity. The
+    // The asymmetry, pinned so nobody reads `classifyActivityTypes` as immunity. The
     // gate keys on the CONNECTION, not the shape, and that is the fail-safe
     // reading: a live window states the subscription account is exhausted, which
     // is true for every shape spending it. Scoping declares only whose output is
@@ -2253,7 +2320,7 @@ describe('#816 — classifyShapes scopes the WRITE side only', () => {
         quota: {
           exhaustionPattern: 'usage limit reached',
           resetWindowSeconds: 300,
-          classifyShapes: ['llm_call'],
+          classifyActivityTypes: ['llm_call'],
         },
       },
       'k',

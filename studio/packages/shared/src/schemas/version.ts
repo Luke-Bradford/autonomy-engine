@@ -179,7 +179,7 @@
 // bump; pre-18 exports lacking `parameters` are healed by its fail-closed
 // `.default([])` on read.)
 // 19 (#816): AGENT_CLI QUOTA CLASSIFICATION SCOPE. An `agent_cli` connection may
-// declare `quota.classifyShapes` — which invocation shapes (`llm_call`,
+// declare `quota.classifyActivityTypes` — which invocation shapes (`llm_call`,
 // `agent_task`) the `exhaustionPattern` produces a quota verdict on; absent = both
 // (the #799 semantics). `agentConnectionConfigSchema` is a plain `z.object`, so a
 // pre-19 build STRIPS the key and classifies BOTH shapes, including the one the
