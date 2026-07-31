@@ -201,7 +201,7 @@ cases where one of them reads healthy and another does not:
 | --- | --- | --- |
 | `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
-| `studio server: in sync \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `STALE` ⇒ `--update`. |
+| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `STALE` ⇒ `--update`. |
 
 All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
 path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
@@ -211,13 +211,15 @@ a merged fix is inert. `DRIFT_REPORT=0` silences all three — and *only* the li
 typo such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
 
 `studio server` is the third half because the spend guard's source 3 is a third *program*, and
-nothing moved it forward or said that it had not (#832): measured 2026-07-31 it was eleven commits
-behind, so it predated #825 and served no unavailable-reason field, and the C3 evidence being
-collected from it was silently a measurement of the wrong build. It stays detection-only — the
-remedy is `install_studio_server.sh --update`, a human act by design (see the drift section above),
-and #792 phase 2 owns making that act a click. Its identity comes from the service's own
-`/api/version` rather than from `built.sha`, because the stamp records what the installer last
-compiled, which can differ from what the loaded unit is serving.
+nothing moved it forward or said that it had not (#832). Its verdict is about **`studio/`**, not
+about sha equality: this service is built from `studio/` alone, so a `loop/` or `docs/` merge cannot
+change a byte it serves, and calling it stale for one would make it red most of the day — a monitor
+whose red state is the normal state is a monitor nobody reads. So `current` means *the served build
+carries every `studio/` commit on main*, and the line still discloses the distance it is discounting.
+`drift_report_studio_server`'s header in `drive.sh` is the canonical account of why it exists, why it
+reads the running service rather than the installer's build stamp, and why it stays detection-only;
+the remedy is `install_studio_server.sh --update`, a human act by design (see the drift section
+above), and #792 phase 2 owns making that act a click.
 
 `driver code` reads `UNKNOWN` for the whole of any run started before #808 landed, because that
 process recorded no boot hash — which is the honest answer, not a gap.
