@@ -21,6 +21,21 @@ function engine(nodes: Node[], edges: Edge[] = []): Engine {
   return createEngine({ nodes, edges } satisfies EngineDoc);
 }
 
+/**
+ * A DEEP COPY of run state, for the inert-event tests' "nothing changed" baseline.
+ *
+ * `const before = s` would ALIAS the very object the reducer is handed, so an
+ * in-place mutation would be copied into the baseline and `toEqual` would pass —
+ * the tests would assert purity while being structurally unable to detect its
+ * violation. (Measured: a probe writing a key onto `state` inside an inert case
+ * left them all green.) A JSON round-trip is a sound clone here specifically
+ * because engine state is JSON-DURABLE by construction — it is what gets
+ * persisted and replayed. `structuredClone` is not in this package's TS lib.
+ */
+function snapshot<T>(state: T): T {
+  return JSON.parse(JSON.stringify(state)) as T;
+}
+
 const RUN = 'r1';
 const PV = 'pv1';
 
@@ -1302,7 +1317,7 @@ describe('activity.toolCalled is inert (#2 L10b)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.toolCalled',
       runId: RUN,
@@ -1327,7 +1342,7 @@ describe('activity.toolCalled is inert (#2 L10b)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.toolCalled',
       runId: RUN,
@@ -1355,7 +1370,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.metered',
       runId: RUN,
@@ -1377,7 +1392,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.metered',
       runId: RUN,
@@ -1403,7 +1418,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     // A subscription/CLI response: metered (provider/model/tokens known) but no
     // per-response price — the schema accepts the new status with all price fields absent.
     const r = eng.reduce(s, {
@@ -1432,7 +1447,7 @@ describe('activity.captured is inert (#2 L9a)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.captured',
       runId: RUN,
@@ -1465,7 +1480,7 @@ describe('activity.agentTelemetry is inert (#2 L11a)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.agentTelemetry',
       runId: RUN,
@@ -1494,7 +1509,7 @@ describe('activity.warned is inert (#750)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.warned',
       runId: RUN,
@@ -1538,7 +1553,7 @@ describe('activity.warned is inert (#750)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const event = {
       type: 'activity.warned',
       runId: RUN,

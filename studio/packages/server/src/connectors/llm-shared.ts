@@ -1239,11 +1239,27 @@ export function coerceStopReason(value: unknown): string {
  * cross-provider normalization is spec #2's I6, still open) — it only RECOGNISES,
  * for a diagnostic, and nothing downstream branches on it.
  *
- * Provenance, each cited in-repo:
- * - `length`   — OpenAI `finish_reason` (`openai-models.ts` "finish_reason: 'length'"),
- *                and Ollama's `done_reason` for the same condition (`ollama.ts`).
- * - `max_tokens` — Anthropic `stop_reason` (`anthropic.ts`'s DEFAULT_MAX_TOKENS note:
- *                "truncated or text-free with `stop_reason: \"max_tokens\"`").
+ * Provenance:
+ * - `length`   — OpenAI `finish_reason`, cited IN-REPO at `openai-models.ts`
+ *                ("finish_reason: 'length'"). Ollama's `done_reason` is understood
+ *                to use the same spelling for the same condition, but that is an
+ *                EXTERNAL-API fact, NOT pinned anywhere in this repo — `ollama.ts`
+ *                records no `done_reason` vocabulary at all. If it turns out to
+ *                differ, the failure direction is silence (see below), not a wrong
+ *                warning.
+ * - `max_tokens` — Anthropic `stop_reason`, cited in-repo at `anthropic.ts`'s
+ *                DEFAULT_MAX_TOKENS note.
+ *
+ * REACHABILITY, stated honestly: `max_tokens` is probably close to DEAD today. The
+ * same `anthropic.ts` note describes what a budget-truncated Anthropic response
+ * actually does — it comes back text-free, `extractText` finds no text block, and
+ * the node terminalizes `empty_completion_set` as a PERMANENT failure whose
+ * message names no stop reason. So the Anthropic truncation this warning most
+ * wants to explain never reaches here; only an explicit `[{type:'text',text:''}]`
+ * block would. The member stays because it is the correct token for that shape and
+ * the fail direction costs nothing, but #750's Anthropic half is NOT closed by
+ * this table — carrying the stop reason into `noCompletionFailure` is what would
+ * close it, and that is tracked as the follow-up.
  *
  * Matching is EXACT and case-sensitive, deliberately. A bespoke gateway spelling
  * (`MAX_TOKENS`) therefore does NOT warn: an absent truncation fact must never be
@@ -1277,11 +1293,17 @@ export const TRUNCATION_STOP_REASONS: ReadonlySet<string> = new Set(['length', '
  * In practice only the `llm_call` TEXT path across the three API adapters and the
  * L10b tool loop can satisfy it. `agent_cli` cannot: its `llm_call` path stamps
  * the `unknown` sentinel, and its `agent_task` paths emit no `text`/`stopReason`
- * pair at all — two different exclusions, both by shape. The structured paths
- * yield the AUTHOR's declared fields, so a schema that happened to declare
- * exactly a `text` + `stopReason` string pair could trip this; that is contrived
- * and harmless (one spurious inert advisory, no outcome change), but it is a
- * shape rule rather than a structural guarantee. The detector table pins each.
+ * pair at all — two different exclusions, both by shape.
+ *
+ * The structured path IS reachable, contrary to what an earlier draft of this
+ * comment claimed: structured success emits the model-supplied object shaped by
+ * the AUTHOR's schema verbatim, so a schema declaring exactly a `text: string` +
+ * `stopReason: string` pair reaches this gate with fully MODEL-CONTROLLED values.
+ * It is the one place model data can decide whether a warning is minted. That is
+ * contrived and harmless — the worst case is one spurious inert advisory, no
+ * outcome change — and it cannot leak, because only the table-matched token is
+ * ever interpolated into the message (pinned by a test). Noted rather than
+ * guarded: a shape rule, not a structural guarantee.
  *
  * A truncated but NON-empty completion stays silent: partial text is a real,
  * usable result, and warning on every one would be noise. That narrowing is
@@ -1298,9 +1320,15 @@ export function emptyTruncationWarning(outputs: Record<string, unknown>): string
   // become a side channel for model text.
   return (
     `the model returned NO text and the provider reported stopReason='${stopReason}' — ` +
-    `the response was cut off at the token budget, so this node succeeded with an empty ` +
-    `\`text\` output. Raise the node's maxTokens; on a reasoning model that budget covers ` +
-    `invisible reasoning tokens as well as the visible answer.`
+    // Deliberately says nothing about the node's OUTCOME. This advisory is
+    // appended BEFORE the terminal, and a `node.succeeded` whose outputs violate
+    // the node's declared contract still folds to `failure` — so "this node
+    // succeeded" would be a false statement in the durable log for any node with a
+    // hand-authored contract. State the output fact; let the terminal state the
+    // outcome.
+    `the response was cut off at the token budget, so the \`text\` output is empty. ` +
+    `Raise the node's maxTokens; on a reasoning model that budget covers invisible ` +
+    `reasoning tokens as well as the visible answer.`
   );
 }
 
