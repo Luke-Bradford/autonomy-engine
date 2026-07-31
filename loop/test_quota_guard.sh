@@ -1360,7 +1360,9 @@ printf '#!/bin/bash\necho boot\n' >"$dctmp/fake_drive.sh"
   # (a) no boot hash recorded at all -- the pre-#808 driver, and any run whose
   #     startup hash failed. UNKNOWN, never a clean bill of health.
   drift_report_driver_code
-  # (b) file unchanged since boot -> live.
+  # (b) file unchanged since boot -> live. Exported for the same reason as the
+  #     vars above: the SOURCED file is what reads it.
+  export DRIVE_BOOT_HASH
   DRIVE_BOOT_HASH="$(drive_self_hash)"
   drift_report_driver_code
   # (c) the file changed underneath the running process -> STALE. Mutated by
