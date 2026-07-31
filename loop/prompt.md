@@ -106,12 +106,29 @@ Bucket them:
   `(disabled)` — **these ARE evidence against studio**, and a run of any of them means C3 is NOT
   ready. They say the reader could not do its job on a call the provider was willing to serve.
 - A bare `UNREADABLE` with no cause — an old studio, or something that is not studio, on the port.
-  Investigate rather than count.
+  Investigate rather than count. **This was measured and resolved on 2026-07-31 (#832): the
+  supervised service was ELEVEN commits behind main, so it predated #825 and served no cause field
+  at all. The three bare lines it produced (`10:53:51Z`, `12:45:12Z`, `14:25:20Z`) are VOID — they
+  measure a build from before the code they were meant to attest. Do not count them on either side.**
+
+**CHECK WHICH BUILD ANSWERED BEFORE YOU COUNT ANYTHING.** Every drift-report iteration now logs a
+`studio server:` line beside the shadow lines (#832). Read it first:
+
+- `studio server: in sync with origin/main (serving <sha>)` — the shadow lines beside it are
+  evidence about the code on main. Count them.
+- `studio server: STALE -- ... serving <sha>` — they are evidence about THAT build, not about main.
+  Do not count them for or against C3. Refresh with `loop/install_studio_server.sh --update` (a
+  human act by design — #773 rejected a scheduled updater on measured starvation evidence, and the
+  drift report is detection-only) and start collecting again.
+- `studio server: UNKNOWN -- ...` — the line says which of the four unknowns it is. Only the
+  `nothing answered` one is a lifecycle fault to go fix; the rest mean the comparison could not be
+  made, not that anything is wrong.
 
 So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
-reading**, with **no run of reader-fault causes** against them (a `quota source: studio` line is
-better still if one ever occurs). Count both sides with
-`grep 'quota shadow: studio' loop/logs/driver.log | sort | uniq -c` — and remember only
+reading while `studio server:` read in sync**, with **no run of reader-fault causes** against them
+(a `quota source: studio` line is better still if one ever occurs). Count both sides with
+`grep 'quota shadow: studio' loop/logs/driver.log | sort | uniq -c`, and check the build with
+`grep 'studio server:' loop/logs/driver.log | tail` — and remember only
 `logs/driver.log` counts; agent transcripts are full of false hits.
 Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
 `loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
