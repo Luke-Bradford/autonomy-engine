@@ -162,6 +162,21 @@ case "$*" in
       echo '{"account":{"claude":null}}'
     fi
     exit 0 ;;
+  # #832: the drift report asks the SAME service for its build identity once per
+  # loop iteration. This arm exists so that call cannot fall through to the
+  # dashboard arm below, which counts calls -- an untracked poll silently
+  # consumes `CURL_READABLE_CALLS` and shifts every scripted response after it,
+  # so the fires a case is asserting on stop being the fires it set up. (It did:
+  # adding the drift half turned a 4-fire case into 3.) Returns early and never
+  # touches `curlcalls`, exactly as the studio arm above does.
+  #
+  # Defaults to the `dev` PLACEHOLDER -- what a checkout with no release
+  # manifest serves -- so the drift half reads UNKNOWN and the pre-existing
+  # cases stay tests of what they were written to test.
+  # STUDIO_VERSION_COMMIT=<sha> is the opt-in for a case that wants a verdict.
+  */api/version*)
+    echo '{"version":"0.0.0-dev","commit":"'"${STUDIO_VERSION_COMMIT:-dev}"'"}'
+    exit 0 ;;
 esac
 EOS
   # --- the dashboard (/api/state) arm: EMPTY utilization => unreadable path.
