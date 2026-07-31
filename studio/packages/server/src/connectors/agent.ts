@@ -153,6 +153,37 @@ const agentConnectionConfigSchema = z.object({
       }),
       /** Conservative reset window (whole seconds) to wait before a retry. */
       resetWindowSeconds: z.number().int().positive().max(MAX_RETRY_AFTER_SECONDS),
+      /**
+       * #816 — which INVOCATION SHAPES `exhaustionPattern` is classified on.
+       * ABSENT = both, i.e. exactly the #799 behaviour, so this field changes
+       * nothing on upgrade.
+       *
+       * It exists because the opt-in was per-CONNECTION and the two shapes carry
+       * very different risk. On `llm_call` the matched stdout is a single
+       * completion; on `agent_task` it is the agent's own transcript, so a
+       * session that merely DISCUSSES a usage limit can trip the pattern — and
+       * the resulting `rate_limit` both fails the node and arms a
+       * CONNECTION-WIDE admission window. Before this field, the only way to
+       * stop that was to unset `quota` entirely, which also disarmed the shape
+       * the operator actually wanted classified.
+       *
+       * SCOPE, not immunity: this governs which shape may PRODUCE a quota
+       * verdict, never which dispatches the resulting window GATES. The
+       * executor's admission gate keys on the CONNECTION (`executor.ts`), so a
+       * shape scoped out here is still refused dispatch while a window armed by
+       * the other shape is live. That is deliberate and it is the fail-safe
+       * reading: the window states that the underlying subscription account is
+       * exhausted, which is true for every shape spending it — scoping only
+       * declares which shape's output is trustworthy EVIDENCE of that.
+       *
+       * EMPTY is refused rather than honoured: it is an oblique spelling of
+       * "delete the quota block" that silently disarms the hot-loop guard on
+       * both shapes, and a config whose intent cannot be read should not run.
+       */
+      classifyShapes: z
+        .array(z.enum([LLM_CALL_ACTIVITY_TYPE, AGENT_TASK_ACTIVITY_TYPE]))
+        .min(1, { message: 'classifyShapes must name at least one shape (omit it to mean both)' })
+        .optional(),
     })
     .optional(),
 });
@@ -254,9 +285,10 @@ const MAX_CLI_DIAGNOSTIC_CHARS = 1000;
  * diagnostic) and the tail keeps the end of stdout, where a CLI that exits
  * non-zero prints the reason it is exiting.
  *
- * This is a SIZE bound only. WHICH CHANNELS `agent_task` should match at all —
- * stderr only, or stderr plus a stdout tail — is a semantics decision that needs
- * evidence about real CLI behaviour, and stays with #816. */
+ * This is a SIZE bound only. WHICH CHANNELS/POSITIONS `agent_task` should match —
+ * stderr only, or stderr plus a stdout tail — still stands with #816: the tail
+ * narrowing was tried and refuted on in-repo evidence (see `diagnoseCliExit`),
+ * and the SHAPE scope that DID ship is `quota.classifyShapes`, not a channel cut. */
 const MAX_CLI_MATCH_CHARS = 64_000;
 
 /**
@@ -306,24 +338,41 @@ type CliTerminal = CliClassification['terminal'];
  * gate from that: the laziness is the by-product, the rule is the point.
  *
  * FALSE-POSITIVE SURFACE, stated where the matching lives: on `llm_call` the
- * stdout half is a single completion, but on `agent_task` it is the ENTIRE agent
- * transcript — tool output, file contents the agent printed, its own prose — up
- * to the connection's `maxOutputBytes` (10 MB by default). So a non-zero exit
- * whose transcript merely MENTIONS the pattern both fails the node and arms a
- * connection-wide window that admission-gates every other run bound to that
- * connection until it elapses. A self-referential agent (one reading logs that
- * discuss quota) is a plausible trip. Bounded by the pattern being operator-
- * authored and opt-in; narrowing WHICH CHANNELS `agent_task` matches at all is a
- * semantics decision tracked separately (#816). The SIZE half of that surface is
- * bounded here and now: the pattern is tested against a `MAX_CLI_MATCH_CHARS`
- * excerpt, not the whole transcript, because the `test` is synchronous and
- * scanning megabytes on the server's only thread is an event-loop stall.
+ * stdout half is a single completion, but on `agent_task` it is the agent's own
+ * transcript — tool output, file contents it printed, its own prose. So a
+ * non-zero exit whose transcript merely MENTIONS the pattern both fails the node
+ * and arms a connection-wide window that admission-gates every other run bound to
+ * that connection until it elapses. A self-referential agent (one reading logs
+ * that discuss quota) is a plausible trip.
+ *
+ * TWO bounds apply, and neither is the CHANNEL question:
+ *  - SIZE: the pattern is tested against a `MAX_CLI_MATCH_CHARS` excerpt, not the
+ *    whole (up to `maxOutputBytes`, 10 MB) transcript, because the `test` is
+ *    synchronous and scanning megabytes on the server's only thread is an
+ *    event-loop stall. Note what this ALSO buys: the transcript's mid-body — the
+ *    intuitive home of a false positive — is already outside the matched window.
+ *  - SHAPE: `quota.classifyShapes` (#816) lets an operator declare which shapes
+ *    may produce a verdict at all, so `agent_task` can be scoped out without
+ *    disarming `llm_call` on the same connection.
+ *
+ * WHICH CHANNELS/POSITIONS `agent_task` should match REMAINS OPEN (#816), and the
+ * tempting narrowing was investigated and REJECTED on evidence rather than left
+ * unexamined. Matching only a stdout TAIL looks safe — "a CLI that dies of quota
+ * prints the reason last" — but `bin/agents/claude.sh` (this repo's only reader of
+ * a real agent CLI) classifies a Claude Code limit from a MID-STREAM
+ * `rate_limit_event`, and scans for the LAST of several, explicitly handling a
+ * session that continues and even succeeds after one. Under `--output-format
+ * stream-json` the refusal can therefore sit arbitrarily far from the end, behind
+ * fallback turns and teardown. A tail cut would miss it and reopen #799's
+ * hot-loop, while leaving the likelier false positive (the agent's closing summary
+ * "I stopped: usage limit reached") untouched — worse on both axes.
  *
  * The pattern is boundary-validated compilable by `agentConnectionConfigSchema`
  * (re-parsed on every dispatch), so `new RegExp` here cannot throw.
  */
 function diagnoseCliExit(
   quota: AgentQuotaHint | undefined,
+  shape: CliShapeLabel,
   terminal: CliTerminal,
   stderr: readonly string[],
   stdout: readonly string[],
@@ -334,15 +383,22 @@ function diagnoseCliExit(
     .map((s) => s.trim())
     .filter((s) => s !== '')
     .join('\n');
+  // #816 — the SHAPE gate, evaluated before the excerpt and the regex (both are
+  // pure waste once the verdict is scoped out). ABSENT `classifyShapes` = both
+  // shapes, so an untouched config behaves exactly as it did under #799. Note
+  // the `diagnostic` is still built and returned: scoping decides whether a
+  // failure carries a QUOTA VERDICT, never what a failure is allowed to SAY.
+  if (quota === undefined || !(quota.classifyShapes ?? [shape]).includes(shape))
+    return { diagnostic, quotaHit: undefined };
   // Match against a BOUNDED excerpt (`MAX_CLI_MATCH_CHARS`) — an `agent_task`
   // transcript can be megabytes and this `test` is synchronous. The FULL
   // `diagnostic` is still returned: the excerpt bounds what the pattern scans,
   // not what the failure event reports.
-  const quotaHit =
-    quota !== undefined &&
-    new RegExp(quota.exhaustionPattern).test(headTailExcerpt(diagnostic, MAX_CLI_MATCH_CHARS))
-      ? quota
-      : undefined;
+  const quotaHit = new RegExp(quota.exhaustionPattern).test(
+    headTailExcerpt(diagnostic, MAX_CLI_MATCH_CHARS),
+  )
+    ? quota
+    : undefined;
   return { diagnostic, quotaHit };
 }
 
@@ -506,7 +562,7 @@ interface CliClassification {
 function classifyCliOutcome(
   result: SupervisedResult,
   command: string,
-  label: string,
+  label: CliShapeLabel,
 ): CliClassification {
   const base = { exitCode: result.exitCode, signal: result.signal };
   if (result.aborted)
@@ -628,14 +684,18 @@ async function* runAgentTask(
     ctx.signal,
   );
   const latencyMs = Date.now() - started;
-  const classification = classifyCliOutcome(result, config.command, 'agent_task');
+  // One `shape` binding per runner (#816): the label reaches `classifyCliOutcome`,
+  // `diagnoseCliExit` and `quotaRefusedFailure`, and a literal repeated at three
+  // sites is three chances for them to disagree about which shape they are.
+  const shape: CliShapeLabel = AGENT_TASK_ACTIVITY_TYPE;
+  const classification = classifyCliOutcome(result, config.command, shape);
   const output = stdout.join('\n');
   // #2 L14c / #799 — the quota verdict, computed HERE (ahead of every yield)
   // because the terminal branch further down keys off it — the same hoist
   // `llm_call` makes. `diagnoseCliExit` decides for itself which outcomes can
   // carry a verdict, so neither shape restates that rule.
   const { terminal } = classification;
-  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, terminal, stderr, stdout);
+  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, shape, terminal, stderr, stdout);
   // #2 L11a — emit the subprocess TELEMETRY fact BEFORE the terminal (mirroring
   // `metered`/`captured`), so the exit code + summary + latency + stdout SHAPE are
   // observable regardless of outcome — including the FAILURE paths, where the
@@ -712,14 +772,16 @@ async function* runAgentTask(
   // a `failed` event can carry, so a node left `succeeded` could never schedule
   // one and the hot-loop would survive.
   //
-  // OPT-IN, but note the granularity: nothing changes unless the operator set
-  // `quota.exhaustionPattern`, and that toggle is per-CONNECTION, not per-shape.
-  // On a connection consumed by both shapes, unsetting it to keep `agent_task`'s
-  // exit-code-is-data behaviour ALSO disarms `llm_call`'s classification and the
-  // admission gate for that connection. There is no per-shape opt-out today.
+  // OPT-IN, and since #816 the granularity is per-SHAPE: nothing changes unless
+  // the operator set `quota.exhaustionPattern`, and `quota.classifyShapes` scopes
+  // WHICH shapes that pattern is classified on. Omitting it means both (the #799
+  // behaviour), so keeping `agent_task`'s exit-code-is-data contract no longer
+  // costs `llm_call` its classification on the same connection. What scoping does
+  // NOT buy is immunity from the admission gate, which keys on the connection —
+  // see `classifyShapes` for why that asymmetry is the fail-safe reading.
   if (quotaHit !== undefined) {
     yield quotaRefusedFailure(
-      'agent_task',
+      shape,
       terminal.exitCode,
       cliFailureDetail(diagnostic, secret),
       quotaHit,
@@ -844,13 +906,15 @@ async function* runLlmCall(
     secret,
     ctx.signal,
   );
-  const classification = classifyCliOutcome(result, config.command, 'llm_call');
+  // One `shape` binding per runner — rationale at `agent_task`'s (#816).
+  const shape: CliShapeLabel = LLM_CALL_ACTIVITY_TYPE;
+  const classification = classifyCliOutcome(result, config.command, shape);
   const { terminal } = classification;
   // #2 L14c — the combined stderr+stdout diagnostic and the quota verdict read
   // off it, both LAZY. Computed HERE rather than inside the non-zero-exit branch
   // because the metering decision below needs the quota match. Shared with
   // `agent_task` since #799 (rationale: `diagnoseCliExit`).
-  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, terminal, stderr, stdout);
+  const { diagnostic, quotaHit } = diagnoseCliExit(config.quota, shape, terminal, stderr, stdout);
   // #797 — meter BEFORE any terminal, so an abnormal termination is accounted for
   // rather than silently free (rationale: `cliSpendFact`).
   //
@@ -861,6 +925,11 @@ async function* runLlmCall(
   //    `quotaHit` requires a COMPLETED non-zero exit, so a CLI that prints its
   //    quota refusal and then hangs until the wall-clock kill is still metered —
   //    correct-by-policy (an over-mark costs one `unpriced` response), not a hole.
+  //    #816 narrows it once more, and deliberately: scoping this shape out of
+  //    `quota.classifyShapes` leaves `quotaHit` undefined, so a genuine refusal
+  //    here is METERED. There is nothing to except once the operator has declared
+  //    this shape's output is not trustworthy evidence of exhaustion, and the
+  //    over-mark direction is the one `cliSpendFact` already prefers.
   // A plain non-zero EXIT is deliberately NOT excluded. It is tempting to read it
   // as the HTTP adapters' unmarked non-2xx, but the analogy breaks: a non-2xx is
   // the PROVIDER stating it did not serve the request, whereas an exit code is the
@@ -885,7 +954,7 @@ async function* runLlmCall(
     // match ran PRE-redaction, above, because that verdict also drives the
     // metering exclusion — a refused call was never served.
     if (quotaHit !== undefined) {
-      yield quotaRefusedFailure('llm_call', terminal.exitCode, detail, quotaHit);
+      yield quotaRefusedFailure(shape, terminal.exitCode, detail, quotaHit);
       return;
     }
     yield {
