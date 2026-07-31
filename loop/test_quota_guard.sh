@@ -236,6 +236,24 @@ EOS
   cat >"$tmp/infra/run.sh" <<'EOS'
 #!/bin/bash
 echo fired >>"$REPO/fires.txt"
+# #811: MUTATE_DRIVE makes a fire change the DRIVER'S OWN source, which is what a
+# `loop/` merge + sync does in production. The next iteration's `drive_self_adopt`
+# then sees its file differ from its boot hash. Appending is the only sanctioned
+# mutation here (never `git checkout --`/`restore`/`stash`, which destroy
+# uncommitted work) and it is safe against the running process: the `while` loop
+# is already parsed, and bash only reads past it once the loop has ended.
+#   comment = ONE harmless append, so exactly one adoption is triggered
+#   broken  = ONE append that does not PARSE, so adoption must refuse
+#   every   = an append per fire, so the adopt CAP is what has to stop it
+if [ -n "${MUTATE_DRIVE:-}" ]; then
+  case "$MUTATE_DRIVE" in
+    comment) grep -q '811-test-marker' "$INFRA/drive.sh" || printf '# 811-test-marker\n' >>"$INFRA/drive.sh" ;;
+    broken)  grep -q '811-test-broken'  "$INFRA/drive.sh" || printf 'if [ ; then # 811-test-broken\n' >>"$INFRA/drive.sh" ;;
+    # No idempotence guard: a repeat of the SAME line still lengthens the file,
+    # so the hash changes on every fire.
+    every)   printf '# 811-test-marker\n' >>"$INFRA/drive.sh" ;;
+  esac
+fi
 if [ -n "${FIRE_RESULT:-}" ]; then
   mkdir -p "$INFRA/logs"
   fl="$INFRA/logs/fire.$(date +%Y%m%d-%H%M%S).$$.log"
@@ -1856,6 +1874,145 @@ check "a printf that fails with the temp already created is a refusal" "refused"
 check "...and that branch cleans up its temp too (45d could not see this)" "clean" "$(swout 27)"
 chmod 755 "$swtmp/ro" 2>/dev/null || true
 rm -rf "$swtmp"
+
+# --- 44. #811 SELF-ADOPTION: a merged loop/ fix actually starts running -------
+# #808 made "this process is running superseded code" VISIBLE; the fix stayed
+# inert until a human ran `launchctl kickstart`. These cases drive the REAL
+# drive.sh and mutate the copy it is running from, exactly as a sync does.
+#
+# The load-bearing property is NOT that it execs -- it is that the exec carries
+# the cross-fire bounds. An exec that reset them would trade a visible staleness
+# for an invisible fail-open in MAX_STALL / MAX_CRASH / QUOTA_UNKNOWN_FIRES /
+# MAX_BUDGET_REGRANTS, which is why #808 refused to build it. So every case here
+# asserts a COUNTER survived, not merely that a line was logged.
+
+# (a) one mutation on fire 1 -> adopt at the top of iteration 2, counters intact.
+#
+# MAX_LOOPS=4 makes the carry ARITHMETICALLY observable. `loops` is incremented
+# before the adopt point, so the handoff carries loops=2: the exec'd process
+# resumes at 2 and has iterations 3 and 4 left, i.e. 3 fires in total. Had
+# `loops` reset to 0 it would have had FOUR more iterations and fired 5 times.
+# The fire COUNT is therefore the assertion, and 3-vs-5 is the whole point.
+r44="$(run_case 0.10 MUTATE_DRIVE=comment MAX_LOOPS=4)"
+l44="$(logof "$r44")"
+check "a driver whose file changed under it ADOPTS the new code (#811)" "1" \
+  "$(grep -c 'driver code: ADOPTING' "$l44" 2>/dev/null || echo 0)"
+check "...and the exec'd process RESUMES the handoff rather than starting clean" "1" \
+  "$(grep -c 'driver handoff: RESUMED' "$l44" 2>/dev/null || echo 0)"
+check "...carrying MAX_LOOPS across the exec (3 fires, not the 5 a reset gives)" "3" \
+  "$(fires_of "$r44")"
+check "...and the fire COUNTER too -- the fire after the exec is FIRE 2, not FIRE 1" "1" \
+  "$(grep -q '=== FIRE 2 ' "$l44" 2>/dev/null && echo 1 || echo 0)"
+check "...so FIRE 1 happened exactly once across both processes" "1" \
+  "$(grep -c '=== FIRE 1 ' "$l44" 2>/dev/null || echo 0)"
+# The handoff is single-use. A record left on disk is one a much later restart
+# could resume bounds from -- the failure this file cares about, arriving late.
+check "...and the handoff record is CONSUMED, never left for a later restart" "0" \
+  "$([ -f "$(tmpof "$r44")/infra/.driver_handoff" ] && echo 1 || echo 0)"
+
+# (b) a new file that does not PARSE must never be exec'd into. This is the
+# half-finished-sync case, and exec'ing it would kill the driver outright --
+# nothing would run until the next scheduled start.
+r44b="$(run_case 0.10 MUTATE_DRIVE=broken MAX_LOOPS=3)"
+l44b="$(logof "$r44b")"
+check "a syntactically broken new file is REFUSED, not exec'd (#811)" "0" \
+  "$(grep -c 'driver code: ADOPTING' "$l44b" 2>/dev/null || echo 0)"
+check "...and the refusal says so instead of failing silently" "1" \
+  "$(grep -q 'NOT adopting -- .* does not PARSE' "$l44b" 2>/dev/null && echo 1 || echo 0)"
+check "...and the driver carries on running the OLD code (all 3 fires)" "3" \
+  "$(fires_of "$r44b")"
+
+# (c) a file that keeps changing must not adopt-loop forever. MAX_SELF_ADOPT
+# bounds it, and the bound has to survive the exec or it bounds nothing.
+r44c="$(run_case 0.10 MUTATE_DRIVE=every MAX_SELF_ADOPT=1 MAX_LOOPS=5)"
+l44c="$(logof "$r44c")"
+check "the adopt cap survives the exec -- exactly ONE adoption, not one per fire" "1" \
+  "$(grep -c 'driver code: ADOPTING' "$l44c" 2>/dev/null || echo 0)"
+check "...and says the cap is why it stopped adopting" "1" \
+  "$(grep -q 'cap MAX_SELF_ADOPT=1' "$l44c" 2>/dev/null && echo 1 || echo 0)"
+
+# (d) SELF_ADOPT=0 returns the driver to #808's report-and-wait behaviour.
+r44d="$(run_case 0.10 MUTATE_DRIVE=comment SELF_ADOPT=0 MAX_LOOPS=3)"
+l44d="$(logof "$r44d")"
+check "SELF_ADOPT=0 refuses to adopt at all (#811)" "0" \
+  "$(grep -c 'driver code: ADOPTING' "$l44d" 2>/dev/null || echo 0)"
+check "...and the #808 STALE report still names the manual remedy" "1" \
+  "$(grep -q 'driver code: STALE' "$l44d" 2>/dev/null && echo 1 || echo 0)"
+
+# (e) the handoff RECORD itself: who may consume it, and when. Sourced rather
+# than driven, because the discriminating inputs (a foreign pid, a stale stamp)
+# cannot be produced by a real run -- an exec always preserves the pid, and the
+# window between write and exec is microseconds.
+#
+# `$$` inside this backgrounded subshell is the TEST SCRIPT's pid (verified:
+# bash keeps $$ stable across subshells; BASHPID is the one that changes), which
+# is exactly why a record written with `$$` here reads as a continuation there.
+hftmp="$(mktemp -d)"
+mkdir -p "$hftmp/infra"
+hfnow="$(date +%s)"
+printf '%s v=1,pid=%s,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$hfnow" "$$" >"$hftmp/infra/.mine"
+printf '%s v=1,pid=999999,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$hfnow" >"$hftmp/infra/.foreign"
+printf '%s v=1,pid=%s,fires=7,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$((hfnow - 4000))" "$$" >"$hftmp/infra/.stale"
+printf '%s v=1,pid=%s,fires=seven,stall=2,blind=1,regrants=1,crash=3,loops=9,adopt=1,head=abc123\n' \
+  "$hfnow" "$$" >"$hftmp/infra/.corrupt"
+# A record from a drive.sh that had no `blind` counter yet -- the version skew an
+# adopt exec makes possible, since the OLD code writes what the NEW code reads.
+printf '%s v=1,pid=%s,fires=7,stall=2,regrants=1,crash=3,loops=9,adopt=1,head=abc123,newfield=x\n' \
+  "$hfnow" "$$" >"$hftmp/infra/.skewed"
+# Bounded exactly like cases 17 and 43: a broken source guard turns `.` into an
+# unconditional `while true` and would hang the suite forever.
+(
+  set -uo pipefail
+  export INFRA="$hftmp/infra"
+  export DLOG="$hftmp/infra/driver.log"
+  # shellcheck source=/dev/null
+  . "$HERE/drive.sh"
+  MAX_SELF_ADOPT=3
+  HANDOFF_MAX_AGE=300
+  for hf_case in mine foreign stale corrupt skewed; do
+    fires=0; stall=0; blind_fires=0; budget_regrants=0; crash=0; loops=0
+    adoptions=0; prev_head=""
+    cp "$hftmp/infra/.$hf_case" "$hftmp/infra/.driver_handoff"
+    DRIVER_HANDOFF="$hftmp/infra/.driver_handoff"
+    drive_handoff_resume
+    echo "$hf_case fires=$fires stall=$stall blind=$blind_fires regrants=$budget_regrants crash=$crash loops=$loops adopt=$adoptions head=$prev_head consumed=$([ -f "$DRIVER_HANDOFF" ] && echo 0 || echo 1)"
+  done
+) >"$hftmp/out" 2>"$hftmp/err" &
+hf_pid=$!
+hf_i=0
+while [ "$hf_i" -lt 15 ]; do kill -0 "$hf_pid" 2>/dev/null || break; sleep 1; hf_i=$((hf_i + 1)); done
+kill -9 "$hf_pid" 2>/dev/null || true
+hfout() { grep "^$1 " "$hftmp/out" 2>/dev/null | head -1; }
+check "a handoff from THIS pid resumes every bound (the case is not vacuous)" \
+  "mine fires=7 stall=2 blind=1 regrants=1 crash=3 loops=9 adopt=1 head=abc123 consumed=1" \
+  "$(hfout mine)"
+check "a handoff from ANOTHER pid is a new run, not a continuation -- all zero" \
+  "foreign fires=0 stall=0 blind=0 regrants=0 crash=0 loops=0 adopt=0 head= consumed=1" \
+  "$(hfout foreign)"
+check "a handoff older than HANDOFF_MAX_AGE is not a continuation either" \
+  "stale fires=0 stall=0 blind=0 regrants=0 crash=0 loops=0 adopt=0 head= consumed=1" \
+  "$(hfout stale)"
+# A malformed counter is REFUSED, never coerced -- and refusing costs the bounds,
+# so it also disarms further adoption rather than letting the loss repeat.
+check "a corrupt counter refuses the whole record and stops adopting (fail-safe)" \
+  "corrupt fires=0 stall=0 blind=0 regrants=0 crash=0 loops=0 adopt=3 head= consumed=1" \
+  "$(hfout corrupt)"
+# Version skew degrades PER FIELD: the writer is the old code and the reader is
+# the new one, so an all-or-nothing parse would drop every bound on the one fire
+# that adopts a format change.
+check "a record missing one counter keeps the others armed (writer=old, reader=new)" \
+  "skewed fires=7 stall=2 blind=0 regrants=1 crash=3 loops=9 adopt=1 head=abc123 consumed=1" \
+  "$(hfout skewed)"
+check "...and NAMES the counter it could not carry, rather than silently zeroing it" "1" \
+  "$(grep -q 'the handoff carried no blind' "$hftmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "...and names the field it did not recognise" "1" \
+  "$(grep -q 'ignored unknown field(s) newfield' "$hftmp/infra/driver.log" 2>/dev/null && echo 1 || echo 0)"
+check "the handoff resume emits NOTHING on stderr (it runs before every fire)" "" \
+  "$(cat "$hftmp/err" 2>/dev/null)"
+rm -rf "$hftmp"
 
 # --- 17. sourcing drive.sh has NO side effects (review round 2) --------------
 # The round-1 mkdir fix ran at FILE SCOPE, ~200 lines above the source guard the
