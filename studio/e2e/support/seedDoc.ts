@@ -59,10 +59,34 @@ export interface SeedContainer {
   join?: 'all' | 'any';
 }
 
+/**
+ * A pipeline's declared input, in the doc's own shape (U16). Seeded so a spec
+ * can start from a doc that ALREADY has a contract — the state an imported or
+ * API-minted pipeline arrives in, which is where the interesting cases live
+ * (a default the run would reject, a param the canvas must not drop on save).
+ */
+export interface SeedParam {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'json' | 'secret';
+  required: boolean;
+  default?: unknown;
+  description?: string;
+}
+
+/** A pipeline's declared result. No `secret` — that would be a leak channel. */
+export interface SeedOutput {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'json';
+  optional?: boolean;
+  description?: string;
+}
+
 export interface SeedDoc {
   nodes: SeedNode[];
   edges?: SeedEdge[];
   containers?: SeedContainer[];
+  params?: SeedParam[];
+  outputs?: SeedOutput[];
 }
 
 /**
@@ -83,8 +107,8 @@ export async function openSeededCanvas(page: Page, name: string, doc: SeedDoc): 
 
   const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
     data: {
-      params: [],
-      outputs: [],
+      params: doc.params ?? [],
+      outputs: doc.outputs ?? [],
       nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
       // `Edge.id` is required on the write path; a seed cares about the shape of
       // the graph, not about the ids, so one is minted from the edge itself —
