@@ -921,7 +921,17 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       ),
     );
     expect(events[0]).toMatchObject({ type: 'metered' });
-    expect(events[1]).toMatchObject({ type: 'failed', kind: 'permanent' });
+    // The DIAGNOSTIC still reaches the failure, even though no pattern is set.
+    // `diagnoseCliExit` builds the stderr+stdout join unconditionally for exactly
+    // this reason: the quota verdict is one consumer, the durable failure detail
+    // is the other, and the latter does not depend on `quota` being configured.
+    // Asserted because its absence makes "short-circuit the join when `quota` is
+    // undefined" look like a free optimization — it would blank this message.
+    expect(events[1]).toEqual({
+      type: 'failed',
+      kind: 'permanent',
+      error: 'llm_call CLI exited 1: usage limit reached',
+    });
   });
 
   it('still REDACTS the injected secret out of a quota (rate_limit) failure error', async () => {
@@ -953,6 +963,244 @@ describe('createAgentAdapter().runActivity — llm_call (CLI/subscription single
       createAgentAdapter(supervisor).runActivity(llmCtx({ connectionConfig: quotaConfig }), null),
     );
     expect(events.map((e) => e.type)).toEqual(['metered', 'succeeded']);
+  });
+});
+
+// #2 L14c / #799 — the SAME quota classification on the `agent_task` shape. Before
+// #799 this shape dropped stderr and mapped every exit code to a COMPLETED run, so
+// it could never classify a refusal — which meant it could never ARM the connection
+// quota window either (the driver writes that window only off a `node.failed`
+// carrying `code:'rate_limit'`). The read side was never the gap: the L14c admission
+// gate keys on connection KIND, so an `agent_task` was always throttled by a window
+// some sibling `llm_call` had armed. A connection consumed SOLELY by `agent_task`
+// nodes simply never armed one.
+//
+// This is the ONE carve-out to "any exit code is `succeeded`", and it is strictly
+// opt-in: it requires the operator to have set `quota.exhaustionPattern`.
+describe('#2 L14c / #799 — agent_task quota classification', () => {
+  const quotaTaskConfig = {
+    command: 'claude',
+    quota: { exhaustionPattern: 'usage limit reached|rate.?limit', resetWindowSeconds: 3600 },
+  };
+
+  it('reclassifies a matching non-zero-exit (stderr) as rate_limit + retryAfterSeconds', async () => {
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'Error: usage limit reached for this account' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    // Metered too — this shape does NOT apply `llm_call`'s refusal exclusion (a
+    // multi-turn session burns quota before it learns it is out).
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'failed']);
+    expect(events[2]).toEqual({
+      type: 'failed',
+      kind: 'rate_limit',
+      error:
+        'agent_task CLI exited 1 (quota exhausted): Error: usage limit reached for this account',
+      retryAfterSeconds: 3600,
+    });
+  });
+
+  it('matches the quota pattern against STDOUT too (codex prints its error there)', async () => {
+    // Widest surface on this shape: an `agent_task`'s stdout is an arbitrarily long
+    // agent transcript, not a single completion, so prose that merely MENTIONS the
+    // phrase can trip it — and the window it arms is connection-wide. Kept for
+    // symmetry with `llm_call` and because some CLIs have no other error channel;
+    // the mitigation is that the pattern is operator-authored and opt-in.
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'hit the rate-limit' }], {
+      exitCode: 7,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events[2]).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('REDACTS a secret straddling the truncation boundary (redact-then-truncate order)', async () => {
+    // The load-bearing ordering inside `cliFailureDetail`: redact the FULL text,
+    // THEN elide the middle. Truncating first would cut the secret in half and
+    // leave a surviving fragment in a durable, API-served `node.failed`. Sized so
+    // the secret sits exactly across the `MAX_CLI_DIAGNOSTIC_CHARS / 2` head
+    // boundary, which is the only place the two orderings differ.
+    const SECRET = 'sk-straddle-0123456789';
+    const PREFIX = 'usage limit reached ';
+    // Place the secret's MIDPOINT exactly on the head boundary (half of the 1000
+    // cap), so truncate-first would slice it in two and keep the leading half.
+    const head = 'A'.repeat(500 - PREFIX.length - Math.floor(SECRET.length / 2));
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: `${PREFIX}${head}${SECRET}${'B'.repeat(900)}` }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: { ...quotaTaskConfig, secretEnv: 'ANTHROPIC_API_KEY' },
+        }),
+        SECRET,
+      ),
+    );
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(SECRET);
+    // …and no ≥8-char fragment of it survived the cut either.
+    for (let i = 0; i + 8 <= SECRET.length; i += 1) {
+      expect(serialized).not.toContain(SECRET.slice(i, i + 8));
+    }
+    expect(serialized).toContain('***');
+  });
+
+  it('orders the diagnostic stderr-BEFORE-stdout', async () => {
+    // Documented as deliberate (stderr is the conventional error channel), so the
+    // real error leads even when a CLI also printed noise to stdout.
+    const { supervisor } = fakeSupervisor(
+      [
+        { stream: 'stdout', line: 'transcript tail' },
+        { stream: 'stderr', line: 'usage limit reached' },
+      ],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect((events[2] as { error: string }).error).toMatch(
+      /usage limit reached[\s\S]*transcript tail/,
+    );
+  });
+
+  it('leaves a NON-matching non-zero exit as succeeded — the carve-out stays narrow', async () => {
+    // The "exit code is data" contract survives everywhere the pattern does not hit.
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'compile error' }], {
+      exitCode: 2,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+    expect(events[2]).toMatchObject({ outputs: { exitCode: 2 } });
+  });
+
+  // The pattern is matched against a BOUNDED excerpt, not the whole transcript
+  // (`MAX_CLI_MATCH_CHARS` = 64k, head + tail). `RegExp.test` is synchronous, and
+  // an `agent_task` transcript runs to `maxOutputBytes` (10 MB default), so an
+  // unbounded scan stalls the server's only thread on every failed node — a cost
+  // the single-completion `llm_call` shape never had. These three pin the bound's
+  // shape: what it deliberately stops seeing, what it must still see, and that
+  // eliding the middle cannot FORGE a match across the seam.
+  const overCap = (head: string, tail: string, gap = 100) =>
+    `${'x'.repeat(32_000 - head.length)}${head}${'z'.repeat(gap)}${tail}${'y'.repeat(32_000 - tail.length)}`;
+
+  it('does NOT match a pattern buried in the elided MIDDLE of an over-cap transcript', async () => {
+    // The deliberate narrowing. A refusal 40k chars deep in an 80k transcript is
+    // not the reason the process exited; the exit reason is at one end or the
+    // other. Costs a mid-transcript mention, buys a bounded scan.
+    const { supervisor } = fakeSupervisor(
+      [
+        {
+          stream: 'stdout',
+          line: `${'x'.repeat(40_000)}usage limit reached${'y'.repeat(40_000)}`,
+        },
+      ],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+  });
+
+  it('STILL matches a refusal in the TAIL of an over-cap transcript — the cap must not miss real ones', async () => {
+    // The half that matters for #799: a CLI prints why it is exiting LAST, so a
+    // cap that dropped the tail would reopen the hot loop this ticket closed.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: `${'x'.repeat(80_000)}\nError: usage limit reached` }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events[2]).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+  });
+
+  it('does NOT forge a match across the elision seam (head + tail are not spliced bare)', async () => {
+    // `headTailExcerpt`'s marker is load-bearing, not decoration: a head ending
+    // 'usage li' spliced onto a tail starting 'mit reached' would invent a quota
+    // refusal — and arm a connection-wide window — out of two unrelated fragments.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stdout', line: overCap('usage li', 'mit reached') }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+  });
+
+  it('does NOT consult the quota pattern on a successful (exit 0) completion', async () => {
+    // A clean run whose transcript happens to discuss rate limits is NOT a refusal.
+    const { supervisor } = fakeSupervisor([{ stream: 'stdout', line: 'usage limit reached' }], {
+      exitCode: 0,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(ctx({ connectionConfig: quotaTaskConfig }), null),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
+  });
+
+  it('classifies the refusal BEFORE structured mode can misdiagnose it as permanent', async () => {
+    // A quota-refused STRUCTURED run has no fenced block, so ordering the terminal
+    // after the structured branch would report "no valid structured output block
+    // found in stdout" — a content complaint about a call that never ran.
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
+      exitCode: 1,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: quotaTaskConfig,
+          input: {
+            task: 'do the thing',
+            outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } } },
+          },
+        }),
+        null,
+      ),
+    );
+    expect(events[2]).toMatchObject({ kind: 'rate_limit' });
+    expect(JSON.stringify(events)).not.toContain('structured output block');
+  });
+
+  it('REDACTS the injected secret out of an agent_task quota failure error', async () => {
+    // The refusal text is persisted to `run_events` and served over the API, and a
+    // CLI commonly echoes the injected key in an auth/quota error.
+    const { supervisor } = fakeSupervisor(
+      [{ stream: 'stderr', line: 'usage limit reached (key sk-agent-secret)' }],
+      { exitCode: 1 },
+    );
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({
+          connectionConfig: { ...quotaTaskConfig, secretEnv: 'ANTHROPIC_API_KEY' },
+          input: { task: 'do the thing' },
+        }),
+        'sk-agent-secret',
+      ),
+    );
+    expect(events[2]).toMatchObject({ kind: 'rate_limit' });
+    expect(JSON.stringify(events)).not.toContain('sk-agent-secret');
+  });
+
+  it('leaves a non-zero exit succeeded when the connection declares NO quota hint', async () => {
+    const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
+      exitCode: 1,
+    });
+    const events = await drain(
+      createAgentAdapter(supervisor).runActivity(
+        ctx({ connectionConfig: { command: 'claude' } }),
+        null,
+      ),
+    );
+    expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'succeeded']);
   });
 });
 
@@ -1184,13 +1432,16 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
       expect(events.find((e) => e.type === 'metered')).toEqual(UNPRICED_CLI);
     });
 
-    it('METERS a quota-refused agent_task — the documented divergence from llm_call', async () => {
-      // Deliberate asymmetry, pinned so it cannot be silently "harmonised": this
-      // shape discards stderr and maps every exit code to a COMPLETED run, so it
-      // never classifies a quota refusal and cannot apply llm_call's second
-      // exclusion. Same connection, same refusal, opposite metering outcome. The
-      // missing classification is the pre-existing L14c gap tracked in #799; the
-      // over-mark it causes costs exactly one `unpriced` response.
+    it('METERS a quota-refused agent_task — a session burns quota before it learns it is out', async () => {
+      // The asymmetry with `llm_call` (pinned below as UNMETERED) SURVIVES #799,
+      // but on a corrected cause. The old rationale was plumbing — "this shape
+      // discards stderr and maps every exit code to a COMPLETED run" — and #799
+      // removed it: the refusal is classified now. The real reason is the shape:
+      // `llm_call` is single-shot and a refusal means nothing was served, whereas
+      // an `agent_task` drives a multi-turn session that typically hits the limit
+      // MID-session, after real spend. Since the adapter cannot tell that from an
+      // already-exhausted t=0 refusal, it errs toward marking: an over-mark costs
+      // one spurious `unpriced` response, an under-mark hides real spend.
       const { supervisor } = fakeSupervisor([{ stream: 'stderr', line: 'usage limit reached' }], {
         exitCode: 1,
       });
@@ -1205,10 +1456,12 @@ describe('agent_cli subscription metering on abnormal termination (#797)', () =>
           null,
         ),
       );
-      expect(events.find((e) => e.type === 'metered')).toEqual(UNPRICED_CLI);
-      // …and it is still a SUCCESS here, which is why there is no refusal verdict
-      // to hang an exclusion off in the first place.
-      expect(events.find((e) => e.type === 'succeeded')).toBeDefined();
+      // The exact emitted SEQUENCE: telemetry, the spend mark, then the classified
+      // throttle. Metering and classification are independent decisions here and
+      // this pins both — the refusal is metered AND is not a success.
+      expect(events.map((e) => e.type)).toEqual(['agentTelemetry', 'metered', 'failed']);
+      expect(events[1]).toEqual(UNPRICED_CLI);
+      expect(events.find((e) => e.type === 'succeeded')).toBeUndefined();
     });
   });
 

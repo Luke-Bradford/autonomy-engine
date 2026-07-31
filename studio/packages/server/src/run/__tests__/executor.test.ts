@@ -39,9 +39,10 @@ import type { Supervisor } from '../../workers/process-supervisor.js';
 
 type Db = ReturnType<typeof freshDb>['db'];
 
-// A no-op supervisor: these tests exercise `http`/fake adapters, never
-// `agent_cli`, so its spawn/reap are never called — it only satisfies the
-// registry's dependency shape.
+// A no-op supervisor: no test drives a real subprocess, so its spawn/reap are
+// never called — it only satisfies the registry's dependency shape. (The one
+// place the REAL `agent_cli` adapter runs, `realAgentCliAdapter`, injects its own
+// stub supervisor rather than this one.)
 const noopSupervisor: Supervisor = {
   spawnSupervised: () => {
     throw new Error('noopSupervisor.spawnSupervised should not be called in these tests');
@@ -1971,6 +1972,40 @@ describe('createExecutor — item 7 / S4: http_request config-sink secret header
 
 // --- #2 L14c: CLI/subscription quota admission gate + window writer ----------
 
+/**
+ * The REAL `agent_cli` adapter over a stubbed supervisor (#799). Distinct from
+ * `fakeAgentCliAdapter` below and NOT interchangeable with it: a fake that yields
+ * `rate_limit` unconditionally proves the driver's writer, but says nothing about
+ * whether `runAgentTask` can ever PRODUCE that terminal — which was the whole of
+ * the #799 gap. Anything asserting the adapter→writer chain must use this.
+ *
+ * The stub returns one stderr line and a caller-chosen exit code; no subprocess
+ * is spawned.
+ */
+function realAgentCliAdapter(stderrLine: string, exitCode: number): ConnectorRegistry {
+  const supervisor: Supervisor = {
+    spawnSupervised: () => ({
+      events: {
+        async *[Symbol.asyncIterator]() {
+          yield { stream: 'stderr' as const, line: stderrLine };
+        },
+      },
+      result: Promise.resolve({
+        exitCode,
+        signal: null,
+        timedOut: false,
+        aborted: false,
+        killed: false,
+        truncated: false,
+      }),
+    }),
+    reapAllSupervised: () => Promise.resolve(),
+  };
+  // Build the REAL registry rather than hand-mapping the adapter, so these tests
+  // also prove the registry binds `agent_cli` to this adapter.
+  return createConnectorRegistry({ supervisor });
+}
+
 /** A fake `agent_cli` adapter yielding a caller-supplied terminal, so the quota
  * tests never spawn a real subprocess (the `noopSupervisor` would throw). */
 function fakeAgentCliAdapter(run: ConnectorAdapter['runActivity']): ConnectorRegistry {
@@ -2052,6 +2087,120 @@ describe('#2 L14c — quota window writer (driver, sole persister)', () => {
       retryAfterSeconds: 120,
       connectionId: connId,
     });
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
+  });
+});
+
+describe('#2 L14c / #799 — an agent_task refusal ARMS the window (real adapter → writer)', () => {
+  const QUOTA_CONN = {
+    command: 'claude',
+    quota: { exhaustionPattern: 'usage limit reached', resetWindowSeconds: 300 },
+  };
+
+  it('a quota-refused agent_task persists the connection window, with NO retry policy', async () => {
+    // THE #799 DEFECT, end to end. Before the fix `runAgentTask` mapped this exit
+    // to `succeeded`, so no `node.failed{rate_limit}` existed for the driver to
+    // write a window from — a connection whose only consumers are `agent_task`
+    // nodes could never learn it was spent, and hot-looped refused spawns forever.
+    // The read side was never broken (the gate keys on connection KIND), which is
+    // why this asserts the WRITE.
+    //
+    // Deliberately WITHOUT a retry policy: the window must arm regardless, because
+    // the driver's writer folds the appended event before and independently of the
+    // reducer's retry decision. If arming only worked for retry-configured nodes,
+    // the gap would be half-open.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', QUOTA_CONN, null);
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    const failed = loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed');
+    expect(failed).toMatchObject({ code: 'rate_limit', connectionId: connId });
+    const failedRow = db
+      .select({ ts: runEvents.ts })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, run.id), eq(runEvents.type, 'node.failed')))
+      .get();
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBe(failedRow!.ts + 300 * 1000);
+  });
+
+  it('the STATED tradeoff: with no retry policy the run now FAILS where it used to succeed', async () => {
+    // Pinned as the headline behaviour change, not buried. `retryEligible` needs a
+    // declared `policy.retry` budget, so an un-retried quota refusal settles the
+    // node — and the run — to failure. That is the deliberate cost of refusing to
+    // let a refusal masquerade as a success: previously the CLI's refusal TEXT
+    // flowed into `${nodes.n1.output}` and every downstream node ran on it.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', QUOTA_CONN, null);
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    const finished = loadEngineEvents(db, run.id).find((e) => e.type === 'run.finished');
+    expect(finished).toMatchObject({ outcome: 'failure' });
+  });
+
+  it('WITH a retry policy: the same refusal arms the window AND schedules a retry', async () => {
+    // The other half of the fork. The pre-existing L7 test drives the FAKE adapter
+    // over a pre-seeded window, so nothing covered real-refusal → window + alarm
+    // together. Both must hold: the window is what stops the hot-loop for every
+    // other node on the connection, the alarm is what makes THIS node wait it out.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', QUOTA_CONN, null);
+    const pvId = seedVersion(db, [
+      agentTaskNode('n1', connId, { retry: 1, retryIntervalSeconds: 30 }),
+    ]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, {
+        adapters: realAgentCliAdapter('Error: usage limit reached', 1),
+        alarms: stubAlarms(),
+      }),
+      run,
+    );
+
+    expect(getConnectionQuotaResetEpoch(db, connId)).not.toBeNull();
+    expect(eventTypes(db, run.id)).toContain('node.retryScheduled');
+  });
+
+  it('a NON-matching non-zero exit still succeeds and arms NOTHING', async () => {
+    // The carve-out stays narrow at the integration level too: the "exit code is
+    // data" contract is intact for every outcome the pattern does not match.
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', QUOTA_CONN, null);
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(deps(db, { adapters: realAgentCliAdapter('compile error', 2) }), run);
+
+    const finished = loadEngineEvents(db, run.id).find((e) => e.type === 'run.finished');
+    expect(finished).toMatchObject({ outcome: 'success' });
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
+  });
+
+  it('a connection with NO quota hint arms nothing (opt-in), and the run succeeds', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'agent_cli', { command: 'claude' }, null);
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    const finished = loadEngineEvents(db, run.id).find((e) => e.type === 'run.finished');
+    expect(finished).toMatchObject({ outcome: 'success' });
     expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
   });
 });
