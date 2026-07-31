@@ -627,6 +627,34 @@ export const FAILURE_CODES = {
 } as const;
 
 /**
+ * The `activity.warned.code` values the engine mints — the ADVISORY twin of
+ * `FAILURE_CODES`, and open for exactly the same reason: `code` stays an OPEN
+ * `z.string()` in the schema because it is a DURABLE event field, so an enum
+ * would be a back-compat trap. `EngineEventSchema.parse` runs on every READ of
+ * the log (`appendEngineEvent`, `loadEngineEvents`), and a payload it rejects
+ * raises `RunLogUnparseableError` — so one day retiring a warning code would
+ * make every run that ever emitted it permanently unreplayable.
+ *
+ * The "no producer hand-spells a durable identifier" property is therefore
+ * enforced on the PRODUCER side (the executor types its emission against this
+ * const, and a test pins the emitted value), never as a parse gate.
+ */
+export const WARNING_CODES = {
+  /**
+   * #750 — the node SUCCEEDED with an empty `text` output because the provider
+   * truncated the response at the token budget (`stopReason` `length` /
+   * `max_tokens`). Not a failure: #461 settled that a present-but-empty
+   * completion is a real result. The warning exists because nothing in the
+   * product branches on `stopReason` yet, so the empty string otherwise flows
+   * downstream with the run reading green and no trace of the cause.
+   */
+  EMPTY_TRUNCATED_COMPLETION: 'empty_truncated_completion',
+} as const;
+
+/** The warning codes the engine itself mints — see `WARNING_CODES`. */
+export type WarningCode = (typeof WARNING_CODES)[keyof typeof WARNING_CODES];
+
+/**
  * The durable facts the driver/reconciler append to `run_events`; folding them
  * through `reduce` is the ONLY way state changes. Every attempt-bearing event
  * carries its `attemptId` for stale-rejection. `run.resumed` /
@@ -1117,6 +1145,47 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     resultHash: z.string().optional(),
     /** Whether the result fed back was an ERROR tool_result (tool-level defect). */
     isError: z.boolean(),
+  }),
+  z.object({
+    /**
+     * #750 — a NON-FATAL advisory about an attempt that nonetheless SUCCEEDED.
+     * The engine's first advisory channel; before it, every attempt fact was
+     * binary (`node.succeeded` or `node.failed`), so a result that was technically
+     * a success but practically useless had nowhere to be said.
+     *
+     * INERT in the reducer, like the rest of the `activity.*` family
+     * (`metered`/`captured`/`agentTelemetry`/`toolCalled`) and ordered BEFORE the
+     * terminal event. It changes NO state, NO outcome and NO `outputs` — a
+     * warning that could alter a run would be a failure wearing a softer word.
+     * It is `activity.*` and not `node.warning` precisely because that family is
+     * defined as node-bearing observability folded inert; `node.*` implies node
+     * state.
+     *
+     * NOT re-derived on RS1 rerun-from-failed: a reseed copies frontier OUTPUTS
+     * via `run.reseeded` and appends no `node.succeeded`, so a copied
+     * truncated-empty output carries no warning in the new run's log. That is
+     * correct and deliberate — the warning is an ATTEMPT-time observation, and
+     * minting one at reseed would manufacture a fresh claim out of copied data.
+     */
+    type: z.literal('activity.warned'),
+    runId: z.string(),
+    nodeId: z.string(),
+    attemptId: z.string(),
+    /**
+     * The machine-readable cause. An OPEN string by durability contract — see
+     * `WARNING_CODES`, which is the SSOT for the values the engine mints.
+     */
+    code: z.string(),
+    /**
+     * The human sentence, for the run-detail feed. Named `reason` deliberately:
+     * the web `eventGloss` already surfaces a `reason` payload key generically,
+     * so this reads in the event trail with no rendering change.
+     *
+     * MUST NOT carry model text, prompt content or any secret — no redaction
+     * pass inspects this field (`redactEventPlaintexts` passes the variant
+     * through untouched), so the producer is the only guard.
+     */
+    reason: z.string(),
   }),
   z.object({
     type: z.literal('run.resumed'),

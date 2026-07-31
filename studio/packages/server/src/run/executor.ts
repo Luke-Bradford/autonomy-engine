@@ -13,10 +13,12 @@ import {
   normalizeLlmRequest,
   parseConnectionPriceTable,
   resolvePrice,
+  WARNING_CODES,
   type ActivityCatalog,
   type EngineEvent,
   type FailureKind,
   type Node,
+  type WarningCode,
 } from '@autonomy-studio/shared';
 import { getRun } from '../repo/runs.js';
 import { connectionNotReadyReason, getConnection } from '../repo/connections.js';
@@ -27,6 +29,7 @@ import { deepRedactRecord, deepRedactSecrets, redactSecrets } from '../connector
 import type { Db } from '../repo/types.js';
 import type { ConnectorRegistry } from '../connectors/registry.js';
 import { toEngineFailure } from '../connectors/error-kind.js';
+import { emptyTruncationWarning } from '../connectors/llm-shared.js';
 import type { ActivityContext, ConnectorAdapter, LlmUsage } from '../connectors/types.js';
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
 
@@ -613,6 +616,24 @@ export function createExecutor(deps: ExecutorDeps): Executor {
             ...(call.resultHash !== undefined ? { resultHash: call.resultHash } : {}),
           });
         } else if (ev.type === 'succeeded') {
+          // #750 — a non-fatal ADVISORY, ordered BEFORE the terminal exactly like
+          // `activity.toolCalled`, and folded inert by the reducer. Read from the
+          // adapter's RAW outputs (`withTranscript` only ever ADDS a `messages`
+          // key, so the two agree on `text`/`stopReason`). The code is typed
+          // against the `WARNING_CODES` SSOT — the durable field is an open
+          // string for back-compat, so the producer is where "no hand-spelled
+          // identifier" is enforced.
+          const warning = emptyTruncationWarning(ev.outputs);
+          if (warning !== null) {
+            events.push({
+              type: 'activity.warned',
+              runId,
+              nodeId,
+              attemptId,
+              code: WARNING_CODES.EMPTY_TRUNCATED_COMPLETION satisfies WarningCode,
+              reason: warning,
+            });
+          }
           events.push({
             type: 'node.succeeded',
             runId,

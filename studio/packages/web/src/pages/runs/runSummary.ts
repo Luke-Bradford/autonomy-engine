@@ -298,6 +298,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'activity.captured':
       case 'activity.agentTelemetry':
       case 'activity.toolCalled':
+      case 'activity.warned':
         break;
       default: {
         // Unreachable while every member above is named — which is exactly the

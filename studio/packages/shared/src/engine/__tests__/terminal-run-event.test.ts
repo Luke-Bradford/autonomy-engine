@@ -198,6 +198,18 @@ describe('#443 — terminalStatusOf', () => {
         resultHash: 'rh',
         isError: false,
       },
+      // #750 — a non-fatal ADVISORY about an attempt that SUCCEEDED anyway.
+      // NON-terminal, and deliberately so: the whole point of the channel is that
+      // it changes no outcome. A warning that could end a run would be a failure
+      // wearing a softer word — `node.failed` is how a run ends badly.
+      {
+        type: 'activity.warned',
+        ...run,
+        nodeId: 'n1',
+        attemptId: 'n1#0',
+        code: 'empty_truncated_completion',
+        reason: 'the model returned no text',
+      },
     ];
     for (const event of nonTerminal) {
       expect(terminalStatusOf(event), `${event.type} must not be terminal`).toBeNull();

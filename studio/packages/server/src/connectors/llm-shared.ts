@@ -1231,6 +1231,73 @@ export function coerceStopReason(value: unknown): string {
 }
 
 /**
+ * #750 — the `stopReason` tokens that mean the provider CUT THE RESPONSE OFF at
+ * the token budget, rather than the model choosing to stop.
+ *
+ * The repo's FIRST cross-provider stopReason vocabulary table. It does not
+ * normalize (`coerceStopReason` passes provider values through verbatim, and
+ * cross-provider normalization is spec #2's I6, still open) — it only RECOGNISES,
+ * for a diagnostic, and nothing downstream branches on it.
+ *
+ * Provenance, each cited in-repo:
+ * - `length`   — OpenAI `finish_reason` (`openai-models.ts` "finish_reason: 'length'"),
+ *                and Ollama's `done_reason` for the same condition (`ollama.ts`).
+ * - `max_tokens` — Anthropic `stop_reason` (`anthropic.ts`'s DEFAULT_MAX_TOKENS note:
+ *                "truncated or text-free with `stop_reason: \"max_tokens\"`").
+ *
+ * Matching is EXACT and case-sensitive, deliberately. A bespoke gateway spelling
+ * (`MAX_TOKENS`) therefore does NOT warn: an absent truncation fact must never be
+ * manufactured into a claim, which is the same rule that keeps the
+ * `MODELS_REJECTING_*` sets from guessing at membership. Fail-safe here means
+ * SILENCE (the pre-#750 status quo), never a warning we cannot source.
+ */
+export const TRUNCATION_STOP_REASONS: ReadonlySet<string> = new Set(['length', 'max_tokens']);
+
+/**
+ * #750 — the diagnostic for a completion that is EMPTY *and* TRUNCATED, or `null`
+ * when none is owed. Returns the human sentence; the caller stamps the durable
+ * `activity.warned` event around it.
+ *
+ * WHY THIS EXISTS. #461 settled that a present-but-empty completion is a REAL
+ * result and still SUCCEEDS — `stopReason` carries why, and downstream can branch
+ * on it. That contract is NOT reversed here and this function changes no outcome:
+ * the node still succeeds with `text: ''`. But nothing in the product currently
+ * branches on `stopReason`, so in practice the empty string flows into
+ * `${nodes.x.output.text}` and the run reads GREEN with no trace of the cause.
+ * #739 made that reachable from an ordinary-looking config: on an OpenAI reasoning
+ * model the budget lowers to `max_completion_tokens`, which bounds reasoning AND
+ * visible output together, so an author's existing `maxTokens` can be consumed
+ * ENTIRELY by invisible reasoning. Before #739 the same config raised a loud
+ * provider 400. So this restores the loudness WITHOUT touching the semantics.
+ *
+ * Gated on the OUTPUT SHAPE, not on `ctx.activityType`, so one site covers the
+ * three API adapters' text path and the L10b tool loop. It is NOT reachable from
+ * `agent_cli` (which stamps the `unknown` sentinel outright) nor from the
+ * structured path (no `text`/`stopReason` outputs at all) — both are correctly
+ * skipped by shape, and the detector table pins each.
+ *
+ * A truncated but NON-empty completion stays silent: partial text is a real,
+ * usable result, and warning on every one would be noise. That narrowing is
+ * #750's, not an oversight — the follow-up ticket records it.
+ */
+export function emptyTruncationWarning(outputs: Record<string, unknown>): string | null {
+  const text = outputs['text'];
+  if (typeof text !== 'string' || text.length > 0) return null;
+  const stopReason = outputs['stopReason'];
+  if (typeof stopReason !== 'string' || !TRUNCATION_STOP_REASONS.has(stopReason)) return null;
+  // Interpolates ONLY the matched token — which, by the guard above, is a member
+  // of the table. No part of `outputs` reaches this string: the warning rides a
+  // durable event that `redactEventPlaintexts` does not inspect, so it must never
+  // become a side channel for model text.
+  return (
+    `the model returned NO text and the provider reported stopReason='${stopReason}' — ` +
+    `the response was cut off at the token budget, so this node succeeded with an empty ` +
+    `\`text\` output. Raise the node's maxTokens; on a reasoning model that budget covers ` +
+    `invisible reasoning tokens as well as the visible answer.`
+  );
+}
+
+/**
  * #2 L3 — lower the portable `reasoningEffort` to OpenAI's `reasoning_effort`
  * vocabulary. Anthropic (`output_config.effort`) and Ollama (`think`) both accept
  * the full `low|medium|high|max` enum verbatim, so ONLY OpenAI needs a mapping:
