@@ -231,7 +231,8 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
   const point = await page.evaluate((i) => {
     const paths = document.querySelectorAll('.react-flow__edge-path');
     const path = paths[i] as SVGPathElement | undefined;
-    if (!path) throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
+    if (!path)
+      throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
     const mid = path.getPointAtLength(path.getTotalLength() / 2);
     const ctm = path.getScreenCTM();
     if (!ctm) throw new Error('the edge path has no screen transform');

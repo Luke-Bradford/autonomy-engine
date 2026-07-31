@@ -276,9 +276,7 @@ describe('back-edge labelling', () => {
    * screen reader learns this edge loops, and how far.
    */
   it('spells back-ness and the cap in the aria-label', () => {
-    expect(edgeAriaLabel(back())).toBe(
-      "Edge from b to a, back-edge on success, up to 3 bounces",
-    );
+    expect(edgeAriaLabel(back())).toBe('Edge from b to a, back-edge on success, up to 3 bounces');
   });
 
   it('isMaxBounces mirrors EdgeSchema — non-negative integers, zero included', () => {
