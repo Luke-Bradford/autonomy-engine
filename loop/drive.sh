@@ -1425,10 +1425,14 @@ drive_self_adopt() {
   # caught mid-write yields exactly that -- and the exec then succeeds, runs the
   # config and the function definitions, never reaches the loop, and exits. Same
   # outcome as a dead exec: nothing running until the next scheduled start.
-  # Requiring a string from the file's LAST line proves the tail arrived. A
-  # future rename of that line makes adoption refuse and say so, which is the
-  # safe direction.
-  if ! grep -q 'DRIVER DONE' "$DRIVE_SELF" 2>/dev/null; then
+  # Requiring a string from the file's LAST line proves the tail arrived, and
+  # requiring it IN the tail rather than anywhere in the file is the stronger
+  # form (review NITPICK): an unanchored match would also be satisfied by a
+  # corrupt copy that happened to retain the substring mid-file. `tail -5` rather
+  # than `tail -1` so a future drive.sh may gain a line or two after the marker
+  # without adoption silently refusing forever -- and a refusal is announced and
+  # fail-safe in any case, since the driver simply stays on the old code.
+  if ! tail -5 "$DRIVE_SELF" 2>/dev/null | grep -q 'DRIVER DONE'; then
     log "driver code: NOT adopting -- $DRIVE_SELF parses but is missing its tail, so it is a TRUNCATED copy (a sync caught mid-write). Exec'ing it would run the definitions and exit without ever reaching the loop (#811)"
     return 0
   fi
