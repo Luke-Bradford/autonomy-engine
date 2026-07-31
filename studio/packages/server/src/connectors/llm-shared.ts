@@ -522,9 +522,15 @@ export function unsupportedParamFailure(
   model: string,
   params: readonly [UnsupportedParam, ...UnsupportedParam[]],
 ): Extract<ActivityEvent, { type: 'failed' }> {
-  // "a and b", not "a, b" — an operator reads this. The join is n-safe; today
-  // the list happens to be ≤2 because the two capability sets are disjoint, but
-  // nothing here relies on that (a model in both sets yields three names).
+  // "a and b", not "a, b" — an operator reads this. The join is n-safe, and
+  // #752 made that load-bearing rather than hypothetical: this comment used to
+  // say the list "happens to be ≤2 because the two capability sets are
+  // disjoint". They are no longer disjoint. `o1-mini` is in BOTH of the OpenAI
+  // sets, so an author setting `temperature` and `reasoningEffort` on it really
+  // does get three names across two cause-grouped sentences — and the two
+  // remedies point OPPOSITE ways (an older model for the sampling knobs, a
+  // newer one for the reasoning knob). Both are individually correct; nothing
+  // here relies on disjointness, and the rendered pair is pinned by test.
   const join = (names: readonly string[]): string =>
     names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]!;
 

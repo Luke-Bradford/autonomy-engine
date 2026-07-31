@@ -237,9 +237,21 @@ export const openaiAdapter: ConnectorAdapter = {
       if (sampling.topP !== undefined) body.top_p = sampling.topP;
       if (sampling.stop !== undefined) body.stop = sampling.stop;
       if (sampling.seed !== undefined) body.seed = sampling.seed;
-      // #2 L3 — top-level `reasoning_effort` (reasoning models only; others
-      // ignore/reject — best-effort, opt-in). `max`→`high` (OpenAI has no `max`
-      // rung). Compatible with structured mode (no Anthropic-style clash).
+      // #2 L3 — top-level `reasoning_effort`. `max`→`high`; see
+      // `openAiReasoningEffort` for why that lowering is right for THIS adapter
+      // (no Chat-Completions-reachable model takes `max`) rather than because
+      // OpenAI lacks the rung, which is what this comment used to claim.
+      // Compatible with structured mode (no Anthropic-style clash).
+      //
+      // #752 REPLACED THE "best-effort, opt-in" DISCLAIMER THIS CARRIED. It
+      // used to say "reasoning models only; others ignore/reject", which
+      // described an unhandled case rather than mitigating it — the emission
+      // was ungated, so a model that rejects the key got a guaranteed 400 with
+      // a diagnostic that named nothing. Both halves are now decided upstream,
+      // in the preflight above: `o1-mini` (the one reasoning model accepting no
+      // effort at all) is REFUSED there, and non-reasoning models are
+      // deliberately still sent the key. `MODELS_REJECTING_REASONING_EFFORT`
+      // carries both decisions and their source.
       if (reasoningEffort !== undefined)
         body.reasoning_effort = openAiReasoningEffort(reasoningEffort);
       // #2 L4b — `json_object` (not strict `json_schema`): the L4a subset permits

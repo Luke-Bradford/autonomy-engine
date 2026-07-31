@@ -108,6 +108,16 @@ import type { UnsupportedParam } from './llm-shared.js';
  *  - `gpt-5.6-sol` / `-terra` / `-luna`. Named only in the Azure table, whose
  *    deployment naming and OpenAI's first-party ids are not the same namespace
  *    for these.
+ *  - Bare `gpt-5.6`. Added to this list by #752, which is the first thing in
+ *    this repo to cite the id at all — its `reasoning_effort` sentence names
+ *    `gpt-5.6` as the one model accepting `max`, and on the RESPONSES API
+ *    (see `openAiReasoningEffort`). That sentence says nothing about whether it
+ *    rejects sampling on Chat Completions, and this set's membership rule is a
+ *    feature-table row, not "sounds like a reasoning model". Listed here rather
+ *    than silently absent so the next author reads a decision instead of a gap
+ *    — the omission costs at most the pre-existing 400, and adding it on the
+ *    strength of a sentence about a different API and a different parameter
+ *    would be the guess this essay exists to prevent.
  *  - `o1-preview`. Retired.
  *
  * Each omission costs at most the pre-existing 400. Adding one on a guess costs
@@ -152,11 +162,14 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
 /**
  * #752 — OpenAI models that accept NO `reasoning_effort` at any value.
  *
- * SOURCE: the same Microsoft Learn page, whose sentence is a single explicit
- * exception rather than a table: "`reasoning_effort` can be set to `low`,
- * `medium`, or `high` for all reasoning models EXCEPT `o1-mini`". One id, named
- * outright, so this set is one id long and the fail-direction rule keeps it
- * that way — every model the source does not except stays permitted.
+ * SOURCE: the same Microsoft Learn page — its `reasoning_effort` sentence
+ * re-fetched and re-verified 2026-07-29, later than the 2026-07-25 date on the
+ * header above, which covers the feature tables. The sentence is a single
+ * explicit exception rather than a table: "`reasoning_effort` can be set to
+ * `low`, `medium`, or `high` for all reasoning models EXCEPT `o1-mini`". One
+ * id, named outright, so this set is one id long and the fail-direction rule
+ * keeps it that way — every model the source does not except stays permitted,
+ * and the membership pin in the tests makes widening it argue with a test.
  *
  * A SEPARATE set from `MODELS_REJECTING_SAMPLING_PARAMS`, not a reuse of it,
  * because the two facts point OPPOSITE ways. Sampling is rejected by the whole
@@ -170,8 +183,10 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  * two-cause case in either provider module — an author setting `temperature`
  * and `reasoningEffort` on `o1-mini` is told to pick an OLDER model for one and
  * a NEWER one for the other. Both remedies are individually correct and the
- * message builder groups them by cause; pinned by test so the combined output
- * is a decision rather than a discovery.
+ * message builder groups them by cause. Pinned at the RENDERED level in
+ * `__tests__/openai.test.ts`, not just as a param array: the string is what the
+ * operator actually reads, and it is the reason `unsupportedParamFailure`'s
+ * n-safe join stopped being hypothetical.
  *
  * TWO THINGS #752 ASKED ABOUT ARE DELIBERATELY NOT HERE, so they are not
  * silently re-opened:
@@ -199,8 +214,8 @@ export const MODELS_REJECTING_SAMPLING_PARAMS: ReadonlySet<string> = new Set([
  *    value dimension would also mean a third `UnsupportedParamCause` on the
  *    PROVIDER-GENERIC type in `llm-shared.ts`, whose message builder groups
  *    strictly by cause and renders one sentence per cause — a shape no
- *    per-value message fits. Tracked separately; build it when a reachable
- *    member exists.
+ *    per-value message fits. Tracked as #809; build it when a reachable member
+ *    exists.
  */
 export const MODELS_REJECTING_REASONING_EFFORT: ReadonlySet<string> = new Set(['o1-mini']);
 
@@ -328,9 +343,21 @@ export function unsupportedOpenAiParams(
     if (requested.hasTemperature) unsupported.push({ name: 'temperature', cause: 'removed' });
     if (requested.hasTopP) unsupported.push({ name: 'topP', cause: 'removed' });
   }
-  // #752 — a SEPARATE membership test, not an `else`: the two sets overlap on
-  // `o1-mini`, and the early return this replaced would have made the
-  // reasoning-effort fact reachable only for models that also reject sampling.
+  // #752 — a SEPARATE membership test, not an `else`. The early return this
+  // replaced (`if (!MODELS_REJECTING_SAMPLING_PARAMS.has(id)) return []`) would
+  // have made the reasoning-effort fact reachable ONLY for models that also
+  // reject sampling — a coupling between two independent facts.
+  //
+  // BE HONEST ABOUT WHAT IS TESTED: no test can currently tell the two
+  // topologies apart, and nesting this block back inside the sampling branch
+  // still passes the whole suite. That is because the sole member of this set
+  // (`o1-mini`) is also a member of the sampling set, so the coupling is
+  // presently unobservable. It is written flat anyway because the two sets
+  // encode facts that vary independently, and the day either of them moves the
+  // nested form would silently drop a refusal rather than fail a test. What
+  // guards the assumption meanwhile is the membership pin on
+  // `MODELS_REJECTING_SAMPLING_PARAMS`: removing `o1-mini` from it has to argue
+  // with that test first.
   if (MODELS_REJECTING_REASONING_EFFORT.has(id) && requested.hasReasoningEffort) {
     unsupported.push({ name: 'reasoningEffort', cause: 'unavailable' });
   }

@@ -263,6 +263,15 @@ describe('unsupportedOpenAiParams — reasoningEffort (#752)', () => {
     ]);
   });
 
+  it('pins the sourced membership of the set', () => {
+    // The same guard the sampling set carries, and this set needs it MORE: its
+    // docstring claims "one id long, and the fail-direction rule keeps it that
+    // way", which nothing else enforces. The source excepts exactly one model,
+    // so widening this on a hunch — every reasoning model "probably" has some
+    // restriction — has to argue with this test first.
+    expect([...MODELS_REJECTING_REASONING_EFFORT]).toEqual(['o1-mini']);
+  });
+
   it('keeps every set member its own normal form (a non-fixed-point entry is DEAD)', () => {
     // Same invariant as the sampling set's, pinned SEPARATELY because this set
     // is maintained separately: lookups normalise first, so a member that is not

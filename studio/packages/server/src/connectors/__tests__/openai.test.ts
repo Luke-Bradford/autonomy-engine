@@ -697,6 +697,32 @@ describe('openaiAdapter unsupported-parameter preflight (#730)', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('renders BOTH remedies when o1-mini is asked for temperature AND reasoningEffort', async () => {
+    // The first genuinely reachable two-cause message in either provider
+    // module: `o1-mini` is in both OpenAI capability sets, so the author is told
+    // to pick an OLDER model for the sampling knob and a NEWER one for the
+    // reasoning knob, in two cause-grouped sentences. Both remedies are
+    // individually correct. Pinned at the RENDERED level, because the sets
+    // being non-disjoint is what makes the message builder's n-safe join
+    // load-bearing rather than hypothetical.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(fakeResponse(200, OK_BODY));
+    const events = await drain(
+      openaiAdapter.runActivity(
+        ctx({
+          input: { prompt: 'p', model: 'o1-mini', temperature: 0.3, reasoningEffort: 'low' },
+        }),
+        'sk',
+      ),
+    );
+    const failure = events[0] as Extract<ActivityEvent, { type: 'failed' }>;
+    expect(failure).toMatchObject({ type: 'failed', kind: 'permanent' });
+    expect(failure.error).toContain('select a model that still accepts');
+    expect(failure.error).toContain('select a newer model that supports');
+    expect(failure.error).toContain('temperature');
+    expect(failure.error).toContain('reasoningEffort');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('still SENDS reasoningEffort to a gateway serving the same id — these are facts about OpenAI', async () => {
     // The first-party gate the sibling facts already carry. An
     // OpenAI-COMPATIBLE server reusing the name `o1-mini` is someone else's
