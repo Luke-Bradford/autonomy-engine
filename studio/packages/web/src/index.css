@@ -1039,6 +1039,33 @@ td button + button {
   color: var(--muted);
 }
 
+/* U6d — container membership + the "New container" form. The section is a plain
+   flex column so its two controls sit at the same rhythm as the panel's other
+   labels; the fieldset is what visually separates "which container is this node
+   in" from "make a new one", which are two different acts through one control. */
+.container-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.container-create {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+  margin: 0;
+}
+
+.container-create legend {
+  font-size: 0.8rem;
+  color: var(--muted);
+  padding: 0 0.3rem;
+}
+
+.property-panel input,
 .property-panel select,
 .property-panel textarea {
   background: var(--bg);
