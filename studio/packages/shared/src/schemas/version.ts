@@ -197,7 +197,25 @@
 // the bump; the direction of the mis-run is the SAFE one — over-classifying, not
 // under-classifying — but bumps 16/18 settled that a conditional mis-run still
 // bumps, and this one is deterministic given a matching non-zero exit.)
-export const CATALOG_VERSION = 19;
+// 20 (#816 half 1): AGENT_CLI QUOTA MATCH SOURCE. An `agent_cli` connection may
+// declare `quota.matchSource: {format:'json-lines', errorEnvelopeTypes:[…]}` —
+// the CLI speaks JSON-per-line on stdout, so `exhaustionPattern` is matched
+// against stderr plus ONLY the decoded string leaves of the named error
+// envelopes — never agent content it did not deliberately format AS a declared
+// envelope — or, under `{format:'stderr'}`, against stderr alone. Absent = `text` = the whole stderr+stdout join
+// (the #799 semantics). Same shape as 16/18/19: a plain `z.object` strips the key
+// on a pre-20 build, which then matches the FULL transcript the operator
+// explicitly narrowed away — the #816 false positive (an agent session that
+// merely DISCUSSES a usage limit arming a connection-wide window) restored on an
+// artifact that declared it away. Direction of the mis-run is again the SAFE one
+// (over-classifying), and again that does not exempt it: bumps 16/18/19 settled
+// that a silently-dropped knob bumps. Second-order effect worth naming: pre-20
+// also computes a DIFFERENT `MAX_CLI_MATCH_CHARS` excerpt, since narrowing runs
+// before that cap. Rides CONNECTION envelopes (`config` is on
+// `ConnectionPublicSchema`), so a pre-20 build must REFUSE the export at import
+// rather than run it wide. (A quota block without the key is byte-identical
+// across the bump.)
+export const CATALOG_VERSION = 20;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
