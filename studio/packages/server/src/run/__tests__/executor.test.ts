@@ -2630,7 +2630,10 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
     const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
     const run = seedRun(db, pvId);
     const adapters = fakeHttpAdapter(async function* () {
-      yield { type: 'succeeded', outputs: { text: '', stopReason: 'length' } } satisfies ActivityEvent;
+      yield {
+        type: 'succeeded',
+        outputs: { text: '', stopReason: 'length' },
+      } satisfies ActivityEvent;
     });
 
     const state = await startRun(deps(db, { adapters }), run);
@@ -2644,7 +2647,11 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
     expect(types.indexOf('activity.warned')).toBeLessThan(types.indexOf('node.succeeded'));
 
     const warned = events.find((e) => e.type === 'activity.warned');
-    expect(warned).toMatchObject({ runId: run.id, nodeId: 'n1', code: 'empty_truncated_completion' });
+    expect(warned).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      code: 'empty_truncated_completion',
+    });
     // The executor stamps the attempt id, and the human sentence names the token.
     expect(typeof (warned as { attemptId?: unknown }).attemptId).toBe('string');
     expect(String((warned as { reason?: unknown }).reason)).toContain('length');
@@ -2652,7 +2659,10 @@ describe('createExecutor — activity.warned (#750 empty-and-truncated completio
     // The terminal event is byte-identical to what it would have been without the
     // warning — this is an observability rider, not an outputs change.
     const succeeded = events.find((e) => e.type === 'node.succeeded');
-    expect((succeeded as { outputs?: unknown }).outputs).toEqual({ text: '', stopReason: 'length' });
+    expect((succeeded as { outputs?: unknown }).outputs).toEqual({
+      text: '',
+      stopReason: 'length',
+    });
   });
 
   it('stays SILENT for an empty completion the provider did not truncate', async () => {

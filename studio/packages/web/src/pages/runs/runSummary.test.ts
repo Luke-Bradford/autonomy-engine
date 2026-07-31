@@ -541,9 +541,7 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
     ];
     const without = deriveNodeActivity(base.map(envelope));
     seq = 0;
-    const withWarning = deriveNodeActivity(
-      [base[0]!, base[1]!, warned, base[2]!].map(envelope),
-    );
+    const withWarning = deriveNodeActivity([base[0]!, base[1]!, warned, base[2]!].map(envelope));
     expect(withWarning).toEqual(without);
   });
 

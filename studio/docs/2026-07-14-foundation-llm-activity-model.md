@@ -337,6 +337,15 @@ CLI). **BYO-LLM**: any provider key or local model or CLI plugs in as a connecti
 - **Prompt budgeting / truncation:** preflight token estimate; fail `permanent` BEFORE the call
   when prompt/schema/tool-history clearly exceed the model window; treat `stopReason=length`
   (truncated output that fails schema validation) as a first-class non-success.
+  **PARTLY ANSWERED, and DIVERGENTLY, by #750 (2026-07-31).** The "first-class non-success"
+  half was NOT taken: it would reverse #461, which settled deliberately that a present-but-empty
+  completion IS a real result carrying its `stopReason`. Instead an empty-AND-truncated
+  completion still SUCCEEDS and now emits `activity.warned{code:'empty_truncated_completion'}` —
+  a non-fatal advisory, inert in the reducer, ordered before the terminal. The preflight
+  token-estimate half remains open. Still open too: the authoring-time hint for `maxTokens` on a
+  reasoning model (blocked on a non-blocking `validatePipelineDoc` tier), a node-row marker for
+  the warning (today it reads only in the run-detail event feed), and a truncated but NON-empty
+  completion, which stays silent by design.
 - **Cost-on-retry / idempotency:** every policy retry is a NEW `attemptId`; every provider response
   under every attempt is metered; unknown billing → `meteringStatus:'unknown'`. Rerun/retry UI
   warns "may incur additional cost."
