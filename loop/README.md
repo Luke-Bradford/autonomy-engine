@@ -194,20 +194,30 @@ launchctl kickstart -k gui/$(id -u)/com.autonomy.studio-build-driver   # -k: res
 iteration's `git fetch` and *ahead of every stop condition* — a run that never fires because the
 quota gate, an operator signal or `MAX_STALL` stopped it is exactly a run that might be stopping
 because it is executing superseded code, so reporting only alongside a fire would go quiet in the
-case that matters most. Two independent verdicts, because the 2026-07-31 incident is exactly the
-case where one of them reads healthy and the other does not:
+case that matters most. Three independent verdicts, because the 2026-07-31 incidents are exactly the
+cases where one of them reads healthy and another does not:
 
 | log line | question | how to read it |
 | --- | --- | --- |
 | `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
+| `studio server: in sync \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `STALE` ⇒ `--update`. |
 
-Both are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure path
-reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must not be
-indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
+All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
+path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
+not be indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
 `plane drift` naming files is information, not an alarm; `driver code: STALE` is the one that means
-a merged fix is inert. `DRIFT_REPORT=0` silences both — and *only* the literal `0` does, so a typo
-such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
+a merged fix is inert. `DRIFT_REPORT=0` silences all three — and *only* the literal `0` does, so a
+typo such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
+
+`studio server` is the third half because the spend guard's source 3 is a third *program*, and
+nothing moved it forward or said that it had not (#832): measured 2026-07-31 it was eleven commits
+behind, so it predated #825 and served no unavailable-reason field, and the C3 evidence being
+collected from it was silently a measurement of the wrong build. It stays detection-only — the
+remedy is `install_studio_server.sh --update`, a human act by design (see the drift section above),
+and #792 phase 2 owns making that act a click. Its identity comes from the service's own
+`/api/version` rather than from `built.sha`, because the stamp records what the installer last
+compiled, which can differ from what the loaded unit is serving.
 
 `driver code` reads `UNKNOWN` for the whole of any run started before #808 landed, because that
 process recorded no boot hash — which is the honest answer, not a gap.
