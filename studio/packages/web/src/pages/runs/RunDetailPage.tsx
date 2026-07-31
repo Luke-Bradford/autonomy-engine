@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { Run, RunLifecycleStatus } from '@autonomy-studio/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PipelineVersion, Run, RunLifecycleStatus, RunState } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import { getRun } from '../../api/runs';
-import { useRunStream, type StreamPhase } from './useRunStream';
+import { getRunDetail } from '../../api/runs';
+import { useRunStream, type RunStreamState, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
+import { RunCanvas } from './RunCanvas';
+import { EMPTY_CARRY, engineForDoc, foldRunProjection, type ProjectionCarry } from './runProjection';
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -27,6 +29,57 @@ function phaseLabel(phase: StreamPhase): string {
 }
 
 /**
+ * The overlay is either projected, or it explains why it is not. There is no
+ * "draw it anyway" state — see `useRunProjection`.
+ */
+type Overlay = { ready: true; state: RunState } | { ready: false; reason: string };
+
+/**
+ * U11 — the ENGINE's node state for this run, or the reason there is none.
+ *
+ * Gated on the stream having finished replaying, which is load-bearing rather
+ * than cosmetic. The engine's seed holds NO nodes until `run.started` folds, and
+ * `useRunStream` starts from an empty log, so projecting mid-replay would draw a
+ * finished run as a graph on which nothing has a status — and, a frame later, as
+ * one where only the first node does. A monitor that says "nothing ran" about a
+ * run that did is worse than one that says "not yet".
+ *
+ * That gate is also where the deliberate absence of an `events` member on R1 is
+ * paid for: the overlay is fed by the WebSocket alone, so a stream that never
+ * connects has no fallback source. It says so, in place, and the doc-free table
+ * below is unaffected.
+ *
+ * The carry lives in a ref so a live run folds only the NEW events per frame.
+ * Re-running this memo with an unchanged log (React may) re-enters the fold with
+ * `count === events.length` and simply returns the same state.
+ */
+function useRunProjection(doc: PipelineVersion | null, stream: RunStreamState): Overlay {
+  const carry = useRef<ProjectionCarry>(EMPTY_CARRY);
+  const engine = useMemo(() => (doc === null ? null : engineForDoc(doc)), [doc]);
+
+  return useMemo(() => {
+    if (doc === null || engine === null) {
+      return { ready: false, reason: 'Loading the pipeline graph…' };
+    }
+    if (stream.phase === 'connecting' || stream.phase === 'replaying') {
+      return { ready: false, reason: 'Loading this run’s history…' };
+    }
+    if (stream.phase === 'error') {
+      return {
+        ready: false,
+        reason: 'The event stream is unavailable, so node state cannot be projected.',
+      };
+    }
+
+    const result = foldRunProjection(engine, doc, stream.events, carry.current);
+    carry.current = result.carry;
+    return result.projection.ok
+      ? { ready: true, state: result.projection.state }
+      : { ready: false, reason: `Node state cannot be projected: ${result.projection.reason}.` };
+  }, [doc, engine, stream.events, stream.phase]);
+}
+
+/**
  * The live run monitor — the "watch it run live" MVP step. It fetches the run's
  * immutable metadata once (REST), then tails `run_events` over the WebSocket
  * (replay-then-live via `useRunStream`). Everything below the header is derived
@@ -40,6 +93,7 @@ function phaseLabel(phase: StreamPhase): string {
 export function RunDetailPage({ runId }: { runId: string }) {
   const navigate = useNavigate();
   const [run, setRun] = useState<Run | null>(null);
+  const [doc, setDoc] = useState<PipelineVersion | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // `RunDetailRoute` renders this with `key={runId}`, so a different run
@@ -47,8 +101,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
   // state synchronously in the effect body — the effect only performs the fetch.
   useEffect(() => {
     const ac = new AbortController();
-    getRun(runId, ac.signal)
-      .then((r) => setRun(r))
+    getRunDetail(runId, ac.signal)
+      .then((d) => {
+        setRun(d.run);
+        setDoc(d.pipelineVersion);
+      })
       .catch((err: unknown) => {
         if (ac.signal.aborted) return;
         setLoadError(err instanceof Error ? err.message : String(err));
@@ -57,6 +114,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
   }, [runId]);
 
   const stream = useRunStream(runId);
+  const overlay = useRunProjection(doc, stream);
   const nodes = useMemo(() => deriveNodeActivity(stream.events), [stream.events]);
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
   const status: RunLifecycleStatus | string = lifecycle ?? run?.status ?? 'pending';
@@ -116,6 +174,24 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <code>{JSON.stringify(run.params)}</code>
           </dd>
         </dl>
+      )}
+
+      <h3>Graph</h3>
+      {doc === null ? (
+        <p>{loadError === null ? 'Loading the pipeline graph…' : 'The pipeline graph is unavailable.'}</p>
+      ) : (
+        <>
+          {/* The graph is drawn whether or not the run projects onto it — the
+              authored shape is a fact of the version, and the run state is an
+              overlay ON it. When there is no overlay the nodes say so, rather
+              than being coloured as if nothing had run. */}
+          <RunCanvas doc={doc} state={overlay.ready ? overlay.state : null} />
+          {!overlay.ready && (
+            <p className="page-hint" role="status">
+              {overlay.reason}
+            </p>
+          )}
+        </>
       )}
 
       <h3>Nodes</h3>

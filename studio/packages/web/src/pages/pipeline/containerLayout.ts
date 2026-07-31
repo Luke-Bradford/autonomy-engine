@@ -1,4 +1,6 @@
-import { containerMembership, type Container } from '@autonomy-studio/shared';
+import { Position, type NodeHandle } from '@xyflow/react';
+import { containerMembership, type Container, type ContainerKind } from '@autonomy-studio/shared';
+import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 
 /**
  * U6c — where a container is DRAWN.
@@ -319,4 +321,84 @@ export function revealTransform(
   const dy = axisPan(target.y * zoom + ty, target.height * zoom, height);
   if (dx === 0 && dy === 0) return null;
   return { x: tx + dx, y: ty + dy, zoom };
+}
+
+/**
+ * The size assumed for a node React Flow has not measured yet.
+ *
+ * Used for ONE frame: `measured` is populated as soon as RF observes the node,
+ * and the container box re-derives from the real size on the next render. It
+ * exists so the first paint of a freshly-loaded doc has a plausible box instead
+ * of a zero-area one, not as a layout constant anything depends on.
+ */
+export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
+
+/**
+ * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
+ * centred on the node's border (`left: -4px` and friends).
+ */
+export const HANDLE_SIZE = 6;
+
+/**
+ * How many activity ids the #788 implicit-chain advisory spells out before it
+ * summarises the rest. An advisory that grows without bound stops being an
+ * advisory and becomes an occlusion: a panel naming forty nodes across the top
+ * of the canvas is worse than the silence it replaces. Six is enough to make the
+ * ORDER concrete (the surprising part is that there is one at all), and the
+ * count in the same sentence keeps the total honest when the list is cut.
+ */
+
+/**
+ * The port bounds of a derived container box, stated rather than measured.
+ *
+ * `x`/`y` are relative to the node's top-left, and React Flow reads an endpoint
+ * off them positionally (`getHandlePosition`): a LEFT handle contributes
+ * `(handle.x, y + height/2)` and a RIGHT one `(handle.x + handle.width, …)`.
+ *
+ * So centring each 6px dot on its border puts the endpoint 3px OUTSIDE the box
+ * (`-HANDLE_SIZE / 2` on the left, `width + HANDLE_SIZE / 2` on the right) and
+ * exactly on the vertical midpoint. Three pixels out is the convention, not a
+ * miss: RF's own stylesheet draws an activity's handle the same way, and what it
+ * MEASURES for one lands within a pixel of this. The line therefore meets the
+ * rendered dot on a container exactly as it does on an activity.
+ */
+export function containerHandles(width: number, height: number): NodeHandle[] {
+  const y = (height - HANDLE_SIZE) / 2;
+  const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
+  return [
+    {
+      id: TARGET_PORT_ID,
+      type: 'target',
+      position: Position.Left,
+      x: -HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+    {
+      id: SOURCE_PORT_ID,
+      type: 'source',
+      position: Position.Right,
+      x: width - HANDLE_SIZE / 2,
+      y,
+      ...size,
+    },
+  ];
+}
+
+/**
+ * What the box announces. Lives on the NODE (`ariaRole`/`ariaLabel`), not on this
+ * component's own `<div>`.
+ *
+ * React Flow owns the outer element — `role: node.ariaRole ?? (isFocusable ?
+ * 'group' : undefined)` and `aria-label: node.ariaLabel` — and this file already
+ * takes that route for edges (`ariaLabel: edgeAriaLabel(e)` below). Labelling the
+ * inner div instead put the accessible name on a `pointer-events: none` child of
+ * a wrapper that, because the container is not focusable, had NO role at all
+ * while still carrying RF's unconditional `aria-roledescription="node"`.
+ *
+ * Counted from the box's OWN `childCount`, not `container.children.length`: see
+ * `ContainerBox`. What is announced is what is drawn.
+ */
+export function containerAriaLabel(kind: ContainerKind, childCount: number): string {
+  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
 }

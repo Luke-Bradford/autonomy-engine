@@ -1688,3 +1688,86 @@ td button + button {
 .event-feed td {
   font-size: 0.85rem;
 }
+
+/* ── U11 run overlay ─────────────────────────────────────────────────────────
+ *
+ * The run monitor's canvas: the authored graph with a run's node/container
+ * state drawn on it (`RunCanvas.tsx`).
+ *
+ * NO new palette variables. Ten engine node statuses are grouped into five
+ * TONES (`runProjection.ts` states the grouping and why), and each tone reuses
+ * the variable the run table's status pills already use — `index.css`'s edge
+ * block records the same commitment, so the canvas, the pills and the edges
+ * cannot come to disagree about what green means. The exact status word is
+ * rendered as TEXT on the node, so the grouping loses no information.
+ *
+ * `outline`, never `border-color`: `.flow-node.selected` owns the border, and a
+ * status that competed with it would be decided by specificity. The outline sits
+ * outside the box, so the two channels stay independent — which matters the day
+ * this vocabulary is reused on the author canvas.
+ */
+.run-canvas {
+  height: 60vh;
+  min-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.run-node {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+
+.run-node-neutral {
+  outline-color: var(--muted);
+}
+
+.run-node-running {
+  outline-color: var(--accent);
+}
+
+.run-node-holding {
+  outline-color: var(--warning);
+}
+
+.run-node-success {
+  outline-color: var(--success);
+}
+
+.run-node-failure {
+  outline-color: var(--error);
+}
+
+/* Skipped is grey like `neutral` and DASHED — the settled encoding for a
+   skipped EDGE, so "this did not run" reads the same everywhere. The dash is
+   what separates it from a node nothing has happened to yet. */
+.run-node-skipped {
+  outline-color: var(--muted);
+  outline-style: dashed;
+}
+
+.run-node-status {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+}
+
+/* Containers take the same tones on their own border. Theirs is already dashed
+   (every container box is), so `skipped` is distinguished by the label text
+   rather than by a second dash. */
+.run-container-running {
+  border-color: var(--accent);
+}
+
+.run-container-holding {
+  border-color: var(--warning);
+}
+
+.run-container-success {
+  border-color: var(--success);
+}
+
+.run-container-failure {
+  border-color: var(--error);
+}
