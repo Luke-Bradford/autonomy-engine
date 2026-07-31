@@ -201,7 +201,8 @@
 // declare `quota.matchSource: {format:'json-lines', errorEnvelopeTypes:[…]}` —
 // the CLI speaks JSON-per-line on stdout, so `exhaustionPattern` is matched
 // against stderr plus ONLY the decoded string leaves of the named error
-// envelopes, never agent content. Absent = `text` = the whole stderr+stdout join
+// envelopes — never agent content it did not deliberately format AS a declared
+// envelope — or, under `{format:'stderr'}`, against stderr alone. Absent = `text` = the whole stderr+stdout join
 // (the #799 semantics). Same shape as 16/18/19: a plain `z.object` strips the key
 // on a pre-20 build, which then matches the FULL transcript the operator
 // explicitly narrowed away — the #816 false positive (an agent session that

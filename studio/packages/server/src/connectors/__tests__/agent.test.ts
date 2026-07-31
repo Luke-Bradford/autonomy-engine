@@ -1792,11 +1792,11 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
   });
 
   it('matches envelope TYPE exactly — a type that merely CONTAINS a declared one is not admitted', async () => {
-    // `code` carries the declared token verbatim, so the line PASSES the cheap
-    // pre-filter and the exact `type` membership is what actually rejects it.
-    // Without that second gate this line classifies.
+    // The NESTED `"type":"error"` is what clears the cheap pre-filter (which reads
+    // the `type` position but not its depth), so the exact TOP-LEVEL membership is
+    // what actually rejects this line. Without that second gate it classifies.
     const events = await runTask(
-      [out(JSON.stringify({ type: 'error_summary', code: 'error', message: PATTERN }))],
+      [out(JSON.stringify({ type: 'error_summary', meta: { type: 'error' }, message: PATTERN }))],
       jsonLines(['error']),
     );
     expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
@@ -1847,20 +1847,6 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
     expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
   });
 
-  it('requires the type to BE a declared string, not merely to stringify to one', async () => {
-    // The declared type is spelled `'5'` on purpose: it is the only shape under
-    // which the non-string guard is observable at all. `types.includes(type)`
-    // already rejects every other non-string, so a test using an ordinary type
-    // name would pass with the guard deleted — it would certify nothing.
-    // `code` carries `"5"` so the line clears the pre-filter and the guard is
-    // what decides — otherwise the unquoted `"type":5` never reaches it.
-    const events = await runTask(
-      [out(JSON.stringify({ type: 5, code: '5', message: PATTERN }))],
-      jsonLines(['5']),
-    );
-    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
-  });
-
   it('a FORGED envelope on raw stdout still classifies — narrowed, not closed', async () => {
     // Pinned as accepted residual, not as a win: the filter cuts the accidental
     // mention (the archetype), never a deliberate forgery by a passthrough tool.
@@ -1896,14 +1882,11 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
     // JSON.parsed in full, synchronously, on the server's only thread. The budget
     // keeps the envelopes NEAREST the exit, so a refusal beyond it is missed —
     // stated, tested, and orders of magnitude past any real refusal stream.
-    // The decoy must be a CANDIDATE (an object line carrying a declared type as a
-    // quoted token) so it is charged to the budget; it is excluded only once
-    // parsed, on its real `type`. Note a mention inside a JSON *string* does not
-    // qualify — `JSON.stringify` escapes the quotes — which is itself why the
-    // cheap pre-filter is not the verdict.
-    const decoy = out(
-      JSON.stringify({ type: 'assistant', kind: 'error', text: 'y'.repeat(9_000) }),
-    );
+    // The decoys are REAL declared envelopes, because the pre-filter keys on the
+    // `type` POSITION — that tightening is what stops unrelated protocol lines
+    // (`{"type":"item.completed","error":null}`) from eating the budget. They
+    // carry no refusal text, so only the budget can decide this test.
+    const decoy = out(JSON.stringify({ type: 'error', message: 'y'.repeat(9_000) }));
     const refusal = out(JSON.stringify({ type: 'error', message: PATTERN }));
     const flood = Array.from({ length: 140 }, () => decoy);
     expect((await runTask([refusal, ...flood], jsonLines(['error']))).at(-1)).toMatchObject({
@@ -1924,6 +1907,73 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
       ).runActivity(llmCtx({ connectionConfig: jsonLines(['error']) }), null),
     );
     expect(events.find((e) => e.type === 'failed')).toMatchObject({ kind: 'permanent' });
+  });
+
+  it('degrades an OVER-CAP declared envelope to a raw excerpt rather than dropping it', async () => {
+    // It already matched in the `type` position, so it is a real envelope that is
+    // merely too big to parse (a provider error body echoing the request). Dropping
+    // it would miss a genuine refusal — the expensive direction.
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', message: `${'z'.repeat(20_000)} ${PATTERN}` }))],
+      jsonLines(['error']),
+    );
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('drops a leaf nested past the depth ceiling, and keeps the one just inside it', async () => {
+    const nest = (depth: number): unknown => (depth === 0 ? PATTERN : { inner: nest(depth - 1) });
+    const at = async (depth: number) =>
+      runTask([out(JSON.stringify({ type: 'error', deep: nest(depth) }))], jsonLines(['error']));
+    expect((await at(7)).at(-1)).toMatchObject({ kind: 'rate_limit' });
+    expect((await at(8)).at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  it('does NOT forge a match across the seam between two leaves', async () => {
+    // Narrowing DELETES the text between survivors, so joining them bare would let
+    // a pattern match across an adjacency that never existed in the output — and
+    // would invent a classification `text` matching would not have produced. Same
+    // hazard `headTailExcerpt`'s elision marker exists to prevent.
+    const events = await runTask(
+      [out(JSON.stringify({ type: 'error', a: 'usage limit', b: 'reached' }))],
+      jsonLines(['error'], 'usage limit\nreached'),
+    );
+    expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+  });
+
+  describe('the stderr-only source — the one that needs no protocol from the CLI', () => {
+    const stderrOnly = {
+      command: 'claude',
+      quota: {
+        exhaustionPattern: PATTERN,
+        resetWindowSeconds: 3600,
+        matchSource: { format: 'stderr' as const },
+      },
+    };
+
+    it('classifies a refusal on stderr', async () => {
+      const events = await runTask([{ stream: 'stderr', line: `Error: ${PATTERN}` }], stderrOnly);
+      expect(events.at(-1)).toMatchObject({ kind: 'rate_limit', retryAfterSeconds: 3600 });
+    });
+
+    it('ignores the same phrase anywhere on stdout — including as plain prose', async () => {
+      // This is the whole point: it works on the DEFAULT `claude -p` invocation,
+      // where there is no JSON protocol to declare. Its cost is the mirror image —
+      // a CLI whose only refusal channel is stdout is missed.
+      const events = await runTask([out(`the log says ${PATTERN}`)], stderrOnly);
+      expect(events.at(-1)).toMatchObject({ type: 'succeeded' });
+    });
+  });
+
+  it('an explicit text source behaves exactly as an absent one', async () => {
+    const events = await runTask([out(`chatter about ${PATTERN}`)], {
+      command: 'claude',
+      quota: {
+        exhaustionPattern: PATTERN,
+        resetWindowSeconds: 3600,
+        matchSource: { format: 'text' as const },
+      },
+    });
+    expect(events.at(-1)).toMatchObject({ kind: 'rate_limit' });
   });
 
   describe('schema', () => {
@@ -1955,6 +2005,18 @@ describe('#816 half 1 — quota match SOURCE (quota.matchSource: json-lines)', (
 
     it('REFUSES an unknown format', () => {
       expect(parse({ format: 'stream-json', errorEnvelopeTypes: ['error'] })).toBe(false);
+    });
+
+    it('accepts a stderr-only source, and refuses envelope types on it', () => {
+      expect(parse({ format: 'stderr' })).toBe(true);
+      expect(parse({ format: 'stderr', errorEnvelopeTypes: ['error'] })).toBe(false);
+    });
+
+    it('BOUNDS errorEnvelopeTypes — the pre-filter walk is linear in types x stream', () => {
+      const many = Array.from({ length: 33 }, (_, i) => `t${i}`);
+      expect(parse({ format: 'json-lines', errorEnvelopeTypes: many })).toBe(false);
+      expect(parse({ format: 'json-lines', errorEnvelopeTypes: ['x'.repeat(201)] })).toBe(false);
+      expect(parse({ format: 'json-lines', errorEnvelopeTypes: many.slice(0, 32) })).toBe(true);
     });
   });
 });
