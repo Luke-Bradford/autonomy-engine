@@ -5,7 +5,7 @@ import {
   type EngineDoc,
   type RunEvent,
 } from '@autonomy-studio/shared';
-import { containerStatusTone, engineForDoc, nodeStatusTone, projectRun } from './runProjection';
+import { containerStatusTone, nodeStatusTone, projectRun } from './runProjection';
 
 const DOC: EngineDoc = {
   nodes: [
@@ -47,8 +47,7 @@ function startedLog(): RunEvent[] {
     pipelineVersionId: 'pv_1',
     params: {},
   });
-  const engine = engineForDoc(DOC);
-  const afterStart = projectRun(engine, [started]);
+  const afterStart = projectRun(DOC, [started]);
   if (!afterStart.ok) throw new Error('fixture: run.started must project');
   const attemptId = afterStart.state.nodes.a?.currentAttemptId;
   if (attemptId === undefined) throw new Error('fixture: `a` must be ready with an attempt');
@@ -64,8 +63,7 @@ describe('projectRun', () => {
     // The doc is what buys this. `b` and `c` have no event of their own at this
     // point in the log, so `deriveNodeActivity` has nothing to put in a row for
     // them; the engine still reports them, because it was given the graph.
-    const engine = engineForDoc(DOC);
-    const projection = projectRun(engine, startedLog());
+    const projection = projectRun(DOC, startedLog());
 
     expect(projection.ok).toBe(true);
     if (!projection.ok) return;
@@ -79,8 +77,7 @@ describe('projectRun', () => {
     // be drawn as "every node is pending". A finished run rendered mid-replay
     // would otherwise claim nothing ran. The page gates the overlay on the
     // stream having finished replaying for exactly this reason.
-    const engine = engineForDoc(DOC);
-    const projection = projectRun(engine, []);
+    const projection = projectRun(DOC, []);
 
     expect(projection.ok).toBe(true);
     if (!projection.ok) return;
@@ -88,8 +85,7 @@ describe('projectRun', () => {
   });
 
   it('folds the engine reducer, so a dispatched node reports the ENGINE status', () => {
-    const engine = engineForDoc(DOC);
-    const projection = projectRun(engine, startedLog());
+    const projection = projectRun(DOC, startedLog());
 
     expect(projection.ok).toBe(true);
     if (!projection.ok) return;
@@ -98,7 +94,6 @@ describe('projectRun', () => {
   });
 
   it('ABANDONS the projection on an unparseable event rather than folding a hole', () => {
-    const engine = engineForDoc(DOC);
     seq = 0;
     const log = [
       ev({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
@@ -111,7 +106,7 @@ describe('projectRun', () => {
       payload: { type: 'node.dispatched' },
     } as RunEvent);
 
-    const projection = projectRun(engine, log);
+    const projection = projectRun(DOC, log);
     expect(projection.ok).toBe(false);
     if (projection.ok) return;
     expect(projection.reason).toContain('event 1');

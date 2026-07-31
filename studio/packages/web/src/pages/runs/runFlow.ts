@@ -149,3 +149,39 @@ export function runFlowEdges(doc: RunDoc): FlowEdge[] {
     focusable: false,
   }));
 }
+
+/**
+ * Merge a freshly-built node array into the one React Flow currently holds,
+ * PRESERVING object identity wherever nothing on screen changed.
+ *
+ * This is not an optimisation, it is a correctness fix. `runFlowNodes` builds
+ * brand-new objects, and React Flow's `adoptUserNodes` rebuilds a node's
+ * internals for any user node that is not reference-identical to the previous
+ * one — including `handleBounds`, which `parseHandles` leaves `undefined` for a
+ * node that states neither `measured` nor `handles`. `getEdgePosition` then
+ * returns `null` for an endpoint with no handle bounds, so EVERY edge touching
+ * a rebuilt node renders as nothing until the ResizeObserver re-measures a
+ * frame later. Since the projection returns a fresh `RunState` per event, that
+ * would be every edge blinking on every event of a live run — precisely the
+ * case this view exists for. (Container boxes were already immune: they state
+ * their own `measured` + `handles`.)
+ *
+ * So: a node whose rendered data is unchanged is returned AS THE SAME OBJECT,
+ * and one whose status did change carries the measurement forward.
+ */
+export function mergeRunNodes(prev: FlowNode[], next: FlowNode[]): FlowNode[] {
+  const before = new Map(prev.map((n) => [n.id, n]));
+  return next.map((n) => {
+    const old = before.get(n.id);
+    if (old === undefined) return n;
+    const a = old.data as RunNodeData;
+    const b = n.data as RunNodeData;
+    // Compared field-by-field rather than by a deep equal: these ARE the fields
+    // the node renders, so a new one added here must be considered deliberately.
+    const sameData = a.title === b.title && a.status === b.status && a.tone === b.tone;
+    if (sameData && old.position.x === n.position.x && old.position.y === n.position.y) return old;
+    // Changed — keep whatever React Flow measured, so the node does not fall
+    // back to uninitialised and take its edges with it for a frame.
+    return { ...n, measured: n.measured ?? old.measured, handles: n.handles ?? old.handles };
+  });
+}

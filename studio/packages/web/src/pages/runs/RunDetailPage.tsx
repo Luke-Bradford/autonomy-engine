@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { PipelineVersion, Run, RunLifecycleStatus, RunState } from '@autonomy-studio/shared';
+import { Suspense, useEffect, useMemo, useState } from 'react';
+import type { PipelineVersion, Run, RunLifecycleStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRunDetail } from '../../api/runs';
 import { useRunStream, type RunStreamState, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, formatClock, formatWhen } from './format';
-import { RunCanvas } from './RunCanvas';
-import { engineForDoc, projectRun } from './runProjection';
+import { RunGraph } from './RunGraph.lazy';
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -26,55 +25,6 @@ function phaseLabel(phase: StreamPhase): string {
     case 'error':
       return 'stream error';
   }
-}
-
-/**
- * The overlay is either projected, or it explains why it is not. There is no
- * "draw it anyway" state — see `useRunProjection`.
- */
-type Overlay = { ready: true; state: RunState } | { ready: false; reason: string };
-
-/** The pre-fetch state — module-level so it is a stable identity. */
-const LOADING_GRAPH: Overlay = { ready: false, reason: 'Loading the pipeline graph…' };
-
-/**
- * U11 — the ENGINE's node state for this run, or the reason there is none.
- *
- * Gated on the stream having finished replaying, which is load-bearing rather
- * than cosmetic. The engine's seed holds NO nodes until `run.started` folds, and
- * `useRunStream` starts from an empty log, so projecting mid-replay would draw a
- * finished run as a graph on which nothing has a status — and, a frame later, as
- * one where only the first node does. A monitor that says "nothing ran" about a
- * run that did is worse than one that says "not yet".
- *
- * That gate is also where the deliberate absence of an `events` member on R1 is
- * paid for: the overlay is fed by the WebSocket alone, so a stream that never
- * connects has no fallback source. It says so, in place, and the doc-free table
- * below is unaffected.
- *
- * Folds the WHOLE log per render, matching the page's two existing folds —
- * `projectRun` says why an incremental carry is not the win it looks like here.
- */
-function useRunProjection(doc: PipelineVersion | null, stream: RunStreamState): Overlay {
-  const engine = useMemo(() => (doc === null ? null : engineForDoc(doc)), [doc]);
-
-  return useMemo(() => {
-    if (engine === null) return LOADING_GRAPH;
-    if (stream.phase === 'connecting' || stream.phase === 'replaying') {
-      return { ready: false, reason: 'Loading this run\u2019s history\u2026' };
-    }
-    if (stream.phase === 'error') {
-      return {
-        ready: false,
-        reason: 'The event stream is unavailable, so node state cannot be projected.',
-      };
-    }
-
-    const projection = projectRun(engine, stream.events);
-    return projection.ok
-      ? { ready: true, state: projection.state }
-      : { ready: false, reason: `Node state cannot be projected: ${projection.reason}.` };
-  }, [engine, stream.events, stream.phase]);
 }
 
 /**
@@ -112,7 +62,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
   }, [runId]);
 
   const stream = useRunStream(runId);
-  const overlay = useRunProjection(doc, stream);
   const nodes = useMemo(() => deriveNodeActivity(stream.events), [stream.events]);
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
   const status: RunLifecycleStatus | string = lifecycle ?? run?.status ?? 'pending';
@@ -182,18 +131,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
             : 'The pipeline graph is unavailable.'}
         </p>
       ) : (
-        <>
-          {/* The graph is drawn whether or not the run projects onto it — the
-              authored shape is a fact of the version, and the run state is an
-              overlay ON it. When there is no overlay the nodes say so, rather
-              than being coloured as if nothing had run. */}
-          <RunCanvas doc={doc} state={overlay.ready ? overlay.state : null} />
-          {!overlay.ready && (
-            <p className="page-hint" role="status">
-              {overlay.reason}
-            </p>
-          )}
-        </>
+        /* #698 — the graph and everything needed to DRAW it (React Flow, and
+           the engine reducer the overlay folds) load on demand, so the run
+           metadata, node table and event feed below paint without waiting on
+           either. The boundary is HERE rather than at the route for that
+           reason: all of that is useful without the graph. */
+        <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
+          <RunGraph doc={doc} stream={stream} />
+        </Suspense>
       )}
 
       <h3>Nodes</h3>

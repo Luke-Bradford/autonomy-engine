@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import {
   Background,
   Controls,
@@ -6,6 +6,8 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesState,
+  type Node as FlowNode,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -13,6 +15,7 @@ import type { RunState } from '@autonomy-studio/shared';
 import { EdgeMarkers } from '../pipeline/EdgeMarkers';
 import { SOURCE_PORT_ID, TARGET_PORT_ID } from '../pipeline/ports';
 import {
+  mergeRunNodes,
   NO_STATUS_LABEL,
   runFlowEdges,
   runFlowNodes,
@@ -46,8 +49,10 @@ import {
  * by convention: the geometry (`containerRects`, `containerHandles`,
  * `UNMEASURED_NODE_SIZE`), the edge vocabulary and its one `EdgeMarkers` def
  * set, the port ids, the node label rule, and the CSS classes — all reached
- * through `runFlow.ts`. This component adds NO handlers at all, so there is no
- * mutation surface to have to disable.
+ * through `runFlow.ts`. The ONE handler it wires is `onNodesChange`, and only so
+ * React Flow's own measurements land back on the node objects (see below) — no
+ * gesture on this canvas can author anything, because nothing here reads from or
+ * writes to a canvas store.
  */
 
 /**
@@ -109,8 +114,17 @@ export interface RunCanvasProps {
  * this page has no canvas shell to inherit it from.
  */
 export function RunCanvas({ doc, state }: RunCanvasProps) {
-  const nodes = useMemo(() => runFlowNodes(doc, state), [doc, state]);
+  /* React Flow owns the VIEW array so it can attach and KEEP each node's
+     measured dimensions across renders — the author canvas holds them the same
+     way, and for the same reason. `onNodesChange` is wired for that alone: with
+     every interaction affordance off, a dimension change is the only change
+     React Flow can produce here. */
+  const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const edges = useMemo(() => runFlowEdges(doc), [doc]);
+
+  useEffect(() => {
+    setNodes((prev) => mergeRunNodes(prev, runFlowNodes(doc, state)));
+  }, [doc, state, setNodes]);
 
   return (
     <div className="run-canvas" data-testid="run-canvas">
@@ -120,10 +134,11 @@ export function RunCanvas({ doc, state }: RunCanvasProps) {
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
-          /* Read-only, stated on every axis rather than left to the absence of
-             handlers: no change callback is wired, so React Flow would drop an
-             interaction anyway, but a later edit that adds one must not silently
-             make the MONITOR authorable. */
+          onNodesChange={onNodesChange}
+          /* Read-only, stated on every axis rather than inferred from the fact
+             that nothing here would act on an interaction. `onNodesChange` above
+             carries measurements, and would happily carry a drag or a selection
+             too — these are what stop one being produced in the first place. */
           nodesDraggable={false}
           nodesConnectable={false}
           elementsSelectable={false}

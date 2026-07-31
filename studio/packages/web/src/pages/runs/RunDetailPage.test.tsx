@@ -77,7 +77,9 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
 }
 
 function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
-  return { events: [], phase: 'live', error: undefined, ...overrides };
+  // `replayComplete` defaults TRUE so a spec that does not care reads as a
+  // normally-replayed stream; the specs that DO care set it explicitly.
+  return { events: [], phase: 'live', error: undefined, replayComplete: true, ...overrides };
 }
 
 beforeEach(() => {
@@ -177,11 +179,33 @@ describe('RunDetailPage', () => {
   it('U11 — withholds the overlay while the stream is still replaying, and says so', async () => {
     // The engine seeds no nodes until `run.started` folds, so projecting
     // mid-replay would draw a finished run as one where nothing ran.
-    useRunStreamMock.mockReturnValue(stream({ phase: 'replaying', events: [] }));
+    useRunStreamMock.mockReturnValue(
+      stream({ phase: 'replaying', events: [], replayComplete: false }),
+    );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
     expect(screen.getByText(/Loading this run’s history/i)).toBeInTheDocument();
+  });
+
+  it('U11 — refuses to project a log the stream CLOSED before finishing, and says why', async () => {
+    // `closed` is set by any orderly close, including one mid-replay. Reading it
+    // as "the log is complete" would present a TRUNCATED log as authoritative —
+    // a finished run drawn with one node stuck dispatched and the rest pending,
+    // indistinguishable from the truth.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'closed',
+        replayComplete: false,
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(await screen.findByTestId('run-canvas')).toBeInTheDocument();
+    expect(screen.getByText(/ended before this run’s history finished loading/i)).toBeInTheDocument();
   });
 
   it('U11 — says the overlay is unavailable when the stream errored, and still draws the graph', async () => {

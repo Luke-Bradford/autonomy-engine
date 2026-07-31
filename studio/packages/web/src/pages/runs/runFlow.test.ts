@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { RunState } from '@autonomy-studio/shared';
-import { engineForDoc, projectRun } from './runProjection';
-import { NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
+import { projectRun } from './runProjection';
+import {
+  mergeRunNodes,
+  NO_STATUS_LABEL,
+  runFlowEdges,
+  runFlowNodes,
+  type RunDoc,
+} from './runFlow';
 
 const DOC: RunDoc = {
   nodes: [
@@ -30,7 +36,6 @@ const CONTAINER_DOC: RunDoc = {
 
 /** A projection of `DOC` in which `a` succeeded, so `b` is ready and `c` skipped. */
 function projected(): RunState {
-  const engine = engineForDoc(DOC);
   const base = {
     id: 'x',
     runId: 'run_1',
@@ -42,7 +47,7 @@ function projected(): RunState {
     type: 'run.started',
     payload: { type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} },
   };
-  const first = projectRun(engine, [started]);
+  const first = projectRun(DOC, [started]);
   if (!first.ok) throw new Error('fixture: run.started must project');
   const attemptId = first.state.nodes.a!.currentAttemptId!;
 
@@ -73,7 +78,7 @@ function projected(): RunState {
       },
     },
   ];
-  const result = projectRun(engine, log as never);
+  const result = projectRun(DOC, log as never);
   if (!result.ok) throw new Error('fixture: log must project');
   return result.state;
 }
@@ -172,5 +177,48 @@ describe('runFlowEdges', () => {
       expect(e.selectable).toBe(false);
       expect(e.focusable).toBe(false);
     }
+  });
+});
+
+describe('mergeRunNodes', () => {
+  /* Why this exists: React Flow rebuilds a node's internals for any user node
+     that is not reference-identical to the previous one, and `parseHandles`
+     leaves `handleBounds` undefined for a node stating neither `measured` nor
+     `handles` — so `getEdgePosition` returns null and EVERY edge touching it
+     renders as nothing until the next measurement. `projectRun` returns a fresh
+     state per event, so without this merge that would be every edge blinking on
+     every event of a live run. */
+
+  it('returns the SAME OBJECT for a node whose rendered data is unchanged', () => {
+    const first = runFlowNodes(DOC, null);
+    const second = runFlowNodes(DOC, null);
+    // A fresh build really is a different object — otherwise this test is vacuous.
+    expect(second[0]).not.toBe(first[0]);
+
+    const merged = mergeRunNodes(first, second);
+    expect(merged[0]).toBe(first[0]);
+    expect(merged.map((n) => n.id)).toEqual(first.map((n) => n.id));
+  });
+
+  it('replaces a node whose STATUS changed, carrying React Flow’s measurement forward', () => {
+    // What RF holds after it has measured: the same objects, now with `measured`.
+    const measured = runFlowNodes(DOC, null).map((n) => ({
+      ...n,
+      measured: { width: 150, height: 52 },
+    }));
+    const next = runFlowNodes(DOC, projected());
+
+    const merged = mergeRunNodes(measured, next);
+    const a = merged.find((n) => n.id === 'a')!;
+    expect(a.data.status).toBe('success');
+    // Not reference-identical (the status DID change) — but still initialised,
+    // so its edges keep their endpoints.
+    expect(a).not.toBe(measured.find((n) => n.id === 'a'));
+    expect(a.measured).toEqual({ width: 150, height: 52 });
+  });
+
+  it('keeps a node it has never seen before exactly as built', () => {
+    const next = runFlowNodes(DOC, null);
+    expect(mergeRunNodes([], next)).toEqual(next);
   });
 });

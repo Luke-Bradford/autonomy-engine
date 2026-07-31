@@ -2,8 +2,8 @@ import {
   EngineEventSchema,
   createEngine,
   type ContainerRunStatus,
-  type Engine,
   type EngineDoc,
+  type EngineEvent,
   type NodeRunStatus,
   type RunEvent,
   type RunState,
@@ -57,19 +57,23 @@ export type RunProjection = { ok: true; state: RunState } | { ok: false; reason:
  * log). The cost is a constant factor on a shape the page already has, and
  * fixing it belongs with those two rather than here: see #849.
  */
-export function projectRun(engine: Engine, events: RunEvent[]): RunProjection {
-  let state = engine.seedState();
+export function projectRun(doc: EngineDoc, events: RunEvent[]): RunProjection {
+  // Parse the WHOLE log first, then hand it to the engine's own replay seam, so
+  // this is literally `createEngine(doc).projectRunState(events)` rather than a
+  // second hand-rolled fold that could drift from it. Validating up front is
+  // also what makes the abandon above a single early return.
+  const parsed: EngineEvent[] = [];
   for (const envelope of events) {
-    const parsed = EngineEventSchema.safeParse(envelope.payload);
-    if (!parsed.success) {
+    const result = EngineEventSchema.safeParse(envelope.payload);
+    if (!result.success) {
       return {
         ok: false,
         reason: `event ${envelope.seq} (${envelope.type}) is not a valid engine event, so the graph cannot be projected`,
       };
     }
-    state = engine.reduce(state, parsed.data).state;
+    parsed.push(result.data);
   }
-  return { ok: true, state };
+  return { ok: true, state: createEngine(doc).projectRunState(parsed) };
 }
 
 /**
@@ -129,7 +133,3 @@ export function containerStatusTone(status: ContainerRunStatus): StatusTone {
   return CONTAINER_TONES[status];
 }
 
-/** Builds the engine for a doc. Thin, but it keeps the import in one place. */
-export function engineForDoc(doc: EngineDoc): Engine {
-  return createEngine(doc);
-}
