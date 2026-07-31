@@ -2777,6 +2777,77 @@ export function closesForwardCycle(
   );
 }
 
+/** Why a candidate BACK-EDGE would be refused by the save gate. */
+export type BackEdgeDefect = 'ancestry' | 'no-progress' | 'parallel-body';
+
+/**
+ * `backEdgeDefect` — the CONNECT-TIME half of the back-edge rules (U6e), the
+ * counterpart to `closesForwardCycle` above.
+ *
+ * The canvas OFFERS to turn a refused connection into a back-edge, and has to
+ * decide whether that offer is legal before the edge exists. Answering it here,
+ * from the same helpers `validateDoc`'s back-edge block reads, is what stops the
+ * offer authoring a doc the #444 write gate then refuses — a control that
+ * creates an unsavable version is the #748/U16 trap, and on an IMMUTABLE doc it
+ * can only be refused at write, never repaired later.
+ *
+ * The three arms are `validateDoc`'s own three back-edge refusals, in the order
+ * that explains the most first:
+ *  - `parallel-body` — a container-level fact independent of reachability
+ *    (`batchCount >= 2`), so it is decided without a traversal;
+ *  - `ancestry` — `to` must forward-reach `from`, containment included;
+ *  - `no-progress` — the reset body must contain `from`, else a bounce resets
+ *    nothing and `fireBackEdges` re-sees the same satisfied edge forever.
+ *
+ * `maxBounces` is NOT an arm: it is a property of the edge the caller authors,
+ * not of the graph, and the canvas supplies a default so a drawn back-edge is
+ * savable from the moment it exists.
+ *
+ * A DELTA, judged against `[...doc.edges, candidate]` rather than against
+ * `doc.edges`. That is load-bearing in both halves and for opposite reasons.
+ * `forwardReach` reads the raw edge list, but the reset body reads
+ * `effectiveEdges`, which SYNTHESIZES a success-chain over node order when a
+ * doc declares NO edges — so on an edge-less doc a predicate reading the
+ * current edges would answer about an implicit chain that stops existing the
+ * instant the operator accepts the offer. The candidate carries `back: true`,
+ * so it adds nothing to either forward graph; including it is what removes the
+ * synthesized one.
+ *
+ * PUBLISHED API: `engine/index.ts` re-exports this module with `export *`.
+ */
+export function backEdgeDefect(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges'>,
+  containers: Container[],
+  from: string,
+  to: string,
+): BackEdgeDefect | null {
+  const probe: Edge = { id: '__probe__', from, to, on: 'success', back: true, maxBounces: 1 };
+  const withProbe = { nodes: doc.nodes, edges: [...doc.edges, probe] };
+
+  // Read from the same `(batchCount ?? 1) >= 2` shape the save gate uses, so a
+  // change to what counts as parallel cannot leave the two disagreeing.
+  for (const c of containers) {
+    if ((c.batchCount ?? 1) < 2) continue;
+    const body = new Set(c.children);
+    if (body.has(from) || body.has(to) || to === c.id) return 'parallel-body';
+  }
+
+  const reach = forwardReach(withProbe, containers);
+  if (!(reach.get(to)?.has(from) ?? false)) return 'ancestry';
+
+  const nodeIdList = withProbe.nodes.map((n) => n.id);
+  const nodeAdj = nodeForwardAdjacency(withProbe);
+  const descendants = new Map<string, Set<string>>();
+  for (const id of nodeIdList) descendants.set(id, forwardDescendants(id, nodeAdj));
+  const resetBody = backEdgeResetBody(
+    probe,
+    nodeIdList,
+    descendants,
+    new Map(containers.map((c) => [c.id, c])),
+  );
+  return resetBody.length === 0 || !resetBody.includes(from) ? 'no-progress' : null;
+}
+
 /**
  * Forward reachability over the doc's forward edges (node OR container
  * endpoints), PLUS containment: a container reaches (encloses) its own
