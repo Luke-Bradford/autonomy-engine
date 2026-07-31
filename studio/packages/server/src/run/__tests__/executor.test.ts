@@ -1986,7 +1986,6 @@ function realAgentCliAdapter(stderrLine: string, exitCode: number): ConnectorReg
   const supervisor: Supervisor = {
     spawnSupervised: () => ({
       events: {
-        // eslint-disable-next-line @typescript-eslint/require-await
         async *[Symbol.asyncIterator]() {
           yield { stream: 'stderr' as const, line: stderrLine };
         },

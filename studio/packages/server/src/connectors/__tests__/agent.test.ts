@@ -985,7 +985,8 @@ describe('#2 L14c / #799 — agent_task quota classification', () => {
     expect(events[1]).toEqual({
       type: 'failed',
       kind: 'rate_limit',
-      error: 'agent_task CLI exited 1 (quota exhausted): Error: usage limit reached for this account',
+      error:
+        'agent_task CLI exited 1 (quota exhausted): Error: usage limit reached for this account',
       retryAfterSeconds: 3600,
     });
   });
