@@ -12,12 +12,16 @@ SAFE_MERGE_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # doc-PATH list (dir-boundary prefixes, e.g. "docs/"). A file is doc-only when
 # its extension matches OR it lives under a configured doc path; the PR is
 # doc-only only when EVERY file is. Empty paths arg = extension-only, the
-# pre-#192 behaviour byte-for-byte. Fail-safe direction: unsure -> NOT
+# pre-#192 behaviour byte-for-byte. #805 adds a 4th arg: a comma-separated
+# EXCLUSION list that beats both other tests, because `.md` is a format and not
+# a risk class -- an agent's work order is Markdown but editing it changes what
+# an unattended agent does, at real spend. Empty excludes arg = pre-#805
+# behaviour byte-for-byte. Fail-safe direction: unsure -> NOT
 # doc-only (review required). Pure string logic, unit-tested. This function is
 # THE single doc-only source: the review workflow sources this file and calls
 # it too (#192 unified the previously-divergent predicates).
 is_doc_only() {
-  local files="$1" extensions_csv="$2" paths_csv="${3:-}"
+  local files="$1" extensions_csv="$2" paths_csv="${3:-}" excludes_csv="${4:-}"
   [ -n "$files" ] || return 1
   local ext pattern="" IFS=','
   read -ra exts <<<"$extensions_csv"
@@ -28,9 +32,20 @@ is_doc_only() {
   done
   local dirs=()
   read -ra dirs <<<"$paths_csv"
+  local excl=()
+  read -ra excl <<<"$excludes_csv"
   local f p matched
   while IFS= read -r f; do
     [ -z "$f" ] && continue
+    # #805: control-plane exclusion, checked BEFORE both other tests so it
+    # cannot be out-voted by them. An entry matches the file exactly or as a
+    # dir-boundary prefix, so `loop/` and `loop/prompt.md` are both expressible.
+    matched=""
+    for p in ${excl[@]+"${excl[@]}"}; do
+      [ -n "$p" ] || continue
+      case "$f" in "$p"|"${p%/}/"*) matched=1; break ;; esac
+    done
+    [ -n "$matched" ] && return 1
     if printf '%s\n' "$f" | grep -qE "$pattern"; then continue; fi
     matched=""
     # bash-3.2 + set -u: guard the possibly-empty array expansion
@@ -96,7 +111,7 @@ review_postdates_head() {
 }
 
 merge_gate_bot_comment() {
-  local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4" doc_only_paths="${5:-}"
+  local pr="$1" author_login="$2" marker="$3" doc_only_extensions="$4" doc_only_paths="${5:-}" doc_only_excludes="${6:-}"
   local head_time; head_time="$(gh pr view "$pr" --json commits -q '.commits[-1].committedDate')"
   [ -n "$head_time" ] || { echo "safe_merge: cannot resolve PR #$pr head commit time" >&2; return 1; }
 
@@ -104,7 +119,7 @@ merge_gate_bot_comment() {
   files="$(gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files" --jq '.[].filename')"
   n_listed="$(printf '%s\n' "$files" | grep -c . || true)"
   n_changed="$(gh pr view "$pr" --json changedFiles -q '.changedFiles')"
-  if [ "$n_listed" = "$n_changed" ] && is_doc_only "$files" "$doc_only_extensions" "$doc_only_paths"; then
+  if [ "$n_listed" = "$n_changed" ] && is_doc_only "$files" "$doc_only_extensions" "$doc_only_paths" "$doc_only_excludes"; then
     local doc_block
     doc_block="$(gh pr view "$pr" --json comments -q \
       "[.comments[] | select(.author.login==\"$author_login\" and (.body|contains(\"$marker\")))]
@@ -324,7 +339,14 @@ case "$STRATEGY" in
     # #192: doc paths default to docs/ -- ONE definition shared with the review
     # workflow (which sources this file and calls is_doc_only itself).
     doc_only_paths="$(CONFIG_GET merge_gate.doc_only_paths | paste -sd, -)"; doc_only_paths="${doc_only_paths:-docs/}"
-    merge_gate_bot_comment "$PR" "$author_login" "$marker" "$doc_only_extensions" "$doc_only_paths" || exit 1
+    # #805: control-plane exclusion. Defaults to `.autonomy/` -- the pack path
+    # EVERY target repo uses, so `loop_prompt.md` / `hard_rules.md` (what the
+    # unattended agent is instructed to DO) never skip review anywhere by
+    # default. Engine-generic, not repo-specific: a repo whose control plane
+    # lives elsewhere adds its own path. Setting the key REPLACES this default,
+    # so an override must re-list `.autonomy/` if it still wants it.
+    doc_only_excludes="$(CONFIG_GET merge_gate.doc_only_exclude_paths | paste -sd, -)"; doc_only_excludes="${doc_only_excludes:-.autonomy/}"
+    merge_gate_bot_comment "$PR" "$author_login" "$marker" "$doc_only_extensions" "$doc_only_paths" "$doc_only_excludes" || exit 1
     ;;
   gh_review)
     reviewer_login="$(CONFIG_GET merge_gate.reviewer_login)"

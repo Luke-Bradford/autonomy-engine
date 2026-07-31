@@ -34,6 +34,12 @@ merge_gate:
   author_login: github-actions          # who posts the review verdict
   marker: "Claude Code Review"          # the review comment's header to match
   doc_only_extensions: [".md"]          # doc-only PRs the bot skips -> merge on CI green alone
+  # #805: NOT documentation however Markdown they look. `loop/prompt.md` is the
+  # studio build loop's work order -- editing it changes what an unattended
+  # agent does overnight, at real spend, with no code diff to show for it
+  # (PR #803 changed it and skipped review). `.autonomy/` is the engine's own
+  # pack, and is re-listed because setting this key REPLACES the default.
+  doc_only_exclude_paths: ["loop/", ".autonomy/"]
 
 worktree:
   default_path: "../.{repo-slug}-autonomy"

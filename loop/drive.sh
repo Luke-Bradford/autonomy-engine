@@ -121,6 +121,33 @@ STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 
+# --- is_loop_ref: is this branch the LOOP's own work? -------------------------
+# #805. Every progress signal the driver keeps must measure the ACTOR IT
+# GOVERNS. All three read "is something happening in this repo?", which is a
+# different question: the operator works in the same repo, on the same main,
+# and their activity is not the loop making progress.
+#
+# Measured 2026-07-31, one supervisor PR (#803) corrupting all three at once:
+#   - the stall counter reset ("'fix/loop-commit-before-long-wait' is ahead of
+#     main -- work in flight"), so a genuinely stalled loop could not trip it;
+#   - `openPR=1` suppressed the stall branch independently, and with NO age
+#     bound (the branch signal at least expires after AHEAD_MAX_AGE);
+#   - the driver waited on #803's gate ("PR #803 gate settled") -- a gate that
+#     was never the loop's to wait for.
+#
+# The convention this keys on is stated in prompt.md rule 2 and holds over
+# every branch the loop has ever pushed (checked 2026-07-31 across 40 merged
+# PRs: 22 `*/studio-*` from the loop, and every `*/loop-*`, `attended/*` and
+# `docs/*` branch was the operator's).
+#
+# Fail-safe direction: a loop branch misnamed outside the convention reads as
+# "not the loop's", which under-counts progress and can trip a false stall. A
+# false stall STOPS the loop; the opposite error spends. Stopping is the cheap
+# mistake, so the imprecision is on the safe side deliberately.
+is_loop_ref() {
+  case "${1:-}" in feat/studio*|fix/studio*) return 0 ;; *) return 1 ;; esac
+}
+
 # --- quota_pct: the 7-day subscription utilization as an INTEGER percent, or ""
 # when it cannot be read. Echoes to stdout; never fails the caller.
 #
@@ -998,8 +1025,17 @@ while true; do
     break
   fi
 
-  # --- wait for any open PR's gate to settle before the next fire -------------
-  pr="$(gh pr list --state open --json number -q '.[0].number // empty' 2>/dev/null || true)"
+  # --- wait for the LOOP's open PR gate to settle before the next fire --------
+  # Filtered in bash rather than in gh's jq so the predicate under test is this
+  # script's (`is_loop_ref`), not a stub's query string.
+  pr=""
+  while IFS=' ' read -r pr_num pr_ref; do
+    [ -n "$pr_num" ] || continue
+    is_loop_ref "$pr_ref" || continue
+    pr="$pr_num"; break
+  done <<EOF
+$(gh pr list --state open --json number,headRefName -q '.[]|"\(.number) \(.headRefName)"' 2>/dev/null || true)
+EOF
   if [ -n "$pr" ]; then
     log "open PR #$pr present -- waiting for its gate to settle"
     t=0
@@ -1030,7 +1066,16 @@ while true; do
 
   # --- progress / stall accounting (the ONLY "nothing more to do" detector) ---
   head="$(git rev-parse origin/main 2>/dev/null || echo unknown)"
-  openpr="$(gh pr list --state open --json number -q 'length' 2>/dev/null || echo 0)"
+  # Counted the same way, and over the loop's PRs only -- an operator PR open in
+  # this repo is not the loop making progress (#805).
+  openpr=0
+  while IFS=' ' read -r pr_num pr_ref; do
+    [ -n "$pr_num" ] || continue
+    is_loop_ref "$pr_ref" || continue
+    openpr=$((openpr + 1))
+  done <<EOF
+$(gh pr list --state open --json number,headRefName -q '.[]|"\(.number) \(.headRefName)"' 2>/dev/null || true)
+EOF
   # A local studio branch with commits origin/main does not have is WORK IN
   # FLIGHT, not a stall. prompt.md's triage rule 2 says exactly that ("a studio
   # feature branch ahead of main -> continue it to a PR"), so without this the
@@ -1057,10 +1102,7 @@ while true; do
   sb_now="$(date +%s)"
   while IFS=' ' read -r sb_ref sb_when; do
     [ -n "$sb_ref" ] || continue
-    case "$sb_ref" in
-      feat/studio*|fix/studio*|feat/loop*|fix/loop*) ;;
-      *) continue ;;
-    esac
+    is_loop_ref "$sb_ref" || continue
     # Non-numeric or absent date -> treat as NOT recent. Fail toward letting the
     # stall detector work, since the alternative masks it.
     case "$sb_when" in ''|*[!0-9]*) continue ;; esac
