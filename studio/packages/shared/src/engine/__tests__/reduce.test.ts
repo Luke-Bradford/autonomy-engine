@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EngineEventSchema } from '../types.js';
 import type { Edge, EdgeOn, EngineCommand, EngineEvent, FailureKind, Node } from '../types.js';
 import { createEngine, type Engine, type EngineDoc } from '../reduce.js';
 import { BUILTIN_PRICE_TABLE_VERSION } from '../../pricing/price-table.js';
@@ -18,6 +19,21 @@ function edge(from: string, to: string, on: EdgeOn): Edge {
 
 function engine(nodes: Node[], edges: Edge[] = []): Engine {
   return createEngine({ nodes, edges } satisfies EngineDoc);
+}
+
+/**
+ * A DEEP COPY of run state, for the inert-event tests' "nothing changed" baseline.
+ *
+ * `const before = s` would ALIAS the very object the reducer is handed, so an
+ * in-place mutation would be copied into the baseline and `toEqual` would pass —
+ * the tests would assert purity while being structurally unable to detect its
+ * violation. (Measured: a probe writing a key onto `state` inside an inert case
+ * left them all green.) A JSON round-trip is a sound clone here specifically
+ * because engine state is JSON-DURABLE by construction — it is what gets
+ * persisted and replayed. `structuredClone` is not in this package's TS lib.
+ */
+function snapshot<T>(state: T): T {
+  return JSON.parse(JSON.stringify(state)) as T;
 }
 
 const RUN = 'r1';
@@ -1301,7 +1317,7 @@ describe('activity.toolCalled is inert (#2 L10b)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.toolCalled',
       runId: RUN,
@@ -1326,7 +1342,7 @@ describe('activity.toolCalled is inert (#2 L10b)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.toolCalled',
       runId: RUN,
@@ -1354,7 +1370,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.metered',
       runId: RUN,
@@ -1376,7 +1392,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.metered',
       runId: RUN,
@@ -1402,7 +1418,7 @@ describe('activity.metered is inert (#2 L2)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     // A subscription/CLI response: metered (provider/model/tokens known) but no
     // per-response price — the schema accepts the new status with all price fields absent.
     const r = eng.reduce(s, {
@@ -1431,7 +1447,7 @@ describe('activity.captured is inert (#2 L9a)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.captured',
       runId: RUN,
@@ -1464,7 +1480,7 @@ describe('activity.agentTelemetry is inert (#2 L11a)', () => {
     const eng = engine([node('a')]);
     let s = eng.reduce(eng.seedState(), started()).state;
     s = eng.reduce(s, dispatched('a', attempt('a'))).state;
-    const before = s;
+    const before = snapshot(s);
     const r = eng.reduce(s, {
       type: 'activity.agentTelemetry',
       runId: RUN,
@@ -1481,5 +1497,72 @@ describe('activity.agentTelemetry is inert (#2 L11a)', () => {
     expect(r.state).toEqual(before);
     expect(r.commands).toEqual([]);
     expect(r.state.status).toBe('running');
+  });
+});
+
+// ===========================================================================
+// #750 — activity.warned is an inert ADVISORY fact
+// ===========================================================================
+
+describe('activity.warned is inert (#750)', () => {
+  it('folding activity.warned changes neither state nor commands, and does not terminalize the node', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = snapshot(s);
+    const r = eng.reduce(s, {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'empty_truncated_completion',
+      reason: 'the model returned no text and the provider reported truncation',
+    });
+    // Inert like activity.toolCalled: identical state, no commands, node in flight.
+    // This is the load-bearing property of the whole channel — a warning that
+    // could move the fold would be a failure wearing a softer word.
+    expect(r.state).toEqual(before);
+    expect(r.commands).toEqual([]);
+    expect(r.state.status).toBe('running');
+  });
+
+  it('does not downgrade a node that then SUCCEEDS — the run still finishes green', () => {
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    s = eng.reduce(s, {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'empty_truncated_completion',
+      reason: 'truncated',
+    }).state;
+    const r = eng.reduce(s, succeeded('a', attempt('a'), {}));
+    expect(r.state.nodes['a']?.status).toBe('success');
+    // The run settles green: `finishRun{success}` is the command the driver acts
+    // on (the run's own `status` flips when that command is applied, not in this
+    // fold), so THIS is where "the warning changed no outcome" is provable.
+    expect(r.commands).toContainEqual({ type: 'finishRun', outcome: 'success' });
+  });
+
+  it('an UNRECOGNISED code still folds — `code` is open by durability contract', () => {
+    // The back-compat property that keeps a retired warning code from making
+    // every run that emitted it unreplayable: the schema must accept it, and the
+    // reducer must not branch on it.
+    const eng = engine([node('a')]);
+    let s = eng.reduce(eng.seedState(), started()).state;
+    s = eng.reduce(s, dispatched('a', attempt('a'))).state;
+    const before = snapshot(s);
+    const event = {
+      type: 'activity.warned',
+      runId: RUN,
+      nodeId: 'a',
+      attemptId: attempt('a'),
+      code: 'a_code_no_build_has_ever_minted',
+      reason: 'from the future',
+    };
+    expect(EngineEventSchema.safeParse(event).success).toBe(true);
+    expect(eng.reduce(s, EngineEventSchema.parse(event)).state).toEqual(before);
   });
 });

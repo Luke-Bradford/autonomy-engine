@@ -4063,6 +4063,14 @@ export function createEngine(doc: EngineDoc): Engine {
         // folding it cannot change semantics. Captured once at dispatch, never
         // recomputed on replay (replay NEVER re-calls the model or the tools).
         return { state, commands: [], diagnostics };
+      case 'activity.warned':
+        // #750 — INERT (like `activity.toolCalled`): a non-fatal ADVISORY about an
+        // attempt that succeeded anyway. It never enters `outputs` or `${}`, never
+        // touches the node's status, and never influences the run outcome — a
+        // warning that could change a fold would be a failure wearing a softer
+        // word. It lives in the log for the Monitor run-detail. Emitted once at
+        // dispatch, never recomputed on replay.
+        return { state, commands: [], diagnostics };
       case 'run.reseeded':
         // RS1 — arrives on the `running`/all-pending run a `run.started{rerunOf}`
         // deferred; applies the copied frontier + containers, then settles once.

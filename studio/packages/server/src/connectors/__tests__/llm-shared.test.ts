@@ -6,6 +6,7 @@ import {
   buildCapture,
   buildRepairTurns,
   coerceStopReason,
+  emptyTruncationWarning,
   executeLocalTool,
   executeToolCalls,
   httpStatusFailure,
@@ -19,6 +20,7 @@ import {
   runTextWithTools,
   structuredEcho,
   toolCallTelemetry,
+  TRUNCATION_STOP_REASONS,
 } from '../llm-shared.js';
 import { sha256Hex } from '../../util/hash.js';
 import type { LlmToolDef, LlmTurn, StructuredCallOutcome, ToolCallResult } from '../llm-shared.js';
@@ -1138,4 +1140,80 @@ describe('normalizeModelId (#751)', () => {
       expect(normalizeModelId(full)).not.toBe(publishedAlias);
     },
   );
+});
+
+describe('emptyTruncationWarning (#750 — a completion that is EMPTY *and* truncated)', () => {
+  // The pairs the detector must judge. `true` = a warning is owed; `false` = the
+  // #461 contract stands untouched and NOTHING is said. Every silent case is a
+  // deliberate fail-SAFE: an absent truncation fact is never manufactured into a
+  // claim (the same rule that keeps `MODELS_REJECTING_*` from guessing).
+  const cases: [name: string, outputs: Record<string, unknown>, warns: boolean][] = [
+    ['OpenAI/Ollama truncation with no visible text', { text: '', stopReason: 'length' }, true],
+    [
+      'Anthropic truncation with an explicit empty text block',
+      { text: '', stopReason: 'max_tokens' },
+      true,
+    ],
+    [
+      'a truncated but NON-empty completion — partial text IS a real result',
+      { text: 'x', stopReason: 'length' },
+      false,
+    ],
+    [
+      'an empty completion the provider did NOT truncate (the #461 case)',
+      { text: '', stopReason: 'end_turn' },
+      false,
+    ],
+    ['an empty completion that stopped normally', { text: '', stopReason: 'stop' }, false],
+    [
+      "`agent_cli`'s `unknown` sentinel — an unread stopReason is not a truncation",
+      { text: '', stopReason: 'unknown' },
+      false,
+    ],
+    ['a structured-output node — no `text` output exists at all', { value: { ok: true } }, false],
+    [
+      'a non-string `text` (defence: the adapter contract says string)',
+      { text: null, stopReason: 'length' },
+      false,
+    ],
+    ['an absent stopReason', { text: '' }, false],
+    [
+      'a case-variant token — no fuzzy matching, so a gateway spelling stays silent',
+      { text: '', stopReason: 'LENGTH' },
+      false,
+    ],
+  ];
+
+  for (const [name, outputs, warns] of cases) {
+    it(`${warns ? 'WARNS' : 'stays silent'}: ${name}`, () => {
+      const warning = emptyTruncationWarning(outputs);
+      if (warns) {
+        expect(warning, name).toBeTypeOf('string');
+        // The matched token is quoted back so the operator can branch on the same
+        // value `${nodes.x.output.stopReason}` carries.
+        expect(warning).toContain(String(outputs['stopReason']));
+      } else {
+        expect(warning, name).toBeNull();
+      }
+    });
+  }
+
+  it('the table is EXACTLY the two sourced truncation tokens', () => {
+    // A membership pin, mirroring `openai-models.test.ts` / `anthropic-models.test.ts`:
+    // every member must be citable to a provider's documented vocabulary, so adding
+    // one has to argue with this test rather than slip in. `length` = OpenAI
+    // `finish_reason` + Ollama `done_reason`; `max_tokens` = Anthropic `stop_reason`.
+    expect([...TRUNCATION_STOP_REASONS].sort()).toEqual(['length', 'max_tokens']);
+  });
+
+  it('quotes ONLY the matched stopReason token — never any of the outputs', () => {
+    // The warning rides a durable event, so it must not become a side channel for
+    // model text that `redactEventPlaintexts` never inspects.
+    const warning = emptyTruncationWarning({
+      text: '',
+      stopReason: 'length',
+      secretish: 'hunter2',
+    });
+    expect(warning).not.toContain('hunter2');
+  });
 });

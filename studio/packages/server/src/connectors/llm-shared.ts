@@ -1231,6 +1231,108 @@ export function coerceStopReason(value: unknown): string {
 }
 
 /**
+ * #750 — the `stopReason` tokens that mean the provider CUT THE RESPONSE OFF at
+ * the token budget, rather than the model choosing to stop.
+ *
+ * The repo's FIRST cross-provider stopReason vocabulary table. It does not
+ * normalize (`coerceStopReason` passes provider values through verbatim, and
+ * cross-provider normalization is spec #2's I6, still open) — it only RECOGNISES,
+ * for a diagnostic, and nothing downstream branches on it.
+ *
+ * Provenance:
+ * - `length`   — OpenAI `finish_reason`, cited IN-REPO at `openai-models.ts`
+ *                ("finish_reason: 'length'"). Ollama's `done_reason` is understood
+ *                to use the same spelling for the same condition, but that is an
+ *                EXTERNAL-API fact, NOT pinned anywhere in this repo — `ollama.ts`
+ *                records no `done_reason` vocabulary at all. If it turns out to
+ *                differ, the failure direction is silence (see below), not a wrong
+ *                warning.
+ * - `max_tokens` — Anthropic `stop_reason`, cited in-repo at `anthropic.ts`'s
+ *                DEFAULT_MAX_TOKENS note.
+ *
+ * REACHABILITY, stated honestly: `max_tokens` is probably close to DEAD today. The
+ * same `anthropic.ts` note describes what a budget-truncated Anthropic response
+ * actually does — it comes back text-free, `extractText` finds no text block, and
+ * the node terminalizes `empty_completion_set` as a PERMANENT failure whose
+ * message names no stop reason. So the Anthropic truncation this warning most
+ * wants to explain never reaches here; only an explicit `[{type:'text',text:''}]`
+ * block would. The member stays because it is the correct token for that shape and
+ * the fail direction costs nothing, but #750's Anthropic half is NOT closed by
+ * this table — carrying the stop reason into `noCompletionFailure` is what would
+ * close it, and that is tracked as the follow-up.
+ *
+ * Matching is EXACT and case-sensitive, deliberately. A bespoke gateway spelling
+ * (`MAX_TOKENS`) therefore does NOT warn: an absent truncation fact must never be
+ * manufactured into a claim, which is the same rule that keeps the
+ * `MODELS_REJECTING_*` sets from guessing at membership. Fail-safe here means
+ * SILENCE (the pre-#750 status quo), never a warning we cannot source.
+ */
+export const TRUNCATION_STOP_REASONS: ReadonlySet<string> = new Set(['length', 'max_tokens']);
+
+/**
+ * #750 — the diagnostic for a completion that is EMPTY *and* TRUNCATED, or `null`
+ * when none is owed. Returns the human sentence; the caller stamps the durable
+ * `activity.warned` event around it.
+ *
+ * WHY THIS EXISTS. #461 settled that a present-but-empty completion is a REAL
+ * result and still SUCCEEDS — `stopReason` carries why, and downstream can branch
+ * on it. That contract is NOT reversed here and this function changes no outcome:
+ * the node still succeeds with `text: ''`. But nothing in the product currently
+ * branches on `stopReason`, so in practice the empty string flows into
+ * `${nodes.x.output.text}` and the run reads GREEN with no trace of the cause.
+ * #739 made that reachable from an ordinary-looking config: on an OpenAI reasoning
+ * model the budget lowers to `max_completion_tokens`, which bounds reasoning AND
+ * visible output together, so an author's existing `maxTokens` can be consumed
+ * ENTIRELY by invisible reasoning. Before #739 the same config raised a loud
+ * provider 400. So this restores the loudness WITHOUT touching the semantics.
+ *
+ * Gated on the OUTPUT SHAPE, not on `ctx.activityType`, and hooked into the
+ * executor's GENERIC `succeeded` handler — so it is reachable from every adapter,
+ * not only the LLM ones (the executor test fires it through a fake HTTP adapter).
+ *
+ * In practice only the `llm_call` TEXT path across the three API adapters and the
+ * L10b tool loop can satisfy it. `agent_cli` cannot: its `llm_call` path stamps
+ * the `unknown` sentinel, and its `agent_task` paths emit no `text`/`stopReason`
+ * pair at all — two different exclusions, both by shape.
+ *
+ * The structured path IS reachable, contrary to what an earlier draft of this
+ * comment claimed: structured success emits the model-supplied object shaped by
+ * the AUTHOR's schema verbatim, so a schema declaring exactly a `text: string` +
+ * `stopReason: string` pair reaches this gate with fully MODEL-CONTROLLED values.
+ * It is the one place model data can decide whether a warning is minted. That is
+ * contrived and harmless — the worst case is one spurious inert advisory, no
+ * outcome change — and it cannot leak, because only the table-matched token is
+ * ever interpolated into the message (pinned by a test). Noted rather than
+ * guarded: a shape rule, not a structural guarantee.
+ *
+ * A truncated but NON-empty completion stays silent: partial text is a real,
+ * usable result, and warning on every one would be noise. That narrowing is
+ * #750's, not an oversight — the follow-up ticket records it.
+ */
+export function emptyTruncationWarning(outputs: Record<string, unknown>): string | null {
+  const text = outputs['text'];
+  if (typeof text !== 'string' || text.length > 0) return null;
+  const stopReason = outputs['stopReason'];
+  if (typeof stopReason !== 'string' || !TRUNCATION_STOP_REASONS.has(stopReason)) return null;
+  // Interpolates ONLY the matched token — which, by the guard above, is a member
+  // of the table. No part of `outputs` reaches this string: the warning rides a
+  // durable event that `redactEventPlaintexts` does not inspect, so it must never
+  // become a side channel for model text.
+  return (
+    `the model returned NO text and the provider reported stopReason='${stopReason}' — ` +
+    // Deliberately says nothing about the node's OUTCOME. This advisory is
+    // appended BEFORE the terminal, and a `node.succeeded` whose outputs violate
+    // the node's declared contract still folds to `failure` — so "this node
+    // succeeded" would be a false statement in the durable log for any node with a
+    // hand-authored contract. State the output fact; let the terminal state the
+    // outcome.
+    `the response was cut off at the token budget, so the \`text\` output is empty. ` +
+    `Raise the node's maxTokens; on a reasoning model that budget covers invisible ` +
+    `reasoning tokens as well as the visible answer.`
+  );
+}
+
+/**
  * #2 L3 — lower the portable `reasoningEffort` to OpenAI's `reasoning_effort`
  * vocabulary. Anthropic (`output_config.effort`) and Ollama (`think`) both accept
  * the full `low|medium|high|max` enum verbatim, so ONLY OpenAI needs a mapping:

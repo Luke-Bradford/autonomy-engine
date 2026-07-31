@@ -2622,3 +2622,64 @@ describe('createExecutor — L12 transcript is connection-kind-agnostic (single 
     });
   });
 });
+
+describe('createExecutor — activity.warned (#750 empty-and-truncated completion)', () => {
+  it('emits the advisory BEFORE the terminal, without changing the outcome or the outputs', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'succeeded',
+        outputs: { text: '', stopReason: 'length' },
+      } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    // #461's contract is UNTOUCHED: the node still succeeds. The warning is a
+    // fact ABOUT the success, never a downgrade of it.
+    expect(state.status).toBe('success');
+    const events = loadEngineEvents(db, run.id);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('activity.warned');
+    expect(types.indexOf('activity.warned')).toBeLessThan(types.indexOf('node.succeeded'));
+
+    const warned = events.find((e) => e.type === 'activity.warned');
+    expect(warned).toMatchObject({
+      runId: run.id,
+      nodeId: 'n1',
+      code: 'empty_truncated_completion',
+    });
+    // The executor stamps the attempt id, and the human sentence names the token.
+    expect(typeof (warned as { attemptId?: unknown }).attemptId).toBe('string');
+    expect(String((warned as { reason?: unknown }).reason)).toContain('length');
+
+    // The terminal event is byte-identical to what it would have been without the
+    // warning — this is an observability rider, not an outputs change.
+    const succeeded = events.find((e) => e.type === 'node.succeeded');
+    expect((succeeded as { outputs?: unknown }).outputs).toEqual({
+      text: '',
+      stopReason: 'length',
+    });
+  });
+
+  it('stays SILENT for an empty completion the provider did not truncate', async () => {
+    const db = freshDb().db;
+    const connId = await seedConnection(db, 'http', {}, null);
+    const pvId = seedVersion(db, [httpNode('n1', connId, { url: 'https://x/y', outputs: [] })]);
+    const run = seedRun(db, pvId);
+    const adapters = fakeHttpAdapter(async function* () {
+      yield {
+        type: 'succeeded',
+        outputs: { text: '', stopReason: 'end_turn' },
+      } satisfies ActivityEvent;
+    });
+
+    const state = await startRun(deps(db, { adapters }), run);
+
+    expect(state.status).toBe('success');
+    expect(loadEngineEvents(db, run.id).map((e) => e.type)).not.toContain('activity.warned');
+  });
+});

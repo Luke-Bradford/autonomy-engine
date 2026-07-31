@@ -515,3 +515,41 @@ describe('deriveNodeActivity — attempts for the never-dispatched activities (#
     expect(a!.attempts).toBe(1);
   });
 });
+
+// #750 — the advisory is a durable fact in the feed, deliberately NOT a node-row
+// signal. The FE fold answers "is this node running / did it end", and a warning
+// says nothing about either; the raw event trail is where it reads.
+describe('activity.warned is inert in the FE fold (#750)', () => {
+  const warned: EngineEvent = {
+    type: 'activity.warned',
+    runId: 'r',
+    nodeId: 'n1',
+    attemptId: 'n1#0',
+    code: 'empty_truncated_completion',
+    reason: 'the model returned no text',
+  };
+
+  it('creates no phantom node row on its own', () => {
+    expect(deriveNodeActivity([envelope(warned)])).toEqual([]);
+  });
+
+  it('leaves an otherwise-normal node projection byte-identical', () => {
+    const base: EngineEvent[] = [
+      { type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} },
+      { type: 'node.dispatched', runId: 'r', nodeId: 'n1', attemptId: 'n1#0', idempotent: true },
+      { type: 'node.succeeded', runId: 'r', nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
+    ];
+    const without = deriveNodeActivity(base.map(envelope));
+    seq = 0;
+    const withWarning = deriveNodeActivity([base[0]!, base[1]!, warned, base[2]!].map(envelope));
+    expect(withWarning).toEqual(without);
+  });
+
+  it('does not alter the run lifecycle status', () => {
+    const events = [
+      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      envelope(warned),
+    ];
+    expect(deriveRunLifecycle(events)).toBe('running');
+  });
+});
