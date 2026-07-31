@@ -179,18 +179,40 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >>"$DLOG"; }
 #   - the driver waited on #803's gate ("PR #803 gate settled") -- a gate that
 #     was never the loop's to wait for.
 #
-# The convention this keys on is prompt.md rule 0's own words -- "the
-# supervisor opens its OWN PRs ... on non-`studio` branches" -- so the driver
-# was the one part of this loop not honouring its own work order. Checked
-# 2026-07-31: of the last 30 merged PRs, 22 were `*/studio-*` (the loop's), and
-# across the last 40 every `*/loop-*` branch was the operator's.
+# CORRECTED SAME DAY (#823). The first cut matched `*/studio-*` ONLY, on the
+# evidence that across 40 merged PRs every `*/loop-*` branch was the operator's.
+# That evidence was TRUE and the inference from it was WRONG: it held only
+# because the loop had never yet worked on `loop/` itself. Hours later it did --
+# #808, #811, #821 -- and named those branches exactly as it names every other,
+# `fix/loop-<issue>-<slug>`. So the predicate started excluding the LOOP'S OWN
+# WORK: measured 2026-07-31 10:54Z, PR #822 (`fix/loop-821-test-harness-orphan`)
+# was open with a fire actively polling its gate, while the driver logged
+# "no progress (main unchanged, no open PR, no branch ahead) stall=1/3" and did
+# not wait on that gate at all. Three of those and it STOPS, reporting "nothing
+# more to do (or the queue is drained)" with a PR in flight -- precisely the
+# false stop #775 exists to prevent, reintroduced by #805's fix for it.
 #
-# Fail-safe direction: a loop branch misnamed outside the convention reads as
-# "not the loop's", which under-counts progress and can trip a false stall. A
-# false stall STOPS the loop; the opposite error spends. Stopping is the cheap
-# mistake, so the imprecision is on the safe side deliberately.
+# The durable discriminator is STRUCTURAL, not a prefix census: the loop always
+# embeds the ISSUE NUMBER it is working (`loop-811-`, `loop-821-`, `studio-806-`),
+# because every branch it opens comes from a ticket. The supervisor's do not
+# (`fix/loop-commit-before-long-wait`, `supervisor/...`, `docs/...`). `studio-*`
+# stays broad because the loop has also shipped un-numbered studio branches
+# (`fix/studio-sweep7-agent-cli-timeout-metering`); only the `loop-` arm needs
+# the digit, and that is the arm the two actors actually collide on.
+#
+# Fail-safe direction, unchanged and now load-bearing in BOTH arms: a loop branch
+# outside the convention reads as "not the loop's", which under-counts progress
+# and can trip a FALSE stall -- and a false stall STOPS the loop, while the
+# opposite error SPENDS. Stopping is the cheap mistake. The residual hazard is a
+# SUPERVISOR branch named `*/loop-<digits>-*`, which would read as the loop's and
+# suppress the stall; that is the expensive polarity, so the supervisor's
+# convention is now the reserved `supervisor/**` prefix (prompt.md rule 0).
 is_loop_ref() {
-  case "${1:-}" in feat/studio*|fix/studio*) return 0 ;; *) return 1 ;; esac
+  case "${1:-}" in
+    feat/studio*|fix/studio*) return 0 ;;
+    feat/loop-[0-9]*|fix/loop-[0-9]*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # --- quota_pct: the 7-day subscription utilization as an INTEGER percent, or ""

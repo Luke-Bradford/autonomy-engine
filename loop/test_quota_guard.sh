@@ -1111,6 +1111,39 @@ check "a SUPERVISOR open PR does NOT mask the stall -> stops after 3" "3" "$(fir
 check "...and the driver does not wait on that PR's gate" "1" \
   "$(grep -q 'open PR #7 present' "$(logof "$r")" && echo 0 || echo 1)"
 
+# --- 27c. #823 the loop's own `loop/` work is NUMBERED and must register -----
+# #805 matched `*/studio-*` only, because across 40 merged PRs every `*/loop-*`
+# branch had been the operator's. That census was true and the inference from it
+# was wrong: it held only while the loop had never worked on `loop/` itself.
+# Hours later it did (#808, #811, #821), naming them `fix/loop-<issue>-<slug>`
+# like everything else -- so the predicate began excluding the LOOP'S OWN WORK.
+#
+# Measured 2026-07-31 10:54Z: PR #822 (`fix/loop-821-test-harness-orphan`) open,
+# a fire actively polling its gate, and the driver logging "no progress ... no
+# open PR ... stall=1/3" while refusing to wait on that gate. Three of those
+# STOPS the driver claiming the queue is drained, with a PR in flight.
+#
+# These are the exact branch names from that incident, so the pre-#823 predicate
+# is what makes them discriminating.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/loop-821-test-harness-orphan)"
+check "a NUMBERED loop-infra branch is the loop's -> no stall" "12" "$(fires_of "$r")"
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 \
+      GH_OPEN_PR=1 GH_OPEN_PR_REF=fix/loop-821-test-harness-orphan)"
+check "...and its PR suppresses the stall too" "12" "$(fires_of "$r")"
+check "...and the driver DOES wait on its gate" "0" \
+  "$(grep -q 'open PR #7 present' "$(logof "$r")" && echo 0 || echo 1)"
+# The discriminator is the DIGIT, not the `loop-` prefix: the supervisor's own
+# branches keep the prefix and carry no issue number, and must still be excluded
+# or #805's whole finding is undone.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/loop-commit-before-long-wait)"
+check "an UNNUMBERED loop- branch is the supervisor's -> still stalls" "3" "$(fires_of "$r")"
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=supervisor/loop-ref-numbered-branches)"
+check "the reserved supervisor/ prefix -> still stalls" "3" "$(fires_of "$r")"
+# An un-numbered STUDIO branch stays the loop's: it has shipped those
+# (`fix/studio-sweep7-...`), so requiring a digit there would trip false stalls.
+r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 BRANCH_AHEAD=fix/studio-sweep7-agent-cli-timeout)"
+check "an UNNUMBERED studio branch is still the loop's" "12" "$(fires_of "$r")"
+
 # Both regression guards: the loop's OWN branch and PR must still register, or
 # the fix trades a spend bug for a false "queue is drained" stop.
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=0 STALL_HEAD=1 GATE_WAIT_TRIES=1 GATE_WAIT_SLEEP=0 \
