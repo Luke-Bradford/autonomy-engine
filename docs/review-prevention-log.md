@@ -679,3 +679,35 @@ did NOT do the thing", which is the interesting half of most safety tests.
 Same shape as #25: the assertion that never goes green is easy to spot, but its
 sibling — the one that never goes RED — is the dangerous one. Before trusting any
 new assertion about absence, make the thing PRESENT once and watch it fail.
+
+## 30. `ls` and `*` are BLIND TO DOTFILES — an "is it clean?" assertion over hidden state always passes
+
+Found by the pre-PR correctness lens on `#806`, and it is the second vacuous-test
+family that one ticket exposed (see #29). Both are the same disease: an assertion
+about something being **absent** that could never have observed it.
+
+`loop/drive.sh`'s state files are all dotfiles (`.last_quota`, `.poll_memo`,
+`.shadow_stamp`), so its temp files are `.last_quota.tmp.<pid>`. Two idioms were
+used to assert "no temp was left behind", and **neither can see one**:
+
+```bash
+ls "$dir" | wc -l                      # `ls` omits dotfiles entirely
+ls "$dir"/*.tmp.* >/dev/null 2>&1      # a leading `*` never matches a leading dot
+```
+
+Measured cost: with the first idiom, deleting the guard it covered
+(`[ -d "$file" ] && return 1`, which stops `mv -f tmp DIR` succeeding **into** a
+directory and returning 0 with no record written) left **all 28 assertions in
+that section green** while a real temp sat inside the directory. The other half
+of that test — "the write was refused" — was produced independently by a later
+check, so the guard had *no* cover at all while appearing to have two.
+
+**Rule: any assertion over directory contents that could involve a dotfile uses
+`ls -A`, or names the dot explicitly (`"$dir"/.thing.tmp.*`).** Prefer naming the
+dot where the destination is known — it is exact, and it does not trip
+shellcheck's SC2010 the way `ls -A | grep` does.
+
+The deeper rule is the one #25 and #29 keep restating from different angles: **a
+test that asserts absence is only worth what its ability to see presence is
+worth.** Make the thing PRESENT once and watch the assertion go red. If it does
+not, the test is decoration. Mutation-prove the guard, not just the feature.
