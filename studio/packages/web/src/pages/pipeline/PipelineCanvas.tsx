@@ -3,6 +3,8 @@ import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
   ContainerKindSchema,
+  OutputTypeSchema,
+  ParamTypeSchema,
   getActivity,
   isStructuralCallActivity,
   type Container,
@@ -10,6 +12,10 @@ import {
   type ContainerKind,
   type Edge,
   type Node,
+  type Output,
+  type OutputType,
+  type Param,
+  type ParamType,
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
@@ -21,6 +27,13 @@ import {
   createCanvasStore,
 } from './canvasStore';
 import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
+import {
+  coerceDefaultInput,
+  defaultAdvisory,
+  formatDefaultInput,
+  nameIssues,
+  withRequired,
+} from './paramRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import {
   branchOptionsFor,
@@ -72,17 +85,25 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     return () => ctrl.abort();
   }, [pipelineId, store]);
 
-  const loaded = useStore(store, (s) => s.loaded);
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
+  const params = useStore(store, (s) => s.params);
+  const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
 
-  // `loaded` STAYS in the dep list alongside `containers` (#746): it still feeds
-  // `params`, which containers moving into the store does not change.
+  // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
+  // was the last thing this memo read off the opened version.
+  //
+  // The two sources are concatenated rather than merged into `validateCanvas`,
+  // because they mirror DIFFERENT server gates and only one of them is
+  // `validatePipelineDoc`. `nameIssues` mirrors the write SCHEMA
+  // (`ParamSchema.name.min(1)` + `refuseDuplicateNames`), which
+  // `validatePipelineDoc` never runs — folding it in would break that function's
+  // stated contract of being exactly the gate the server calls.
   const issues = useMemo(
-    () => validateCanvas(nodes, edges, containers, loaded?.params ?? []),
-    [nodes, edges, containers, loaded],
+    () => [...validateCanvas(nodes, edges, containers, params), ...nameIssues(params, outputs)],
+    [nodes, edges, containers, params, outputs],
   );
 
   const onSave = useCallback(async () => {
@@ -105,13 +126,32 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     // container-ONLY mutator would leave this the only check standing, which is
     // why it stays.
     const savedContainers = store.getState().containers;
+    // U16 — the typed contract rides in the same snapshot, and in the same race
+    // check. Every param and output action writes `params`/`outputs` and nothing
+    // else, so an edit made during the in-flight POST would be invisible to all
+    // three of the checks above it.
+    //
+    // It is NOT the first such writer, though an earlier draft of this comment
+    // claimed so: `createContainer` and `setNodeContainer` both write
+    // `containers` alone. What the five checks together now assert is the
+    // property that actually matters — they cover every doc field the store
+    // owns, and every action mints a fresh array reference, so no concurrent
+    // edit can be silently overwritten by the rebase.
+    const savedParams = store.getState().params;
+    const savedOutputs = store.getState().outputs;
     try {
       const created = await createPipelineVersion(
         pipelineId,
-        toVersionBody(store.getState().loaded, savedNodes, savedEdges, savedContainers),
+        toVersionBody(savedNodes, savedEdges, savedContainers, savedParams, savedOutputs),
       );
       const s = store.getState();
-      if (s.nodes === savedNodes && s.edges === savedEdges && s.containers === savedContainers) {
+      if (
+        s.nodes === savedNodes &&
+        s.edges === savedEdges &&
+        s.containers === savedContainers &&
+        s.params === savedParams &&
+        s.outputs === savedOutputs
+      ) {
         // Nothing changed during the request: rebase fully onto the new
         // immutable version (clears `dirty`, and the next save carries THIS
         // version's params/outputs).
@@ -161,8 +201,12 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
               stored versions would just read as "yours is unfixable". */}
           <strong>{issues.length} validation issue(s)</strong> — fix these to save.
           <ul>
-            {issues.map((msg) => (
-              <li key={msg}>{msg}</li>
+            {issues.map((msg, i) => (
+              // Indexed, because the messages are NOT unique: three params sharing
+              // a name emit the identical duplicate-name string twice, and a bare
+              // `key={msg}` makes that a React duplicate-key warning — which the
+              // e2e console guard treats as a failure.
+              <li key={`${String(i)}-${msg}`}>{msg}</li>
             ))}
           </ul>
         </div>
@@ -199,23 +243,19 @@ function PropertyPanel({
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
 
-  if (!selected) {
-    return (
-      <aside className="property-panel" aria-label="Properties">
-        <h3>Properties</h3>
-        <p className="page-hint">Select a node or an edge to edit it.</p>
-      </aside>
-    );
-  }
+  if (!selected) return <PipelinePanel store={store} />;
 
   if (selected.kind === 'edge') {
     const edge = edges.find((e) => e.id === selected.id);
-    if (!edge) return <EmptyPanel />;
+    // A selection pointing at an element that no longer exists is, from the
+    // operator's side, indistinguishable from having nothing selected — so it
+    // gets the same pipeline-level panel as the `!selected` branch above.
+    if (!edge) return <PipelinePanel store={store} />;
     return <EdgePanel store={store} edge={edge} nodes={nodes} edges={edges} />;
   }
 
   const node = nodes.find((n) => n.id === selected.id);
-  if (!node) return <EmptyPanel />;
+  if (!node) return <PipelinePanel store={store} />;
   return (
     <NodePanel
       key={node.id}
@@ -229,11 +269,342 @@ function PropertyPanel({
   );
 }
 
-function EmptyPanel() {
+/**
+ * U16 — the PIPELINE-level property panel: the typed `params` (inputs) and
+ * `outputs` (declared results) contract.
+ *
+ * Placement is the nothing-selected slot, which previously held only a hint.
+ * That is the ADF pattern — click the canvas background to edit the pipeline
+ * itself — and it needs no new shell chrome. The spec's U16 row calls for a
+ * BOTTOM-pane tab; the bottom pane does not exist yet, and building one is shell
+ * work this ticket does not own, so the editor lands where the canvas can
+ * actually reach it today and moves when that pane arrives.
+ *
+ * Exported for its own tests, the same reason `EdgePanel`/`NodePanel` are.
+ */
+export function PipelinePanel({ store }: { store: ReturnType<typeof createCanvasStore> }) {
+  const params = useStore(store, (s) => s.params);
+  const outputs = useStore(store, (s) => s.outputs);
+
   return (
     <aside className="property-panel" aria-label="Properties">
-      <h3>Properties</h3>
+      <h3>Pipeline</h3>
+      <p className="page-hint">Select a node or an edge to edit it.</p>
+
+      <section className="contract-section">
+        <h4>Params</h4>
+        <p className="page-hint">
+          The typed inputs a run supplies. Referenced as <code>{'${params.name}'}</code>, and what a
+          trigger binds its values to.
+        </p>
+        {params.length === 0 ? <p className="page-hint">None declared.</p> : null}
+        {params.map((p, i) => (
+          <ParamRow key={i} store={store} index={i} param={p} />
+        ))}
+        <button type="button" onClick={() => store.getState().addParam()}>
+          Add param
+        </button>
+      </section>
+
+      <section className="contract-section">
+        <h4>Outputs</h4>
+        <p className="page-hint">The results this pipeline declares to a caller.</p>
+        {outputs.length === 0 ? <p className="page-hint">None declared.</p> : null}
+        {outputs.map((o, i) => (
+          <OutputRow key={i} store={store} index={i} output={o} />
+        ))}
+        <button type="button" onClick={() => store.getState().addOutput()}>
+          Add output
+        </button>
+      </section>
     </aside>
+  );
+}
+
+/** What the default field should look like it wants, per declared type. */
+const DEFAULT_PLACEHOLDER: Record<ParamType, string> = {
+  string: 'text',
+  number: '42',
+  boolean: 'true or false',
+  json: '{"key": "value"}',
+  secret: 'credential label',
+};
+
+function ParamRow({
+  store,
+  index,
+  param,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  index: number;
+  param: Param;
+}) {
+  // The default field is the ONE control that cannot commit on every keystroke:
+  // half-typed JSON is not JSON, so a commit-per-character would either reject
+  // every intermediate state or store garbage. It holds a draft and commits on
+  // blur; every other control writes straight through to the store.
+  const stored = formatDefaultInput(param.default);
+  const [draft, setDraft] = useState(stored);
+  const [syncedParam, setSyncedParam] = useState(param);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-sync whenever a DIFFERENT param object arrives at this index.
+  //
+  // The identity check is the load-bearing choice, and it replaces a compare of
+  // the formatted default STRING that was wrong in a way worth recording. The
+  // rows are keyed by array index, so a removal SHIFTS the params after it into
+  // a row that already holds draft text for the one that left. A string compare
+  // misses that whenever the two defaults happen to format alike: with two
+  // number params both defaulting to `1`, typing `9x` into row 1, blurring (the
+  // commit fails, so nothing is written), then removing row 1 leaves row 1
+  // rendering the SECOND param while still showing the first one's draft and
+  // error — and the next successful blur writes that value onto a param the
+  // operator never edited.
+  //
+  // The reason first given for the string compare — that a `json` default is a
+  // fresh object every render, so identity would resync constantly — was simply
+  // false. `map`/`filter` in the store preserve element identity for untouched
+  // rows, so a new object arrives exactly when this row's param is REPLACED.
+  //
+  // It costs nothing in practice: every other control in this row takes focus to
+  // reach, which blurs the default field and commits it first, so an
+  // uncommitted draft cannot survive an edit to a sibling field anyway.
+  if (syncedParam !== param) {
+    setSyncedParam(param);
+    setDraft(formatDefaultInput(param.default));
+    setError(null);
+  }
+
+  const advisory = defaultAdvisory(param);
+
+  function commitDefault(text: string) {
+    // A blur that changed nothing must not write. Tabbing THROUGH the field
+    // would otherwise mark the canvas dirty on an untouched doc — the same
+    // no-op-write hazard `setNodeContainer` avoids — and, worse, would DELETE a
+    // stored default of `''` or whitespace, which `coerceDefaultInput` reads as
+    // "no default". An imported doc can legitimately hold one.
+    if (text === stored) return;
+
+    const parsed = coerceDefaultInput(param.type, text);
+    if (!parsed.ok) {
+      // Keep the operator's text on screen and say why it was not stored. The
+      // alternative — silently reverting the field — loses what they typed.
+      setError(parsed.error);
+      return;
+    }
+    setError(null);
+    if (parsed.has) {
+      store.getState().updateParam(index, { ...param, default: parsed.value });
+    } else {
+      // Blank means NO default, which is the absence of the key, not
+      // `default: undefined` — `resolveRunParams` reads it with `hasOwnProperty`.
+      const { default: cleared, ...rest } = param;
+      void cleared; // discard: lint has no ignoreRestSiblings here
+      store.getState().updateParam(index, rest);
+    }
+  }
+
+  return (
+    <div className="contract-row">
+      <label>
+        Name
+        <input
+          aria-label={`param ${index + 1} name`}
+          value={param.name}
+          onChange={(e) => store.getState().updateParam(index, { ...param, name: e.target.value })}
+        />
+      </label>
+      <label>
+        Type
+        <select
+          aria-label={`param ${index + 1} type`}
+          value={param.type}
+          onChange={(e) => {
+            const parsed = ParamTypeSchema.safeParse(e.target.value);
+            if (!parsed.success) return;
+            // The stored default is deliberately KEPT across a type change, even
+            // when it no longer fits: dropping it would destroy authored data on
+            // a mis-click, and `defaultAdvisory` already says plainly that the
+            // run will fail. Repair beats silent deletion.
+            store.getState().updateParam(index, { ...param, type: parsed.data });
+          }}
+        >
+          {ParamTypeSchema.options.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="contract-check">
+        <input
+          type="checkbox"
+          aria-label={`param ${index + 1} required`}
+          checked={param.required}
+          onChange={(e) =>
+            store.getState().updateParam(index, withRequired(param, e.target.checked))
+          }
+        />
+        Required
+      </label>
+      {param.required && !('default' in param) ? (
+        <p className="page-hint">A run must supply this param.</p>
+      ) : (
+        // The field is shown whenever a default EXISTS, required or not.
+        //
+        // Hiding it for a required param — on the belief that a required param's
+        // default is never read — was wrong, and silently so. `resolveRunParams`
+        // tests `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a
+        // required param carrying a default resolves from that default and is
+        // never asked for a value. A doc minted through the API can hold one (the
+        // write path accepts any `default`), and hiding the field made that value
+        // invisible, un-editable, and immune to the advisory below — while the
+        // panel asserted the opposite of what the engine does.
+        <label>
+          Default
+          <input
+            aria-label={`param ${index + 1} default`}
+            placeholder={DEFAULT_PLACEHOLDER[param.type]}
+            value={draft}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setError(null);
+            }}
+            onBlur={(e) => commitDefault(e.target.value)}
+          />
+          <span className="page-hint">
+            {param.required
+              ? 'Required, but this stored default already satisfies it — a run is never asked for a value. Blank the field to make the param truly required.'
+              : 'Leave blank for no default.'}
+          </span>
+        </label>
+      )}
+      {error ? (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      {!error && advisory ? (
+        // ADVISORY, never a save gate. The server accepts this doc, so refusing
+        // to save it would leave an imported pipeline that already holds such a
+        // default permanently unsaveable — the one-way trap #748 closed.
+        <p className="page-hint contract-advisory">{advisory}</p>
+      ) : null}
+      <label>
+        Description
+        <input
+          aria-label={`param ${index + 1} description`}
+          value={param.description ?? ''}
+          onChange={(e) => {
+            const text = e.target.value;
+            if (text) {
+              store.getState().updateParam(index, { ...param, description: text });
+            } else {
+              const { description: cleared, ...rest } = param;
+              void cleared;
+              store.getState().updateParam(index, rest);
+            }
+          }}
+        />
+      </label>
+      <button
+        type="button"
+        aria-label={`remove param ${index + 1}`}
+        onClick={() => store.getState().removeParam(index)}
+      >
+        Remove
+      </button>
+    </div>
+  );
+}
+
+function OutputRow({
+  store,
+  index,
+  output,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  index: number;
+  output: Output;
+}) {
+  return (
+    <div className="contract-row">
+      <label>
+        Name
+        <input
+          aria-label={`output ${index + 1} name`}
+          value={output.name}
+          onChange={(e) =>
+            store.getState().updateOutput(index, { ...output, name: e.target.value })
+          }
+        />
+      </label>
+      <label>
+        Type
+        <select
+          aria-label={`output ${index + 1} type`}
+          value={output.type}
+          onChange={(e) => {
+            // `OutputTypeSchema` excludes `secret` — a declared secret output
+            // would be a leak channel. Parsing rather than casting means the
+            // exclusion is enforced here, not merely reflected by the options.
+            const parsed = OutputTypeSchema.safeParse(e.target.value);
+            if (!parsed.success) return;
+            store.getState().updateOutput(index, { ...output, type: parsed.data as OutputType });
+          }}
+        >
+          {OutputTypeSchema.options.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="contract-check">
+        <input
+          type="checkbox"
+          aria-label={`output ${index + 1} optional`}
+          checked={output.optional ?? false}
+          onChange={(e) => {
+            if (e.target.checked) {
+              store.getState().updateOutput(index, { ...output, optional: true });
+            } else {
+              // ABSENT means required in `OutputSchema`, so unchecking removes
+              // the key rather than writing `optional: false`. Both read the
+              // same, but only one matches what the schema documents.
+              const { optional: cleared, ...rest } = output;
+              void cleared;
+              store.getState().updateOutput(index, rest);
+            }
+          }}
+        />
+        Optional
+      </label>
+      <label>
+        Description
+        <input
+          aria-label={`output ${index + 1} description`}
+          value={output.description ?? ''}
+          onChange={(e) => {
+            const text = e.target.value;
+            if (text) {
+              store.getState().updateOutput(index, { ...output, description: text });
+            } else {
+              const { description: cleared, ...rest } = output;
+              void cleared;
+              store.getState().updateOutput(index, rest);
+            }
+          }}
+        />
+      </label>
+      <button
+        type="button"
+        aria-label={`remove output ${index + 1}`}
+        onClick={() => store.getState().removeOutput(index)}
+      >
+        Remove
+      </button>
+    </div>
   );
 }
 
@@ -379,8 +750,11 @@ function ContainerSection({
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
-  const loaded = useStore(store, (s) => s.loaded);
-  const params = loaded?.params ?? [];
+  // U16 — the WORKING params, not `loaded`'s. The container-edit consequence is
+  // computed against the doc as it stands on screen, so reading the opened
+  // version here would judge a container against a param contract the operator
+  // has already changed.
+  const params = useStore(store, (s) => s.params);
 
   const [kind, setKind] = useState<ContainerKind>('stage');
   const [exitWhen, setExitWhen] = useState('');

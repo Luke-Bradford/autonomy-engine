@@ -3,35 +3,42 @@ import {
   type Container,
   type Edge,
   type Node,
+  type Output,
   type Param,
-  type PipelineVersion,
 } from '@autonomy-studio/shared';
 import type { PipelineVersionWrite } from '../../api/pipelines';
 
 /**
- * Build the `POST .../versions` body for a canvas save. The graph (`nodes`,
- * `edges`, `containers`) is the current canvas; `params` and `outputs` are
- * CARRIED FORWARD from the version the canvas was opened on so a save from the
- * activity-node canvas never silently drops the typed param/output contract
- * authored elsewhere (this slice has no UI for it yet). `catalogVersion` is
- * deliberately omitted — the server defaults it to the current catalog,
- * re-stamping the doc on save.
+ * Build the `POST .../versions` body for a canvas save — entirely from WORKING
+ * state. `catalogVersion` is deliberately omitted: the server defaults it to the
+ * current catalog, re-stamping the doc on save.
  *
- * `containers` became a PARAMETER in #746. Reading `loaded?.containers` here was
- * the carry-forward that made the phantom-child bug: the canvas could delete an
- * enclosed activity, and the save body still listed it as a child, because the
- * membership came from the version the canvas was opened on rather than from the
- * graph on screen. Containers are working state now, like nodes and edges.
+ * Every field here was once read off `loaded` (the version the canvas was opened
+ * on) because no UI could edit it, and each in turn became a PARAMETER as its
+ * editor landed — `containers` in #746, `params`/`outputs` in U16. That
+ * migration is the whole point of this function's shape, and the failure it
+ * fixes is the same each time: a carry-forward that outlives its "no UI yet"
+ * premise silently DISCARDS the operator's edits. In #746 the canvas could
+ * delete an enclosed activity and the save body still listed it as a container
+ * child, because membership came from the opened version rather than the graph
+ * on screen. A param edited on screen would have been dropped identically.
+ *
+ * With `params`/`outputs` moved, NOTHING is carried forward any more, so the
+ * `loaded` parameter is gone: every field of the body now comes from the store.
+ * `loaded` keeps its other jobs in the store (the rebase basis for Save, and the
+ * un-lowered record of what the server stored) — it is just no longer a source
+ * of doc content.
  */
 export function toVersionBody(
-  loaded: PipelineVersion | null,
   nodes: Node[],
   edges: Edge[],
   containers: Container[],
+  params: Param[],
+  outputs: Output[],
 ): PipelineVersionWrite {
   return {
-    params: loaded?.params ?? [],
-    outputs: loaded?.outputs ?? [],
+    params,
+    outputs,
     containers,
     nodes,
     edges,
