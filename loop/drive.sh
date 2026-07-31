@@ -132,14 +132,14 @@ STUDIO_QUOTA_URL="${STUDIO_QUOTA_URL:-http://127.0.0.1:8788/api/quota}"
 # chaining them onto the default would also strip and re-suffix an EXPLICIT
 # override, turning `STUDIO_VERSION_URL=http://host/v` into `http://host/v/api/version`.
 if [ -z "${STUDIO_VERSION_URL:-}" ]; then
-  # The two strips happen in a SUBSHELL so the intermediate needs no name in this
-  # scope: a leftover `STUDIO_VERSION_BASE` global would outlive the one line
-  # that needs it and read like configuration, which is exactly what this
-  # section is. Not `set --` for the same scratch space -- this is top-level, so
-  # that would clobber the script's own positional parameters.
-  STUDIO_VERSION_URL="$(
-    svu="${STUDIO_QUOTA_URL%/}"; printf '%s' "${svu%/api/quota}"
-  )/api/version"
+  # Two strips, both onto the destination itself, so the intermediate needs no
+  # name in this scope: a leftover `STUDIO_VERSION_BASE` global would outlive the
+  # lines that need it and read like configuration, which is exactly what this
+  # section is. Deliberately NOT `set --` for scratch space -- this file is
+  # SOURCED (by every test, and by anything reusing its helpers), and `set --` at
+  # top level destroys the sourcing context's own positional parameters.
+  STUDIO_VERSION_URL="${STUDIO_QUOTA_URL%/}"
+  STUDIO_VERSION_URL="${STUDIO_VERSION_URL%/api/quota}/api/version"
 fi
 QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
                                   # last SHADOW poll ATTEMPT. Its own file, its own age, its own
@@ -1472,30 +1472,52 @@ drift_report_studio_server() {
       log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is not an ancestor of origin/main ($ds_short), so how far behind it is cannot be stated. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
       return 0
     fi
-    # THE PATHSPEC MUST EXIST BEFORE IT CAN MEAN ANYTHING. `rev-list --count
-    # A..B -- studio/` returns 0 with rc=0 when the path matches nothing, so if
-    # `studio/` were ever renamed every verdict would silently become "current
-    # for studio/" forever -- a check that never fails while looking perfectly
-    # installed, which is the exact shape `drift_report_plane` had to be
-    # rewritten out of. Assert the tree is there rather than trusting a zero.
-    if ! git -C "$REPO" rev-parse --quiet --verify "$ds_main:studio" >/dev/null 2>&1; then
-      log "studio server: UNKNOWN -- origin/main ($ds_short) has no studio/ tree, so 'commits touching studio/' cannot be counted and no currency verdict is possible. Has the directory been renamed? (#832)"
+    # THE VERDICT IS A TREE COMPARISON, NOT A COMMIT COUNT (#832 pre-PR review).
+    # The first draft asked `rev-list --count A..B -- studio/` and called 0
+    # "current". That count applies git's default history simplification, which
+    # can return 0 while `A:studio` and `B:studio` genuinely DIFFER: an evil
+    # merge on main -- one whose resolution puts studio/ back to an older state
+    # -- is not counted as a commit touching studio/. Reproduced on a scratch
+    # repo: the plain count says 0, `--full-history` says 1, and the two trees
+    # are different objects. The half would then attest a build whose studio/
+    # bytes are NOT main's, which is precisely the "an unmeasurable thing
+    # silently becomes 0" fail-open the lines below refuse. Latent rather than
+    # live today -- main is squash-merged, with 0 merge commits in the last 200 --
+    # and fixed anyway, because a currency claim this guard rests on has to be
+    # MEASURED, not inferred from a proxy that is usually equivalent.
+    #
+    # Comparing the tree objects is exact, and it SUBSUMES the pathspec-exists
+    # check it replaces: a renamed or absent studio/ yields an empty id, which is
+    # refused below rather than read as a match. `cat-file -t` additionally
+    # rejects a `studio` that is a BLOB rather than a directory -- `:studio`
+    # resolves fine in that case, and the old pathspec count would have read 0
+    # forever while looking perfectly installed.
+    ds_tree_have="$(git -C "$REPO" rev-parse --quiet --verify "$ds_have:studio" 2>/dev/null)"
+    ds_tree_main="$(git -C "$REPO" rev-parse --quiet --verify "$ds_main:studio" 2>/dev/null)"
+    ds_type_main="$(git -C "$REPO" cat-file -t "$ds_main:studio" 2>/dev/null)"
+    if [ -z "$ds_tree_main" ] || [ "$ds_type_main" != "tree" ]; then
+      log "studio server: UNKNOWN -- origin/main ($ds_short) has no studio/ tree, so the served build's studio/ cannot be compared against it and no currency verdict is possible. Has the directory been renamed? (#832)"
       return 0
     fi
+    if [ -z "$ds_tree_have" ]; then
+      log "studio server: UNKNOWN -- the served build $ds_commit has no studio/ tree to compare against origin/main ($ds_short), so whether it carries every studio/ change is unmeasured (#832)"
+      return 0
+    fi
+    # DISCLOSURE ONLY, never the verdict. Both counts are for the operator
+    # reading the line; an unmeasurable one degrades to "an unknown number of"
+    # rather than to 0, because a failed count must not read as a clean bill of
+    # health even in prose.
     ds_behind="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" 2>/dev/null)"
-    ds_behind_studio="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
-    # An unmeasurable count must not silently become 0 -- "none touching studio/"
-    # is the CURRENT verdict, so a failed `rev-list` defaulting to empty would
-    # turn a measurement failure into a clean bill of health. Refuse instead.
-    if [ -z "$ds_behind" ] || [ -z "$ds_behind_studio" ]; then
-      log "studio server: UNKNOWN -- the distance from $ds_commit to origin/main ($ds_short) could not be counted, so whether the served build carries every studio/ change is unmeasured (#832)"
-    elif [ "$ds_behind_studio" = "0" ]; then
-      # Behind, but only by commits that cannot have changed what it serves. The
-      # count is still reported: "current" is a claim about `studio/`, and an
-      # operator reading it is entitled to see the distance it is discounting.
-      log "studio server: current for studio/ -- serving $ds_commit, behind origin/main ($ds_short) by $ds_behind commit(s), none touching studio/"
+    [ -n "$ds_behind" ] || ds_behind="an unknown number of"
+    if [ "$ds_tree_have" = "$ds_tree_main" ]; then
+      # Behind, but by nothing that changed a byte it serves. The distance is
+      # still reported: "current" is a claim about `studio/`, and an operator
+      # reading it is entitled to see what it is discounting.
+      log "studio server: current for studio/ -- serving $ds_commit, behind origin/main ($ds_short) by $ds_behind commit(s), none of which changed studio/"
     else
-      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, which is $ds_behind commit(s) behind origin/main ($ds_short), $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the 'quota shadow: studio' lines it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      ds_behind_studio="$(git -C "$REPO" rev-list --count "$ds_have..$ds_main" -- studio/ 2>/dev/null)"
+      [ -n "$ds_behind_studio" ] || ds_behind_studio="an unknown number"
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_behind_studio of them touching studio/. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the 'quota shadow: studio' lines it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
     fi
   fi
   return 0

@@ -2048,7 +2048,7 @@ check "a service behind by a loop/-only commit still reads current for studio/" 
 check "...and is NOT called STALE" "1" \
   "$(printf '%s' "$ss_near" | grep -q 'STALE' && echo 0 || echo 1)"
 check "...while still disclosing the distance it is discounting" "0" \
-  "$(printf '%s' "$ss_near" | grep -q 'by 1 commit(s), none touching studio/' && echo 0 || echo 1)"
+  "$(printf '%s' "$ss_near" | grep -q 'by 1 commit(s), none of which changed studio/' && echo 0 || echo 1)"
 # (c) behind by a commit that DOES touch studio/ -> STALE, naming the counts and
 #     the remedy. This is the 2026-07-31 state, and the point of the half.
 ss_stale="$(ssrun "$ss_body_old")"
@@ -2127,6 +2127,61 @@ check "a main with no studio/ tree reads UNKNOWN, not a free 'none touching'" "0
   "$(printf '%s' "$ss_nost" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and never claims currency for a path it could not count" "1" \
   "$(printf '%s' "$ss_nost" | grep -q 'current' && echo 0 || echo 1)"
+# (c6) THE EVIL MERGE (#832 pre-PR review). `rev-list --count A..B -- studio/`
+#      applies git's default history simplification, so a merge whose RESOLUTION
+#      changes studio/ is not counted as a commit touching studio/. The count
+#      says 0 -- "none of which changed studio/", the CURRENT verdict -- while
+#      the two studio/ trees are genuinely different objects, i.e. the served
+#      build's studio/ bytes are not main's. That is the "an unmeasurable thing
+#      silently becomes 0" fail-open the half exists to refuse, so the verdict is
+#      a TREE COMPARISON and this fixture is what pins it.
+#
+#      Latent on this repo today (main is squash-merged, no merge commits), which
+#      is exactly why it needs a constructed fixture rather than a real one.
+mkdir -p "$sstmp/evil-src/studio" "$sstmp/evil-src/loop"
+git init -q --bare "$sstmp/evil-origin" 2>/dev/null
+git init -q "$sstmp/evil-src" 2>/dev/null
+git -C "$sstmp/evil-src" checkout -q -b main 2>/dev/null
+printf 'v1\n' >"$sstmp/evil-src/studio/x"
+printf 'y\n' >"$sstmp/evil-src/loop/y"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm base >/dev/null 2>&1
+# The SERVED build: studio/x moves to v2 on a side branch.
+git -C "$sstmp/evil-src" checkout -q -b side 2>/dev/null
+printf 'v2\n' >"$sstmp/evil-src/studio/x"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm served >/dev/null 2>&1
+ss_evil_sha="$(git -C "$sstmp/evil-src" rev-parse --short HEAD)"
+# main moves on independently, then merges side and RESOLVES studio/x back to v1.
+git -C "$sstmp/evil-src" checkout -q main 2>/dev/null
+printf 'r\n' >"$sstmp/evil-src/loop/readme"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm mainside >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t merge --no-ff --no-commit side >/dev/null 2>&1
+printf 'v1\n' >"$sstmp/evil-src/studio/x"
+git -C "$sstmp/evil-src" add -A >/dev/null 2>&1
+git -C "$sstmp/evil-src" -c user.email=t@t -c user.name=t commit -qm evilmerge >/dev/null 2>&1
+git -C "$sstmp/evil-src" remote add origin "$sstmp/evil-origin" 2>/dev/null
+git -C "$sstmp/evil-src" push -q origin main 2>/dev/null
+git -C "$sstmp/evil-src" worktree add -q --detach "$sstmp/evil" main >/dev/null 2>&1
+# THE FIXTURE MUST REPRODUCE THE TRAP, or the assertion below passes for the
+# wrong reason. Both halves are pinned: the served build IS an ancestor (so the
+# not-an-ancestor branch is not what produces STALE), and the pathspec count IS
+# 0 (so the old implementation really would have said "current for studio/").
+check "the evil-merge fixture's served build really is an ancestor of main" "0" \
+  "$(git -C "$sstmp/evil" merge-base --is-ancestor "$ss_evil_sha" origin/main 2>/dev/null && echo 0 || echo 1)"
+check "...and the pathspec count really is 0 (the trap the old verdict fell into)" "0" \
+  "$(git -C "$sstmp/evil" rev-list --count "$ss_evil_sha..origin/main" -- studio/ 2>/dev/null)"
+check "...while the two studio/ trees genuinely DIFFER (not vacuous)" "1" \
+  "$([ "$(git -C "$sstmp/evil" rev-parse --quiet --verify "$ss_evil_sha:studio" 2>/dev/null)" \
+     = "$(git -C "$sstmp/evil" rev-parse --quiet --verify 'origin/main:studio' 2>/dev/null)" ] && echo 0 || echo 1)"
+ss_evil="$(SS_REPO="$sstmp/evil" ssrun '{"version":"1.0.0","commit":"'"$ss_evil_sha"'"}')"
+check "a build whose studio/ tree differs reads STALE, though 0 commits 'touch' studio/" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q 'studio server: STALE' && echo 0 || echo 1)"
+check "...and is never called current for studio/" "1" \
+  "$(printf '%s' "$ss_evil" | grep -q 'current' && echo 0 || echo 1)"
+check "...saying the TREE differs, rather than quoting a count that says 0" "0" \
+  "$(printf '%s' "$ss_evil" | grep -q 'studio/ tree differs' && echo 0 || echo 1)"
 # (d) the `dev` PLACEHOLDER -> UNKNOWN, never resolved against the `dev` branch.
 #     Without the hex guard `rev-parse dev^{commit}` succeeds here and the half
 #     announces a verdict about a build it cannot identify.
@@ -2135,6 +2190,51 @@ check "the 'dev' placeholder reads UNKNOWN, not a verdict" "0" \
   "$(printf '%s' "$ss_dev" | grep -q 'studio server: UNKNOWN' && echo 0 || echo 1)"
 check "...and is NOT resolved against a branch that happens to be named dev" "1" \
   "$(printf '%s' "$ss_dev" | grep -qE 'current|STALE' && echo 0 || echo 1)"
+# (d2) the HEX GUARD ITSELF, asserted directly on the parser (#832 pre-PR
+#      review). Case (d) above claims to pin it and does NOT: "dev" contains a
+#      `v`, so the PREFIX guard (`case "$ds_have" in "$ds_commit"*`) rejects it
+#      whatever the parser returns, and (d) still passes with the `fullmatch`
+#      relaxed to anything. Every other 44c case is the same -- none of them can
+#      tell hex-guard-present from hex-guard-absent, which makes the guard's own
+#      coverage vacuous while looking thorough.
+#
+#      So assert the contract at the function, where nothing downstream can mask
+#      it: the parser's job is that ONLY a plain abbreviated sha is an identity.
+#      These flip red if `re.fullmatch(r'[0-9a-f]{7,40}', c)` is relaxed.
+#      drive.sh is sourced in a SUBSHELL here, as everywhere else in this file --
+#      it is a script, not a library, and sourcing it into the harness's own
+#      scope would leak its config globals over the fixtures below.
+svc() {  # $1 = an /api/version body -> what studio_version_commit makes of it
+  (
+    set -uo pipefail
+    export INFRA="$sstmp/infra"
+    export REPO="$sstmp/repo"
+    export DLOG="$sstmp/infra/driver.log"
+    # shellcheck source=/dev/null
+    . "$HERE/drive.sh"
+    printf '%s' "$1" | studio_version_commit
+  ) 2>/dev/null
+}
+check "the parser accepts a 7-char short sha (the lower bound git itself uses)" "abc1234" \
+  "$(svc '{"commit":"abc1234"}')"
+check "...and a full 40-char sha" "0123456789abcdef0123456789abcdef01234567" \
+  "$(svc '{"commit":"0123456789abcdef0123456789abcdef01234567"}')"
+check "the parser REFUSES 'dev', which rev-parse would happily resolve" "" \
+  "$(svc '{"commit":"dev"}')"
+check "...refuses a 6-char value, one short of an abbreviation" "" \
+  "$(svc '{"commit":"abc123"}')"
+check "...refuses 41 chars, one past a full sha" "" \
+  "$(svc '{"commit":"0123456789abcdef0123456789abcdef012345678"}')"
+check "...refuses UPPERCASE hex, which is not how git abbreviates" "" \
+  "$(svc '{"commit":"ABC1234"}')"
+check "...refuses a version-shaped string containing hex" "" \
+  "$(svc '{"commit":"0.0.0-dev"}')"
+check "...refuses a ref name that is entirely hex-ish but too short" "" \
+  "$(svc '{"commit":"beef"}')"
+check "...refuses a non-string commit rather than crashing" "" \
+  "$(svc '{"commit":1234567}')"
+check "...refuses trailing whitespace rather than trimming it into a sha" "" \
+  "$(svc '{"commit":"abc1234 "}')"
 # (e) hex, but not a commit this checkout knows -> UNKNOWN, not STALE, no crash.
 ss_unk="$(ssrun '{"version":"1.0.0","commit":"0123456789abcdef0123456789abcdef01234567"}')"
 check "a commit this checkout does not know reads UNKNOWN" "0" \
