@@ -2205,6 +2205,83 @@ describe('#2 L14c / #799 — an agent_task refusal ARMS the window (real adapter
   });
 });
 
+describe('#816 — classifyShapes scopes the WRITE side only', () => {
+  it('an agent_task refusal on a connection scoped to llm_call arms NO window and the run SUCCEEDS', async () => {
+    // The end-to-end form of the #816 escape hatch: an operator who wants
+    // `llm_call` quota-classified but not `agent_task` gets the pre-#799
+    // exit-code-is-data contract back on the agent shape — and, critically, no
+    // connection-wide window, so no sibling run is admission-gated by it.
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'agent_cli',
+      {
+        command: 'claude',
+        quota: {
+          exhaustionPattern: 'usage limit reached',
+          resetWindowSeconds: 300,
+          classifyShapes: ['llm_call'],
+        },
+      },
+      null,
+    );
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+
+    await startRun(
+      deps(db, { adapters: realAgentCliAdapter('Error: usage limit reached', 1) }),
+      run,
+    );
+
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toBeUndefined();
+    expect(getConnectionQuotaResetEpoch(db, connId)).toBeNull();
+  });
+
+  it('a scoped-OUT shape is STILL admission-gated by a window the OTHER shape armed', async () => {
+    // The asymmetry, pinned so nobody reads `classifyShapes` as immunity. The
+    // gate keys on the CONNECTION, not the shape, and that is the fail-safe
+    // reading: a live window states the subscription account is exhausted, which
+    // is true for every shape spending it. Scoping declares only whose output is
+    // trustworthy EVIDENCE of exhaustion — here, `llm_call`'s. So an `agent_task`
+    // node scoped out of classification is still refused dispatch.
+    const db = freshDb().db;
+    const connId = await seedConnection(
+      db,
+      'agent_cli',
+      {
+        command: 'claude',
+        quota: {
+          exhaustionPattern: 'usage limit reached',
+          resetWindowSeconds: 300,
+          classifyShapes: ['llm_call'],
+        },
+      },
+      'k',
+    );
+    const pvId = seedVersion(db, [agentTaskNode('n1', connId)]);
+    const run = seedRun(db, pvId);
+    const now = () => 1_000_000;
+    recordConnectionQuotaExhaustion(db, connId, 1_000_000 + 60_000, 900_000);
+
+    const neverCalled = vi.fn();
+    const registry = fakeAgentCliAdapter(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        neverCalled();
+        throw new Error('adapter should not run while the quota window is active');
+      },
+    );
+
+    await startRun(deps(db, { adapters: registry, now }), run);
+
+    expect(neverCalled).not.toHaveBeenCalled();
+    expect(loadEngineEvents(db, run.id).find((e) => e.type === 'node.failed')).toMatchObject({
+      kind: 'transient',
+      code: 'rate_limit',
+    });
+  });
+});
+
 describe('#2 L14c — quota admission gate (executor pre-flight)', () => {
   it('short-circuits an agent_cli dispatch during an active window WITHOUT spawning', async () => {
     const db = freshDb().db;

@@ -178,7 +178,26 @@
 // export. (A doc/connection without the new keys is byte-identical across the
 // bump; pre-18 exports lacking `parameters` are healed by its fail-closed
 // `.default([])` on read.)
-export const CATALOG_VERSION = 18;
+// 19 (#816): AGENT_CLI QUOTA CLASSIFICATION SCOPE. An `agent_cli` connection may
+// declare `quota.classifyShapes` — which invocation shapes (`llm_call`,
+// `agent_task`) the `exhaustionPattern` produces a quota verdict on; absent = both
+// (the #799 semantics). `agentConnectionConfigSchema` is a plain `z.object`, so a
+// pre-19 build STRIPS the key and classifies BOTH shapes, including the one the
+// operator explicitly scoped out. The mis-run is the #799 carve-out firing where
+// it was declared not to: a completed non-zero exit whose transcript merely
+// MENTIONS the pattern is turned into a `rate_limit` failure that also arms a
+// CONNECTION-WIDE admission window, refusing dispatch for every other run bound
+// to that connection until it elapses. Same shape as bumps 16 and 18 — a
+// non-strict schema silently dropping a knob so the artifact is not runnable AS
+// AUTHORED — and like 18 it rides CONNECTION envelopes, since `config` is on
+// `ConnectionPublicSchema` (only `secretRef` is omitted). So a pre-19 build must
+// REFUSE an #816 connection export at import (`parseAndUpgradeEnvelope` refuses a
+// newer `catalogVersion` for every envelope kind) rather than over-throttle a
+// connection at run time. (A quota block without the key is byte-identical across
+// the bump; the direction of the mis-run is the SAFE one — over-classifying, not
+// under-classifying — but bumps 16/18 settled that a conditional mis-run still
+// bumps, and this one is deterministic given a matching non-zero exit.)
+export const CATALOG_VERSION = 19;
 // SCHEMA_VERSION 2 (#5 S8): `TriggerSchema` gained two required-nullable stored
 // fields since 1 — `recurrence` (#5 S5b, which should have bumped this and did
 // not: a latent import break for every pre-S5b trigger export, healed by the
