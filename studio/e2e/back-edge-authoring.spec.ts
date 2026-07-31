@@ -90,7 +90,9 @@ test.describe('U6e back-edge authoring', () => {
        operator draw but not save would be unrepairable, only re-authorable.
        Asserted by actually saving, not by reading the button's disabled state. */
     await page.getByRole('button', { name: 'Save version' }).click();
-    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    // v1: this pipeline is authored from scratch, so this is its FIRST version
+    // (unlike the seeded-doc specs, where the same click mints v2).
+    await expect(page.locator('.notice')).toHaveText('Saved v1.');
 
     await expectQuiet(page, problems);
   });
