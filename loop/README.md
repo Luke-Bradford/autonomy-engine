@@ -201,7 +201,7 @@ cases where one of them reads healthy and another does not:
 | --- | --- | --- |
 | `driver code: live \| STALE \| UNKNOWN` | is *this process* running its own file's contents? | compares the file now against its hash at `DRIVER START`. `STALE` ⇒ restart. |
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
-| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `current` = identical, **or behind by nothing touching `studio/`**. `STALE` ⇒ `--update`. |
+| `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `current` = identical, **or behind only by commits that leave its `studio/` tree byte-identical to main's** (the trees are compared directly, not the commits between them). `STALE` ⇒ `--update`. |
 
 All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
 path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
@@ -214,8 +214,10 @@ typo such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it of
 nothing moved it forward or said that it had not (#832). Its verdict is about **`studio/`**, not
 about sha equality: this service is built from `studio/` alone, so a `loop/` or `docs/` merge cannot
 change a byte it serves, and calling it stale for one would make it red most of the day — a monitor
-whose red state is the normal state is a monitor nobody reads. So `current` means *the served build
-carries every `studio/` commit on main*, and the line still discloses the distance it is discounting.
+whose red state is the normal state is a monitor nobody reads. So `current` means *the served build's
+`studio/` tree object is identical to `origin/main`'s* — compared directly rather than inferred from
+a count of commits touching the path, which git's default history simplification can report as 0
+while the two trees genuinely differ — and the line still discloses the distance it is discounting.
 It is a claim about the served CODE, not about the unit: a plist change (port, node path, env) is
 outside that pathspec, so `--status` remains the authority on whether the installer's own
 configuration is current.

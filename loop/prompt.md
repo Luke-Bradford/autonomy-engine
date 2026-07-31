@@ -114,11 +114,11 @@ Bucket them:
 **CHECK WHICH BUILD ANSWERED BEFORE YOU COUNT ANYTHING.** Every drift-report iteration now logs a
 `studio server:` line beside the shadow lines (#832). Read it first:
 
-- **`studio server: current`** — either identical to `origin/main`, or behind it only by commits
-  that do not touch `studio/`. Either way the served build carries every `studio/` change on main,
-  so the shadow lines beside it are evidence about the code on main. **Count them.** (The service is
-  built from `studio/` alone, which is why a `loop/`-only merge does not disqualify it.)
-- `studio server: STALE` — it is behind by commits that DO touch `studio/`, or has diverged from
+- **`studio server: current`** — either identical to `origin/main`, or behind it while its `studio/`
+  tree is still byte-identical to main's. Either way the served build carries every `studio/` change
+  on main, so the shadow lines beside it are evidence about the code on main. **Count them.** (The
+  service is built from `studio/` alone, which is why a `loop/`-only merge does not disqualify it.)
+- `studio server: STALE` — its `studio/` tree differs from main's, or it has diverged from
   main. Those shadow lines are evidence about THAT build, not about main: do not count them for or
   against C3. Refresh with `loop/install_studio_server.sh --update` (a human act by design, #773)
   and start collecting again.
@@ -132,12 +132,14 @@ Bucket them:
     non-JSON or empty body; or **something that is not studio at all owning the port** — where
     `--update` is the wrong move entirely and `install_studio_server.sh --status` is where to look.
     `curl -s $STUDIO_VERSION_URL` tells you which in one call.
-  - **`has no studio/ tree`** — the directory was renamed and nothing can be counted; the verdict is
-    unavailable until this half is taught the new path.
+  - **`has no studio/ tree`** — said of `origin/main`, the directory was renamed and the verdict is
+    unavailable until this half is taught the new path; said of *the served build*, that build
+    predates `studio/` existing (or was built from a tree without it), which is itself a reason to
+    `--update`. Either way nothing can be compared.
   - `nothing answered` is a lifecycle fault to go fix (`loop/install_studio_server.sh`). The
     remaining causes ("is not a git checkout to compare against", "could not be refreshed", "not a
-    commit this checkout knows", "could not be resolved in", "could not be counted") mean the
-    comparison could not be made — no finding about studio, but no evidence either.
+    commit this checkout knows", "could not be resolved in") mean the comparison could not be made
+    — no finding about studio, but no evidence either.
 - **No `studio server:` line at all** — every shadow line older than #832, and any fire run with
   `DRIFT_REPORT=0`. Unattributed, so **do not count it either way**. That is what voids the three
   lines above.
