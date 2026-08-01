@@ -83,6 +83,51 @@ test.describe('U23 — container config editing', () => {
   });
 
   /**
+   * The OTHER kind's fields, and the kind-filtering that decides them.
+   *
+   * `items` and `batchCount` are foreach-only and `exitWhen`/`maxRounds`/
+   * `timeout` are refused on a foreach, so this is where
+   * `CONTAINER_CONFIG_FIELDS` earns its place: the panel must offer exactly the
+   * first pair and none of the second, or it authors a doc the save gate then
+   * rejects. `batchCount` in particular had no authoring surface of any kind
+   * before this ticket.
+   */
+  test('offers a foreach its own fields, and none of the loop-only ones', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, 'u23 per kind', {
+      nodes: [{ id: 'n_a', position: AT }],
+      containers: [
+        { id: 'foreach_1', kind: 'foreach', children: ['n_a'], items: '${createArray(1, 2)}' },
+      ],
+    });
+
+    await configure(page, 'foreach 1');
+    await expect(page.getByLabel(/^items/)).toHaveValue('${createArray(1, 2)}');
+    await expect(page.getByLabel(/^batchCount/)).toHaveCount(1);
+    // Refused on a foreach by `validateDoc`, so never offered here.
+    await expect(page.getByLabel(/^exitWhen/)).toHaveCount(0);
+    await expect(page.getByLabel(/^maxRounds/)).toHaveCount(0);
+    await expect(page.getByLabel(/^timeout/)).toHaveCount(0);
+
+    await page.getByLabel(/^items/).fill('${createArray(1, 2, 3)}');
+    await page.getByLabel(/^batchCount/).fill('2');
+    await page.getByRole('button', { name: 'Apply container settings' }).click();
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await savedContainers(page, pipelineId)).toEqual([
+      {
+        id: 'foreach_1',
+        kind: 'foreach',
+        children: ['n_a'],
+        items: '${createArray(1, 2, 3)}',
+        batchCount: 2,
+      },
+    ]);
+    await expectQuiet(page, problems);
+  });
+
+  /**
    * The fields U6d could never author at all. `timeout` and `join` have no
    * create-time control, so before this ticket the only way a container carried
    * either was the API.
