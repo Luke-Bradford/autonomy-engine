@@ -91,7 +91,19 @@ test.describe('U6d — creating a container from the canvas', () => {
     await expect(page.locator('.flow-container')).toHaveCount(1);
 
     await select(page, 'b');
-    await page.getByLabel('Container membership').selectOption({ label: 'stage 1' });
+    /* #840 — this SECOND edit is now stated too, and it did not used to be. The
+       old comparison read the routing KIND, which is `partitioned` on both sides
+       of it; what actually changes is that `b` stops running after the stage and
+       starts running inside it. Under a `stage` that is subtle, under a `loop` it
+       is the difference between once and once per round. So the dialog has to be
+       READ here rather than left to Playwright's default dismissal, which is what
+       silently declined the edit and turned this into a red spec. */
+    const joined = await captureConfirm(page, async () => {
+      await page.getByLabel('Container membership').selectOption({ label: 'stage 1' });
+    });
+    expect(joined, 'joining an existing container went unstated — #840 regressed?').toContain(
+      'changes that inferred routing',
+    );
     await expect(page.getByLabel('Container membership')).toHaveValue(/^stage_/);
 
     expect(await validationIssues(page), 'the edit left the doc invalid').toEqual([]);
@@ -281,6 +293,77 @@ test.describe('U6d — creating a container from the canvas', () => {
     // config-parse error, so it would stay green if this one never rendered.
     await expect(page.locator('.property-panel .error')).toContainText('maxRounds');
     await expect(page.locator('.flow-container')).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+});
+
+/**
+ * #840 — a membership edit on a doc that ALREADY has a container states what it
+ * changes, before it changes it.
+ *
+ * The gap this closes is a SILENCE, which is why it needs a spec at this level:
+ * the old warning compared only the routing KIND, so both sides of this edit read
+ * `partitioned` and no dialog was raised at all. Nothing else on the page said
+ * anything either — `validateDoc` accepts both docs, the badge stays empty, Save
+ * stays enabled, and the changed routing goes straight into the next IMMUTABLE
+ * version. A spec that only asserted the dialog's wording could not have caught
+ * that; what makes this one meaningful is that a dialog exists to read.
+ */
+test.describe('#840 — a container edit states the routing it changes', () => {
+  test('moving an activity OUT of an existing container is stated first', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'routing-change-840', {
+      nodes: [
+        { id: 'a', position: { x: 0, y: 0 } },
+        { id: 'b', position: { x: 260, y: 0 } },
+        { id: 'c', position: { x: 520, y: 0 } },
+      ],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['b', 'c'] }],
+    });
+
+    // No authored edges and no validation issue on either side of this edit —
+    // so the dialog is the ONLY thing that can tell the operator anything.
+    expect(await validationIssues(page)).toEqual([]);
+
+    await select(page, 'c');
+    const message = await captureConfirm(page, async () => {
+      await page.getByLabel('Container membership').selectOption('');
+    });
+
+    expect(message, 'the membership move raised no warning at all — #840 regressed?').not.toBeNull();
+    expect(message).toContain('changes that inferred routing');
+    expect(message).toContain('Saving mints');
+    // Qualitative by design: `activityLabel` is keyed on TYPE, so naming the
+    // activities would repeat one word rather than identify anything.
+    expect(message).not.toContain('HTTP Request');
+
+    await expect(page.getByLabel('Container membership')).toHaveValue('');
+    expect(await validationIssues(page), 'the edit left the doc invalid').toEqual([]);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * The negative half. Re-picking the container an activity is ALREADY in is a
+   * no-op the store short-circuits, and a warning there would train the operator
+   * to dismiss the dialog unread — which is how a pre-hoc warning stops working.
+   */
+  test('a membership pick that changes nothing does not interrupt', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'routing-change-840-noop', {
+      nodes: [
+        { id: 'a', position: { x: 0, y: 0 } },
+        { id: 'b', position: { x: 260, y: 0 } },
+      ],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['b'] }],
+    });
+
+    await select(page, 'b');
+    const message = await captureConfirm(page, async () => {
+      await page.getByLabel('Container membership').selectOption({ label: 'stage 1' });
+    });
+    expect(message).toBeNull();
 
     await expectQuiet(page, problems);
   });

@@ -78,6 +78,33 @@ test.describe('implicit-chain advisory (#788)', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * #840 — for a containered doc the panel names the PARALLEL ROOTS.
+   *
+   * It used to say only that "containers split that chain", which is true and
+   * unactionable: the operator is looking at a flat list of activities and cannot
+   * tell which of them start together. `b` sits inside the stage, so it must NOT
+   * be named beside `a` — that is the "these all run together" reading the
+   * partition exists to correct, and the assertion that makes this spec fail if
+   * the panel ever enumerates entities rather than roots.
+   */
+  test('names the parallel roots when containers split the chain', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'implicit chain — partitioned', {
+      ...chainDoc(['a', 'b']),
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['b'] }],
+    });
+
+    const advisory = page.locator(ADVISORY);
+    await expect(advisory).toContainText('2 that start in parallel');
+    // The container by its within-kind ordinal, the activity by its id.
+    await expect(advisory).toContainText('a, stage 1');
+    await expect(advisory).not.toContainText('run in one sequence');
+    await expect(advisory).toContainText('Saving mints');
+
+    await expectQuiet(page, problems);
+  });
+
   test('says nothing about a single activity — there is no sequence to warn about', async ({
     page,
   }) => {
