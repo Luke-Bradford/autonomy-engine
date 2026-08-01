@@ -158,9 +158,22 @@ test.describe('#483 held/parked node pills', () => {
    * green. Comparing against the resolved token is what makes a missing rule, a
    * typo'd class, or a missing light override fail.
    */
+  /* U25 renamed these to the ENGINE's vocabulary (the Monitor no longer keeps a
+     five-word enum of its own) and split the single `waiting` pill into the
+     three parks the engine distinguishes. Every member of the widened set is
+     listed, not just the two #483 introduced: `pending`/`ready`/`skipped` had
+     no pill at all until the table began reading the doc-aware projection, and
+     an unmatched class is precisely the silent failure this fixture exists to
+     catch. `nodeStatus.test.ts` pins that no status is missing from the CODE;
+     this pins that none is missing from the STYLESHEET, in both themes. */
   const PILLS = [
-    { cls: 'node-status-retrying', token: '--warning' },
+    { cls: 'node-status-retry_pending', token: '--warning' },
     { cls: 'node-status-waiting', token: '--muted' },
+    { cls: 'node-status-wait_pending', token: '--muted' },
+    { cls: 'node-status-external_wait_pending', token: '--muted' },
+    { cls: 'node-status-pending', token: '--muted' },
+    { cls: 'node-status-ready', token: '--muted' },
+    { cls: 'node-status-skipped', token: '--muted' },
   ] as const;
 
   async function pillColours(page: import('@playwright/test').Page) {
@@ -211,9 +224,9 @@ test.describe('#483 held/parked node pills', () => {
         // 1. The rule MATCHED and painted the intended token. Fails outright if
         //    the rule is missing (the class then inherits `--text`).
         expect(color, `${cls} does not paint var(${token}) in ${theme}`).toBe(expected);
-        // 2. Every sibling pill colours its ring to match; `waiting` was the one
-        //    that did not until this sweep, and it is now reachable for the first
-        //    time (`NodeActivityStatus` had no `waiting` before #483).
+        // 2. Every sibling pill colours its ring to match; the parked pill was
+        //    the one that did not until this sweep, and it became reachable for
+        //    the first time in #483.
         expect(borderColor, `${cls} ring does not match its text colour`).toBe(expected);
         expect(isOpaque(color), `${cls} paints a transparent colour`).toBe(true);
         // 3. The pills are 0.72rem — small text, so WCAG AA asks 4.5:1. This is
