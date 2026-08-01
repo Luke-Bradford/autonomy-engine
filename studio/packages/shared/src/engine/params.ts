@@ -1339,6 +1339,171 @@ export function validateRefs(
   return errors;
 }
 
+// --- U8a: the reference catalog behind the expression flyout -----------------
+
+/**
+ * One `${}` reference an author may legally write at a given site (U8a).
+ *
+ * DELIBERATELY carries no display label. Naming a node is the WEB layer's job
+ * (`activityLabel` reads the activity catalog's title, `containerLabels` mints
+ * the `loop 1`/`loop 2` ordinals) and neither is reachable from `shared` — so a
+ * label computed here would be a second, drifting answer to "what is this node
+ * called". This returns identity + legality; the picker formats it.
+ */
+export type RefSuggestion = {
+  /** The bare reference path, no braces — e.g. `nodes.fetch.output.body`. */
+  ref: string;
+  /** The exact text to write into a config field, braces (and any wrapper) included. */
+  insert: string;
+  /** WHAT this references — a semantic kind, not a display heading. */
+  kind: 'item' | 'param' | 'nodeOutput' | 'nodeStatus' | 'run' | 'trigger';
+  /** The producing node or container id. `nodeOutput`/`nodeStatus` only. */
+  producerId?: string;
+  /** Output name, param name, or run/trigger field. Absent for `${item}`. */
+  name?: string;
+  /** The statically-known type, or `any` where the language does not know one. */
+  type: string;
+  /**
+   * `needs-default` — the reference is legal ONLY inside `default()`'s first
+   * argument, and `insert` is already wrapped accordingly. The distinction is
+   * kept so the picker can SAY why, rather than silently handing over a longer
+   * string than the author asked for.
+   */
+  availability: 'available' | 'needs-default';
+};
+
+/**
+ * Every `${}` reference legally writable in one node's config (U8a).
+ *
+ * The governing property is NO FALSE OFFER: a picker that hands the author a
+ * reference the save-gate then refuses is worse than no picker at all, because
+ * nothing on screen distinguishes the real offers from the dead ones. So this
+ * does not restate the rules — it reads the SAME analysis `validateRefs` reads
+ * (`computeGraph` for dominance, `outputsByIdOf` for contracts, the same
+ * foreach-membership set, the same `RUN_FIELDS`/`TRIGGER_FIELDS` constants), and
+ * mirrors `checkRefRoot`'s accept/reject decisions one for one. `available-refs.
+ * test.ts` pins the property directly by feeding every suggestion back through
+ * `validatePipelineDoc`.
+ *
+ * It errs toward UNDER-offering wherever the answer is unknowable rather than
+ * illegal:
+ *  - a producer whose contract is `absent`/`invalid` has no enumerable output
+ *    NAMES (the validator accepts any name there, but this cannot invent one);
+ *  - `${tool.args.*}` and the tumbling-window trigger fields are context-scoped
+ *    to sites this function does not describe, so they are never offered;
+ *  - a `filter`'s `predicate` binds `${item}` per FIELD rather than per node
+ *    (`scanFilterRefs`), which a node-level site cannot express — so a filter
+ *    outside a foreach body is not offered `${item}` even though its predicate
+ *    would accept it. A missed offer, never a false one (#--- follow-up).
+ */
+export function availableRefs(
+  doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
+  site: { kind: 'node'; nodeId: string },
+): RefSuggestion[] {
+  const { nodeId } = site;
+  if (!doc.nodes.some((n) => n.id === nodeId)) return [];
+
+  const containers = doc.containers ?? [];
+  const graph = computeGraph(doc);
+  const guaranteed = graph.guaranteed.get(nodeId) ?? new Set<string>();
+  const settled = graph.settled.get(nodeId) ?? new Set<string>();
+  const reachable = graph.reachable.get(nodeId) ?? new Set<string>();
+  const soft = graph.soft.get(nodeId) ?? new Set<string>();
+  const outputsById = outputsByIdOf(doc.nodes, containers);
+
+  const out: RefSuggestion[] = [];
+
+  // `${item}` — the same binding `validateRefs` computes for its `itemInScope`
+  // flag: a child of a foreach body, and nothing else at node granularity.
+  if (containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId))) {
+    out.push({ ref: 'item', insert: '${item}', kind: 'item', type: 'any', availability: 'available' });
+  }
+
+  // A secret-typed param is REFUSED by `checkRefRoot`, not merely discouraged:
+  // a secret's only sink is the executor env channel.
+  for (const p of doc.params) {
+    if (p.type === 'secret') continue;
+    out.push({
+      ref: `params.${p.name}`,
+      insert: `\${params.${p.name}}`,
+      kind: 'param',
+      name: p.name,
+      type: p.type,
+      availability: 'available',
+    });
+  }
+
+  // Producers in DOC order (nodes, then containers) so the picker's list is
+  // stable across renders rather than dependent on Map iteration.
+  const producerIds = [...doc.nodes.map((n) => n.id), ...containers.map((c) => c.id)];
+
+  for (const id of producerIds) {
+    if (id === nodeId) continue;
+    const contract = outputsById.get(id);
+    if (contract?.kind !== 'declared') continue;
+    const dominates = guaranteed.has(id);
+    const rescuable = !dominates && (reachable.has(id) || soft.has(id));
+    if (!dominates && !rescuable) continue;
+    for (const declared of contract.outputs) {
+      const ref = `nodes.${id}.output.${declared.name}`;
+      out.push({
+        ref,
+        // `default()`'s first argument is the one place a non-dominating output
+        // is accepted (`staticSoftArg: 0`), and it must be the BARE ref — the
+        // checker does not thread softness through a further call.
+        insert: dominates ? `\${${ref}}` : `\${default(${ref}, "")}`,
+        kind: 'nodeOutput',
+        producerId: id,
+        name: declared.name,
+        type: declared.type,
+        availability: dominates ? 'available' : 'needs-default',
+      });
+    }
+  }
+
+  for (const id of producerIds) {
+    if (id === nodeId) continue;
+    // Availability for a STATUS is `settled` ("guaranteed terminal"), not
+    // `guaranteed` ("succeeded") — and `default()` cannot rescue an unsettled
+    // one, so there is no wrapped variant to offer.
+    if (!settled.has(id)) continue;
+    out.push({
+      ref: `nodes.${id}.status`,
+      insert: `\${nodes.${id}.status}`,
+      kind: 'nodeStatus',
+      producerId: id,
+      type: 'string',
+      availability: 'available',
+    });
+  }
+
+  for (const field of RUN_FIELDS) {
+    out.push({
+      ref: `run.${field}`,
+      insert: `\${run.${field}}`,
+      kind: 'run',
+      name: field,
+      type: 'string',
+      availability: 'available',
+    });
+  }
+
+  // TRIGGER_FIELDS only. `TRIGGER_WINDOW_FIELDS` are legal exclusively in a
+  // tumbling trigger's param bindings, so they are not offerable here.
+  for (const field of TRIGGER_FIELDS) {
+    out.push({
+      ref: `trigger.${field}`,
+      insert: `\${trigger.${field}}`,
+      kind: 'trigger',
+      name: field,
+      type: field === 'body' ? 'json' : 'string',
+      availability: 'available',
+    });
+  }
+
+  return out;
+}
+
 // --- secret-sink gate (item 7 / S2) ----------------------------------------
 
 /**
