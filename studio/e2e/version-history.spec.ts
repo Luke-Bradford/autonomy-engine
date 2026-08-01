@@ -142,9 +142,9 @@ test.describe('pipeline version history', () => {
        would describe a run that does not exist. Asserted on the accessible name
        too, which is where it survived being dropped from the drawn box. */
     await expect(page.locator('.canvas-preview')).not.toContainText('not projected');
-    const ariaLabels = await page.locator('.react-flow__node').evaluateAll((els) =>
-      els.map((el) => el.getAttribute('aria-label') ?? ''),
-    );
+    const ariaLabels = await page
+      .locator('.react-flow__node')
+      .evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') ?? ''));
     expect(ariaLabels.every((l) => l.length > 0)).toBe(true);
     expect(ariaLabels.some((l) => l.includes('not projected'))).toBe(false);
 
