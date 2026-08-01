@@ -617,7 +617,7 @@ describe('listRunSummaries (R2)', () => {
   }
 
   it('resolves the pipeline name, version NUMBER and trigger name', () => {
-    const { db, pipeline, version } = setup();
+    const { db, version } = setup();
     const trigger = makeTrigger(db, version.id, 'Every morning');
     const run = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
 
