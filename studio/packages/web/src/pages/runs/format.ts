@@ -1,4 +1,5 @@
-import type { Run, RunEvent } from '@autonomy-studio/shared';
+import { TerminalNodeStatusSchema, type Run, type RunEvent } from '@autonomy-studio/shared';
+import type { NodeActivity } from './runSummary';
 
 /** Epoch-ms → a human date+time, or an em-dash for a null (not-yet) timestamp. */
 export function formatWhen(ms: number | null): string {
@@ -6,7 +7,7 @@ export function formatWhen(ms: number | null): string {
 }
 
 /** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   const totalSeconds = Math.floor(ms / 1_000);
   const seconds = totalSeconds % 60;
@@ -43,6 +44,45 @@ export function formatRunDuration(
     return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
   }
   return `${formatElapsed(Math.max(0, now - run.startedAt))} so far`;
+}
+
+/**
+ * #867 — how long a NODE took, for the Monitor's per-node Duration column.
+ *
+ * Two guards, and each of them is the difference between a fact and a guess:
+ *
+ * 1. **No start stamp → an em-dash.** An `if`/`switch`, a `fail`/`filter` and a
+ *    `call_pipeline` node are started and settled by ONE event, so no span was
+ *    ever measured for them. Rendering `0ms` there would state a measurement
+ *    nothing took; the em-dash says "not measured", which is true.
+ * 2. **An open span on a SETTLED node → an em-dash, not "so far".** "so far"
+ *    counts against the caller's clock, so on a node the log left open — a run
+ *    that died between a dispatch and its terminal, or any future single-event
+ *    kind nobody wired a close for — it would grow forever and read as a node
+ *    still working hours after the run ended. The node's own status is the
+ *    authority on whether it is still going.
+ *
+ * The number is WALL CLOCK for the latest attempt, from start to settle. That
+ * INCLUDES a `wait`/`webhook` park (for those nodes waiting is the work) and
+ * excludes time held between retries (the hold sits between two spans). It is
+ * deliberately not called execution time, and it is not
+ * `activity.captured.latencyMs` — that is one provider call's wall time, a
+ * different number on a different scope.
+ *
+ * `now` is the CALLER's, on the same convention `formatRunDuration` sets above:
+ * a point-in-time snapshot, not a ticking clock, which is also what keeps this
+ * pure and testable.
+ */
+export function formatNodeDuration(
+  node: Pick<NodeActivity, 'status' | 'startedAtMs' | 'endedAtMs'>,
+  now: number,
+): string {
+  if (node.startedAtMs === undefined) return '—';
+  if (node.endedAtMs !== undefined) {
+    return formatElapsed(Math.max(0, node.endedAtMs - node.startedAtMs));
+  }
+  if (TerminalNodeStatusSchema.safeParse(node.status).success) return '—';
+  return `${formatElapsed(Math.max(0, now - node.startedAtMs))} so far`;
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

@@ -11,15 +11,20 @@ import {
 
 let seq = 0;
 /** Wrap a typed EngineEvent in the durable envelope shape the log/stream carry
- * (the whole EngineEvent is stored as `payload`, per `run/events.ts`). */
-function envelope(event: EngineEvent): RunEvent {
+ * (the whole EngineEvent is stored as `payload`, per `run/events.ts`).
+ *
+ * `at` sets the envelope `ts` — the append-time epoch-ms stamp, and the only
+ * clock in the log (payloads are deliberately clock-free). It defaults to the
+ * sequence so every pre-existing case is untouched; the #867 duration cases
+ * pass it explicitly, because a span is the whole thing they measure. */
+function envelope(event: EngineEvent, at?: number): RunEvent {
   return {
     id: `evt_${seq}`,
     runId: event.runId,
     seq: seq++,
     type: event.type,
     payload: event,
-    ts: seq,
+    ts: at ?? seq,
   };
 }
 
@@ -46,31 +51,43 @@ describe('deriveNodeActivity', () => {
 
   it('projects dispatch → success/failure and counts attempts + outputs', () => {
     const events = [
-      envelope({
-        type: 'node.dispatched',
-        runId: 'r',
-        nodeId: 'a',
-        attemptId: 'a#0',
-        idempotent: true,
-      }),
+      envelope(
+        {
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          idempotent: true,
+        },
+        1_000,
+      ),
       envelope({ type: 'node.output', runId: 'r', nodeId: 'a', name: 'text', value: 'hi' }),
       envelope({ type: 'node.output', runId: 'r', nodeId: 'a', name: 'text', value: 'there' }),
-      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
-      envelope({
-        type: 'node.dispatched',
-        runId: 'r',
-        nodeId: 'b',
-        attemptId: 'b#0',
-        idempotent: true,
-      }),
-      envelope({
-        type: 'node.failed',
-        runId: 'r',
-        nodeId: 'b',
-        attemptId: 'b#0',
-        error: 'boom',
-        kind: 'permanent',
-      }),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} },
+        1_400,
+      ),
+      envelope(
+        {
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'b',
+          attemptId: 'b#0',
+          idempotent: true,
+        },
+        2_000,
+      ),
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'b',
+          attemptId: 'b#0',
+          error: 'boom',
+          kind: 'permanent',
+        },
+        2_300,
+      ),
     ];
     const activity = deriveNodeActivity(events);
     expect(activity).toEqual([
@@ -85,6 +102,8 @@ describe('deriveNodeActivity', () => {
         failureCode: undefined,
         outputValues: {},
         instanceId: undefined,
+        startedAtMs: 1_000,
+        endedAtMs: 1_400,
       },
       {
         nodeId: 'b',
@@ -99,6 +118,8 @@ describe('deriveNodeActivity', () => {
         failureCode: undefined,
         outputValues: undefined,
         instanceId: undefined,
+        startedAtMs: 2_000,
+        endedAtMs: 2_300,
       },
     ]);
   });
@@ -441,6 +462,12 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
         failureCode: undefined,
         outputValues: {},
         instanceId: undefined,
+        // #867 — the LAST attempt's span, so the retry hold between them is not
+        // inside it. Read off the two events themselves (the second dispatch and
+        // its success) rather than written as literals, because this helper's
+        // stamps come from a file-wide sequence.
+        startedAtMs: events[4]!.ts,
+        endedAtMs: events[5]!.ts,
       },
     ]);
   });
@@ -657,9 +684,23 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
       { type: 'node.dispatched', runId: 'r', nodeId: 'n1', attemptId: 'n1#0', idempotent: true },
       { type: 'node.succeeded', runId: 'r', nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
     ];
-    const without = deriveNodeActivity(base.map(envelope));
+    // Stamps are pinned rather than left to the helper's sequence: since #867
+    // the fold reads the envelope `ts`, and a seq-derived default would shift
+    // the succeeded event's clock purely because a warning was spliced in
+    // front of it — an artifact of the helper, not of production, where an
+    // inserted event renumbers nothing.
+    const without = deriveNodeActivity([
+      envelope(base[0]!, 1_000),
+      envelope(base[1]!, 1_100),
+      envelope(base[2]!, 1_500),
+    ]);
     seq = 0;
-    const withWarning = deriveNodeActivity([base[0]!, base[1]!, warned, base[2]!].map(envelope));
+    const withWarning = deriveNodeActivity([
+      envelope(base[0]!, 1_000),
+      envelope(base[1]!, 1_100),
+      envelope(warned, 1_200),
+      envelope(base[2]!, 1_500),
+    ]);
     expect(withWarning).toEqual(without);
   });
 
@@ -1193,5 +1234,230 @@ describe('reconcileNodeActivity', () => {
     expect(ids).not.toContain('w@1');
     expect(ids).not.toContain('w@2');
     expect(ids).not.toContain('w');
+  });
+});
+
+/**
+ * #867 — a node's DURATION span, stamped from the envelope `ts`.
+ *
+ * The events the log already carries are the only clock there is: the reducer
+ * is pure and stamps no per-node time, and `activity.captured.latencyMs` is a
+ * different number (one provider call, on two activity kinds). So a span is a
+ * pair of append stamps, and the whole correctness question is WHICH pair.
+ */
+describe('deriveNodeActivity — duration span (#867)', () => {
+  const rowFor = (events: RunEvent[], nodeId: string): NodeActivity => {
+    const row = deriveNodeActivity(events).find((r) => r.nodeId === nodeId);
+    if (row === undefined) throw new Error(`no row for ${nodeId}`);
+    return row;
+  };
+
+  it('spans dispatch → terminal', () => {
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} },
+        1_500,
+      ),
+    ];
+    const row = rowFor(events, 'a');
+    expect(row.startedAtMs).toBe(1_000);
+    expect(row.endedAtMs).toBe(1_500);
+  });
+
+  it('measures the LATEST attempt, so a retry HOLD is excluded', () => {
+    // The defect this pins: a first-dispatch→terminal span silently swallows
+    // the `retryScheduled`→`retryDue` hold, which policy can set to minutes.
+    // Per-attempt makes the hold fall BETWEEN two spans rather than inside one.
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          error: 'boom',
+          kind: 'transient',
+        },
+        1_200,
+      ),
+      envelope(
+        {
+          type: 'node.retryScheduled',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          nextAttemptAt: 61_000,
+        },
+        1_200,
+      ),
+      envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }, 61_000),
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#1', idempotent: true },
+        61_010,
+      ),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#1', outputs: {} },
+        61_310,
+      ),
+    ];
+    const row = rowFor(events, 'a');
+    expect(row.startedAtMs).toBe(61_010);
+    expect(row.endedAtMs).toBe(61_310);
+  });
+
+  it('re-opens the span on a re-dispatch, so a retrying node is not still holding its last end', () => {
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          error: 'boom',
+          kind: 'transient',
+        },
+        1_200,
+      ),
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#1', idempotent: true },
+        9_000,
+      ),
+    ];
+    const row = rowFor(events, 'a');
+    expect(row.startedAtMs).toBe(9_000);
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
+  it("spans a wait's PARK, because for a parked node waiting is the work", () => {
+    // `timer.due` IS the success event for a `wait` — no `node.succeeded`
+    // follows it — so a terminal set of {succeeded, failed} would leave every
+    // parked node with an open span reading "so far" forever.
+    const events = [
+      envelope(
+        {
+          type: 'timer.waitScheduled',
+          runId: 'r',
+          nodeId: 'w',
+          attemptId: 'w#0',
+          dueAt: 30_000,
+        },
+        1_000,
+      ),
+      envelope({ type: 'timer.due', runId: 'r', nodeId: 'w', previousAttemptId: 'w#0' }, 30_050),
+    ];
+    const row = rowFor(events, 'w');
+    expect(row.startedAtMs).toBe(1_000);
+    expect(row.endedAtMs).toBe(30_050);
+  });
+
+  it('spans an external wait to its expiry, which is that node’s failure', () => {
+    const events = [
+      envelope(
+        {
+          type: 'externalWait.created',
+          runId: 'r',
+          nodeId: 'h',
+          attemptId: 'h#0',
+          token: 't',
+          dueAt: 50_000,
+        },
+        2_000,
+      ),
+      envelope(
+        { type: 'externalWait.expired', runId: 'r', nodeId: 'h', previousAttemptId: 'h#0' },
+        50_100,
+      ),
+    ];
+    const row = rowFor(events, 'h');
+    expect(row.startedAtMs).toBe(2_000);
+    expect(row.endedAtMs).toBe(50_100);
+  });
+
+  it('gives an if/switch NO span, because its one event is both start and terminal', () => {
+    // `condition.evaluated` is the whole life of an `if`: it starts it AND
+    // succeeds it. Stamping a start off it would leave an end that never
+    // arrives, and a long-finished branch node would read "3h so far".
+    const events = [
+      envelope(
+        {
+          type: 'condition.evaluated',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#0',
+          branch: 'true',
+        },
+        1_000,
+      ),
+    ];
+    const row = rowFor(events, 'c');
+    expect(row.startedAtMs).toBeUndefined();
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
+  it('gives a `fail` control node no START, so no span is claimed for it', () => {
+    // Its `node.failed` is its only event. We hold an end stamp and no start,
+    // which is exactly "no span" — never a manufactured `0ms`.
+    const events = [
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'f',
+          attemptId: 'f#0',
+          error: 'stopped',
+          kind: 'permanent',
+        },
+        1_000,
+      ),
+    ];
+    const row = rowFor(events, 'f');
+    expect(row.startedAtMs).toBeUndefined();
+  });
+
+  it('drops the span when a terminal comes from a DIFFERENT foreach instance', () => {
+    // `w@1`/`w@2` fold onto one `w` row, last-write-wins. Pairing w@1's start
+    // with w@2's terminal would render a number that is not any item's runtime
+    // — a fabricated fact, which is worse than the em-dash this leaves.
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'w@1', attemptId: 'w@1#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'w@2', attemptId: 'w@2#0', outputs: {} },
+        9_000,
+      ),
+    ];
+    const row = rowFor(events, 'w');
+    expect(row.startedAtMs).toBeUndefined();
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
+  it('keeps the span when the SAME foreach instance starts and terminates', () => {
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'w@1', attemptId: 'w@1#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        { type: 'node.succeeded', runId: 'r', nodeId: 'w@1', attemptId: 'w@1#0', outputs: {} },
+        1_400,
+      ),
+    ];
+    const row = rowFor(events, 'w');
+    expect(row.startedAtMs).toBe(1_000);
+    expect(row.endedAtMs).toBe(1_400);
   });
 });
