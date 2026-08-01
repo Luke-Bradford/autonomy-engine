@@ -2054,3 +2054,46 @@ td button + button {
   font-size: 0.72rem;
   color: var(--warning);
 }
+
+/* U10 — the runs list's origin tabs (All / Triggered / Manual / Child).
+   Tokens only, so both themes follow the palette: the selected tab is marked by
+   the accent underline AND by full-strength text, never by colour alone. */
+.run-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 0 0 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.7rem;
+}
+
+.run-tab:hover {
+  color: var(--text);
+}
+
+.run-tab-selected {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.run-tab-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* The version number beside a run's pipeline NAME — present but subordinate to
+   the name, which is what the operator is actually scanning for. */
+.run-version {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
