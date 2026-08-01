@@ -28,7 +28,7 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
 
   const pipelineName = `Run list readable ${Date.now()}`;
   const { pipelineVersionId } = await seedVersion(page, pipelineName, {
-    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' } }],
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
   });
   const triggerName = 'e2e run-list trigger';
   const runId = await fireAndSettle(page, pipelineVersionId, triggerName);

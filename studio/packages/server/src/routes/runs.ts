@@ -1,12 +1,7 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { computeRunCost, type RunDetail } from '@autonomy-studio/shared';
-import {
-  getRun,
-  listRunDiagnostics,
-  listRunEvents,
-  listRunSummaries,
-} from '../repo/index.js';
+import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeDocResolver } from '../run/driver.js';

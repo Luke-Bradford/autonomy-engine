@@ -621,17 +621,19 @@ describe('listRunSummaries (R2)', () => {
     const trigger = makeTrigger(db, version.id, 'Every morning');
     const run = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
 
-    const [summary] = listRunSummaries(db);
-    expect(summary.id).toBe(run.id);
-    expect(summary.pipelineId).toBe(pipeline.id);
-    expect(summary.pipelineName).toBe('Nightly report');
+    const summaries = listRunSummaries(db);
+    expect(summaries).toHaveLength(1);
+    const summary = summaries[0];
+    expect(summary?.id).toBe(run.id);
+    expect(summary?.pipelineId).toBe(pipeline.id);
+    expect(summary?.pipelineName).toBe('Nightly report');
     // The version NUMBER an operator reads as "v1", not the opaque `pv_…` id.
-    expect(summary.pipelineVersion).toBe(version.version);
-    expect(summary.pipelineVersion).not.toBe(version.id);
-    expect(summary.triggerName).toBe('Every morning');
+    expect(summary?.pipelineVersion).toBe(version.version);
+    expect(summary?.pipelineVersion).not.toBe(version.id);
+    expect(summary?.triggerName).toBe('Every morning');
     // Additive over `Run` — every original field survives untouched.
-    expect(summary.status).toBe(run.status);
-    expect(summary.pipelineVersionId).toBe(version.id);
+    expect(summary?.status).toBe(run.status);
+    expect(summary?.pipelineVersionId).toBe(version.id);
   });
 
   /**

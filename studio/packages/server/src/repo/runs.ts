@@ -134,16 +134,15 @@ export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummar
   const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
     .orderBy(desc(runs.startedAt), desc(runs.id))
     .all();
-  return rows
-    .map((row) =>
-      RunSummarySchema.parse({
-        ...row.run,
-        pipelineId: row.pipelineId,
-        pipelineName: row.pipelineName,
-        pipelineVersion: row.pipelineVersion,
-        triggerName: row.triggerName,
-      }),
-    );
+  return rows.map((row) =>
+    RunSummarySchema.parse({
+      ...row.run,
+      pipelineId: row.pipelineId,
+      pipelineName: row.pipelineName,
+      pipelineVersion: row.pipelineVersion,
+      triggerName: row.triggerName,
+    }),
+  );
 }
 
 /**
