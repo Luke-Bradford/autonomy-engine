@@ -292,6 +292,30 @@ describe('TriggersPage', () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it('does not manufacture a schedule for a schedule trigger that has none', async () => {
+    // A `mode: 'schedule'` trigger with neither a cron nor a recurrence is a
+    // legal stored row. Opening it on the recurrence builder would be wrong:
+    // the builder has no "nothing selected" state — its blank form is a valid
+    // DAILY recurrence — so renaming such a trigger would silently grant it a
+    // midnight cron it never had. Same fail-open shape as #473, one level up.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({ name: 'Inert', mode: 'schedule', schedule: null, recurrence: null }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(form.getByLabelText(/Schedule authored as/i)).toHaveValue('cron');
+    await user.type(form.getByLabelText('Name'), ' renamed');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const patch = updateMock.mock.calls[0]![1];
+    expect(patch.schedule).toBeNull();
+    expect(patch.recurrence).toBeNull();
+  });
+
   it('re-edits a recurrence trigger without re-authoring its derived cron', async () => {
     // The defect this closes: `formForEdit` used to load the DERIVED cron into
     // the raw-cron field, so any save of a recurrence-backed trigger authored

@@ -62,6 +62,22 @@ export interface RecurrenceFormState {
   /** `datetime-local` values (naive, browser-local wall clock); `''` = absent. */
   startTime: string;
   endTime: string;
+  /**
+   * The bounds EXACTLY as they were loaded, so an untouched one is written back
+   * byte-identical instead of being re-derived from the control.
+   *
+   * A `datetime-local` value has no sub-second component, so a stored
+   * `09:15:45.500Z` would otherwise come back as `09:15:45.000Z` merely because
+   * the operator opened the form to rename the trigger. That is not cosmetic:
+   * `startTime` is the INCLUSIVE bound and `endTime` the EXCLUSIVE one, so a
+   * silent shift widens the firing window at one end and drops the last
+   * occurrence at the other — and a sub-minute window would collapse to
+   * `endTime <= startTime`, which the write boundary refuses, leaving the
+   * trigger permanently unsaveable. Same principle as the rest of this module:
+   * do not manufacture a fact the operator did not author.
+   */
+  startTimeIso: string;
+  endTimeIso: string;
 }
 
 export function blankRecurrenceForm(): RecurrenceFormState {
@@ -75,6 +91,8 @@ export function blankRecurrenceForm(): RecurrenceFormState {
     timeZone: '',
     startTime: '',
     endTime: '',
+    startTimeIso: '',
+    endTimeIso: '',
   };
 }
 
@@ -93,11 +111,13 @@ export function parseNumberList(raw: string): NumberListParse {
   for (const part of trimmed.split(',')) {
     const token = part.trim();
     if (token === '') return { ok: false, reason: 'empty entry — remove the stray comma' };
-    const n = Number(token);
-    if (!Number.isInteger(n)) {
+    // Pin the accepted shape rather than leaving it to `Number`, which also
+    // accepts hex and exponent literals — `0x1f` would silently become 31, and
+    // the "not a whole number" message below would be a lie about what happened.
+    if (!/^[+-]?\d+$/.test(token)) {
       return { ok: false, reason: `'${token}' is not a whole number` };
     }
-    values.push(n);
+    values.push(Number(token));
   }
   return { ok: true, values };
 }
@@ -142,10 +162,12 @@ const pad = (n: number): string => String(n).padStart(2, '0');
 export function utcIsoToLocalInput(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return (
+  const base =
     `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
-  );
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  // Only surface seconds when the instant actually has them, so the common
+  // minute-aligned bound stays a clean `HH:MM` rather than a noisy `HH:MM:00`.
+  return d.getSeconds() === 0 ? base : `${base}:${pad(d.getSeconds())}`;
 }
 
 /** Clear every `schedule` sub-field the NEW frequency does not honour, so a
@@ -211,6 +233,14 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
 
   for (const bound of ['startTime', 'endTime'] as const) {
     if (form[bound].trim() === '') continue;
+    // An UNTOUCHED bound is written back exactly as it was loaded. The control
+    // cannot hold sub-second precision, so re-deriving it would silently shift
+    // a stored instant just because the form was opened (see `startTimeIso`).
+    const original = form[`${bound}Iso`];
+    if (original !== '' && utcIsoToLocalInput(original) === form[bound]) {
+      candidate[bound] = original;
+      continue;
+    }
     const iso = localInputToUtcIso(form[bound]);
     if (iso === null)
       return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
@@ -242,6 +272,8 @@ export function recurrenceToForm(recurrence: Recurrence): RecurrenceFormState {
     timeZone: recurrence.timeZone ?? '',
     startTime: recurrence.startTime === undefined ? '' : utcIsoToLocalInput(recurrence.startTime),
     endTime: recurrence.endTime === undefined ? '' : utcIsoToLocalInput(recurrence.endTime),
+    startTimeIso: recurrence.startTime ?? '',
+    endTimeIso: recurrence.endTime ?? '',
   };
 }
 

@@ -1,5 +1,6 @@
 import {
   HONOURED_FIELDS,
+  MAX_RECURRENCE_INTERVAL,
   REQUIRED_FIELDS,
   RecurrenceFrequencySchema,
   type RecurrenceFrequency,
@@ -49,6 +50,10 @@ export function RecurrenceEditor({
 
   const conversion = formToRecurrence(value);
   const preview = conversion.ok ? cronPreview(conversion.recurrence) : null;
+  // Report WHY as soon as it is known, rather than holding it back until submit
+  // — the two states a first-time author lands in (a weekly with no day ticked,
+  // an interval > 1 with no anchor) are both reached before pressing anything.
+  const problem = conversion.ok ? null : conversion.reason;
 
   const toggleWeekDay = (day: number, checked: boolean) => {
     const next = checked
@@ -57,10 +62,12 @@ export function RecurrenceEditor({
     set({ weekDays: next });
   };
 
-  /** The absolute instant a bound resolves to, echoed so the browser-local
-   * anchoring of the control is visible rather than implied. */
+  /** The absolute instants the bounds resolve to, echoed so the browser-local
+   * anchoring of the controls is visible rather than implied. */
   const boundEcho = (local: string): string | null =>
     local.trim() === '' ? null : localInputToUtcIso(local);
+  const startUtc = boundEcho(value.startTime);
+  const endUtc = boundEcho(value.endTime);
 
   return (
     <fieldset className="recurrence-editor">
@@ -87,6 +94,7 @@ export function RecurrenceEditor({
         <input
           type="number"
           min={1}
+          max={MAX_RECURRENCE_INTERVAL}
           value={value.interval}
           onChange={(e) => set({ interval: e.target.value })}
         />
@@ -158,10 +166,13 @@ export function RecurrenceEditor({
         />
       </label>
 
+      {/* `step={1}` admits seconds, so a stored bound that has them can be both
+          shown and re-entered rather than silently rounded to the minute. */}
       <label>
         Start time (optional)
         <input
           type="datetime-local"
+          step={1}
           value={value.startTime}
           onChange={(e) => set({ startTime: e.target.value })}
         />
@@ -171,6 +182,7 @@ export function RecurrenceEditor({
         End time (optional)
         <input
           type="datetime-local"
+          step={1}
           value={value.endTime}
           onChange={(e) => set({ endTime: e.target.value })}
         />
@@ -179,17 +191,23 @@ export function RecurrenceEditor({
       {/* The bounds are absolute instants that the time zone above does NOT
           shift, so the control is anchored in the browser's zone. Echo the
           resolved instant rather than leaving that anchoring to be guessed. */}
-      {(boundEcho(value.startTime) || boundEcho(value.endTime)) && (
+      {(startUtc || endUtc) && (
         <p className="page-hint" data-testid="recurrence-bounds-utc">
           {`Bounds are absolute instants, entered in your browser's local time — `}
-          {boundEcho(value.startTime) ? `from ${boundEcho(value.startTime)}` : 'open start'}
-          {boundEcho(value.endTime) ? ` until ${boundEcho(value.endTime)}` : ', open end'}
+          {startUtc ? `from ${startUtc}` : 'open start'}
+          {endUtc ? ` until ${endUtc}` : ', open end'}
         </p>
       )}
 
       {preview && (
         <p className="page-hint" data-testid="recurrence-preview">
           {preview.kind === 'cron' ? `Fires on cron: ${preview.cron}` : `Fires ${preview.text}`}
+        </p>
+      )}
+
+      {problem && (
+        <p className="page-hint" data-testid="recurrence-problem">
+          {`Not a valid recurrence yet — ${problem}`}
         </p>
       )}
     </fieldset>

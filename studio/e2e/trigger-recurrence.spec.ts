@@ -140,6 +140,54 @@ test.describe('U14b recurrence builder', () => {
     await expectQuiet(page, problems);
   });
 
+  test('renaming a schedule trigger that has NO schedule does not grant it one', async ({
+    page,
+  }) => {
+    // A schedule-mode trigger with neither a cron nor a recurrence is a legal
+    // stored row. The recurrence builder has no "nothing selected" state — its
+    // blank form is a valid DAILY recurrence — so opening such a row on the
+    // builder would silently author `0 0 * * *` on the next save.
+    const seeded = await page.request.post('/api/triggers', {
+      data: {
+        name: 'Inert schedule',
+        pipelineVersionId: null,
+        params: {},
+        mode: 'schedule',
+        schedule: null,
+        recurrence: null,
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: false,
+      },
+    });
+    expect(seeded.status()).toBe(201);
+
+    const problems = await openTriggers(page);
+    await page
+      .getByRole('row', { name: /Inert schedule/ })
+      .getByRole('button', { name: /^Edit$/ })
+      .click();
+
+    const form = triggerForm(page);
+    await form.getByLabel('Name').fill('Inert schedule (renamed)');
+    await form.getByRole('button', { name: /Save changes/i }).click();
+    await expect(form).toBeHidden();
+
+    const after = await page.request.get('/api/triggers');
+    const list = (await after.json()) as Array<{
+      name: string;
+      schedule: string | null;
+      recurrence: unknown;
+    }>;
+    const renamed = list.find((t) => t.name === 'Inert schedule (renamed)');
+    expect(renamed).toBeDefined();
+    expect(renamed?.schedule).toBeNull();
+    expect(renamed?.recurrence).toBeNull();
+
+    await expectQuiet(page, problems);
+  });
+
   test('switching to the cron escape hatch clears the recurrence', async ({ page }) => {
     const problems = await openTriggers(page);
 

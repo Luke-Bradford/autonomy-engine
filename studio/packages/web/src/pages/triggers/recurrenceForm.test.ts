@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { RecurrenceWriteSchema, type Recurrence } from '@autonomy-studio/shared';
+import { recurrenceToCron, type Recurrence } from '@autonomy-studio/shared';
 import {
   blankRecurrenceForm,
   cronPreview,
@@ -47,6 +47,14 @@ describe('parseNumberList / formatNumberList', () => {
 
   it('refuses a fractional entry (the schema wants integers)', () => {
     expect(parseNumberList('1.5').ok).toBe(false);
+  });
+
+  it('refuses hex and exponent literals rather than silently converting them', () => {
+    // `Number('0x1f')` is 31 and `Number('1e1')` is 10, both integers — so a
+    // bare `Number.isInteger` check would accept them and store a value the
+    // operator never typed.
+    expect(parseNumberList('0x1f').ok).toBe(false);
+    expect(parseNumberList('1e1').ok).toBe(false);
   });
 
   it('formats a list back to the input text, and an absent field to blank', () => {
@@ -162,17 +170,64 @@ describe('formToRecurrence — interval, timeZone and bounds', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('produces a recurrence the shared WRITE schema accepts, for every frequency', () => {
-    const cases: RecurrenceFormState[] = [
-      form({ frequency: 'minute' }),
-      form({ frequency: 'hour', minutes: '0,30' }),
-      form({ frequency: 'day', hours: '9', minutes: '0' }),
-      form({ frequency: 'week', weekDays: [1, 3], hours: '9' }),
-      form({ frequency: 'month', monthDays: '1,15', hours: '9' }),
+  it('compiles to the cron the server will derive, for every frequency', () => {
+    // Asserting the DERIVED cron, not `RecurrenceWriteSchema.safeParse(...)` —
+    // `formToRecurrence` returns that schema's own parse output, so re-parsing
+    // it could never fail and would prove nothing.
+    const cases: Array<[RecurrenceFormState, string]> = [
+      [form({ frequency: 'minute' }), '* * * * *'],
+      [form({ frequency: 'hour', minutes: '0,30' }), '0,30 * * * *'],
+      [form({ frequency: 'day', hours: '9', minutes: '0' }), '0 9 * * *'],
+      [form({ frequency: 'week', weekDays: [3, 1], hours: '9' }), '0 9 * * 1,3'],
+      [form({ frequency: 'month', monthDays: '15,1', hours: '9' }), '0 9 1,15 * *'],
     ];
-    for (const c of cases) {
-      expect(RecurrenceWriteSchema.safeParse(recurrenceOf(c)).success).toBe(true);
+    for (const [input, cron] of cases) {
+      expect(recurrenceToCron(recurrenceOf(input))).toBe(cron);
     }
+  });
+});
+
+describe('formToRecurrence — an untouched bound is written back unchanged', () => {
+  /** A form as loaded from a stored recurrence, with nothing edited. */
+  function loaded(recurrence: Recurrence): RecurrenceFormState {
+    return recurrenceToForm(recurrence);
+  }
+
+  it('preserves sub-second precision the control cannot hold', () => {
+    // The control has no milliseconds, so re-deriving the bound from it would
+    // shift an INCLUSIVE start and an EXCLUSIVE end merely because the form was
+    // opened — silently widening the firing window at one end and dropping the
+    // last occurrence at the other.
+    const original: Recurrence = {
+      frequency: 'day',
+      interval: 1,
+      startTime: '2026-01-01T09:15:45.500Z',
+      endTime: '2026-06-01T09:15:45.500Z',
+    };
+    expect(recurrenceOf(loaded(original))).toEqual(original);
+  });
+
+  it('keeps a sub-minute window saveable', () => {
+    // Both bounds would round to the same minute, making the window empty and
+    // the trigger permanently unsaveable against the write schema's
+    // `endTime > startTime` rule.
+    const original: Recurrence = {
+      frequency: 'day',
+      interval: 1,
+      startTime: '2026-01-01T09:15:10.000Z',
+      endTime: '2026-01-01T09:15:50.000Z',
+    };
+    expect(recurrenceOf(loaded(original))).toEqual(original);
+  });
+
+  it('re-derives a bound the operator DID edit', () => {
+    const asLoaded = loaded({
+      frequency: 'day',
+      interval: 1,
+      startTime: '2026-01-01T09:15:45.500Z',
+    });
+    const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
+    expect(recurrenceOf(edited).startTime).toBe(localInputToUtcIso('2026-02-02T10:00'));
   });
 });
 
@@ -299,10 +354,25 @@ describe('cronPreview', () => {
 });
 
 describe('WEEK_DAY_NAMES', () => {
-  it('is indexed so that 0 is Sunday, matching the schema and cron day-of-week', () => {
+  it('labels each day with the value that day actually STORES', () => {
+    // Tying the label to the compiled cron day-of-week, rather than to a
+    // hand-written copy of the same array: if the labels were ever reordered,
+    // "Mon" would start meaning a different stored value and this would fail.
     expect(WEEK_DAY_NAMES).toHaveLength(7);
+    WEEK_DAY_NAMES.forEach((name, day) => {
+      const summary = cronPreview({
+        frequency: 'week',
+        interval: 2,
+        schedule: { weekDays: [day] },
+        startTime: '2026-08-01T09:00:00.000Z',
+      });
+      expect(summary.kind).toBe('summary');
+      if (summary.kind === 'summary') expect(summary.text).toContain(name);
+      expect(
+        recurrenceToCron({ frequency: 'week', interval: 1, schedule: { weekDays: [day] } }),
+      ).toBe(`0 0 * * ${day}`);
+    });
+    // The anchor the whole indexing rests on: cron day-of-week 0 is Sunday.
     expect(WEEK_DAY_NAMES[0]).toBe('Sun');
-    expect(WEEK_DAY_NAMES[1]).toBe('Mon');
-    expect(WEEK_DAY_NAMES[6]).toBe('Sat');
   });
 });

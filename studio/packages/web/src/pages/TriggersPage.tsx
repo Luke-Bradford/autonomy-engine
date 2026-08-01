@@ -82,15 +82,22 @@ function formForEdit(t: TriggerPublic): FormState {
   // A recurrence-backed trigger also carries a `schedule` — the cron DERIVED
   // from it. Loading that into the raw-cron field would make every save author
   // both, which the server refuses; so the recurrence, when present, wins and
-  // the cron field stays empty. A trigger with neither (a schedule trigger that
-  // has not been given one yet) opens on an empty builder.
+  // the cron field stays empty.
+  //
+  // Everything else opens on the CRON side, including a schedule trigger that
+  // has no schedule at all (a legal stored row: nothing server-side forces one).
+  // Opening THAT on the recurrence builder would be the wrong default, because
+  // the builder has no "nothing selected" state — its blank form is a valid
+  // daily recurrence — so merely renaming such a trigger would silently grant it
+  // a midnight cron it never had. The blank cron field round-trips to `null`,
+  // which is what was actually stored.
   const hasRecurrence = t.recurrence !== null;
   return {
     id: t.id,
     name: t.name,
     pipelineVersionId: t.pipelineVersionId ?? '',
     mode: t.mode,
-    scheduleKind: hasRecurrence || t.schedule === null ? 'recurrence' : 'cron',
+    scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
     schedule: hasRecurrence ? '' : (t.schedule ?? ''),
     recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
     concurrencyPolicy: t.concurrency.policy,
