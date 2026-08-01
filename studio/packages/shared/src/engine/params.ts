@@ -37,6 +37,7 @@ import {
   lowerOutputSchema,
 } from '../catalog/llm-config.js';
 import { SecretRefSchema, isSecretRef } from '../schemas/secret-ref.js';
+import type { ContainerKind } from '../schemas/pipeline.js';
 import type { EvalIn, FnSpec, SigType } from './functions.js';
 import {
   FUNCTIONS,
@@ -1617,6 +1618,41 @@ export interface ValidateDocOptions {
   /** Max call-graph depth (hops from this version). Default 3. */
   maxCallDepth?: number;
 }
+
+/** The non-structural fields of a `Container` — everything but `id`/`kind`/`children`. */
+export const CONTAINER_CONFIG_FIELD_NAMES = [
+  'exitWhen',
+  'maxRounds',
+  'timeout',
+  'items',
+  'batchCount',
+  'join',
+] as const;
+export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number];
+
+/**
+ * Which config fields are meaningful on a container of each kind.
+ *
+ * `ContainerSchema` is a FLAT object with no kind cross-checks — a `stage` with
+ * a `timeout` parses cleanly and is refused only by the block below (search
+ * `is only meaningful on`). So this map is the machine-readable form of a
+ * decision that lives, in prose-and-refusal form, ~200 lines down; it is
+ * exported so U23's container-config panel can decide which controls to offer
+ * WITHOUT restating the rules, and it lives here, beside its only authority,
+ * rather than beside `ContainerSchema`, which has no opinion on the matter.
+ *
+ * `validate-doc.test.ts` pins the two together in both directions against the
+ * refusal grammar, and records the one case the validator does not refuse
+ * (`stage.maxRounds`, #859) so the gap cannot silently grow.
+ *
+ * `join` appears on every kind because the reducer reads it on every kind
+ * (see `c.join === 'any'` in the container-completion path).
+ */
+export const CONTAINER_CONFIG_FIELDS: Record<ContainerKind, readonly ContainerConfigField[]> = {
+  loop: ['exitWhen', 'maxRounds', 'timeout', 'join'],
+  foreach: ['items', 'batchCount', 'join'],
+  stage: ['join'],
+};
 
 /**
  * PURE structural validation of a pipeline's P2c constructs, at SAVE time

@@ -9,12 +9,15 @@ import type {
   PipelineVersion,
 } from '../types.js';
 import {
+  CONTAINER_CONFIG_FIELDS,
+  CONTAINER_CONFIG_FIELD_NAMES,
   validateDoc,
   validatePipelineDoc,
   validateRefs,
+  type ContainerConfigField,
   type PipelineResolver,
 } from '../params.js';
-import { ContainerSchema } from '../../schemas/pipeline.js';
+import { ContainerSchema, type ContainerKind } from '../../schemas/pipeline.js';
 import { lowerAgentTaskStructuredOutputs } from '../../catalog/lower.js';
 
 // --- helpers ---------------------------------------------------------------
@@ -1378,5 +1381,93 @@ describe('validateDoc — parallel foreach batchCount (#4 A4b)', () => {
   it('does NOT apply the parallel-only refusals at batchCount 1 / absent', () => {
     const withAt = doc([node('w'), node('other@2')], [], [fe({ batchCount: 1 })], [LIST]);
     expect(validateDoc(withAt).join(' ')).not.toContain("'@'");
+  });
+});
+
+// --- CONTAINER_CONFIG_FIELDS ↔ validateDoc consistency ---------------------
+//
+// U23 (#839) gives the canvas a container-config panel. The panel has to know
+// which fields a container of a given kind may carry — a decision that ALREADY
+// exists, as the refusal block inside `validateDoc`. Restating it in the web
+// package would be a SECOND COPY of one decision, so the map is exported from
+// here and this test pins the two together.
+//
+// The predicate is the refusal GRAMMAR, not a hand-picked valid value per
+// field: every kind-legality refusal reads `<field> is only meaningful on a
+// <kind>`. That keeps the test from drifting into "tune the values until it
+// goes green", and it means a doc that is invalid for unrelated reasons cannot
+// mask the answer — every other error is filtered out.
+describe('CONTAINER_CONFIG_FIELDS', () => {
+  const KINDS: ContainerKind[] = ['loop', 'stage', 'foreach'];
+
+  /** A plausible value per field. Its CONTENT is irrelevant to this test. */
+  const SAMPLE: Record<ContainerConfigField, unknown> = {
+    exitWhen: '${nodes.a.status}',
+    maxRounds: 3,
+    timeout: 30,
+    items: '${run.params.rows}',
+    batchCount: 2,
+    join: 'all',
+  };
+
+  /**
+   * Kind-legality refusals `validateDoc` does NOT make, so the map cannot be
+   * pinned for them. Each is a validator hole, not a map error — recorded here
+   * so it cannot silently grow.
+   */
+  const UNPINNED: ReadonlyArray<`${ContainerKind}.${ContainerConfigField}`> = [
+    // #859 — `maxRounds` is refused on a `foreach` but not on a `stage`, where
+    // it is equally dead. The map excludes it; the validator lets it through.
+    'stage.maxRounds',
+  ];
+
+  function kindLegalityErrors(kind: ContainerKind, field: ContainerConfigField): string[] {
+    const errors = validateDoc({
+      params: [],
+      nodes: [node('a')],
+      edges: [],
+      containers: [{ id: 'c1', kind, children: ['a'], [field]: SAMPLE[field] } as Container],
+    });
+    return errors.filter((e) => e.includes(`${field} is only meaningful on`));
+  }
+
+  it('offers no field the validator would refuse for that kind', () => {
+    for (const kind of KINDS) {
+      for (const field of CONTAINER_CONFIG_FIELDS[kind]) {
+        expect(kindLegalityErrors(kind, field), `${kind}.${field}`).toEqual([]);
+      }
+    }
+  });
+
+  it('omits every field the validator refuses for that kind', () => {
+    for (const kind of KINDS) {
+      for (const field of CONTAINER_CONFIG_FIELD_NAMES) {
+        if (CONTAINER_CONFIG_FIELDS[kind].includes(field)) continue;
+        if (UNPINNED.includes(`${kind}.${field}`)) continue;
+        expect(kindLegalityErrors(kind, field), `${kind}.${field}`).toHaveLength(1);
+      }
+    }
+  });
+
+  // The exception list is a liability, so it is pinned too: if a validator hole
+  // is ever closed, this goes red and the entry must be deleted rather than
+  // left to rot into a lie about what the validator does.
+  it('still has exactly the validator holes it declares', () => {
+    for (const entry of UNPINNED) {
+      const [kind, field] = entry.split('.') as [ContainerKind, ContainerConfigField];
+      expect(CONTAINER_CONFIG_FIELDS[kind]).not.toContain(field);
+      expect(kindLegalityErrors(kind, field), entry).toEqual([]);
+    }
+  });
+
+  // Every field on `ContainerSchema` is either structural (owned by other
+  // canvas affordances) or configurable HERE. A field added to the schema with
+  // no home in either list is one the panel would silently never surface.
+  it('accounts for every field on ContainerSchema', () => {
+    const STRUCTURAL = ['id', 'kind', 'children'];
+    const onSchema = Object.keys(ContainerSchema.shape);
+    expect([...onSchema].sort()).toEqual(
+      [...STRUCTURAL, ...CONTAINER_CONFIG_FIELD_NAMES].sort(),
+    );
   });
 });
