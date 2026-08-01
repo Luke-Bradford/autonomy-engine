@@ -224,4 +224,29 @@ test.describe('U14b recurrence builder', () => {
 
     await expectQuiet(page, problems);
   });
+
+  test('an exponent interval is refused, not silently coerced', async ({ page }) => {
+    const problems = await openTriggers(page);
+
+    await page.getByRole('button', { name: /New trigger/i }).click();
+    const form = triggerForm(page);
+    await form.getByLabel('Name').fill('Exponent interval');
+    await form.getByLabel(/^Mode/).selectOption('schedule');
+
+    // `<input type="number">` accepts any "valid floating-point number", which
+    // INCLUDES exponent notation — so this reaches the conversion from the real
+    // control, not just from a unit test. Assert the control actually holds it
+    // before asserting what the conversion does with it; if a browser ever
+    // sanitised it away, this test would otherwise pass for the wrong reason.
+    const interval = form.getByLabel(/^Repeat every N/);
+    await interval.fill('2e1');
+    await expect(interval).toHaveValue('2e1');
+
+    // `Number('2e1')` is 20, so coercing would have authored a 20-day recurrence
+    // the operator never asked for.
+    await expect(form.getByTestId('recurrence-problem')).toContainText('is not a whole number');
+    await expect(form.getByTestId('recurrence-preview')).toBeHidden();
+
+    await expectQuiet(page, problems);
+  });
 });

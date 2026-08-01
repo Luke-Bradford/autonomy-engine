@@ -96,6 +96,21 @@ export function blankRecurrenceForm(): RecurrenceFormState {
   };
 }
 
+/**
+ * The only accepted shape for a whole number typed into this form.
+ *
+ * Pinned as a pattern rather than left to `Number`, which also accepts hex and
+ * exponent literals — `0x1f` would silently become 31 and `2e1` become 20, while
+ * the "not a whole number" message claimed the opposite. Exponent notation is
+ * not hypothetical for the interval control either: `<input type="number">`
+ * accepts any "valid floating-point number", which INCLUDES `2e1`, so the value
+ * reaches the conversion from the real control and not only from a test.
+ *
+ * Shared by every numeric field so one rule governs them all; a second copy is
+ * how `interval` drifted from the list fields in the first place.
+ */
+const WHOLE_NUMBER = /^[+-]?\d+$/;
+
 export type NumberListParse = { ok: true; values: number[] } | { ok: false; reason: string };
 
 /**
@@ -111,10 +126,7 @@ export function parseNumberList(raw: string): NumberListParse {
   for (const part of trimmed.split(',')) {
     const token = part.trim();
     if (token === '') return { ok: false, reason: 'empty entry — remove the stray comma' };
-    // Pin the accepted shape rather than leaving it to `Number`, which also
-    // accepts hex and exponent literals — `0x1f` would silently become 31, and
-    // the "not a whole number" message below would be a lie about what happened.
-    if (!/^[+-]?\d+$/.test(token)) {
+    if (!WHOLE_NUMBER.test(token)) {
       return { ok: false, reason: `'${token}' is not a whole number` };
     }
     values.push(Number(token));
@@ -226,10 +238,10 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   const honoured = HONOURED_FIELDS[form.frequency];
 
   const intervalText = form.interval.trim();
-  const interval = intervalText === '' ? 1 : Number(intervalText);
-  if (!Number.isInteger(interval)) {
+  if (intervalText !== '' && !WHOLE_NUMBER.test(intervalText)) {
     return { ok: false, reason: `interval: '${form.interval}' is not a whole number` };
   }
+  const interval = intervalText === '' ? 1 : Number(intervalText);
 
   const schedule: Record<string, number[]> = {};
   for (const { key, label } of LIST_FIELDS) {

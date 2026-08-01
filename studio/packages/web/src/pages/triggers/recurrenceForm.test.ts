@@ -232,6 +232,27 @@ describe('formToRecurrence — an untouched bound is written back unchanged', ()
   });
 });
 
+describe('formToRecurrence — interval is shape-checked, not left to Number()', () => {
+  // `Number` accepts hex and exponent literals, so `0x2` would have been stored
+  // as 2 and `2e1` as 20 while the operator's text said something else. The
+  // exponent case is reachable from the real control: `<input type="number">`
+  // accepts any valid floating-point number, which includes `2e1`.
+  it.each(['0x2', '2e1', '1.5', '+ 2', 'two'])('rejects %j rather than coercing it', (text) => {
+    const result = formToRecurrence(form({ frequency: 'day', interval: text }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('is not a whole number');
+  });
+
+  it('still accepts a plain whole number, and an empty interval means 1', () => {
+    // An interval > 1 needs a startTime anchor (#550), so the accepting case
+    // carries one — otherwise this would fail on that rule and say nothing about
+    // the shape check it exists to guard.
+    const anchored = form({ frequency: 'day', interval: '3', startTime: '2026-01-01T09:00' });
+    expect(recurrenceOf(anchored).interval).toBe(3);
+    expect(recurrenceOf(form({ frequency: 'day', interval: '' })).interval).toBe(1);
+  });
+});
+
 describe('resolveBound — the editor echoes exactly what the write path submits', () => {
   it('returns the preserved instant for an UNTOUCHED sub-second bound', () => {
     // The echo used to re-derive from the seconds-only control, so it displayed
