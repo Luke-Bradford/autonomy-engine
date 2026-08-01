@@ -1,4 +1,9 @@
-import { formatTokenCount, formatUsd } from '@autonomy-studio/shared';
+import {
+  formatTokenCount,
+  formatUsd,
+  TERMINAL_NODE,
+  type NodeCost,
+} from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
 import { readNodeCost, type NodeCostReading } from './nodeCost';
@@ -205,6 +210,12 @@ export function NodeActivityPanel({
         </section>
       )}
 
+      {/* The `||` is DEFENCE, not a live path: the tool loop yields its `metered`
+          event before its `toolCalled` ones in the same round, so tool calls today
+          imply at least one billed exchange. It is kept — with the `none` reading
+          behind it — so that a future producer of tool calls without metering
+          renders "no billed exchange" rather than silently dropping the section,
+          which would read as "this panel does not do cost". */}
       {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && <CostSection node={node} />}
 
       {node.toolCalls.length > 0 && <ToolCallSection calls={node.toolCalls} />}
@@ -250,20 +261,21 @@ function CostSection({ node }: { node: NodeActivity }) {
           </dd>
           <dt>Tokens</dt>
           <dd>
-            {/* The load-bearing arm. An `agent_cli` spend fact carries NO token
-                counts at all, so `0 in / 0 out` would be a measurement nobody
-                took — the same manufactured zero the Duration line refuses. */}
-            {reading.tokensReported
-              ? `${formatTokenCount(cost.inputTokens)} in · ${formatTokenCount(cost.outputTokens)} out`
-              : 'not reported'}
+            {/* The load-bearing arm, and it answers PER SIDE. An `agent_cli`
+                spend fact carries no counts at all; a provider that sent only
+                `prompt_eval_count` carries one. Either way an unmeasured side
+                must say so rather than print `0` — the same manufactured zero
+                the Duration line refuses. */}
+            {tokenSummary(reading, cost)}
           </dd>
         </dl>
       )}
 
-      {reading.tokensPartial && (
+      {(reading.inputTokensPartial || reading.outputTokensPartial) && (
         <p className="page-hint">
-          Only {cost.tokenReportedResponseCount} of {cost.responseCount} exchanges reported a token
-          count, so these sums are partial.
+          Not every exchange reported a count — {reading.inputReportedCount} of{' '}
+          {cost.responseCount} reported input and {reading.outputReportedCount} of{' '}
+          {cost.responseCount} reported output — so these sums are partial.
         </p>
       )}
 
@@ -275,13 +287,42 @@ function CostSection({ node }: { node: NodeActivity }) {
       )}
 
       {node.costSpansInstances && (
+        /* M2 — worded about the KEY, not about "parallel items". An `id@n` key is
+           how a parallel foreach writes its items, but a sequential doc may carry
+           a literal `x@2` node id, and no reader may infer the one from the other
+           (`instance-key.ts`). The scope claim is true either way. */
         <p className="page-hint">
-          This total SUMS every parallel item that ran under this node — unlike the outputs above,
-          which are one item&apos;s.
+          This total SUMS every result keyed <code>id@n</code> that folded onto this node — unlike
+          the outputs above, which are one of them.
+        </p>
+      )}
+
+      {!TERMINAL_NODE.has(node.status) && (
+        /* The figure is a RUNNING total. Same objection the Duration section
+           answers one block up ("this attempt has not settled yet"): on a live
+           tail an in-flight node's spend-so-far otherwise reads with exactly the
+           confidence of a settled one. */
+        <p className="page-hint">
+          This node has not settled, so this is what it has spent SO FAR — not a final figure.
         </p>
       )}
     </section>
   );
+}
+
+/**
+ * The token line. Each side answers for itself, so one measured side never lends
+ * its credibility to an unmeasured one.
+ */
+function tokenSummary(reading: NodeCostReading, cost: NodeCost): string {
+  if (!reading.inputTokensReported && !reading.outputTokensReported) return 'not reported';
+  const input = reading.inputTokensReported
+    ? `${formatTokenCount(cost.inputTokens)} in`
+    : 'input not reported';
+  const output = reading.outputTokensReported
+    ? `${formatTokenCount(cost.outputTokens)} out`
+    : 'output not reported';
+  return `${input} · ${output}`;
 }
 
 /** The headline, which for three readings is deliberately not a money amount. */
@@ -294,7 +335,15 @@ function costFigure(reading: NodeCostReading): string {
     case 'unknown':
       return 'Cost unknown';
     case 'lower-bound':
-      return `At least ${formatUsd(reading.amount)}`;
+      /* `formatUsd` renders a sub-threshold amount as its OWN bound
+         (`< $0.000001`), and "At least < $0.000001" is a contradiction on its
+         face. A genuine `costEstimate: 0` (a free model in the price table) hits
+         the same wall from the other side: "At least $0.00" is the very reading
+         this surface exists to prevent. Both collapse to the one true statement —
+         the priced part tells us nothing, and there is more we could not price. */
+      return reading.amount < 0.000001
+        ? 'Cost unknown'
+        : `At least ${formatUsd(reading.amount)}`;
     case 'exact':
       return formatUsd(reading.amount);
   }
@@ -312,11 +361,13 @@ function costSentence(reading: NodeCostReading): string {
     case 'lower-bound':
       return `${exchanges}, of which ${reading.unknownCount} could not be priced. The figure is what the rest cost, so the real total is higher.`;
     case 'exact':
-      return `${exchanges}, all priced. Retries are included — each attempt was billed.${
-        reading.coveredCount > 0
-          ? ` ${reading.coveredCount} of them were subscription calls that add nothing.`
-          : ''
-      }`;
+      /* No subscription-call clause here. `meteringStatus:'unpriced'` is minted
+         at exactly one site (`cliSpendFact`, `agent_cli`) and a node binds ONE
+         connection for the whole immutable run, so a node cannot hold both a
+         priced and an unpriced response — and a sentence saying "all priced. N of
+         them were subscription calls" contradicts itself. If a second producer of
+         `unpriced` ever lands, this arm is where it has to be re-read. */
+      return `${exchanges}, all priced. Retries are included — each attempt was billed.`;
   }
 }
 
@@ -333,6 +384,14 @@ function costSentence(reading: NodeCostReading): string {
  * (only chars + a hash), and the hash is a drift fingerprint, not something a
  * person reads — but the size is the one thing about an opaque payload that is
  * actionable.
+ */
+/**
+ * The cap on RENDERED rows. `index.css` also bounds the list by height, and the
+ * two are not redundant: the stylesheet stops the panel growing, this stops the
+ * DOM growing — an agent loop's call count is unbounded, and #869 is the same
+ * lesson from the other direction (a panel that serialised a whole payload into
+ * the DOM). The list is truncated from the FRONT, keeping the most recent, and
+ * says so; a silent subset would read as the whole history.
  */
 const MAX_TOOL_ROWS = 100;
 

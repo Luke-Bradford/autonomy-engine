@@ -1213,6 +1213,106 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
     expect(within(panel).getByText(/1 of which returned an error/)).toBeInTheDocument();
   });
 
+  it('says a tool-running node billed NOTHING, rather than hiding the section', async () => {
+    /* The `||` arm: tool calls but no metered response. Reachable, and the case
+       where an absent Cost section would be read as "the panel does not do
+       cost" rather than as the finding it is — a timed-out provider call
+       records no exchange at all, deliberately. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      {
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: 0,
+        toolName: 'read_file',
+        argsChars: 4,
+        resultChars: 8,
+        isError: false,
+      } as EngineEvent,
+    ]);
+    expect(within(panel).getByRole('heading', { name: 'Cost & usage' })).toBeInTheDocument();
+    expect(within(panel).getByText('No billed exchange')).toBeInTheDocument();
+    expect(within(panel).getByText(/TIMED OUT records no exchange/)).toBeInTheDocument();
+  });
+
+  it('says a foreach node’s cost SUMS every item, unlike the outputs beside it', async () => {
+    const panel = await openPanel([
+      dispatched('greet@1', 'greet@1#0'),
+      dispatched('greet@2', 'greet@2#0'),
+      metered({ nodeId: 'greet@1', inputTokens: 1, outputTokens: 1, costEstimate: 0.1 }),
+      metered({ nodeId: 'greet@2', inputTokens: 1, outputTokens: 1, costEstimate: 0.2 }),
+    ]);
+    expect(within(panel).getByText('$0.30')).toBeInTheDocument();
+    expect(within(panel).getByText(/SUMS every result keyed/)).toBeInTheDocument();
+  });
+
+  it('names an unnamed tool as unnamed, and truncates a long list out loud', async () => {
+    const call = (i: number): EngineEvent =>
+      ({
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: i,
+        // The LAST call is structurally nameless — kept in view by the
+        // keep-the-most-recent truncation, which is the point of both halves.
+        toolName: i === 120 ? '' : `tool_${i}`,
+        argsChars: 1,
+        resultChars: 1,
+        isError: false,
+      }) as EngineEvent;
+    const calls = Array.from({ length: 121 }, (_, i) => call(i));
+    const panel = await openPanel([dispatched('greet', 'greet#0'), ...calls]);
+    expect(within(panel).getByText(/showing the most recent 100 of 121 calls/)).toBeInTheDocument();
+    expect(within(panel).getByText('unnamed')).toBeInTheDocument();
+    // Truncated from the FRONT: the oldest call is gone, the newest is not.
+    expect(within(panel).queryByText('tool_0')).not.toBeInTheDocument();
+    expect(within(panel).getByText('tool_119')).toBeInTheDocument();
+  });
+
+  it('reports ONE side of a token count without inventing the other', async () => {
+    /* `meterUsage` stamps whichever side the provider sent. Rendering the
+       unmeasured side as `0 out` is the manufactured zero this panel exists to
+       refuse — and it is the arm a single combined "tokens reported" flag got
+       wrong. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 4000, meteringStatus: 'unknown' }),
+    ]);
+    expect(within(panel).getByText('4,000 in · output not reported')).toBeInTheDocument();
+    expect(within(panel).queryByText(/0 out/)).not.toBeInTheDocument();
+  });
+
+  it('says the token sums are partial when only some exchanges reported a side', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ outputTokens: 5, meteringStatus: 'unknown' }),
+    ]);
+    expect(within(panel).getByText(/2 of 3 reported input and 3 of 3 reported output/)).toBeInTheDocument();
+  });
+
+  it('says an unsettled node’s spend is SO FAR, not a final figure', async () => {
+    // Dispatched and never settled — the live-tail case.
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+    ]);
+    expect(within(panel).getByText(/spent SO FAR/)).toBeInTheDocument();
+  });
+
+  it('does not caveat a SETTLED node’s spend as still running', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+      { type: 'node.succeeded', runId: 'run_1', nodeId: 'greet', attemptId: 'greet#0', outputs: {} },
+    ]);
+    expect(within(panel).queryByText(/spent SO FAR/)).not.toBeInTheDocument();
+  });
+
   it('shows no tool-call section for a node that ran none', async () => {
     const panel = await openPanel([
       dispatched('greet', 'greet#0'),

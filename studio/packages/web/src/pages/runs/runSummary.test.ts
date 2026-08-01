@@ -1726,7 +1726,8 @@ describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
     );
     expect(row.cost.responseCount).toBe(1);
     expect(row.cost.inputTokens).toBe(0);
-    expect(row.cost.tokenReportedResponseCount).toBe(0);
+    expect(row.cost.inputReportedResponseCount).toBe(0);
+    expect(row.cost.outputReportedResponseCount).toBe(0);
     expect(row.cost.providers).toEqual(['agent_cli']);
     // An unpriced subscription call is NOT a measurement gap.
     expect(row.cost.complete).toBe(true);
@@ -1819,6 +1820,48 @@ describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
       'w',
     );
     expect(row.toolCalls.map((t) => t.instanceId)).toEqual(['w@1', 'w@2']);
+  });
+
+  it('counts a sibling foreach item’s attempt PER ITEM, not per row', () => {
+    /* The row folds `w@1` and `w@2` together, so the row's `attempts` counts
+       BOTH dispatches. Stamping that on a tool call says `w@2`'s first exchange
+       happened on attempt 2 — it was that item's attempt ONE. The interleaving
+       matters: dispatch/tool/dispatch/tool is what exposes it, because the two
+       calls then read 1 and 2 and the panel grows an "Attempt" column to show a
+       difference that is not there. */
+    const row = rowFor(
+      [
+        started,
+        dispatch('w@1', 'w@1#0'),
+        toolCall('w@1', { round: 0 }),
+        dispatch('w@2', 'w@2#0'),
+        toolCall('w@2', { round: 0 }),
+      ],
+      'w',
+    );
+    expect(row.toolCalls.map((t) => t.attempt)).toEqual([1, 1]);
+  });
+
+  it('still counts a RETRY of one item as that item’s second attempt', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('w@1', 'w@1#0'),
+        toolCall('w@1', { attemptId: 'w@1#0', round: 0 }),
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'w@1',
+          attemptId: 'w@1#0',
+          error: 'boom',
+          kind: 'transient',
+        },
+        dispatch('w@1', 'w@1#1'),
+        toolCall('w@1', { attemptId: 'w@1#1', round: 0 }),
+      ],
+      'w',
+    );
+    expect(row.toolCalls.map((t) => t.attempt)).toEqual([1, 2]);
   });
 
   it('creates NO row for a tool call naming a node the fold never saw', () => {

@@ -14,7 +14,8 @@ function cost(fields: Partial<NodeCost> = {}): NodeCost {
     inputTokens: 0,
     outputTokens: 0,
     complete: true,
-    tokenReportedResponseCount: 0,
+    inputReportedResponseCount: 0,
+    outputReportedResponseCount: 0,
     providers: [],
     models: [],
     ...fields,
@@ -82,30 +83,56 @@ describe('readNodeCost (#866)', () => {
   });
 
   it('says tokens were NOT reported, so a zero sum is never read as a measurement', () => {
-    const r = readNodeCost(
-      cost({ responseCount: 1, unpricedResponseCount: 1, tokenReportedResponseCount: 0 }),
-    );
-    expect(r.tokensReported).toBe(false);
-    expect(r.tokensPartial).toBe(false);
+    const r = readNodeCost(cost({ responseCount: 1, unpricedResponseCount: 1 }));
+    expect(r.inputTokensReported).toBe(false);
+    expect(r.outputTokensReported).toBe(false);
   });
 
-  it('says the token sums are PARTIAL when only some exchanges reported', () => {
+  it('answers PER SIDE — a one-sided count never lends credibility to the other', () => {
+    /* The documented `meterUsage` case: a gateway sends `prompt_eval_count` and
+       no `eval_count`. A single combined flag would call this response "reported"
+       and render `4,000 in · 0 out` — a measurement nobody took. */
+    const r = readNodeCost(
+      cost({
+        responseCount: 1,
+        costUnknownResponseCount: 1,
+        complete: false,
+        inputTokens: 4000,
+        inputReportedResponseCount: 1,
+        outputReportedResponseCount: 0,
+      }),
+    );
+    expect(r.inputTokensReported).toBe(true);
+    expect(r.outputTokensReported).toBe(false);
+    // And neither side is "partial": input reported on every exchange there was.
+    expect(r.inputTokensPartial).toBe(false);
+  });
+
+  it('says a side is PARTIAL when only some exchanges reported it', () => {
     const r = readNodeCost(
       cost({
         responseCount: 3,
         pricedResponseCount: 3,
-        tokenReportedResponseCount: 2,
+        inputReportedResponseCount: 2,
+        outputReportedResponseCount: 3,
         inputTokens: 40,
       }),
     );
-    expect(r.tokensReported).toBe(true);
-    expect(r.tokensPartial).toBe(true);
+    expect(r.inputTokensPartial).toBe(true);
+    expect(r.outputTokensPartial).toBe(false);
+    expect(r.inputReportedCount).toBe(2);
   });
 
   it('does not call a fully-reporting node partial', () => {
     const r = readNodeCost(
-      cost({ responseCount: 2, pricedResponseCount: 2, tokenReportedResponseCount: 2 }),
+      cost({
+        responseCount: 2,
+        pricedResponseCount: 2,
+        inputReportedResponseCount: 2,
+        outputReportedResponseCount: 2,
+      }),
     );
-    expect(r.tokensPartial).toBe(false);
+    expect(r.inputTokensPartial).toBe(false);
+    expect(r.outputTokensPartial).toBe(false);
   });
 });

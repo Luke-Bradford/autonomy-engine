@@ -34,7 +34,10 @@ export * from './triggers/run-window.js';
 // stamped onto `activity.metered`; L6 sums the stamped costEstimate).
 export * from './pricing/price-table.js';
 
+// #866 — how a cost figure is WRITTEN DOWN (the never-render-spent-money-as-
+// `$0.00` rule), shared so a second cost surface cannot re-decide it.
+export * from './pricing/display.js';
+
 // #2 L6 — the run-cost projection: a pure fold that SUMS the stamped
 // `costEstimate` per run + per pipeline (fail-closed on an absent estimate).
-export * from './pricing/display.js';
 export * from './pricing/run-cost.js';

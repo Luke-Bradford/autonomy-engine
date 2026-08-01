@@ -1768,8 +1768,9 @@ td button + button {
    panel rather than dominate it. Capped and scrolled for the same reason
    `.node-detail-outputs` is. */
 .node-tool-calls {
-  width: 100%;
-  border-collapse: collapse;
+  /* `width`/`border-collapse` come from the global `table` rule. `display: block`
+     is what makes a <table> scrollable at all, and it is the reason the cells set
+     their own padding rather than inheriting a table layout. */
   font-size: 0.8rem;
   display: block;
   max-height: 14rem;

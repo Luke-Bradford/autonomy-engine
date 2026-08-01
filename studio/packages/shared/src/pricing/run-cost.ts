@@ -212,20 +212,26 @@ export interface MeteredTotals {
   inputTokens: number;
   outputTokens: number;
   /**
-   * Responses that reported AT LEAST ONE token count.
+   * Responses that reported an input / an output token count, counted SEPARATELY.
    *
-   * Without it, `inputTokens: 0` is ambiguous between "this really used no tokens"
-   * and "nobody counted" — and the second is the COMMON case per node: an
+   * Without them, `inputTokens: 0` is ambiguous between "this really used no
+   * tokens" and "nobody counted" — and the second is the COMMON case per node: an
    * `agent_cli` spend fact (`cliSpendFact`) carries no token counts at all, so an
    * `agent_task` node would render `0 in / 0 out` for a subprocess that may have
    * driven dozens of model calls internally. That is a measurement nobody took,
    * printed as a measurement — the same manufactured-zero shape `formatNodeDuration`
    * refuses when it renders an unmeasured span as an em-dash rather than `0ms`.
    *
-   * A PARTIAL count (one side present) counts as reported: it reported the side it
-   * had, and the missing side is already visible as `meteringStatus:'unknown'`.
+   * TWO counters, not one, and that is the load-bearing part. `meterUsage` stamps
+   * whichever side a provider reported and leaves the other absent (an
+   * OpenAI-compatible gateway sending `prompt_eval_count` and no `eval_count` is
+   * the documented case), so a SINGLE "reported at least one side" counter would
+   * call that response reported and render `4,000 in · 0 out` — the manufactured
+   * zero, on the very side nobody counted. The absent side has to be visible as
+   * absent, which means each side answers for itself.
    */
-  tokenReportedResponseCount: number;
+  inputReportedResponseCount: number;
+  outputReportedResponseCount: number;
   /** Distinct `provider` values seen, in first-seen order. */
   providers: Set<string>;
   /** Distinct `model` values seen, in first-seen order. */
@@ -242,7 +248,8 @@ export function emptyMeteredTotals(): MeteredTotals {
     costUnknownResponseCount: 0,
     inputTokens: 0,
     outputTokens: 0,
-    tokenReportedResponseCount: 0,
+    inputReportedResponseCount: 0,
+    outputReportedResponseCount: 0,
     providers: new Set(),
     models: new Set(),
   };
@@ -256,10 +263,13 @@ export function accumulateMetered(totals: MeteredTotals, e: MeteredEvent): void 
   totals.responseCount += 1;
   totals.providers.add(e.provider);
   totals.models.add(e.model);
-  if (e.inputTokens !== undefined) totals.inputTokens += e.inputTokens;
-  if (e.outputTokens !== undefined) totals.outputTokens += e.outputTokens;
-  if (e.inputTokens !== undefined || e.outputTokens !== undefined) {
-    totals.tokenReportedResponseCount += 1;
+  if (e.inputTokens !== undefined) {
+    totals.inputTokens += e.inputTokens;
+    totals.inputReportedResponseCount += 1;
+  }
+  if (e.outputTokens !== undefined) {
+    totals.outputTokens += e.outputTokens;
+    totals.outputReportedResponseCount += 1;
   }
 
   // Three disjoint, exhaustive categories. `costEstimate` presence wins first —
@@ -305,7 +315,8 @@ export function runCostFromTotals(totals: MeteredTotals): RunCost {
  * a census, because the CLI reports none of the model calls it drives internally).
  */
 export interface NodeCost extends RunCost {
-  tokenReportedResponseCount: number;
+  inputReportedResponseCount: number;
+  outputReportedResponseCount: number;
   providers: string[];
   models: string[];
 }
@@ -314,7 +325,8 @@ export interface NodeCost extends RunCost {
 export function nodeCostFromTotals(totals: MeteredTotals): NodeCost {
   return {
     ...runCostFromTotals(totals),
-    tokenReportedResponseCount: totals.tokenReportedResponseCount,
+    inputReportedResponseCount: totals.inputReportedResponseCount,
+    outputReportedResponseCount: totals.outputReportedResponseCount,
     providers: [...totals.providers],
     models: [...totals.models],
   };

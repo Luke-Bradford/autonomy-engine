@@ -251,7 +251,13 @@ export interface NodeToolCall {
   round: number;
   /** The executed tool name. `''` for a structurally nameless (malformed) call. */
   toolName: string;
-  /** The provider's call id, ABSENT where the provider issues none (Ollama). */
+  /**
+   * The provider's call id, ABSENT where the provider issues none (Ollama).
+   * NOT rendered as a column — it is a provider-side correlation handle, not
+   * something an operator reads — but it is the one field that distinguishes two
+   * otherwise-identical calls in the same round, so it is folded and used to key
+   * the rendered rows.
+   */
   callId: string | undefined;
   /** Whether the result fed back to the model was an ERROR tool_result. */
   isError: boolean;
@@ -292,6 +298,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const costByNode = new Map<string, MeteredTotals>();
   const instanceSpannedCost = new Set<string>();
   const toolCallsByNode = new Map<string, NodeToolCall[]>();
+  /* Dispatches per RAW node id — `w@1` counted apart from `w@2`, unlike the
+     row's own `attempts`, which folds every item's dispatch onto one number.
+     A tool call belongs to ONE item's attempt, and saying `w@2`'s first exchange
+     happened on "attempt 2" (because a sibling had already dispatched) is a
+     fact about the row, not about the call. Only dispatched activities emit
+     `activity.toolCalled`, so for any node reaching that case this counter and
+     `attempts` agree exactly where there are no instances. */
+  const dispatchesByRawNode = new Map<string, number>();
   // #566 slice 2 / #4 A4b — a PARALLEL foreach's body events carry per-item
   // INSTANCE keys (`w@1`); fold them onto the CANVAS node's row (`w`) so item
   // instances light up the one node the author drew — last-write-wins, the same
@@ -440,6 +454,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     const e = parsed.data;
     switch (e.type) {
       case 'node.dispatched': {
+        dispatchesByRawNode.set(e.nodeId, (dispatchesByRawNode.get(e.nodeId) ?? 0) + 1);
         const n = ensure(e.nodeId);
         n.status = 'dispatched';
         n.attempts += 1;
@@ -679,9 +694,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
           isError: e.isError,
           argsChars: e.argsChars,
           resultChars: e.resultChars,
-          /* The node's attempt count AT APPEND TIME. `node.dispatched` has
-             already bumped it, so the first attempt reads 1. */
-          attempt: target.attempts,
+          /* THIS ITEM's attempt at append time, not the row's. `node.dispatched`
+             has already bumped it, so a first attempt reads 1. The fallback is
+             unreachable through the executor (a tool call follows a dispatch of
+             the same raw id) and exists so a malformed log degrades to the row's
+             count rather than to a manufactured 0. */
+          attempt: dispatchesByRawNode.get(e.nodeId) ?? target.attempts,
           instanceId: instanceOf(e.nodeId),
         });
         toolCallsByNode.set(target.nodeId, list);

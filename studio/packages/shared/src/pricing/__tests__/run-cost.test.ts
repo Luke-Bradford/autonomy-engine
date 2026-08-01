@@ -399,11 +399,14 @@ describe('the metered accumulator (#866)', () => {
     accumulateMetered(totals, meteredEvent({ meteringStatus: 'unpriced', provider: 'agent_cli' }));
     expect(totals.responseCount).toBe(1);
     expect(totals.inputTokens).toBe(0);
-    expect(totals.tokenReportedResponseCount).toBe(0);
+    expect(totals.inputReportedResponseCount).toBe(0);
+    expect(totals.outputReportedResponseCount).toBe(0);
 
     // A PARTIAL count still counts as reported — it reported the side it had.
     accumulateMetered(totals, meteredEvent({ inputTokens: 7, meteringStatus: 'unknown' }));
-    expect(totals.tokenReportedResponseCount).toBe(1);
+    expect(totals.inputReportedResponseCount).toBe(1);
+    // The side the provider did NOT send stays uncounted — the whole point.
+    expect(totals.outputReportedResponseCount).toBe(0);
     expect(totals.inputTokens).toBe(7);
   });
 
@@ -426,7 +429,8 @@ describe('the metered accumulator (#866)', () => {
     const node = nodeCostFromTotals(totals);
     // Every `RunCost` field is present and agrees with the run-level projection.
     expect(node).toMatchObject(runCostFromTotals(totals));
-    expect(node.tokenReportedResponseCount).toBe(1);
+    expect(node.inputReportedResponseCount).toBe(1);
+    expect(node.outputReportedResponseCount).toBe(1);
   });
 
   it('never mutates a caller through a shared totals object', () => {

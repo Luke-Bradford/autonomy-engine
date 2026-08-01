@@ -235,9 +235,16 @@ export async function fireManualTrigger(
  * on the row, and because a poll cannot miss a frame that arrived before the
  * subscription did.
  *
- * The pipeline it fires must be egress-free (the `control` activities — `fail`,
- * `if`, `switch`, `filter` — need no connection and make no network call), or
- * this waits on something a test machine cannot do.
+ * The pipeline it fires must be egress-free, or this waits on something a test
+ * machine cannot do. TWO classes qualify:
+ *  - the `control` activities — `fail`, `if`, `switch`, `filter` — which need no
+ *    connection and make no network call;
+ *  - an `agent_task` on an `agent_cli` connection whose `command` is a local
+ *    binary (`/bin/echo`). `agent_cli` is credential-less by design, and the
+ *    subprocess is an exec, not a socket. This class is strictly more useful for
+ *    OBSERVABILITY specs: `cliSpendFact` mints a real `activity.metered` for any
+ *    subprocess that ran, so a spend fact reaches the durable log with no
+ *    provider (see `node-cost-and-tools.spec.ts`).
  */
 export async function fireAndSettle(
   page: Page,

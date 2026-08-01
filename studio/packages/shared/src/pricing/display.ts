@@ -1,8 +1,18 @@
 /**
- * #866 — how a cost figure is WRITTEN DOWN. Shared rather than page-local because
- * cost has more than one surface already (`GET /api/runs/:id/cost`, the per-node
- * drill-in, and the pipeline rollup `rollupFromAggregates` serves), and the one
- * rule below must not be re-decided per surface.
+ * #866 — how a cost figure is WRITTEN DOWN.
+ *
+ * Shared rather than page-local, and the honest reason is FORWARD-looking rather
+ * than current: the per-node drill-in is the only consumer today (the cost ROUTES
+ * return JSON numbers and render nothing). But U27 is a cost COLUMN plus a
+ * per-run/rollup consumption surface, and the rule below is exactly the kind that
+ * gets re-decided differently the second time someone needs it. It sits beside the
+ * money model it is about, rather than inside one page that reads it.
+ *
+ * The directly analogous formatter — `formatNodeDuration`, carrying the same
+ * never-manufacture-a-zero rule for time — lives page-local in
+ * `pages/runs/format.ts`. If U27 lands and this is still the only caller, the two
+ * should probably be together; that is a deliberate open question, not an
+ * oversight.
  *
  * THE RULE: money that was spent is never rendered as `$0.00`.
  *
@@ -30,17 +40,24 @@ export function formatUsd(amount: number): string {
   if (amount === 0) return '$0.00';
   if (amount < 0.000001) return '< $0.000001';
   if (amount < 0.01) return `$${trimTrailingZeros(amount.toFixed(6))}`;
-  return `$${amount.toFixed(2)}`;
+  /* Grouped, and the locale PINNED for the same reason `formatTokenCount` pins
+     it: an unpinned `toLocaleString()` renders differently per machine. */
+  return `$${amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 /**
- * Drop trailing zeros from a fixed-point string, keeping at least two decimals so
- * every figure still reads as money (`0.009900` → `0.0099`, `0.001000` → `0.001`).
+ * Drop trailing zeros from a `toFixed(6)` string (`0.009900` → `0.0099`).
+ *
+ * Called from ONE branch only — `0.000001 <= amount < 0.01` — which is what makes
+ * this total: every such amount has a significant digit in the first six decimal
+ * places, so trimming can never strip the whole fraction and leave a dangling
+ * `.`, and never needs a minimum-decimals pad.
  */
 function trimTrailingZeros(fixed: string): string {
-  const trimmed = fixed.replace(/0+$/, '');
-  const [whole, fraction = ''] = trimmed.split('.');
-  return fraction.length >= 2 ? trimmed : `${whole}.${fraction.padEnd(2, '0')}`;
+  return fixed.replace(/0+$/, '');
 }
 
 /**

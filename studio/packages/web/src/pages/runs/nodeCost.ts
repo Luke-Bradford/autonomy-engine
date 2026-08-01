@@ -56,13 +56,25 @@ export interface NodeCostReading {
    */
   exchangesAreFloor: boolean;
   /**
-   * Whether ANY exchange reported a token count. `false` means the token sums
-   * are zeros nobody measured — an `agent_cli` spend fact carries no counts at
-   * all — and must be rendered as unreported rather than as `0`.
+   * Whether any exchange reported an input / an output token count, answered
+   * SEPARATELY per side.
+   *
+   * `false` means that side's sum is a zero nobody measured, and must render as
+   * unreported rather than as `0`. Per side rather than combined because
+   * `meterUsage` stamps whichever side a provider sent and leaves the other
+   * absent: a response reporting 4,000 input tokens and no output count is
+   * REPORTED on one side and UNMEASURED on the other, and a single flag would
+   * have to call it one or the other — printing `4,000 in · 0 out` if it chose
+   * "reported", which is the manufactured zero this whole reading exists to stop.
    */
-  tokensReported: boolean;
-  /** True when only SOME exchanges reported tokens, so the sums are partial. */
-  tokensPartial: boolean;
+  inputTokensReported: boolean;
+  outputTokensReported: boolean;
+  /** True when only SOME exchanges reported that side, so its sum is partial. */
+  inputTokensPartial: boolean;
+  outputTokensPartial: boolean;
+  /** How many exchanges reported each side — for saying how partial. */
+  inputReportedCount: number;
+  outputReportedCount: number;
 }
 
 /** Classify a node's folded cost into the one reading that is true of it. */
@@ -73,9 +85,16 @@ export function readNodeCost(cost: NodeCost): NodeCostReading {
     coveredCount: cost.unpricedResponseCount,
     exchangeCount: cost.responseCount,
     exchangesAreFloor: cost.providers.includes(AGENT_CLI_CONNECTION_KIND),
-    tokensReported: cost.tokenReportedResponseCount > 0,
-    tokensPartial:
-      cost.tokenReportedResponseCount > 0 && cost.tokenReportedResponseCount < cost.responseCount,
+    inputTokensReported: cost.inputReportedResponseCount > 0,
+    outputTokensReported: cost.outputReportedResponseCount > 0,
+    inputTokensPartial:
+      cost.inputReportedResponseCount > 0 &&
+      cost.inputReportedResponseCount < cost.responseCount,
+    outputTokensPartial:
+      cost.outputReportedResponseCount > 0 &&
+      cost.outputReportedResponseCount < cost.responseCount,
+    inputReportedCount: cost.inputReportedResponseCount,
+    outputReportedCount: cost.outputReportedResponseCount,
   };
 
   if (cost.responseCount === 0) return { ...base, kind: 'none' };

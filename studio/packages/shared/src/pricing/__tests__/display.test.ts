@@ -26,7 +26,8 @@ describe('formatUsd', () => {
   it('renders an ordinary amount to two decimals', () => {
     expect(formatUsd(0.01)).toBe('$0.01');
     expect(formatUsd(1.239)).toBe('$1.24');
-    expect(formatUsd(1234.5)).toBe('$1234.50');
+    // Grouped, matching formatTokenCount — one module, one convention.
+    expect(formatUsd(1234.5)).toBe('$1,234.50');
   });
 
   it('is TOTAL — a non-finite or negative amount is stated as unknown, never $NaN', () => {
