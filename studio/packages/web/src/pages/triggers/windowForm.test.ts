@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WindowConfig } from '@autonomy-studio/shared';
+import { localInputToUtcIso } from './formFields';
 import { blankWindowForm, formToWindow, windowToForm, type WindowFormState } from './windowForm';
 
 function form(over: Partial<WindowFormState> = {}): WindowFormState {
@@ -19,8 +20,27 @@ function reasonOf(state: WindowFormState): string {
   return converted.reason;
 }
 
+/**
+ * The instant a local wall-clock fixture denotes, resolved the way the browser
+ * would — never written as a literal beside it.
+ *
+ * A hardcoded pair (`'2026-08-01T09:00'` ↔ `'2026-08-01T08:00:00.000Z'`) is only
+ * self-consistent in a UTC+1 zone, and `resolveBound` reads an INCONSISTENT pair
+ * as a control the operator edited, so it re-derives the bound instead of
+ * honouring the shadow. That makes the fixture, not the code, decide which
+ * branch is under test: it asserted the untouched branch in BST and the edited
+ * branch in CI's UTC, where it failed.
+ */
+function isoOf(local: string): string {
+  const iso = localInputToUtcIso(local);
+  if (iso === null) throw new Error(`fixture is not a local date-time: ${local}`);
+  return iso;
+}
+
 /** A start bound, with its shadow — the shape `windowToForm` produces. */
-const START = { startTime: '2026-08-01T09:00', startTimeIso: '2026-08-01T08:00:00.000Z' };
+const START_LOCAL = '2026-08-01T09:00';
+const START_ISO = isoOf(START_LOCAL);
+const START = { startTime: START_LOCAL, startTimeIso: START_ISO };
 
 describe('formToWindow — the absent/present boundary', () => {
   it('reads an untouched form as NO window, not a half-built one', () => {
@@ -47,7 +67,7 @@ describe('formToWindow — the absent/present boundary', () => {
     expect(windowOf(form({ frequency: 'hour', interval: '2', ...START }))).toEqual({
       frequency: 'hour',
       interval: 2,
-      startTime: '2026-08-01T08:00:00.000Z',
+      startTime: START_ISO,
     });
   });
 
@@ -82,11 +102,11 @@ describe('formToWindow — the text a control can hold that a number cannot', ()
 
 describe('formToWindow — every rule beyond "is this a number" comes from the schema', () => {
   it('refuses an endTime at or before the startTime', () => {
-    expect(
-      reasonOf(
-        form({ ...START, endTime: '2026-08-01T09:00', endTimeIso: '2026-08-01T08:00:00.000Z' }),
-      ),
-    ).toMatch(/endTime/);
+    // The "at" case: an end bound on the same instant as the start, i.e. a
+    // zero-length window.
+    expect(reasonOf(form({ ...START, endTime: START_LOCAL, endTimeIso: START_ISO }))).toMatch(
+      /endTime/,
+    );
   });
 
   it('refuses a backfill cap above MAX_BACKFILL_WINDOWS_CAP', () => {
