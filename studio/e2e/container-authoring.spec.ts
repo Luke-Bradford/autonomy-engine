@@ -269,7 +269,7 @@ test.describe('U6d — creating a container from the canvas', () => {
       await create.click();
     });
     await expect(page.locator('.flow-container')).toHaveCount(1);
-    await expect(page.locator('.flow-container-label')).toHaveText('loop');
+    await expect(page.locator('.flow-container-label')).toHaveText('loop 1');
 
     await expectQuiet(page, problems);
   });

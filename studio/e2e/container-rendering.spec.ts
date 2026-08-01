@@ -161,18 +161,23 @@ test.describe('U6c container rendering', () => {
 
     const box = page.locator('.flow-container');
     await expect(box).toHaveCount(1);
-    // The KIND, in words — the epic's non-colour status encoding, and the same
-    // word `connectRules` refuses a boundary crossing by.
-    await expect(box.locator('.flow-container-label')).toHaveText('loop');
+    // In words — the epic's non-colour status encoding — and since #883 with the
+    // WITHIN-KIND ORDINAL, the same text `connectRules` refuses a boundary
+    // crossing by and the same text the membership picker offers. Before #883 the
+    // box drew the bare kind while every surface that OFFERED a container drew
+    // 'loop 2', so the name identified an option and not a rectangle.
+    await expect(box.locator('.flow-container-label')).toHaveText('loop 1');
     /* The accessible name/role are on the NODE element React Flow renders (via the
        node's `ariaRole`/`ariaLabel`), not on the inner box — which is
        `pointer-events: none` inside a wrapper that, being non-focusable, would
        carry no role of its own. Asserted through the a11y tree rather than by
        selector, so it fails if the name stops being reachable. */
-    await expect(page.getByRole('group', { name: 'loop container, 2 activities' })).toHaveCount(1);
+    await expect(page.getByRole('group', { name: 'loop 1 container, 2 activities' })).toHaveCount(
+      1,
+    );
     await expect(page.locator('.react-flow__node[data-id="loop_1"]')).toHaveAttribute(
       'aria-label',
-      'loop container, 2 activities',
+      'loop 1 container, 2 activities',
     );
 
     const boxRect = await rectOf(page, '.flow-container');
