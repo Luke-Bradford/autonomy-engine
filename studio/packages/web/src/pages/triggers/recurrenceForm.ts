@@ -6,6 +6,13 @@ import {
   type RecurrenceFrequency,
   type RecurrenceSchedule,
 } from '@autonomy-studio/shared';
+import {
+  pad,
+  parseWholeNumber,
+  resolveBound,
+  utcIsoToLocalInput,
+  WHOLE_NUMBER,
+} from './formFields';
 
 /**
  * #439 U14b — the PURE half of the recurrence builder: converting between the
@@ -96,21 +103,6 @@ export function blankRecurrenceForm(): RecurrenceFormState {
   };
 }
 
-/**
- * The only accepted shape for a whole number typed into this form.
- *
- * Pinned as a pattern rather than left to `Number`, which also accepts hex and
- * exponent literals — `0x1f` would silently become 31 and `2e1` become 20, while
- * the "not a whole number" message claimed the opposite. Exponent notation is
- * not hypothetical for the interval control either: `<input type="number">`
- * accepts any "valid floating-point number", which INCLUDES `2e1`, so the value
- * reaches the conversion from the real control and not only from a test.
- *
- * Shared by every numeric field so one rule governs them all; a second copy is
- * how `interval` drifted from the list fields in the first place.
- */
-const WHOLE_NUMBER = /^[+-]?\d+$/;
-
 export type NumberListParse = { ok: true; values: number[] } | { ok: false; reason: string };
 
 /**
@@ -137,65 +129,6 @@ export function parseNumberList(raw: string): NumberListParse {
 /** Render a stored list back into the input's text. An absent field is blank. */
 export function formatNumberList(values: readonly number[] | undefined): string {
   return values === undefined ? '' : values.join(', ');
-}
-
-/**
- * Read a `datetime-local` value (naive, no zone) as an absolute UTC instant.
- *
- * The anchoring zone is the BROWSER's, because `RecurrenceSchema` pins
- * `startTime`/`endTime` as absolute instants that the recurrence's own
- * `timeZone` does not affect — that field governs only which wall-clock
- * instants the PATTERN selects. Anchoring the bound in the recurrence's zone
- * instead would read intuitively but contradict the stored semantics, so the
- * editor labels the control and echoes the resolved instant rather than
- * silently reinterpreting it.
- *
- * Returns `null` for anything that is not a well-formed local date-time, so a
- * caller never propagates an `Invalid Date`.
- */
-export function localInputToUtcIso(local: string): string | null {
-  const trimmed = local.trim();
-  // Pin the accepted shape rather than trusting `Date`'s lenient fallback
-  // parsing, which would accept (and mis-anchor) an offset-bearing string.
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) return null;
-  const parsed = new Date(trimmed);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString();
-}
-
-const pad = (n: number): string => String(n).padStart(2, '0');
-
-/**
- * Render an absolute UTC instant back into a `datetime-local` value, in the
- * browser's LOCAL wall clock — the inverse of `localInputToUtcIso`. Building
- * the string from the local getters (rather than slicing `toISOString`, which
- * is UTC) is what keeps the round trip stable in a non-UTC browser.
- */
-export function utcIsoToLocalInput(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const base =
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
-    `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  // Only surface seconds when the instant actually has them, so the common
-  // minute-aligned bound stays a clean `HH:MM` rather than a noisy `HH:MM:00`.
-  return d.getSeconds() === 0 ? base : `${base}:${pad(d.getSeconds())}`;
-}
-
-/**
- * The absolute instant a bound control will actually SUBMIT — the single place
- * that decision is made, so what the editor echoes and what the write boundary
- * receives cannot drift apart.
- *
- * An UNTOUCHED bound resolves to the instant exactly as it was loaded. The
- * control cannot hold sub-second precision, so re-deriving it from the local
- * string would silently shift a stored instant just because the form was opened
- * (see `startTimeIso`). Returns `null` when `local` is not a well-formed local
- * date-time — including when it is empty.
- */
-export function resolveBound(local: string, originalIso: string): string | null {
-  if (originalIso !== '' && utcIsoToLocalInput(originalIso) === local) return originalIso;
-  return localInputToUtcIso(local);
 }
 
 /** Clear every `schedule` sub-field the NEW frequency does not honour, so a
@@ -237,11 +170,10 @@ const LIST_FIELDS: ReadonlyArray<{
 export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversion {
   const honoured = HONOURED_FIELDS[form.frequency];
 
-  const intervalText = form.interval.trim();
-  if (intervalText !== '' && !WHOLE_NUMBER.test(intervalText)) {
-    return { ok: false, reason: `interval: '${form.interval}' is not a whole number` };
-  }
-  const interval = intervalText === '' ? 1 : Number(intervalText);
+  const parsedInterval = parseWholeNumber(form.interval);
+  if (!parsedInterval.ok) return { ok: false, reason: `interval: ${parsedInterval.reason}` };
+  // A blank interval is the schema's own default of 1, not an absent field.
+  const interval = parsedInterval.value ?? 1;
 
   const schedule: Record<string, number[]> = {};
   for (const { key, label } of LIST_FIELDS) {

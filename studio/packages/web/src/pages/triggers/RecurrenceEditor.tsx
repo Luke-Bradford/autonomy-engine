@@ -10,10 +10,10 @@ import {
   cronPreview,
   formToRecurrence,
   pruneForFrequency,
-  resolveBound,
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
+import { resolveBound } from './formFields';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
