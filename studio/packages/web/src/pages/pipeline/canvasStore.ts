@@ -725,6 +725,13 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       // `id`, `kind` and `children` are structural, not config — see the note.
       if (next.id !== id) return;
       if (next.kind !== current.kind) return;
+      // Vacuous for `ContainerPanel`, and deliberately kept anyway: its
+      // `assembleConfig` shallow-copies, so `next.children` IS `current.children`
+      // and this can never fire from there. It guards the seam, not that caller.
+      // (The sharing is harmless — every writer here is copy-on-write and nothing
+      // mutates a children array in place — but it is the shape `loadVersion`'s
+      // deep copy exists to keep away from `loaded`, so: no in-place membership
+      // edits, ever.)
       if (
         next.children.length !== current.children.length ||
         next.children.some((ch, i) => ch !== current.children[i])
