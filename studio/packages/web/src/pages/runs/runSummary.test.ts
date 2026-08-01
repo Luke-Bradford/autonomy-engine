@@ -659,7 +659,11 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
         nextAttemptAt: 10,
       }),
     ])[0];
-    expect(held!).toMatchObject({ status: 'retry_pending', error: 'boom', failureKind: 'transient' });
+    expect(held!).toMatchObject({
+      status: 'retry_pending',
+      error: 'boom',
+      failureKind: 'transient',
+    });
 
     const reopened = deriveNodeActivity([
       envelope(dispatched('a', 'a#0')),
@@ -1018,7 +1022,10 @@ describe('reconcileNodeActivity', () => {
 
   it('lets the ENGINE settle the status, since it sees routing and the doc and the fold does not', () => {
     const events = aSucceededLog();
-    const reconciled = reconcileNodeActivity([row({ nodeId: 'a', status: 'failure' })], stateOf(events));
+    const reconciled = reconcileNodeActivity(
+      [row({ nodeId: 'a', status: 'failure' })],
+      stateOf(events),
+    );
     expect(reconciled[0]!.status).toBe('success');
   });
 

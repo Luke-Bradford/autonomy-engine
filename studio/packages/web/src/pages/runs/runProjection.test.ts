@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ContainerRunStatusSchema,
-  NodeRunStatusSchema,
-  type EngineDoc,
-  type RunEvent,
-} from '@autonomy-studio/shared';
+import type { EngineDoc, RunEvent } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 
 const DOC: EngineDoc = {

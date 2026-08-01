@@ -96,4 +96,3 @@ export function projectRun(doc: EngineDoc, events: RunEvent[]): RunProjection {
   }
   return { ok: true, state: createEngine(doc).projectRunState(parsed) };
 }
-

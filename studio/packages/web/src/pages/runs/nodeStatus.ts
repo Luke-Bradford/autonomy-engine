@@ -49,7 +49,14 @@ import type { ContainerRunStatus, NodeRunStatus } from '@autonomy-studio/shared'
  * ask for — it records that the palette mapping "is NOT injective ACROSS
  * surfaces". The WORD is what U25 reconciles; the hue stays each surface's own.
  */
-export const ALL_TONES = ['neutral', 'running', 'holding', 'success', 'failure', 'skipped'] as const;
+export const ALL_TONES = [
+  'neutral',
+  'running',
+  'holding',
+  'success',
+  'failure',
+  'skipped',
+] as const;
 export type StatusTone = (typeof ALL_TONES)[number];
 
 /**

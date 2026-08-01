@@ -8,7 +8,12 @@ import {
   UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
 import { toFlowEdge } from '../pipeline/edgeCondition';
-import { containerStatusTone, nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
+import {
+  containerStatusTone,
+  nodeStatusLabel,
+  nodeStatusTone,
+  type StatusTone,
+} from './nodeStatus';
 
 /**
  * U11 — the doc + run state → React Flow arrays, as PURE functions.
