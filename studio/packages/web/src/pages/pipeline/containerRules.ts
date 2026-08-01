@@ -2,8 +2,10 @@ import {
   implicitRouting,
   type Container,
   type Edge,
+  type ImplicitRouting,
   type Node,
   type Param,
+  type RoutingPartition,
 } from '@autonomy-studio/shared';
 import { activityLabel } from './activityLabel';
 import { validateCanvas } from './canvasDoc';
@@ -44,10 +46,14 @@ export interface ContainerEditDoc {
 }
 
 /**
- * Where a doc's routing comes from. `authored` means real edges (or nothing to
- * route); the other two are `implicitRouting`'s inferred shapes (#788).
+ * What a doc's routing was, and what the edit makes it. `null` on either side
+ * means routing is AUTHORED — the doc has its own edges, so nothing is inferred
+ * (or it has too few nodes to have a sequence at all).
  */
-export type RoutingSource = 'authored' | 'chain' | 'partitioned';
+export interface RoutingChange {
+  from: ImplicitRouting | null;
+  to: ImplicitRouting | null;
+}
 
 export interface ContainerEditConsequence {
   /**
@@ -79,20 +85,115 @@ export interface ContainerEditConsequence {
    * panel tells an operator what the graph has become, this tells them what a
    * click is about to do, while they can still decline.
    *
-   * HOW FAR IT REACHES, stated rather than left to be discovered: only a change
-   * of KIND. `implicitRouting` collapses every containered edge-less doc to a
-   * detail-free `{kind:'partitioned'}`, so moving a node in or out of a container
-   * that ALREADY exists changes which activities are roots without changing the
-   * kind, and fires nothing. Nor does `deleteContainer` removing the last one
-   * (that edit does not come through this module at all). Both are #840.
+   * HOW FAR IT REACHES, stated rather than left to be discovered: any change to
+   * the inferred WALK, not merely to its kind. #840 widened it — the kind-only
+   * comparison this replaced was blind to a membership edit on a doc that already
+   * had a container, because `implicitRouting` collapsed every such doc to a
+   * detail-free `{kind:'partitioned'}` and both sides read the same.
+   *
+   * A doc with AUTHORED edges still compares as `null` on both sides and reports
+   * nothing — not because such an edit is harmless, but because nothing is being
+   * inferred for it, so there is no inferred routing to change. A membership move
+   * on an authored doc CAN still change readiness without raising an issue
+   * (moving an edge-less node into a container gates it on the container). That
+   * is a real and separate hole, filed as #877 rather than silently folded in.
    */
-  routingChange: { from: RoutingSource; to: RoutingSource } | null;
+  routingChange: RoutingChange | null;
 }
 
-function routingSource(
-  doc: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
-): RoutingSource {
-  return implicitRouting(doc)?.kind ?? 'authored';
+function sameFollows(a: RoutingPartition, b: RoutingPartition): boolean {
+  if (a.follows.length !== b.follows.length) return false;
+  return a.follows.every((f, i) => {
+    const g = b.follows[i]!;
+    return f.from === g.from && f.to === g.to && f.scope === g.scope;
+  });
+}
+
+/**
+ * Compile-time backstop for the cost named above: adding a field to
+ * `RoutingPartition` without comparing it here would silently WITHHOLD a warning,
+ * which is the failure mode this whole ticket exists to end. This map has to gain
+ * the key before the type checks, which turns a silent omission into a build
+ * error at the one place that must not miss one.
+ */
+const COMPARED_PARTITION_FIELDS: Record<keyof RoutingPartition, true> = {
+  roots: true,
+  containerRoots: true,
+  follows: true,
+};
+
+function samePartition(a: RoutingPartition, b: RoutingPartition): boolean {
+  void COMPARED_PARTITION_FIELDS;
+  const sameChildren =
+    a.containerRoots.length === b.containerRoots.length &&
+    a.containerRoots.every((c, i) => {
+      const d = b.containerRoots[i]!;
+      return (
+        c.containerId === d.containerId &&
+        c.children.length === d.children.length &&
+        c.children.every((id, j) => id === d.children[j])
+      );
+    });
+  return (
+    a.roots.length === b.roots.length &&
+    a.roots.every((id, i) => id === b.roots[i]) &&
+    sameChildren &&
+    sameFollows(a, b)
+  );
+}
+
+/**
+ * Field-wise rather than `JSON.stringify(a) === JSON.stringify(b)`, and that is
+ * this directory's settled position rather than a preference: `sameContainerConfig`
+ * (`canvasStore.ts`) REPLACED exactly that comparison, because it made a "did
+ * anything change?" question depend on the key order an unrelated module happened
+ * to construct its objects in. The same objection applies here — both operands
+ * come from `routingPartition` today, but nothing in the type says they must.
+ *
+ * (An ordering argument would NOT justify this: stringify is just as
+ * order-sensitive over arrays as a field-wise walk. The array ordering is a
+ * property of `routingPartition`, pinned by its own tests, not of this function.)
+ *
+ * There is also no shared deep-equal to reach for — `deepEquals` is module-private
+ * to the expression functions. The cost of hand-rolling is stated plainly: a new
+ * field on `RoutingPartition` is IGNORED here until someone adds it, which would
+ * silently withhold a warning. `samePartition` is the one place to change.
+ */
+function sameRouting(a: ImplicitRouting | null, b: ImplicitRouting | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'chain' && b.kind === 'chain') {
+    return a.order.length === b.order.length && a.order.every((id, i) => id === b.order[i]);
+  }
+  if (a.kind === 'partitioned' && b.kind === 'partitioned') {
+    return samePartition(a.partition, b.partition);
+  }
+  return false;
+}
+
+/**
+ * The routing half of a container edit's consequence, on its own.
+ *
+ * Separate from `containerEditConsequence` because `deleteContainer` needs it and
+ * cannot use that function: a delete cascades the container's incident EDGES as
+ * well, which a `nextContainers`-only signature cannot express, and #840 warns
+ * that feeding it the naive `containers.filter(...)` produces a WRONG warning.
+ * Exporting the half it can compose with keeps `confirmDeleteContainer`'s own
+ * destruction warning specific, which is the separation this module's tail
+ * comment argues for.
+ *
+ * Deliberately NOT short-circuited on `before.edges.length > 0`. That reads like
+ * a free optimisation and would silently kill the case this exists for: a delete
+ * whose cascade removes the doc's last authored edge flips routing from authored
+ * to an inferred chain.
+ */
+export function routingChangeBetween(
+  before: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
+  after: Pick<ContainerEditDoc, 'nodes' | 'edges' | 'containers'>,
+): RoutingChange | null {
+  const from = implicitRouting(before);
+  const to = implicitRouting(after);
+  return sameRouting(from, to) ? null : { from, to };
 }
 
 /**
@@ -117,11 +218,9 @@ export function containerEditConsequence(
 ): ContainerEditConsequence {
   const known = new Set(validateCanvas(doc.nodes, doc.edges, doc.containers, doc.params));
   const after = validateCanvas(doc.nodes, doc.edges, nextContainers, doc.params);
-  const from = routingSource(doc);
-  const to = routingSource({ nodes: doc.nodes, edges: doc.edges, containers: nextContainers });
   return {
     newIssues: after.filter((issue) => !known.has(issue)),
-    routingChange: from === to ? null : { from, to },
+    routingChange: routingChangeBetween(doc, { ...doc, containers: nextContainers }),
   };
 }
 
@@ -211,6 +310,60 @@ export function readableIssue(
 }
 
 /**
+ * How a routing change is put to the operator, or `null` when there is none.
+ *
+ * Every arm is QUALITATIVE — it names no activity. That is a constraint, not a
+ * shortcut: `activityLabel` is keyed on an activity's TYPE, so three
+ * `http_request` nodes are all "HTTP Request", and there is no identifying
+ * node-side counterpart to `containerLabels` yet. Enumerating "these now start in
+ * parallel: HTTP Request, HTTP Request" would be a confident claim the operator
+ * cannot act on, and a wrong-looking one. Describing the CHANGE is honest at the
+ * fidelity actually available; the canvas advisory panel, which can afford ids,
+ * is where the detail goes. #878 is the identifying activity name that would let
+ * these sentences name what moved.
+ *
+ * Every arm also ends on what SAVING does, because that is the real cost: the
+ * inferred routing is minted into the next version, and a version is immutable.
+ */
+export function routingSentence(change: RoutingChange | null): string | null {
+  if (change === null) return null;
+  const { from, to } = change;
+  // DEFENSIVE, and reachable from no caller today: `to === null` needs the
+  // candidate doc to author edges, which `containerEditConsequence` never adds
+  // and `cascadeDeleteContainer` only removes — so every real call with a
+  // non-null `from` also has a non-null `to`. Kept because this function is
+  // EXPORTED and a future caller (an undo, an import-into-canvas) could produce
+  // it, and returning nothing there would be the silent withholding this whole
+  // ticket is about. Pinned by a direct unit test rather than left unexercised.
+  if (to === null) {
+    return (
+      'This pipeline now authors its own edges, so its routing is no longer inferred from the ' +
+      'order activities were added. Saving mints the authored routing into the next version.'
+    );
+  }
+  if (to.kind === 'chain') {
+    return (
+      'This pipeline has no authored edges, so its routing is inferred: the activities ' +
+      'run as one sequence, in the order they were added. Saving mints that as the next ' +
+      "version's routing."
+    );
+  }
+  if (from?.kind === 'partitioned') {
+    return (
+      'This pipeline has no authored edges, so its routing is inferred from the order activities ' +
+      'were added, and its containers split that into parallel roots. This edit changes that ' +
+      'inferred routing — which activities start in parallel, and what runs inside each ' +
+      'container. Saving mints the changed routing into the next version.'
+    );
+  }
+  return (
+    'This pipeline has no authored edges, so its routing is inferred from the order ' +
+    'activities were added. A container splits that single sequence into parallel roots — ' +
+    'saving mints the split routing into the next version.'
+  );
+}
+
+/**
  * The confirmation an edit needs before it is applied, or `null` when it costs
  * nothing worth interrupting for.
  *
@@ -240,19 +393,8 @@ export function consequenceMessage(
   recovery: string,
 ): string | null {
   const parts: string[] = [];
-  const change = consequence.routingChange;
-  if (change !== null && change.to === 'partitioned') {
-    parts.push(
-      'This pipeline has no authored edges, so its routing is inferred from the order ' +
-        'activities were added. A container splits that single sequence into parallel roots — ' +
-        'saving mints the split routing into the next version.',
-    );
-  }
-  // No `to === 'chain'` arm: no caller SHRINKS the container array
-  // (`assignContainerChild` and U23's config edit are length-preserving,
-  // `containersWithNew` appends), so a doc can only gain its first container
-  // here. Removing the LAST one is `deleteContainer`'s edit (#748), which does
-  // not come through this module.
+  const routing = routingSentence(consequence.routingChange);
+  if (routing !== null) parts.push(routing);
 
   if (consequence.newIssues.length > 0) {
     const lines = consequence.newIssues.map(

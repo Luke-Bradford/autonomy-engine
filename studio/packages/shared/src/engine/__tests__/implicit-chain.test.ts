@@ -63,15 +63,126 @@ describe('implicitRouting (#788)', () => {
    * The container case is REACHABLE — nothing refuses an edge-less doc that has
    * containers (asserted below) — and it is where a naive surface lies. `nodes`
    * is FLAT, so the synthesized chain crosses container boundaries; the walk then
-   * DROPS those edges. Routing is still inferred and still worth announcing, so
-   * this is `partitioned` rather than `null`, but the order is deliberately
-   * withheld because it would be wrong.
+   * DROPS those edges. No single LINE can be claimed, so there is no `order`; what
+   * the doc gets instead is the partition itself (#840), read off the same
+   * `partitionReadiness` the walk uses.
    */
-  it('withholds the order when containers are present — the chain is not the walk', () => {
+  it('describes the partition when containers are present — the chain is not the walk', () => {
     const d = doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: ['b'] }]);
     // Reachability, not a hypothetical: the write gate accepts this doc as-is.
     expect(validateDoc({ ...d, params: [] })).toEqual([]);
-    expect(implicitRouting(d)).toEqual({ kind: 'partitioned' });
+    expect(implicitRouting(d)).toEqual({
+      kind: 'partitioned',
+      partition: {
+        roots: ['a', 'c1'],
+        containerRoots: [{ containerId: 'c1', children: ['b'] }],
+        follows: [],
+      },
+    });
+  });
+});
+
+/**
+ * #840 — the partition is what makes a container edit's routing change VISIBLE.
+ *
+ * `implicitRouting` used to collapse every containered edge-less doc to a
+ * detail-free `{kind:'partitioned'}`, so the canvas's pre-edit warning — which
+ * compared only that KIND — fired nothing for a membership edit on a doc that
+ * already had a container, and nothing for deleting the last one. The doc still
+ * changed what runs after what, and saving still minted it into an IMMUTABLE
+ * version. These tests pin the detail that closes that gap.
+ */
+describe('implicitRouting partition (#840)', () => {
+  function partitionOf(d: ReturnType<typeof doc>) {
+    const routing = implicitRouting(d);
+    if (routing?.kind !== 'partitioned')
+      throw new Error(`expected partitioned, got ${routing?.kind}`);
+    return routing.partition;
+  }
+
+  /**
+   * THE case the ticket is about, and the one that pins `follows.scope` as
+   * load-bearing: `roots` and `containerRoots` are IDENTICAL on both sides, and
+   * the `b -> c` pair survives on both sides. The only thing that changes is
+   * WHERE it runs — inside the stage's body, or at the top level. A projection
+   * carrying `{from, to}` alone reports no change here, which is precisely the
+   * silence #840 was filed about.
+   */
+  it('distinguishes a membership move that changes only WHERE a pair runs', () => {
+    const nodes = () => [node('a'), node('b'), node('c')];
+    const inside = partitionOf(
+      doc(nodes(), [], [{ id: 'c1', kind: 'stage', children: ['b', 'c'] }]),
+    );
+    const moved = partitionOf(doc(nodes(), [], [{ id: 'c1', kind: 'stage', children: ['b'] }]));
+
+    expect(inside).toEqual({
+      roots: ['a', 'c1'],
+      containerRoots: [{ containerId: 'c1', children: ['b'] }],
+      follows: [{ from: 'b', to: 'c', scope: 'c1' }],
+    });
+    expect(moved).toEqual({
+      roots: ['a', 'c1'],
+      containerRoots: [{ containerId: 'c1', children: ['b'] }],
+      follows: [{ from: 'b', to: 'c', scope: null }],
+    });
+    // Stated as its own assertion because it is the property, not a by-product.
+    expect(moved).not.toEqual(inside);
+    expect(moved.roots).toEqual(inside.roots);
+    expect(moved.containerRoots).toEqual(inside.containerRoots);
+  });
+
+  /**
+   * An EMPTIED container is still a top-level root — it is a `topIncoming` key
+   * with an empty bucket, whatever it does or does not contain. Pinned because
+   * the plan for this ticket guessed `['a']` and the walk says `['a', 'c1']`.
+   */
+  it('keeps an emptied container as a parallel root, and claims no children for it', () => {
+    expect(
+      partitionOf(doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: [] }])),
+    ).toEqual({
+      roots: ['a', 'c1'],
+      containerRoots: [{ containerId: 'c1', children: [] }],
+      follows: [{ from: 'a', to: 'b', scope: null }],
+    });
+  });
+
+  /**
+   * A container may DECLARE a child that is not in `doc.nodes` — the dangling ref
+   * #746/#425 are about, and a state the warning fires in, since it fires on
+   * candidate docs that are unsavable. Listing a ghost as something that runs
+   * would be the surface stating the opposite of what happens, so membership is
+   * intersected with the walk's own `endpointIds`.
+   */
+  it('does not claim a ghost child runs', () => {
+    expect(
+      partitionOf(
+        doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: ['b', 'ghost'] }]),
+      ).containerRoots,
+    ).toEqual([{ containerId: 'c1', children: ['b'] }]);
+  });
+
+  /**
+   * Two containers claiming the same child: `containerMembership` resolves it
+   * first-wins, and the projection must resolve it the SAME way rather than
+   * listing the node under both — a second reader of that rule is #847's
+   * anti-pattern.
+   */
+  it('attributes a duplicated child to its first-wins owner only', () => {
+    expect(
+      partitionOf(
+        doc(
+          [node('a'), node('b')],
+          [],
+          [
+            { id: 'c1', kind: 'stage', children: ['b'] },
+            { id: 'c2', kind: 'stage', children: ['b'] },
+          ],
+        ),
+      ).containerRoots,
+    ).toEqual([
+      { containerId: 'c1', children: ['b'] },
+      { containerId: 'c2', children: [] },
+    ]);
   });
 
   /**

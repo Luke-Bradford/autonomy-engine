@@ -4318,14 +4318,114 @@ export function effectiveEdges(doc: Pick<PipelineVersion, 'nodes' | 'edges'>): E
 }
 
 /**
+ * One gating pair the readiness partition actually walks, and WHERE it walks it.
+ *
+ * `scope` is the container whose body the pair runs inside, or `null` for the top
+ * level. It is not decoration (#840): a membership move can leave both endpoints,
+ * both root sets and the pair itself untouched and change only its scope — `b -> c`
+ * inside a stage runs once per round of that stage, the same pair at the top level
+ * runs once. A projection carrying `{from, to}` alone reports no change there.
+ */
+export interface RoutingFollow {
+  from: string;
+  to: string;
+  scope: string | null;
+}
+
+/**
+ * What an edge-less doc WITH containers actually runs, as a comparable value.
+ *
+ * Every field is read off `partitionReadiness` — the same buckets the reducer
+ * reads — so this describes the walk rather than re-deriving it.
+ *
+ * Ordering is deterministic, which is what lets two of these be compared
+ * field-wise, but it is NOT one flat document order and a surface rendering the
+ * list verbatim should know it: `roots` is every top-level node in `doc.nodes`
+ * order and THEN every container in `doc.containers` order (that is
+ * `topIncoming`'s insertion order, which this deliberately preserves rather than
+ * re-sorting). `containerRoots` follows `doc.containers`, and each `children`
+ * follows that container's own `children`.
+ */
+export interface RoutingPartition {
+  /** Top-level entities (top nodes and containers) that start at once, in parallel. */
+  roots: string[];
+  /** Per container, the children that start when it opens. */
+  containerRoots: Array<{ containerId: string; children: string[] }>;
+  /** Every gating pair the partition walks, top level and inside containers. */
+  follows: RoutingFollow[];
+}
+
+/**
  * #788 — what an EDGE-LESS doc's routing actually is, for a surface to SAY.
  *
  * `chain` carries the run order in full; `partitioned` means routing is still
- * inferred but no single line can be claimed (see below). `null` means nothing
- * is being inferred at all: the doc authors its own edges, or has fewer than two
- * nodes and so has no sequence to speak of.
+ * inferred but no single LINE can be claimed, and carries the partition instead
+ * (see below). `null` means nothing is being inferred at all: the doc authors its
+ * own edges, or has fewer than two nodes and so has no sequence to speak of.
  */
-export type ImplicitRouting = { kind: 'chain'; order: string[] } | { kind: 'partitioned' };
+export type ImplicitRouting =
+  { kind: 'chain'; order: string[] } | { kind: 'partitioned'; partition: RoutingPartition };
+
+/**
+ * The partition of an edge-less containered doc, DERIVED — never re-derived.
+ *
+ * Every value here comes out of `partitionReadiness`'s buckets, which is what
+ * makes it safe for a surface to state: if the walk's bucketing changes, this
+ * changes with it rather than going quietly stale.
+ *
+ * The one rule NOT taken verbatim from a bucket is "an empty incoming list means
+ * this starts immediately" — `reduce.ts`'s `computeReadiness` owns that, and this
+ * re-expresses it in two lines. It is a seam where drift could appear, so it is
+ * named rather than left to be discovered; the anti-drift test in
+ * `implicit-chain.test.ts` checks a claimed chain against the real buckets for
+ * the same reason.
+ *
+ * Two degenerate memberships are resolved the way the walk resolves them, not
+ * the way `Container.children` reads. A child DECLARED but absent from
+ * `doc.nodes` (the dangling ref of #746/#425) is excluded via `endpointIds`,
+ * because a surface must not claim a ghost runs — and this matters precisely
+ * here, since the canvas warning fires on candidate docs that are unsavable. A
+ * child claimed by two containers is attributed to `containerMembership`'s
+ * first-wins owner, so it appears exactly once.
+ */
+function routingPartition(
+  doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
+): RoutingPartition {
+  const { owner } = containerMembership(doc.containers);
+  const { topIncoming, childIncoming } = partitionReadiness(doc, doc.containers, owner);
+
+  const roots: string[] = [];
+  const follows: RoutingFollow[] = [];
+  for (const [id, incoming] of topIncoming) {
+    if (incoming.length === 0) roots.push(id);
+    for (const e of incoming) follows.push({ from: e.from, to: e.to, scope: null });
+  }
+
+  const containerRoots = doc.containers.map((c) => {
+    const children: string[] = [];
+    // Walked over `doc.nodes`, NOT over `c.children`, and that choice does three
+    // jobs at once. It makes the result INVARIANT under a reorder of `children`
+    // — two docs that run the same thing must compare equal, or a pure reorder
+    // reads as a routing change and the warning becomes noise. It drops a GHOST
+    // child (declared but absent from `doc.nodes` — the dangling ref of
+    // #746/#425) without needing a separate id-set test, and a surface must not
+    // claim a ghost runs. And it makes a container id listed as a child — only
+    // reachable from an imported/POSTed doc, since `validateDoc` refuses it and
+    // the UI cannot author it — describable as the top-level entity the walk
+    // actually treats it as, rather than as both a root and someone's child.
+    // Listing each node once also subsumes the duplicate cases: first-wins
+    // ownership across containers, and one container naming a child twice.
+    for (const n of doc.nodes) {
+      if (owner.get(n.id) !== c.id) continue;
+      const incoming = childIncoming.get(n.id) ?? [];
+      if (incoming.length === 0) children.push(n.id);
+      for (const e of incoming) follows.push({ from: e.from, to: e.to, scope: c.id });
+    }
+    return { containerId: c.id, children };
+  });
+
+  return { roots, containerRoots, follows };
+}
 
 /**
  * #788 — the routing an EDGE-LESS doc gets handed, described honestly.
@@ -4350,9 +4450,17 @@ export type ImplicitRouting = { kind: 'chain'; order: string[] } | { kind: 'part
  * in PARALLEL. Reporting `[a, b]` as a sequence there would be a surface
  * confidently stating the opposite of what runs, which is worse than the silence
  * this ticket set out to end. Hence `partitioned`: routing is still inferred and
- * still worth announcing, but the ORDER is not ours to claim. Describing the
- * container case exactly would mean re-deriving the partition here, which is a
- * bigger seam than the discoverability fix needs.
+ * still worth announcing, but the ORDER is not ours to claim.
+ *
+ * #840 replaced the ORIGINAL reason for withholding the detail as well ("describing
+ * the container case exactly would mean re-deriving the partition here"). It would
+ * have, and that was the right call while the only consumer wanted a sentence — but
+ * a detail-free `partitioned` is not COMPARABLE, so the canvas's pre-edit warning
+ * could not see a membership edit that changed which activities are roots, and
+ * saving minted the changed routing into an immutable version with nothing said.
+ * `routingPartition` therefore reads the buckets straight off `partitionReadiness`
+ * rather than re-deriving anything: the seam the old comment was avoiding is the
+ * one that would have been a SECOND source of truth, and this is not that.
  */
 export function implicitRouting(
   doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
@@ -4360,7 +4468,7 @@ export function implicitRouting(
   if (doc.edges.length > 0) return null;
   const synth = effectiveEdges(doc);
   if (synth.length === 0) return null;
-  if (doc.containers.length > 0) return { kind: 'partitioned' };
+  if (doc.containers.length > 0) return { kind: 'partitioned', partition: routingPartition(doc) };
   return { kind: 'chain', order: [synth[0]!.from, ...synth.map((e) => e.to)] };
 }
 
