@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { TERMINAL_RUN_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
@@ -64,6 +64,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [rerunning, setRerunning] = useState(false);
   const [rerunError, setRerunError] = useState<string | null>(null);
 
+  /* Whether this mount is still on screen, read by the rerun settle handlers.
+     Set on mount rather than only cleared on unmount, so a StrictMode
+     mount-unmount-remount leaves it TRUE rather than permanently false. */
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+
   /**
    * RS2 — start a rerun-from-failed of THIS run and follow the new one.
    *
@@ -72,28 +83,42 @@ export function RunDetailPage({ runId }: { runId: string }) {
    * acknowledgement, and the right destination is R2's own page, where the live
    * tail takes over and shows the rerun actually happening.
    *
-   * `rerunning` guards a double-click: without it a second click before the
-   * request resolves would start a SECOND rerun, and unlike a re-read that is
-   * not idempotent — it would spend money twice and leave an orphan run.
+   * `rerunning` guards a double-click WITHIN one mount: without it a second
+   * click before the request resolves would start a SECOND rerun, and unlike a
+   * re-read that is not idempotent — it would spend money twice and leave an
+   * orphan run. It does NOT survive a remount, which is a real residual and is
+   * filed rather than implied: `RunDetailRoute` keys this page by `runId`, so
+   * leaving the page and coming back mid-flight yields a fresh mount with the
+   * flag back to `false` and the button live again (#896).
+   *
+   * `live` is why the settle handlers check before touching anything. The
+   * component has three other ways to unmount while a request is open — the
+   * "← All runs" button, the lineage link, and the browser's own back — and
+   * react-router's `navigate` carries no unmount guard of its own (its active
+   * flag is set in a layout effect with no cleanup). Without this check, a 202
+   * landing after the operator has already walked away would yank them off the
+   * runs list onto R2, which is a navigation nobody asked for.
    *
    * Failures are shown, not swallowed. A `409` here is the expected, meaningful
    * case (the server found the run ineligible after all) and its message is the
    * server's own sentence; anything else surfaces just as plainly rather than
-   * leaving a button that silently did nothing.
+   * leaving a button that silently did nothing. `async`/`try`/`catch` rather
+   * than a two-argument `then`, matching `PipelinesPage.onDelete`: a throw from
+   * the success path lands in the same `catch` instead of stranding the button
+   * disabled with nothing said.
    */
-  const onRerun = () => {
+  const onRerun = async () => {
     if (rerunning) return;
     setRerunning(true);
     setRerunError(null);
-    rerunFromFailed(runId).then(
-      ({ runId: newRunId }) => void navigate(runDetailPath(newRunId)),
-      (err: unknown) => {
-        /* No `aborted` check: this is a user action with no AbortController, and
-           the component only unmounts here by navigating away on success. */
-        setRerunError(messageOf(err));
-        setRerunning(false);
-      },
-    );
+    try {
+      const { runId: newRunId } = await rerunFromFailed(runId);
+      if (live.current) void navigate(runDetailPath(newRunId));
+    } catch (err: unknown) {
+      if (!live.current) return;
+      setRerunError(messageOf(err));
+      setRerunning(false);
+    }
   };
 
   // `RunDetailRoute` renders this with `key={runId}`, so a different run
@@ -278,7 +303,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
           page sets the precedent that starting work is a direct action here. */}
       {canRerunFromFailed(status) && (
         <div className="run-actions">
-          <button type="button" onClick={onRerun} disabled={rerunning}>
+          <button type="button" onClick={() => void onRerun()} disabled={rerunning}>
             {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
           </button>
           <span className="page-hint">{RERUN_COST_WARNING}</span>

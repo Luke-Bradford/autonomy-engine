@@ -26,10 +26,17 @@ import type { NodeActivity, NodeToolCall } from './runSummary';
  * rerun-from-failed seeds its copied frontier through `run.reseeded`, which this
  * fold ignores, so a copied node shows no outputs here.
  *
- * READ-ONLY by design (U28): no cancel, no rerun, no retry. Those are
- * control-plane WRITES with no engine primitive behind them today, and inventing
- * a control here would cross the "no engine execution-semantics changes"
- * boundary the UI epic draws.
+ * READ-ONLY by design (U28): no cancel, no retry, and no NODE-level rerun. The
+ * reason is per-control, and one of the three has since changed, so it is worth
+ * stating precisely rather than as one blanket claim:
+ *  - cancel and retry still have no engine primitive at all — the only
+ *    cancellation in the tree is connector-level `AbortSignal` plumbing, there is
+ *    no cancel command, route or event — so inventing either control here would
+ *    cross the "no engine execution-semantics changes" boundary the UI epic draws.
+ *  - rerun DOES now have a primitive (RS2), but it reruns a RUN, not a node:
+ *    it resumes from the run's failure frontier. It therefore belongs to the
+ *    parent page, which is where it lives, and there is still nothing a
+ *    node-scoped rerun control could call.
  *
  * Deliberately NOT shown yet, each for a stated reason rather than an oversight:
  *  - the node's INPUT — no event captures the resolved config a node ran with,

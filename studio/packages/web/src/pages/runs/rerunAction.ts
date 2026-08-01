@@ -18,9 +18,9 @@ import type { RunStatus } from '@autonomy-studio/shared';
  * names). So the split is:
  *
  *  - **this predicate** decides only whether to put the control on screen, from
- *    the one fact the row already carries — the status. It exists to avoid
- *    offering an action that obviously cannot work (there is no "rerun from
- *    failed" for a run that succeeded, or one still running).
+ *    a single fact — the run's status as the page already computes it. It exists
+ *    to avoid offering an action that obviously cannot work (there is no "rerun
+ *    from failed" for a run that succeeded, or one still running).
  *  - **the server** decides whether a click actually proceeds, and its `409`
  *    message is surfaced VERBATIM. It is the authority, and it is allowed to
  *    refuse something this predicate offered.
@@ -31,11 +31,20 @@ import type { RunStatus } from '@autonomy-studio/shared';
  * it, whereas offering one the server refuses costs a click and produces a
  * truthful explanation.
  *
- * The row can also legitimately disagree with the log for a moment — the row is
- * a projection of the log (#443 makes the log the authority), so a run whose
- * terminal event has landed but whose row has not yet been patched will show as
- * running here. The server still answers correctly; the control simply appears
- * a beat later.
+ * WHICH status this reads matters, because the lag it can suffer is not the one
+ * you would first guess. `RunDetailPage` passes `view?.status ?? run?.status` —
+ * the LOG-derived lifecycle first (the same `terminalFactFromLog` fact the
+ * server decides on), and the REST row only as a fallback. So the ordinary case
+ * is not lagged at all: page and server are reading the same authority.
+ *
+ * The fallback is where a disagreement can appear, and it fails in the direction
+ * this module already prefers. Before the WebSocket has replayed — or if the
+ * stream is in `error` and never does — the page falls back to the row, and a
+ * row still reading `running` while the log has terminated withholds the control
+ * on a run the server WOULD have accepted. That is the "weaker, never stronger"
+ * side of the split above: nothing is offered that cannot work, and the control
+ * appears once the log arrives. It is a real limitation rather than a
+ * theoretical one, and it is stated here rather than left to be discovered.
  */
 
 /**

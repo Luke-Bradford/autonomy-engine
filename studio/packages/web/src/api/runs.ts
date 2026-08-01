@@ -83,11 +83,19 @@ export function getRunEvents(id: string, signal?: AbortSignal): Promise<RunEvent
  * The accepted-rerun body. Declared HERE rather than in `@autonomy-studio/shared`,
  * which is the exception to this module's shared-schema rule and is called out
  * rather than glossed: the route replies with an inline object literal
- * (`reply.status(202).send({ runId })` — `server/src/routes/runs.ts`) and has no
- * shared response schema to borrow. Introducing one that only the client used
- * would look like a contract check while checking nothing on the server side, so
- * this stays a local shape assertion: it proves the field arrived and is a
+ * (`reply.status(202).send({ runId })` — `server/src/routes/runs.ts`), so there
+ * is no shared response schema to borrow, and one introduced for the client
+ * alone would look like a contract check while checking nothing on the server
+ * side. This stays a local shape assertion: it proves the field arrived and is a
  * non-empty string, and nothing more.
+ *
+ * The honest caveat is that the SIBLING `202 { runId }` route did better. `POST
+ * /api/triggers/:id/fire` has `FireResultSchema` in shared, and the server's
+ * `FireResult` type is derived from it (`server/src/run/launcher.ts`) — which is
+ * exactly the cure for the objection above. Matching that is ~2 lines in shared
+ * plus a `satisfies` on the route, and it is deferred here only to keep this
+ * change client-only, because the argument for building it at all rests on
+ * touching no server code. Worth doing the next time that route is opened.
  */
 const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
 

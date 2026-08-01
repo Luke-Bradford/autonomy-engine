@@ -14,10 +14,12 @@ import { fluentRootReady } from './support/theme';
  * the real producer actually runs: the unit tests mock the request, so they can
  * show the page ASKS, never that a rerun HAPPENS.
  *
- * Both fixtures are egress-free (`fireAndSettle`'s rule): `fail` is a control
- * activity needing no connection and making no network call, and `wait` is
- * resolved by the engine itself. `seconds` is a whole-value `${}` expression
- * because `validateWaitConfig` refuses a bare literal at save time.
+ * Both fixtures are egress-free, which is `fireAndSettle`'s standing requirement:
+ * `fail` is a control activity needing no connection and making no network call,
+ * and `wait` is resolved by the engine's own alarm rather than by anything
+ * outside the process (`seconds` is a whole-value `${}` expression because
+ * `validateWaitConfig` refuses a bare literal at save time). That second class
+ * is recorded in `seedDoc.ts`'s own docblock alongside the other two.
  */
 const FAILING_DOC = {
   nodes: [{ id: 'stop', type: 'fail', config: { message: 'planned' }, position: { x: 0, y: 0 } }],
@@ -70,6 +72,13 @@ test('#895 — a run that SUCCEEDED is offered no rerun-from-failed', async ({ p
 
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
+
+  /* PIN THE STATUS FIRST. `fireAndSettle` returns on ANY terminal status, so
+     without this the test's own sentence is unproven: a fixture that ended
+     `skipped` or `interrupted` would satisfy every assertion below while the
+     title claimed it had succeeded. The absences only mean something once the
+     run is known to be the case the title names. */
+  await expect(page.locator('.run-status')).toHaveText('success');
 
   /* The withhold half, and it is the one worth an e2e: the server would refuse a
      successful run with `409 the run succeeded (nothing to resume from)`, so

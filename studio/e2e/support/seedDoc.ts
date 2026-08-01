@@ -245,6 +245,13 @@ export async function fireManualTrigger(
  *    OBSERVABILITY specs: `cliSpendFact` mints a real `activity.metered` for any
  *    subprocess that ran, so a spend fact reaches the durable log with no
  *    provider (see `node-cost-and-tools.spec.ts`).
+ *  - the ENGINE-RESOLVED park, `wait`. It leaves the process entirely (it is an
+ *    alarm, not a call) and the engine itself resumes it, so nothing outside can
+ *    be waited on. `${0}` settles immediately, which is what makes it the
+ *    cheapest way to seed a SUCCEEDED run — the other two classes give a failure
+ *    or need a connection (`node-duration.spec.ts`, `rerun-from-failed.spec.ts`).
+ *    A long `seconds` parks and never settles, so `fireAndSettle` would time out
+ *    on one — that is `fireManualTrigger`'s case (`run-status-vocabulary.spec.ts`).
  */
 export async function fireAndSettle(
   page: Page,

@@ -14,8 +14,19 @@ describe('canRerunFromFailed', () => {
      a failure of THIS test, not as a silently unclassified value. */
   const ALL: readonly RunStatus[] = RunStatusSchema.options;
 
+  /* The set, not the COUNT. A count passes an add-plus-remove unchanged, which
+     is exactly the edit that would leave a new status silently unclassified. */
   it('covers every status the schema declares', () => {
-    expect(ALL.length).toBe(8);
+    expect([...ALL].sort()).toEqual([
+      'failure',
+      'interrupted',
+      'pending',
+      'queued',
+      'running',
+      'skipped',
+      'success',
+      'waiting',
+    ]);
   });
 
   it.each(['failure', 'interrupted'] as const)('offers the action for %s', (status) => {
@@ -35,7 +46,9 @@ describe('canRerunFromFailed', () => {
     // `interrupted` are the only two statuses that can mean that, so those are
     // the two the UI offers on. `success`/`skipped` are terminal but not
     // failures; the rest have not terminated at all.
-    expect(ALL.filter(canRerunFromFailed)).toEqual(['failure', 'interrupted']);
+    // Sorted, so the assertion does not silently depend on the order
+    // `RunStatusSchema.options` happens to declare its members in.
+    expect(ALL.filter(canRerunFromFailed).sort()).toEqual(['failure', 'interrupted']);
   });
 
   it('exposes the same set it decides with', () => {
