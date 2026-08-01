@@ -116,3 +116,78 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * U25 — the graph and the node table are ONE vocabulary, and the table stops
+ * omitting the nodes only the doc can account for.
+ *
+ * Reuses the fixture above deliberately: `neverRan` is routed around, and the
+ * U11 spec's own comment recorded the defect this closes — "the table below is
+ * fed by events, so it has no row for `neverRan` at all". One page, two answers.
+ *
+ * The load-bearing assertion is the LAST one: for every node, the word on the
+ * graph equals the word in the table. That is the invariant itself rather than
+ * a sample of it, so a future surface that reintroduces its own vocabulary
+ * fails here without anyone having to think of the case.
+ */
+test('U25 — the node table and the graph give every node the same word, including a skipped one', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, 'U25 vocabulary', DOC);
+  const runId = await fireAndSettle(page, pipelineVersionId);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  /* Wait on the RECONCILED table rather than the canvas: the reconciliation is
+     gated on a complete WebSocket replay, so a row for `neverRan` existing at
+     all is proof the projection landed AND that the table read it. Before U25
+     this row could never appear, no matter how long the wait. */
+  const skippedRow = page.getByRole('row').filter({ hasText: 'neverRan' });
+  await expect(skippedRow).toHaveCount(1);
+  await expect(skippedRow.getByText('skipped', { exact: true })).toBeVisible();
+
+  // The drill-in panel is the third surface that renders a status, so it reads
+  // from the same map — a node routed around says so there too.
+  await page.getByRole('button', { name: 'neverRan', exact: true }).click();
+  await expect(
+    page.getByRole('complementary', { name: 'Node neverRan' }).getByText('skipped', {
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  /* ONE evaluate for the whole comparison — a per-node round trip is what makes
+     a browser-driven check expensive. Pairs each node's graph word with its
+     table word, keyed by the doc id React Flow puts on the wrapper and by the
+     row's own node-id cell. */
+  const words = await page.evaluate(() => {
+    const graph: Record<string, string> = {};
+    for (const el of document.querySelectorAll('.react-flow__node')) {
+      const inner = el.querySelector('.run-node');
+      if (inner === null) continue;
+      graph[(el as HTMLElement).dataset.id ?? '?'] =
+        inner.querySelector('.run-node-status')?.textContent?.trim() ?? '';
+    }
+    const table: Record<string, string> = {};
+    for (const row of document.querySelectorAll('tbody tr')) {
+      const id = row.querySelector('.node-drill-in')?.textContent?.trim();
+      const status = row.querySelector('.node-status')?.textContent?.trim();
+      if (id !== undefined && status !== undefined) table[id] = status;
+    }
+    return { graph, table };
+  });
+
+  // Every node the graph draws has a table row — that equivalence is new, and
+  // it is what "the table stops omitting nodes" means concretely.
+  expect(Object.keys(words.table).sort()).toEqual(Object.keys(words.graph).sort());
+  // …and neither surface has a word the other does not.
+  expect(words.table).toEqual(words.graph);
+  // Pinned outright, so a change that made BOTH surfaces agree on the wrong
+  // word could not pass the equality above in silence.
+  expect(words.table.neverRan).toBe('skipped');
+  expect(words.table.start).toBe('failure');
+
+  await expectQuiet(page, problems);
+});

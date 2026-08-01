@@ -71,6 +71,27 @@ export default defineConfig({
         // introspection surface off schemas the canvas chunk already holds, so
         // there is no second copy of `zod` and no new dependency edge.
         //
+        // U25 measured (one Monitor status vocabulary) — gzip: entry 127.91 ->
+        // 128.41 kB (+0.50) · index css 4.39 -> 4.43 kB · `RunGraph` 1.79 ->
+        // 1.36 kB · every other chunk byte-identical. Built against
+        // `origin/main` (3c8c215) in a throwaway worktree, per the #698 note
+        // above.
+        //
+        // U25 moved the PROJECTION out of the lazy `RunGraph` and up into the
+        // eagerly-routed `RunDetailPage`, so the node table could reconcile
+        // against the same state the graph draws. That looks like it should
+        // undo U11's split and it does not, for the reason U11 recorded 60
+        // lines up: `engine/reduce.js` is ALREADY placed in the entry chunk
+        // (eager code imports the engine barrel for `EngineEventSchema`), so
+        // `createEngine` was being paid for either way. What actually crossed
+        // the boundary is a `useMemo` and a label map, and `RunGraph` got
+        // SMALLER by more than half of what the entry gained.
+        //
+        // The property to hold: `@xyflow/react` is the thing that must stay
+        // behind `RunGraph.lazy.ts`, and it is reachable only from `RunCanvas`.
+        // An entry jump of tens of kB on a Monitor change means React Flow
+        // escaped — that, not this half-kilobyte, is the regression to hunt.
+        //
         // Only the canvas route is lazy. The other pages are ordinary React +
         // Fluent and would each buy back single-digit kB for a Suspense
         // boundary apiece — measure before adding more, rather than lazying
