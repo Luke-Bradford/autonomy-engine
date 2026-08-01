@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { computeRunCost, type RunDetail } from '@autonomy-studio/shared';
+import { computeRunCost, type PendingExternalWait, type RunDetail } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
@@ -171,6 +171,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * is RE-DERIVED here (`HMAC(masterKey, ...)`, never read from a log or the row's
    * hash), so a live bearer credential is only ever handed to the run's OWNER, on
    * demand — never persisted in plaintext, never in the raw event feed.
+   *
+   * #900 — the response is `satisfies PendingExternalWait[]`, so the shared schema
+   * the web client parses this through is a real CONTRACT rather than a client-side
+   * assertion about a shape nothing on this side is held to. `api/runs.ts` names
+   * that distinction on the sibling rerun route (#899, still open) and asks each to
+   * be fixed as its route is opened; this is that route's turn. Projection only —
+   * the row's stored token hash and `status` deliberately do not cross the wire.
    */
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/external-waits', async (request) => {
     const run = requireOwned(
@@ -179,16 +186,19 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       'run',
       request.params.id,
     );
-    return listPendingExternalWaitsByRun(db, run.id).map((wait) => ({
-      nodeId: wait.nodeId,
-      attemptId: wait.attemptId,
-      expiresAt: wait.expiresAt,
-      callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
-        runId: wait.runId,
-        nodeId: wait.nodeId,
-        attemptId: wait.attemptId,
-      })}`,
-    }));
+    return listPendingExternalWaitsByRun(db, run.id).map(
+      (wait) =>
+        ({
+          nodeId: wait.nodeId,
+          attemptId: wait.attemptId,
+          expiresAt: wait.expiresAt,
+          callbackPath: `/api/external-wait/${deriveExternalWaitToken(fastify.masterKey, {
+            runId: wait.runId,
+            nodeId: wait.nodeId,
+            attemptId: wait.attemptId,
+          })}`,
+        }) satisfies PendingExternalWait,
+    );
   });
 
   /**

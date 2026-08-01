@@ -1703,6 +1703,22 @@ td button + button {
   word-break: break-all;
 }
 
+/* #900 — the run monitor's pending external waits. A list because it genuinely is
+   one (a run can park several nodes on callbacks at once), but unbulleted: each
+   item is a stacked block of prose, a reveal control and — once asked for — a
+   `.secret-reveal`, which reads as a card rather than as a bullet. */
+.external-waits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.external-waits > li + li {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
 /* U24 — the node table's drill-in trigger. A real <button> (so it takes its

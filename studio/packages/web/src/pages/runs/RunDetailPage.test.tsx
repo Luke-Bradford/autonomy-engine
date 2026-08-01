@@ -19,6 +19,14 @@ vi.mock('../../api/runs', async (importActual) => ({
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
   rerunFromFailed: vi.fn(),
+  /* Defaulted to `[]` rather than a bare `vi.fn()`, and listed HERE rather than
+     left to fall through to the real module. An un-mocked member of this module
+     reaches `fetch`, which jsdom cannot serve; the rejection lands inside an
+     effect and vitest reports it as an unhandled error that fails the file
+     BEFORE its assertions run — the failure mode filed as #897. A resolved
+     default also means every existing test in this file keeps describing a run
+     that owes no callback, which is what they all are. */
+  listExternalWaits: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('./useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./useRunStream')>()),
@@ -27,6 +35,7 @@ vi.mock('./useRunStream', async (importActual) => ({
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
+const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
 
 let seq = 0;
@@ -1451,5 +1460,296 @@ describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
   it('shows no lineage row on an original run', async () => {
     await mountWithStatus('failure');
     expect(screen.queryByText('Rerun of')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #900 — the "waiting on a callback" surface.
+ *
+ * A16 shipped the whole producer (the correlation row, the derived capability
+ * token, `GET /api/runs/:id/external-waits`) and nothing in the web app called
+ * it, so a run parked on a human-approval webhook was a dead end: the header
+ * said `waiting (callback)` and the page offered no way to find out where that
+ * callback goes.
+ *
+ * These drive the page against a REAL parked log — `run.waiting{waiting_external}`
+ * is the event the reducer folds — so what is asserted is the rendered surface
+ * over the same state the engine produces, not a hand-built status.
+ */
+describe('RunDetailPage — #900 waiting on a callback', () => {
+  const WAIT = {
+    nodeId: 'approve',
+    attemptId: 'approve#0',
+    expiresAt: 1_700_000_900_000,
+    callbackPath: '/api/external-wait/tok_abc',
+  };
+
+  /** A doc whose parked node is a `webhook` with a declared output contract. */
+  const approvalDoc = (outputs?: unknown) =>
+    version({
+      nodes: [
+        {
+          id: 'approve',
+          type: 'webhook',
+          position: { x: 0, y: 0 },
+          config:
+            outputs === undefined
+              ? { timeoutSeconds: '${600}' }
+              : { timeoutSeconds: '${600}', outputs },
+        },
+      ],
+      edges: [],
+    });
+
+  /* Scoped to the new list. The node table and the drill-in name the same node
+     with the same string (which is #882 working), so an unscoped query for it
+     matches three elements and throws. */
+  const pendingList = () => screen.findByRole('list', { name: 'Pending callbacks' });
+
+  const parkedOn = (reason: 'waiting_timer' | 'waiting_external') => [
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+    envelope({ type: 'run.waiting', runId: 'run_1', reason }),
+  ];
+
+  async function mountParked(
+    reason: 'waiting_timer' | 'waiting_external' = 'waiting_external',
+    doc = approvalDoc(),
+  ) {
+    getRunDetailMock.mockResolvedValue({ run: run({ status: 'waiting' }), pipelineVersion: doc });
+    useRunStreamMock.mockReturnValue(stream({ events: parkedOn(reason) }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByText('Run');
+  }
+
+  it('names the parked node and reveals its callback path on demand', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked();
+
+    // Named by the one name #878 gives an activity — kind plus within-kind
+    // ordinal — and never by the raw `n_<uuid>` the canvas mints.
+    expect(within(await pendingList()).getByText('Webhook (external wait) 1')).toBeVisible();
+
+    /* The token is a live bearer credential, so it is NOT painted onto the page:
+       it appears only once asked for, matching the webhook-secret reveal on the
+       triggers page. */
+    expect(screen.queryByText(/tok_abc/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Show callback URL' }));
+    expect(screen.getByText(/\/api\/external-wait\/tok_abc/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Hide callback URL' }));
+    expect(screen.queryByText(/tok_abc/)).not.toBeInTheDocument();
+  });
+
+  it('renders the path as TEXT, never as a link', async () => {
+    /* A link would navigate somewhere useless (the route is POST-only) and would
+       leak the capability token through the Referer header on any external
+       navigation. */
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked();
+    await userEvent.click(await screen.findByRole('button', { name: 'Show callback URL' }));
+    expect(screen.queryByRole('link', { name: /external-wait/ })).not.toBeInTheDocument();
+  });
+
+  it('says nothing, and asks nothing, on a run parked on a TIMER', async () => {
+    /* The whole reason the gate is the waiting REASON and not the bare status: a
+       timer park is equally `waiting` and owes no callback. */
+    await mountParked('waiting_timer');
+    expect(await screen.findByText('waiting (timer)', { selector: '.run-status' })).toBeVisible();
+    expect(screen.queryByText('Waiting on a callback')).not.toBeInTheDocument();
+    expect(listExternalWaitsMock).not.toHaveBeenCalled();
+  });
+
+  it('states what the callback body must contain, read off the declared contract', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked('waiting_external', approvalDoc([{ name: 'decision', type: 'string' }]));
+    // A missing declared key is a 422 that leaves the node parked, so an operator
+    // handed only a URL would find this out by failing.
+    expect(await screen.findByText(/must be JSON supplying “decision” \(string\)/)).toBeVisible();
+  });
+
+  it('says a no-outputs webhook discards whatever body it is sent', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked();
+    expect(await screen.findByText(/declares no outputs/)).toBeVisible();
+  });
+
+  it('names the INSTANCE when a parallel foreach body parked', async () => {
+    // The engine parks `approve@1`; the doc only has `approve`. The name comes
+    // from the resolved doc node, and the instance key is what says WHICH one.
+    listExternalWaitsMock.mockResolvedValue([{ ...WAIT, nodeId: 'approve@1' }]);
+    await mountParked();
+    const list = within(await pendingList());
+    expect(list.getByText('Webhook (external wait) 1')).toBeVisible();
+    expect(list.getByText('approve@1')).toBeVisible();
+  });
+
+  it('surfaces a failed lookup instead of reading as "no callback owed"', async () => {
+    listExternalWaitsMock.mockRejectedValue(new Error('boom'));
+    await mountParked();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('The pending callbacks could not be loaded');
+    expect(alert).toHaveTextContent('boom');
+    // And no reveal control, because there is nothing to reveal.
+    expect(screen.queryByRole('button', { name: 'Show callback URL' })).not.toBeInTheDocument();
+  });
+
+  it('says it is still LOADING before the list arrives', async () => {
+    let release!: (waits: (typeof WAIT)[]) => void;
+    listExternalWaitsMock.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await mountParked();
+    expect(await screen.findByText(/Loading the pending callbacks/)).toBeVisible();
+    // And it is genuinely a WAITING state, not the empty one wearing a spinner.
+    expect(screen.queryByText(/No callback is pending/)).not.toBeInTheDocument();
+    release([WAIT]);
+    expect(within(await pendingList()).getByText('Webhook (external wait) 1')).toBeVisible();
+  });
+
+  it('says a settled wait is settled, rather than loading forever', async () => {
+    // Parked, but the list came back EMPTY — the wait settled between the status
+    // frame and this fetch. A spinner that never resolves would be a lie.
+    listExternalWaitsMock.mockResolvedValue([]);
+    await mountParked();
+    expect(await screen.findByText(/No callback is pending/)).toBeVisible();
+    expect(screen.queryByText(/Loading the pending callbacks/)).not.toBeInTheDocument();
+  });
+
+  it('re-asks on a NEW park, so a second webhook never shows the first dead token', async () => {
+    /* Two webhooks in sequence: the completion of one and the park of the next
+       can arrive in a single stream batch, so the un-parked state may never
+       render. Counting `externalWait.created` is what makes the refetch survive
+       that batching. */
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'waiting' }),
+      pipelineVersion: approvalDoc(),
+    });
+    const first = [
+      ...parkedOn('waiting_external'),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'run_1',
+        nodeId: 'approve',
+        attemptId: 'approve#0',
+        dueAt: WAIT.expiresAt,
+      }),
+    ];
+    useRunStreamMock.mockReturnValue(stream({ events: first }));
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await pendingList();
+    expect(listExternalWaitsMock).toHaveBeenCalledTimes(1);
+
+    listExternalWaitsMock.mockResolvedValue([
+      { ...WAIT, callbackPath: '/api/external-wait/tok_2' },
+    ]);
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          ...first,
+          envelope({
+            type: 'externalWait.completed',
+            runId: 'run_1',
+            nodeId: 'approve',
+            previousAttemptId: 'approve#0',
+            outputs: {},
+          }),
+          envelope({ type: 'run.waiting', runId: 'run_1', reason: 'waiting_external' }),
+          envelope({
+            type: 'externalWait.created',
+            runId: 'run_1',
+            nodeId: 'approve',
+            attemptId: 'approve#1',
+            dueAt: WAIT.expiresAt,
+          }),
+        ],
+      }),
+    );
+    /* Wrapped, because `rerender` replaces the WHOLE tree — including the
+       `MemoryRouter` `renderWithRouter` supplied — and the page calls
+       `useNavigate`, which throws outside a router. */
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => expect(listExternalWaitsMock).toHaveBeenCalledTimes(2));
+    await userEvent.click(await screen.findByRole('button', { name: 'Show callback URL' }));
+    expect(screen.getByText(/tok_2/)).toBeInTheDocument();
+    // The title's actual claim: the FIRST park's token is gone, not merely that
+    // the second one arrived.
+    expect(screen.queryByText(/tok_abc/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The case a `created`-only tick could not see, and the reason the epoch counts
+   * settlements too.
+   *
+   * TWO webhooks parked at once — a fork, or a `foreach` webhook body. Completing
+   * one leaves the other parked, so the reducer answers `waiting_external` again
+   * and the run re-parks with NO new `externalWait.created`. A tick that counted
+   * only parks would not move, the list would never be re-asked, and the completed
+   * wait's dead token would stay on screen.
+   */
+  it('re-asks when one of TWO concurrent waits completes, dropping the dead one', async () => {
+    const second = { ...WAIT, nodeId: 'approve2', attemptId: 'approve2#0' };
+    listExternalWaitsMock.mockResolvedValue([WAIT, second]);
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'waiting' }),
+      pipelineVersion: approvalDoc(),
+    });
+    const bothParked = [
+      ...parkedOn('waiting_external'),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'run_1',
+        nodeId: 'approve',
+        attemptId: 'approve#0',
+        dueAt: WAIT.expiresAt,
+      }),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'run_1',
+        nodeId: 'approve2',
+        attemptId: 'approve2#0',
+        dueAt: WAIT.expiresAt,
+      }),
+    ];
+    useRunStreamMock.mockReturnValue(stream({ events: bothParked }));
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await pendingList();
+    expect(listExternalWaitsMock).toHaveBeenCalledTimes(1);
+
+    // One completes. The run STAYS parked on the other — note there is no further
+    // `externalWait.created` in this batch, which is the whole point.
+    listExternalWaitsMock.mockResolvedValue([second]);
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          ...bothParked,
+          envelope({
+            type: 'externalWait.completed',
+            runId: 'run_1',
+            nodeId: 'approve',
+            previousAttemptId: 'approve#0',
+            outputs: {},
+          }),
+          envelope({ type: 'run.waiting', runId: 'run_1', reason: 'waiting_external' }),
+        ],
+      }),
+    );
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => expect(listExternalWaitsMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () =>
+      expect(within(await pendingList()).getAllByRole('listitem')).toHaveLength(1),
+    );
   });
 });

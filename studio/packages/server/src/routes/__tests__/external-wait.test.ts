@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   buildDedupeKey,
   CATALOG_VERSION,
+  PendingExternalWaitListSchema,
   type NewPipelineVersion,
   type Node,
 } from '@autonomy-studio/shared';
@@ -108,6 +109,54 @@ describe('external-wait routes', () => {
     expect(waits[0]!.nodeId).toBe('w');
     return waits[0]!.callbackPath;
   }
+
+  /**
+   * #900 — the retrieval response is held to the SHARED schema, not merely to
+   * whatever this file happens to destructure. The web client parses through this
+   * same schema, so a field renamed or dropped here fails on THIS side rather than
+   * silently degrading a rendered surface into "no waits". Parsed strictly enough
+   * to matter: the row's stored token hash and `status` must not ride along.
+   */
+  it('the retrieval response satisfies the shared PendingExternalWait contract', async () => {
+    const { runId } = await parkRun();
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(res.statusCode).toBe(200);
+
+    const waits = PendingExternalWaitListSchema.parse(res.json());
+    expect(waits).toHaveLength(1);
+    expect(waits[0]!.nodeId).toBe('w');
+    expect(waits[0]!.expiresAt).toBeGreaterThan(0);
+
+    const raw = (res.json() as Array<Record<string, unknown>>)[0]!;
+    expect(Object.keys(raw).sort()).toEqual(['attemptId', 'callbackPath', 'expiresAt', 'nodeId']);
+  });
+
+  it('a run with no parked webhook returns an empty list, not a 404', async () => {
+    // The client renders the callback section only when the run is parked on a
+    // CALLBACK, but a run parked on a timer is also `waiting` — this is the shape
+    // that must come back for it rather than an error the page would have to
+    // distinguish from a real failure.
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'no-wait' });
+    const input: NewPipelineVersion = {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [{ id: 'n', type: 'fail', config: { message: 'x' }, position: { x: 0, y: 0 } }],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    };
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId: createPipelineVersion(app.db, input).id,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${run.id}/external-waits` });
+    expect(res.statusCode).toBe(200);
+    expect(PendingExternalWaitListSchema.parse(res.json())).toEqual([]);
+  });
 
   it('owner retrieval returns a working callback URL; posting it completes the run', async () => {
     const { runId, resolveDoc } = await parkRun();

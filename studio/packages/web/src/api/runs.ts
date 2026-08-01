@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import {
+  PendingExternalWaitListSchema,
   RunDetailSchema,
   RunSchema,
   RunSummarySchema,
   RunEventSchema,
+  type PendingExternalWait,
   type Run,
   type RunSummary,
   type RunDetail,
@@ -80,6 +82,29 @@ export function getRunEvents(id: string, signal?: AbortSignal): Promise<RunEvent
 }
 
 /**
+ * #4 A16 / #900 — a run's PENDING external waits, each with the callback path that
+ * resumes it (`GET /api/runs/:id/external-waits`).
+ *
+ * Read-only, and owner-scoped on the server (`requireOwned` through the run). The
+ * `callbackPath` in each element is a live CAPABILITY: whoever holds it can complete
+ * that wait. So a caller must treat the result as credential material — do not log
+ * it, do not put it in a URL, and reveal it on demand rather than painting it onto
+ * the page (`RunDetailPage`, following `TriggersPage`'s webhook-secret reveal).
+ *
+ * A run parked on a TIMER rather than a callback returns `[]`, not a 404 — so an
+ * empty list means "owes no callback", never "something went wrong".
+ */
+export function listExternalWaits(
+  id: string,
+  signal?: AbortSignal,
+): Promise<PendingExternalWait[]> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/external-waits`, {
+    schema: PendingExternalWaitListSchema,
+    signal,
+  });
+}
+
+/**
  * The accepted-rerun body. Declared HERE rather than in `@autonomy-studio/shared`,
  * which is the exception to this module's shared-schema rule and is called out
  * rather than glossed: the route replies with an inline object literal
@@ -95,7 +120,9 @@ export function getRunEvents(id: string, signal?: AbortSignal): Promise<RunEvent
  * exactly the cure for the objection above. Matching that is ~2 lines in shared
  * plus a `satisfies` on the route, and it is deferred here only to keep this
  * change client-only, because the argument for building it at all rests on
- * touching no server code. Worth doing the next time that route is opened.
+ * touching no server code. Worth doing the next time that route is opened —
+ * tracked as **#899**, and already done for the external-waits route above
+ * (`PendingExternalWaitSchema`), which is what that fix looks like.
  */
 const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
 

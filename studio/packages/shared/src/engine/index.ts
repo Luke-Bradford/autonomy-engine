@@ -25,6 +25,12 @@ export type { SigType } from './functions.js';
 // public entry point to validate an untrusted body against `config.outputs` using
 // the SAME machinery the `node.succeeded` fold uses — never a second copy.
 export { checkInboundOutputs, type InboundOutputsResult } from './outputs.js';
+// #900 — `outputContract` joins it, for a READER rather than a validator: the run
+// monitor tells an operator what a parked webhook's callback body must contain, and
+// the only way that description cannot drift from what the boundary actually
+// enforces is to derive it from the same contract reader. Still named, still not
+// `export *` — `validateOutputs`/`storeOutputs` remain reducer-internal.
+export { outputContract, type OutputContract } from './outputs.js';
 export * from './params.js';
 // #4 A4b — the parallel-foreach instance-key grammar (`<nodeId>@<i>`), shared
 // by the reducer, the server's doc-node lookups and the web run view.

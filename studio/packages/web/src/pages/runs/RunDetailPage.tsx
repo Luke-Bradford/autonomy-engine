@@ -4,6 +4,8 @@ import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
+import { owesCallback } from './externalWaits';
+import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
 import { runDetailPath } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
@@ -266,6 +268,49 @@ export function RunDetailPage({ runId }: { runId: string }) {
      `run.rerunOf` inside a callback would not stay narrowed. */
   const rerunOf = run?.rerunOf ?? null;
 
+  /* #900 — whether this run owes an inbound callback, and a tick that changes
+     whenever the set of pending ones does.
+
+     Gated on the waiting REASON, not the bare `waiting` status. A `wait`-timer park
+     is equally `waiting` and owes no callback, so the status alone would fire a
+     request on every timer park and then render an empty section under a heading
+     claiming a callback is owed. The reducer gives `waiting_external` precedence
+     when a run is parked on both, so the reason loses no case. */
+  const parkedOnCallback = owesCallback(waitingReason);
+
+  /* The tick counts EVERY event that changes the pending set — created, completed
+     AND expired — and all three are load-bearing. It is the `key` of the section
+     below, so a change to it REMOUNTS that component: fresh list, cleared error,
+     and no revealed token surviving the wait it belonged to.
+
+     Counting only `created` was the first cut, and it was wrong. Two webhooks in
+     SEQUENCE is the easy case it did handle: one completes and the next parks, and
+     those frames can arrive in one stream batch, so React may never render the
+     un-parked state in between and a `parkedOnCallback` dep alone would not
+     re-fire. Two webhooks in PARALLEL is the case it could not see at all — a fork,
+     or a `foreach` webhook body, which this surface explicitly supports. Completing
+     one leaves the OTHER parked, so `parkReason` answers `waiting_external` again
+     and the run re-parks with NO new `externalWait.created`: the tick would not
+     move, the list would never be re-asked, and the completed wait's dead token
+     would stay on screen — the exact failure the tick exists to prevent.
+
+     A fourth walk of the log on this page (#849 — it already folds three times a
+     frame); this one is a bare counter rather than a fold, and it rides the same
+     memoized `stream.events`. It belongs in #849's consolidation, not ahead of it. */
+  const waitEpoch = useMemo(
+    () =>
+      stream.events.reduce(
+        (n, e) =>
+          e.type === 'externalWait.created' ||
+          e.type === 'externalWait.completed' ||
+          e.type === 'externalWait.expired'
+            ? n + 1
+            : n,
+        0,
+      ),
+    [stream.events],
+  );
+
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
   // is still folded from the FULL log, so nothing is lost from the summary.
@@ -363,6 +408,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
             <code>{JSON.stringify(run.params)}</code>
           </dd>
         </dl>
+      )}
+
+      {/* #900 — the parked-on-a-callback surface. Rendered only for an EXTERNAL
+          park, so it never appears over a timer wait, and KEYED on the wait epoch
+          so any change to the pending set remounts it (see `waitEpoch` above —
+          that key is the component's entire freshness model). */}
+      {parkedOnCallback && (
+        <PendingCallbacks key={waitEpoch} runId={runId} doc={doc} nameOf={nameOf} />
       )}
 
       <h3>Graph</h3>
