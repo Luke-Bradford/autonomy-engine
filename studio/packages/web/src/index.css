@@ -1774,6 +1774,19 @@ td button + button {
   color: var(--muted);
 }
 
+/* U25 — two RUN statuses that reach the screen with no rule of their own, so
+   they inherited `--text` and read as if nothing were unusual. `queued` is live
+   today (#5 S6a admission writes it, and the run detail header falls back to the
+   REST row status, so it shows on BOTH the runs list and the detail page);
+   `skipped` has no server producer yet but is in the enum, and the pill is
+   keyed by string concat, so leaving it out would just be the same hole waiting.
+   Muted, matching the pre-`run.started`/inert family beside them. */
+.run-status-queued,
+.run-status-skipped {
+  color: var(--muted);
+  border-color: var(--muted);
+}
+
 /* #483 — a PARKED node. Muted, since a park is routine. Split out of the group
    above to carry a matching `border-color`: every other node pill rings itself
    in its own colour, and this one kept the default `--border` ring. That was

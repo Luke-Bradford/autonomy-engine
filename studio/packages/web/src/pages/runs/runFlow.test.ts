@@ -12,7 +12,7 @@ const DOC: RunDoc = {
   edges: [
     { id: 'e1', from: 'a', to: 'b', on: 'success' },
     // `c` is the FAILURE branch, so a successful `a` leaves it `skipped` — a
-    // status the event-driven table has no vocabulary for at all.
+    // status no event carries, so only the doc-aware projection can report it.
     { id: 'e2', from: 'a', to: 'c', on: 'failure' },
     { id: 'e3', from: 'b', to: 'a', on: 'failure', back: true, maxBounces: 3 },
   ],
@@ -86,9 +86,10 @@ describe('runFlowNodes', () => {
     expect(a.data.status).toBe('success');
     expect(a.data.tone).toBe('success');
 
-    // Neither `b` nor `c` has an event of its own, so the doc-free table can
+    // Neither `b` nor `c` has an event of its own, so the doc-free FOLD can
     // produce no row for either — and yet they are in DIFFERENT states, which is
-    // exactly what the doc buys. `skipped` is not even in the table's vocabulary.
+    // exactly what the doc buys. (Since U25 the table shows them anyway, by
+    // reconciling against this same projection.)
     const b = nodes.find((n) => n.id === 'b')!;
     expect(b.data.status).toBe('ready');
     expect(b.data.tone).toBe('neutral');
@@ -235,5 +236,52 @@ describe('mergeRunNodes', () => {
   it('keeps a node it has never seen before exactly as built', () => {
     const next = runFlowNodes(DOC, null);
     expect(mergeRunNodes([], next)).toEqual(next);
+  });
+});
+
+describe('U25 — the graph words a status for an operator', () => {
+  /**
+   * The graph and the table must show the SAME word, and the only statuses that
+   * can prove it are the ones whose label differs from their identifier. The
+   * suite above happens to use `success`/`ready`/`skipped`, all of which word to
+   * themselves — so every assertion in it holds whether or not `runFlowNodes`
+   * words anything at all. Mutating `nodeStatusLabel(status)` back to a raw
+   * `status` there is invisible.
+   *
+   * `dispatched` is the case that bites: the engine's word names the ENGINE's
+   * act (it handed the node to a driver), and printing it would put a term from
+   * the reducer's vocabulary in front of an operator asking what the node is
+   * doing.
+   */
+  it('renders `dispatched` as "running", in the node data AND in its accessible name', () => {
+    const state = projected();
+    const dispatched = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'dispatched' as const, attempts: 1, retries: 0 } },
+    };
+    const a = runFlowNodes(DOC, dispatched).find((n) => n.id === 'a')!;
+
+    expect(a.data.status).toBe('running');
+    expect(a.ariaLabel).toContain('running');
+    // The identifier must not reach the screen by either route — a11y name
+    // included, since that is what a screen-reader user gets INSTEAD of the
+    // visible text rather than in addition to it.
+    expect(a.data.status).not.toBe('dispatched');
+    expect(a.ariaLabel).not.toContain('dispatched');
+    // The TONE still comes off the raw status, so wording it must not have
+    // changed which hue family the node is drawn in.
+    expect(a.data.tone).toBe('running');
+  });
+
+  it('says which alarm a parked node is waiting on, rather than the bare word', () => {
+    const state = projected();
+    const parked = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'wait_pending' as const, attempts: 1, retries: 0 } },
+    };
+    const a = runFlowNodes(DOC, parked).find((n) => n.id === 'a')!;
+
+    expect(a.data.status).toBe('waiting (timer)');
+    expect(a.ariaLabel).toContain('waiting (timer)');
   });
 });

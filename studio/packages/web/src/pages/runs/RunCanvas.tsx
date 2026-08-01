@@ -63,8 +63,12 @@ import {
  * The status word is rendered as TEXT beside the colour. Ten engine statuses
  * share five hues, so colour alone would collapse `retry_pending`,
  * `wait_pending`, `external_wait_pending` and `waiting` into one indistinguish-
- * able amber — the same lossy vocabulary the doc-free table already had. Colour
- * narrows it to a family; the label says which member.
+ * able amber. Colour narrows it to a family; the label says which member.
+ *
+ * The word comes from `nodeStatus.ts` (U25), which the run TABLE renders
+ * through as well — so the two surfaces cannot describe one node differently.
+ * That map is also what turns those four into distinct sentences rather than
+ * four spellings of "held".
  */
 const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   const d = data as RunNodeData;

@@ -55,8 +55,10 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
   await expect(canvas).toBeVisible();
 
   // Every node in the DOC is drawn — including the one that never dispatched.
-  // The table below is fed by events, so it has no row for `neverRan` at all;
-  // this is the whole reason R1 hands the page the version doc.
+  // The table below is fed by events, so nothing in the LOG accounts for
+  // `neverRan`; this is the whole reason R1 hands the page the version doc.
+  // (U25 then made the table read that same projection, so it has a row for it
+  // now too — the spec below asserts exactly that.)
   await expect(canvas.locator('.run-node')).toHaveCount(3);
 
   /* Wait for the OVERLAY specifically, not just for the canvas. The graph is
@@ -88,11 +90,10 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
     return out;
   });
 
-  // The ENGINE's vocabulary, not the table's `running|retrying|waiting|…`.
   expect(nodes.start!.status).toBe('failure');
   expect(nodes.handled!.status).toBe('failure');
-  // `skipped` is not in the doc-free table's vocabulary AT ALL — it can only be
-  // known from the graph plus the log together.
+  // `skipped` is a status no EVENT carries — the reducer computes it — so it can
+  // only be known from the doc plus the log together.
   expect(nodes.neverRan!.status).toBe('skipped');
 
   // The status is not conveyed by colour alone (the word is on the node), and
@@ -125,10 +126,19 @@ test('U11 — the run canvas shows the engine’s own status for every node, inc
  * U11 spec's own comment recorded the defect this closes — "the table below is
  * fed by events, so it has no row for `neverRan` at all". One page, two answers.
  *
- * The load-bearing assertion is the LAST one: for every node, the word on the
- * graph equals the word in the table. That is the invariant itself rather than
- * a sample of it, so a future surface that reintroduces its own vocabulary
- * fails here without anyone having to think of the case.
+ * The load-bearing assertion is the equality of the two maps: for every node,
+ * the word on the graph equals the word in the table.
+ *
+ * Be honest about its REACH, because it is easy to overclaim. This fixture is
+ * three `fail` nodes, so the statuses in play are `failure`/`failure`/`skipped`
+ * — all three of which word to themselves. The equality therefore proves the
+ * two surfaces read the same MAP; it would still hold if neither of them worded
+ * anything. What pins the wording itself is `runFlow.test.ts`'s `dispatched` →
+ * "running" case (graph side) and `RunDetailPage.test.tsx` (table and panel
+ * side), both of which use statuses whose label differs from their identifier
+ * and both of which go red when the label call is removed. An e2e that parked a
+ * real node on a timer would fold those together, and needs a `wait` fixture
+ * that settles deterministically — worth doing, not worth blocking on.
  */
 test('U25 — the node table and the graph give every node the same word, including a skipped one', async ({
   page,

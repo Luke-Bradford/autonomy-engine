@@ -504,17 +504,30 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
     reconciled.push({
       nodeId,
       status: engine.status,
-      /* ZERO, and deliberately NOT `engine.attempts`, which was tried and is
-         wrong here. The reducer mints an attempt id as a node becomes READY and
-         bumps the counter then, so a node that has not run yet reports
-         `attempts: 1` — measured, not assumed (the test pins it). This column
-         means "how many times the node has been STARTED", so copying that
-         across would print "1 attempt" beside `ready` and restate, in the
-         attempts column, exactly the kind of falsehood this reconciliation
-         exists to remove. A row reaches this branch precisely BECAUSE no event
-         mentions the node — no dispatch, no evaluation, no park — so nothing
-         has started it, and 0 is a fact rather than a fallback. */
-      attempts: 0,
+      /* ZERO, and deliberately NOT `engine.attempts` — except for the one
+         status where the engine is right and the zero would be the lie.
+
+         The general rule first. The reducer mints an attempt id as a node
+         becomes READY and bumps the counter then, so a node that has not run
+         yet reports `attempts: 1` — measured, not assumed (the test pins it).
+         This column means "how many times the node has been STARTED", so
+         copying that across would print "1 attempt" beside `ready` and restate,
+         in the attempts column, exactly the kind of falsehood this
+         reconciliation exists to remove.
+
+         The exception is `waiting`, and it is the one status whose absence from
+         the fold does NOT imply "nothing started it". A `call_pipeline` node is
+         parked by a `startChild` COMMAND with no event appended until
+         `call.returned` (see the `NodeActivity` docblock above, and
+         `reduce.ts`'s `waiting` park, which sets `attempts: attempts + 1`), so
+         the node reaches this branch precisely BECAUSE the engine started it
+         and told no one. Zero there would render "waiting (child run) · 0
+         attempts" over a child run that is genuinely on its first attempt.
+         Barely reachable today — the executor answers `startChild` with an
+         immediate `call.returned{failure}` (P3b) — but it is the state a live
+         tail passes through, it FREEZES there if the server dies between the
+         command and the append, and #796 makes it routine. */
+      attempts: engine.status === 'waiting' ? engine.attempts : 0,
       outputs: 0,
       lastOutputName: undefined,
       error: undefined,

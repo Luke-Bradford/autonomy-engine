@@ -1063,6 +1063,32 @@ describe('reconcileNodeActivity', () => {
     expect(reconciled).toEqual(body);
   });
 
+  it('credits a parked call node its attempt, since a `startChild` park announces itself to nobody', () => {
+    /* The one status whose absence from the fold does NOT mean "nothing started
+       it": the engine parks a `call_pipeline` node with a COMMAND and appends
+       no event until `call.returned`, bumping `attempts` as it does. Rendering
+       0 would say "waiting (child run) · 0 attempts" over a child run that is
+       genuinely on its first attempt. */
+    const events = aSucceededLog();
+    const state = stateOf(events);
+    const parked = {
+      ...state,
+      nodes: {
+        ...state.nodes,
+        child: { status: 'waiting' as const, attempts: 1, retries: 0 },
+      },
+    };
+    const child = reconcileNodeActivity([], parked).find((n) => n.nodeId === 'child');
+    expect(child!.status).toBe('waiting');
+    expect(child!.attempts).toBe(1);
+
+    // …and the exception is NARROW: every other seeded status still reports 0,
+    // because the engine bumps its counter at READY and this column counts
+    // starts. `b` is ready with `engine.attempts === 1`.
+    const b = reconcileNodeActivity([], parked).find((n) => n.nodeId === 'b');
+    expect(b!.attempts).toBe(0);
+  });
+
   it('does not mint a row for an INSTANCE key — `w@1` and `w@2` have no defensible single status', () => {
     const events = aSucceededLog();
     const state = stateOf(events);

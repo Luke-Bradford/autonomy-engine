@@ -90,8 +90,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
   /* U25 — ONE projection for the whole page. The graph below takes this same
      overlay rather than folding the log a second time inside its lazy chunk,
-     and the node table reconciles against it, so the two surfaces cannot come
-     to different conclusions about a node: they are reading one value. */
+     and the node table reconciles against it, so neither surface can invent a
+     status the other does not have: they read one value.
+
+     They can still SAY different amounts about one node, and the honest
+     statement of the guarantee is narrower than "they agree". A parallel
+     foreach's body node has no bare-id entry in `state.nodes` at all, so the
+     graph draws it with no status while the table shows the fold's — the graph
+     is silent, not contradictory, and the table is the better-informed of the
+     two. That predates U25 (`runFlow.ts` reads `state.nodes[n.id]` directly)
+     and is #439 UI work, not a reconciliation bug. */
   const overlay = useRunProjection(doc, stream);
   const folded = useMemo(() => deriveNodeActivity(stream.events), [stream.events]);
   const nodes = useMemo(
@@ -182,11 +190,14 @@ export function RunDetailPage({ runId }: { runId: string }) {
             : 'The pipeline graph is unavailable, so there is no node overlay. The event feed below is unaffected.'}
         </p>
       ) : (
-        /* #698 — the graph and everything needed to DRAW it (React Flow, and
-           the engine reducer the overlay folds) load on demand, so the run
-           metadata, node table and event feed below paint without waiting on
-           either. The boundary is HERE rather than at the route for that
-           reason: all of that is useful without the graph. */
+        /* #698 — React Flow loads on demand, so the run metadata, node table
+           and event feed below paint without waiting on it. The boundary is
+           HERE rather than at the route for that reason: all of that is useful
+           without the graph. The engine reducer used to sit behind this
+           boundary too and no longer does (U25 lifted the projection to the
+           page so the table could reconcile against it) — which changed no
+           bytes, because eager code already imported the engine barrel and
+           `reduce.js` was placed in the entry chunk regardless. */
         <Suspense fallback={<p className="page-hint">Loading the graph…</p>}>
           <RunGraph doc={doc} overlay={overlay} />
         </Suspense>

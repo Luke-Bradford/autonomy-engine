@@ -4,6 +4,7 @@ import {
   ContainerRunStatusSchema,
   EdgeOnSchema,
   NodeRunStatusSchema,
+  RunStatusSchema,
 } from '@autonomy-studio/shared';
 import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
 import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/nodeStatus';
@@ -139,14 +140,33 @@ describe('U6a edge variant hues', () => {
    * `ready`, `skipped` and the two split parks had this test not been written
    * alongside them.
    */
+  /**
+   * The RUN-level pills, by the same argument. Kept beside the node-level test
+   * because the asymmetry is what let `queued` go unstyled: U25 enumerated the
+   * node statuses against the stylesheet and would have caught a hole there,
+   * while the run statuses next to them had no such check — and `queued` is
+   * live (#5 S6a admission), rendering on the runs list and, via the header's
+   * fallback to the REST row status, on the run detail page too.
+   */
+  it('has a run-status pill rule for every run status either surface can show', () => {
+    for (const status of RunStatusSchema.options) {
+      expect(
+        new RegExp(`\\.run-status-${status}\\s*[,{]`).test(css),
+        `no .run-status-${status} rule`,
+      ).toBe(true);
+    }
+  });
+
   it('has a node-status pill rule for every engine status the table can show', () => {
     for (const status of NodeRunStatusSchema.options) {
       /* Matched as a rule HEAD (`… ,` or `… {`) rather than through `ruleBody`,
          which finds only a selector that opens its own block: most of these
-         pills deliberately share a declaration with a sibling, and the parks
-         share one with each other. The boundary character is what keeps
-         `.node-status-pending` from being satisfied by `.node-status-
-         wait_pending`. */
+         pills deliberately share a declaration with a sibling, and the three
+         parks share one with each other. The trailing `[,{]` is what makes it a
+         rule head rather than any mention of the string — it is NOT a
+         disambiguator between statuses, and does not need to be: no status is a
+         prefix of another once the literal `.node-status-` sits in front of it
+         (`pending` is a suffix of `wait_pending`, not a prefix). */
       expect(
         new RegExp(`\\.node-status-${status}\\s*[,{]`).test(css),
         `no .node-status-${status} rule`,
