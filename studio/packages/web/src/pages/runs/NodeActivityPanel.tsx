@@ -128,6 +128,14 @@ export function NodeActivityPanel({
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
           'This attempt has not settled yet, so its span is not complete.'}
+        {/* The corrupt-log case. `formatNodeDuration` renders it as unmeasured
+            rather than clamping to `0ms`, and without this arm it would be the
+            ONE em-dash on this panel with no sentence explaining it — which
+            reads as a rendering bug rather than as the finding it is. */}
+        {node.startedAtMs !== undefined &&
+          node.endedAtMs !== undefined &&
+          node.endedAtMs < node.startedAtMs &&
+          'The recorded end precedes the start, so the log’s clock is inconsistent and no span can be stated.'}
       </p>
 
       {node.instanceId !== undefined && (
