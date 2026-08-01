@@ -1292,7 +1292,24 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
       metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
       metered({ outputTokens: 5, meteringStatus: 'unknown' }),
     ]);
-    expect(within(panel).getByText(/2 of 3 reported input and 3 of 3 reported output/)).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/2 of 3 reported input and 3 of 3 reported output/),
+    ).toBeInTheDocument();
+  });
+
+  it('never composes a lower bound out of an amount too small to state', async () => {
+    /* A genuinely-stamped `costEstimate: 0` (a free model in the price table)
+       alongside an unpriceable exchange. "At least $0.00" is the exact reading
+       this surface exists to prevent, and the sub-micro-dollar case composes into
+       the self-contradictory "At least < $0.000001". Both collapse to the one
+       true statement: the priced part tells us nothing. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0 }),
+      metered({ inputTokens: 1, outputTokens: 1 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText(/At least/)).not.toBeInTheDocument();
   });
 
   it('says an unsettled node’s spend is SO FAR, not a final figure', async () => {
@@ -1308,7 +1325,13 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
     const panel = await openPanel([
       dispatched('greet', 'greet#0'),
       metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
-      { type: 'node.succeeded', runId: 'run_1', nodeId: 'greet', attemptId: 'greet#0', outputs: {} },
+      {
+        type: 'node.succeeded',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        outputs: {},
+      },
     ]);
     expect(within(panel).queryByText(/spent SO FAR/)).not.toBeInTheDocument();
   });

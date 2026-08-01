@@ -1,9 +1,4 @@
-import {
-  formatTokenCount,
-  formatUsd,
-  TERMINAL_NODE,
-  type NodeCost,
-} from '@autonomy-studio/shared';
+import { formatTokenCount, formatUsd, TERMINAL_NODE, type NodeCost } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
 import { readNodeCost, type NodeCostReading } from './nodeCost';
@@ -273,9 +268,9 @@ function CostSection({ node }: { node: NodeActivity }) {
 
       {(reading.inputTokensPartial || reading.outputTokensPartial) && (
         <p className="page-hint">
-          Not every exchange reported a count — {reading.inputReportedCount} of{' '}
-          {cost.responseCount} reported input and {reading.outputReportedCount} of{' '}
-          {cost.responseCount} reported output — so these sums are partial.
+          Not every exchange reported a count — {reading.inputReportedCount} of {cost.responseCount}{' '}
+          reported input and {reading.outputReportedCount} of {cost.responseCount} reported output —
+          so these sums are partial.
         </p>
       )}
 
@@ -341,9 +336,7 @@ function costFigure(reading: NodeCostReading): string {
          the same wall from the other side: "At least $0.00" is the very reading
          this surface exists to prevent. Both collapse to the one true statement —
          the priced part tells us nothing, and there is more we could not price. */
-      return reading.amount < 0.000001
-        ? 'Cost unknown'
-        : `At least ${formatUsd(reading.amount)}`;
+      return reading.amount < 0.000001 ? 'Cost unknown' : `At least ${formatUsd(reading.amount)}`;
     case 'exact':
       return formatUsd(reading.amount);
   }

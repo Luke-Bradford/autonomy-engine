@@ -88,11 +88,9 @@ export function readNodeCost(cost: NodeCost): NodeCostReading {
     inputTokensReported: cost.inputReportedResponseCount > 0,
     outputTokensReported: cost.outputReportedResponseCount > 0,
     inputTokensPartial:
-      cost.inputReportedResponseCount > 0 &&
-      cost.inputReportedResponseCount < cost.responseCount,
+      cost.inputReportedResponseCount > 0 && cost.inputReportedResponseCount < cost.responseCount,
     outputTokensPartial:
-      cost.outputReportedResponseCount > 0 &&
-      cost.outputReportedResponseCount < cost.responseCount,
+      cost.outputReportedResponseCount > 0 && cost.outputReportedResponseCount < cost.responseCount,
     inputReportedCount: cost.inputReportedResponseCount,
     outputReportedCount: cost.outputReportedResponseCount,
   };
