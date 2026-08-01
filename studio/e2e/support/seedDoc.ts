@@ -32,6 +32,11 @@ export interface SeedNode {
   /** An activity `type` from the catalog — defaults to `http_request`. */
   type?: string;
   config?: Record<string, unknown>;
+  /** The Connection this node dispatches through — a TOP-LEVEL field on the
+   * node, not part of `config` (`schemas/pipeline.ts`). Checked at DISPATCH,
+   * never at version save, so a seed may mint a version naming a connection and
+   * only find out at fire time whether it resolves. */
+  connectionId?: string;
   position: { x: number; y: number };
 }
 
