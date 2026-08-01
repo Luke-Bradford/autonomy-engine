@@ -1257,6 +1257,32 @@ describe('canvasStore — container membership (U6d)', () => {
     });
 
     /**
+     * The reviewer's case (PR #860): the comparison must not depend on key
+     * ORDER. A container rebuilt with its keys in a different sequence is the
+     * same container, and reporting it as an edit marks the canvas dirty on an
+     * Apply that changed nothing.
+     */
+    it('treats a key-reordered container as unchanged', () => {
+      const s = withLoop();
+      const reordered = {
+        exitWhen: LOOP.exitWhen,
+        children: LOOP.children,
+        kind: LOOP.kind,
+        id: LOOP.id,
+      } as Container;
+      expect(Object.keys(reordered)).not.toEqual(Object.keys(LOOP));
+      s.getState().updateContainer('loop_1', reordered);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    /** …while a container differing only in a VALUE is still an edit. */
+    it('still sees a change that only a value carries', () => {
+      const s = withLoop();
+      s.getState().updateContainer('loop_1', { ...LOOP, timeout: 30 });
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    /**
      * The non-vacuous half. `Container`'s TypeScript type is WIDER than
      * `ContainerSchema`'s runtime constraint — `maxRounds: number` admits 0 and
      * 1.5, which `.int().positive()` refuses — so `safeParse` on the INPUT is a

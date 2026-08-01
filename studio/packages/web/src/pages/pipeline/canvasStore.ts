@@ -179,6 +179,35 @@ export function assignContainerChild(
 }
 
 /**
+ * Are these two containers the same, field for field?
+ *
+ * Order-INSENSITIVE, unlike the `JSON.stringify(a) === JSON.stringify(b)` this
+ * replaces. That comparison was correct for every path that can reach it today
+ * — `assembleConfig` builds from `{ ...original }` and assigns in place, so key
+ * order is preserved by construction — but it made a "did anything change?"
+ * question depend on a property of an unrelated module's object construction.
+ * The failure it invited is quiet: a no-op Apply marks the canvas dirty, and an
+ * unchanged graph that reports itself as edited is how an unsaved-changes prompt
+ * loses the operator's trust.
+ *
+ * Per-key `Object.is` first, and that is the case that actually fires: every key
+ * no form field owns is copied by REFERENCE from the original, so untouched
+ * values — `children`, and any key a git-imported container carries that this
+ * schema version does not know about — are reference-identical. The
+ * `JSON.stringify` fallback is only reached for a key whose value the form
+ * rewrote, which is a primitive.
+ */
+function sameContainerConfig(a: Container, b: Container): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  const ra = a as unknown as Record<string, unknown>;
+  const rb = b as unknown as Record<string, unknown>;
+  return keys.every(
+    (k) => (k in rb && Object.is(ra[k], rb[k])) || JSON.stringify(ra[k]) === JSON.stringify(rb[k]),
+  );
+}
+
+/**
  * The containers array a doc would have once `container`'s config is applied.
  *
  * The third member of the family `assignContainerChild`/`containersWithNew`
@@ -740,7 +769,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       }
       if (!ContainerSchema.safeParse(next).success) return;
       // Pressing Apply without typing must not mark the canvas dirty.
-      if (JSON.stringify(current) === JSON.stringify(next)) return;
+      if (sameContainerConfig(current, next)) return;
       set((st) => ({ containers: containersWithUpdated(st.containers, next), dirty: true }));
     },
 
