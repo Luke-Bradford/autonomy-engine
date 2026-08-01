@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
@@ -276,5 +277,151 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_x" />);
     expect(await screen.findByText(/not found or not accessible/i)).toBeInTheDocument();
+  });
+});
+
+describe('RunDetailPage — U24 the failure class and the node drill-in', () => {
+  /** A run whose `greet` node failed with a full F0 class. */
+  function failedStream(overrides: Partial<EngineEvent & { kind: string }> = {}) {
+    return stream({
+      events: [
+        envelope({
+          type: 'node.dispatched',
+          runId: 'run_1',
+          nodeId: 'greet',
+          attemptId: 'greet#0',
+          idempotent: true,
+        }),
+        envelope({ type: 'node.output', runId: 'run_1', nodeId: 'greet', name: 'chunk', value: 1 }),
+        envelope({
+          type: 'node.failed',
+          runId: 'run_1',
+          nodeId: 'greet',
+          attemptId: 'greet#0',
+          error: 'boom',
+          kind: 'transient',
+          code: 'rate_limit',
+          ...overrides,
+        } as EngineEvent),
+      ],
+    });
+  }
+
+  it('names the failure CLASS in the node table, not just the message', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('boom (transient · rate_limit)')).toBeInTheDocument();
+  });
+
+  it('opens a drill-in for the node clicked, and closes it again', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    // The class the table compresses into one line, spelled out as fields.
+    expect(within(panel).getByText('transient')).toBeInTheDocument();
+    expect(within(panel).getByText('rate_limit')).toBeInTheDocument();
+    expect(within(panel).getByText('boom')).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a succeeded node’s DECLARED outputs — the thing nothing rendered before', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            outputs: { body: 'hello', status: 200 },
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('{"body":"hello","status":200}')).toBeInTheDocument();
+  });
+
+  it('states the ABSENCE of a class rather than inventing one', async () => {
+    // An expired external wait fails the node off its own alarm — there is no
+    // `node.failed` behind it, so there is no kind to show.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'externalWait.created',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            dueAt: 5,
+          }),
+          envelope({
+            type: 'externalWait.expired',
+            runId: 'run_1',
+            nodeId: 'greet',
+            previousAttemptId: 'greet#0',
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText(/without a machine-readable class/i)).toBeInTheDocument();
+  });
+
+  it('names the foreach ITEM INSTANCE a collapsed result came from', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet@1',
+            attemptId: 'greet@1#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet@1',
+            attemptId: 'greet@1#0',
+            outputs: { body: 'one item' },
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('greet@1')).toBeInTheDocument();
+    expect(within(panel).getByText(/most recent result wins/i)).toBeInTheDocument();
+  });
+
+  it('the event feed names the failure class too', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(
+      await screen.findByText('node=greet error=boom kind=transient code=rate_limit'),
+    ).toBeInTheDocument();
   });
 });

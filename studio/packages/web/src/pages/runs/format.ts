@@ -28,5 +28,24 @@ export function eventGloss(event: RunEvent): string {
   push('outcome', p.outcome ?? p.childOutcome);
   push('reason', p.reason);
   push('error', p.error);
+  /* #1 F0 / U24 — the failure CLASS. F0 correctly moved it out of the message
+     string and into `kind`/`code` fields, and nothing here was taught to read
+     them, so the feed rendered a throttle and a dead credential identically.
+     `kind` appears on no other event variant in `EngineEventSchema`, so there is
+     nothing else this can pick up. */
+  push('kind', p.kind);
+  push('code', p.code);
   return parts.join(' ');
+}
+
+/**
+ * The failure class as one compact display string — `"transient · rate_limit"`.
+ *
+ * EMPTY is a real answer and callers must render it as nothing: a node can fail
+ * with no class at all (`externalWait.expired` fails it from the expiry alarm,
+ * with no `node.failed` behind it). Substituting a default here would make this
+ * a second, drifting authority on what an unclassified failure means.
+ */
+export function failureClass(kind: string | undefined, code: string | undefined): string {
+  return [kind, code].filter((v): v is string => typeof v === 'string' && v.length > 0).join(' · ');
 }

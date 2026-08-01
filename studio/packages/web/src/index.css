@@ -1693,6 +1693,29 @@ td button + button {
 
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
+/* U24 — the node table's drill-in trigger. A real <button> (so it takes its
+   accessible name from the id and is keyboard-operable without inventing key
+   handling), stripped back to read as the ID it opens rather than as a chunky
+   form control — otherwise the Node column stops scanning as a column of ids. */
+.node-drill-in {
+  background: none;
+  border: 1px solid transparent;
+  padding: 0.1rem 0.25rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.node-drill-in:hover:not(:disabled),
+.node-drill-in[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+/* The drill-in panel opens directly beneath the table row that summoned it. */
+.node-detail-panel {
+  margin-top: 0.75rem;
+}
+
 /* A small status pill, shared by run-level and node-level state. The colour
    families read at a glance: neutral (pending/waiting), blue (in flight),
    green (success), red (failure/interrupted), muted (skipped). */
