@@ -1,3 +1,4 @@
+import { nodeStatusLabel } from './nodeStatus';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -69,7 +70,11 @@ export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClo
       </div>
 
       <p>
-        <span className={`node-status node-status-${node.status}`}>{node.status}</span>{' '}
+        {/* U25 — one status vocabulary for the whole Monitor: the same word
+            the table and the graph show, sourced from `nodeStatus.ts`. */}
+        <span className={`node-status node-status-${node.status}`}>
+          {nodeStatusLabel(node.status)}
+        </span>{' '}
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
       </p>
 
