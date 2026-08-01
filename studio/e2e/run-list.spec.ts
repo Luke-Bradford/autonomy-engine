@@ -75,6 +75,21 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
 
   await page.getByRole('tab', { name: /^All/ }).click();
   await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
+  // `all` is the default view, so it is the ABSENCE of the param.
+  expect(page.url()).not.toContain('tab=');
+
+  // U10 — the tab is URL state, which is the half a unit test cannot prove: a
+  // filtered view must survive a real RELOAD and be linkable, not just re-render.
+  await page.getByRole('tab', { name: /Triggered/ }).click();
+  expect(page.url()).toContain('tab=triggered');
+
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(page.getByRole('tab', { name: /Triggered/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(page.getByRole('row').filter({ hasText: runId })).toHaveCount(1);
 
   await expectQuiet(page, problems);
 });
