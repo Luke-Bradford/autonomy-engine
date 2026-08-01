@@ -2,7 +2,7 @@ import {
   docNodeIdOf,
   EngineEventSchema,
   parseInstanceKey,
-  TerminalNodeStatusSchema,
+  TERMINAL_NODE,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
   type EngineEvent,
@@ -301,6 +301,20 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   };
 
   /**
+   * Forget the span entirely — no start, no end, and no claim about either.
+   *
+   * The map delete keeps the invariant "an entry exists iff a span is open"
+   * true. Nothing reads a stale entry today (`openSpan` is the only writer of
+   * `startedAtMs` and always rewrites it), so it is belt-and-braces rather than
+   * load-bearing — stated so a later reader does not mistake it for a fix.
+   */
+  const dropSpan = (n: NodeActivity): void => {
+    n.startedAtMs = undefined;
+    n.endedAtMs = undefined;
+    spanInstance.delete(n.nodeId);
+  };
+
+  /**
    * Close the span — unless the terminal came from a DIFFERENT instance than
    * the one that opened it, in which case there is no honest span to state and
    * the whole pair is dropped.
@@ -316,13 +330,6 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * A terminal with no open span (a `fail`/`filter` node's only event) is a
    * no-op: it leaves the row with no start, which IS "no span".
    */
-  /** Forget the span entirely — no start, no end, and no claim about either. */
-  const dropSpan = (n: NodeActivity): void => {
-    n.startedAtMs = undefined;
-    n.endedAtMs = undefined;
-    spanInstance.delete(n.nodeId);
-  };
-
   const closeSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
     if (n.startedAtMs === undefined) return;
     if (spanInstance.get(n.nodeId) !== instanceOf(rawNodeId)) {
@@ -615,7 +622,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
        engine is the authority on the status, so it is the authority on whether
        an attempt is still running. */
     const open = row.startedAtMs !== undefined && row.endedAtMs === undefined;
-    const settled = TerminalNodeStatusSchema.safeParse(engine.status).success;
+    const settled = TERMINAL_NODE.has(engine.status);
     return open && settled
       ? { ...row, status: engine.status, startedAtMs: undefined }
       : { ...row, status: engine.status };

@@ -1254,6 +1254,20 @@ describe('reconcileNodeActivity', () => {
     expect(only!.startedAtMs).toBeUndefined();
   });
 
+  it('#867 — leaves an OPEN span alone while the engine still calls the node live', () => {
+    // The other half of the rule above, and the one that keeps it a RULE rather
+    // than "always drop": a node the engine reports as still running has an
+    // attempt genuinely in flight, and its start is a real stamp.
+    const state = stateOf(aSucceededLog());
+    const live = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'dispatched' as const, attempts: 1, retries: 0 } },
+    };
+    const [only] = reconcileNodeActivity([row({ nodeId: 'a', startedAtMs: 1_000 })], live);
+    expect(only!.status).toBe('dispatched');
+    expect(only!.startedAtMs).toBe(1_000);
+  });
+
   it('#867 — leaves a CLOSED span alone, because it is a measurement that happened', () => {
     const state = stateOf(aSucceededLog());
     const done = {

@@ -88,7 +88,9 @@ These extend UI-epic Monitor (U10–U12) + #1 audit; listed here so they're not 
 - **Filter pane** — ADF-style: by pipeline, status, time range, trigger, annotations/tags
   (#1 pipeline props); saved views. (UI-epic U10 tabs → concrete filters.)
 - **Activity-level drill-in** — per-node input/output/error/usage/cost (#2 metering), retry
-  history (#1 attempts + `node.retryScheduled` events), duration (gantt U12a).
+  history (#1 attempts + `node.retryScheduled` events). **Duration SHIPPED 2026-08-01 (#867)** as a
+  per-attempt span derived from the event log's append stamps — the gantt (U12a) is a separate,
+  still-unbuilt rendering of the same fact. Input remains deferred (#890).
 - **Run-cost surfacing** — the #2 run-cost projection shown per run + pipeline rollup.
 - **Alerts (later)** — ADF's elapsed-time metric analog (#1 pipeline `policy`); a run-exceeds-
   duration or run-failed notification. Deferred to a monitoring/alerting spec.

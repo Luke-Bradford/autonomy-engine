@@ -41,7 +41,7 @@ import type { NodeActivity } from './runSummary';
  *  - tool calls — `activity.toolCalled` carries `toolName`, `round`, `callId`
  *    and `isError` IN THE CLEAR (only args/result are chars+hash), so "which
  *    tools ran, in which exchange, which errored" is renderable today. It is
- *    deferred as its own slice, NOT because the data is missing;
+ *    deferred as its own slice, NOT because the data is missing.
  *
  * The per-attempt DURATION was on that list and no longer is: #867 shipped it.
  * Both objections that kept it off were answered rather than waived — the span
@@ -116,7 +116,9 @@ export function NodeActivityPanel({
           event, so nothing ever measured a span for them, and saying so beats
           printing a `0ms` nobody observed. */}
       <p className="page-hint">
-        Duration <strong>{formatNodeDuration(node)}</strong> — wall clock for the latest attempt,
+        {/* A COLON, not a dash: the value is itself an em-dash whenever no span
+            was measured, and "Duration — — wall clock…" is what a dash gave. */}
+        Duration: <strong>{formatNodeDuration(node)}</strong> — wall clock for the latest attempt,
         from start to settle, including any wait it parked on and excluding time held between
         retries.{' '}
         {node.startedAtMs === undefined &&

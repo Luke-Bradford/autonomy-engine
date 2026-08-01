@@ -956,6 +956,74 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     expect(within(skippedRow).getByText('—')).toBeInTheDocument();
   });
 
+  it('the panel says a node has not STARTED, rather than blaming a single-step activity', async () => {
+    // Three different absences render the same em-dash, and only one of them is
+    // "the engine evaluates this in one step". The fixture routes
+    // `greet --failure--> never`, so a successful `greet` leaves `never` with no
+    // events at all — a node that never ran. Telling an operator it was
+    // evaluated in a single step would be a confident, wrong explanation.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope(
+            {
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              idempotent: true,
+            },
+            1_000,
+          ),
+          envelope(
+            {
+              type: 'node.succeeded',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              outputs: {},
+            },
+            4_200,
+          ),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const skippedRow = (await screen.findByText('never')).closest('tr')!;
+    await userEvent.click(within(skippedRow).getByRole('button'));
+    const panel = screen.getByRole('complementary');
+    expect(
+      within(panel).getByText(/has not started, so there is nothing to measure/i),
+    ).toBeInTheDocument();
+  });
+
+  it('the panel says an attempt is still OPEN rather than claiming a span for it', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope(
+            {
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              idempotent: true,
+            },
+            1_000,
+          ),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+
+    const panel = screen.getByRole('complementary');
+    expect(within(panel).getByText(/has not settled yet/i)).toBeInTheDocument();
+  });
+
   it('the drill-in panel says what the number MEANS, not just the number', async () => {
     useRunStreamMock.mockReturnValue(
       stream({
