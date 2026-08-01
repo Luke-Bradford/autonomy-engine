@@ -263,40 +263,60 @@ describe('readableIssue', () => {
 
   /**
    * #884 — the NODE half of the unquoted-location pass, and the reason this
-   * function could not simply be pointed at the badge list. `validateRefs` writes
-   * `node.<id>.<field>` (`params.ts:2475`), so the commonest canvas error of all —
-   * a bad reference in a config field — carried a raw uuid straight through the
-   * two passes that existed before.
+   * function could not simply be pointed at the badge list. The if/fail/filter and
+   * wait validators write `node.<id>.<field>` (`params.ts:2475`), so a bad
+   * reference in a config field carried a raw uuid straight through the two passes
+   * that existed before. (`scanNodeRefs` writes the PLURAL `nodes.<id>.config.…`
+   * for an activity's own config — covered separately below.)
    */
   it('rewrites the unquoted node.<id>.<field> location', () => {
     const out = readableIssue(
-      'node.n_a.config.url: ${nodes.ghost.output.body} does not name an upstream node',
+      'node.n_a.condition: ${nodes.ghost.output.body} does not name an upstream node',
       [A, B, C],
       [],
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.ghost.output.body} does not name an upstream node",
+      "node 'HTTP Request 1' condition: ${nodes.ghost.output.body} does not name an upstream node",
     );
   });
 
   /**
    * The operator's OWN expression text, and the reason the location pass is
-   * anchored at index 0 rather than global. `n_d` is a real node here, so a global
-   * pass WOULD rewrite it — and would then be telling the operator to go and fix
-   * `${nodes.HTTP Request 2.output.body}`, a string that appears nowhere in their
-   * config and is not even valid expression syntax.
+   * anchored at index 0.
+   *
+   * THE FIXTURE IS THE TEST. An earlier version of this case used a NODE-located
+   * message, and was vacuous: `String.replace` with a non-global regex rewrites
+   * only the FIRST match, and in that message the first `nodes.` occurrence IS the
+   * location — so dropping the `^` changed nothing and the whole suite stayed
+   * green. The anchor is only load-bearing when the first occurrence is in the
+   * BODY, which needs a message located somewhere other than a node. A
+   * CONTAINER-located one is the real shape: `validateExitWhen` writes
+   * `container.<id>.exitWhen` and the operator's own `exitWhen` expression follows
+   * it. Without the anchor that expression is corrupted into
+   * `${node 'HTTP Request 1' output.done}` — a string that appears nowhere in
+   * their config and is not even valid expression syntax.
    */
   it('leaves a ${nodes.<id>...} reference in the message BODY verbatim', () => {
     const out = readableIssue(
-      'node.n_a.config.url: ${nodes.n_d.output.body} is not guaranteed here',
+      'container.stage_1.exitWhen: ${nodes.n_a.output.done} does not name an upstream node',
       [A, B, C, D],
       [],
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} is not guaranteed here",
+      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} does not name an upstream node",
     );
+  });
+
+  /**
+   * The same protection for the shape that has NO location at all — the forward
+   * cycle message opens on prose, so an unanchored pass would find its first
+   * `nodes.` wherever one happened to appear.
+   */
+  it('rewrites nothing node-shaped in a message that has no location prefix', () => {
+    const msg = 'the graph is unsound near ${nodes.n_a.output.done}';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(msg);
   });
 
   /**
@@ -321,7 +341,7 @@ describe('readableIssue', () => {
   });
 
   /**
-   * `forwardCycleErrors` (`params.ts:2962`) names its ids in a third shape — a
+   * `forwardCycleErrors` (`params.ts:2930`, message at `:2964`) names its ids in a third shape — a
    * brace-wrapped comma list, unquoted and mid-sentence — which neither location
    * pass nor the quoted pass can see. A forward cycle is among the most reachable
    * authoring errors, so this was the other message that would have reached the
@@ -341,9 +361,9 @@ describe('readableIssue', () => {
   });
 
   it('leaves a ${…} expression alone even though it is brace-wrapped', () => {
-    const msg = 'node.n_a.config.url: ${default(nodes.n_d.output.body, "x")} is malformed';
+    const msg = 'nodes.n_a.config.url: ${default(nodes.n_d.output.body, "x")} is malformed';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
-      msg.replace('node.n_a.config.url', "node 'HTTP Request 1' config.url"),
+      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
     );
   });
 });

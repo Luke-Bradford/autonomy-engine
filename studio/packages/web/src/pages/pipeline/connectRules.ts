@@ -92,8 +92,6 @@ export interface ConnectPrecheck {
   edgeKeys: ReadonlySet<string>;
   /** Each activity's identifying name (#878) — what a refusal calls its ends. */
   nodeLabels: ReadonlyMap<string, string>;
-  /** Containers by id — an endpoint can be one. */
-  containerById: ReadonlyMap<string, Container>;
   /** Each container's identifying name (#883) — the text its box draws. */
   containerNames: ReadonlyMap<string, string>;
   /**
@@ -128,7 +126,6 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     endpoints: edgeEndpointIds(graph.nodes, graph.containers),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     nodeLabels: activityLabels(graph.nodes),
-    containerById: new Map(graph.containers.map((c) => [c.id, c])),
     containerNames: containerLabels(graph.containers),
     childOwner: containerMembership(graph.containers).owner,
   };
@@ -165,8 +162,8 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
 function endpointLabel(pre: ConnectPrecheck, id: string): string {
   const name = pre.nodeLabels.get(id);
   if (name !== undefined) return name;
-  const container = pre.containerById.get(id);
-  if (container !== undefined) return `${pre.containerNames.get(id) ?? container.kind} container`;
+  const container = pre.containerNames.get(id);
+  if (container !== undefined) return `${container} container`;
   return id;
 }
 
@@ -175,17 +172,20 @@ function endpointLabel(pre: ConnectPrecheck, id: string): string {
  *
  * Same `containerLabels` name as `endpointLabel` uses (#883), for the same
  * reason: a crossing refused by "the loop container" is unactionable while two
- * loops are on screen. `containerKind` stays the KIND, unnamed and unordinalled —
- * its callers ask a question about the kind ("is this a foreach?"), not about
- * which box.
+ * loops are on screen.
+ *
+ * `containerNames` is the ONLY lookup, with no `?? kind` behind it, and that is a
+ * correctness point rather than brevity. It is built by `containerLabels` from
+ * `graph.containers` — the same array `childOwner` is built from — so an id known
+ * to either of them is known to both. A kind
+ * fallback would be unreachable code advertising a degradation that cannot
+ * happen, which is worse than none: a reader would take it as evidence that a
+ * container can be nameless. `containerById` went the same way — replacing its
+ * two readers with `containerNames` left it dead, and a dead field on a hot
+ * precompute is a claim that something still needs it.
  */
-function containerKind(pre: ConnectPrecheck, id: string | undefined): string | undefined {
-  return id === undefined ? undefined : pre.containerById.get(id)?.kind;
-}
-
 function containerName(pre: ConnectPrecheck, id: string | undefined): string {
-  if (id === undefined) return 'a container';
-  const named = pre.containerNames.get(id) ?? containerKind(pre, id);
+  const named = id === undefined ? undefined : pre.containerNames.get(id);
   return named === undefined ? 'a container' : `the ${named} container`;
 }
 

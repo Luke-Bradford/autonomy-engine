@@ -326,11 +326,11 @@ describe('connectRejection — container boundaries', () => {
    * The naming defect U6b's browser pass found, in its container form. A
    * container id is minted the same way a node id is, so a message that fell
    * through to the raw id would read *"…leaves 'c_7c44a16f-98f1-…'"*. There is no
-   * activity to name a container by, so it is named by its KIND — which is also
-   * exactly what the box on screen is labelled with, so the sentence points at
-   * something the operator can see.
+   * activity to name a container by, so it is named by its `containerLabels`
+   * ordinal — which since #883 is exactly what the box on screen is labelled
+   * with, so the sentence points at something the operator can see.
    */
-  it('names a container by KIND, never by its raw id', () => {
+  it('names a container by its NAME, never by its raw id', () => {
     const id = 'c_7c44a16f-98f1-4958-9a1e-0d4f2b6c8e11';
     const g = graph(
       [
@@ -353,8 +353,32 @@ describe('connectRejection — container boundaries', () => {
       'n_1a2b3c4d-5e6f-4708-9a0b-c1d2e3f4a5b6',
     )?.message;
     expect(message).toBeDefined();
-    expect(message).toContain('loop');
+    // The ordinal, not a bare `toContain('loop')` — which a bare-kind message
+    // would satisfy just as well, and did before #883.
+    expect(message).toContain('the loop 1 container');
     expect(message).not.toContain(id);
+  });
+
+  /**
+   * The container as an EDGE ENDPOINT, which is a different code path from the
+   * container as an OBSTACLE — `endpointLabel` rather than `containerName` — and
+   * was the one arm of #883 with no unit coverage. Reverting that one line to the
+   * bare kind left the whole web suite green.
+   *
+   * Driven through the DUPLICATE rule, because that is the refusal that names an
+   * endpoint: the edge `<container> -> b` already exists, so re-drawing it comes
+   * back naming the container end.
+   */
+  it('names a container ENDPOINT by its name too', () => {
+    const g = graph(
+      [node('a'), node('b')],
+      [{ id: 'e1', from: 'c_1', to: 'b', on: 'success' }],
+      [{ id: 'c_1', kind: 'loop', children: ['a'], exitWhen: '${true}' }],
+    );
+    const message = reject(g, 'c_1', 'b')?.message;
+    expect(message).toBeDefined();
+    expect(message).toContain('loop 1 container');
+    expect(message).not.toContain('c_1');
   });
 
   /**
