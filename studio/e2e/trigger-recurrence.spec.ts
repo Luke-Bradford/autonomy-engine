@@ -42,8 +42,14 @@ test.describe('U14b recurrence builder', () => {
     await form.getByLabel(/^Mode/).selectOption('schedule');
 
     // The builder — not a cron string — is what a new schedule trigger opens on.
-    await expect(form.getByLabel('Schedule authored as')).toHaveValue('recurrence');
-    await form.getByLabel('Frequency').selectOption('week');
+    // EXACT label match, deliberately: these two selects are labelled by
+    // `htmlFor`/`id`, so their accessible name is the label text ALONE. Wrapping
+    // a select in its label instead folds every option's text into that name
+    // (#857), and this assertion is what stops the new controls regressing to it.
+    await expect(form.getByLabel('Schedule authored as', { exact: true })).toHaveValue(
+      'recurrence',
+    );
+    await form.getByLabel('Frequency', { exact: true }).selectOption('week');
     await form.getByRole('checkbox', { name: 'Mon' }).check();
     await form.getByRole('checkbox', { name: 'Wed' }).check();
     await form.getByLabel(/^Hours/).fill('9');

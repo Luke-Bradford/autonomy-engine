@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import {
   HONOURED_FIELDS,
   MAX_RECURRENCE_INTERVAL,
@@ -8,8 +9,8 @@ import {
 import {
   cronPreview,
   formToRecurrence,
-  localInputToUtcIso,
   pruneForFrequency,
+  resolveBound,
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
@@ -44,6 +45,7 @@ export function RecurrenceEditor({
   value: RecurrenceFormState;
   onChange: (next: RecurrenceFormState) => void;
 }) {
+  const frequencyId = useId();
   const honoured = HONOURED_FIELDS[value.frequency];
   const required = REQUIRED_FIELDS[value.frequency];
   const set = (patch: Partial<RecurrenceFormState>) => onChange({ ...value, ...patch });
@@ -63,31 +65,33 @@ export function RecurrenceEditor({
   };
 
   /** The absolute instants the bounds resolve to, echoed so the browser-local
-   * anchoring of the controls is visible rather than implied. */
-  const boundEcho = (local: string): string | null =>
-    local.trim() === '' ? null : localInputToUtcIso(local);
-  const startUtc = boundEcho(value.startTime);
-  const endUtc = boundEcho(value.endTime);
+   * anchoring of the controls is visible rather than implied. Resolved through
+   * the same `resolveBound` the write path uses, so an untouched sub-second
+   * bound is echoed as the instant that will actually be submitted rather than
+   * as the truncated re-derivation. */
+  const boundEcho = (local: string, originalIso: string): string | null =>
+    local.trim() === '' ? null : resolveBound(local, originalIso);
+  const startUtc = boundEcho(value.startTime, value.startTimeIso);
+  const endUtc = boundEcho(value.endTime, value.endTimeIso);
 
   return (
     <fieldset className="recurrence-editor">
       <legend>Recurrence</legend>
 
-      <label>
-        Frequency
-        <select
-          value={value.frequency}
-          onChange={(e) =>
-            onChange(pruneForFrequency(value, e.target.value as RecurrenceFrequency))
-          }
-        >
-          {FREQUENCIES.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* The select is labelled by `htmlFor`/`id` rather than wrapped: wrapping
+        * folds every option's text into the control's accessible name (#857). */}
+      <label htmlFor={frequencyId}>Frequency</label>
+      <select
+        id={frequencyId}
+        value={value.frequency}
+        onChange={(e) => onChange(pruneForFrequency(value, e.target.value as RecurrenceFrequency))}
+      >
+        {FREQUENCIES.map((f) => (
+          <option key={f} value={f}>
+            {f}
+          </option>
+        ))}
+      </select>
 
       <label>
         {`Repeat every N ${PERIOD_NOUN[value.frequency]}`}

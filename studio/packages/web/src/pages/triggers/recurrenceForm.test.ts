@@ -9,6 +9,7 @@ import {
   parseNumberList,
   pruneForFrequency,
   recurrenceToForm,
+  resolveBound,
   utcIsoToLocalInput,
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
@@ -228,6 +229,34 @@ describe('formToRecurrence — an untouched bound is written back unchanged', ()
     });
     const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
     expect(recurrenceOf(edited).startTime).toBe(localInputToUtcIso('2026-02-02T10:00'));
+  });
+});
+
+describe('resolveBound — the editor echoes exactly what the write path submits', () => {
+  it('returns the preserved instant for an UNTOUCHED sub-second bound', () => {
+    // The echo used to re-derive from the seconds-only control, so it displayed
+    // `.000Z` while the value actually submitted kept its true milliseconds —
+    // an echo that contradicted the write.
+    const stored = '2026-01-01T09:15:45.500Z';
+    const asLoaded = recurrenceToForm({ frequency: 'day', interval: 1, startTime: stored });
+    expect(resolveBound(asLoaded.startTime, asLoaded.startTimeIso)).toBe(stored);
+  });
+
+  it('agrees with formToRecurrence for both an untouched and an edited bound', () => {
+    const stored = '2026-01-01T09:15:45.500Z';
+    const asLoaded = recurrenceToForm({ frequency: 'day', interval: 1, startTime: stored });
+    const edited = { ...asLoaded, startTime: '2026-02-02T10:00' };
+    for (const form of [asLoaded, edited]) {
+      expect(resolveBound(form.startTime, form.startTimeIso)).toBe(recurrenceOf(form).startTime);
+    }
+  });
+
+  it('re-derives when there is no preserved instant to preserve', () => {
+    expect(resolveBound('2026-02-02T10:00', '')).toBe(localInputToUtcIso('2026-02-02T10:00'));
+  });
+
+  it('returns null for a malformed local value rather than an Invalid Date', () => {
+    expect(resolveBound('not a date', '')).toBeNull();
   });
 });
 

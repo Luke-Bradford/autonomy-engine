@@ -170,6 +170,22 @@ export function utcIsoToLocalInput(iso: string): string {
   return d.getSeconds() === 0 ? base : `${base}:${pad(d.getSeconds())}`;
 }
 
+/**
+ * The absolute instant a bound control will actually SUBMIT — the single place
+ * that decision is made, so what the editor echoes and what the write boundary
+ * receives cannot drift apart.
+ *
+ * An UNTOUCHED bound resolves to the instant exactly as it was loaded. The
+ * control cannot hold sub-second precision, so re-deriving it from the local
+ * string would silently shift a stored instant just because the form was opened
+ * (see `startTimeIso`). Returns `null` when `local` is not a well-formed local
+ * date-time — including when it is empty.
+ */
+export function resolveBound(local: string, originalIso: string): string | null {
+  if (originalIso !== '' && utcIsoToLocalInput(originalIso) === local) return originalIso;
+  return localInputToUtcIso(local);
+}
+
 /** Clear every `schedule` sub-field the NEW frequency does not honour, so a
  * selection made under the old one is never submitted (the write boundary
  * refuses an unhonoured field rather than ignoring it). */
@@ -233,15 +249,7 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
 
   for (const bound of ['startTime', 'endTime'] as const) {
     if (form[bound].trim() === '') continue;
-    // An UNTOUCHED bound is written back exactly as it was loaded. The control
-    // cannot hold sub-second precision, so re-deriving it would silently shift
-    // a stored instant just because the form was opened (see `startTimeIso`).
-    const original = form[`${bound}Iso`];
-    if (original !== '' && utcIsoToLocalInput(original) === form[bound]) {
-      candidate[bound] = original;
-      continue;
-    }
-    const iso = localInputToUtcIso(form[bound]);
+    const iso = resolveBound(form[bound], form[`${bound}Iso`]);
     if (iso === null)
       return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
     candidate[bound] = iso;
