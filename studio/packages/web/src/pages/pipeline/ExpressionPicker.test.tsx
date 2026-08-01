@@ -68,23 +68,28 @@ describe('ExpressionPicker in NodePanel', () => {
   it('lists an upstream output the author had no other way to discover', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
     ui.open('url');
-    // Named by the activity's CATALOG title — the same text its box carries —
-    // not by the raw node id the reference is built from.
-    expect(screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ })).toBeTruthy();
+    // Named by the activity's IDENTIFYING name (#878) — the same text its box
+    // carries — not by the raw node id the reference is built from.
+    expect(screen.getByRole('button', { name: /HTTP Request 1 → body/ })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Upstream outputs' })).toBeTruthy();
   });
 
-  it('names a producer by title ALONE when that title is unambiguous', () => {
-    // An activity title names a TYPE. It identifies an instance only while it is
-    // the doc's only node of that type — so the id is appended when it is not,
-    // and withheld when it is, rather than always or never.
+  /**
+   * #878 — a producer is offered under the name its BOX carries, so the author
+   * can match an option to a rectangle. The option text used to be the activity
+   * TITLE, with the raw doc id appended only where two producers rendered the
+   * same one ("HTTP Request (fetch)"); that bought uniqueness with a string the
+   * canvas shows nowhere. The ordinal is unique AND readable.
+   */
+  it('names a producer the way the canvas names it', () => {
     const gate: Node = { id: 'gate', type: 'if', config: { condition: '${item}' }, position: at };
     mount([FETCH, gate], [{ id: 'e1', from: 'fetch', to: 'gate', on: 'success' }], [], 'gate');
     fireEvent.click(screen.getByRole('button', { name: 'Insert reference into condition' }));
-    expect(screen.getByRole('button', { name: /^HTTP Request → body/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^HTTP Request 1 → body/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /HTTP Request \(fetch\)/ })).toBeNull();
   });
 
-  it('disambiguates two producers of the SAME activity type by id', () => {
+  it('tells two producers of the SAME activity type apart', () => {
     const second: Node = {
       ...FETCH,
       id: 'other',
@@ -101,14 +106,14 @@ describe('ExpressionPicker in NodePanel', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Insert reference into url' }));
     // Both are offered, and each says WHICH box it is — the list's whole job.
-    expect(screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /HTTP Request \(other\) → body/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /HTTP Request 1 → body/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /HTTP Request 2 → body/ })).toBeTruthy();
   });
 
   it('writes the chosen reference into the DOC, not merely onto the screen', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
     ui.open('url');
-    fireEvent.click(screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ }));
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     ui.apply();
     expect(ui.storedConfig()['url']).toBe('${nodes.fetch.output.body}');
   });
@@ -124,7 +129,7 @@ describe('ExpressionPicker in NodePanel', () => {
     fireEvent.select(url);
 
     ui.open('url');
-    fireEvent.click(screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ }));
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     ui.apply();
     expect(ui.storedConfig()['url']).toBe('https://x.test/?q=${nodes.fetch.output.body}&page=2');
   });
@@ -142,7 +147,7 @@ describe('ExpressionPicker in NodePanel', () => {
 
     ui.open('condition');
     expect(screen.getByText(/REPLACES its current value/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /HTTP Request → body/ }));
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     ui.apply();
     expect(ui.storedConfig()['condition']).toBe('${nodes.fetch.output.body}');
   });
@@ -163,9 +168,9 @@ describe('ExpressionPicker in NodePanel', () => {
   it('closes on Escape without touching the field', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
     ui.open('url');
-    const item = screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ });
+    const item = screen.getByRole('button', { name: /HTTP Request 1 → body/ });
     fireEvent.keyDown(item, { key: 'Escape' });
-    expect(screen.queryByRole('button', { name: /HTTP Request \(fetch\) → body/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /HTTP Request 1 → body/ })).toBeNull();
     ui.apply();
     expect(ui.storedConfig()['url']).toBe('');
   });
@@ -178,7 +183,7 @@ describe('ExpressionPicker in NodePanel', () => {
     const seeded: Node = { ...CALL, config: { method: 'GET', url: 'https://api.test/v1/' } };
     const ui = mount([FETCH, seeded], CHAIN, [], 'call');
     ui.open('url');
-    fireEvent.click(screen.getByRole('button', { name: /HTTP Request \(fetch\) → body/ }));
+    fireEvent.click(screen.getByRole('button', { name: /HTTP Request 1 → body/ }));
     ui.apply();
     expect(ui.storedConfig()['url']).toBe('https://api.test/v1/${nodes.fetch.output.body}');
   });
@@ -211,10 +216,10 @@ describe('ExpressionPicker in NodePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Insert reference into items' }));
 
     // The json output is assignable to an array and survives.
-    expect(screen.getByRole('button', { name: /HTTP Request → rows/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeTruthy();
     // A string output, a string param and a run field are all type-refused here,
     // and so are not offered at all.
-    expect(screen.queryByRole('button', { name: /HTTP Request → label/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /HTTP Request 1 → label/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^topic/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^runId/ })).toBeNull();
   });

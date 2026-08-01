@@ -23,7 +23,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
-import { activityLabel } from './activityLabel';
+import { activityLabel, activityLabels } from './activityLabel';
 import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge } from './edgeCondition';
@@ -149,8 +149,9 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
           bare kind: two loops on screen would otherwise give two buttons with
           one name, which is ambiguous to a screen reader and unaddressable to a
           spec. The BOX's own label stays the bare kind — putting the ordinal
-          there is a U6c render change (#839 part 3), deliberately not smuggled
-          in here. */}
+          there is a U6c render change, deliberately not smuggled in here — and
+          since #878 drew the ACTIVITY ordinal on its box, the asymmetry has a
+          ticket of its own (#883). */}
       <button
         type="button"
         className="flow-container-configure nodrag nopan"
@@ -284,25 +285,37 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   );
 
   /**
-   * #840 — the parallel roots, named, for the `partitioned` arm of the advisory.
-   *
-   * The panel can afford this where the pre-edit CONFIRMATION cannot: it names an
-   * activity by the same ID the `chain` arm already spells out, and an id is at
-   * least unique. `activityLabel` is keyed on TYPE, so it would render three
-   * `http_request` roots as one repeated word — which is why the confirmation
-   * describes its change instead of enumerating it. Containers DO have an
-   * identifying name (`containerLabels`' within-kind ordinal) and get it.
-   *
-   * A node id is not a friendly name — `newLocalId` mints `n_7c44a16f-…` for
-   * anything authored on the canvas. That is the `chain` arm's pre-existing cost,
-   * not one this adds; an identifying node-side counterpart to `containerLabels`
-   * is its own ticket, and the day it lands both arms read it.
+   * The operator-facing name of every activity and every container on this
+   * canvas, minted once (#878). The box label, the advisory and the property
+   * panel all read these two maps, so no surface can name a node differently
+   * from the rectangle it points at.
    */
+  const nodeLabels = useMemo(() => activityLabels(nodes), [nodes]);
+  const containerLabelsById = useMemo(() => containerLabels(containers), [containers]);
+
+  /**
+   * How the #788 advisory names one thing it points at — an activity by its
+   * `activityLabels` ordinal, a container by its `containerLabels` one.
+   *
+   * #878: both arms used to spell out RAW IDS for activities, which
+   * `newLocalId` mints as `n_7c44a16f-…` for anything drawn on the canvas — so
+   * the panel named a rectangle by a string that appears nowhere on the canvas.
+   * An id is unique but unreadable; the label is both, and it is the text the box
+   * itself now carries, which is what makes the sentence actionable.
+   *
+   * An id that resolves to neither (a stale view) still degrades to the raw id
+   * rather than inventing a name.
+   */
+  const advisoryName = useCallback(
+    (id: string) => nodeLabels.get(id) ?? containerLabelsById.get(id) ?? id,
+    [nodeLabels, containerLabelsById],
+  );
+
+  /** #840 — the parallel roots, named, for the `partitioned` arm of the advisory. */
   const parallelRoots = useMemo(() => {
     if (routing?.kind !== 'partitioned') return [];
-    const labels = containerLabels(containers);
-    return routing.partition.roots.map((id) => labels.get(id) ?? id);
-  }, [routing, containers]);
+    return routing.partition.roots.map(advisoryName);
+  }, [routing, advisoryName]);
 
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
   /**
@@ -358,7 +371,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           // the domain position for a freshly-added node.
           position: existing?.position ?? n.position,
           data: {
-            title: activityLabel(n),
+            // #878 — the box carries the IDENTIFYING name ("HTTP Request 2"),
+            // not the kind. Every message that points at one activity now names
+            // it this way, and a name the canvas cannot show is a name the
+            // operator cannot act on. The fallback is unreachable: `nodeLabels`
+            // is built from this very array.
+            title: nodeLabels.get(n.id) ?? activityLabel(n),
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
@@ -387,7 +405,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         };
       });
     });
-  }, [nodes, selected, setFlowNodes]);
+  }, [nodes, nodeLabels, selected, setFlowNodes]);
 
   /**
    * U6c — the container boxes, DERIVED from the activity nodes rather than held
@@ -524,7 +542,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     // The SAME within-kind ordinals the membership `<select>` offers and
     // `readableIssue` quotes, so "loop 2" names one container everywhere it
     // appears rather than three things that happen to agree.
-    const labels = containerLabels(containers);
+    const labels = containerLabelsById;
     return containers.map((c) => {
       const rect = containerBoxes.get(c.id)!;
       return {
@@ -617,7 +635,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-  }, [containers, containerBoxes, selected, confirmDeleteContainer, selectContainer]);
+  }, [
+    containers,
+    containerBoxes,
+    containerLabelsById,
+    selected,
+    confirmDeleteContainer,
+    selectContainer,
+  ]);
 
   /**
    * #785 — a container that has just become EMPTY is panned into view.
@@ -1044,7 +1069,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
               <>
                 No edges authored — these {routing.order.length} activities run in one sequence, in
                 the order they were added:{' '}
-                <strong>{routing.order.slice(0, IMPLICIT_CHAIN_PREVIEW).join(' → ')}</strong>
+                <strong>
+                  {routing.order.slice(0, IMPLICIT_CHAIN_PREVIEW).map(advisoryName).join(' → ')}
+                </strong>
                 {routing.order.length > IMPLICIT_CHAIN_PREVIEW
                   ? ` +${routing.order.length - IMPLICIT_CHAIN_PREVIEW} more`
                   : ''}

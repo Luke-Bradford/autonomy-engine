@@ -7,7 +7,7 @@ import {
   type Edge,
   type Node,
 } from '@autonomy-studio/shared';
-import { activityLabel } from './activityLabel';
+import { activityLabels } from './activityLabel';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
 
 /**
@@ -89,8 +89,8 @@ export interface ConnectPrecheck {
   endpoints: ReadonlySet<string>;
   /** `authoringEdgeKey` of every existing edge. */
   edgeKeys: ReadonlySet<string>;
-  /** Nodes by id, for naming an endpoint the way the canvas labels it. */
-  byId: ReadonlyMap<string, Node>;
+  /** Each activity's identifying name (#878) — what a refusal calls its ends. */
+  nodeLabels: ReadonlyMap<string, string>;
   /** Containers by id — an endpoint can be one, and it is named by its KIND. */
   containerById: ReadonlyMap<string, Container>;
   /**
@@ -124,7 +124,7 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     graph,
     endpoints: edgeEndpointIds(graph.nodes, graph.containers),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
-    byId: new Map(graph.nodes.map((n) => [n.id, n])),
+    nodeLabels: activityLabels(graph.nodes),
     containerById: new Map(graph.containers.map((c) => [c.id, c])),
     childOwner: containerMembership(graph.containers).owner,
   };
@@ -141,10 +141,13 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  * true, and unreadable. The unit specs could not catch it because their fixtures
  * use ids a human would choose (`'a'`, `'b'`).
  *
- * Two same-typed nodes therefore share a label. That is accepted: this text is
- * transient feedback about the two ports the operator's pointer just connected,
- * so it names WHAT they wired, not which of two identical activities it was —
- * and there is no per-node name to use instead (`Node` has an id and a type).
+ * #878 — an activity is named by its IDENTIFYING name (`activityLabels`: kind
+ * plus within-kind ordinal, the text its box carries), so a refusal between two
+ * `http_request` nodes no longer reads as one word twice. It used to, on the
+ * grounds that transient feedback about two ports need only say WHAT was wired;
+ * but the two ends of a refused connection are the one thing this sentence is
+ * about, and naming them identically made the panel unreadable in exactly the
+ * graph an operator is most likely to be building.
  * A CONTAINER endpoint is named by its KIND — "loop", "stage", "foreach" — which
  * is the same word its box is labelled with on the canvas (U6c), so the sentence
  * points at something the operator can actually see. A container has no activity
@@ -155,8 +158,8 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  * rather than inventing a name.
  */
 function endpointLabel(pre: ConnectPrecheck, id: string): string {
-  const node = pre.byId.get(id);
-  if (node !== undefined) return activityLabel(node);
+  const name = pre.nodeLabels.get(id);
+  if (name !== undefined) return name;
   const container = pre.containerById.get(id);
   if (container !== undefined) return `${container.kind} container`;
   return id;

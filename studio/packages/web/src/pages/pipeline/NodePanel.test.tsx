@@ -100,6 +100,60 @@ describe('NodePanel (#4 A9 structural-call stub)', () => {
   });
 });
 
+/**
+ * #878 — the panel heading names the NODE, not its kind.
+ *
+ * Both review lenses proved this consumer had no guard: reverting both `<h3>`s to
+ * the old `entry?.title ?? nodeType` left the whole suite green. The failure it
+ * would have hidden is the exact disagreement `activityLabel`'s docblock exists
+ * to prevent — the box reads "HTTP Request 2" and its own panel reads "HTTP
+ * Request", with nothing to say they are the same activity.
+ */
+describe('NodePanel heading (#878)', () => {
+  const http = (id: string): Node => ({
+    id,
+    type: 'http_request',
+    config: {},
+    position: { x: 0, y: 0 },
+  });
+
+  /** Mount the panel over a store holding a WHOLE doc, and open it on one node. */
+  function heading(nodes: Node[], nodeId: string): string {
+    const store = createCanvasStore();
+    store.setState({ nodes });
+    const node = nodes.find((n) => n.id === nodeId)!;
+    render(
+      <NodePanel
+        store={store}
+        connections={[]}
+        nodeId={node.id}
+        nodeType={node.type}
+        config={node.config}
+        connectionId={undefined}
+      />,
+    );
+    return screen.getAllByRole('heading', { level: 3 })[0]!.textContent ?? '';
+  }
+
+  it('names the node its ordinal, not its kind', () => {
+    expect(heading([http('n_1'), http('n_2')], 'n_2')).toBe('HTTP Request 2');
+  });
+
+  /* The stub arm is a SECOND copy of the heading, behind an early `return` — a
+     fix applied to the editor arm alone would leave it saying the kind. The
+     catalog DOES know this type (the palette hides it; `getActivity` does not),
+     so the name is the ordinary catalog title plus its ordinal. */
+  it('names a structural-call node the same way in its read-only stub', () => {
+    const call: Node = {
+      id: 'n_ep',
+      type: 'execute_pipeline',
+      config: {},
+      position: { x: 0, y: 0 },
+    };
+    expect(heading([http('n_1'), call], 'n_ep')).toBe('Execute Pipeline 1');
+  });
+});
+
 describe('NodePanel (U7 per-activity config form)', () => {
   it('renders a labelled control per config key instead of one JSON blob', () => {
     mountOver(httpNode({}));

@@ -775,3 +775,37 @@ Two corollaries worth keeping:
   guard protects against X failing — what does it need in order to run *when X
   has failed?*" For a retry cap, a circuit breaker, a stall detector or a spend
   bound, the answer is almost never "the thing X was carrying".
+
+## 32. A MUTATION TEST edits the working tree — so it voids any build or suite running concurrently
+
+Mutation-proving a test ("break the guard, watch it go red, restore it") is a
+required practice here. It is also a *write to the working tree*, and that makes
+it incompatible with anything else reading that tree at the same time.
+
+Measured on the #878 branch. A full `pnpm -C studio test:e2e` was launched in the
+background; while it ran, three mutations were applied and reverted in the same
+checkout. `test:e2e` begins with `pnpm build`, so the build compiled a tree in
+which the feature under test had been temporarily gutted. The run came back
+**157 passed / 4 failed** — and the specs most certain to break were among the
+*passes*. Every one of those passes was a reading of a mutant.
+
+The failure is silent and reads as good news. Nothing errors; the suite simply
+describes code that no longer exists. It is the same class as the stale-`dist`
+false pass, but worse, because the artifact is freshly built — the usual
+"is the build current?" check says yes.
+
+**Rule: one writer at a time. Never mutate the working tree while a build, a test
+suite, a subagent, or a browser session is reading it.** Either serialise them, or
+mutate in a `git worktree add` copy so the two never share a checkout.
+
+Two corollaries:
+
+- **A concurrent-mutation run is void in BOTH directions.** It cannot be salvaged
+  by "the failures are real and the passes are suspect" — a mutation can make a
+  test pass as easily as fail. Discard the whole run and repeat it on a quiescent
+  tree; do not reason from any part of it.
+- **Diagnose a surprising PASS with the same energy as a failure.** The thing that
+  caught this was dumping the actual string an assertion was matching against
+  (`expect(x).toBe('DUMP')`), not re-reading the assertion. An assertion you
+  expected to fail and which passed is evidence about the *harness*, not a happy
+  accident.

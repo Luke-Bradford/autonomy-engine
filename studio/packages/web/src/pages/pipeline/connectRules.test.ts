@@ -78,9 +78,26 @@ describe('connectRejection', () => {
       expect(message).not.toBe('');
       for (const id of ids) expect(message, `leaks ${id}`).not.toContain(id);
     }
-    expect(reject(g, ids[1], ids[0])?.message).toContain("'HTTP Request'");
-    expect(reject(g, ids[1], ids[0])?.message).toContain("'Write File'");
-    expect(reject(g, ids[0], ids[0])?.message).toContain("'HTTP Request'");
+    expect(reject(g, ids[1], ids[0])?.message).toContain("'HTTP Request 1'");
+    expect(reject(g, ids[1], ids[0])?.message).toContain("'Write File 1'");
+    expect(reject(g, ids[0], ids[0])?.message).toContain("'HTTP Request 1'");
+  });
+
+  /**
+   * #878 — the same defect one turn on. Naming both ends "HTTP Request" is
+   * literally true and no more actionable than the two uuids the label replaced,
+   * and a chain of same-type activities is a graph an operator really builds.
+   */
+  it('tells two endpoints of the SAME activity type apart', () => {
+    const ids = ['n_7c44a16f-98f1-4958', 'n_9c4bb103-23dc-4965'] as const;
+    const g = graph(
+      [node(ids[0], 'http_request'), node(ids[1], 'http_request')],
+      [edge(ids[0], ids[1])],
+    );
+    const message = reject(g, ids[1], ids[0])?.message ?? '';
+    expect(message).toContain("'HTTP Request 1'");
+    expect(message).toContain("'HTTP Request 2'");
+    for (const id of ids) expect(message, `leaks ${id}`).not.toContain(id);
   });
 
   /**

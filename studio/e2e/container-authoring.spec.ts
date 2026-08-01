@@ -144,8 +144,11 @@ test.describe('U6d — creating a container from the canvas', () => {
 
     expect(message).toContain('unsavable');
     expect(message).toContain('crosses a container boundary');
-    // Named by its ENDS, never by the uuid `newLocalId` minted for it.
-    expect(message).toContain('HTTP Request → HTTP Request');
+    // Named by its ENDS, never by the uuid `newLocalId` minted for it — and
+    // since #878 the two ends are TOLD APART. This doc is two `http_request`
+    // nodes, which used to render "HTTP Request → HTTP Request": true, and no
+    // more use to the operator than the two uuids it replaced.
+    expect(message).toContain('HTTP Request 1 → HTTP Request 2');
     expect(message).not.toMatch(/'e_[0-9a-f]{8}/);
 
     expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');
@@ -337,8 +340,11 @@ test.describe('#840 — a container edit states the routing it changes', () => {
     ).not.toBeNull();
     expect(message).toContain('changes that inferred routing');
     expect(message).toContain('Saving mints');
-    // Qualitative by design: `activityLabel` is keyed on TYPE, so naming the
-    // activities would repeat one word rather than identify anything.
+    // Qualitative by design. It was once a hard constraint — `activityLabel` is
+    // keyed on TYPE, so naming the activities repeated one word — and since #878
+    // it is a scope decision instead: `activityLabels` could name them, and
+    // `RoutingChange` carries the ids. Deferred to #881; this pins the sentence
+    // that ships today.
     expect(message).not.toContain('HTTP Request');
 
     await expect(page.getByLabel('Container membership')).toHaveValue('');

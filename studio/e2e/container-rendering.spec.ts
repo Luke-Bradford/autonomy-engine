@@ -59,9 +59,12 @@ function loopDoc(): SeedDoc {
     nodes: [
       { id: 'a', position: { x: 0, y: 0 } },
       { id: 'b', position: { x: 0, y: 160 } },
-      // A DIFFERENT activity type, so the boundary refusal below names two
-      // distinguishable titles — `'HTTP Request' → 'HTTP Request'` would pass an
-      // assertion about naming while proving nothing about which end is which.
+      // A DIFFERENT activity type. It predates #878 — when every node of one
+      // type shared one name, `'HTTP Request' → 'HTTP Request'` would have passed
+      // an assertion about naming while proving nothing about which end is which.
+      // The ordinal now tells `a` and `b` apart on its own, and the refusal below
+      // asserts `HTTP Request 2` (that is `b`, the enclosed end) precisely to pin
+      // WHICH of the two identical-type nodes is named.
       { id: 'after', type: 'file_write', position: { x: 420, y: 80 } },
     ],
     edges: [
@@ -429,7 +432,7 @@ test.describe('U6c container rendering', () => {
         'cross a container boundary',
       );
       await expect(refusal, `${direction}: the enclosed end is named wrong`).toContainText(
-        "'HTTP Request' is inside the loop container",
+        "'HTTP Request 2' is inside the loop container",
       );
       await expect(refusal).not.toContainText('loop_1');
       // Nothing authored: still the two edges the doc was seeded with.
