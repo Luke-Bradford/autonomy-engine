@@ -24,7 +24,7 @@ import '@xyflow/react/dist/style.css';
 import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel } from './activityLabel';
-import { containerLabels } from './containerRules';
+import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
@@ -42,7 +42,12 @@ import {
   type ContainerBox,
 } from './containerLayout';
 import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
-import { nextSelection, type CanvasState, type Selection } from './canvasStore';
+import {
+  cascadeDeleteContainer,
+  nextSelection,
+  type CanvasState,
+  type Selection,
+} from './canvasStore';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -278,6 +283,27 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [nodes, edges, containers],
   );
 
+  /**
+   * #840 — the parallel roots, named, for the `partitioned` arm of the advisory.
+   *
+   * The panel can afford this where the pre-edit CONFIRMATION cannot: it names an
+   * activity by the same ID the `chain` arm already spells out, and an id is at
+   * least unique. `activityLabel` is keyed on TYPE, so it would render three
+   * `http_request` roots as one repeated word — which is why the confirmation
+   * describes its change instead of enumerating it. Containers DO have an
+   * identifying name (`containerLabels`' within-kind ordinal) and get it.
+   *
+   * A node id is not a friendly name — `newLocalId` mints `n_7c44a16f-…` for
+   * anything authored on the canvas. That is the `chain` arm's pre-existing cost,
+   * not one this adds; an identifying node-side counterpart to `containerLabels`
+   * is its own ticket, and the day it lands both arms read it.
+   */
+  const parallelRoots = useMemo(() => {
+    if (routing?.kind !== 'partitioned') return [];
+    const labels = containerLabels(containers);
+    return routing.partition.roots.map((id) => labels.get(id) ?? id);
+  }, [routing, containers]);
+
   const [flowNodes, setFlowNodes, onNodesChangeRaw] = useNodesState<FlowNode>([]);
   /**
    * The ENDS of the last refused connection attempt — not its message.
@@ -425,8 +451,26 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [store],
   );
 
+  /**
+   * #840 — the delete's ROUTING consequence, appended to its destruction warning.
+   *
+   * Two things this edit can do to routing, neither of which any validator
+   * reports: removing the last container turns the inferred partition back into
+   * one sequence, and the edge CASCADE can remove the doc's last authored edge,
+   * which starts inferring routing for a doc that previously authored its own.
+   * Both mint into the next immutable version.
+   *
+   * Appended rather than folded into `confirmContainerEdit`: that gate diffs the
+   * VALIDATOR's issues, which is not what a delete costs, and `containerRules`
+   * argues that merging the two makes each vaguer. So the routing half is reused
+   * and the destruction sentence stays this function's own.
+   */
   const confirmDeleteContainer = useCallback(
     (id: string, kind: ContainerKind) => {
+      const state = store.getState();
+      const routing = routingSentence(
+        routingChangeBetween(state, { ...state, ...cascadeDeleteContainer(state, id) }),
+      );
       const confirmed = window.confirm(
         `Delete this ${kind} container?\n\n` +
           'Its settings and the edges connected to it are removed, and this cannot be undone. ' +
@@ -434,7 +478,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           (kind === 'foreach'
             ? ' Any ${item} they reference will no longer resolve, and must be edited' +
               ' before the pipeline can be saved.'
-            : ''),
+            : '') +
+          (routing === null ? '' : `\n\n${routing}`),
       );
       if (!confirmed) return;
       store.getState().deleteContainer(id);
@@ -1008,8 +1053,13 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             ) : (
               <>
                 No edges authored — routing is <strong>inferred</strong> from the order activities
-                were added, and this graph&rsquo;s containers split that chain. Saving mints the
-                inferred routing as this version&rsquo;s routing.
+                were added, and this graph&rsquo;s containers split that chain into{' '}
+                {parallelRoots.length} that start in parallel:{' '}
+                <strong>{parallelRoots.slice(0, IMPLICIT_CHAIN_PREVIEW).join(', ')}</strong>
+                {parallelRoots.length > IMPLICIT_CHAIN_PREVIEW
+                  ? ` +${parallelRoots.length - IMPLICIT_CHAIN_PREVIEW} more`
+                  : ''}
+                . Saving mints the inferred routing as this version&rsquo;s routing.
               </>
             )}
           </Panel>

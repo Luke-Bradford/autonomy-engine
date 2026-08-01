@@ -444,6 +444,70 @@ describe('FlowCanvas container delete (#748)', () => {
     fireEvent.click(within(box).getByRole('button', { name: 'Delete loop container' }));
     expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
   });
+
+  /**
+   * #840 — the delete's ROUTING consequence, on the fixture that produces it for
+   * the reason easiest to miss. This graph AUTHORS an edge (`c_1 → after`), so
+   * nothing is inferred for it; the cascade removes that edge along with the box,
+   * which leaves the doc edge-less and starts inferring a chain over node order.
+   * A comparison short-circuited on "the doc has authored edges" would report
+   * nothing here, which is why `routingChangeBetween` refuses that guard.
+   */
+  it('warns that deleting the box leaves routing INFERRED, when the cascade empties the edges', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const { box } = withBoxedGraph();
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    const message = confirm.mock.calls[0]![0] as string;
+    expect(message).toContain('no authored edges');
+    expect(message).toContain('one sequence');
+    // The destruction half is still its own sentence — the two are composed, not
+    // merged into one vaguer warning.
+    expect(message).toMatch(/cannot be undone/i);
+  });
+
+  /**
+   * The negative half, and it must be a delete that genuinely leaves routing
+   * alone — not merely one that leaves another container standing, which DOES
+   * change the walk by moving the deleted box's children to the top level. Here a
+   * second authored edge survives the cascade, so routing stays authored on both
+   * sides and there is nothing to say.
+   */
+  it('says nothing about routing when an authored edge survives the cascade', () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'after', type: 'http_request', config: {}, position: { x: 400, y: 0 } },
+          { id: 'last', type: 'http_request', config: {}, position: { x: 800, y: 0 } },
+        ],
+        edges: [
+          { id: 'e_out', from: 'c_1', to: 'after', on: 'success' },
+          { id: 'e_keep', from: 'after', to: 'last', on: 'success' },
+        ],
+        containers: [{ id: 'c_1', kind: 'stage', children: ['n_a'] }],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    const box = container.querySelector<HTMLElement>('.react-flow__node[data-id="c_1"]')!;
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    const message = confirm.mock.calls[0]![0] as string;
+    expect(message).not.toContain('inferred');
+    expect(message).not.toContain('one sequence');
+  });
 });
 
 /**
@@ -569,6 +633,22 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     expect(advisory!.textContent).toContain('Saving mints');
     expect(advisory!.textContent).not.toContain('a → b');
     expect(advisory!.textContent).not.toContain('run in one sequence');
+  });
+
+  /**
+   * #840 — it names the parallel roots it previously only alluded to.
+   *
+   * `a` and the stage are the two things that start; `b` is INSIDE the stage and
+   * must not be listed beside it, because that is the very "these all run
+   * together" reading the partition exists to correct. The container is named by
+   * its `containerLabels` ordinal rather than its raw id, which is the only
+   * identifying name available on either side.
+   */
+  it('names the parallel roots, and does not list a container’s child among them', () => {
+    const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
+    expect(advisory!.textContent).toContain('2 that start in parallel');
+    expect(advisory!.textContent).toContain('a, stage 1');
+    expect(advisory!.textContent).not.toContain('c_1');
   });
 
   /**

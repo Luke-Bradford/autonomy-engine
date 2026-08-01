@@ -226,6 +226,30 @@ export function containersWithUpdated(containers: Container[], container: Contai
   return containers.map((c) => (c.id === container.id ? container : c));
 }
 
+/**
+ * The containers and edges a `deleteContainer` would leave behind.
+ *
+ * Exported so the CONFIRMATION and the ACTION read one rule (#847's anti-pattern
+ * is a second reader of a rule like this). The delete cascades incident edges as
+ * well as removing the box, and #840 records what a second reader costs here
+ * specifically: a confirmation computing its candidate doc as the naive
+ * `containers.filter(...)` would keep the cascaded edges and describe routing the
+ * delete does not produce — a WRONG warning, which is worse than none.
+ *
+ * The children are deliberately absent from the cascade; `deleteContainer`'s own
+ * docblock argues why they survive. Selection repair and the `dirty` flag stay in
+ * the action: they are store bookkeeping, not part of the doc this describes.
+ */
+export function cascadeDeleteContainer(
+  doc: { containers: Container[]; edges: Edge[] },
+  id: string,
+): { containers: Container[]; edges: Edge[] } {
+  return {
+    containers: doc.containers.filter((c) => c.id !== id),
+    edges: doc.edges.filter((e) => e.from !== id && e.to !== id),
+  };
+}
+
 /** The containers array a doc would have once `container` is added to it. */
 export function containersWithNew(containers: Container[], container: Container): Container[] {
   let next = containers;
@@ -697,12 +721,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
     deleteContainer(id) {
       if (!get().containers.some((c) => c.id === id)) return;
       set((s) => {
+        const next = cascadeDeleteContainer(s, id);
+        const kept = new Set(next.edges.map((e) => e.id));
         const removedEdgeIds = new Set(
-          s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
+          s.edges.filter((e) => !kept.has(e.id)).map((e) => e.id),
         );
         return {
-          containers: s.containers.filter((c) => c.id !== id),
-          edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+          containers: next.containers,
+          edges: next.edges,
           // Two ways to strand a selection here: an EDGE the cascade removed,
           // and — since U23 — the deleted CONTAINER itself. RF drives neither
           // clear (it never sees a container at all, and the edge is gone
