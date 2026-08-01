@@ -79,7 +79,7 @@ export function RecurrenceEditor({
       <legend>Recurrence</legend>
 
       {/* The select is labelled by `htmlFor`/`id` rather than wrapped: wrapping
-        * folds every option's text into the control's accessible name (#857). */}
+       * folds every option's text into the control's accessible name (#857). */}
       <label htmlFor={frequencyId}>Frequency</label>
       <select
         id={frequencyId}

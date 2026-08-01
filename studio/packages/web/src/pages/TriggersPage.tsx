@@ -552,7 +552,7 @@ function TriggerForm({
       {form.mode === 'schedule' && (
         <>
           {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
-            * option's text into the control's accessible name (#857). */}
+           * option's text into the control's accessible name (#857). */}
           <label htmlFor={scheduleKindId}>Schedule authored as</label>
           <select
             id={scheduleKindId}
