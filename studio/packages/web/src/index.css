@@ -1283,6 +1283,71 @@ td button + button {
 }
 
 /*
+ * U23 (#839) — the container's CONFIGURE button: the box's third opt-in.
+ *
+ * Everything the delete button's note above says about `pointer-events: all`,
+ * `nodrag nopan` and staying out of the bottom-centre probe applies here
+ * verbatim; the two controls share the header band for that reason.
+ *
+ * Placed to the LEFT of the ✕ rather than beside the kind label, so the
+ * destructive control keeps the corner position the operator has learnt and a
+ * mis-aimed click lands on the harmless one. 30px = the ✕'s 22px target plus its
+ * 4px right offset plus a 4px gap, so the two targets do not overlap. The
+ * narrowest real box is one 150px node plus 2 × 20px padding = 190px, which
+ * leaves the uppercase kind label (~60px at 0.72rem) clear of both.
+ *
+ * `--muted` at rest, `--accent` on hover/focus and while PRESSED: unlike the ✕,
+ * this control has a state — it is `aria-pressed` while its container is the
+ * panel's subject — and the colour follows that state so the box and the panel
+ * agree about which container is being edited. Never colour alone: the
+ * accessible name is "Configure <kind> <ordinal>", the same string is the
+ * tooltip, and `aria-pressed` carries the state non-visually.
+ */
+.flow-container-configure {
+  position: absolute;
+  top: 2px;
+  right: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.flow-container-configure:hover,
+.flow-container-configure:focus-visible,
+.flow-container-configure[aria-pressed='true'] {
+  color: var(--accent);
+}
+
+.flow-container-configure:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * The container the property panel is editing.
+ *
+ * A SOLID border against the box's usual dashed one, plus the accent colour —
+ * two channels, not colour alone, because with two loops on screen this is the
+ * only thing on the canvas that says which rectangle the panel's fields belong
+ * to. Deliberately not React Flow's `.selected` class: a container is never in
+ * RF's selection (`selectable: false`), so this state is the store's alone.
+ */
+.flow-container--selected {
+  border-style: solid;
+  border-color: var(--accent);
+}
+
+/*
  * A container in the MINIMAP.
  *
  * React Flow's minimap draws every node in the lookup as one filled rect, so

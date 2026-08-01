@@ -1466,8 +1466,6 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
   it('accounts for every field on ContainerSchema', () => {
     const STRUCTURAL = ['id', 'kind', 'children'];
     const onSchema = Object.keys(ContainerSchema.shape);
-    expect([...onSchema].sort()).toEqual(
-      [...STRUCTURAL, ...CONTAINER_CONFIG_FIELD_NAMES].sort(),
-    );
+    expect([...onSchema].sort()).toEqual([...STRUCTURAL, ...CONTAINER_CONFIG_FIELD_NAMES].sort());
   });
 });

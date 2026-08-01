@@ -27,13 +27,14 @@ import {
   createCanvasStore,
 } from './canvasStore';
 import { ConfigFieldControl } from './ConfigFieldControl';
+import { ContainerPanel } from './ContainerPanel';
 import {
   assembleConfig,
   deriveConfigFields,
   seedFieldInputs,
   unrepresentableFields,
 } from './configForm';
-import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
+import { confirmContainerEdit, containerLabels } from './containerRules';
 import {
   coerceDefaultInput,
   defaultAdvisory,
@@ -250,6 +251,8 @@ function PropertyPanel({
   const selected = useStore(store, (s) => s.selected);
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
+  const containers = useStore(store, (s) => s.containers);
+  const params = useStore(store, (s) => s.params);
 
   if (!selected) return <PipelinePanel store={store} />;
 
@@ -263,6 +266,25 @@ function PropertyPanel({
     // selecting a different edge must not carry the previous one's half-typed
     // text (or its error) onto it.
     return <EdgePanel key={edge.id} store={store} edge={edge} nodes={nodes} edges={edges} />;
+  }
+
+  if (selected.kind === 'container') {
+    const container = containers.find((c) => c.id === selected.id);
+    if (!container) return <PipelinePanel store={store} />;
+    // Keyed for the same reason the other two are: the form holds a draft per
+    // field, and configuring a different container must not carry the previous
+    // one's half-typed values (or its error) onto it.
+    return (
+      <ContainerPanel
+        key={container.id}
+        container={container}
+        nodes={nodes}
+        edges={edges}
+        containers={containers}
+        params={params}
+        onApply={(next) => store.getState().updateContainer(container.id, next)}
+      />
+    );
   }
 
   const node = nodes.find((n) => n.id === selected.id);
@@ -878,14 +900,12 @@ function ContainerSection({
     recovery: string,
     apply: () => void,
   ): boolean {
-    const message = consequenceMessage(
-      containerEditConsequence({ nodes, edges, containers, params }, nextContainers),
-      nodes,
-      edges,
-      nextContainers,
-      recovery,
-    );
-    if (message !== null && !window.confirm(message)) return false;
+    // The gate itself is `confirmContainerEdit`, hoisted into `containerRules`
+    // when U23's config panel became its second call site. This wrapper is only
+    // the "and then apply it" half, which the two callers below share.
+    if (!confirmContainerEdit({ nodes, edges, containers, params }, nextContainers, recovery)) {
+      return false;
+    }
     apply();
     return true;
   }

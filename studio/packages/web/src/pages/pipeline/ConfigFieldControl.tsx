@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { ConfigField } from './configForm';
 
 /**
@@ -30,6 +31,10 @@ export function ConfigFieldControl({
   onChange: (next: string | boolean) => void;
 }) {
   const label = field.optional ? `${field.name} (optional)` : field.name;
+  // Only the `enum` branch uses this — see the note there. `useId` rather than
+  // the field NAME, because two panels can render the same field name at once
+  // and duplicate ids would point both labels at whichever control mounted first.
+  const controlId = useId();
 
   if (field.kind === 'boolean') {
     return (
@@ -45,10 +50,18 @@ export function ConfigFieldControl({
   }
 
   if (field.kind === 'enum') {
+    /* #857 — the label is ASSOCIATED, not WRAPPING, and this is the one control
+       where that matters. A `<label>` containing a `<select>` takes its
+       accessible name from all its text content, which includes every
+       `<option>`; the name of a `mode` picker becomes "mode auto manual off",
+       so `getByLabel('mode')` misses it and a screen reader reads the whole
+       list as the field's name. Wrapping is harmless around an `<input>`
+       (its value is not text content), which is why the other branches keep it. */
     return (
-      <label>
-        {label}
+      <>
+        <label htmlFor={controlId}>{label}</label>
         <select
+          id={controlId}
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
         >
@@ -59,7 +72,7 @@ export function ConfigFieldControl({
             </option>
           ))}
         </select>
-      </label>
+      </>
     );
   }
 
