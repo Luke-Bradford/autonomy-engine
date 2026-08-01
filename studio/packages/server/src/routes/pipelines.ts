@@ -315,9 +315,11 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
    * `owner_id` — defense in depth, never trusting that every run under the
    * pipeline shares its owner.
    *
-   * NOTE (scope): this is the API/projection half of "→ Monitor". Rendering the
-   * cost in the run/pipeline monitor UI is deferred to the U-series UI epic
-   * (#439), which carries the mandatory browser-verify gate.
+   * NOTE (scope): this is the API/projection half of "→ Monitor". #866 shipped
+   * the first UI reader of cost — PER NODE, on the run monitor's drill-in, folded
+   * client-side from the run's event stream rather than from this route. The
+   * per-run and per-pipeline ROLLUP surfaces this route serves are still
+   * unrendered, and remain U27's (#439).
    */
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/cost', async (request) => {
     const pipeline = requireOwned(

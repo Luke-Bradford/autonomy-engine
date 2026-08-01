@@ -1101,3 +1101,265 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     expect(within(panel).getByText(/excluding time held between retries/i)).toBeInTheDocument();
   });
 });
+
+describe('RunDetailPage — #866 the drill-in says what a node SPENT and which tools it ran', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'run_1',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+  const metered = (fields: Record<string, unknown> = {}): EngineEvent =>
+    ({
+      type: 'activity.metered',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    }) as EngineEvent;
+
+  /** Open the drill-in for `greet` and hand back the panel. */
+  async function openPanel(events: EngineEvent[]) {
+    useRunStreamMock.mockReturnValue(stream({ events: events.map((e) => envelope(e)) }));
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    return screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
+  }
+
+  it('states a priced node’s cost, its model and its token usage', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1200, outputTokens: 340, costEstimate: 0.0055 }),
+    ]);
+    expect(within(panel).getByText('$0.0055')).toBeInTheDocument();
+    expect(within(panel).getByText('claude-opus-4-8')).toBeInTheDocument();
+    expect(within(panel).getByText('1,200 in · 340 out')).toBeInTheDocument();
+  });
+
+  it('never renders a spent-but-unpriceable node as $0.00', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      // A model with no known price: tokens counted, no `costEstimate` stamped.
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText('$0.00')).not.toBeInTheDocument();
+  });
+
+  it('renders a lower bound when only SOME exchanges priced', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('At least $0.02')).toBeInTheDocument();
+  });
+
+  it('renders an agent_cli node as a covered cost with tokens UNREPORTED, not zero', async () => {
+    // `cliSpendFact`: provider `agent_cli`, unpriced, and no token counts at all.
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' }),
+    ]);
+    expect(within(panel).getByText('No marginal cost')).toBeInTheDocument();
+    expect(within(panel).getByText('not reported')).toBeInTheDocument();
+    expect(within(panel).queryByText(/0 in · 0 out/)).not.toBeInTheDocument();
+    // And the count is named as a floor, because a CLI reports none of the model
+    // calls it drives internally.
+    expect(within(panel).getByText(/floor, not a census/)).toBeInTheDocument();
+  });
+
+  it('shows no cost section at all for a node that never billed anything', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      {
+        type: 'node.succeeded',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        outputs: {},
+      },
+    ]);
+    expect(within(panel).queryByRole('heading', { name: 'Cost & usage' })).not.toBeInTheDocument();
+  });
+
+  it('lists the tools the node ran, flagging the ones that errored', async () => {
+    const toolCall = (fields: Record<string, unknown>): EngineEvent =>
+      ({
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: 0,
+        toolName: 'read_file',
+        argsChars: 12,
+        resultChars: 400,
+        isError: false,
+        ...fields,
+      }) as EngineEvent;
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      toolCall({ toolName: 'read_file' }),
+      toolCall({ toolName: 'grep', round: 1, isError: true }),
+    ]);
+    expect(within(panel).getByRole('heading', { name: 'Tool calls' })).toBeInTheDocument();
+    expect(within(panel).getByText('read_file')).toBeInTheDocument();
+    expect(within(panel).getByText('grep')).toBeInTheDocument();
+    expect(within(panel).getByText(/1 of which returned an error/)).toBeInTheDocument();
+  });
+
+  it('says a tool-running node billed NOTHING, rather than hiding the section', async () => {
+    /* The `||` arm: tool calls but no metered response. Reachable, and the case
+       where an absent Cost section would be read as "the panel does not do
+       cost" rather than as the finding it is — a timed-out provider call
+       records no exchange at all, deliberately. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      {
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: 0,
+        toolName: 'read_file',
+        argsChars: 4,
+        resultChars: 8,
+        isError: false,
+      } as EngineEvent,
+    ]);
+    expect(within(panel).getByRole('heading', { name: 'Cost & usage' })).toBeInTheDocument();
+    expect(within(panel).getByText('No billed exchange')).toBeInTheDocument();
+    expect(within(panel).getByText(/TIMED OUT records no exchange/)).toBeInTheDocument();
+  });
+
+  it('says a foreach node’s cost SUMS every item, unlike the outputs beside it', async () => {
+    const panel = await openPanel([
+      dispatched('greet@1', 'greet@1#0'),
+      dispatched('greet@2', 'greet@2#0'),
+      metered({ nodeId: 'greet@1', inputTokens: 1, outputTokens: 1, costEstimate: 0.1 }),
+      metered({ nodeId: 'greet@2', inputTokens: 1, outputTokens: 1, costEstimate: 0.2 }),
+    ]);
+    expect(within(panel).getByText('$0.30')).toBeInTheDocument();
+    expect(within(panel).getByText(/SUMS every result keyed/)).toBeInTheDocument();
+  });
+
+  it('names an unnamed tool as unnamed, and truncates a long list out loud', async () => {
+    const call = (i: number): EngineEvent =>
+      ({
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: i,
+        // The LAST call is structurally nameless — kept in view by the
+        // keep-the-most-recent truncation, which is the point of both halves.
+        toolName: i === 120 ? '' : `tool_${i}`,
+        argsChars: 1,
+        resultChars: 1,
+        isError: false,
+      }) as EngineEvent;
+    const calls = Array.from({ length: 121 }, (_, i) => call(i));
+    const panel = await openPanel([dispatched('greet', 'greet#0'), ...calls]);
+    expect(within(panel).getByText(/showing the most recent 100 of 121 calls/)).toBeInTheDocument();
+    expect(within(panel).getByText('unnamed')).toBeInTheDocument();
+    // Truncated from the FRONT: the oldest call is gone, the newest is not.
+    expect(within(panel).queryByText('tool_0')).not.toBeInTheDocument();
+    expect(within(panel).getByText('tool_119')).toBeInTheDocument();
+  });
+
+  it('reports ONE side of a token count without inventing the other', async () => {
+    /* `meterUsage` stamps whichever side the provider sent. Rendering the
+       unmeasured side as `0 out` is the manufactured zero this panel exists to
+       refuse — and it is the arm a single combined "tokens reported" flag got
+       wrong. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 4000, meteringStatus: 'unknown' }),
+    ]);
+    expect(within(panel).getByText('4,000 in · output not reported')).toBeInTheDocument();
+    expect(within(panel).queryByText(/0 out/)).not.toBeInTheDocument();
+  });
+
+  it('says the token sums are partial when only some exchanges reported a side', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ outputTokens: 5, meteringStatus: 'unknown' }),
+    ]);
+    expect(
+      within(panel).getByText(/2 of 3 reported input and 3 of 3 reported output/),
+    ).toBeInTheDocument();
+  });
+
+  it('never composes a lower bound out of an amount too small to state', async () => {
+    /* A genuinely-stamped `costEstimate: 0` (a free model in the price table)
+       alongside an unpriceable exchange. "At least $0.00" is the exact reading
+       this surface exists to prevent, and the sub-micro-dollar case composes into
+       the self-contradictory "At least < $0.000001". Both collapse to the one
+       true statement: the priced part tells us nothing. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0 }),
+      metered({ inputTokens: 1, outputTokens: 1 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText(/At least/)).not.toBeInTheDocument();
+    /* And the SENTENCE agrees with the headline. Promising "the figure" while
+       the headline deliberately withheld one is the contradiction the shared
+       `statesAnAmount` predicate exists to stop. */
+    expect(within(panel).queryByText(/The figure is what the rest cost/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/less than a millionth of a dollar/)).toBeInTheDocument();
+  });
+
+  it('says an unsettled node’s spend is SO FAR, not a final figure', async () => {
+    // Dispatched and never settled — the live-tail case.
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+    ]);
+    expect(within(panel).getByText(/spent SO FAR/)).toBeInTheDocument();
+  });
+
+  it('does not qualify a FIGURE when the headline never showed one', async () => {
+    /* Unsettled, and nothing priced — the headline is "Cost unknown" and its own
+       sentence says a number is deliberately not shown. A caveat about "what it
+       has spent SO FAR" would qualify a figure that is not on screen. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText(/spent SO FAR/)).not.toBeInTheDocument();
+    // The useful half of the caveat survives, worded for a panel with no figure.
+    expect(within(panel).getByText(/more exchanges may still be billed/)).toBeInTheDocument();
+  });
+
+  it('does not caveat a SETTLED node’s spend as still running', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+      {
+        type: 'node.succeeded',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        outputs: {},
+      },
+    ]);
+    expect(within(panel).queryByText(/spent SO FAR/)).not.toBeInTheDocument();
+  });
+
+  it('shows no tool-call section for a node that ran none', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+    ]);
+    expect(within(panel).queryByRole('heading', { name: 'Tool calls' })).not.toBeInTheDocument();
+  });
+});

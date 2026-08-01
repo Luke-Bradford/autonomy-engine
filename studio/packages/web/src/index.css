@@ -1763,6 +1763,39 @@ td button + button {
   overflow-y: auto;
 }
 
+/* #866 — the per-node tool-call list. Dense by design: it is a log, and an
+   agent loop routinely runs dozens of calls, so it must stay scannable inside a
+   panel rather than dominate it. Capped and scrolled for the same reason
+   `.node-detail-outputs` is. */
+.node-tool-calls {
+  /* `width`/`border-collapse` come from the global `table` rule. `display: block`
+     is what makes a <table> scrollable at all, and it is the reason the cells set
+     their own padding rather than inheriting a table layout. */
+  font-size: 0.8rem;
+  display: block;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.node-tool-calls th,
+.node-tool-calls td {
+  text-align: left;
+  padding: 0.15rem 0.5rem 0.15rem 0;
+  white-space: nowrap;
+}
+
+.node-tool-calls th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* An errored tool result is a TOOL-level defect the model saw and carried on
+   from — not a node failure — so it is marked in the failure colour without a
+   pill, which is the vocabulary reserved for node/run status. */
+.tool-call-error {
+  color: var(--error);
+}
+
 /* A small status pill, shared by run-level and node-level state. The colour
    families read at a glance: neutral (pending/waiting), blue (in flight),
    green (success), red (failure/interrupted), muted (skipped). */
