@@ -203,7 +203,10 @@ describe('deriveRunLifecycle', () => {
     expect(deriveRunLifecycle(events)).toEqual({ status: 'interrupted', waitingReason: null });
   });
   it('#5 S3 — a run.waiting tailing after run.started shows `waiting` (live park view)', () => {
-    const events = [started(), envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' })];
+    const events = [
+      started(),
+      envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' }),
+    ];
     // #870 — and it now carries the REASON, which this fold used to drop.
     expect(deriveRunLifecycle(events)).toEqual({
       status: 'waiting',

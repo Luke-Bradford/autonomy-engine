@@ -184,20 +184,15 @@ export function rectOf(page: Page, selector: string): Promise<ScreenRect> {
 }
 
 /**
- * Bind a manual trigger to `pipelineVersionId`, FIRE it, and wait for the run to
- * reach a terminal status. Returns the run id.
+ * Bind a manual trigger to `pipelineVersionId` and FIRE it. Returns the run id,
+ * without waiting for anything.
  *
- * This is the first e2e path that produces a real run, so it goes through the
- * public API exactly as an operator would: create → fire → poll. It polls the
- * run row rather than the event stream because the terminal fact it needs lives
- * on the row, and because a poll cannot miss a frame that arrived before the
- * subscription did.
- *
- * The pipeline it fires must be egress-free (the `control` activities — `fail`,
- * `if`, `switch`, `filter` — need no connection and make no network call), or
- * this waits on something a test machine cannot do.
+ * Split out of `fireAndSettle` (#870) for the runs that DO NOT settle: a
+ * pipeline parked on a timer or an inbound callback is a legitimate, indefinite
+ * state, and the Monitor's job is to say so. A spec about a parked run cannot
+ * use the settling helper — it would simply time out.
  */
-export async function fireAndSettle(
+export async function fireManualTrigger(
   page: Page,
   pipelineVersionId: string,
   name = 'e2e manual',
@@ -222,6 +217,29 @@ export async function fireAndSettle(
   expect(fired.status(), `firing trigger: ${await fired.text()}`).toBe(202);
   const { runId } = (await fired.json()) as { runId: string };
   expect(runId, 'a manual fire must start a run').toBeTruthy();
+  return runId;
+}
+
+/**
+ * Bind a manual trigger to `pipelineVersionId`, FIRE it, and wait for the run to
+ * reach a terminal status. Returns the run id.
+ *
+ * This is the first e2e path that produces a real run, so it goes through the
+ * public API exactly as an operator would: create → fire → poll. It polls the
+ * run row rather than the event stream because the terminal fact it needs lives
+ * on the row, and because a poll cannot miss a frame that arrived before the
+ * subscription did.
+ *
+ * The pipeline it fires must be egress-free (the `control` activities — `fail`,
+ * `if`, `switch`, `filter` — need no connection and make no network call), or
+ * this waits on something a test machine cannot do.
+ */
+export async function fireAndSettle(
+  page: Page,
+  pipelineVersionId: string,
+  name = 'e2e manual',
+): Promise<string> {
+  const runId = await fireManualTrigger(page, pipelineVersionId, name);
 
   // Hand-listed rather than read off `RunStatusSchema.options`: no e2e file
   // imports `@autonomy-studio/shared` (the specs drive the app through its HTTP
