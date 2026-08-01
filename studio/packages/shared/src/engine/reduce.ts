@@ -282,8 +282,14 @@ function unparkIfWaiting(state: RunState): RunState {
  * un-park the run. A stale/mismatched one still no-ops in its handler, correctly
  * leaving the run `waiting`. (`run.waiting` is deliberately absent — a second park
  * on an already-`waiting` run stays an ignored no-op, the S3 status-guard.)
+ *
+ * EXPORTED (#870) so the web's doc-free run-lifecycle fold derives its unpark set
+ * from this one rather than keeping a hand-copied twin. It cannot reproduce the
+ * per-handler node guard below it (a stale/mismatched unpark no-ops there), so
+ * the fold is deliberately the coarser of the two — but the SET, at least, is
+ * now impossible to drift.
  */
-const UNPARK_EVENTS = new Set<EngineEvent['type']>([
+export const UNPARK_EVENTS = new Set<EngineEvent['type']>([
   'timer.due',
   'externalWait.completed',
   'externalWait.expired',

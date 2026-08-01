@@ -239,11 +239,16 @@ describe('deriveRunLifecycle', () => {
   });
 
   /**
-   * #870 — the fold is a MIRROR of the reducer's S3 rules, and these are the
-   * four that decide which reason (if any) reaches the screen. Each is pinned
-   * against the reducer's own pinned behaviour in
-   * `shared/engine/__tests__/run-waiting-status.test.ts`; if that file's
-   * expectations ever change, exactly one of these should go red.
+   * #870 — the rules that decide which reason (if any) reaches the screen.
+   *
+   * THREE of them mirror behaviour the reducer pins for itself in
+   * `shared/engine/__tests__/run-waiting-status.test.ts` (a pre-`run.started`
+   * park, a second park on an already-parked run, and the unparks). The other
+   * three are this fold's OWN rules, and have no reducer counterpart on
+   * purpose: the fold's status model is terminal-aware where `RunState.status`
+   * is not — a terminal arriving on a parked run is not admitted by the
+   * reducer's top-level guard at all (see `RunDetailPage`'s split-of-authority
+   * tests, which measure exactly that).
    */
   describe('#870 — mirrors the reducer’s park/unpark rules', () => {
     it('ignores a run.waiting that arrives BEFORE run.started', () => {

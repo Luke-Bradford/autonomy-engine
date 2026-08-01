@@ -57,10 +57,9 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
     .toBe('waiting');
 
   // ── The run LIST ────────────────────────────────────────────────────────────
-  // It reads the DB row, which carries no park reason, so a bare `waiting` here
-  // is the honest answer and is pinned as such: one surface knowing LESS than
-  // another is not the drift this ticket closes, and "fixing" it would mean
-  // inventing a reason the row does not have.
+  // A bare `waiting` is the honest answer here and is pinned as such — the row
+  // has no park-reason column, and "fixing" the asymmetry would mean inventing
+  // a reason. `runStatusLabel`'s docblock owns the argument.
   await page.goto('/#/monitor/runs');
   await fluentRootReady(page);
   const row = page.locator('tr', { has: page.getByText(runId, { exact: true }) });

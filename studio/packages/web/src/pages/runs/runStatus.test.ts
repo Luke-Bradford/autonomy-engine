@@ -16,9 +16,8 @@ describe('#870 runStatusLabel', () => {
    */
   it('words every status the DB enum can hold', () => {
     for (const status of RunStatusSchema.options) {
-      const label = runStatusLabel(status);
-      expect(label, `no label for ${status}`).toBeTruthy();
-      expect(label).not.toBe('undefined');
+      // A missing key yields `undefined`, which `toBeTruthy` catches.
+      expect(runStatusLabel(status), `no label for ${status}`).toBeTruthy();
     }
   });
 
@@ -51,7 +50,13 @@ describe('#870 runStatusLabel', () => {
 
   it('words every reason the engine can park on', () => {
     for (const reason of WaitingReasonSchema.options) {
-      expect(runStatusLabel('waiting', reason), `no label for ${reason}`).not.toBe('waiting ()');
+      /* Matched as a SHAPE, not against a single wrong string. A missing key in
+         `WAITING_REASON_LABELS` renders `waiting (undefined)` — which an
+         `!== 'waiting ()'` assertion would happily pass, leaving the one
+         backstop against a fifth `WaitingReason` unable to fail. */
+      expect(runStatusLabel('waiting', reason), `no label for ${reason}`).toMatch(
+        /^waiting \([a-z][a-z ]*\)$/,
+      );
     }
   });
 

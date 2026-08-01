@@ -7,6 +7,7 @@ import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-stud
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
 import { projectRun } from './runProjection';
+import { deriveRunLifecycle } from './runSummary';
 import * as runsApi from '../../api/runs';
 import * as hook from './useRunStream';
 import type { RunStreamState } from './useRunStream';
@@ -365,6 +366,12 @@ describe('RunDetailPage', () => {
    * hand-built status.
    */
   describe('#870 — the run header says WHY a parked run is parked', () => {
+    /* Scoped to the HEADER pill. The node table words its own parks through
+       `nodeStatusLabel` and lands on the same string for the same alarm, so an
+       unscoped `findByText('waiting (timer)')` matches both and throws — which
+       is itself a small proof that the two vocabularies now agree. */
+    const headerPill = () => screen.findByText(/./, { selector: '.page-hint .run-status' });
+
     const parked = (reason: 'waiting_timer' | 'waiting_external') => [
       envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
       envelope({ type: 'run.waiting', runId: 'run_1', reason }),
@@ -373,14 +380,14 @@ describe('RunDetailPage', () => {
     it('reads `waiting (timer)`, not a bare `waiting`', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await screen.findByText('waiting (timer)')).toBeInTheDocument();
+      expect(await headerPill()).toHaveTextContent('waiting (timer)');
       expect(screen.queryByText('waiting')).not.toBeInTheDocument();
     });
 
     it('reads `waiting (callback)` for an inbound external wait', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_external') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await screen.findByText('waiting (callback)')).toBeInTheDocument();
+      expect(await headerPill()).toHaveTextContent('waiting (callback)');
     });
 
     /**
@@ -394,7 +401,7 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await screen.findByText('waiting (timer)')).toBeInTheDocument();
+      expect(await headerPill()).toHaveTextContent('waiting (timer)');
     });
 
     /**
@@ -411,35 +418,115 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: [] }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await screen.findByText('queued (slot)')).toBeInTheDocument();
+      expect(await headerPill()).toHaveTextContent('queued (slot)');
       expect(screen.queryByText('pending')).not.toBeInTheDocument();
     });
 
     /**
-     * WHY THE HEADER DOES NOT READ THE ENGINE'S PROJECTION, pinned as a fact
-     * about the reducer rather than left as a comment nobody can check.
+     * WHY A TERMINAL IS THE FOLD'S ANSWER AND THE PARK IS THE ENGINE'S — both
+     * halves pinned as facts about the reducer, so neither is a comment nobody
+     * can check.
      *
-     * `RunState.status` tracks the WALK, not the log's terminal fact: a log of
-     * `run.started → run.finished{success}` projects to `running` (measured;
-     * `onResumed`'s comment and #443 record the intent — terminality is read by
-     * `terminalFactFromLog` and put on the row by `syncRunLifecycle`). So
-     * taking the header's status from `overlay.state` — the obvious next step
-     * after U25 did exactly that for the node table — would label every
-     * finished run `running`. This test fails the day that changes, which is
-     * the day the reconcile becomes available at run level.
+     * The doc here is a single `wait` node, which makes both a real park and a
+     * possible terminal expressible in one fixture. The page's own two-node
+     * `version()` cannot express the terminal half: `run.finished` on a run
+     * whose nodes are not all terminal is an IMPOSSIBLE event the reducer
+     * rejects outright, and an earlier draft of this test measured exactly that
+     * rejection and generalised it into a false claim that the reducer never
+     * folds terminals at all. It does.
      */
-    it('reports a finished run as finished, which its PROJECTION does not', async () => {
-      const events = [
-        envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
-        envelope({ type: 'run.finished', runId: 'run_1', outcome: 'success' }),
-      ];
-      useRunStreamMock.mockReturnValue(stream({ events }));
-      renderWithRouter(<RunDetailPage runId="run_1" />);
+    describe('the split of authority', () => {
+      const waitDoc = () =>
+        version({
+          nodes: [
+            { id: 'hold', type: 'wait', position: { x: 0, y: 0 }, config: { seconds: '${1}' } },
+          ],
+          edges: [],
+        });
+      const startEv = () =>
+        envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} });
+      const scheduleEv = () =>
+        envelope({
+          type: 'timer.waitScheduled',
+          runId: 'run_1',
+          nodeId: 'hold',
+          attemptId: 'hold#0',
+          dueAt: 9_999_999_999_999,
+        });
+      const parkEv = () =>
+        envelope({ type: 'run.waiting', runId: 'run_1', reason: 'waiting_timer' });
 
-      expect(await screen.findByText('success')).toBeInTheDocument();
-      // The projection this page holds for the same log says otherwise.
-      const projected = projectRun(version(), events);
-      expect(projected.ok && projected.state.status).toBe('running');
+      /**
+       * A terminal arriving on a PARKED run is not folded by the reducer at all
+       * — its top-level guard admits only unpark events on a non-`running` run
+       * — so the projection stays `waiting` while `terminalFactFromLog` and the
+       * runs-list row both say `failure`. The fold reads terminals through the
+       * same `terminalStatusOf` the server does, so it agrees with the row.
+       */
+      it('reports a terminal on a parked run, which its PROJECTION does not', async () => {
+        const events = [startEv(), scheduleEv(), parkEv()];
+        const terminated = [
+          ...events,
+          envelope({ type: 'run.finished', runId: 'run_1', outcome: 'failure' }),
+        ];
+        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        useRunStreamMock.mockReturnValue(stream({ events: terminated }));
+        renderWithRouter(<RunDetailPage runId="run_1" />);
+
+        expect(await headerPill()).toHaveTextContent('failure');
+        // The projection this page holds for the same log is still parked.
+        const projected = projectRun(waitDoc(), terminated);
+        expect(projected.ok && projected.state.status).toBe('waiting');
+      });
+
+      /**
+       * THE OTHER DIRECTION, and the reason the park is NOT the fold's. The
+       * reducer un-parks only when the parked node is still at the attempt the
+       * alarm names; a redelivered or superseded `timer.due` no-ops and the run
+       * stays parked. The doc-free fold has no node state, so it un-parks on
+       * any of them — and the ROW stays `waiting`, so trusting the fold here
+       * would put this header at odds with the runs list.
+       */
+      it('stays parked on a STALE timer.due, as the engine does — not un-parked as the fold would', async () => {
+        const events = [
+          startEv(),
+          scheduleEv(),
+          parkEv(),
+          envelope({
+            type: 'timer.due',
+            runId: 'run_1',
+            nodeId: 'hold',
+            previousAttemptId: 'hold#99',
+          }),
+        ];
+        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        useRunStreamMock.mockReturnValue(stream({ events }));
+        renderWithRouter(<RunDetailPage runId="run_1" />);
+
+        expect(await headerPill()).toHaveTextContent('waiting (timer)');
+        // The doc-free fold, left to itself, would have said `running` here.
+        expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+      });
+
+      /** A MATCHING alarm un-parks both, so the header advances. */
+      it('un-parks on a matching timer.due', async () => {
+        const events = [
+          startEv(),
+          scheduleEv(),
+          parkEv(),
+          envelope({
+            type: 'timer.due',
+            runId: 'run_1',
+            nodeId: 'hold',
+            previousAttemptId: 'hold#0',
+          }),
+        ];
+        getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: waitDoc() });
+        useRunStreamMock.mockReturnValue(stream({ events }));
+        renderWithRouter(<RunDetailPage runId="run_1" />);
+
+        expect(await headerPill()).toHaveTextContent('running');
+      });
     });
   });
 

@@ -87,9 +87,7 @@ describe('RunsPage', () => {
    *
    * Enumerated from `RunStatusSchema` rather than from a list written here, so
    * a ninth DB status cannot be added and rendered as a bare identifier without
-   * this failing. `queued` is what makes the assertion bite: it is the one
-   * status whose LABEL differs from its identifier, so reverting this page to
-   * `{r.status}` goes red here rather than passing on a table of identities.
+   * this failing — the guard is the module boundary, not any one word.
    */
   it('words every run status through the shared vocabulary', async () => {
     listMock.mockResolvedValue(

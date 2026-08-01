@@ -802,7 +802,17 @@ describe('triggers routes', () => {
          Anchoring to the next UTC midnight keeps the 09:00 slot always ahead of
          `now`, so the assertion tests the rule and nothing else. */
       const DAY_MS = 24 * 60 * 60 * 1000;
-      const startMs = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
+      const HOUR_MS = 60 * 60 * 1000;
+      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
+      /* The window OPENS AT 10:00, past the 09:00 slot on its own first day, so
+         the first in-window occurrence is 09:00 the day AFTER. That is what
+         makes the assertion discriminating: a `startTime` at midnight would be
+         satisfied by the next 09:00 whether or not the bound were honoured at
+         all, so dropping `startAt` from the seed would still pass. This way only
+         a seed that actually respects the lower bound lands on the expected
+         instant. */
+      const startMs = midnight + 10 * HOUR_MS;
+      const firstSlotMs = midnight + DAY_MS + 9 * HOUR_MS;
       const startTime = new Date(startMs).toISOString();
       const endTime = new Date(startMs + 30 * DAY_MS).toISOString();
 
@@ -826,12 +836,12 @@ describe('triggers routes', () => {
         endTime,
       });
       // The seeded tick carries the bounds in its ref (so a later bounds edit is
-      // detectable) and is armed for the first in-window slot — 09:00 on the
-      // window's opening day.
+      // detectable) and is armed for the first IN-WINDOW slot, which the 10:00
+      // opening pushes to 09:00 on the following day.
       const ticks = scheduleTicksFor(app, created.id);
       expect(ticks).toHaveLength(1);
       expect(ticks[0]!.ref).toMatchObject({ schedule: '0 9 * * *', startTime, endTime });
-      expect(ticks[0]!.dueAt).toBe(startMs + 9 * 60 * 60 * 1000);
+      expect(ticks[0]!.dueAt).toBe(firstSlotMs);
     });
 
     it('rejects an inverted/empty window (endTime <= startTime) with 400 (#549)', async () => {

@@ -32,21 +32,25 @@ import type { RunStatus, WaitingReason } from '@autonomy-studio/shared';
  * ninth DB status has to be worded deliberately instead of leaking its
  * identifier onto the screen.
  *
- * Same three rules that produced the node table (`nodeStatus.ts`):
+ * Worded by the same three rules `nodeStatus.ts` states in full, applied here:
  *
- *  1. **A status whose identifier already reads as English keeps it.**
- *     `pending`, `running`, `success`, `failure`, `skipped` and `interrupted`
- *     are not improved by paraphrase, and inventing synonyms would be a second
- *     vocabulary in the module that exists to end one.
- *  2. **A status that names the ENGINE's act is re-worded to say what the RUN
- *     is doing.** `queued` records that admission put the fire in the durable
- *     queue; the operator is asking why it has not started, and the answer is
- *     that it is holding for a concurrency slot. (`launcher.ts` — a fire is
- *     queued when it passes neither the trigger's policy cap nor the pipeline's
- *     `concurrency` cap; when a slot frees, `drainPipelineQueue` admits across
- *     that pipeline's triggers least-recently-served first, oldest-queued first
- *     WITHIN a trigger. Only `pending`/`running` occupy a slot.)
- *  3. **A park says WHAT it is parked on** — see `runStatusLabel`.
+ *  1. An identifier that already reads as English keeps it — `pending`,
+ *     `running`, `success`, `failure`, `skipped`, `interrupted`.
+ *  2. A status naming the ENGINE's act is re-worded to say what the RUN is
+ *     doing. `queued` records that admission put the fire in the durable queue;
+ *     the operator is asking why it has not started, and the answer is that it
+ *     is holding for a concurrency slot. (`launcher.ts`: a fire is queued when
+ *     the PIPELINE is at its `concurrency` cap, or when a `queue`-policy trigger
+ *     is at its own — a `skip_if_running`/`parallel` trigger over its cap is
+ *     SKIPPED rather than queued. When a slot frees, `drainPipelineQueue` admits
+ *     across that pipeline's triggers least-recently-served first, oldest-queued
+ *     first within a trigger; only `pending`/`running` occupy a slot.)
+ *  3. A park says WHAT it is parked on — see `runStatusLabel`.
+ *
+ * NOT in scope, deliberately: the `queued` a trigger FIRE returns
+ * (`TriggersPage`'s toast renders `FireOutcome`, a different enum answering
+ * "what did this fire do" rather than "what is this run doing"). Wording the two
+ * alike would assert they are the same fact. They are adjacent, not identical.
  */
 const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   pending: 'pending',

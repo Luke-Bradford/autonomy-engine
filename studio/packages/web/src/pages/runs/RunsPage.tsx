@@ -88,11 +88,9 @@ export function RunsPage() {
                   {/* #870 — the WORD comes from the Monitor's one run-status
                       vocabulary; the CLASS still comes from the status itself,
                       so the pill's hue and its label cannot drift apart (and
-                      `palette.test.ts` keeps a rule for every member). This list
-                      reads the DB row, which carries no park reason, so a parked
-                      run reads a bare `waiting` here and `waiting (timer)` on
-                      the detail page — one surface knowing more, not two
-                      disagreeing. */}
+                      `palette.test.ts` keeps a rule for every member). No park
+                      reason is passed: this list reads the DB row, which has no
+                      such column — `runStatusLabel` owns that argument. */}
                   <span className={`run-status run-status-${r.status}`}>
                     {runStatusLabel(r.status)}
                   </span>
