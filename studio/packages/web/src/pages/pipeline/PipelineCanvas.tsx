@@ -127,14 +127,10 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   // #903 — three derived facts the history needs. `headVersion` is read off the
   // versions this page holds rather than off `loaded`: the two part company the
   // moment a save fails, and the head is what a restore is measured against.
-  const headVersion = useMemo(
-    () =>
-      versions.reduce<number | null>(
-        (max, v) => (max === null || v.version > max ? v.version : max),
-        null,
-      ),
-    [versions],
-  );
+  // Through `latestVersion`, whose docblock already claims to be the ONE rule
+  // for "highest version" — a second reduce here would be exactly the drift it
+  // names.
+  const headVersion = useMemo(() => latestVersion(versions)?.version ?? null, [versions]);
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null),
     [versions, loaded],
@@ -297,14 +293,19 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           <button
             type="button"
             aria-expanded={historyOpen}
+            aria-controls="version-history-panel"
+            disabled={!ready}
             onClick={() => {
-              setHistoryOpen((open) => {
-                // Closing the list also leaves any preview it opened — the
-                // preview is only reachable through a row, so leaving one on
-                // screen with no list would strand it.
-                if (open) setPreviewing(null);
-                return !open;
-              });
+              // Both setters at the TOP LEVEL. Calling `setPreviewing` inside
+              // the `setHistoryOpen` updater made that updater impure, which
+              // StrictMode double-invokes in development — harmless while it is
+              // idempotent, and a silent double-apply the moment it is not.
+              //
+              // Closing the list also leaves any preview it opened: the preview
+              // is only reachable through a row, so one left on screen with no
+              // list would be stranded.
+              if (historyOpen) setPreviewing(null);
+              setHistoryOpen(!historyOpen);
             }}
           >
             Version history
@@ -349,7 +350,12 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         </div>
       )}
 
-      {historyOpen && (
+      {/* `ready` gates the panel, because `versions` is `[]` both before the
+          load resolves AND forever after it fails — and the panel's empty state
+          says "no versions yet", which would be a flat falsehood printed next
+          to the load-error banner. An unloaded page has no history to show, not
+          an empty one. */}
+      {historyOpen && ready && (
         <VersionHistoryPanel
           entries={entries}
           previewing={previewing}
@@ -383,7 +389,19 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           {/* `showStatus={false}` — there is no run behind a stored version, so
               the monitor's "not projected" would be a sentence about a run that
               does not exist. */}
-          <RunCanvas doc={previewed} state={null} showStatus={false} />
+          {/* KEYED BY VERSION, and this is not cosmetic. `RunCanvas` was built
+              for a doc that is immutable for its whole lifetime, so switching
+              `doc` on a live instance leaves two things stale that nothing
+              rebuilds: `mergeRunNodes` keeps a container box WHOLE when its
+              `data` is unchanged, and a box's geometry, handles and child count
+              live OUTSIDE `data` — with no status to differ, two versions'
+              boxes compare equal, so a loop that gained a child would keep the
+              previous version's width and draw that child outside the container
+              it is in. And `fitView` is init-only, so a 2-node version followed
+              by a 20-node one would stay at the first version's viewport with
+              the rest culled by `onlyRenderVisibleElements`. Remounting is the
+              same answer this page already gives for the editor. */}
+          <RunCanvas key={previewed.id} doc={previewed} state={null} showStatus={false} />
         </div>
       )}
 

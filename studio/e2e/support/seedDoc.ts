@@ -110,23 +110,45 @@ export async function seedVersion(
   expect(created.status(), `creating pipeline '${name}': ${await created.text()}`).toBe(201);
   const { id } = (await created.json()) as { id: string };
 
-  const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
-    data: {
-      params: doc.params ?? [],
-      outputs: doc.outputs ?? [],
-      nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
-      // `Edge.id` is required on the write path; a seed cares about the shape of
-      // the graph, not about the ids, so one is minted from the edge itself —
-      // stable across runs (no randomness), and unique for any doc a spec can
-      // express, since `(from, to, on)` is the authoring key the canvas already
-      // refuses duplicates on.
-      edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
-      containers: doc.containers ?? [],
-    },
-  });
-  expect(minted.status(), `minting version for '${name}': ${await minted.text()}`).toBe(201);
-  const { id: pipelineVersionId } = (await minted.json()) as { id: string };
+  const pipelineVersionId = await mintVersion(page, id, doc, name);
   return { pipelineId: id, pipelineVersionId };
+}
+
+/**
+ * Mint ONE more version on an EXISTING pipeline, and return its id.
+ *
+ * Split out of `seedVersion` for the version-history spec (#903), which is the
+ * first to need a pipeline carrying several versions. The defaults and the edge
+ * id-minting live here so that every seeded version has one shape — a spec
+ * hand-writing raw request bodies for its second and third versions would be
+ * expressing the same doc two different ways in one file.
+ */
+export async function mintVersion(
+  page: Page,
+  pipelineId: string,
+  doc: SeedDoc,
+  label = pipelineId,
+): Promise<string> {
+  const minted = await page.request.post(
+    `/api/pipelines/${encodeURIComponent(pipelineId)}/versions`,
+    {
+      data: {
+        params: doc.params ?? [],
+        outputs: doc.outputs ?? [],
+        nodes: doc.nodes.map((n) => ({ type: 'http_request', config: {}, ...n })),
+        // `Edge.id` is required on the write path; a seed cares about the shape of
+        // the graph, not about the ids, so one is minted from the edge itself —
+        // stable across runs (no randomness), and unique for any doc a spec can
+        // express, since `(from, to, on)` is the authoring key the canvas already
+        // refuses duplicates on.
+        edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
+        containers: doc.containers ?? [],
+      },
+    },
+  );
+  expect(minted.status(), `minting version for '${label}': ${await minted.text()}`).toBe(201);
+  const { id } = (await minted.json()) as { id: string };
+  return id;
 }
 
 /**

@@ -74,8 +74,15 @@ export interface RunContainerData extends Record<string, unknown> {
   tone: StatusTone | null;
   /** A container's own progress; `null` until it has started. */
   round: number | null;
-  /** As `RunNodeData.showStatus` — the box has the same two absences. */
-  showStatus: boolean;
+  /*
+   * Deliberately NO `showStatus` twin of `RunNodeData`'s. The box has only ONE
+   * absence to render: it already drops the whole ` · <status>` fragment when
+   * `status` is null (`RunCanvas`'s `RunContainerNode`), where the activity node
+   * falls back to `NO_STATUS_LABEL` and so has to be told which absence it is
+   * looking at. Suppression reaches the box through `status` being forced null,
+   * and its accessible name through the builder's own local flag — a field here
+   * would be set, pinned by a test, and read by nothing.
+   */
 }
 
 /** How a doc is drawn when there is no run behind it (#903). */
@@ -206,7 +213,6 @@ export function runFlowNodes(
         status: label,
         tone: status === null ? null : containerStatusTone(status),
         round: cs?.round ?? null,
-        showStatus,
       } satisfies RunContainerData,
       ariaRole: 'group',
       // The box below draws this same `name`, which is the whole contract

@@ -22,28 +22,30 @@ interface VersionHistoryProps {
   onPreview: (version: number) => void;
 }
 
-/** A version's shape in one line — what an operator picks between. */
+function count(n: number, word: string): string {
+  return `${String(n)} ${word}${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * A version's shape in one line — what an operator picks between.
+ *
+ * Nodes and edges are always stated, including at zero (an empty version is a
+ * real thing to have saved, and "0 nodes" is what says so). The other three are
+ * stated only when present, so a doc with no containers does not carry three
+ * zeroes past every row that does.
+ */
 function shapeSummary(e: VersionEntry): string {
-  const parts = [
-    `${String(e.nodeCount)} node${e.nodeCount === 1 ? '' : 's'}`,
-    `${String(e.edgeCount)} edge${e.edgeCount === 1 ? '' : 's'}`,
-  ];
-  if (e.containerCount > 0) {
-    parts.push(`${String(e.containerCount)} container${e.containerCount === 1 ? '' : 's'}`);
-  }
-  if (e.paramCount > 0) {
-    parts.push(`${String(e.paramCount)} param${e.paramCount === 1 ? '' : 's'}`);
-  }
-  if (e.outputCount > 0) {
-    parts.push(`${String(e.outputCount)} output${e.outputCount === 1 ? '' : 's'}`);
-  }
+  const parts = [count(e.nodeCount, 'node'), count(e.edgeCount, 'edge')];
+  if (e.containerCount > 0) parts.push(count(e.containerCount, 'container'));
+  if (e.paramCount > 0) parts.push(count(e.paramCount, 'param'));
+  if (e.outputCount > 0) parts.push(count(e.outputCount, 'output'));
   return parts.join(' · ');
 }
 
 export function VersionHistoryPanel({ entries, previewing, onPreview }: VersionHistoryProps) {
   if (entries.length === 0) {
     return (
-      <div className="version-history" data-testid="version-history">
+      <div className="version-history" id="version-history-panel" data-testid="version-history">
         <p className="page-hint">
           No versions yet — “Save version” mints the first one, and every save after it is kept.
         </p>
@@ -52,7 +54,7 @@ export function VersionHistoryPanel({ entries, previewing, onPreview }: VersionH
   }
 
   return (
-    <div className="version-history" data-testid="version-history">
+    <div className="version-history" id="version-history-panel" data-testid="version-history">
       <ul className="version-history-list">
         {entries.map((e) => (
           <li key={e.id}>

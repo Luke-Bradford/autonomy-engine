@@ -57,6 +57,22 @@ describe('VersionHistoryPanel', () => {
     expect(row.textContent).toContain('2 params');
   });
 
+  /* The timestamp is how an operator tells two same-shaped versions apart, and
+     it is rendered through the runs page's `formatWhen` rather than a second
+     formatter. Asserted against that function's own output, so the test cannot
+     bake in a locale the CI box does not share. */
+  it('dates each version', () => {
+    const createdAt = 1_700_000_000_000;
+    render(
+      <VersionHistoryPanel
+        entries={[entry({ createdAt })]}
+        previewing={null}
+        onPreview={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button').textContent).toContain(new Date(createdAt).toLocaleString());
+  });
+
   it('reports which row is being previewed as pressed', () => {
     render(
       <VersionHistoryPanel

@@ -405,12 +405,22 @@ describe('runFlowNodes — statusless', () => {
     const nodes = runFlowNodes(CONTAINER_DOC, null, { showStatus: false });
 
     for (const n of nodes) {
-      expect(n.data.showStatus).toBe(false);
       expect(n.data.status).toBeNull();
       expect(n.data.tone).toBeNull();
       // The accessible name is where the status leaked on BOTH node types — the
       // box already dropped it from its drawn text but not from its aria-label.
       expect(n.ariaLabel).not.toContain(NO_STATUS_LABEL);
+    }
+
+    /* The flag itself is carried only by the ACTIVITY node, which is the only
+       one that needs telling which absence it is rendering. Asserted on that
+       type alone, so a `showStatus` added to the container data would be dead
+       code this test failed to notice rather than dead code it pinned. */
+    for (const n of nodes.filter((x) => x.type === 'runActivity')) {
+      expect(n.data.showStatus).toBe(false);
+    }
+    for (const n of nodes.filter((x) => x.type === 'runContainer')) {
+      expect(n.data).not.toHaveProperty('showStatus');
     }
   });
 

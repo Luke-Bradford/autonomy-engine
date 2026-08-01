@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { addActivity, viewportSettled } from './support/canvasGraph';
 import { fluentRootReady } from './support/theme';
-import { nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
+import { mintVersion, nodeById, seedVersion, type SeedDoc } from './support/seedDoc';
 
 /**
  * U22 slice 1 (#903) — a pipeline's version history, end to end.
@@ -33,43 +33,34 @@ const V1: SeedDoc = {
 };
 
 /** `n_a` RIGHT of `n_b`, plus a third node v1 never had. */
-const V3 = {
-  params: [],
-  outputs: [],
+const V3: SeedDoc = {
   nodes: [
-    { id: 'n_a', type: 'http_request', config: {}, position: { x: 320, y: 0 } },
-    { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-    { id: 'n_c', type: 'http_request', config: {}, position: { x: 640, y: 0 } },
+    { id: 'n_a', position: { x: 320, y: 0 } },
+    { id: 'n_b', position: { x: 0, y: 0 } },
+    { id: 'n_c', position: { x: 640, y: 0 } },
   ],
-  edges: [{ id: 'e_b_a', from: 'n_b', to: 'n_a', on: 'success' as const }],
-  containers: [],
+  edges: [{ from: 'n_b', to: 'n_a', on: 'success' }],
 };
 
-/** v2 exists only so the list has a middle row that is neither head nor first. */
-const V2 = {
-  params: [],
-  outputs: [],
+/**
+ * v2 gives the list a middle row that is neither head nor first — and it is the
+ * version the preview-switch test lands on SECOND, so it deliberately differs
+ * from v1 by a node the first preview never drew.
+ */
+const V2: SeedDoc = {
   nodes: [
-    { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-    { id: 'n_b', type: 'http_request', config: {}, position: { x: 320, y: 0 } },
-    { id: 'n_c', type: 'http_request', config: {}, position: { x: 640, y: 0 } },
+    { id: 'n_a', position: { x: 0, y: 0 } },
+    { id: 'n_b', position: { x: 320, y: 0 } },
+    { id: 'n_c', position: { x: 640, y: 0 } },
   ],
-  edges: [{ id: 'e_a_b', from: 'n_a', to: 'n_b', on: 'success' as const }],
-  containers: [],
+  edges: [{ from: 'n_a', to: 'n_b', on: 'success' }],
 };
-
-async function mintVersion(page: Page, pipelineId: string, doc: unknown): Promise<void> {
-  const res = await page.request.post(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`, {
-    data: doc,
-  });
-  expect(res.status(), `minting a version: ${await res.text()}`).toBe(201);
-}
 
 /** Seed one pipeline carrying three versions, and open its canvas on the head. */
 async function seedThreeVersions(page: Page, name: string): Promise<string> {
   const { pipelineId } = await seedVersion(page, name, V1);
-  await mintVersion(page, pipelineId, V2);
-  await mintVersion(page, pipelineId, V3);
+  await mintVersion(page, pipelineId, V2, name);
+  await mintVersion(page, pipelineId, V3, name);
 
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
   await fluentRootReady(page);
@@ -154,6 +145,46 @@ test.describe('pipeline version history', () => {
     await page.getByRole('button', { name: 'Back to editing' }).click();
     await expect(page.locator('.canvas-grid')).toHaveCount(1);
     await expect(nodeById(page, 'n_c')).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
+   * Switching straight from one preview to another, without going back to the
+   * editor in between.
+   *
+   * `RunCanvas` was built for the monitor, where `doc` is immutable for the
+   * component's whole lifetime — so swapping `doc` on a LIVE instance leaves
+   * state nothing rebuilds. `mergeRunNodes` keeps a node whole when its `data`
+   * and position are unchanged, and `fitView` only runs on init. This is the
+   * case the first version of this spec never reached, because it only ever
+   * opened v1.
+   */
+  test('shows the version it is switched TO, not a hybrid of the two', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-switch');
+    await historyButton(page).click();
+
+    // v1 — two nodes, `n_a` left of `n_b`.
+    await rows(page).nth(2).click();
+    await viewportSettled(page);
+    await expect(page.locator('.react-flow__node')).toHaveCount(2);
+    expect(await leftOf(page, 'n_a')).toBeLessThan(await leftOf(page, 'n_b'));
+
+    // Straight to v2 — three nodes, and `n_c` is one this canvas has never drawn.
+    await rows(page).nth(1).click();
+    await viewportSettled(page);
+    await expect(page.getByTestId('version-preview-bar')).toContainText('Viewing v2');
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+    // Visible, not merely present: a viewport left at v1's fit would leave the
+    // third node culled by `onlyRenderVisibleElements`.
+    await expect(nodeById(page, 'n_c')).toBeVisible();
+
+    // And back down to v1, so the shrink direction is covered too.
+    await rows(page).nth(2).click();
+    await viewportSettled(page);
+    await expect(page.locator('.react-flow__node')).toHaveCount(2);
+    await expect(nodeById(page, 'n_c')).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });

@@ -14,7 +14,7 @@
  * test can reach it.
  */
 import type { PipelineVersion } from '@autonomy-studio/shared';
-import type { PipelineVersionWrite } from '../../api/pipelines';
+import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
 
 /** One row of the history list — a version summarised, never its whole doc. */
@@ -48,10 +48,9 @@ export function historyEntries(
   versions: PipelineVersion[],
   currentVersion: number | null,
 ): VersionEntry[] {
-  const head = versions.reduce<number | null>(
-    (max, v) => (max === null || v.version > max ? v.version : max),
-    null,
-  );
+  // `latestVersion` and not a local reduce: its docblock states it is the ONE
+  // rule for "the highest version", shared so two readers cannot drift.
+  const head = latestVersion(versions)?.version ?? null;
   return [...versions]
     .sort((a, b) => b.version - a.version)
     .map((v) => ({
