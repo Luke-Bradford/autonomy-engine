@@ -335,8 +335,24 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'stage 1');
-    await expect(page.locator('.contract-advisory')).toContainText('maxRounds');
+    const advisory = page.locator('.contract-advisory');
+    await expect(advisory).toContainText('maxRounds');
+    // #859 is the reason this combination is reachable AND the reason the
+    // advisory must not promise a blocked save: validateDoc does not refuse it,
+    // so Save is enabled on this very screen. The claim is derived from the
+    // validator, not from the field map, so it stays true if #859 is closed.
+    await expect(advisory).toContainText('does nothing');
+    await expect(advisory).not.toContainText('Saving is blocked');
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
     await expect(page.getByLabel(/^maxRounds/)).toHaveValue('3');
+
+    // Clear-only: typing a new value into a dead field is refused, not minted.
+    // The refusal keeps the typed text, as every other refusal here does.
+    await page.getByLabel(/^maxRounds/).fill('10');
+    await page.getByRole('button', { name: 'Apply container settings' }).click();
+    await expect(page.getByRole('alert')).toContainText('maxRounds');
+    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('10');
+
     await page.getByLabel(/^maxRounds/).fill('');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 

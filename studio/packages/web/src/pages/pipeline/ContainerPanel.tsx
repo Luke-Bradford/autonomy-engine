@@ -17,6 +17,8 @@ import {
   unrepresentableFields,
   type ConfigField,
 } from './configForm';
+import { validateCanvas } from './canvasDoc';
+import { containersWithUpdated } from './canvasStore';
 import { confirmContainerEdit, containerLabels } from './containerRules';
 
 /**
@@ -114,6 +116,36 @@ export function ContainerPanel({
   const unrenderable = unrepresentableFields(fields, stored);
 
   /**
+   * Of those, the ones the SAVE GATE actually refuses — read from the validator
+   * rather than inferred from the map.
+   *
+   * The two are not the same set, and assuming they were made the advisory say
+   * something false in the ONLY case it can currently appear. `illegal` means
+   * "no kind-legality rule permits this field here"; blocked means "`validateDoc`
+   * emits an issue about it". `stage` + `maxRounds` is illegal and NOT refused
+   * (#859), so the advisory promised a blocked save on a screen whose Save
+   * button was enabled — and since every other illegal combination is rejected
+   * by the server's own write gate before a version can be minted, that one case
+   * is the whole reachable population.
+   *
+   * Deriving it means the sentence stays true if #859 is ever closed, without
+   * this panel having to know that it was.
+   */
+  const blocked = useMemo(() => {
+    // Not computed when a stored value is unrenderable. That branch renders no
+    // form at all, so the answer is unused — and `validateDoc` assumes its input
+    // is schema-typed, so a doc carrying `exitWhen: 42` (exactly the population
+    // `unrenderable` exists for) makes it THROW on `value.trim()` rather than
+    // report an issue. Memoised because it re-runs the whole doc validator.
+    if (unrenderable.length > 0 || illegal.length === 0) return new Set<string>();
+    return new Set(
+      validateCanvas(nodes, edges, containers, params)
+        .filter((issue) => issue.includes(`container '${container.id}'`))
+        .flatMap((issue) => illegal.filter((name) => issue.includes(name))),
+    );
+  }, [unrenderable, illegal, nodes, edges, containers, params, container.id]);
+
+  /**
    * Seeded ONCE, per mount.
    *
    * `NodePanel` pairs its seed with a render-phase re-seed when its `config`
@@ -140,6 +172,22 @@ export function ContainerPanel({
       return;
     }
     const next = assembled.config as unknown as Container;
+    // The dead-field control is a REPAIR, and repair means clearing. Without
+    // this, typing a new value into one is accepted, warns about nothing (the
+    // consequence gate diffs the validator, which has no opinion on the one
+    // reachable case) and mints the dead field into an immutable version — the
+    // panel inviting an edit it exists to undo.
+    const written = illegal.filter(
+      (name) => (next as unknown as Record<string, unknown>)[name] !== undefined,
+    );
+    if (written.length > 0) {
+      setError(
+        `${written.join(', ')} ${written.length === 1 ? 'is' : 'are'} not valid on a ` +
+          `${container.kind} — clear ${written.length === 1 ? 'it' : 'them'} rather than ` +
+          'giving a value.',
+      );
+      return;
+    }
     // A UX PRE-CHECK, never the gate — `NodePanel.schemaIssues`' posture and its
     // reason. The server parses the body first, so this only spares the author a
     // round-trip to a 400 they were going to get anyway.
@@ -155,7 +203,7 @@ export function ContainerPanel({
     if (
       !confirmContainerEdit(
         { nodes, edges, containers, params },
-        replace(containers, next),
+        containersWithUpdated(containers, next),
         recovery(stored, next),
       )
     ) {
@@ -166,7 +214,16 @@ export function ContainerPanel({
   }
 
   return (
-    <>
+    /* An `<aside className="property-panel">`, like every other top-level panel
+       (`NodePanel`, `EdgePanel`, `PipelinePanel`) — NOT the bare fragment
+       `ContainerSection` returns. That fragment is right for a section NESTED
+       inside a panel, whose comment says so; copied to a TOP-LEVEL panel the
+       premise is false, and the children would land as separate items of
+       `.canvas-grid` instead of inside the panel card. Everything scoped to
+       `.property-panel` — the card itself, the label/control flex column, the
+       input styling — would silently stop applying, and the `Properties`
+       landmark four other specs address the panel by would vanish. */
+    <aside className="property-panel" aria-label="Properties">
       <h3>{label}</h3>
       <p className="page-hint">
         {container.children.length} {container.children.length === 1 ? 'activity' : 'activities'}{' '}
@@ -181,7 +238,7 @@ export function ContainerPanel({
           it again.
         </p>
       ) : (
-        <>
+        <div className="contract-section">
           {fields.map((field) => (
             <ConfigFieldControl
               key={field.name}
@@ -193,9 +250,10 @@ export function ContainerPanel({
           {illegal.length > 0 && (
             <p className="contract-advisory">
               {illegal.join(', ')} {illegal.length === 1 ? 'is' : 'are'} not valid on a{' '}
-              {container.kind} and {illegal.length === 1 ? 'blocks' : 'block'} saving. Clear the
-              {illegal.length === 1 ? ' field' : ' fields'} to remove{' '}
-              {illegal.length === 1 ? 'it' : 'them'}.
+              {container.kind} and {illegal.length === 1 ? 'does' : 'do'} nothing.{' '}
+              {illegal.some((name) => blocked.has(name))
+                ? 'Saving is blocked until cleared.'
+                : 'Clearing is the only edit allowed here.'}
             </p>
           )}
           {error !== null && (
@@ -206,15 +264,10 @@ export function ContainerPanel({
           <button type="button" onClick={apply}>
             Apply container settings
           </button>
-        </>
+        </div>
       )}
-    </>
+    </aside>
   );
-}
-
-/** `containers` with `next` in place of the container of the same id. */
-function replace(containers: Container[], next: Container): Container[] {
-  return containers.map((c) => (c.id === next.id ? next : c));
 }
 
 /**

@@ -240,7 +240,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   );
 }
 
-/** Edits the currently-selected node or edge; empty when nothing is selected. */
+/** Edits the currently-selected node, edge or container; empty when nothing is. */
 function PropertyPanel({
   store,
   connections,
@@ -322,7 +322,9 @@ export function PipelinePanel({ store }: { store: ReturnType<typeof createCanvas
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>Pipeline</h3>
-      <p className="page-hint">Select a node or an edge to edit it.</p>
+      <p className="page-hint">
+        Select a node or an edge to edit it, or use the ⚙ on a container box.
+      </p>
 
       <section className="contract-section">
         <h4>Params</h4>

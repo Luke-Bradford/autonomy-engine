@@ -178,6 +178,25 @@ export function assignContainerChild(
   return changed ? next : containers;
 }
 
+/**
+ * The containers array a doc would have once `container`'s config is applied.
+ *
+ * The third member of the family `assignContainerChild`/`containersWithNew`
+ * belong to, and exported for the same reason they are: the panel measures an
+ * edit's consequence against the array this returns, and the store COMMITS the
+ * same array. One function, so the doc the operator was warned about and the
+ * doc that lands cannot come to disagree.
+ *
+ * Length-preserving, unlike its two siblings — which is why
+ * `consequenceMessage` can still assume no caller shrinks the array.
+ * Copy-on-write: an array holding no container of that id comes back by
+ * reference.
+ */
+export function containersWithUpdated(containers: Container[], container: Container): Container[] {
+  if (!containers.some((c) => c.id === container.id)) return containers;
+  return containers.map((c) => (c.id === container.id ? container : c));
+}
+
 /** The containers array a doc would have once `container` is added to it. */
 export function containersWithNew(containers: Container[], container: Container): Container[] {
   let next = containers;
@@ -339,16 +358,30 @@ export interface CanvasState {
    * here as a second merge that could disagree with it.
    *
    * Refuses (silent no-op) an unknown id, a container the schema rejects, and
-   * any change to `id` or `children` — the two STRUCTURAL fields, which this
-   * action does not own. A rename would strand the id's three other readers (an
-   * edge endpoint, a `containerMembership` key, the selection's own handle); a
-   * membership write belongs to `setNodeContainer`, which alone takes the child
-   * out of whatever container held it, and to `deleteNode`, which prunes (#746).
-   * Routing membership through here would bypass both and could author the
-   * duplicate-child doc `validateDoc` refuses — or the empty container
-   * `createContainer` is careful never to mint (#748). Silent for the reason
-   * `createContainer` is: the canvas explains refusals, because it is where the
-   * operator is.
+   * any change to `id`, `kind` or `children` — the three STRUCTURAL fields,
+   * which this action does not own. (Three, matching `validate-doc.test.ts`'s
+   * `STRUCTURAL` list; an earlier version of this note said two and omitted
+   * `kind`, which the guard then omitted too.)
+   *
+   * A rename would strand the id's three other readers (an edge endpoint, a
+   * `containerMembership` key, the selection's own handle). `kind` decides which
+   * config fields are legal AND how the reducer runs the box, so reclassifying a
+   * loop as a stage through a CONFIG action would silently leave `exitWhen`
+   * behind on a kind that refuses it. A membership write belongs to
+   * `setNodeContainer`, which alone takes the child out of whatever container
+   * held it, and to `deleteNode`, which prunes (#746); routing membership
+   * through here would bypass both and could author the duplicate-child doc
+   * `validateDoc` refuses — or the empty container `createContainer` is careful
+   * never to mint (#748).
+   *
+   * None of the three is reachable from `ContainerPanel`, which filters all
+   * three out of its form and lets `assembleConfig` pass them through from the
+   * original. They are guarded because this action re-checks what the panel has
+   * already checked — it is the defence-in-depth seam, so it should not have
+   * holes the layer above happens to cover.
+   *
+   * Silent for the reason `createContainer` is: the canvas explains refusals,
+   * because it is where the operator is.
    *
    * Stores the INPUT, never `parsed.data`. `ContainerSchema` is a plain
    * `z.object`, so it strips unknown keys; storing the parse result would drop
@@ -689,8 +722,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       const s = get();
       const current = s.containers.find((c) => c.id === id);
       if (current === undefined) return;
-      // `id` and `children` are structural, not config — see the interface note.
+      // `id`, `kind` and `children` are structural, not config — see the note.
       if (next.id !== id) return;
+      if (next.kind !== current.kind) return;
       if (
         next.children.length !== current.children.length ||
         next.children.some((ch, i) => ch !== current.children[i])
@@ -700,10 +734,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       if (!ContainerSchema.safeParse(next).success) return;
       // Pressing Apply without typing must not mark the canvas dirty.
       if (JSON.stringify(current) === JSON.stringify(next)) return;
-      set((st) => ({
-        containers: st.containers.map((c) => (c.id === id ? next : c)),
-        dirty: true,
-      }));
+      set((st) => ({ containers: containersWithUpdated(st.containers, next), dirty: true }));
     },
 
     /**

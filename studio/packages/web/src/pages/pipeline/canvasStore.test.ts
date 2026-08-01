@@ -1298,6 +1298,7 @@ describe('canvasStore — container membership (U6d)', () => {
      */
     it.each([
       ['a rename', { id: 'loop_renamed' }],
+      ['a kind change', { kind: 'stage' }],
       ['a membership ADD', { children: ['n_a', 'n_b', 'n_c'] }],
       ['a membership REMOVAL', { children: ['n_a'] }],
       ['a membership EMPTYING', { children: [] }],

@@ -1,4 +1,3 @@
-import { useId } from 'react';
 import type { ConfigField } from './configForm';
 
 /**
@@ -31,10 +30,6 @@ export function ConfigFieldControl({
   onChange: (next: string | boolean) => void;
 }) {
   const label = field.optional ? `${field.name} (optional)` : field.name;
-  // Only the `enum` branch uses this — see the note there. `useId` rather than
-  // the field NAME, because two panels can render the same field name at once
-  // and duplicate ids would point both labels at whichever control mounted first.
-  const controlId = useId();
 
   if (field.kind === 'boolean') {
     return (
@@ -50,23 +45,10 @@ export function ConfigFieldControl({
   }
 
   if (field.kind === 'enum') {
-    /* #857 — the label is ASSOCIATED here, not WRAPPING as in the branches
-       below, because a `<label>` containing a `<select>` is the shape that
-       ticket was filed against.
-
-       What is NOT claimed: that this FIXES #857. Measured on this control
-       (Chromium, via the U23 e2e spec) the wrapped shape computes the same
-       accessible name as the associated one — "join (optional)" either way —
-       so no assertion here can tell the two apart, and a test that cannot fail
-       would be worse than none. The explicit association is kept because it is
-       the shape that is robust by construction rather than by the accname
-       algorithm's treatment of an embedded control's value, but #857 stays open
-       and needs re-measuring against the control it was actually reported on. */
     return (
-      <>
-        <label htmlFor={controlId}>{label}</label>
+      <label>
+        {label}
         <select
-          id={controlId}
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
         >
@@ -77,7 +59,7 @@ export function ConfigFieldControl({
             </option>
           ))}
         </select>
-      </>
+      </label>
     );
   }
 

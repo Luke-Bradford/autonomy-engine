@@ -548,13 +548,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
 
            Creating a container and moving a node in or out is the property
            panel's, as of U6d — a `<select>` on the NODE, precisely because the box
-           itself cannot be selected. DRAGGING one in, and the RF `parentId`
-           mapping that would make a container draggable as a group, is U23's. */
+           cannot be RF-selected. U23 gave the box its own CONFIG panel without
+           relaxing this line: the ⚙ writes the store's `Selection` directly, so
+           a container is selectable in the STORE's sense and not in RF's, which
+           is the whole point. DRAGGING one in, and the RF `parentId` mapping that
+           would make a container draggable as a group, is still U23's part 2. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
            rather than dressed up as load-bearing: RF's Backspace path only
-           targets a SELECTED node and a container cannot be selected, container
+           targets a node RF considers selected, and a container is never in RF's
+           selection (the store's own container selection is a different fact and
+           RF cannot see it), container
            ids are filtered at the change seam before any branch runs, and a
            `remove` that somehow reached `deleteNode(<container id>)` would find
            no node and no-op. Nothing can reach `deleteContainer` except the

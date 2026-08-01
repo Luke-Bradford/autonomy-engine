@@ -1645,8 +1645,11 @@ export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number]
  * refusal grammar, and records the one case the validator does not refuse
  * (`stage.maxRounds`, #859) so the gap cannot silently grow.
  *
- * `join` appears on every kind because the reducer reads it on every kind
- * (see `c.join === 'any'` in the container-completion path).
+ * `join` appears on every kind because the reducer reads it on every kind: the
+ * `containerJoin` helper below is applied unconditionally to all three from the
+ * container's pending -> ready transition. It is the ENTRY-READINESS rule, not a
+ * completion one — an earlier version of this note pointed at a
+ * "container-completion path", where no such read exists.
  */
 export const CONTAINER_CONFIG_FIELDS: Record<ContainerKind, readonly ContainerConfigField[]> = {
   loop: ['exitWhen', 'maxRounds', 'timeout', 'join'],
