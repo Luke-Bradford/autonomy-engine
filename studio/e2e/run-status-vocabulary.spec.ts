@@ -162,11 +162,19 @@ test('#873 — a live container says "running", the same word its node and its r
      fact this spec has no need to assume — and the retry cannot paper over the
      defect here, because with the wording reverted the box reads `stage · active`
      and never becomes `running` however long it is given. The box is drawn from
-     the R1 doc fetch before the WebSocket replay lands, so it says
-     `stage · not projected` first; this is the assertion that can only hold
-     once the projection has arrived. */
+     the R1 doc fetch before the WebSocket replay lands, so it says `stage` ALONE
+     first — `RunCanvas` short-circuits the whole ` · <status>` fragment when
+     nothing is projected, so the visible label omits the status entirely and
+     `NO_STATUS_LABEL` reaches only the accessible name. This is the assertion
+     that can only hold once the projection has arrived.
+
+     The 20s budget is #870's, above, and is needed for the same reason: the
+     driver has to start the run, enter the container, dispatch the node and arm
+     its alarm before either surface can say anything true. This assertion covers
+     strictly MORE than #870's poll — the SPA navigation, the lazy `RunGraph`
+     chunk and the WS replay on top — so it cannot take the 5s default. */
   const box = canvas.locator('.run-container .flow-container-label');
-  await expect(box).toHaveText('stage · running');
+  await expect(box).toHaveText('stage · running', { timeout: 20_000 });
 
   /* One evaluate, every remaining assertion. The pairing is the point of the
      ticket: the container and the node it encloses are two levels of one graph,

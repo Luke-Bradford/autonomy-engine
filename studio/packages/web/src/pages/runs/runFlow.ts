@@ -114,9 +114,16 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
     const cs = state?.containers[c.id] ?? null;
     const status = cs?.status ?? null;
     /* #873 — worded HERE, not at the render site the ticket suggested, so the
-       box and its accessible name below cannot come to disagree, and so nothing
-       has to cast `data.status` back to `ContainerRunStatus` to word it. Same
-       shape as the activity branch above; the TONE still reads the raw status. */
+       box and its accessible name below cannot come to disagree about WHICH WORD
+       a status gets, and so nothing has to cast `data.status` back to
+       `ContainerRunStatus` to word it. Same shape as the activity branch above;
+       the TONE still reads the raw status.
+
+       They do still differ on the NULL path, and that is pre-existing rather
+       than introduced here: `RunCanvas` drops the whole ` · <status>` fragment
+       when `status` is null, so an unprojected box reads `stage` while its
+       accessible name reads `…, not projected`. Worth knowing before reading the
+       sentence above as stronger than it is. */
     const label = status === null ? null : containerStatusLabel(status);
     return {
       id: c.id,
