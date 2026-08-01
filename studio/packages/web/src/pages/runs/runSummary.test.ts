@@ -186,37 +186,41 @@ describe('deriveNodeActivity', () => {
 });
 
 describe('deriveRunLifecycle', () => {
+  const started = () =>
+    envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} });
+
   it('is null before any lifecycle event (caller falls back to the REST status)', () => {
     expect(deriveRunLifecycle([])).toBeNull();
   });
   it('tracks started → finished', () => {
-    const events = [
-      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
-    ];
-    expect(deriveRunLifecycle(events)).toBe('running');
+    const events = [started()];
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
     events.push(envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }));
-    expect(deriveRunLifecycle(events)).toBe('success');
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'success', waitingReason: null });
   });
   it('maps run.interrupted', () => {
     const events = [envelope({ type: 'run.interrupted', runId: 'r', reason: 'boot' })];
-    expect(deriveRunLifecycle(events)).toBe('interrupted');
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'interrupted', waitingReason: null });
   });
   it('#5 S3 — a run.waiting tailing after run.started shows `waiting` (live park view)', () => {
-    const events = [
-      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
-      envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' }),
-    ];
-    expect(deriveRunLifecycle(events)).toBe('waiting');
+    const events = [started(), envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' })];
+    // #870 — and it now carries the REASON, which this fold used to drop.
+    expect(deriveRunLifecycle(events)).toEqual({
+      status: 'waiting',
+      waitingReason: 'waiting_external',
+    });
   });
   it('#5 S3 — a run.resumed/started after a run.waiting returns the VIEW to running', () => {
     // The live-view reverse edge (the reducer defers the waiting→running producer
     // to S4/S6, but the monitor must un-park a run the moment it advances again).
     const events = [
-      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      started(),
       envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
       envelope({ type: 'run.resumed', runId: 'r', reason: 'boot_reconcile' }),
     ];
-    expect(deriveRunLifecycle(events)).toBe('running');
+    // #870 — the reason is cleared with the status. A stale reason surviving an
+    // unpark is how a running run comes to be labelled "waiting (timer)".
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
   });
   it('a resume AFTER a terminal shows running again — the VIEW rule, not the log rule', () => {
     // This is the deliberate divergence from the server's `terminalFactFromLog`
@@ -224,11 +228,88 @@ describe('deriveRunLifecycle', () => {
     // it. This is a live view: a resume tailing in means the run is going again.
     // Pinned so a later "unify these two" fire cannot silently break one of them.
     const events = [
-      envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
+      started(),
       envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }),
       envelope({ type: 'run.resumed', runId: 'r', reason: 'boot_reconcile' }),
     ];
-    expect(deriveRunLifecycle(events)).toBe('running');
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+  });
+
+  /**
+   * #870 — the fold is a MIRROR of the reducer's S3 rules, and these are the
+   * four that decide which reason (if any) reaches the screen. Each is pinned
+   * against the reducer's own pinned behaviour in
+   * `shared/engine/__tests__/run-waiting-status.test.ts`; if that file's
+   * expectations ever change, exactly one of these should go red.
+   */
+  describe('#870 — mirrors the reducer’s park/unpark rules', () => {
+    it('ignores a run.waiting that arrives BEFORE run.started', () => {
+      const events = [envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' })];
+      expect(deriveRunLifecycle(events)).toBeNull();
+    });
+
+    it('keeps the FIRST reason when a second run.waiting lands on an already-parked run', () => {
+      // The reducer's status guard ignores the second park outright, so the run
+      // is still parked on the thing it first parked on. A last-wins fold would
+      // relabel it — a specific, confident, wrong noun.
+      const events = [
+        started(),
+        envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
+        envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_external' }),
+      ];
+      expect(deriveRunLifecycle(events)).toEqual({
+        status: 'waiting',
+        waitingReason: 'waiting_timer',
+      });
+    });
+
+    it('ignores a run.waiting that arrives after a terminal', () => {
+      const events = [
+        started(),
+        envelope({ type: 'run.finished', runId: 'r', outcome: 'success' }),
+        envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
+      ];
+      expect(deriveRunLifecycle(events)).toEqual({ status: 'success', waitingReason: null });
+    });
+
+    const parkedNode = { runId: 'r', nodeId: 'n', previousAttemptId: 'n#0' };
+    it.each([
+      ['timer.due', envelope({ type: 'timer.due', ...parkedNode })],
+      [
+        'externalWait.completed',
+        envelope({ type: 'externalWait.completed', ...parkedNode, outputs: {} }),
+      ],
+      ['externalWait.expired', envelope({ type: 'externalWait.expired', ...parkedNode })],
+    ])('un-parks on %s — the reducer’s unpark set, not just run.resumed', (_name, unpark) => {
+      // The case that made the reason dangerous: `run.resumed` is appended only
+      // by boot-reconcile and lease-reclaim, so a timer-parked run resumed by
+      // `timer.due` used to keep a stale `waiting` here while the RUNS LIST,
+      // reading the row, correctly said `running`.
+      const events = [
+        started(),
+        envelope({ type: 'run.waiting', runId: 'r', reason: 'waiting_timer' }),
+        unpark,
+      ];
+      expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
+    });
+
+    it('does not let an unpark event resurrect a terminal run', () => {
+      // `unparkIfWaiting` is a no-op on anything that is not `waiting`; so is
+      // this. A late `timer.due` on a finished run must not un-finish it.
+      const events = [
+        started(),
+        envelope({ type: 'run.finished', runId: 'r', outcome: 'failure' }),
+        envelope({ type: 'timer.due', runId: 'r', nodeId: 'n', previousAttemptId: 'n#0' }),
+      ];
+      expect(deriveRunLifecycle(events)).toEqual({ status: 'failure', waitingReason: null });
+    });
+
+    it('does not let an unpark event start a run that never started', () => {
+      const events = [
+        envelope({ type: 'timer.due', runId: 'r', nodeId: 'n', previousAttemptId: 'n#0' }),
+      ];
+      expect(deriveRunLifecycle(events)).toBeNull();
+    });
   });
 });
 
@@ -579,7 +660,7 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
       envelope({ type: 'run.started', runId: 'r', pipelineVersionId: 'pv', params: {} }),
       envelope(warned),
     ];
-    expect(deriveRunLifecycle(events)).toBe('running');
+    expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
   });
 });
 

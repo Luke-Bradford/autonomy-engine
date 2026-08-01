@@ -124,32 +124,32 @@ export function RunDetailPage({ runId }: { runId: string }) {
     () => nodes.find((n) => n.nodeId === openNodeId) ?? null,
     [nodes, openNodeId],
   );
-  /* #870 — U25's split of authority, one level up: the ENGINE settles the RUN's
-     status too, wherever it has an opinion about this run.
+  /* #870 — the RUN's status and, when it is parked, WHY.
 
-     The doc-free fold sees only run-level events, and that is not enough to
-     un-park correctly. `run.resumed` is appended ONLY by boot-reconcile and
-     lease-reclaim, so a run parked on a timer and resumed by `timer.due` reads
-     `waiting` in the fold while the row and the reducer have both moved on.
-     #870 taught the fold the reducer's remaining unpark events, which fixes that
-     for the fold's own case — but where the doc resolves there is no reason to
-     re-derive at all: `RunState` already carries `status` AND `waitingReason`,
-     computed by the same reducer the driver runs.
+     U25 gave the NODE table the engine's own answer wherever the projection had
+     one. The obvious next move was to do the same here — `overlay.state` carries
+     both `status` and `waitingReason`, from the very reducer the driver runs.
+     It is wrong, and measurably so: the reducer does NOT fold a terminal into
+     `RunState.status`. A log of `run.started → run.finished{success}` projects
+     to `status: 'running'`. That is deliberate (`onResumed`'s comment and #443
+     record it — terminality is a LOG fact, read by `terminalFactFromLog` and
+     projected onto the row by `syncRunLifecycle`; `RunState.status` tracks the
+     WALK, which is why `driveRun` refuses a terminal log rather than consulting
+     it). Preferring the projection would have labelled every finished run
+     `running` on this header.
 
-     Gated on `lifecycle !== null` as well as `overlay.ready`, and that guard is
-     load-bearing. The engine's seed state is `pending` — a placeholder, not an
-     observation — so a run with no lifecycle event in its log yet would have its
-     row status MASKED by that seed, turning a `queued` run into a `pending` one
-     on the very page this ticket is making truthful. A null fold means no
-     run-level event has landed, which is exactly when the projection has no
-     opinion to prefer. */
-  const engineView = overlay.ready && lifecycle !== null ? overlay.state : null;
-  const status: RunStatus =
-    engineView?.status ?? lifecycle?.status ?? run?.status ?? 'pending';
-  /* The REST row carries no park reason (`RunSchema` has no such column), so
-     the fallback tail is `null` rather than a guess — a bare `waiting`, which is
-     what the runs list shows for the same run. */
-  const waitingReason = engineView?.waitingReason ?? lifecycle?.waitingReason ?? null;
+     So the fold stays the authority at run level, and its two answers are sound
+     for different reasons. The STATUS maps terminals through `terminalStatusOf`
+     — the engine's own SSOT, shared with the reducer and the boot reconciler.
+     The PARK is now a faithful mirror of the reducer's S3 rules (#870 taught it
+     the same `run.waiting` guard and the same unpark set), and there is nothing
+     for the projection to add: both read the one `run.waiting` event, so they
+     cannot disagree about which alarm a run is parked on. */
+  const status: RunStatus = lifecycle?.status ?? run?.status ?? 'pending';
+  /* The REST row carries no park reason (`RunSchema` has no such column), so the
+     fallback tail is `null` rather than a guess — a bare `waiting`, which is
+     exactly what the runs list shows for the same run. */
+  const waitingReason = lifecycle?.waitingReason ?? null;
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above

@@ -6,6 +6,7 @@ import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
 import { RunDetailPage } from './RunDetailPage';
+import { projectRun } from './runProjection';
 import * as runsApi from '../../api/runs';
 import * as hook from './useRunStream';
 import type { RunStreamState } from './useRunStream';
@@ -354,6 +355,92 @@ describe('RunDetailPage', () => {
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/no node overlay/i);
     expect(screen.queryByTestId('run-canvas')).not.toBeInTheDocument();
+  });
+
+  /**
+   * #870 — the run header, one level up from U25's node table.
+   *
+   * The park events used here are the same ones the reducer folds, so these
+   * assert the RENDERED word against a real log rather than against a
+   * hand-built status.
+   */
+  describe('#870 — the run header says WHY a parked run is parked', () => {
+    const parked = (reason: 'waiting_timer' | 'waiting_external') => [
+      envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+      envelope({ type: 'run.waiting', runId: 'run_1', reason }),
+    ];
+
+    it('reads `waiting (timer)`, not a bare `waiting`', async () => {
+      useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect(await screen.findByText('waiting (timer)')).toBeInTheDocument();
+      expect(screen.queryByText('waiting')).not.toBeInTheDocument();
+    });
+
+    it('reads `waiting (callback)` for an inbound external wait', async () => {
+      useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_external') }));
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect(await screen.findByText('waiting (callback)')).toBeInTheDocument();
+    });
+
+    /**
+     * The reason survives the loss of the doc. This is the case the doc-free
+     * fold exists for, and the one where a parked run most needs reading — so
+     * it must not be the case that loses the answer.
+     */
+    it('still says why when the pipeline version will not resolve', async () => {
+      getRunDetailMock.mockRejectedValue(new Error('pipeline version not found'));
+      vi.mocked(runsApi.getRun).mockResolvedValue(run({ status: 'waiting' }));
+      useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
+
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect(await screen.findByText('waiting (timer)')).toBeInTheDocument();
+    });
+
+    /**
+     * The row is the fallback while no lifecycle event has landed, and it must
+     * survive a fully-loaded page. A `queued` run has a version, a doc and a
+     * ready projection — and an EMPTY event log, because admission has not
+     * driven it yet.
+     */
+    it('shows a `queued` row through the shared vocabulary, with a doc loaded', async () => {
+      getRunDetailMock.mockResolvedValue({
+        run: run({ status: 'queued' }),
+        pipelineVersion: version(),
+      });
+      useRunStreamMock.mockReturnValue(stream({ events: [] }));
+
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect(await screen.findByText('queued (slot)')).toBeInTheDocument();
+      expect(screen.queryByText('pending')).not.toBeInTheDocument();
+    });
+
+    /**
+     * WHY THE HEADER DOES NOT READ THE ENGINE'S PROJECTION, pinned as a fact
+     * about the reducer rather than left as a comment nobody can check.
+     *
+     * `RunState.status` tracks the WALK, not the log's terminal fact: a log of
+     * `run.started → run.finished{success}` projects to `running` (measured;
+     * `onResumed`'s comment and #443 record the intent — terminality is read by
+     * `terminalFactFromLog` and put on the row by `syncRunLifecycle`). So
+     * taking the header's status from `overlay.state` — the obvious next step
+     * after U25 did exactly that for the node table — would label every
+     * finished run `running`. This test fails the day that changes, which is
+     * the day the reconcile becomes available at run level.
+     */
+    it('reports a finished run as finished, which its PROJECTION does not', async () => {
+      const events = [
+        envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        envelope({ type: 'run.finished', runId: 'run_1', outcome: 'success' }),
+      ];
+      useRunStreamMock.mockReturnValue(stream({ events }));
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+
+      expect(await screen.findByText('success')).toBeInTheDocument();
+      // The projection this page holds for the same log says otherwise.
+      const projected = projectRun(version(), events);
+      expect(projected.ok && projected.state.status).toBe('running');
+    });
   });
 
   it('U11 — only when the plain run read ALSO fails is the page empty', async () => {

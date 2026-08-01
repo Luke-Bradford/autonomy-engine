@@ -4,8 +4,9 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
-import type { Run } from '@autonomy-studio/shared';
+import { RunStatusSchema, type Run } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
+import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
@@ -79,6 +80,40 @@ describe('RunsPage', () => {
     // The run detail page renders the id in its heading.
     expect(await screen.findByRole('heading', { name: /run_abc/ })).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/monitor/runs/run_abc');
+  });
+
+  /**
+   * #870 — the list speaks the Monitor's ONE run-status vocabulary.
+   *
+   * Enumerated from `RunStatusSchema` rather than from a list written here, so
+   * a ninth DB status cannot be added and rendered as a bare identifier without
+   * this failing. `queued` is what makes the assertion bite: it is the one
+   * status whose LABEL differs from its identifier, so reverting this page to
+   * `{r.status}` goes red here rather than passing on a table of identities.
+   */
+  it('words every run status through the shared vocabulary', async () => {
+    listMock.mockResolvedValue(
+      RunStatusSchema.options.map((status, i) => run({ id: `run_${i}`, status })),
+    );
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_0');
+    for (const status of RunStatusSchema.options) {
+      expect(screen.getByText(runStatusLabel(status)), `no cell for ${status}`).toBeInTheDocument();
+    }
+    expect(screen.getByText('queued (slot)')).toBeInTheDocument();
+  });
+
+  /**
+   * The list reads the DB row, which has no park-reason column — so a parked
+   * run reads a BARE `waiting` here while the detail page says
+   * `waiting (timer)`. Pinned deliberately: one surface knowing more than
+   * another is fine; this test is what stops someone "fixing" the asymmetry by
+   * inventing a reason the row does not carry.
+   */
+  it('shows a parked run as a bare `waiting` — the row carries no reason', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_parked', status: 'waiting' })]);
+    renderWithRouter(<RunsPage />);
+    expect(await screen.findByText('waiting')).toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {
