@@ -39,7 +39,7 @@ test.describe('U14b recurrence builder', () => {
     await page.getByRole('button', { name: /New trigger/i }).click();
     const form = triggerForm(page);
     await form.getByLabel('Name').fill('Mon and Wed at 09:00 London');
-    await form.getByLabel('Mode').selectOption('schedule');
+    await form.getByLabel(/^Mode/).selectOption('schedule');
 
     // The builder — not a cron string — is what a new schedule trigger opens on.
     await expect(form.getByLabel('Schedule authored as')).toHaveValue('recurrence');
@@ -146,7 +146,7 @@ test.describe('U14b recurrence builder', () => {
     await page.getByRole('button', { name: /New trigger/i }).click();
     const form = triggerForm(page);
     await form.getByLabel('Name').fill('Switched to cron');
-    await form.getByLabel('Mode').selectOption('schedule');
+    await form.getByLabel(/^Mode/).selectOption('schedule');
     await form.getByLabel('Frequency').selectOption('week');
     await form.getByRole('checkbox', { name: 'Mon' }).check();
 
