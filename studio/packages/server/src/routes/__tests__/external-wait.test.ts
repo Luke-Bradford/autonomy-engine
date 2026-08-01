@@ -128,12 +128,7 @@ describe('external-wait routes', () => {
     expect(waits[0]!.expiresAt).toBeGreaterThan(0);
 
     const raw = (res.json() as Array<Record<string, unknown>>)[0]!;
-    expect(Object.keys(raw).sort()).toEqual([
-      'attemptId',
-      'callbackPath',
-      'expiresAt',
-      'nodeId',
-    ]);
+    expect(Object.keys(raw).sort()).toEqual(['attemptId', 'callbackPath', 'expiresAt', 'nodeId']);
   });
 
   it('a run with no parked webhook returns an empty list, not a 404', async () => {

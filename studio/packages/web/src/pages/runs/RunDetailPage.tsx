@@ -284,9 +284,6 @@ export function RunDetailPage({ runId }: { runId: string }) {
      between the status frame and this fetch — a real race worth saying out loud
      rather than rendering as a spinner that never resolves. */
   const parkedOnCallback = owesCallback(waitingReason);
-  const [waits, setWaits] = useState<PendingExternalWait[] | null>(null);
-  const [waitsError, setWaitsError] = useState<string | null>(null);
-  const [revealedWait, setRevealedWait] = useState<string | null>(null);
 
   /* Why an EPOCH and not just `parkedOnCallback`: a run with two webhook nodes in
      sequence completes one and parks on the next, and those frames can arrive in a
@@ -303,30 +300,36 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [stream.events],
   );
 
+  /* The fetched list, STAMPED with the park it describes. Stamped rather than
+     cleared, because clearing means writing state from the effect body on every
+     un-park, and a synchronous setState in an effect is a cascading render (the
+     `react-hooks/set-state-in-effect` rule). Freshness is a comparison instead:
+     a list stamped with a previous park simply is not this park's, so it never
+     renders. Same argument for the reveal below, whose key carries the epoch —
+     a token revealed under one park cannot survive into the next. */
+  const [waitsState, setWaitsState] = useState<{
+    epoch: number;
+    waits: PendingExternalWait[];
+    error: string | null;
+  } | null>(null);
+  const [revealedWait, setRevealedWait] = useState<string | null>(null);
+  const fresh = waitsState !== null && waitsState.epoch === parkEpoch ? waitsState : null;
+  const waits = fresh?.waits ?? null;
+  const waitsError = fresh?.error ?? null;
+
   useEffect(() => {
-    if (!parkedOnCallback) {
-      // Un-parked: drop the list AND the reveal. A revealed token must not survive
-      // the run resuming — it is dead, and leaving it on screen invites a POST that
-      // can only come back as the route's indistinguishable 404.
-      setWaits(null);
-      setWaitsError(null);
-      setRevealedWait(null);
-      return;
-    }
+    if (!parkedOnCallback) return;
     const ac = new AbortController();
     listExternalWaits(runId, ac.signal).then(
       (pending) => {
-        if (ac.signal.aborted) return;
-        setWaits(pending);
-        setWaitsError(null);
+        if (!ac.signal.aborted) setWaitsState({ epoch: parkEpoch, waits: pending, error: null });
       },
       (err: unknown) => {
         /* Shown, never swallowed. Without this the section's absence would be
            indistinguishable from "this run owes no callback" — the failure would
            read as a fact about the run. */
-        if (ac.signal.aborted) return;
-        setWaits([]);
-        setWaitsError(messageOf(err));
+        if (!ac.signal.aborted)
+          setWaitsState({ epoch: parkEpoch, waits: [], error: messageOf(err) });
       },
     );
     return () => ac.abort();
@@ -457,7 +460,10 @@ export function RunDetailPage({ runId }: { runId: string }) {
           {waits !== null && waits.length > 0 && (
             <ul className="external-waits" aria-label="Pending callbacks">
               {waits.map((wait) => {
-                const key = waitKey(wait);
+                /* Epoch-scoped, so a reveal cannot outlive the park it belongs
+                   to: after the run re-parks, that token is dead and a POST to it
+                   could only come back as the route's indistinguishable 404. */
+                const key = `${parkEpoch} ${waitKey(wait)}`;
                 /* The parked id is an INSTANCE key inside a parallel foreach
                    (`w@1`), so it is resolved to its doc node before being named —
                    `nameOf` is keyed on doc ids and would otherwise draw a blank on
@@ -468,7 +474,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
                    instance parked. On an ordinary node it is the same node twice,
                    and on a canvas-authored one it is a raw `n_<uuid>` — the noise
                    #884 removed from the validator's messages. */
-                const instance = docNode !== null && docNode.id !== wait.nodeId ? wait.nodeId : null;
+                const instance =
+                  docNode !== null && docNode.id !== wait.nodeId ? wait.nodeId : null;
                 const bodyHint = describeCallbackBody(docNode);
                 return (
                   <li key={key}>

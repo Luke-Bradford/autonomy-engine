@@ -1626,7 +1626,9 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     await pendingList();
     expect(listExternalWaitsMock).toHaveBeenCalledTimes(1);
 
-    listExternalWaitsMock.mockResolvedValue([{ ...WAIT, callbackPath: '/api/external-wait/tok_2' }]);
+    listExternalWaitsMock.mockResolvedValue([
+      { ...WAIT, callbackPath: '/api/external-wait/tok_2' },
+    ]);
     useRunStreamMock.mockReturnValue(
       stream({
         events: [

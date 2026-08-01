@@ -6,7 +6,8 @@ function webhook(id: string, outputs?: unknown): Node {
   return {
     id,
     type: 'webhook',
-    config: outputs === undefined ? { timeoutSeconds: '${600}' } : { timeoutSeconds: '${600}', outputs },
+    config:
+      outputs === undefined ? { timeoutSeconds: '${600}' } : { timeoutSeconds: '${600}', outputs },
     position: { x: 0, y: 0 },
   } as Node;
 }
@@ -106,7 +107,9 @@ describe('describeCallbackBody', () => {
   });
 
   it('says an all-optional contract accepts an empty body', () => {
-    const text = describeCallbackBody(webhook('w', [{ name: 'note', type: 'string', optional: true }]))!;
+    const text = describeCallbackBody(
+      webhook('w', [{ name: 'note', type: 'string', optional: true }]),
+    )!;
     expect(text).toContain('empty body is accepted');
     expect(text).toContain('“note” (string)');
   });

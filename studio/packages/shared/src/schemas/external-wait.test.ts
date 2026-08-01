@@ -25,7 +25,8 @@ describe('PendingExternalWaitSchema', () => {
   it.each(['nodeId', 'attemptId', 'expiresAt', 'callbackPath'] as const)(
     'refuses a response missing %s',
     (key) => {
-      const { [key]: _dropped, ...rest } = WAIT;
+      const rest: Record<string, unknown> = { ...WAIT };
+      delete rest[key];
       expect(() => PendingExternalWaitSchema.parse(rest)).toThrow();
     },
   );
