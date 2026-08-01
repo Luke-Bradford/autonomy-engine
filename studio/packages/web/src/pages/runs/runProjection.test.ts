@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ContainerRunStatusSchema,
-  NodeRunStatusSchema,
-  type EngineDoc,
-  type RunEvent,
-} from '@autonomy-studio/shared';
-import { containerStatusTone, nodeStatusTone, projectRun } from './runProjection';
+import type { EngineDoc, RunEvent } from '@autonomy-studio/shared';
+import { projectRun } from './runProjection';
 
 const DOC: EngineDoc = {
   nodes: [
@@ -110,34 +105,5 @@ describe('projectRun', () => {
     expect(projection.ok).toBe(false);
     if (projection.ok) return;
     expect(projection.reason).toContain('event 1');
-  });
-});
-
-describe('status tones', () => {
-  it('maps every engine node status — no status is left without a tone', () => {
-    for (const status of NodeRunStatusSchema.options) {
-      expect(nodeStatusTone(status)).toBeTruthy();
-    }
-    // The groupings that carry meaning, pinned so a careless edit trips:
-    expect(nodeStatusTone('pending')).toBe('neutral');
-    expect(nodeStatusTone('dispatched')).toBe('running');
-    expect(nodeStatusTone('skipped')).toBe('skipped');
-    // All four parked statuses share ONE tone, and it is not `neutral` — a
-    // parked node is not an idle one.
-    for (const held of [
-      'waiting',
-      'retry_pending',
-      'wait_pending',
-      'external_wait_pending',
-    ] as const) {
-      expect(nodeStatusTone(held)).toBe('holding');
-    }
-  });
-
-  it('maps every container status, with `active` as the container’s running tone', () => {
-    for (const status of ContainerRunStatusSchema.options) {
-      expect(containerStatusTone(status)).toBeTruthy();
-    }
-    expect(containerStatusTone('active')).toBe('running');
   });
 });

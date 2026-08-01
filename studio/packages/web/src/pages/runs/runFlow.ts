@@ -8,7 +8,12 @@ import {
   UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
 import { toFlowEdge } from '../pipeline/edgeCondition';
-import { containerStatusTone, nodeStatusTone, type StatusTone } from './runProjection';
+import {
+  containerStatusTone,
+  nodeStatusLabel,
+  nodeStatusTone,
+  type StatusTone,
+} from './nodeStatus';
 
 /**
  * U11 — the doc + run state → React Flow arrays, as PURE functions.
@@ -25,7 +30,12 @@ export type RunDoc = Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>;
 
 export interface RunNodeData extends Record<string, unknown> {
   title: string;
-  /** The engine's own status word, or `null` when nothing is projected yet. */
+  /**
+   * The node's status AS WORDED FOR AN OPERATOR (`nodeStatusLabel`), or `null`
+   * when nothing is projected yet. The engine's identifier is deliberately not
+   * what reaches the screen — U25 gave the Monitor one vocabulary, and this is
+   * the same string the run table's pill shows.
+   */
   status: string | null;
   tone: StatusTone | null;
 }
@@ -56,6 +66,9 @@ export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone
 export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
   const activities: FlowNode[] = doc.nodes.map((n) => {
     const status = state?.nodes[n.id]?.status ?? null;
+    /* U25 — the node says the same word the table's pill does. The TONE still
+       comes off the raw engine status; only what an operator reads is worded. */
+    const label = status === null ? null : nodeStatusLabel(status);
     return {
       id: n.id,
       type: 'runActivity',
@@ -65,10 +78,10 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       connectable: false,
       data: {
         title: activityLabel(n),
-        status,
+        status: label,
         tone: status === null ? null : nodeStatusTone(status),
       } satisfies RunNodeData,
-      ariaLabel: `${activityLabel(n)}, ${status ?? NO_STATUS_LABEL}`,
+      ariaLabel: `${activityLabel(n)}, ${label ?? NO_STATUS_LABEL}`,
     };
   });
 

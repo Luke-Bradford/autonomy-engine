@@ -1,10 +1,13 @@
 import {
   docNodeIdOf,
   EngineEventSchema,
+  parseInstanceKey,
   terminalStatusOf,
   type FailureKind,
+  type NodeRunStatus,
   type RunEvent,
   type RunLifecycleStatus,
+  type RunState,
 } from '@autonomy-studio/shared';
 
 /**
@@ -22,9 +25,14 @@ import {
  * This doc-FREE derivation is kept deliberately, and is not a leftover. It needs
  * no doc, so it still renders for a run whose version no longer resolves, and it
  * still renders while the stream is mid-replay — both cases where the overlay
- * correctly refuses to draw. Its status vocabulary is its own and LOSSIER than
- * the engine's on purpose (see `NodeActivity` below); where the two disagree,
- * the engine is right.
+ * correctly refuses to draw.
+ *
+ * U25 ended the second half of that arrangement. The fold is still doc-free, but
+ * its status vocabulary is no longer its OWN: it speaks the engine's
+ * `NodeRunStatus` and only ever emits the subset a bare event log can justify.
+ * "Where the two disagree the engine is right" used to be a docblock promise
+ * that no code kept — the page rendered both and let them contradict each other.
+ * `reconcileNodeActivity` is that promise as code.
  */
 
 /** Same-origin WebSocket URL for a run's live event tail. `wss` under TLS. */
@@ -37,41 +45,47 @@ export function runStreamUrl(
 }
 
 /**
- * What the monitor says a node is doing. `retrying` and `waiting` are the two
- * NON-TERMINAL holds, and they exist because without them a held node is
- * indistinguishable from a failed one (#483):
+ * What the monitor says a node is doing — the ENGINE's vocabulary, so the graph
+ * and the table cannot word the same node differently (U25). It was its own
+ * five-word enum until then, which is what let one page say `retry_pending`
+ * above and `retrying` below for one node.
  *
- * - `retrying` — the node failed `transient`ly, its policy still has budget, and
- *   it is waiting out the retry interval (the engine's `retry_pending`).
- * - `waiting`  — the node is PARKED on a DURABLE alarm that announced itself in
- *   the log: a `wait`'s timer (`wait_pending`) or a `webhook`'s inbound callback
- *   (`external_wait_pending`).
+ * A bare event log cannot justify all ten members, and this fold emits only the
+ * ones it can observe:
  *
- * NOT the engine's `NodeRunStatus.waiting`, which means something else entirely
- * (a `call_pipeline` node whose child run is in flight). This vocabulary is the
- * MONITOR's, and deliberately lossy — see the module doc on why this view is
- * doc-free. A call node is in fact the one park this status CANNOT show: the
- * engine parks it via a `startChild` COMMAND and appends no event until
- * `call.returned`, so there is nothing in the log to fold and the node stays
- * absent from the table for the whole child run (#796 — it needs a new engine
- * event, not a projection change).
+ * - `dispatched` — a `node.dispatched`, or a control node's own evaluation.
+ * - `retry_pending` — #483/F2b: the node failed `transient`ly, its policy still
+ *   has budget, and it is waiting out the retry interval.
+ * - `wait_pending` / `external_wait_pending` — the node is PARKED on a DURABLE
+ *   alarm that announced itself in the log: a `wait`'s timer, or a `webhook`'s
+ *   inbound callback. These were ONE word (`waiting`) before U25, which told an
+ *   operator staring at a stuck run that it was parked without saying on what —
+ *   the difference between "wait for it" and "something external owes us a
+ *   call". The log always knew; every reader threw it away.
+ * - `success` / `failure` — terminal.
  *
- * That window is one synchronous step TODAY, not a real blind spot: `call_pipeline`
+ * The four it cannot emit are exactly the four that need the doc, and they are
+ * why `reconcileNodeActivity` exists: `pending`/`ready` (no event is appended
+ * for a node that has not started) and `skipped` (routing-around emits nothing
+ * at all — the reducer computes it), plus the engine's `waiting`, which means a
+ * `call_pipeline`'s child run is in flight. A call node is the one park this
+ * fold structurally cannot see: the engine parks it via a `startChild` COMMAND
+ * and appends no event until `call.returned`, so there is nothing in the log to
+ * fold (#796 — it needs a new engine event, not a projection change). That
+ * window is one synchronous step TODAY, not a real blind spot: `call_pipeline`
  * does not execute yet (the executor's `startChild` branch yields an immediate
- * `call.returned{failure}` — P3b), so there is no child run to be blind to. #796
- * owns the spawn seam AND the `call.started` append it then owes; #735, which
- * reported the blind spot alone, closed into it.
+ * `call.returned{failure}` — P3b), so there is no child run to be blind to.
+ * #796 owns the spawn seam AND the `call.started` append it then owes; #735,
+ * which reported the blind spot alone, closed into it.
  *
- * Both are healthy, in-progress states. They are deliberately distinct from
- * `running`: `running` means the node is executing, and a held/parked node is
- * not — conflating them would tell an operator watching a stuck run that work is
- * happening when nothing is.
+ * The holds are healthy, in-progress states, and deliberately distinct from
+ * `dispatched`: dispatched means the node is executing, and a held/parked node
+ * is not — conflating them would tell an operator watching a stuck run that
+ * work is happening when nothing is.
  */
-export type NodeActivityStatus = 'running' | 'retrying' | 'waiting' | 'success' | 'failure';
-
 export interface NodeActivity {
   nodeId: string;
-  status: NodeActivityStatus;
+  status: NodeRunStatus;
   /**
    * How many times the node has been STARTED, and retries bump it.
    *
@@ -173,7 +187,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     if (!n) {
       n = {
         nodeId,
-        status: 'running',
+        status: 'dispatched',
         attempts: 0,
         outputs: 0,
         lastOutputName: undefined,
@@ -235,7 +249,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     switch (e.type) {
       case 'node.dispatched': {
         const n = ensure(e.nodeId);
-        n.status = 'running';
+        n.status = 'dispatched';
         n.attempts += 1;
         clearResult(n);
         break;
@@ -282,7 +296,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // reconciler's crash-recovery decision, `retryDue` is F2b/F2c's policy
         // retry firing; they differ in the engine, not in what the monitor shows.)
         const n = ensure(e.nodeId);
-        n.status = 'running';
+        n.status = 'dispatched';
         clearResult(n);
         break;
       }
@@ -295,17 +309,29 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // U24: the failure CLASS is kept for the same reason and cleared by the
         // same events — `clearResult` moves the whole result as one fact, so the
         // kind can never outlive the message it classifies.
-        ensure(e.nodeId).status = 'retrying';
+        ensure(e.nodeId).status = 'retry_pending';
         break;
       }
-      case 'timer.waitScheduled':
-      case 'externalWait.created': {
-        // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
-        // inbound callback (a `webhook`). These are the START of a control node's
-        // life, not a transition within it: such nodes are engine-evaluated and
-        // never dispatched, so this is also the event that counts their attempt.
+      // #4 A5/A6 + A13 — the node PARKED on an alarm (a `wait`'s timer) or on an
+      // inbound callback (a `webhook`). These are the START of a control node's
+      // life, not a transition within it: such nodes are engine-evaluated and
+      // never dispatched, so this is also the event that counts their attempt.
+      //
+      // TWO cases rather than one, since U25. They shared a branch while the
+      // monitor had a single `waiting` word for both, and folding them together
+      // was the last place the distinction was lost: the log names which alarm a
+      // node is parked on, the engine keeps them apart (`wait_pending` vs
+      // `external_wait_pending`), and only this reader collapsed them.
+      case 'timer.waitScheduled': {
         const n = ensure(e.nodeId);
-        n.status = 'waiting';
+        n.status = 'wait_pending';
+        n.attempts += 1;
+        clearResult(n);
+        break;
+      }
+      case 'externalWait.created': {
+        const n = ensure(e.nodeId);
+        n.status = 'external_wait_pending';
         n.attempts += 1;
         clearResult(n);
         break;
@@ -419,6 +445,99 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   }
 
   return [...byNode.values()];
+}
+
+/**
+ * U25 — let the ENGINE settle the status of every node it has an opinion about,
+ * and add the rows only it can know exist.
+ *
+ * `deriveNodeActivity` above folds a bare event log; `projectRun` folds the same
+ * log through the reducer WITH the doc. Both were rendered on one page, in two
+ * vocabularies, and nothing reconciled them — so the graph could paint a node
+ * grey-`skipped` while the table two elements below simply had no row for it,
+ * which reads as "never reached". This is the join.
+ *
+ * The split of authority is deliberate and narrow:
+ *
+ *  - **STATUS comes from the engine** wherever the engine has one. It is the
+ *    same reducer the driver runs, and it sees routing, containers and the doc.
+ *  - **Every other column stays the FOLD's.** `attempts`, the streamed-output
+ *    count, the failure message/kind/code, the declared outputs and the
+ *    instance attribution are things the log records and the projection either
+ *    discards or never had. Overwriting them from `NodeRunState` would trade a
+ *    rich row for a poorer one to buy a consistency nothing was violating.
+ *
+ * PARALLEL-FOREACH BODY NODES ARE THE CASE THAT MAKES THIS SUBTLE, and getting
+ * it wrong makes the table worse rather than better. `seedState` deliberately
+ * does NOT seed them (`reduce.ts` skips `parallelChildIds`); their state lives
+ * only under transient per-item instance keys (`w@1`), which are DELETED as
+ * each item completes. So for such a node `state.nodes['w']` is absent whether
+ * it has never run, is running, or has long finished — while the fold, which
+ * collapses `w@1`/`w@2` onto `w`, lit that row up correctly. Two rules follow,
+ * and both are load-bearing:
+ *
+ *  1. The engine wins only where `state.nodes[nodeId]` EXISTS. Absent means
+ *     "the projection has no opinion", never "pending" — treating it as pending
+ *     would blank exactly the rows a parallel foreach is driving.
+ *  2. Seeded rows come from bare keys of `state.nodes` only. An instance key is
+ *     skipped rather than collapsed: `w@1` and `w@2` would collapse onto one
+ *     row with no defensible rule for which item's status wins, and the fold
+ *     has already made that row from the same events under its own stated
+ *     last-write-wins.
+ *
+ * The caller is responsible for only calling this once the projection is
+ * trustworthy — see `useRunProjection`, which withholds it until the replay is
+ * complete. A projection of a partly-replayed log holds nodes the run has in
+ * fact moved past, and letting THAT win over the fold would reintroduce the
+ * same lie from the other direction.
+ */
+export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): NodeActivity[] {
+  const reconciled = rows.map((row) => {
+    const engine = state.nodes[row.nodeId];
+    return engine === undefined ? row : { ...row, status: engine.status };
+  });
+
+  const seen = new Set(reconciled.map((row) => row.nodeId));
+  for (const [nodeId, engine] of Object.entries(state.nodes)) {
+    if (seen.has(nodeId)) continue;
+    if (parseInstanceKey(nodeId) !== null) continue;
+    reconciled.push({
+      nodeId,
+      status: engine.status,
+      /* ZERO, and deliberately NOT `engine.attempts` — except for the one
+         status where the engine is right and the zero would be the lie.
+
+         The general rule first. The reducer mints an attempt id as a node
+         becomes READY and bumps the counter then, so a node that has not run
+         yet reports `attempts: 1` — measured, not assumed (the test pins it).
+         This column means "how many times the node has been STARTED", so
+         copying that across would print "1 attempt" beside `ready` and restate,
+         in the attempts column, exactly the kind of falsehood this
+         reconciliation exists to remove.
+
+         The exception is `waiting`, and it is the one status whose absence from
+         the fold does NOT imply "nothing started it". A `call_pipeline` node is
+         parked by a `startChild` COMMAND with no event appended until
+         `call.returned` (see the `NodeActivity` docblock above, and
+         `reduce.ts`'s `waiting` park, which sets `attempts: attempts + 1`), so
+         the node reaches this branch precisely BECAUSE the engine started it
+         and told no one. Zero there would render "waiting (child run) · 0
+         attempts" over a child run that is genuinely on its first attempt.
+         Barely reachable today — the executor answers `startChild` with an
+         immediate `call.returned{failure}` (P3b) — but it is the state a live
+         tail passes through, it FREEZES there if the server dies between the
+         command and the append, and #796 makes it routine. */
+      attempts: engine.status === 'waiting' ? engine.attempts : 0,
+      outputs: 0,
+      lastOutputName: undefined,
+      error: undefined,
+      failureKind: undefined,
+      failureCode: undefined,
+      outputValues: undefined,
+      instanceId: undefined,
+    });
+  }
+  return reconciled;
 }
 
 /**

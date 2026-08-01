@@ -4,9 +4,10 @@ import {
   ContainerRunStatusSchema,
   EdgeOnSchema,
   NodeRunStatusSchema,
+  RunStatusSchema,
 } from '@autonomy-studio/shared';
 import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
-import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/runProjection';
+import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/nodeStatus';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -128,6 +129,51 @@ describe('U6a edge variant hues', () => {
    * container status is `holding`), which is exactly the kind of asymmetry that
    * rots — so each side is enumerated from the CODE, not from a copy of it.
    */
+  /**
+   * U25 — the same argument one level down, for the TABLE's pills.
+   *
+   * `RunDetailPage` and `NodeActivityPanel` build their class the same way
+   * (`node-status-${status}`), and the status is now the engine's full
+   * `NodeRunStatus` rather than the five words the table used to fold for
+   * itself. A member with no rule is a pill that silently falls through to the
+   * unstyled default — which is exactly what would have happened to `pending`,
+   * `ready`, `skipped` and the two split parks had this test not been written
+   * alongside them.
+   */
+  /**
+   * The RUN-level pills, by the same argument. Kept beside the node-level test
+   * because the asymmetry is what let `queued` go unstyled: U25 enumerated the
+   * node statuses against the stylesheet and would have caught a hole there,
+   * while the run statuses next to them had no such check — and `queued` is
+   * live (#5 S6a admission), rendering on the runs list and, via the header's
+   * fallback to the REST row status, on the run detail page too.
+   */
+  it('has a run-status pill rule for every run status either surface can show', () => {
+    for (const status of RunStatusSchema.options) {
+      expect(
+        new RegExp(`\\.run-status-${status}\\s*[,{]`).test(css),
+        `no .run-status-${status} rule`,
+      ).toBe(true);
+    }
+  });
+
+  it('has a node-status pill rule for every engine status the table can show', () => {
+    for (const status of NodeRunStatusSchema.options) {
+      /* Matched as a rule HEAD (`… ,` or `… {`) rather than through `ruleBody`,
+         which finds only a selector that opens its own block: most of these
+         pills deliberately share a declaration with a sibling, and the three
+         parks share one with each other. The trailing `[,{]` is what makes it a
+         rule head rather than any mention of the string — it is NOT a
+         disambiguator between statuses, and does not need to be: no status is a
+         prefix of another once the literal `.node-status-` sits in front of it
+         (`pending` is a suffix of `wait_pending`, not a prefix). */
+      expect(
+        new RegExp(`\\.node-status-${status}\\s*[,{]`).test(css),
+        `no .node-status-${status} rule`,
+      ).toBe(true);
+    }
+  });
+
   it('has a run-overlay rule for every tone the projection can emit, and no others', () => {
     const nodeTones = new Set(NodeRunStatusSchema.options.map(nodeStatusTone));
     for (const tone of nodeTones) {

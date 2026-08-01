@@ -99,6 +99,98 @@ describe('RunDetailPage', () => {
     expect(screen.getByText('{"greeting":"hi"}')).toBeInTheDocument();
   });
 
+  /**
+   * U25 — the page had TWO answers for one node, and this is the one that read
+   * as a lie: the fixture doc routes `greet --failure--> never`, so a run in
+   * which `greet` succeeds leaves `never` skipped. The graph painted it grey;
+   * the table had no row for it at all, which an operator reads as "the run
+   * never got there".
+   */
+  it('gives a routed-around node a row that says `skipped`, instead of omitting it', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            outputs: {},
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const skippedRow = (await screen.findByText('never')).closest('tr')!;
+    expect(within(skippedRow).getByText('skipped')).toBeInTheDocument();
+  });
+
+  it('words the status for an operator rather than printing the engine’s identifier', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const row = (await screen.findByText('greet')).closest('tr')!;
+    // The engine calls this `dispatched`, which names the ENGINE's act. The
+    // operator is asking what the NODE is doing.
+    expect(within(row).getByText('running')).toBeInTheDocument();
+    expect(within(row).queryByText('dispatched')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The reconciliation is GATED on a complete replay, and this is the case that
+   * gate exists for. A projection of a half-replayed log holds nodes the run has
+   * in fact moved past, so letting it win would overwrite live rows with
+   * `pending` — the same falsehood the ticket closes, arriving from the other
+   * side. Mid-replay the doc-free fold stands alone.
+   */
+  it('does not let a HALF-REPLAYED projection mint rows or overrule the fold', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        phase: 'replaying',
+        replayComplete: false,
+        events: [
+          envelope({
+            type: 'timer.waitScheduled',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            dueAt: 1_700_000_000_000,
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    // The parked row is the fold's, and it says WHICH alarm — one word
+    // ("waiting") could not tell a timer from an awaited inbound callback.
+    const row = (await screen.findByText('greet')).closest('tr')!;
+    expect(within(row).getByText('waiting (timer)')).toBeInTheDocument();
+    // …and no row was minted for the node the projection would have seeded.
+    expect(screen.queryByText('never')).not.toBeInTheDocument();
+  });
+
   it('shows empty node/event states with no events', async () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
     expect(await screen.findByText(/No node activity yet/i)).toBeInTheDocument();

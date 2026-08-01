@@ -3,8 +3,11 @@ import { lazy } from 'react';
 /**
  * #698, second front — the on-demand wrapper around `RunGraph`.
  *
- * `RunGraph` pulls in `@xyflow/react` (and its stylesheet) via `RunCanvas`, AND
- * the engine reducer via `projectRun`. React Flow, until U11, was
+ * `RunGraph` pulls in `@xyflow/react` (and its stylesheet) via `RunCanvas`.
+ * (It also reached the engine reducer via `projectRun` until U25 moved that
+ * projection up to the page so the node table could share it — which cost
+ * nothing, because `reduce.js` was already placed in the entry chunk either
+ * way; `vite.config.ts` records both measurements.) React Flow, until U11, was
  * reachable from exactly ONE route — the author canvas — and was split out for
  * that reason: everyone was paying React Flow's download to look at a list of
  * runs. Importing it statically from `RunDetailPage` put the whole library back

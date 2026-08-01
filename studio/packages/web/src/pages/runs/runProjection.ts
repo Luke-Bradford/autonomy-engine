@@ -1,10 +1,8 @@
 import {
   EngineEventSchema,
   createEngine,
-  type ContainerRunStatus,
   type EngineDoc,
   type EngineEvent,
-  type NodeRunStatus,
   type RunEvent,
   type RunState,
 } from '@autonomy-studio/shared';
@@ -18,9 +16,24 @@ import {
  * `createEngine(doc).projectRunState(events)` the driver runs — and the monitor
  * stops having a second, lossier opinion about what a node's status is.
  *
- * What the doc buys, concretely: `seedState()` seeds EVERY node in the doc as
- * `pending`, so a node that never dispatched is visible. The event-driven table
- * structurally cannot show one — no event was ever appended for it.
+ * What the doc buys, concretely: `seedState()` seeds the doc's nodes as
+ * `pending`, so a node that never dispatched is visible. The event-driven fold
+ * structurally cannot show one — no event was ever appended for it. U25 is what
+ * makes the table read this instead of guessing.
+ *
+ * ONE exception, and it matters to every reader: a PARALLEL foreach's body
+ * nodes are deliberately NOT seeded (`reduce.ts`'s `seedState` skips
+ * `parallelChildIds`). Their state exists only under transient per-item
+ * instance keys (`w@1`), which are DELETED as each item completes, so
+ * `state.nodes['w']` is absent for such a node whether it has never run, is
+ * running, or has finished. Absent therefore does not mean `pending` here, and
+ * a reader that treats the projection as total over the doc will blank exactly
+ * the rows a parallel foreach lights up. `reconcileNodeActivity` states how it
+ * handles that.
+ *
+ * The tone and label maps that used to live here are in `nodeStatus.ts`, which
+ * is type-only against the engine — this module imports `createEngine` as a
+ * VALUE, and the node table needs the words without the reducer.
  */
 
 /**
@@ -82,69 +95,4 @@ export function projectRun(doc: EngineDoc, events: RunEvent[]): RunProjection {
     parsed.push(result.data);
   }
   return { ok: true, state: createEngine(doc).projectRunState(parsed) };
-}
-
-/**
- * The hue GROUP a status is drawn in. Ten node statuses share five palette
- * variables, so the groups are stated here once and the exact status is ALSO
- * rendered as text on the node — the colour narrows it to a family, the label
- * says which member, and nothing is silently collapsed.
- *
- * Chosen so the canvas and the run table cannot come to disagree
- * (`index.css` records the same commitment for the edge hues):
- *   - `neutral`  — nothing has happened to this node (`pending`, `ready`).
- *   - `running`  — the engine has dispatched it.
- *   - `holding`  — dispatched-and-parked: a retry backoff, a timer, an external
- *     callback, or a child run in flight. Distinct from `neutral` because the
- *     run IS advancing here; the old table collapsed three of these to one word.
- *   - `success` / `failure` — terminal.
- *   - `skipped` — terminal, but by ROUTING rather than execution. Grey like
- *     `neutral` and drawn DASHED, matching the settled edge encoding for a
- *     skipped edge, so "this did not run" reads the same everywhere.
- */
-export const ALL_TONES = [
-  'neutral',
-  'running',
-  'holding',
-  'success',
-  'failure',
-  'skipped',
-] as const;
-export type StatusTone = (typeof ALL_TONES)[number];
-
-/**
- * Exhaustive BY CONSTRUCTION: `Record<NodeRunStatus, StatusTone>` fails to
- * compile the day the engine adds a status, which forces a deliberate choice
- * rather than a silent fallthrough to some default hue. (A `satisfies` on an
- * array would NOT catch a forgotten member — the engine's own `TERMINAL_NODE`
- * comment records that having been probed and found false.)
- */
-const NODE_TONES: Record<NodeRunStatus, StatusTone> = {
-  pending: 'neutral',
-  ready: 'neutral',
-  dispatched: 'running',
-  success: 'success',
-  failure: 'failure',
-  skipped: 'skipped',
-  waiting: 'holding',
-  retry_pending: 'holding',
-  wait_pending: 'holding',
-  external_wait_pending: 'holding',
-};
-
-/** Same construction for containers; `active` is their `dispatched`. */
-const CONTAINER_TONES: Record<ContainerRunStatus, StatusTone> = {
-  pending: 'neutral',
-  active: 'running',
-  success: 'success',
-  failure: 'failure',
-  skipped: 'skipped',
-};
-
-export function nodeStatusTone(status: NodeRunStatus): StatusTone {
-  return NODE_TONES[status];
-}
-
-export function containerStatusTone(status: ContainerRunStatus): StatusTone {
-  return CONTAINER_TONES[status];
 }

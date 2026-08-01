@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { EngineEvent, RunEvent } from '@autonomy-studio/shared';
-import { deriveNodeActivity, deriveRunLifecycle, runStreamUrl } from './runSummary';
+import type { EngineDoc, EngineEvent, RunEvent } from '@autonomy-studio/shared';
+import { projectRun } from './runProjection';
+import {
+  deriveNodeActivity,
+  deriveRunLifecycle,
+  reconcileNodeActivity,
+  runStreamUrl,
+  type NodeActivity,
+} from './runSummary';
 
 let seq = 0;
 /** Wrap a typed EngineEvent in the durable envelope shape the log/stream carry
@@ -129,7 +136,7 @@ describe('deriveNodeActivity', () => {
       }),
     ];
     const [a] = deriveNodeActivity(events);
-    expect(a).toMatchObject({ nodeId: 'a', status: 'running', attempts: 2 });
+    expect(a).toMatchObject({ nodeId: 'a', status: 'dispatched', attempts: 2 });
   });
 
   it('resolves a call node from call.returned', () => {
@@ -278,7 +285,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       idempotent: true,
     });
 
-  it('a HELD node reads `retrying`, not the red `failure` its node.failed set', () => {
+  it('a HELD node reads `retry_pending`, not the red `failure` its node.failed set', () => {
     // The defect: `node.retryScheduled` fell through `default:`, so a node
     // waiting out its retry interval kept the RED pill for the whole hold
     // (`retryIntervalSeconds` can make that minutes) and the monitor said a node
@@ -302,7 +309,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       }),
     ];
     const [a] = deriveNodeActivity(events);
-    expect(a!.status).toBe('retrying');
+    expect(a!.status).toBe('retry_pending');
     // The failure message SURVIVES the hold: it is why the node is retrying, and
     // the detail column is the only place it is shown.
     expect(a!.error).toBe('timeout');
@@ -373,7 +380,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }),
     ];
     const [a] = deriveNodeActivity(events);
-    expect(a!.status).toBe('running');
+    expect(a!.status).toBe('dispatched');
     expect(a!.attempts).toBe(1);
     expect(a!.error).toBeUndefined();
   });
@@ -392,7 +399,8 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       }),
     ];
     const [waiting] = deriveNodeActivity(parked);
-    expect(waiting!.status).toBe('waiting');
+    // U25 — the park names WHICH alarm: a timer, not an awaited callback.
+    expect(waiting!.status).toBe('wait_pending');
     expect(waiting!.attempts).toBe(1);
 
     const [done] = deriveNodeActivity([
@@ -402,7 +410,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
     expect(done!.status).toBe('success');
   });
 
-  it('a parked `webhook` node reads `waiting`, then succeeds on its callback', () => {
+  it('a parked `webhook` node reads `external_wait_pending`, then succeeds on its callback', () => {
     const parked = [
       envelope({
         type: 'externalWait.created',
@@ -412,7 +420,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
         dueAt: 1_700_000_000_000,
       }),
     ];
-    expect(deriveNodeActivity(parked)[0]!.status).toBe('waiting');
+    expect(deriveNodeActivity(parked)[0]!.status).toBe('external_wait_pending');
 
     const [done] = deriveNodeActivity([
       ...parked,
@@ -651,7 +659,11 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
         nextAttemptAt: 10,
       }),
     ])[0];
-    expect(held!).toMatchObject({ status: 'retrying', error: 'boom', failureKind: 'transient' });
+    expect(held!).toMatchObject({
+      status: 'retry_pending',
+      error: 'boom',
+      failureKind: 'transient',
+    });
 
     const reopened = deriveNodeActivity([
       envelope(dispatched('a', 'a#0')),
@@ -881,7 +893,7 @@ describe('deriveNodeActivity — a row that folds TWO instances (U24)', () => {
         dueAt: 10,
       }),
     ]);
-    expect(w!.status).toBe('waiting');
+    expect(w!.status).toBe('wait_pending');
     expect(w!.error).toBeUndefined();
     expect(w!.failureKind).toBeUndefined();
     expect(w!.failureCode).toBeUndefined();
@@ -904,5 +916,193 @@ describe('deriveNodeActivity — a row that folds TWO instances (U24)', () => {
     expect(a!.status).toBe('failure');
     expect(a!.error).toBe('boom');
     expect(a!.failureKind).toBeUndefined();
+  });
+});
+
+describe('reconcileNodeActivity', () => {
+  /**
+   * `a` fans out to `b` on success and `c` on failure, so a run in which `a`
+   * succeeds leaves `c` ROUTED AROUND — the case the doc-free fold structurally
+   * cannot show, because the reducer computes a skip and appends no event for
+   * it. The projection is built by the REAL reducer rather than hand-written:
+   * a fixture RunState I invented would pin my assumptions about `seedState`
+   * rather than its behaviour.
+   */
+  const DOC: EngineDoc = {
+    nodes: [
+      { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+      { id: 'b', type: 'http_request', position: { x: 200, y: 0 }, config: {} },
+      { id: 'c', type: 'http_request', position: { x: 400, y: 0 }, config: {} },
+    ],
+    edges: [
+      { id: 'e1', from: 'a', to: 'b', on: 'success' },
+      { id: 'e2', from: 'a', to: 'c', on: 'failure' },
+    ],
+  };
+
+  /** `run.started` + `a` dispatched and succeeded, so `c` is routed around. */
+  function aSucceededLog(): RunEvent[] {
+    const started = envelope({
+      type: 'run.started',
+      runId: 'r',
+      pipelineVersionId: 'pv',
+      params: {},
+    });
+    // Read the attempt id OFF the projection: `onDispatched` ignores an event
+    // whose `attemptId` is not the one the reducer assigned, so a made-up id
+    // folds to nothing and the test would assert against an empty state.
+    const afterStart = projectRun(DOC, [started]);
+    if (!afterStart.ok) throw new Error('fixture: run.started must project');
+    const attemptId = afterStart.state.nodes.a?.currentAttemptId;
+    if (attemptId === undefined) throw new Error('fixture: `a` must be ready with an attempt');
+    return [
+      started,
+      envelope({ type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId, idempotent: false }),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId, outputs: {} }),
+    ];
+  }
+
+  function stateOf(events: RunEvent[]) {
+    const projection = projectRun(DOC, events);
+    if (!projection.ok) throw new Error(`fixture: must project — ${projection.reason}`);
+    return projection.state;
+  }
+
+  /** A folded row, for the precedence rules that need one to already exist. */
+  function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
+    return {
+      status: 'dispatched',
+      attempts: 1,
+      outputs: 0,
+      lastOutputName: undefined,
+      error: undefined,
+      failureKind: undefined,
+      failureCode: undefined,
+      outputValues: undefined,
+      instanceId: undefined,
+      ...over,
+    };
+  }
+
+  it('gives a ROUTED-AROUND node a row that says `skipped` — the graph said so and the table said nothing', () => {
+    const events = aSucceededLog();
+    const folded = deriveNodeActivity(events);
+    // The defect, stated as the premise: the fold has no row for `c` at all,
+    // which on screen is indistinguishable from "the run never reached it".
+    expect(folded.map((n) => n.nodeId)).toEqual(['a']);
+
+    const reconciled = reconcileNodeActivity(folded, stateOf(events));
+    const c = reconciled.find((n) => n.nodeId === 'c');
+    expect(c).toBeDefined();
+    expect(c!.status).toBe('skipped');
+  });
+
+  it('gives a node that never started a row, rather than leaving the operator to infer it', () => {
+    const events = aSucceededLog();
+    const reconciled = reconcileNodeActivity(deriveNodeActivity(events), stateOf(events));
+    const b = reconciled.find((n) => n.nodeId === 'b');
+    expect(b).toBeDefined();
+    // `b` is the successor of a succeeded node, so the engine has already made
+    // it ready — either way it is a state the log alone cannot report.
+    expect(['pending', 'ready']).toContain(b!.status);
+    // ZERO attempts, even though the ENGINE says one. The reducer bumps its
+    // counter when it mints the attempt id at READY, so `engine.attempts` reads
+    // 1 for a node that has not run — pinned here because it is the reason the
+    // seeded row does not copy the field, and a future refactor that "tidies"
+    // the 0 into `engine.attempts` must go red.
+    expect(stateOf(events).nodes.b?.attempts).toBe(1);
+    expect(b!.attempts).toBe(0);
+  });
+
+  it('keeps the folded rows FIRST and in their own order, with the engine-only rows after', () => {
+    const events = aSucceededLog();
+    const reconciled = reconcileNodeActivity(deriveNodeActivity(events), stateOf(events));
+    expect(reconciled.map((n) => n.nodeId)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('lets the ENGINE settle the status, since it sees routing and the doc and the fold does not', () => {
+    const events = aSucceededLog();
+    const reconciled = reconcileNodeActivity(
+      [row({ nodeId: 'a', status: 'failure' })],
+      stateOf(events),
+    );
+    expect(reconciled[0]!.status).toBe('success');
+  });
+
+  it('overrides ONLY the status — every column the projection does not carry stays the fold’s', () => {
+    // The projection discards the failure message, its F0 class, the streamed
+    // output count and the declared outputs. Taking the row wholesale from
+    // `NodeRunState` would trade a rich row for a poorer one to buy a
+    // consistency nothing was violating.
+    const events = aSucceededLog();
+    const rich = row({
+      nodeId: 'a',
+      status: 'failure',
+      attempts: 3,
+      outputs: 2,
+      lastOutputName: 'text',
+      error: 'boom',
+      failureKind: 'transient',
+      failureCode: 'rate_limit',
+      outputValues: { body: 'hi' },
+      instanceId: 'a@1',
+    });
+    const [reconciled] = reconcileNodeActivity([rich], stateOf(events));
+    expect(reconciled).toEqual({ ...rich, status: 'success' });
+  });
+
+  it('leaves a row the projection has NO opinion about exactly as folded', () => {
+    // A parallel foreach's body node is the real case: `seedState` deliberately
+    // skips `parallelChildIds`, and the per-item keys its state lives under are
+    // deleted as items complete — so `state.nodes[bare]` is absent whether the
+    // node has never run, is running, or has finished. Reading absent as
+    // `pending` would blank exactly the rows a parallel foreach lights up.
+    const events = aSucceededLog();
+    const body = row({ nodeId: 'w', status: 'dispatched', instanceId: 'w@1' });
+    const [reconciled] = reconcileNodeActivity([body], stateOf(events));
+    expect(reconciled).toEqual(body);
+  });
+
+  it('credits a parked call node its attempt, since a `startChild` park announces itself to nobody', () => {
+    /* The one status whose absence from the fold does NOT mean "nothing started
+       it": the engine parks a `call_pipeline` node with a COMMAND and appends
+       no event until `call.returned`, bumping `attempts` as it does. Rendering
+       0 would say "waiting (child run) · 0 attempts" over a child run that is
+       genuinely on its first attempt. */
+    const events = aSucceededLog();
+    const state = stateOf(events);
+    const parked = {
+      ...state,
+      nodes: {
+        ...state.nodes,
+        child: { status: 'waiting' as const, attempts: 1, retries: 0 },
+      },
+    };
+    const child = reconcileNodeActivity([], parked).find((n) => n.nodeId === 'child');
+    expect(child!.status).toBe('waiting');
+    expect(child!.attempts).toBe(1);
+
+    // …and the exception is NARROW: every other seeded status still reports 0,
+    // because the engine bumps its counter at READY and this column counts
+    // starts. `b` is ready with `engine.attempts === 1`.
+    const b = reconcileNodeActivity([], parked).find((n) => n.nodeId === 'b');
+    expect(b!.attempts).toBe(0);
+  });
+
+  it('does not mint a row for an INSTANCE key — `w@1` and `w@2` have no defensible single status', () => {
+    const events = aSucceededLog();
+    const state = stateOf(events);
+    const withInstances = {
+      ...state,
+      nodes: {
+        ...state.nodes,
+        'w@1': { status: 'dispatched' as const, attempts: 1, retries: 0 },
+        'w@2': { status: 'success' as const, attempts: 1, retries: 0 },
+      },
+    };
+    const ids = reconcileNodeActivity([], withInstances).map((n) => n.nodeId);
+    expect(ids).not.toContain('w@1');
+    expect(ids).not.toContain('w@2');
+    expect(ids).not.toContain('w');
   });
 });
