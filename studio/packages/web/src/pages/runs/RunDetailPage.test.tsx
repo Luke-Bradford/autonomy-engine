@@ -1326,6 +1326,20 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
     expect(within(panel).getByText(/spent SO FAR/)).toBeInTheDocument();
   });
 
+  it('does not qualify a FIGURE when the headline never showed one', async () => {
+    /* Unsettled, and nothing priced — the headline is "Cost unknown" and its own
+       sentence says a number is deliberately not shown. A caveat about "what it
+       has spent SO FAR" would qualify a figure that is not on screen. */
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText(/spent SO FAR/)).not.toBeInTheDocument();
+    // The useful half of the caveat survives, worded for a panel with no figure.
+    expect(within(panel).getByText(/more exchanges may still be billed/)).toBeInTheDocument();
+  });
+
   it('does not caveat a SETTLED node’s spend as still running', async () => {
     const panel = await openPanel([
       dispatched('greet', 'greet#0'),

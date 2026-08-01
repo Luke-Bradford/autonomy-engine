@@ -298,7 +298,13 @@ function CostSection({ node }: { node: NodeActivity }) {
            tail an in-flight node's spend-so-far otherwise reads with exactly the
            confidence of a settled one. */
         <p className="page-hint">
-          This node has not settled, so this is what it has spent SO FAR — not a final figure.
+          {/* Two wordings, because the headline is not always a number. Saying
+              "this is what it has spent so far" directly under "No billed
+              exchange" qualifies a figure that is not on screen — the same
+              contradiction the `lower-bound` sentence above already answers. */}
+          {showsAnAmount(reading)
+            ? 'This node has not settled, so this is what it has spent SO FAR — not a final figure.'
+            : 'This node has not settled, so more exchanges may still be billed to it.'}
         </p>
       )}
     </section>
@@ -334,6 +340,18 @@ function tokenSummary(reading: NodeCostReading, cost: NodeCost): string {
  */
 function statesAnAmount(reading: NodeCostReading): boolean {
   return reading.amount >= 0.000001;
+}
+
+/**
+ * Whether the HEADLINE is a money figure at all.
+ *
+ * Three of the five readings deliberately render words instead of an amount
+ * (`No billed exchange` · `No marginal cost` · `Cost unknown`), as does a
+ * `lower-bound` too small to state. Anything hanging a caveat off "the figure"
+ * has to ask this first, or it qualifies a number that is not on screen.
+ */
+function showsAnAmount(reading: NodeCostReading): boolean {
+  return reading.kind === 'exact' || (reading.kind === 'lower-bound' && statesAnAmount(reading));
 }
 
 /** The headline, which for three readings is deliberately not a money amount. */
