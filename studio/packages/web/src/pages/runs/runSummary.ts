@@ -2,6 +2,7 @@ import {
   docNodeIdOf,
   EngineEventSchema,
   terminalStatusOf,
+  type FailureKind,
   type RunEvent,
   type RunLifecycleStatus,
 } from '@autonomy-studio/shared';
@@ -97,6 +98,44 @@ export interface NodeActivity {
   lastOutputName: string | undefined;
   /** The failure message, once the node has failed. */
   error: string | undefined;
+  /**
+   * #1 F0's machine-readable failure CLASS, off the `node.failed` that set
+   * `error` — the difference between "the provider throttled us" and "the
+   * credential is wrong", which the raw message is not obliged to say.
+   *
+   * `undefined` is a real answer, not a gap. THREE paths reach a failed node
+   * without a stated class: `externalWait.expired`, whose expiry alarm fails the
+   * node directly; `call.returned{childOutcome !== 'success'}`, which reports a
+   * child run's verdict and has no failure of its own to classify; and a
+   * `node.failed` appended before F0 minted the field, whose class the schema's
+   * `.default('permanent')` supplies at the PARSE boundary rather than the
+   * producer. Readers must render the absence rather than substitute a default —
+   * the reducer's own reading of an expired wait as permanent lives in the
+   * reducer, and restating it here would make this a second, drifting authority
+   * on it.
+   */
+  failureKind: FailureKind | undefined;
+  /** The optional machine detail beside `failureKind` (`FAILURE_CODES`, open). */
+  failureCode: string | undefined;
+  /**
+   * The DECLARED outputs of the most recent `node.succeeded` — the node's typed
+   * result contract, distinct from `outputs`/`lastOutputName` above, which count
+   * the streamed `node.output` observability frames.
+   */
+  outputValues: Record<string, unknown> | undefined;
+  /**
+   * The RAW node id the result on show came from, when it differed from the
+   * canvas node id this row folds onto (`w@1` → `w`) — set by EVERY terminal
+   * branch, so a parked or evaluated instance is attributed like a dispatched
+   * one. `undefined` for an ordinary node, so the collapse is named exactly
+   * where it happened instead of being caveated everywhere.
+   *
+   * It names the KEY, not a cause: an `id@n` key is how a parallel foreach's
+   * items are written, but a SEQUENTIAL doc may legitimately carry a literal
+   * `x@2` node id (save-time only refuses those for `batchCount >= 2`), so no
+   * reader may infer "this is a parallel foreach" from its presence.
+   */
+  instanceId: string | undefined;
 }
 
 /**
@@ -139,11 +178,42 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: undefined,
+        instanceId: undefined,
       };
       byNode.set(nodeId, n);
     }
     return n;
   };
+
+  /**
+   * Drop the node's last TERMINAL result, because the node has re-opened. One
+   * helper rather than five assignments at each of the three re-open sites: the
+   * message, its class, the outputs and the instance they came from are one
+   * fact, and splitting them is how a stale kind outlives the message it
+   * classifies.
+   *
+   * Called at the three RE-OPEN sites (dispatch, the retry re-open, the park)
+   * and at the head of EVERY terminal branch. The terminal calls are what keep a
+   * parallel foreach honest: its item instances are not serialised, so
+   * `succeeded w@1` then `failed w@2` folds two instances onto one row and would
+   * otherwise leave a green row carrying w@2's failure — with `instanceId`
+   * confidently attributing the pair to one of them. Deliberately NOT called on
+   * `node.retryScheduled` — the hold keeps its reason on screen (see that case).
+   */
+  const clearResult = (n: NodeActivity): void => {
+    n.error = undefined;
+    n.failureKind = undefined;
+    n.failureCode = undefined;
+    n.outputValues = undefined;
+    n.instanceId = undefined;
+  };
+
+  /** The raw id, when this event came from a foreach ITEM INSTANCE of the node. */
+  const instanceOf = (rawNodeId: string): string | undefined =>
+    docNodeIdOf(rawNodeId) === rawNodeId ? undefined : rawNodeId;
 
   /**
    * A TERMINAL event for a node we never saw start. That happens for the
@@ -167,7 +237,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'running';
         n.attempts += 1;
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'node.output': {
@@ -178,14 +248,29 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       }
       case 'node.succeeded': {
         const n = ensure(e.nodeId);
+        clearResult(n);
         n.status = 'success';
+        n.outputValues = e.outputs;
+        n.instanceId = instanceOf(e.nodeId);
         countIfUnstarted(n); // a `filter`'s only event
         break;
       }
       case 'node.failed': {
         const n = ensure(e.nodeId);
+        clearResult(n);
         n.status = 'failure';
         n.error = e.error;
+        /* `kind` carries `.default('permanent')` in `EngineEventSchema` — a
+           PARSE boundary for failures stored before #1 F0 minted the field, and
+           safe there because `permanent` never retries. It is NOT a fact the
+           producer stated, so reading `e.kind` straight would print a
+           machine-readable class onto an event that never had one. Presence is
+           read off the RAW payload for that reason alone; the VALUE still comes
+           from the parsed event, so this is not a second parser. */
+        const statedKind = (row.payload as { kind?: unknown } | null)?.kind !== undefined;
+        n.failureKind = statedKind ? e.kind : undefined;
+        n.failureCode = e.code;
+        n.instanceId = instanceOf(e.nodeId);
         countIfUnstarted(n); // a `fail` control node's only event
         break;
       }
@@ -198,7 +283,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // retry firing; they differ in the engine, not in what the monitor shows.)
         const n = ensure(e.nodeId);
         n.status = 'running';
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'node.retryScheduled': {
@@ -207,6 +292,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // coming back. `error` is deliberately KEPT: it is the reason for the
         // hold, and the detail column is the only place it appears. It is cleared
         // by the `node.retryDue`/`node.dispatched` that re-open the node.
+        // U24: the failure CLASS is kept for the same reason and cleared by the
+        // same events — `clearResult` moves the whole result as one fact, so the
+        // kind can never outlive the message it classifies.
         ensure(e.nodeId).status = 'retrying';
         break;
       }
@@ -219,7 +307,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'waiting';
         n.attempts += 1;
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'timer.due':
@@ -227,7 +315,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // The park resolved successfully. These ARE the node's success event —
         // there is no following `node.succeeded` for a parked node (reduce.ts
         // `onWaitDue` / `onExternalWaitCompleted` flip it to `success` directly).
-        ensure(e.nodeId).status = 'success';
+        const n = ensure(e.nodeId);
+        clearResult(n);
+        n.status = 'success';
+        n.instanceId = instanceOf(e.nodeId);
         break;
       }
       case 'externalWait.expired': {
@@ -236,8 +327,10 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // to quote), so state the reason rather than leave a red row with a blank
         // detail column.
         const n = ensure(e.nodeId);
+        clearResult(n);
         n.status = 'failure';
         n.error = 'external wait expired before a callback arrived';
+        n.instanceId = instanceOf(e.nodeId);
         break;
       }
       case 'condition.evaluated':
@@ -247,13 +340,25 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // it was folded, control nodes never appeared in this table at all — the
         // author drew them, the run executed them, and the monitor showed nothing.
         const n = ensure(e.nodeId);
+        clearResult(n);
         n.status = 'success';
         n.attempts += 1;
+        n.instanceId = instanceOf(e.nodeId);
         break;
       }
       case 'call.returned': {
         const n = ensure(e.callNodeId);
+        clearResult(n);
         n.status = e.childOutcome === 'success' ? 'success' : 'failure';
+        // A call node's declared outputs arrive on THIS event rather than a
+        // `node.succeeded` — it is the only terminal event a call node gets — so
+        // without this the Outputs section stayed empty on the one activity that
+        // can carry a whole child run's result. Folded on BOTH outcomes, not
+        // gated on success: `call.returned`'s own schema records that a
+        // `failure` child may still carry projected `outputs` (the findings
+        // loop), and gating would silently drop exactly that documented case.
+        n.outputValues = e.outputs;
+        n.instanceId = instanceOf(e.callNodeId);
         countIfUnstarted(n); // a call node's only event
         break;
       }

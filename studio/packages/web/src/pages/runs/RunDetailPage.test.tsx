@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
@@ -276,5 +278,263 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_x" />);
     expect(await screen.findByText(/not found or not accessible/i)).toBeInTheDocument();
+  });
+});
+
+describe('RunDetailPage — U24 the failure class and the node drill-in', () => {
+  /** A run whose `greet` node failed with a full F0 class. */
+  function failedStream(overrides: Partial<EngineEvent & { kind: string }> = {}) {
+    return stream({
+      events: [
+        envelope({
+          type: 'node.dispatched',
+          runId: 'run_1',
+          nodeId: 'greet',
+          attemptId: 'greet#0',
+          idempotent: true,
+        }),
+        envelope({ type: 'node.output', runId: 'run_1', nodeId: 'greet', name: 'chunk', value: 1 }),
+        envelope({
+          type: 'node.failed',
+          runId: 'run_1',
+          nodeId: 'greet',
+          attemptId: 'greet#0',
+          error: 'boom',
+          kind: 'transient',
+          code: 'rate_limit',
+          ...overrides,
+        } as EngineEvent),
+      ],
+    });
+  }
+
+  it('names the failure CLASS in the node table, not just the message', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(await screen.findByText('boom (transient · rate_limit)')).toBeInTheDocument();
+  });
+
+  it('opens a drill-in for the node clicked, and closes it again', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    // The class the table compresses into one line, spelled out as fields.
+    expect(within(panel).getByText('transient')).toBeInTheDocument();
+    expect(within(panel).getByText('rate_limit')).toBeInTheDocument();
+    expect(within(panel).getByText('boom')).toBeInTheDocument();
+
+    await user.click(within(panel).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+  });
+
+  it('shows a succeeded node’s DECLARED outputs — the thing nothing rendered before', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            outputs: { body: 'hello', status: 200 },
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('{"body":"hello","status":200}')).toBeInTheDocument();
+  });
+
+  it('states the ABSENCE of a class rather than inventing one', async () => {
+    // An expired external wait fails the node off its own alarm — there is no
+    // `node.failed` behind it, so there is no kind to show.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'externalWait.created',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            dueAt: 5,
+          }),
+          envelope({
+            type: 'externalWait.expired',
+            runId: 'run_1',
+            nodeId: 'greet',
+            previousAttemptId: 'greet#0',
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText(/without a machine-readable class/i)).toBeInTheDocument();
+  });
+
+  it('names the instance KEY a collapsed result came from, without asserting a cause', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet@1',
+            attemptId: 'greet@1#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.succeeded',
+            runId: 'run_1',
+            nodeId: 'greet@1',
+            attemptId: 'greet@1#0',
+            outputs: { body: 'one item' },
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('greet@1')).toBeInTheDocument();
+    expect(within(panel).getByText(/fold onto the one node you drew/i)).toBeInTheDocument();
+    // It names the KEY, never a cause: a SEQUENTIAL doc may legitimately
+    // carry a literal `x@2` id, so 'a parallel foreach' would be a claim the
+    // doc-free view cannot make.
+    expect(within(panel).queryByText(/parallel foreach's items all/i)).not.toBeInTheDocument();
+  });
+
+  it('the event feed names the failure class too', async () => {
+    useRunStreamMock.mockReturnValue(failedStream());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(
+      await screen.findByText('node=greet error=boom kind=transient code=rate_limit'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('RunDetailPage — U24 the states a single well-formed failure does not cover', () => {
+  it('a failed CALL node gets a Failure section, though it has no message of its own', async () => {
+    // Gating the section on `error` hid it entirely for a call node: the child
+    // run's verdict is the failure, and there is no message to quote.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'call.returned',
+            runId: 'run_1',
+            callNodeId: 'greet',
+            attemptId: 'greet#0',
+            childRunId: 'run_child',
+            childOutcome: 'failure',
+            outputs: {},
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText(/reports another run/i)).toBeInTheDocument();
+  });
+
+  it('keeps the class on screen through a retry HOLD — it is the reason for the hold', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.failed',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            error: 'throttled',
+            kind: 'transient',
+            code: 'rate_limit',
+          }),
+          envelope({
+            type: 'node.retryScheduled',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            nextAttemptAt: 1,
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(
+      await screen.findByRole('cell', { name: 'throttled (transient · rate_limit)' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('retrying')).toBeInTheDocument();
+  });
+
+  it('the OPEN panel tracks the node as later frames arrive', async () => {
+    // The panel resolves its node from the live fold rather than snapshotting a
+    // row, which is the whole reason it can be opened on a running node.
+    const dispatched = envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: [dispatched] }));
+    const user = userEvent.setup();
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    expect(
+      within(screen.getByRole('complementary', { name: /Node greet/ })).getByText('running'),
+    ).toBeInTheDocument();
+
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          dispatched,
+          envelope({
+            type: 'node.failed',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            error: 'boom',
+            kind: 'permanent',
+            code: 'auth',
+          }),
+        ],
+      }),
+    );
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('failure')).toBeInTheDocument();
+    expect(within(panel).getByText('auth')).toBeInTheDocument();
   });
 });

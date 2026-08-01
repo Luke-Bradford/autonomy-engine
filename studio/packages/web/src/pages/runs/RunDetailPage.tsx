@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router';
 import { getRun, getRunDetail } from '../../api/runs';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
-import { eventGloss, formatClock, formatWhen } from './format';
+import { eventGloss, failureClass, formatClock, formatWhen } from './format';
+import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunGraph } from './RunGraph.lazy';
 
 function message(err: unknown): string {
@@ -86,6 +87,16 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const stream = useRunStream(runId);
   const nodes = useMemo(() => deriveNodeActivity(stream.events), [stream.events]);
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
+
+  // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
+  // live fold rather than storing the row itself, so the panel tracks a running
+  // node's state as frames arrive, and a node that leaves the table (a different
+  // run's log replacing this one) closes the panel by simply not resolving.
+  const [openNodeId, setOpenNodeId] = useState<string | null>(null);
+  const openNode = useMemo(
+    () => nodes.find((n) => n.nodeId === openNodeId) ?? null,
+    [nodes, openNodeId],
+  );
   const status: RunLifecycleStatus | string = lifecycle ?? run?.status ?? 'pending';
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
@@ -178,21 +189,50 @@ export function RunDetailPage({ runId }: { runId: string }) {
             </tr>
           </thead>
           <tbody>
-            {nodes.map((n) => (
-              <tr key={n.nodeId}>
-                <td>
-                  <code>{n.nodeId}</code>
-                </td>
-                <td>
-                  <span className={`node-status node-status-${n.status}`}>{n.status}</span>
-                </td>
-                <td>{n.attempts}</td>
-                <td>{n.outputs}</td>
-                <td>{n.error ?? (n.lastOutputName ? `output: ${n.lastOutputName}` : '')}</td>
-              </tr>
-            ))}
+            {nodes.map((n) => {
+              /* U24 — the failure CLASS beside the message. `""` when the
+                 failure carries none, which is a real state (an expired
+                 external wait), so it renders as nothing rather than a guess. */
+              const cls = failureClass(n.failureKind, n.failureCode);
+              return (
+                <tr key={n.nodeId}>
+                  <td>
+                    {/* A real <button> rather than a clickable/aria-ified <tr>:
+                        it takes its accessible name from the node id for free
+                        and is keyboard-operable without inventing key handling. */}
+                    <button
+                      type="button"
+                      className="node-drill-in"
+                      aria-expanded={openNodeId === n.nodeId}
+                      aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
+                      onClick={() => setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId)}
+                    >
+                      <code>{n.nodeId}</code>
+                    </button>
+                  </td>
+                  <td>
+                    <span className={`node-status node-status-${n.status}`}>{n.status}</span>
+                  </td>
+                  <td>{n.attempts}</td>
+                  <td>{n.outputs}</td>
+                  <td>
+                    {n.error !== undefined
+                      ? cls === ''
+                        ? n.error
+                        : `${n.error} (${cls})`
+                      : n.lastOutputName
+                        ? `output: ${n.lastOutputName}`
+                        : ''}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      )}
+
+      {openNode !== null && (
+        <NodeActivityPanel node={openNode} onClose={() => setOpenNodeId(null)} />
       )}
 
       <h3>Events</h3>

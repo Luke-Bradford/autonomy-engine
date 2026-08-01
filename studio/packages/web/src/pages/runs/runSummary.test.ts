@@ -74,6 +74,10 @@ describe('deriveNodeActivity', () => {
         outputs: 2,
         lastOutputName: 'text',
         error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: {},
+        instanceId: undefined,
       },
       {
         nodeId: 'b',
@@ -82,6 +86,12 @@ describe('deriveNodeActivity', () => {
         outputs: 0,
         lastOutputName: undefined,
         error: 'boom',
+        // U24 — the class the message no longer carries. `code` is genuinely
+        // absent here: this producer stated none.
+        failureKind: 'permanent',
+        failureCode: undefined,
+        outputValues: undefined,
+        instanceId: undefined,
       },
     ]);
   });
@@ -146,6 +156,11 @@ describe('deriveNodeActivity', () => {
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        // `{}`, not `undefined`: this event's `outputs` is a REQUIRED record, so
+        // the child genuinely declared none — which the panel renders as "this
+        // node declared no outputs" rather than hiding the section as it does
+        // for a node that has not reported yet.
+        outputValues: {},
       },
     ]);
   });
@@ -324,6 +339,12 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        // The transient failure that opened the loop left NO residue once the
+        // node re-opened and then succeeded — message and class went together.
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: {},
+        instanceId: undefined,
       },
     ]);
   });
@@ -551,5 +572,337 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
       envelope(warned),
     ];
     expect(deriveRunLifecycle(events)).toBe('running');
+  });
+});
+
+describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24 / #1 F0)', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+
+  it('captures `kind` and `code` off `node.failed`, not just the message', () => {
+    // The regression this closes: F0 moved the failure class out of the message
+    // string and into fields, and nothing in the monitor read them — so a
+    // throttled call and a bad credential were indistinguishable on screen.
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+    ];
+    expect(deriveNodeActivity(events)[0]).toMatchObject({
+      error: 'boom',
+      failureKind: 'transient',
+      failureCode: 'rate_limit',
+    });
+  });
+
+  it('leaves `code` undefined when the producer stated none (it is optional)', () => {
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'boom',
+        kind: 'permanent',
+      }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a!.failureKind).toBe('permanent');
+    expect(a!.failureCode).toBeUndefined();
+  });
+
+  it('KEEPS the class through the retry hold, and clears it at both RE-OPEN sites', () => {
+    // `error` is cleared in three branches — `node.dispatched`, the
+    // `retryRequested`/`retryDue` re-open, and the `waitScheduled`/`created`
+    // park — and deliberately KEPT on `retryScheduled` (the hold's reason). This
+    // covers the first two and the hold; the PARK site has its own test below,
+    // because this one never reaches it.
+    const failed: EngineEvent = {
+      type: 'node.failed',
+      runId: 'r',
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'boom',
+      kind: 'transient',
+      code: 'rate_limit',
+    };
+
+    const held = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        nextAttemptAt: 10,
+      }),
+    ])[0];
+    expect(held!).toMatchObject({ status: 'retrying', error: 'boom', failureKind: 'transient' });
+
+    const reopened = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope({
+        type: 'node.retryDue',
+        runId: 'r',
+        nodeId: 'a',
+        previousAttemptId: 'a#0',
+      }),
+    ])[0];
+    expect(reopened!.error).toBeUndefined();
+    expect(reopened!.failureKind).toBeUndefined();
+    expect(reopened!.failureCode).toBeUndefined();
+
+    const redispatched = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope(dispatched('a', 'a#1')),
+    ])[0];
+    expect(redispatched!.failureKind).toBeUndefined();
+    expect(redispatched!.failureCode).toBeUndefined();
+  });
+
+  it('has NO class for an expired external wait — that failure carries no `node.failed`', () => {
+    // #4 A13 fails the node from the expiry alarm itself, so there is no kind to
+    // read. The panel must render the absence rather than manufacture one.
+    const events = [
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 5,
+      }),
+      envelope({
+        type: 'externalWait.expired',
+        runId: 'r',
+        nodeId: 'w',
+        previousAttemptId: 'w#0',
+      }),
+    ];
+    const [w] = deriveNodeActivity(events);
+    expect(w!.status).toBe('failure');
+    expect(w!.error).toBeDefined();
+    expect(w!.failureKind).toBeUndefined();
+  });
+
+  it('captures the DECLARED outputs off `node.succeeded`, distinct from the streamed count', () => {
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({ type: 'node.output', runId: 'r', nodeId: 'a', name: 'text', value: 'hi' }),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        outputs: { text: 'hi there', tokens: 12 },
+      }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a!.outputs).toBe(1); // the streamed observability count, unchanged
+    expect(a!.outputValues).toEqual({ text: 'hi there', tokens: 12 });
+  });
+
+  it('captures a call node DECLARED outputs off `call.returned`, on either outcome', () => {
+    // A call node never gets a `node.succeeded` — `call.returned` is its ONE
+    // terminal event, so it is the only door its outputs can come through. The
+    // `failure` half is not symmetry for its own sake: the event schema records
+    // that a failed child may still carry projected outputs (the findings loop),
+    // so gating the fold on success would drop that documented case silently.
+    const returned = (callNodeId: string, childOutcome: 'success' | 'failure') =>
+      envelope({
+        type: 'call.returned' as const,
+        runId: 'r',
+        callNodeId,
+        attemptId: `${callNodeId}#0`,
+        childRunId: `run_${callNodeId}`,
+        childOutcome,
+        outputs: { findings: 3, report: 'ok' },
+      });
+
+    const [ok, bad] = deriveNodeActivity([returned('c', 'success'), returned('d', 'failure')]);
+    expect(ok!.status).toBe('success');
+    expect(ok!.outputValues).toEqual({ findings: 3, report: 'ok' });
+    expect(bad!.status).toBe('failure');
+    expect(bad!.outputValues).toEqual({ findings: 3, report: 'ok' });
+  });
+
+  it('names the INSTANCE a collapsed result came from, and nothing for an ordinary node', () => {
+    // A parallel foreach's item instances (`w@1`) fold onto the one node the
+    // author drew (`w`), last-write-wins. The row cannot avoid the collapse, but
+    // it can say which instance the result on show belongs to.
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { n: 1 },
+      }),
+    ]);
+    expect(w!.nodeId).toBe('w');
+    expect(w!.instanceId).toBe('w@1');
+
+    const [a] = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
+    ]);
+    expect(a!.instanceId).toBeUndefined();
+  });
+});
+
+describe('deriveNodeActivity — a row that folds TWO instances (U24)', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+
+  // A parallel foreach's item instances are NOT serialised — `reduce-a4b` pins
+  // exactly this interleave — so both terminals land on the one canvas row. Each
+  // terminal must therefore own the WHOLE result: without that, the row keeps
+  // one instance's outputs beside another's failure, and `instanceId` then
+  // attributes the pair to whichever wrote last.
+  it('shows the LAST instance whole, never a green row wearing a red instance’s failure', () => {
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope(dispatched('w@2', 'w@2#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w@2',
+        attemptId: 'w@2#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { v: 1 },
+      }),
+    ]);
+    expect(w!.status).toBe('success');
+    expect(w!.instanceId).toBe('w@1');
+    expect(w!.outputValues).toEqual({ v: 1 });
+    // The red instance's residue must be gone, or the row reads green while its
+    // Detail column quotes a failure.
+    expect(w!.error).toBeUndefined();
+    expect(w!.failureKind).toBeUndefined();
+    expect(w!.failureCode).toBeUndefined();
+  });
+
+  it('and the mirror — a red row carries no earlier instance’s outputs', () => {
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope(dispatched('w@2', 'w@2#0')),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { v: 1 },
+      }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w@2',
+        attemptId: 'w@2#0',
+        error: 'boom',
+        kind: 'transient',
+      }),
+    ]);
+    expect(w!.status).toBe('failure');
+    expect(w!.instanceId).toBe('w@2');
+    expect(w!.failureKind).toBe('transient');
+    expect(w!.outputValues).toBeUndefined();
+  });
+
+  it('attributes a PARKED instance too, not only a dispatched one', () => {
+    // `instanceId` is documented as "the raw id the result came from", so every
+    // terminal branch must set it — a parked `webhook` instance included.
+    const [w] = deriveNodeActivity([
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w@3',
+        attemptId: 'w@3#0',
+        dueAt: 5,
+      }),
+      envelope({
+        type: 'externalWait.expired',
+        runId: 'r',
+        nodeId: 'w@3',
+        previousAttemptId: 'w@3#0',
+      }),
+    ]);
+    expect(w!.nodeId).toBe('w');
+    expect(w!.instanceId).toBe('w@3');
+  });
+
+  it('the PARK clears a previous failure’s class — the third clearResult site', () => {
+    // The two re-open sites are covered above; this is the one a `wait`/`webhook`
+    // reaches, and it is the site the earlier test's title did not actually reach.
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w', 'w#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+      envelope({
+        type: 'timer.waitScheduled',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#1',
+        dueAt: 10,
+      }),
+    ]);
+    expect(w!.status).toBe('waiting');
+    expect(w!.error).toBeUndefined();
+    expect(w!.failureKind).toBeUndefined();
+    expect(w!.failureCode).toBeUndefined();
+  });
+
+  it('a failure stored BEFORE F0 minted `kind` reads as unclassified, not as `permanent`', () => {
+    // `EngineEventSchema` gives `kind` a `.default('permanent')` as a PARSE
+    // boundary for exactly these events. Safe for the reducer, but reading the
+    // parsed value would print a machine-readable class onto an event whose
+    // producer never stated one — an absent fact dressed as a recorded one.
+    const preF0: RunEvent = {
+      id: 'evt_pre',
+      runId: 'r',
+      seq: 900,
+      type: 'node.failed',
+      payload: { type: 'node.failed', runId: 'r', nodeId: 'a', attemptId: 'a#0', error: 'boom' },
+      ts: 900,
+    };
+    const [a] = deriveNodeActivity([envelope(dispatched('a', 'a#0')), preF0]);
+    expect(a!.status).toBe('failure');
+    expect(a!.error).toBe('boom');
+    expect(a!.failureKind).toBeUndefined();
   });
 });

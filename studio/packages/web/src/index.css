@@ -1693,6 +1693,46 @@ td button + button {
 
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
+/* U24 — the node table's drill-in trigger. A real <button> (so it takes its
+   accessible name from the id and is keyboard-operable without inventing key
+   handling), stripped back to read as the ID it opens rather than as a chunky
+   form control — otherwise the Node column stops scanning as a column of ids. */
+.node-drill-in {
+  background: none;
+  border: 1px solid transparent;
+  padding: 0.1rem 0.25rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+/* `:focus-visible` alongside `:hover`, matching `.expression-picker-list li
+   button` — without it the keyboard gets the UA outline while the mouse gets the
+   house style. (No `:not(:disabled)`: this button is never disabled, and the
+   global `button:hover` rule already carries that guard.) */
+.node-drill-in:hover,
+.node-drill-in:focus-visible,
+.node-drill-in[aria-expanded='true'] {
+  border-color: var(--accent);
+}
+
+/* The drill-in panel opens beneath the node table, not inside the row — a
+   <tr>-nested panel would have to be a full-width <td>, and the table is already
+   the page's densest region. */
+.node-detail-panel {
+  margin-top: 0.75rem;
+}
+
+/* A `JSON.stringify` dump has no spaces to break on, so it needs an explicit
+   break opportunity or it pushes the panel sideways — the same fix `.run-meta
+   dd` already carries — plus a cap, since an agent node's output is unbounded. */
+.node-detail-outputs {
+  display: block;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
 /* A small status pill, shared by run-level and node-level state. The colour
    families read at a glance: neutral (pending/waiting), blue (in flight),
    green (success), red (failure/interrupted), muted (skipped). */
