@@ -1394,7 +1394,7 @@ export type RefSuggestion = {
  *  - a `filter`'s `predicate` binds `${item}` per FIELD rather than per node
  *    (`scanFilterRefs`), which a node-level site cannot express — so a filter
  *    outside a foreach body is not offered `${item}` even though its predicate
- *    would accept it. A missed offer, never a false one (#--- follow-up).
+ *    would accept it. A missed offer, never a false one (#864).
  */
 export function availableRefs(
   doc: Pick<PipelineVersion, 'params' | 'nodes' | 'edges' | 'containers'>,
@@ -1416,7 +1416,13 @@ export function availableRefs(
   // `${item}` — the same binding `validateRefs` computes for its `itemInScope`
   // flag: a child of a foreach body, and nothing else at node granularity.
   if (containers.some((c) => c.kind === 'foreach' && c.children.includes(nodeId))) {
-    out.push({ ref: 'item', insert: '${item}', kind: 'item', type: 'any', availability: 'available' });
+    out.push({
+      ref: 'item',
+      insert: '${item}',
+      kind: 'item',
+      type: 'any',
+      availability: 'available',
+    });
   }
 
   // A secret-typed param is REFUSED by `checkRefRoot`, not merely discouraged:

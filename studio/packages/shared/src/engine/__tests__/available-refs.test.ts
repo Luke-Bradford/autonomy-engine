@@ -34,6 +34,10 @@ function producer(id: string, outputs: { name: string; type: string }[]): Node {
   return node(id, { config: { outputs } });
 }
 
+function edge(from: string, to: string, on: 'success' | 'failure' = 'success'): Edge {
+  return { id: `${from}->${to}`, from, to, on };
+}
+
 function doc(over: Partial<Doc> = {}): Doc {
   return { params: [], nodes: [], edges: [], containers: [], ...over };
 }
@@ -70,25 +74,19 @@ const CHAIN = doc({
     producer('b', [{ name: 'count', type: 'number' }]),
     node('c'),
   ],
-  edges: [
-    { from: 'a', to: 'b', on: 'success' },
-    { from: 'b', to: 'c', on: 'success' },
-  ],
+  edges: [edge('a', 'b'), edge('b', 'c')],
 });
 
 /** `a` reaches `b` only on FAILURE — so a's output is reachable but not guaranteed. */
 const FAILURE_BRANCH = doc({
   nodes: [producer('a', [{ name: 'body', type: 'string' }]), node('b')],
-  edges: [{ from: 'a', to: 'b', on: 'failure' }],
+  edges: [edge('a', 'b', 'failure')],
 });
 
 /** A foreach body child, which is the only site where `${item}` is bound. */
 const FOREACH = doc({
   nodes: [producer('src', [{ name: 'rows', type: 'json' }]), node('body'), node('after')],
-  edges: [
-    { from: 'src', to: 'loop', on: 'success' },
-    { from: 'loop', to: 'after', on: 'success' },
-  ],
+  edges: [edge('src', 'loop'), edge('loop', 'after')],
   containers: [
     {
       id: 'loop',
@@ -103,7 +101,7 @@ const FOREACH = doc({
 /** `plain` carries NO outputs key — an `absent` contract, whose names are unknowable. */
 const ABSENT_CONTRACT = doc({
   nodes: [node('plain'), node('reader')],
-  edges: [{ from: 'plain', to: 'reader', on: 'success' }],
+  edges: [edge('plain', 'reader')],
 });
 
 const FIXTURES: [string, Doc][] = [

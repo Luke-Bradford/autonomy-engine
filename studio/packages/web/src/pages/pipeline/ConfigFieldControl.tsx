@@ -1,4 +1,20 @@
+import { useEffect, useRef } from 'react';
+import type { RefSuggestion } from '@autonomy-studio/shared';
 import type { ConfigField } from './configForm';
+import { ExpressionPicker } from './ExpressionPicker';
+import { applyInsert, type InsertMode } from './expressionInsert';
+
+/**
+ * Everything the U8a flyout needs that only the OWNING panel can supply: the
+ * references legal at this node, how to name them, and how to probe a field's
+ * shape. Passed as one optional object so a panel with no expression context
+ * (`ContainerPanel`, whose container fields are #864) simply omits it.
+ */
+export type FieldPicker = {
+  suggestions: RefSuggestion[];
+  describe: (suggestion: RefSuggestion) => string;
+  resolveMode: (fieldName: string) => InsertMode;
+};
 
 /**
  * One derived config control (U7).
@@ -24,12 +40,28 @@ export function ConfigFieldControl({
   field,
   value,
   onChange,
+  picker,
 }: {
   field: ConfigField;
   value: string | boolean;
   onChange: (next: string | boolean) => void;
+  picker?: FieldPicker;
 }) {
   const label = field.optional ? `${field.name} (optional)` : field.name;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret must land after an insert. The textarea is CONTROLLED, so
+  // the new value has to round-trip through the owner's state before the DOM
+  // selection can be moved — setting it inline would be overwritten by the
+  // re-render. Held in a ref rather than state so restoring it does not itself
+  // cause one.
+  const caret = useRef<number | null>(null);
+  useEffect(() => {
+    const at = caret.current;
+    if (at === null || textareaRef.current === null) return;
+    caret.current = null;
+    textareaRef.current.focus();
+    textareaRef.current.setSelectionRange(at, at);
+  });
 
   if (field.kind === 'boolean') {
     return (
@@ -83,17 +115,45 @@ export function ConfigFieldControl({
   }
 
   const hint = field.kind === 'json' ? 'JSON' : field.kind === 'stringList' ? 'one per line' : null;
+  const text = typeof value === 'string' ? value : '';
 
   return (
-    <label>
-      {hint === null ? label : `${label} — ${hint}`}
-      <textarea
-        value={typeof value === 'string' ? value : ''}
-        rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
-        spellCheck={false}
-        placeholder={field.defaultText}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
+    <div className="config-field">
+      <label>
+        {hint === null ? label : `${label} — ${hint}`}
+        <textarea
+          ref={textareaRef}
+          value={text}
+          rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
+          spellCheck={false}
+          placeholder={field.defaultText}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+      {/* A SIBLING of the label, not a child: a button inside a `<label>` still
+          triggers the label's focus behaviour, which would fight the picker. */}
+      {picker && (
+        <ExpressionPicker
+          fieldName={field.name}
+          suggestions={picker.suggestions}
+          describe={picker.describe}
+          resolveMode={() => picker.resolveMode(field.name)}
+          onSelect={(insert, mode) => {
+            // The selection survives the toggle click (focus moves, the caret
+            // does not), so a mid-string insert lands where the author left it.
+            const el = textareaRef.current;
+            const next = applyInsert(
+              text,
+              el?.selectionStart ?? text.length,
+              el?.selectionEnd ?? text.length,
+              insert,
+              mode,
+            );
+            caret.current = next.caret;
+            onChange(next.value);
+          }}
+        />
+      )}
+    </div>
   );
 }

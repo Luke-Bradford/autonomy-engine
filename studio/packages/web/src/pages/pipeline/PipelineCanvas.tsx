@@ -5,8 +5,10 @@ import {
   ContainerKindSchema,
   OutputTypeSchema,
   ParamTypeSchema,
+  availableRefs,
   getActivity,
   isStructuralCallActivity,
+  type RefSuggestion,
   type Container,
   type ConnectionPublic,
   type ContainerKind,
@@ -26,8 +28,10 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
-import { ConfigFieldControl } from './ConfigFieldControl';
+import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { ContainerPanel } from './ContainerPanel';
+import { activityLabel } from './activityLabel';
+import { insertModeFor } from './expressionInsert';
 import {
   assembleConfig,
   deriveConfigFields,
@@ -1041,6 +1045,57 @@ function ContainerSection({
 }
 
 /**
+ * The U8a flyout's context for one node: which references are legal here, how to
+ * NAME each, and how to tell whether a given field takes a whole expression.
+ *
+ * Naming lives on this side of the boundary deliberately. `availableRefs`
+ * returns identity only — a node's operator-facing name comes from the activity
+ * catalog (`activityLabel`, the same text its box carries) and a container's
+ * from `containerLabels`' document-order ordinals, neither reachable from
+ * `shared`. Computing a label there would be a second answer to "what is this
+ * node called", free to disagree with the canvas.
+ */
+function useExpressionPicker(
+  nodes: Node[],
+  edges: Edge[],
+  containers: Container[],
+  params: Param[],
+  nodeId: string,
+): FieldPicker {
+  return useMemo(() => {
+    const doc = { params, nodes, edges, containers };
+    const suggestions = availableRefs(doc, { kind: 'node', nodeId });
+    const labels = containerLabels(containers);
+    const nodeNames = new Map(nodes.map((n) => [n.id, activityLabel(n)]));
+    const producerName = (id: string) => nodeNames.get(id) ?? labels.get(id) ?? id;
+
+    return {
+      suggestions,
+      describe: (s: RefSuggestion) => {
+        if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
+        if (s.kind === 'nodeStatus') return `${producerName(s.producerId ?? '')} → status`;
+        if (s.kind === 'item') return 'item — the element this round is processing';
+        return s.name ?? s.ref;
+      },
+      // Probed only when a flyout OPENS, not per render: each call runs the
+      // whole-doc validator twice, and a field's shape cannot change underneath
+      // an open list.
+      resolveMode: (fieldName: string) =>
+        insertModeFor((value) =>
+          validateCanvas(
+            nodes.map((n) =>
+              n.id === nodeId ? { ...n, config: { ...n.config, [fieldName]: value } } : n,
+            ),
+            edges,
+            containers,
+            params,
+          ),
+        ),
+    };
+  }, [nodes, edges, containers, params, nodeId]);
+}
+
+/**
  * Editor for one activity node.
  *
  * Settings are authored through a FORM derived from the activity's own
@@ -1077,6 +1132,15 @@ export function NodePanel({
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
   const { outputs, ...editable } = config;
+
+  // U8a — the whole doc, read reactively, because which references are legal
+  // here is a property of the GRAPH: adding an upstream edge changes the answer
+  // while this panel is open.
+  const docNodes = useStore(store, (s) => s.nodes);
+  const docEdges = useStore(store, (s) => s.edges);
+  const docContainers = useStore(store, (s) => s.containers);
+  const docParams = useStore(store, (s) => s.params);
+  const picker = useExpressionPicker(docNodes, docEdges, docContainers, docParams, nodeId);
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -1273,6 +1337,7 @@ export function NodePanel({
               field={field}
               value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
               onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+              picker={picker}
             />
           ))}
         </div>

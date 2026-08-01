@@ -20,6 +20,11 @@
   --error: #ff6b6b;
   --success: #58d68d;
   --warning: #f0b429;
+  /* U8a — the drop shadow that lifts a field-anchored flyout off the panel
+     behind it. A colour, so it belongs in the palette rather than inline in the
+     rule: dark mode casts a BLACK shadow, which is invisible against a light
+     surface, so light mode needs its own. */
+  --shadow: rgba(0, 0, 0, 0.25);
   /* U6a — business BRANCH edges. A neutral hue, deliberately not green/red:
      those are taken by success/failure, and a branch is a routing decision, not
      an outcome. Graphical (a ~1.5px stroke), so the bar is WCAG 1.4.11's 3:1
@@ -74,6 +79,9 @@
      5.75:1 on `--bg` — rather than a brighter one that reads as amber but fails
      the pills' small text. Both numbers are asserted in `e2e/bug-sweep.spec.ts`. */
   --warning: #8a5300;
+  /* A softer black on a light surface: the same 25% alpha reads as a smudge
+     against white, where the panel edge is already doing most of the lifting. */
+  --shadow: rgba(0, 0, 0, 0.15);
   /* Darkened for a WHITE canvas surface (#ffffff), the same reason every hue
      above is darkened for `--bg`. */
   --branch: #6b3fa0;
@@ -1876,4 +1884,89 @@ td button + button {
 
 .run-container-failure {
   border-color: var(--error);
+}
+
+/* U8a — the expression-insert flyout. The field wrapper exists because the
+   picker's toggle must be a SIBLING of the label rather than a child: a button
+   inside a `<label>` also triggers the label's focus behaviour, which would
+   fight the control it is meant to serve. It inherits the column direction its
+   bare `<label>` had inside `.contract-section`, so wrapping changes no
+   layout. */
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.expression-picker {
+  position: relative;
+}
+
+.expression-picker-toggle {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.45rem;
+}
+
+/* Anchored to the field rather than portalled: this is field-local chrome, and
+   the epic's z-index policy portals only GLOBAL menus to the body. */
+.expression-picker-list {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  min-width: 18rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 20px var(--shadow);
+}
+
+.expression-picker-list h4 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.expression-picker-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.expression-picker-list li button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  padding: 0.3rem 0.4rem;
+}
+
+.expression-picker-list li button:hover,
+.expression-picker-list li button:focus-visible {
+  border-color: var(--accent);
+}
+
+.expression-picker-type {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* The `default()` wrapping is a real property of the author's graph, not a
+   detail to hide behind a longer string — so it is stated, and warning-coloured
+   for the same reason `.contract-advisory` is. */
+.expression-picker-note {
+  font-size: 0.72rem;
+  color: var(--warning);
 }
