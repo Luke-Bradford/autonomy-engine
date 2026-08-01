@@ -3,11 +3,24 @@ import type { EngineDoc, EngineEvent, RunEvent } from '@autonomy-studio/shared';
 import { projectRun } from './runProjection';
 import {
   deriveNodeActivity,
+  emptyNodeCost,
   deriveRunLifecycle,
   reconcileNodeActivity,
   runStreamUrl,
   type NodeActivity,
 } from './runSummary';
+
+/**
+ * #866 — the three observability fields every row now carries. Spread into the
+ * EXHAUSTIVE whole-row assertions so they stay exhaustive (a `toEqual` that
+ * omitted them would silently stop checking them) without restating a dozen
+ * zeroed cost counters in each case.
+ */
+const NO_LLM_ACTIVITY = {
+  cost: emptyNodeCost(),
+  costSpansInstances: false,
+  toolCalls: [],
+};
 
 let seq = 0;
 /** Wrap a typed EngineEvent in the durable envelope shape the log/stream carry
@@ -92,6 +105,7 @@ describe('deriveNodeActivity', () => {
     const activity = deriveNodeActivity(events);
     expect(activity).toEqual([
       {
+        ...NO_LLM_ACTIVITY,
         nodeId: 'a',
         status: 'success',
         attempts: 1,
@@ -106,6 +120,7 @@ describe('deriveNodeActivity', () => {
         endedAtMs: 1_400,
       },
       {
+        ...NO_LLM_ACTIVITY,
         nodeId: 'b',
         status: 'failure',
         attempts: 1,
@@ -174,6 +189,7 @@ describe('deriveNodeActivity', () => {
     ];
     expect(deriveNodeActivity(events)).toEqual([
       {
+        ...NO_LLM_ACTIVITY,
         nodeId: 'c',
         status: 'failure',
         // 1, not 0, since #483: a call node is never dispatched, so `call.returned`
@@ -450,6 +466,7 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
     ];
     expect(deriveNodeActivity(events)).toEqual([
       {
+        ...NO_LLM_ACTIVITY,
         nodeId: 'a',
         status: 'success',
         attempts: 2,
@@ -1129,6 +1146,17 @@ describe('reconcileNodeActivity', () => {
     expect(c!.status).toBe('skipped');
   });
 
+  it('#866 — a SYNTHESIZED row carries an empty cost and no tool calls, as measured', () => {
+    const reconciled = reconcileNodeActivity(deriveNodeActivity(aSucceededLog()), stateOf(aSucceededLog()));
+    const c = reconciled.find((n) => n.nodeId === 'c');
+    // The row exists BECAUSE no event named this node, so nothing billed under
+    // it: an empty cost is the measurement, not a stand-in for a missing one.
+    expect(c!.cost).toEqual(emptyNodeCost());
+    expect(c!.cost.complete).toBe(true);
+    expect(c!.costSpansInstances).toBe(false);
+    expect(c!.toolCalls).toEqual([]);
+  });
+
   it('gives a node that never started a row, rather than leaving the operator to infer it', () => {
     const events = aSucceededLog();
     const reconciled = reconcileNodeActivity(deriveNodeActivity(events), stateOf(events));
@@ -1552,5 +1580,258 @@ describe('deriveNodeActivity — duration span (#867)', () => {
     const row = rowFor(events, 'w');
     expect(row.startedAtMs).toBe(1_000);
     expect(row.endedAtMs).toBe(1_400);
+  });
+});
+
+describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
+  const started: EngineEvent = {
+    type: 'run.started',
+    runId: 'r',
+    pipelineVersionId: 'pv',
+    params: {},
+  };
+  const dispatch = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+  const metered = (nodeId: string, fields: Partial<EngineEvent> = {}): EngineEvent =>
+    ({
+      type: 'activity.metered',
+      runId: 'r',
+      nodeId,
+      attemptId: `${nodeId}#0`,
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    }) as EngineEvent;
+  const toolCall = (nodeId: string, fields: Partial<EngineEvent> = {}): EngineEvent =>
+    ({
+      type: 'activity.toolCalled',
+      runId: 'r',
+      nodeId,
+      attemptId: `${nodeId}#0`,
+      round: 0,
+      toolName: 'read_file',
+      argsChars: 12,
+      resultChars: 340,
+      isError: false,
+      ...fields,
+    }) as EngineEvent;
+  const rowFor = (events: EngineEvent[], nodeId: string): NodeActivity => {
+    const row = deriveNodeActivity(events.map((e) => envelope(e))).find((r) => r.nodeId === nodeId);
+    if (row === undefined) throw new Error(`no row for ${nodeId}`);
+    return row;
+  };
+
+  it('attributes a metered response to the node that billed it', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('n1', 'n1#0'),
+        metered('n1', { inputTokens: 100, outputTokens: 20, costEstimate: 0.0055 }),
+        { type: 'node.succeeded', runId: 'r', nodeId: 'n1', attemptId: 'n1#0', outputs: {} },
+      ],
+      'n1',
+    );
+    expect(row.cost.responseCount).toBe(1);
+    expect(row.cost.totalCostEstimate).toBeCloseTo(0.0055, 10);
+    expect(row.cost.inputTokens).toBe(100);
+    expect(row.cost.complete).toBe(true);
+    expect(row.cost.models).toEqual(['claude-opus-4-8']);
+  });
+
+  it('does NOT spread one node’s cost across the others', () => {
+    const rows = deriveNodeActivity(
+      [
+        started,
+        dispatch('n1', 'n1#0'),
+        dispatch('n2', 'n2#0'),
+        metered('n1', { inputTokens: 5, outputTokens: 5, costEstimate: 0.25 }),
+      ].map((e) => envelope(e)),
+    );
+    expect(rows.find((r) => r.nodeId === 'n1')?.cost.totalCostEstimate).toBeCloseTo(0.25, 10);
+    expect(rows.find((r) => r.nodeId === 'n2')?.cost.totalCostEstimate).toBe(0);
+    expect(rows.find((r) => r.nodeId === 'n2')?.cost.responseCount).toBe(0);
+  });
+
+  it('SUMS across a retry — the money was spent on each attempt', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('n1', 'n1#0'),
+        metered('n1', { attemptId: 'n1#0', inputTokens: 10, outputTokens: 1, costEstimate: 0.01 }),
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'n1',
+          attemptId: 'n1#0',
+          message: 'throttled',
+          kind: 'transient',
+        },
+        dispatch('n1', 'n1#1'),
+        metered('n1', { attemptId: 'n1#1', inputTokens: 10, outputTokens: 1, costEstimate: 0.02 }),
+        { type: 'node.succeeded', runId: 'r', nodeId: 'n1', attemptId: 'n1#1', outputs: {} },
+      ],
+      'n1',
+    );
+    // The re-open resets the node's RESULT (error/outputs), never its spend.
+    expect(row.error).toBeUndefined();
+    expect(row.cost.responseCount).toBe(2);
+    expect(row.cost.totalCostEstimate).toBeCloseTo(0.03, 10);
+  });
+
+  it('folds a parallel foreach ITEM instance’s spend onto the canvas node, summed', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('w@1', 'w@1#0'),
+        dispatch('w@2', 'w@2#0'),
+        metered('w@1', { inputTokens: 1, outputTokens: 1, costEstimate: 0.1 }),
+        metered('w@2', { inputTokens: 1, outputTokens: 1, costEstimate: 0.2 }),
+      ],
+      'w',
+    );
+    expect(row.cost.responseCount).toBe(2);
+    expect(row.cost.totalCostEstimate).toBeCloseTo(0.3, 10);
+    // The panel must be able to SAY the sum spans instances, because the row's
+    // own outputs are one instance's, not all of them.
+    expect(row.costSpansInstances).toBe(true);
+  });
+
+  it('does not claim an instance span for an ordinary node', () => {
+    const row = rowFor(
+      [started, dispatch('n1', 'n1#0'), metered('n1', { costEstimate: 0.1 })],
+      'n1',
+    );
+    expect(row.costSpansInstances).toBe(false);
+  });
+
+  it('records the token-REPORT count, so an agent_cli’s absent counts are not zeros', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('a1', 'a1#0'),
+        // `cliSpendFact` — provider `agent_cli`, unpriced, NO token counts at all.
+        metered('a1', { provider: 'agent_cli', model: 'claude', meteringStatus: 'unpriced' }),
+      ],
+      'a1',
+    );
+    expect(row.cost.responseCount).toBe(1);
+    expect(row.cost.inputTokens).toBe(0);
+    expect(row.cost.tokenReportedResponseCount).toBe(0);
+    expect(row.cost.providers).toEqual(['agent_cli']);
+    // An unpriced subscription call is NOT a measurement gap.
+    expect(row.cost.complete).toBe(true);
+    expect(row.cost.unpricedResponseCount).toBe(1);
+  });
+
+  it('creates NO row for a metered event naming a node the fold never saw', () => {
+    // Unreachable in production (`node.dispatched` precedes any activity event
+    // and the stream replays uncapped), but the rule is the one the inert
+    // `activity.*` group has always had: observability never invents a node.
+    expect(deriveNodeActivity([envelope(metered('ghost', { costEstimate: 1 }))])).toEqual([]);
+  });
+
+  it('lists tool calls in log order with their round, attempt and instance', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('n1', 'n1#0'),
+        toolCall('n1', { round: 0, toolName: 'read_file' }),
+        toolCall('n1', { round: 0, toolName: 'grep', isError: true, resultChars: 9 }),
+        toolCall('n1', { round: 1, toolName: 'write_file', callId: 'toolu_1' }),
+      ],
+      'n1',
+    );
+    expect(row.toolCalls).toEqual([
+      {
+        round: 0,
+        toolName: 'read_file',
+        callId: undefined,
+        isError: false,
+        argsChars: 12,
+        resultChars: 340,
+        attempt: 1,
+        instanceId: undefined,
+      },
+      {
+        round: 0,
+        toolName: 'grep',
+        callId: undefined,
+        isError: true,
+        argsChars: 12,
+        resultChars: 9,
+        attempt: 1,
+        instanceId: undefined,
+      },
+      {
+        round: 1,
+        toolName: 'write_file',
+        callId: 'toolu_1',
+        isError: false,
+        argsChars: 12,
+        resultChars: 340,
+        attempt: 1,
+        instanceId: undefined,
+      },
+    ]);
+  });
+
+  it('stamps the ATTEMPT, so a retry’s repeated round 0 is not ambiguous', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('n1', 'n1#0'),
+        toolCall('n1', { attemptId: 'n1#0', round: 0 }),
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'n1',
+          attemptId: 'n1#0',
+          message: 'boom',
+          kind: 'transient',
+        },
+        dispatch('n1', 'n1#1'),
+        toolCall('n1', { attemptId: 'n1#1', round: 0 }),
+      ],
+      'n1',
+    );
+    expect(row.toolCalls.map((t) => t.attempt)).toEqual([1, 2]);
+  });
+
+  it('stamps the INSTANCE, so sibling foreach items’ colliding rounds are separable', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('w@1', 'w@1#0'),
+        dispatch('w@2', 'w@2#0'),
+        toolCall('w@1', { round: 0 }),
+        toolCall('w@2', { round: 0 }),
+      ],
+      'w',
+    );
+    expect(row.toolCalls.map((t) => t.instanceId)).toEqual(['w@1', 'w@2']);
+  });
+
+  it('creates NO row for a tool call naming a node the fold never saw', () => {
+    expect(deriveNodeActivity([envelope(toolCall('ghost'))])).toEqual([]);
+  });
+
+  it('keeps a node with no LLM activity at an empty, complete cost and no tool calls', () => {
+    const row = rowFor(
+      [
+        started,
+        dispatch('h1', 'h1#0'),
+        { type: 'node.succeeded', runId: 'r', nodeId: 'h1', attemptId: 'h1#0', outputs: {} },
+      ],
+      'h1',
+    );
+    expect(row.cost.responseCount).toBe(0);
+    expect(row.cost.complete).toBe(true);
+    expect(row.toolCalls).toEqual([]);
   });
 });

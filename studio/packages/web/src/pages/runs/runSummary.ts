@@ -1,12 +1,17 @@
 import {
+  accumulateMetered,
   docNodeIdOf,
+  emptyMeteredTotals,
   EngineEventSchema,
+  nodeCostFromTotals,
   parseInstanceKey,
   TERMINAL_NODE,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
   type EngineEvent,
   type FailureKind,
+  type MeteredTotals,
+  type NodeCost,
   type NodeRunStatus,
   type RunEvent,
   type RunLifecycleStatus,
@@ -187,7 +192,91 @@ export interface NodeActivity {
    */
   startedAtMs: number | undefined;
   endedAtMs: number | undefined;
+  /**
+   * #866 — what this node SPENT: the `activity.metered` responses billed under
+   * it, folded through the shared fail-closed accumulator so the per-node and
+   * per-run readings cannot drift (`pricing/run-cost.ts` owns the rule).
+   *
+   * A node with no LLM activity holds an EMPTY cost, which is the true answer —
+   * zero billed exchanges, `complete: true`, nothing to price. It is not a
+   * "cost unknown": nothing was expected to be priced. The panel decides whether
+   * that is worth rendering.
+   *
+   * SUMMED ACROSS ATTEMPTS, deliberately, unlike the result fields above which
+   * `resetForNewAttempt` clears when a node re-opens. A retry re-runs the work
+   * and the provider bills again; dropping attempt n's spend when attempt n+1
+   * starts would under-report real money. `RunCost.responseCount` says the same
+   * thing at run level ("billed exchanges … the money was spent each time").
+   */
+  cost: NodeCost;
+  /**
+   * Whether any of that spend arrived under an INSTANCE key (`w@1`), i.e. from a
+   * parallel foreach ITEM rather than the canvas node itself.
+   *
+   * It exists because this row folds every item onto one node (`ensure`), and
+   * the two things the panel shows about such a row then have DIFFERENT scopes:
+   * `outputValues`/`instanceId` are ONE item's, last-write-wins, while the cost
+   * is ALL of them summed. Summing is right for money — every item's charge is
+   * real — but a panel that states both without qualification asserts two
+   * incompatible scopes about one row, so the fact is recorded rather than left
+   * for the reader to infer.
+   */
+  costSpansInstances: boolean;
+  /**
+   * #866 — the tool calls an LLM node's loop made, in LOG ORDER.
+   *
+   * `activity.toolCalled` carries `toolName`/`round`/`callId`/`isError` IN THE
+   * CLEAR; only the args/result payloads are reduced to chars + hash. So "which
+   * tools ran, in which exchange, which errored" is renderable today, and this
+   * is the fold that makes it so.
+   */
+  toolCalls: NodeToolCall[];
 }
+
+/**
+ * One `activity.toolCalled` fact, flattened for rendering.
+ *
+ * The args/result HASHES are deliberately not carried: they are fingerprints for
+ * drift correlation, not content, and a sha256 on screen is not worth a column.
+ * The CHAR counts are, because size is the one thing about an opaque payload a
+ * reader can act on.
+ */
+export interface NodeToolCall {
+  /**
+   * The 0-based provider-EXCHANGE index that requested the call. NOT unique on
+   * its own — it restarts at 0 on every attempt, and sibling foreach instances
+   * run their own exchanges concurrently — which is why `attempt` and
+   * `instanceId` sit beside it.
+   */
+  round: number;
+  /** The executed tool name. `''` for a structurally nameless (malformed) call. */
+  toolName: string;
+  /** The provider's call id, ABSENT where the provider issues none (Ollama). */
+  callId: string | undefined;
+  /** Whether the result fed back to the model was an ERROR tool_result. */
+  isError: boolean;
+  argsChars: number;
+  resultChars: number;
+  /**
+   * Which ATTEMPT of the node made this call (1-based, the node's `attempts` at
+   * the time it was appended). A retry re-runs the tool loop from round 0, so
+   * without this the list carries duplicate rounds with nothing distinguishing
+   * them.
+   */
+  attempt: number;
+  /** The foreach ITEM key (`w@1`) this call came from, `undefined` otherwise. */
+  instanceId: string | undefined;
+}
+
+/** The cost of a node nothing billed under: zero exchanges, complete, $0. */
+export function emptyNodeCost(): NodeCost {
+  return nodeCostFromTotals(emptyMeteredTotals());
+}
+
+/** The row shape the fold BUILDS. The three #866 fields are projected once at
+ * the end (from accumulators kept beside the map) rather than mutated in place,
+ * so no caller can be handed a live accumulator. */
+type FoldingNode = Omit<NodeActivity, 'cost' | 'costSpansInstances' | 'toolCalls'>;
 
 /**
  * Fold the node-bearing events into per-node activity, in first-seen order
@@ -196,7 +285,13 @@ export interface NodeActivity {
  * dispatch is not itself an event).
  */
 export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
-  const byNode = new Map<string, NodeActivity>();
+  const byNode = new Map<string, FoldingNode>();
+  /* #866 — the observability accumulators, kept BESIDE the row map rather than
+     on the rows. They are only ever written for a node the fold has already
+     seen start (see the `activity.*` cases), so they cannot conjure a row. */
+  const costByNode = new Map<string, MeteredTotals>();
+  const instanceSpannedCost = new Set<string>();
+  const toolCallsByNode = new Map<string, NodeToolCall[]>();
   // #566 slice 2 / #4 A4b — a PARALLEL foreach's body events carry per-item
   // INSTANCE keys (`w@1`); fold them onto the CANVAS node's row (`w`) so item
   // instances light up the one node the author drew — last-write-wins, the same
@@ -218,7 +313,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   // guard were ever relaxed, a late `externalWait.expired` would flip a green row
   // red here while the reducer treats it as a no-op, and the two views would
   // disagree with nothing failing.
-  const ensure = (rawNodeId: string): NodeActivity => {
+  const ensure = (rawNodeId: string): FoldingNode => {
     const nodeId = docNodeIdOf(rawNodeId);
     let n = byNode.get(nodeId);
     if (!n) {
@@ -533,10 +628,13 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       //     Surfacing container state needs the version doc this page does not
       //     fetch (a P6c follow-up).
       //   - `activity.*` — node-bearing but pure OBSERVABILITY: they say nothing
-      //     about whether the node is running, and folding them would create rows
-      //     for nodes that never started. `node.output` is the one observability
-      //     event folded above, and only because it feeds the `outputs` count and
-      //     the `lastOutputName` progress hint.
+      //     about whether the node is RUNNING, so none of them may set a status
+      //     or create a row. `node.output` is folded above (it feeds the
+      //     `outputs` count and the `lastOutputName` progress hint), and since
+      //     #866 `activity.metered`/`activity.toolCalled` are folded too — into
+      //     the cost/tool accumulators only, and ONLY onto a row that already
+      //     exists. `captured`/`agentTelemetry`/`warned` remain wholly inert
+      //     (#750 pins `warned`'s inertness).
       case 'run.started':
       case 'run.finished':
       case 'run.resumed':
@@ -546,12 +644,49 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'run.reseeded':
       case 'container.timeoutScheduled':
       case 'container.timedOut':
-      case 'activity.metered':
       case 'activity.captured':
       case 'activity.agentTelemetry':
-      case 'activity.toolCalled':
       case 'activity.warned':
         break;
+
+      /* #866 — SPEND. Attributed to an EXISTING row only: `node.dispatched`
+         precedes every activity event the executor emits and the stream replays
+         the log uncapped, so an unrowed metered event is unreachable in practice
+         — but the rule the inert group states ("observability never creates a
+         row") is the one worth keeping, because the alternative invents a node
+         with a manufactured status. */
+      case 'activity.metered': {
+        const target = byNode.get(docNodeIdOf(e.nodeId));
+        if (target === undefined) break;
+        let totals = costByNode.get(target.nodeId);
+        if (totals === undefined) {
+          totals = emptyMeteredTotals();
+          costByNode.set(target.nodeId, totals);
+        }
+        accumulateMetered(totals, e);
+        if (instanceOf(e.nodeId) !== undefined) instanceSpannedCost.add(target.nodeId);
+        break;
+      }
+
+      case 'activity.toolCalled': {
+        const target = byNode.get(docNodeIdOf(e.nodeId));
+        if (target === undefined) break;
+        const list = toolCallsByNode.get(target.nodeId) ?? [];
+        list.push({
+          round: e.round,
+          toolName: e.toolName,
+          callId: e.callId,
+          isError: e.isError,
+          argsChars: e.argsChars,
+          resultChars: e.resultChars,
+          /* The node's attempt count AT APPEND TIME. `node.dispatched` has
+             already bumped it, so the first attempt reads 1. */
+          attempt: target.attempts,
+          instanceId: instanceOf(e.nodeId),
+        });
+        toolCallsByNode.set(target.nodeId, list);
+        break;
+      }
       default: {
         // Unreachable while every member above is named — which is exactly the
         // property being enforced. A new event type makes this assignment fail to
@@ -563,7 +698,20 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     }
   }
 
-  return [...byNode.values()];
+  /* Project the #866 accumulators onto the rows ONCE, at the end. Walking the
+     nodes (a handful) rather than the events (unbounded), so this is not the
+     fourth log fold #849 is about. Each row gets its OWN empty cost rather than
+     a shared constant — a shared object would hand every uncosted node the same
+     mutable `providers`/`models` arrays. */
+  return [...byNode.values()].map((n) => {
+    const totals = costByNode.get(n.nodeId);
+    return {
+      ...n,
+      cost: totals === undefined ? emptyNodeCost() : nodeCostFromTotals(totals),
+      costSpansInstances: instanceSpannedCost.has(n.nodeId),
+      toolCalls: toolCallsByNode.get(n.nodeId) ?? [],
+    };
+  });
 }
 
 /**
@@ -671,6 +819,12 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          never manufactured (#867). */
       startedAtMs: undefined,
       endedAtMs: undefined,
+      /* #866 — likewise. A row reached here because NO event named this node, so
+         nothing billed under it and no tool ran: an empty cost and an empty list
+         are the MEASURED answer here, not a placeholder standing in for one. */
+      cost: emptyNodeCost(),
+      costSpansInstances: false,
+      toolCalls: [],
     });
   }
   return reconciled;
