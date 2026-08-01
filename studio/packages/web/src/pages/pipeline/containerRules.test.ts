@@ -210,7 +210,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toBe(`container 'stage 1': child 'HTTP Request' is not a node in this pipeline`);
+    expect(out).toBe(`container 'stage 1': child 'HTTP Request 1' is not a node in this pipeline`);
   });
 
   it('names an edge by its ENDS, since an edge has no name of its own', () => {
@@ -220,7 +220,23 @@ describe('readableIssue', () => {
       [AB],
       containers,
     );
-    expect(out).toBe(`edge 'HTTP Request → LLM Call': crosses a container boundary`);
+    expect(out).toBe(`edge 'HTTP Request 1 → LLM Call 1': crosses a container boundary`);
+  });
+
+  /**
+   * #878 — the defect this whole function exists to prevent, in its last form.
+   * Before `activityLabels`, an issue naming two `http_request` nodes rendered
+   * one word twice: literally true, and no more actionable than the two uuids it
+   * replaced.
+   */
+  it('tells two activities of the SAME type apart', () => {
+    const out = readableIssue(
+      `edge 'n_a' → 'n_d' is broken`,
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(`edge 'HTTP Request 1' → 'HTTP Request 2' is broken`);
   });
 
   it('leaves a quoted token that resolves to nothing exactly as it was', () => {
@@ -247,7 +263,7 @@ describe('readableIssue', () => {
 
   it('falls back to the raw type for an activity the catalog does not know', () => {
     const out = readableIssue(`node 'n_c' is broken`, [C], [], []);
-    expect(out).toBe(`node 'not_in_catalog' is broken`);
+    expect(out).toBe(`node 'not_in_catalog 1' is broken`);
   });
 });
 
@@ -272,10 +288,10 @@ describe('consequenceMessage', () => {
 
   /**
    * #840 — the two arms that did not exist. Both sentences are QUALITATIVE: they
-   * name no activity, because there is no identifying name to give one.
-   * `activityLabel` is keyed on TYPE, so three `http_request` nodes are all
-   * "HTTP Request" — enumerating them would be a confident false claim about
-   * which activity moved, which is worse than describing the change in general.
+   * name no activity. `activityLabels` (#878) now mints a name that could be
+   * enumerated and `RoutingChange` carries the ids, so this is a scope decision
+   * deferred to #881 rather than the hard constraint it was; the assertion stays
+   * to pin the sentence that ships today.
    */
   it('states a routing change between two partitioned shapes', () => {
     const before: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b', 'n_c'] }];
@@ -317,7 +333,7 @@ describe('consequenceMessage', () => {
       containers,
       'You can undo it by setting the activity back to — none —.',
     );
-    expect(msg).toContain('HTTP Request → LLM Call');
+    expect(msg).toContain('HTTP Request 1 → LLM Call 1');
     expect(msg).not.toContain('e_ab');
     expect(msg).toContain('— none —');
   });

@@ -109,10 +109,30 @@ describe('runFlowNodes', () => {
     expect(nodes[0]!.ariaLabel).toContain(NO_STATUS_LABEL);
   });
 
+  /**
+   * #878 — `DOC` is three `http_request` nodes, which is exactly the graph that
+   * used to draw three boxes reading "HTTP Request". A monitor whose job is to
+   * say WHICH node failed cannot name them identically, and the name it uses is
+   * the one the authoring canvas draws.
+   */
+  it('names each activity distinctly, in the label and in the accessible name', () => {
+    const nodes = runFlowNodes(DOC, null);
+    expect(nodes.map((n) => n.data.title)).toEqual([
+      'HTTP Request 1',
+      'HTTP Request 2',
+      'HTTP Request 3',
+    ]);
+    expect(nodes.map((n) => n.ariaLabel)).toEqual([
+      `HTTP Request 1, ${NO_STATUS_LABEL}`,
+      `HTTP Request 2, ${NO_STATUS_LABEL}`,
+      `HTTP Request 3, ${NO_STATUS_LABEL}`,
+    ]);
+  });
+
   it('puts the status in the accessible name, so it is not conveyed by colour alone', () => {
     const nodes = runFlowNodes(DOC, projected());
     // The label is the activity's TITLE (the author canvas's own rule), not its id.
-    expect(nodes.find((n) => n.id === 'a')!.ariaLabel).toBe('HTTP Request, success');
+    expect(nodes.find((n) => n.id === 'a')!.ariaLabel).toBe('HTTP Request 1, success');
   });
 
   it('renders every node UNDRAGGABLE and UNSELECTABLE — this is a monitor', () => {
