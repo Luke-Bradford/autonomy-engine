@@ -792,6 +792,35 @@ td button + button {
   gap: 0.5rem;
 }
 
+/* #439 U14b — the recurrence builder reads as a grouped sub-form within the
+   trigger form (a bare <fieldset> would otherwise inherit the browser default
+   border and collapse its stacked children). */
+.trigger-form .recurrence-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.trigger-form .recurrence-editor legend {
+  padding: 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* The seven day checkboxes wrap as one row rather than stacking seven deep. */
+.trigger-form .recurrence-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .connection-form input,
 .connection-form select,
 .connection-form textarea,

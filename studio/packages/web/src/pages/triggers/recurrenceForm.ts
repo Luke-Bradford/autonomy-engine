@@ -78,9 +78,7 @@ export function blankRecurrenceForm(): RecurrenceFormState {
   };
 }
 
-export type NumberListParse =
-  | { ok: true; values: number[] }
-  | { ok: false; reason: string };
+export type NumberListParse = { ok: true; values: number[] } | { ok: false; reason: string };
 
 /**
  * Parse a comma-separated integer list. A blank input yields an EMPTY list,
@@ -169,8 +167,7 @@ export function pruneForFrequency(
 }
 
 export type RecurrenceConversion =
-  | { ok: true; recurrence: Recurrence }
-  | { ok: false; reason: string };
+  { ok: true; recurrence: Recurrence } | { ok: false; reason: string };
 
 /** The text-list fields, paired with the label an error message should use. */
 const LIST_FIELDS: ReadonlyArray<{
@@ -215,7 +212,8 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   for (const bound of ['startTime', 'endTime'] as const) {
     if (form[bound].trim() === '') continue;
     const iso = localInputToUtcIso(form[bound]);
-    if (iso === null) return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
+    if (iso === null)
+      return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
     candidate[bound] = iso;
   }
 
@@ -263,9 +261,7 @@ const PERIOD_SIMPLE: Record<RecurrenceFrequency, string> = {
   month: 'monthly',
 };
 
-export type CronPreview =
-  | { kind: 'cron'; cron: string }
-  | { kind: 'summary'; text: string };
+export type CronPreview = { kind: 'cron'; cron: string } | { kind: 'summary'; text: string };
 
 /**
  * What to show the operator as "this is the schedule you authored".
