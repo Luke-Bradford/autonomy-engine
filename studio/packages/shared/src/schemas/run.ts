@@ -86,6 +86,44 @@ export const RunSchema = z.object({
 export type Run = z.infer<typeof RunSchema>;
 
 /**
+ * R2 — a run PLUS the human names the Monitor's list needs, resolved server-side
+ * in one query so U10 needn't N+1.
+ *
+ * A `Run` row carries only opaque foreign keys: `pipelineVersionId` identifies
+ * the immutable version, and the pipeline's NAME lives two joins away
+ * (`runs ⋈ pipeline_versions ⋈ pipelines`). The runs list rendered that raw
+ * `pv_…` id as its only identity column, so an operator with more than one
+ * pipeline could not tell their runs apart without opening each one.
+ *
+ * Strictly ADDITIVE over `RunSchema`, which is what makes the
+ * `GET /api/runs` response-shape change safe: every existing reader parsing a
+ * summary through `RunSchema` still succeeds (zod strips the extra keys).
+ *
+ * `triggerName` is NULLABLE and the join behind it must be a LEFT join. Not
+ * every run has a trigger: a rerun deliberately sets `triggerId = null`
+ * (`run/reseed.ts` — "a rerun is an explicit operator action"), a child run is
+ * spawned by its parent, and `runs.trigger_id` is `onDelete: 'set null'`, so a
+ * deleted trigger leaves its runs behind with no name to resolve. An INNER join
+ * here would silently drop exactly those runs from the operator's own list.
+ *
+ * DURATION is deliberately NOT a field. The spec lists it among what the list
+ * shows, but `startedAt`/`finishedAt` already determine it, and a server-stamped
+ * elapsed for a still-running run would be stale the instant it was serialized —
+ * a second, immediately-wrong authority for a value the row already fixes. The
+ * client derives it (`pages/runs/format.ts::formatDuration`).
+ */
+export const RunSummarySchema = RunSchema.extend({
+  pipelineId: z.string().min(1),
+  pipelineName: z.string(),
+  /** The version NUMBER (`pipeline_versions.version`), not its id — what an
+   * operator reads as "v3". */
+  pipelineVersion: z.number().int(),
+  /** `null` for a rerun, a child run, or a run whose trigger has been deleted. */
+  triggerName: z.string().nullable(),
+});
+export type RunSummary = z.infer<typeof RunSummarySchema>;
+
+/**
  * Insert shape: server sets `id` + `startedAt`; `leaseUntil`/`heartbeatAt`/
  * `finishedAt` start `null` (the executor sets them as the run progresses,
  * not at creation); `status` defaults to `'pending'`.

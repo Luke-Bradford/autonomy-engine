@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
 import { computeRunCost, type RunDetail } from '@autonomy-studio/shared';
-import { getRun, listRunDiagnostics, listRunEvents, listRuns } from '../repo/index.js';
+import {
+  getRun,
+  listRunDiagnostics,
+  listRunEvents,
+  listRunSummaries,
+} from '../repo/index.js';
 import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeDocResolver } from '../run/driver.js';
@@ -31,11 +36,27 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
   const resolveDoc = makeDocResolver(db);
 
+  /**
+   * R2 — the Monitor's list read-model. Returns `RunSummary[]`: every field of
+   * the `Run` row PLUS the pipeline's name + version number and the trigger's
+   * name, joined server-side so U10's list needn't N+1 its way to a human label.
+   *
+   * The response shape widened from `Run[]` to `RunSummary[]`, which is safe
+   * because `RunSummarySchema` is a strict `RunSchema.extend` — additive only.
+   * Any reader still parsing an element through `RunSchema` keeps working (zod
+   * strips the extra keys); nothing about the existing fields moved or changed
+   * meaning. The per-run route (`GET /api/runs/:id`) deliberately keeps
+   * returning a bare `Run`: it has no list to de-N+1, and the detail page
+   * already resolves the version doc itself via `/detail`.
+   *
+   * Rows come back newest-first with a total, deterministic tie-break; the
+   * previous route promised an order the query never actually imposed.
+   */
   fastify.get('/api/runs', async (request) => {
     const { pipelineVersionId, triggerId, parentRunId, rerunOf } = ListRunsQuerystringSchema.parse(
       request.query,
     );
-    return listRuns(db, {
+    return listRunSummaries(db, {
       pipelineVersionId,
       triggerId,
       parentRunId,

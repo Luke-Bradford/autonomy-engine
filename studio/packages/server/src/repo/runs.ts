@@ -1,15 +1,17 @@
-import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import {
   NewRunSchema,
   RunLifecyclePatchSchema,
   RunSchema,
+  RunSummarySchema,
   type NewRun,
   type Run,
+  type RunSummary,
   type RunLifecyclePatch,
   type RunStatus,
 } from '@autonomy-studio/shared';
-import { pipelineVersions, runs } from '../db/schema.js';
+import { pipelines, pipelineVersions, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
 import type { Db } from './types.js';
 
@@ -81,6 +83,67 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
           .all()
       : db.select().from(runs).all();
   return rows.map((row) => RunSchema.parse(row));
+}
+
+/**
+ * R2 — `listRuns` as the Monitor's list read-model: every run PLUS the human
+ * names U10's columns need, in ONE query instead of an N+1 walk from the client.
+ *
+ * `runs ⋈ pipeline_versions ⋈ pipelines` is the same two-hop join
+ * `countActiveRunsForPipeline` and `queuedTriggerCandidatesForPipeline` already
+ * use — a run row carries only its immutable `pipelineVersionId`, and the
+ * pipeline identity lives on the version row. Both hops are INNER: the FKs are
+ * `restrict`/`cascade`, so a surviving run necessarily pins both rows.
+ *
+ * The trigger hop is a LEFT JOIN, and that asymmetry is load-bearing.
+ * `runs.trigger_id` is nullable and `onDelete: 'set null'`, and three ordinary
+ * runs have no trigger at all: a rerun (`run/reseed.ts` sets `triggerId = null`
+ * deliberately), a child run, and any run whose trigger was later deleted. An
+ * INNER join would drop every one of them from the operator's own list —
+ * silently, and indistinguishably from "you have no reruns".
+ *
+ * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`),
+ * backed by `runs_started_at_idx`. `listRuns` issues no `ORDER BY` at all, yet
+ * the page consuming it claimed rows arrived "newest-first as the server returns
+ * them" — SQLite's row order is an implementation detail, so that was never a
+ * promise anything kept. The `id` tie-break makes two runs stamped in the same
+ * millisecond stably ordered rather than arbitrarily.
+ *
+ * SECURITY — the ownership proof is the RUN's, exactly as `GET /api/runs/:id/detail`
+ * documents. `ownerId` filters the RUNS table; the joined version and pipeline
+ * are reachable only from a run that filter already cleared, and a run's binding
+ * is established at trigger-create time under `requireOwnedPipelineVersion` and
+ * is immutable thereafter. No owner filter is applied to `pipelines` — a version
+ * row carries no `ownerId` (owner scoping rides the pipeline FK), and filtering
+ * there could only ever DROP one of the caller's own runs from their list.
+ */
+export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummary[] {
+  const conditions = listRunsConditions(filter);
+  const query = db
+    .select({
+      run: runs,
+      pipelineId: pipelines.id,
+      pipelineName: pipelines.name,
+      pipelineVersion: pipelineVersions.version,
+      triggerName: triggers.name,
+    })
+    .from(runs)
+    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+    .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
+    .leftJoin(triggers, eq(runs.triggerId, triggers.id));
+  const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
+    .orderBy(desc(runs.startedAt), desc(runs.id))
+    .all();
+  return rows
+    .map((row) =>
+      RunSummarySchema.parse({
+        ...row.run,
+        pipelineId: row.pipelineId,
+        pipelineName: row.pipelineName,
+        pipelineVersion: row.pipelineVersion,
+        triggerName: row.triggerName,
+      }),
+    );
 }
 
 /**
