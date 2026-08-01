@@ -1,5 +1,5 @@
 import { Position, type NodeHandle } from '@xyflow/react';
-import { containerMembership, type Container, type ContainerKind } from '@autonomy-studio/shared';
+import { containerMembership, type Container } from '@autonomy-studio/shared';
 import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 
 /**
