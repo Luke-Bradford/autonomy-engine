@@ -64,9 +64,7 @@ test.describe('U23 — container config editing', () => {
     const problems = collectPageProblems(page);
     const pipelineId = await openSeededCanvas(page, 'u23 fix in place', {
       nodes: [{ id: 'n_a', position: AT }],
-      containers: [
-        { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 2)}' },
-      ],
+      containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 2)}' }],
     });
 
     await configure(page, 'loop 1');
@@ -93,9 +91,7 @@ test.describe('U23 — container config editing', () => {
     const problems = collectPageProblems(page);
     const pipelineId = await openSeededCanvas(page, 'u23 new fields', {
       nodes: [{ id: 'n_a', position: AT }],
-      containers: [
-        { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' },
-      ],
+      containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
     await configure(page, 'loop 1');
@@ -169,9 +165,7 @@ test.describe('U23 — container config editing', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 refuse', {
       nodes: [{ id: 'n_a', position: AT }],
-      containers: [
-        { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' },
-      ],
+      containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
     await configure(page, 'loop 1');
@@ -196,9 +190,7 @@ test.describe('U23 — container config editing', () => {
         { id: 'n_a', position: AT },
         { id: 'n_b', position: AT2 },
       ],
-      containers: [
-        { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' },
-      ],
+      containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
     await configure(page, 'loop 1');
@@ -220,9 +212,7 @@ test.describe('U23 — container config editing', () => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 harmless', {
       nodes: [{ id: 'n_a', position: AT }],
-      containers: [
-        { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' },
-      ],
+      containers: [{ id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' }],
     });
 
     await configure(page, 'loop 1');
@@ -259,9 +249,9 @@ test.describe('U23 — container config editing', () => {
     await expect(page.locator('.react-flow__node[data-id="loop_2"] .flow-container')).toHaveClass(
       /flow-container--selected/,
     );
-    await expect(page.locator('.react-flow__node[data-id="loop_1"] .flow-container')).not.toHaveClass(
-      /flow-container--selected/,
-    );
+    await expect(
+      page.locator('.react-flow__node[data-id="loop_1"] .flow-container'),
+    ).not.toHaveClass(/flow-container--selected/);
 
     // Switching subjects must carry no draft across — the panel is keyed per
     // container for exactly this.
@@ -271,9 +261,9 @@ test.describe('U23 — container config editing', () => {
 
     await page.locator('.react-flow__pane').click({ position: { x: 8, y: 8 } });
     await expect(page.getByRole('heading', { name: 'loop 1' })).toHaveCount(0);
-    await expect(page.locator('.react-flow__node[data-id="loop_1"] .flow-container')).not.toHaveClass(
-      /flow-container--selected/,
-    );
+    await expect(
+      page.locator('.react-flow__node[data-id="loop_1"] .flow-container'),
+    ).not.toHaveClass(/flow-container--selected/);
     await expectQuiet(page, problems);
   });
 
@@ -315,25 +305,6 @@ test.describe('U23 — container config editing', () => {
     expect(await savedContainers(page, pipelineId)).toEqual([
       { id: 'stage_1', kind: 'stage', children: ['n_a'] },
     ]);
-    await expectQuiet(page, problems);
-  });
-
-  /**
-   * #857's fix, asserted where it is reachable: the `join` picker's accessible
-   * name must be the FIELD, not the field followed by every option. Before the
-   * fix `getByLabel(/^join/)` matched a control named "join (optional) all any".
-   */
-  test('the join picker is named by its field, not by its options', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u23 a11y', {
-      nodes: [{ id: 'n_a', position: AT }],
-      containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'] }],
-    });
-
-    await configure(page, 'stage 1');
-    const join = page.getByLabel('join (optional)', { exact: true });
-    await expect(join).toBeVisible();
-    await expect(join).toHaveRole('combobox');
     await expectQuiet(page, problems);
   });
 });

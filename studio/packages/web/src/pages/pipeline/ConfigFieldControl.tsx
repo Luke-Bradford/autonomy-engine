@@ -50,13 +50,18 @@ export function ConfigFieldControl({
   }
 
   if (field.kind === 'enum') {
-    /* #857 — the label is ASSOCIATED, not WRAPPING, and this is the one control
-       where that matters. A `<label>` containing a `<select>` takes its
-       accessible name from all its text content, which includes every
-       `<option>`; the name of a `mode` picker becomes "mode auto manual off",
-       so `getByLabel('mode')` misses it and a screen reader reads the whole
-       list as the field's name. Wrapping is harmless around an `<input>`
-       (its value is not text content), which is why the other branches keep it. */
+    /* #857 — the label is ASSOCIATED here, not WRAPPING as in the branches
+       below, because a `<label>` containing a `<select>` is the shape that
+       ticket was filed against.
+
+       What is NOT claimed: that this FIXES #857. Measured on this control
+       (Chromium, via the U23 e2e spec) the wrapped shape computes the same
+       accessible name as the associated one — "join (optional)" either way —
+       so no assertion here can tell the two apart, and a test that cannot fail
+       would be worse than none. The explicit association is kept because it is
+       the shape that is robust by construction rather than by the accname
+       algorithm's treatment of an embedded control's value, but #857 stays open
+       and needs re-measuring against the control it was actually reported on. */
     return (
       <>
         <label htmlFor={controlId}>{label}</label>

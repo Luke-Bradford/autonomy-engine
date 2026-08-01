@@ -113,28 +113,25 @@ export function ContainerPanel({
    */
   const unrenderable = unrepresentableFields(fields, stored);
 
+  /**
+   * Seeded ONCE, per mount.
+   *
+   * `NodePanel` pairs its seed with a render-phase re-seed when its `config`
+   * prop changes, and this panel deliberately does NOT — it was written and
+   * then removed, because the two differ in what a prop change MEANS.
+   * `NodePanel`'s subject is `node.config`, which changes only when that config
+   * is replaced. This panel's subject is the whole `Container`, and the store's
+   * copy-on-write actions replace that object for edits the operator did not
+   * make here at all: `deleteNode` pruning a child out of it (#746) mints a new
+   * container, and a re-seed would silently discard an `exitWhen` they were
+   * half-way through typing.
+   *
+   * Switching to a DIFFERENT container is handled by `PropertyPanel`'s `key`,
+   * which remounts — the same mechanism `EdgePanel` and `NodePanel` rely on, and
+   * mutation-proved: removing the key alone leaves the draft carrying across.
+   */
   const [inputs, setInputs] = useState(() => seedFieldInputs(fields, stored));
   const [error, setError] = useState<string | null>(null);
-
-  /**
-   * Re-seed when the container this panel is editing is REPLACED underneath it.
-   *
-   * `PropertyPanel`'s `key` already remounts per container, so this covers the
-   * other direction: the same container's object identity changing, which the
-   * store's copy-on-write actions make mean "this container was rewritten" —
-   * by an apply landing, or by a `deleteNode` pruning a child out of it (#746).
-   * Leaving the draft alone would show values the doc no longer holds.
-   *
-   * A render-phase set-on-prop-change, not an effect: React's derived-state
-   * pattern, which this repo's React 19 lint permits where `useEffect` +
-   * setState would not. `NodePanel` does exactly this with `config`.
-   */
-  const [syncedContainer, setSyncedContainer] = useState(container);
-  if (syncedContainer !== container) {
-    setSyncedContainer(container);
-    setInputs(seedFieldInputs(fields, stored));
-    setError(null);
-  }
 
   function apply() {
     const assembled = assembleConfig(stored, fields, inputs);
