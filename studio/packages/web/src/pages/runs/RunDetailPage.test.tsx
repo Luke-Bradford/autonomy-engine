@@ -18,6 +18,7 @@ vi.mock('../../api/runs', async (importActual) => ({
   getRunDetail: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),
+  rerunFromFailed: vi.fn(),
 }));
 vi.mock('./useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./useRunStream')>()),
@@ -25,6 +26,7 @@ vi.mock('./useRunStream', async (importActual) => ({
 }));
 
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
+const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
 
 let seq = 0;
@@ -1361,5 +1363,93 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
       metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
     ]);
     expect(within(panel).queryByRole('heading', { name: 'Tool calls' })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * RS2 — the rerun action. The engine half (`POST /api/runs/:id/rerun-from-failed`)
+ * shipped with the RS series and had no caller at all, so an operator could not
+ * rerun a failed run from the product.
+ *
+ * NAVIGATION on success is deliberately NOT asserted here: `renderWithRouter`
+ * mounts a router that goes nowhere, and its own docblock says destination
+ * assertions belong on the real `ROUTES`. The e2e spec covers the landing,
+ * end to end, against a real rerun. What these specs pin is the decision to
+ * call the server, and everything the page says around it.
+ */
+describe('RunDetailPage — the rerun-from-failed action (RS2)', () => {
+  const ACTION = 'Rerun from failed';
+
+  /** Mount with the run row in `status`; an empty stream leaves the row as the
+        page's status source, which is the case an operator sees on a finished
+        run they navigated to fresh. */
+  async function mountWithStatus(status: Run['status'], overrides: Partial<Run> = {}) {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status, finishedAt: 1_700_000_001_000, ...overrides }),
+      pipelineVersion: version(),
+    });
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByText('pv_1');
+  }
+
+  beforeEach(() => rerunFromFailedMock.mockResolvedValue({ runId: 'run_2' }));
+
+  it.each(['failure', 'interrupted'] as const)('offers the action on a %s run', async (s) => {
+    await mountWithStatus(s);
+    expect(screen.getByRole('button', { name: ACTION })).toBeInTheDocument();
+  });
+
+  it.each(['success', 'running'] as const)('withholds the action on a %s run', async (s) => {
+    await mountWithStatus(s);
+    expect(screen.queryByRole('button', { name: ACTION })).not.toBeInTheDocument();
+  });
+
+  /* The rerun spec requires the UI warn that a rerun "may incur additional
+       cost" — copied nodes are free, but everything from the failure onward
+       re-executes and meters. Asserted on the RENDERED page, not just on the
+       constant, so removing it from the JSX fails here. */
+  it('warns that the rerun may cost money, beside the button', async () => {
+    await mountWithStatus('failure');
+    expect(screen.getByText(/may incur additional cost/)).toBeInTheDocument();
+  });
+
+  it('asks the server to rerun THIS run when clicked', async () => {
+    await mountWithStatus('failure');
+    await userEvent.click(screen.getByRole('button', { name: ACTION }));
+    expect(rerunFromFailedMock).toHaveBeenCalledWith('run_1');
+  });
+
+  /* A rerun is NOT idempotent — a second in-flight click would start a second
+       run and spend money twice. The button disables itself the moment the
+       request goes out, so the second click cannot land. */
+  it('starts only one rerun when the button is clicked twice', async () => {
+    let release!: (v: { runId: string }) => void;
+    rerunFromFailedMock.mockReturnValue(
+      new Promise<{ runId: string }>((resolve) => {
+        release = resolve;
+      }),
+    );
+    await mountWithStatus('failure');
+    const button = screen.getByRole('button', { name: ACTION });
+    await userEvent.click(button);
+    const busy = await screen.findByRole('button', { name: 'Starting rerun…' });
+    expect(busy).toBeDisabled();
+    await userEvent.click(busy);
+    expect(rerunFromFailedMock).toHaveBeenCalledTimes(1);
+    release({ runId: 'run_2' });
+  });
+
+  /* RS6 lineage. `rerunOf` is the durable row projection of
+       `run.started.rerunOf`, so a rerun can always say what it came from. An
+       ORDINARY run gets no row at all rather than a row reading "—". */
+  it('links back to the source run, and says nothing on a run that is not a rerun', async () => {
+    await mountWithStatus('failure', { rerunOf: 'run_0' });
+    expect(screen.getByText('Rerun of')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'run_0' })).toBeInTheDocument();
+  });
+
+  it('shows no lineage row on an original run', async () => {
+    await mountWithStatus('failure');
+    expect(screen.queryByText('Rerun of')).not.toBeInTheDocument();
   });
 });
