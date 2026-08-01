@@ -351,7 +351,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * confidently attributing the pair to one of them. Deliberately NOT called on
    * `node.retryScheduled` — the hold keeps its reason on screen (see that case).
    */
-  const clearResult = (n: NodeActivity): void => {
+  const clearResult = (n: FoldingNode): void => {
     n.error = undefined;
     n.failureKind = undefined;
     n.failureCode = undefined;
@@ -372,7 +372,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * evaluated, or parked) node already has attempts ≥ 1 by the time it
    * terminates, so this can never double-count.
    */
-  const countIfUnstarted = (n: NodeActivity): void => {
+  const countIfUnstarted = (n: FoldingNode): void => {
     if (n.attempts === 0) n.attempts = 1;
   };
 
@@ -389,7 +389,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * would render the PREVIOUS attempt's duration beside a row that is running
    * again.
    */
-  const openSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
+  const openSpan = (n: FoldingNode, rawNodeId: string, at: number): void => {
     n.startedAtMs = at;
     n.endedAtMs = undefined;
     spanInstance.set(n.nodeId, instanceOf(rawNodeId));
@@ -403,7 +403,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * `startedAtMs` and always rewrites it), so it is belt-and-braces rather than
    * load-bearing — stated so a later reader does not mistake it for a fix.
    */
-  const dropSpan = (n: NodeActivity): void => {
+  const dropSpan = (n: FoldingNode): void => {
     n.startedAtMs = undefined;
     n.endedAtMs = undefined;
     spanInstance.delete(n.nodeId);
@@ -425,7 +425,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * A terminal with no open span (a `fail`/`filter` node's only event) is a
    * no-op: it leaves the row with no start, which IS "no span".
    */
-  const closeSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
+  const closeSpan = (n: FoldingNode, rawNodeId: string, at: number): void => {
     if (n.startedAtMs === undefined) return;
     if (spanInstance.get(n.nodeId) !== instanceOf(rawNodeId)) {
       dropSpan(n);

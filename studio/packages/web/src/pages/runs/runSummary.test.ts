@@ -1118,6 +1118,7 @@ describe('reconcileNodeActivity', () => {
   /** A folded row, for the precedence rules that need one to already exist. */
   function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     return {
+      ...NO_LLM_ACTIVITY,
       status: 'dispatched',
       attempts: 1,
       outputs: 0,
@@ -1669,7 +1670,7 @@ describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
           runId: 'r',
           nodeId: 'n1',
           attemptId: 'n1#0',
-          message: 'throttled',
+          error: 'throttled',
           kind: 'transient',
         },
         dispatch('n1', 'n1#1'),
@@ -1792,7 +1793,7 @@ describe('deriveNodeActivity — per-node cost and tool calls (#866)', () => {
           runId: 'r',
           nodeId: 'n1',
           attemptId: 'n1#0',
-          message: 'boom',
+          error: 'boom',
           kind: 'transient',
         },
         dispatch('n1', 'n1#1'),

@@ -1,6 +1,8 @@
+import { formatTokenCount, formatUsd } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
-import type { NodeActivity } from './runSummary';
+import { readNodeCost, type NodeCostReading } from './nodeCost';
+import type { NodeActivity, NodeToolCall } from './runSummary';
 
 /**
  * U24 (slice 1) — the per-node drill-in on the run monitor.
@@ -32,16 +34,20 @@ import type { NodeActivity } from './runSummary';
  * Deliberately NOT shown yet, each for a stated reason rather than an oversight:
  *  - the node's INPUT — no event captures the resolved config a node ran with,
  *    so there is nothing truthful to render (the authored template is in the
- *    doc, but that is the un-substituted text, not what executed);
- *  - per-node cost/tokens — `activity.metered` carries them and
- *    `computeRunCost` already folds them, but that is its own slice;
+ *    doc, but that is the un-substituted text, not what executed) — #890;
  *  - prompt/completion — `activity.captured` holds only redacted SHAPE (message
  *    counts, char counts, content hashes) until L9b/F4 lands raw capture, and a
- *    sha256 on screen is not worth a section;
- *  - tool calls — `activity.toolCalled` carries `toolName`, `round`, `callId`
- *    and `isError` IN THE CLEAR (only args/result are chars+hash), so "which
- *    tools ran, in which exchange, which errored" is renderable today. It is
- *    deferred as its own slice, NOT because the data is missing.
+ *    sha256 on screen is not worth a section (#605).
+ *
+ * COST and TOOL CALLS were on that list and no longer are: #866 shipped both.
+ * Neither needed new data — `activity.metered` already carried the money and
+ * `activity.toolCalled` already carried `toolName`/`round`/`callId`/`isError` in
+ * the clear (only args/result are reduced to chars+hash). What they needed was
+ * the honesty work, because a per-node money figure misleads in ways a per-run
+ * one does not: `nodeCost.ts` classifies WHICH reading is true of a node before
+ * a dollar sign is drawn, so a run of unpriceable exchanges never renders as
+ * `$0.00`, a subscription call's known zero never renders as a measurement gap,
+ * and an `agent_cli` node's token sums never render as `0` when nobody counted.
  *
  * The per-attempt DURATION was on that list and no longer is: #867 shipped it.
  * Both objections that kept it off were answered rather than waived — the span
@@ -199,6 +205,12 @@ export function NodeActivityPanel({
         </section>
       )}
 
+      {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && (
+        <CostSection node={node} />
+      )}
+
+      {node.toolCalls.length > 0 && <ToolCallSection calls={node.toolCalls} />}
+
       <section className="contract-section">
         <h4>Streamed output</h4>
         <p>
@@ -207,5 +219,173 @@ export function NodeActivityPanel({
         </p>
       </section>
     </aside>
+  );
+}
+
+/**
+ * #866 slice 1 — what this node SPENT.
+ *
+ * The money figure is never rendered bare: `readNodeCost` decides which of five
+ * readings is true first, and each gets its own sentence, because the same
+ * `totalCostEstimate: 0` means four different things depending on the counters
+ * beside it (nothing ran · a known covered zero · nothing could be priced · a
+ * genuinely free exchange).
+ */
+function CostSection({ node }: { node: NodeActivity }) {
+  const reading = readNodeCost(node.cost);
+  const { cost } = node;
+  return (
+    <section className="contract-section">
+      <h4>Cost &amp; usage</h4>
+      <p>
+        <strong>{costFigure(reading)}</strong>
+      </p>
+      <p className="page-hint">{costSentence(reading)}</p>
+
+      {cost.models.length > 0 && (
+        <dl className="run-meta">
+          <dt>{cost.models.length === 1 ? 'Model' : 'Models'}</dt>
+          <dd>
+            {cost.models.map((m) => (
+              <code key={m}>{m}</code>
+            ))}
+          </dd>
+          <dt>Tokens</dt>
+          <dd>
+            {/* The load-bearing arm. An `agent_cli` spend fact carries NO token
+                counts at all, so `0 in / 0 out` would be a measurement nobody
+                took — the same manufactured zero the Duration line refuses. */}
+            {reading.tokensReported
+              ? `${formatTokenCount(cost.inputTokens)} in · ${formatTokenCount(cost.outputTokens)} out`
+              : 'not reported'}
+          </dd>
+        </dl>
+      )}
+
+      {reading.tokensPartial && (
+        <p className="page-hint">
+          Only {cost.tokenReportedResponseCount} of {cost.responseCount} exchanges reported a token
+          count, so these sums are partial.
+        </p>
+      )}
+
+      {reading.exchangesAreFloor && (
+        <p className="page-hint">
+          A CLI activity records one exchange per <em>invocation</em>, and the CLI does not report
+          the model calls it makes internally — so this count is a floor, not a census.
+        </p>
+      )}
+
+      {node.costSpansInstances && (
+        <p className="page-hint">
+          This total SUMS every parallel item that ran under this node — unlike the outputs above,
+          which are one item&apos;s.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The headline, which for three readings is deliberately not a money amount. */
+function costFigure(reading: NodeCostReading): string {
+  switch (reading.kind) {
+    case 'none':
+      return 'No billed exchange';
+    case 'covered':
+      return 'No marginal cost';
+    case 'unknown':
+      return 'Cost unknown';
+    case 'lower-bound':
+      return `At least ${formatUsd(reading.amount)}`;
+    case 'exact':
+      return formatUsd(reading.amount);
+  }
+}
+
+function costSentence(reading: NodeCostReading): string {
+  const exchanges = `${reading.exchangeCount} billed exchange${reading.exchangeCount === 1 ? '' : 's'}`;
+  switch (reading.kind) {
+    case 'none':
+      return 'Nothing was billed under this node. A provider call that TIMED OUT records no exchange either — a timeout cannot tell a long generation from a request that never arrived, so counting it would invent spend.';
+    case 'covered':
+      return `${exchanges}, every one a subscription or CLI call. Those carry no unit price by design, so this zero is a known covered cost — not a figure nobody could work out.`;
+    case 'unknown':
+      return `${exchanges}, and none of them could be priced (an unpriced model, or usage the provider did not report). A number is deliberately not shown: the sum would be $0.00, which reads as free.`;
+    case 'lower-bound':
+      return `${exchanges}, of which ${reading.unknownCount} could not be priced. The figure is what the rest cost, so the real total is higher.`;
+    case 'exact':
+      return `${exchanges}, all priced. Retries are included — each attempt was billed.${
+        reading.coveredCount > 0
+          ? ` ${reading.coveredCount} of them were subscription calls that add nothing.`
+          : ''
+      }`;
+  }
+}
+
+/**
+ * #866 slice 2 — WHICH TOOLS the node's LLM loop ran.
+ *
+ * `round` alone does not identify a row: it restarts at 0 on every attempt, and
+ * sibling parallel-foreach items run their own exchanges concurrently. So the
+ * attempt and the instance are stamped on each call by the fold and rendered as
+ * their own columns whenever more than one of either appears — rather than left
+ * as a caveat under the table for the reader to apply themselves.
+ *
+ * Args and results are shown as SIZES. Their content is not in the log at all
+ * (only chars + a hash), and the hash is a drift fingerprint, not something a
+ * person reads — but the size is the one thing about an opaque payload that is
+ * actionable.
+ */
+const MAX_TOOL_ROWS = 100;
+
+function ToolCallSection({ calls }: { calls: NodeToolCall[] }) {
+  const shown = calls.length > MAX_TOOL_ROWS ? calls.slice(-MAX_TOOL_ROWS) : calls;
+  const showAttempt = calls.some((c) => c.attempt !== calls[0]?.attempt);
+  const showInstance = calls.some((c) => c.instanceId !== undefined);
+  const errors = calls.filter((c) => c.isError).length;
+  return (
+    <section className="contract-section">
+      <h4>Tool calls</h4>
+      <p className="page-hint">
+        {calls.length} call{calls.length === 1 ? '' : 's'}
+        {errors > 0 && <>, {errors} of which returned an error to the model</>}.
+      </p>
+      <table className="node-tool-calls">
+        <thead>
+          <tr>
+            {showAttempt && <th scope="col">Attempt</th>}
+            {showInstance && <th scope="col">Item</th>}
+            <th scope="col">Round</th>
+            <th scope="col">Tool</th>
+            <th scope="col">Args</th>
+            <th scope="col">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((call, i) => (
+            <tr key={`${call.instanceId ?? ''}#${call.attempt}#${call.round}#${call.callId ?? i}`}>
+              {showAttempt && <td>{call.attempt}</td>}
+              {showInstance && <td>{call.instanceId}</td>}
+              <td>{call.round}</td>
+              <td>
+                {/* A structurally nameless call is answered with an error
+                    tool_result and never asserted — so it is named as nameless
+                    rather than rendered as an empty cell, which reads as a
+                    rendering fault. */}
+                {call.toolName === '' ? <em>unnamed</em> : call.toolName}
+                {call.isError && <span className="tool-call-error"> · error</span>}
+              </td>
+              <td>{call.argsChars} chars</td>
+              <td>{call.resultChars} chars</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {calls.length > shown.length && (
+        <p className="page-hint">
+          … showing the most recent {shown.length} of {calls.length} calls.
+        </p>
+      )}
+    </section>
   );
 }
