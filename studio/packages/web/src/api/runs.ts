@@ -26,9 +26,11 @@ const RunEventListSchema = z.array(RunEventSchema);
 
 /**
  * Owner-scoped list of runs, newest-first — an order the server now genuinely
- * imposes (`started_at DESC, id DESC`). It did not before: `listRuns` issued no
- * `ORDER BY` at all, so this docblock's previous "newest-first as the server
- * returns them" described SQLite's incidental row order, not a promise.
+ * imposes (`started_at DESC, rowid DESC`). It did not before: `listRuns` issued
+ * no `ORDER BY` at all, so this docblock's previous "newest-first as the server
+ * returns them" described SQLite's incidental row order, not a promise. The
+ * tie-break is `rowid` — insert order, so chronological — and NOT `id`, which
+ * is a random nanoid and would order same-instant runs arbitrarily.
  *
  * R2 — each element is a `RunSummary`, the run row PLUS the pipeline name +
  * version number and trigger name the list renders. Strictly additive over
