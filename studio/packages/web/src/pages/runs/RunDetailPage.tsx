@@ -1,11 +1,18 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
-import type { PipelineVersion, Run, RunLifecycleStatus } from '@autonomy-studio/shared';
+import { TERMINAL_RUN_STATUS } from '@autonomy-studio/shared';
+import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRun, getRunDetail } from '../../api/runs';
 import { useRunStream, type StreamPhase } from './useRunStream';
-import { deriveNodeActivity, deriveRunLifecycle, reconcileNodeActivity } from './runSummary';
+import {
+  deriveNodeActivity,
+  deriveRunLifecycle,
+  reconcileNodeActivity,
+  type RunLifecycle,
+} from './runSummary';
 import { eventGloss, failureClass, formatClock, formatWhen } from './format';
 import { nodeStatusLabel } from './nodeStatus';
+import { runStatusLabel } from './runStatus';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
@@ -123,7 +130,48 @@ export function RunDetailPage({ runId }: { runId: string }) {
     () => nodes.find((n) => n.nodeId === openNodeId) ?? null,
     [nodes, openNodeId],
   );
-  const status: RunLifecycleStatus | string = lifecycle ?? run?.status ?? 'pending';
+  /* #870 — the RUN's status and, when it is parked, WHY.
+     U25's split of authority one level up, but the line falls in a DIFFERENT
+     place here, and the two halves are each measured rather than assumed.
+
+     THE PARK GOES TO THE ENGINE. The reducer un-parks only after the parked
+     NODE's own guard passes — the node must still be at the attempt the event
+     names — so a redelivered or superseded alarm no-ops and the run stays
+     parked. The doc-free fold has no node state and cannot make that check, so
+     it un-parks on any `timer.due`/`externalWait.*`. Measured, for
+     `run.waiting → timer.due{stale attempt}`: reducer `waiting/waiting_timer`,
+     fold `running`. The row stays `waiting` too, so preferring the fold would
+     put this header at odds with the runs list — the exact drift #870 closes.
+
+     THE TERMINAL STAYS WITH THE FOLD, and NOT for the reason a first pass here
+     claimed. The reducer does fold `run.finished` into `RunState.status`
+     (measured: a valid `…node.succeeded → run.finished{success}` log projects
+     `success`) — an earlier note said otherwise, generalising from a log the
+     reducer had REJECTED as impossible. What is true is narrower and is exactly
+     the case that matters: the top-level fold guard admits only unpark events on
+     a non-`running` run, so a terminal arriving on a PARKED run is not folded at
+     all. Measured, `run.waiting → run.finished{failure}`: projection `waiting`,
+     while `terminalFactFromLog` and the row both say `failure`. This fold reads
+     terminals through `terminalStatusOf` — the same SSOT the server reads — so
+     it agrees with the row where the projection would not.
+
+     Hence: a terminal wins outright; otherwise the projection settles parked vs
+     running when it is ready; otherwise the fold; otherwise the REST row. The
+     one direction not handled is projection-`running` over fold-`waiting`, which
+     cannot arise: the fold un-parks on a superset of the events the reducer
+     does, never a subset. */
+  const view = useMemo((): RunLifecycle | null => {
+    if (lifecycle !== null && TERMINAL_RUN_STATUS.has(lifecycle.status)) return lifecycle;
+    if (overlay.ready && overlay.state.status === 'waiting') {
+      return { status: 'waiting', waitingReason: overlay.state.waitingReason };
+    }
+    return lifecycle;
+  }, [lifecycle, overlay]);
+
+  const status: RunStatus = view?.status ?? run?.status ?? 'pending';
+  /* The REST row carries no park reason (`RunSchema` has no such column), so
+     the fallback tail is `null` rather than a guess — see `runStatusLabel`. */
+  const waitingReason = view?.waitingReason ?? null;
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
@@ -146,7 +194,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
       </div>
 
       <p className="page-hint">
-        <span className={`run-status run-status-${status}`}>{status}</span>{' '}
+        <span className={`run-status run-status-${status}`}>
+          {runStatusLabel(status, waitingReason)}
+        </span>{' '}
         <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
           {phaseLabel(stream.phase)}
         </span>

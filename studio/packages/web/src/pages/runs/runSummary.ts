@@ -3,11 +3,14 @@ import {
   EngineEventSchema,
   parseInstanceKey,
   terminalStatusOf,
+  UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
+  type EngineEvent,
   type FailureKind,
   type NodeRunStatus,
   type RunEvent,
   type RunLifecycleStatus,
   type RunState,
+  type WaitingReason,
 } from '@autonomy-studio/shared';
 
 /**
@@ -541,9 +544,65 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
 }
 
 /**
+ * #870 — the events that RESUME a parked run, DERIVED from the engine's own
+ * `UNPARK_EVENTS` rather than hand-copied from it, so the two cannot drift and a
+ * fifth engine unpark event is honoured here the day it lands.
+ *
+ * `run.resumed` is subtracted because this fold handles it unconditionally
+ * above, preserving the deliberate resume-after-terminal live-VIEW rule pinned
+ * in this module's tests. (If the engine ever drops it from the set, the
+ * subtraction is a harmless no-op.)
+ *
+ * THE SET IS SHARED; THE PRECISION IS NOT, and the gap is stated because it is
+ * real. In the reducer each of these reaches `unparkIfWaiting` only after its
+ * handler's node-level guard — the parked node must still be at the attempt the
+ * event names. A redelivered or superseded alarm (at-least-once delivery, a
+ * back-edge reset, a child abandoned by a container timeout) no-ops there and
+ * the run stays parked. This fold has no node state and cannot make that check,
+ * so it un-parks on any of them. Measured: for
+ * `run.waiting → timer.due{previousAttemptId: <stale>}` the reducer stays
+ * `waiting` and this fold says `running`.
+ *
+ * That is the right trade for what this fold IS — the answer when no version doc
+ * resolves, where the alternative (never un-parking without a `run.resumed`) is
+ * wrong on every ordinary timer resume rather than on a rare redelivery. Where
+ * a doc DOES resolve, `RunDetailPage` prefers the projection for exactly this
+ * question; see its comment.
+ */
+const UNPARK_EVENTS = new Set<EngineEvent['type']>(
+  [...ENGINE_UNPARK_EVENTS].filter((type) => type !== 'run.resumed'),
+);
+
+/** The run's lifecycle status and, when it is parked, WHY. */
+export interface RunLifecycle {
+  status: RunLifecycleStatus;
+  /**
+   * Non-null only while `status === 'waiting'`. The reducer nulls it on every
+   * edge out of `waiting` (`unparkIfWaiting`) and this fold mirrors that, so a
+   * stale reason cannot survive an unpark and be rendered over a running run.
+   */
+  waitingReason: WaitingReason | null;
+}
+
+/**
  * The run's lifecycle status AS THE LOG SEES IT, or `null` if no lifecycle event
  * has landed yet (the caller then shows the run row's REST status). Later events
  * win, so a `run.finished` after `run.started` yields the terminal outcome.
+ *
+ * NOT checked here, unlike in the reducer: `e.runId`. The reducer guards it
+ * (a foreign run's `run.waiting` cannot park this run); this fold is only ever
+ * handed `useRunStream(runId)`'s rows, which are one run's by construction. It
+ * is named rather than silently omitted, because "mirrors the reducer's S3
+ * rules" would otherwise cover a rule that is not in fact mirrored.
+ *
+ * #870 — this is now the run detail page's FALLBACK, not its primary answer.
+ * Where the version doc resolves, the page reads the run's status and park
+ * reason off the ENGINE's projection instead, which is U25's settled split of
+ * authority applied one level up: the reducer sees the whole run, this fold sees
+ * only the run-level events. The fold is kept, and improved rather than
+ * simplified, because it is what still renders for a run whose version no longer
+ * resolves and while the stream is mid-replay — exactly the cases a broken run
+ * most needs reading. See `RunDetailPage`.
  *
  * The terminal events map through `terminalStatusOf` — the engine's SSOT (#443),
  * shared with the reducer and the boot reconciler, so this page and `runs.status`
@@ -556,8 +615,9 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
  * resume must never erase the terminal under it. Same mapping, different rule, by
  * intent.
  */
-export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | null {
+export function deriveRunLifecycle(events: RunEvent[]): RunLifecycle | null {
   let status: RunLifecycleStatus | null = null;
+  let waitingReason: WaitingReason | null = null;
   for (const row of events) {
     const parsed = EngineEventSchema.safeParse(row.payload);
     if (!parsed.success) continue;
@@ -565,17 +625,53 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | nul
     const terminal = terminalStatusOf(e);
     if (terminal !== null) {
       status = terminal;
+      waitingReason = null;
     } else if (e.type === 'run.started' || e.type === 'run.resumed') {
       // A resume/(re)start tailing in shows the run running again — and CLEARS a
       // prior `waiting` (the live-view reverse edge, mirroring the reducer's
       // waiting→running un-park, wired in #619 as `unparkIfWaiting`).
       status = 'running';
+      waitingReason = null;
     } else if (e.type === 'run.waiting') {
       // #5 S3 — the run parked on an external event. Live VIEW: show it `waiting`
-      // (not the stale `running`) until a `run.started`/`run.resumed` returns it.
-      // Non-exhaustive if/else, so this case is added by hand (no compile guard).
-      status = 'waiting';
+      // (not the stale `running`) until an unpark returns it.
+      //
+      // #870 — GUARDED ON `running`, mirroring the reducer's own S3 status guard
+      // instead of taking the last `run.waiting` in the log. Three of the
+      // reducer's pinned behaviours fall out of that one condition, and
+      // last-wins would have broken the middle one: a `run.waiting` before
+      // `run.started` is ignored; a SECOND `run.waiting` on an already-parked
+      // run is ignored, so the FIRST reason stands; and a post-terminal one is
+      // ignored.
+      //
+      // A second park cannot in fact occur today — the PRODUCER is itself
+      // status-guarded (`parkRun` fires only on a `running` run), so no log
+      // carries one. The guard is kept anyway, and is not defensive clutter:
+      // it is what makes first-wins EXPLICIT, so a future producer cannot
+      // silently flip a rendered reason from one confident noun to another.
+      if (status === 'running') {
+        status = 'waiting';
+        waitingReason = e.reason;
+      }
+    } else if (UNPARK_EVENTS.has(e.type)) {
+      // #870 — the REST of the reducer's unpark set. Without these the fold
+      // stayed `waiting` forever on the common path: `run.resumed` is appended
+      // only by boot-reconcile and lease-reclaim, so a run parked on a timer and
+      // resumed by `timer.due` kept a stale `waiting` here while the row and the
+      // reducer had both moved on. That was survivable while the word was bare;
+      // with a reason attached it becomes a confident lie — "waiting (timer)"
+      // over a running run — and the runs LIST, reading the row, would say
+      // `running` for that same run. Precisely the cross-surface drift #870
+      // exists to close.
+      //
+      // Conditional on `waiting`, exactly as `unparkIfWaiting` is: these are
+      // node-level facts that no-op on a run which is not parked, and must never
+      // resurrect a terminal one.
+      if (status === 'waiting') {
+        status = 'running';
+        waitingReason = null;
+      }
     }
   }
-  return status;
+  return status === null ? null : { status, waitingReason };
 }

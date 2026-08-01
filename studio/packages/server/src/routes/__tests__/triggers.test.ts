@@ -793,18 +793,36 @@ describe('triggers routes', () => {
 
     // #5 S5b-2 (#549) — bounds authoring.
     it('creates a bounded recurrence: bounds round-trip and the seeded tick carries them', async () => {
+      /* The window is derived from NOW, not pinned to a calendar date.
+         It was literally `2026-08-01 → 2026-08-31`, which asserted the right
+         RULE — the tick is armed for the first IN-WINDOW 09:00 slot — only
+         while the suite happened to run before 2026-08-01T09:00Z. From that
+         instant the first future slot became Aug 2, and the test began failing
+         on every studio PR because of the DATE rather than because of a change.
+         Anchoring to the next UTC midnight keeps the 09:00 slot always ahead of
+         `now`, so the assertion tests the rule and nothing else. */
+      const DAY_MS = 24 * 60 * 60 * 1000;
+      const HOUR_MS = 60 * 60 * 1000;
+      const midnight = Math.floor(Date.now() / DAY_MS) * DAY_MS + DAY_MS;
+      /* The window OPENS AT 10:00, past the 09:00 slot on its own first day, so
+         the first in-window occurrence is 09:00 the day AFTER. That is what
+         makes the assertion discriminating: a `startTime` at midnight would be
+         satisfied by the next 09:00 whether or not the bound were honoured at
+         all, so dropping `startAt` from the seed would still pass. This way only
+         a seed that actually respects the lower bound lands on the expected
+         instant. */
+      const startMs = midnight + 10 * HOUR_MS;
+      const firstSlotMs = midnight + DAY_MS + 9 * HOUR_MS;
+      const startTime = new Date(startMs).toISOString();
+      const endTime = new Date(startMs + 30 * DAY_MS).toISOString();
+
       const res = await app.inject({
         method: 'POST',
         url: '/api/triggers',
         payload: {
           ...triggerBody(pipelineVersionId),
           schedule: null,
-          recurrence: {
-            frequency: 'day',
-            schedule: { hours: [9] },
-            startTime: '2026-08-01T00:00:00Z',
-            endTime: '2026-08-31T00:00:00Z',
-          },
+          recurrence: { frequency: 'day', schedule: { hours: [9] }, startTime, endTime },
         },
       });
       expect(res.statusCode).toBe(201);
@@ -814,19 +832,16 @@ describe('triggers routes', () => {
         frequency: 'day',
         interval: 1,
         schedule: { hours: [9] },
-        startTime: '2026-08-01T00:00:00Z',
-        endTime: '2026-08-31T00:00:00Z',
+        startTime,
+        endTime,
       });
       // The seeded tick carries the bounds in its ref (so a later bounds edit is
-      // detectable) and is armed for the first in-window slot (Aug 1 09:00).
+      // detectable) and is armed for the first IN-WINDOW slot, which the 10:00
+      // opening pushes to 09:00 on the following day.
       const ticks = scheduleTicksFor(app, created.id);
       expect(ticks).toHaveLength(1);
-      expect(ticks[0]!.ref).toMatchObject({
-        schedule: '0 9 * * *',
-        startTime: '2026-08-01T00:00:00Z',
-        endTime: '2026-08-31T00:00:00Z',
-      });
-      expect(ticks[0]!.dueAt).toBe(Date.parse('2026-08-01T09:00:00.000Z'));
+      expect(ticks[0]!.ref).toMatchObject({ schedule: '0 9 * * *', startTime, endTime });
+      expect(ticks[0]!.dueAt).toBe(firstSlotMs);
     });
 
     it('rejects an inverted/empty window (endTime <= startTime) with 400 (#549)', async () => {

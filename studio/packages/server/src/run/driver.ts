@@ -13,6 +13,7 @@ import {
   type EngineEvent,
   type PipelineVersion,
   type Run,
+  TERMINAL_RUN_STATUS,
   type RunLifecycleStatus,
   type RunState,
   type ScheduledWakeup,
@@ -312,12 +313,10 @@ export interface DriverDeps {
   log?: DriveLog;
 }
 
-/** Run-lifecycle statuses that are terminal (the run stops advancing). */
-const TERMINAL_RUN: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus>([
-  'success',
-  'failure',
-  'interrupted',
-]);
+/* #870 — `TERMINAL_RUN` was a private list here; it now lives in `shared` as
+   `TERMINAL_RUN_STATUS`, beside the terminal-EVENT set it is the twin of, so the
+   web run monitor can ask the same question without a third copy. */
+const TERMINAL_RUN = TERMINAL_RUN_STATUS;
 
 /**
  * A belt-and-suspenders bound on driver iterations, and NOT the general liveness

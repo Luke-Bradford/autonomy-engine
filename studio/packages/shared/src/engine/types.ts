@@ -1477,6 +1477,24 @@ export const TERMINAL_RUN_EVENT: ReadonlySet<EngineEvent['type']> = new Set(
 );
 
 /**
+ * The lifecycle STATUSES that are terminal — the run stops advancing. The twin
+ * of `TERMINAL_RUN_EVENT` above, which answers the same question about an
+ * EVENT.
+ *
+ * Lifted here (#870) from a private copy in the server's `driver.ts`, which was
+ * the only holder, so the web's run monitor could ask the question without
+ * minting a third list. Exhaustive by construction against
+ * `RunLifecycleStatus`: `pending`/`running`/`waiting` are the non-terminal
+ * three, and a new lifecycle status has to be classified deliberately rather
+ * than defaulting to non-terminal by omission.
+ */
+export const TERMINAL_RUN_STATUS: ReadonlySet<RunLifecycleStatus> = new Set<RunLifecycleStatus>(
+  RunLifecycleStatusSchema.options.filter(
+    (status) => status !== 'pending' && status !== 'running' && status !== 'waiting',
+  ),
+);
+
+/**
  * The lifecycle status an event RECORDS as a durable fact, or `null` if it is not
  * a terminal run event.
  *
