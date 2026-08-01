@@ -301,6 +301,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                  failure carries none, which is a real state (an expired
                  external wait), so it renders as nothing rather than a guess. */
               const cls = failureClass(n.failureKind, n.failureCode);
+              /* One lookup per row, read twice below: the button renders the
+                 name, and the sibling `<code>` exists only when there IS one. */
+              const name = nameOf(n.nodeId);
               return (
                 <tr key={n.nodeId}>
                   <td>
@@ -325,9 +328,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
                       onClick={() => setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId)}
                     >
-                      {nameOf(n.nodeId) ?? <code>{n.nodeId}</code>}
+                      {name ?? <code>{n.nodeId}</code>}
                     </button>
-                    {nameOf(n.nodeId) !== null && <code className="node-id">{n.nodeId}</code>}
+                    {name !== null && <code className="node-id">{n.nodeId}</code>}
                   </td>
                   <td>
                     {/* U25 — the word comes from `nodeStatus.ts`, which the
