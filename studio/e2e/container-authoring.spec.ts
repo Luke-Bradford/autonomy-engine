@@ -196,7 +196,7 @@ test.describe('U6d — creating a container from the canvas', () => {
 
     // The recovery the dialog actually named.
     await captureConfirm(page, async () => {
-      await page.getByRole('button', { name: 'Delete loop container' }).click();
+      await page.getByRole('button', { name: 'Delete loop 1 container' }).click();
     });
     await expect(page.locator('.flow-container')).toHaveCount(0);
     expect(await validationIssues(page)).toEqual([]);
