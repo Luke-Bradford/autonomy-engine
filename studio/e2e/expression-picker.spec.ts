@@ -68,8 +68,10 @@ test.describe('U8a — expression insert flyout', () => {
 
     // The discovery this ticket exists for: the producer is named by the title
     // its BOX carries, and its declared output name is spelled out — neither of
-    // which the author had any way to read off the canvas before.
-    const option = panel(page).getByRole('button', { name: /HTTP Request → body/ });
+    // which the author had any way to read off the canvas before. The id is
+    // appended because this doc has TWO `http_request` nodes, so the title alone
+    // would not say which box the reference points at.
+    const option = panel(page).getByRole('button', { name: /HTTP Request \(fetch\) → body/ });
     await expect(option).toBeVisible();
     await option.click();
 
