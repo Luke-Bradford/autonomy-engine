@@ -9,6 +9,7 @@ import {
 } from '../pipeline/containerLayout';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
+  containerStatusLabel,
   containerStatusTone,
   nodeStatusLabel,
   nodeStatusTone,
@@ -42,6 +43,16 @@ export interface RunNodeData extends Record<string, unknown> {
 
 export interface RunContainerData extends Record<string, unknown> {
   kind: PipelineVersion['containers'][number]['kind'];
+  /**
+   * AS WORDED FOR AN OPERATOR, the same commitment `RunNodeData.status` above
+   * makes, and `string` rather than `ContainerRunStatus` for the same reason:
+   * the engine's identifier is not what reaches the screen.
+   *
+   * Both have been `string` since U11 (`d432814`), when the engine's own word
+   * WAS what reached the screen for each — so the width was never a promise of
+   * wording. U25 made the node half honest by wording its producer; #873 does
+   * the same for this one.
+   */
   status: string | null;
   tone: StatusTone | null;
   /** A container's own progress; `null` until it has started. */
@@ -105,6 +116,18 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
     const rect = rects.get(c.id)!;
     const cs = state?.containers[c.id] ?? null;
     const status = cs?.status ?? null;
+    /* #873 — worded HERE, not at the render site the ticket suggested, so the
+       box and its accessible name below cannot come to disagree about WHICH WORD
+       a status gets, and so nothing has to cast `data.status` back to
+       `ContainerRunStatus` to word it. Same shape as the activity branch above;
+       the TONE still reads the raw status.
+
+       They do still differ on the NULL path, and that is pre-existing rather
+       than introduced here: `RunCanvas` drops the whole ` · <status>` fragment
+       when `status` is null, so an unprojected box reads `stage` while its
+       accessible name reads `…, not projected`. Worth knowing before reading the
+       sentence above as stronger than it is. */
+    const label = status === null ? null : containerStatusLabel(status);
     return {
       id: c.id,
       type: 'runContainer',
@@ -123,12 +146,12 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       connectable: false,
       data: {
         kind: c.kind,
-        status,
+        status: label,
         tone: status === null ? null : containerStatusTone(status),
         round: cs?.round ?? null,
       } satisfies RunContainerData,
       ariaRole: 'group',
-      ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${status ?? NO_STATUS_LABEL}`,
+      ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
     };
   });
 

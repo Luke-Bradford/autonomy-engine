@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RunState } from '@autonomy-studio/shared';
+import { ContainerRunStatusSchema, type RunState } from '@autonomy-studio/shared';
+import { containerStatusLabel, containerStatusTone } from './nodeStatus';
 import { projectRun } from './runProjection';
 import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
 
@@ -141,16 +142,63 @@ describe('runFlowNodes', () => {
     expect(nodes[0]!.width!).toBeGreaterThan(240);
   });
 
-  it('carries a container’s own status and round', () => {
+  it('carries a container’s own status — WORDED — and its round', () => {
     const state: RunState = {
       ...projected(),
       containers: { stg: { status: 'active', round: 2, outputs: {} } },
     };
     const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
-    expect(box.data.status).toBe('active');
+    /* #873 — these four assertions INVERT what they pinned before, which is the
+       point: this test was the only thing holding the raw identifier on screen.
+       `active` is the container's `dispatched`, so the box now says the word the
+       node and the run already said, and the engine's identifier reaches
+       neither the label nor the accessible name. */
+    expect(box.data.status).toBe('running');
+    expect(box.data.status).not.toBe('active');
+    expect(box.ariaLabel).toContain('running');
+    expect(box.ariaLabel).not.toContain('active');
     expect(box.data.tone).toBe('running');
     expect(box.data.round).toBe(2);
-    expect(box.ariaLabel).toContain('active');
+  });
+
+  it('words a container status the same way the shared map does, and keeps the tone off the RAW status', () => {
+    /* Guards the SEAM rather than one status: a projection that worded `active`
+       by hand and passed the rest through would satisfy the test above.
+
+       The tone is asserted HERE rather than beside the `active` case, because
+       there it could not fail — `active`'s label is `running` and its tone is
+       ALSO `running`, so a tone accidentally keyed off the LABEL would read
+       identically.
+
+       And the divergence is RARER than it looks: `success`, `failure` and
+       `skipped` each word to their own tone too, so FOUR of the five coincide
+       and `pending` (label `pending`, tone `neutral`) is the ONLY member that
+       can catch a label-keyed tone. That is why the loop must walk every member
+       rather than sample one — and it is asserted below rather than asserted
+       here in prose, because the first draft of this comment claimed four
+       members diverged and the assertion is what caught it.
+       `palette.test.ts` enumerates `.run-container-<tone>`, so a tone built from
+       the label would match no rule and fall through to unstyled. */
+    for (const status of ContainerRunStatusSchema.options) {
+      const state: RunState = {
+        ...projected(),
+        containers: { stg: { status, round: 0, outputs: {} } },
+      };
+      const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
+      expect(box.data.status).toBe(containerStatusLabel(status));
+      expect(box.ariaLabel).toContain(containerStatusLabel(status));
+      expect(box.data.tone).toBe(containerStatusTone(status));
+    }
+    /* The claim above, as an assertion rather than as prose a reader has to
+       trust: `pending` is the ONLY member whose label and tone differ, so it
+       alone can catch a tone keyed off the label. Should a future wording make a
+       second member diverge this still passes; should it make `pending`
+       COINCIDE, the loop above would quietly stop discriminating anything — and
+       this goes red instead. */
+    const diverge = ContainerRunStatusSchema.options.filter(
+      (s) => containerStatusLabel(s) !== containerStatusTone(s),
+    );
+    expect(diverge).toContain('pending');
   });
 });
 

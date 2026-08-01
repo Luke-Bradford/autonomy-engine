@@ -109,3 +109,126 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #873 — the CONTAINER half of the same reconciliation, and the FIRST e2e ever
+ * to render a container on the run canvas.
+ *
+ * The ticket claimed `run-overlay.spec.ts` or `container-rendering.spec.ts`
+ * "already drive a container on the run canvas". Neither does: `run-overlay`'s
+ * doc has no containers at all, and `container-rendering` drives the AUTHOR
+ * canvas. So `runFlowNodes`' container branch had no browser coverage, which is
+ * how it kept passing the engine's identifier through for two tickets while the
+ * node branch beside it was worded.
+ *
+ * THE FIXTURE IS THE #870 PARKED NODE, WRAPPED IN A STAGE. A container is
+ * `active` only while it is live and unfinished, so the spec needs a run that
+ * stays that way — and a `wait` on an hour is already the suite's egress-free
+ * way to buy exactly that. `stepContainers` advances a container only once every
+ * child is terminal, and `wait_pending` is not terminal, so the stage holds at
+ * `active` for as long as the spec needs it. A `stage` also imposes no
+ * `exitWhen`/`items`/min-children rules (those are loop/foreach), so the doc
+ * needs nothing invented to be savable.
+ *
+ * It is a SEPARATE fixture from #870's rather than a container added to that
+ * one: the run-level spec above is not about containers, and giving it a
+ * container would make its parked-run assertions depend on a fact it does not
+ * claim.
+ */
+const PARKED_IN_STAGE_DOC = {
+  nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${3600}' }, position: { x: 0, y: 0 } }],
+  containers: [{ id: 'stg', kind: 'stage' as const, children: ['hold'] }],
+};
+
+test('#873 — a live container says "running", the same word its node and its run say', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(
+    page,
+    '#873 parked in a stage',
+    PARKED_IN_STAGE_DOC,
+  );
+  const runId = await fireManualTrigger(page, pipelineVersionId, '#873 container park');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  const canvas = page.getByTestId('run-canvas');
+  await expect(canvas).toBeVisible();
+
+  /* Wait on the ASSERTION TARGET itself rather than on the run row's status.
+     The row reaching `waiting` while the `wait` sits inside a container is a
+     fact this spec has no need to assume — and the retry cannot paper over the
+     defect here, because with the wording reverted the box reads `stage · active`
+     and never becomes `running` however long it is given. The box is drawn from
+     the R1 doc fetch before the WebSocket replay lands, so it says `stage` ALONE
+     first — `RunCanvas` short-circuits the whole ` · <status>` fragment when
+     nothing is projected, so the visible label omits the status entirely and
+     `NO_STATUS_LABEL` reaches only the accessible name. This is the assertion
+     that can only hold once the projection has arrived.
+
+     The 20s budget is #870's, above, and is needed for the same reason: the
+     driver has to start the run, enter the container, dispatch the node and arm
+     its alarm before either surface can say anything true. This assertion covers
+     strictly MORE than #870's poll — the SPA navigation, the lazy `RunGraph`
+     chunk and the WS replay on top — so it cannot take the 5s default. */
+  const box = canvas.locator('.run-container .flow-container-label');
+  await expect(box).toHaveText('stage · running', { timeout: 20_000 });
+
+  /* And wait on the CHILD's park too, before reading anything one-shot below.
+     The container turns `active` at ENTER, which is strictly earlier in the
+     lifecycle than its child parking — the driver appends `timer.waitScheduled`
+     only once it has armed the alarm, a separate event in a separate frame. So
+     the box can already read `running` while the node still reads `ready`, and
+     the single `evaluate` below has no retry to save it. This is the assertion
+     that closes that window; it replaces #870's run-row poll, which this spec
+     deliberately does not borrow, and it does so without assuming anything
+     about what the ROW says for a wait nested in a container. */
+  await expect(canvas.locator('.run-node .run-node-status')).toHaveText('waiting (timer)', {
+    timeout: 20_000,
+  });
+
+  /* One evaluate, every remaining assertion. The pairing is the point of the
+     ticket: the container and the node it encloses are two levels of one graph,
+     and before this they answered "what is happening here?" in two vocabularies
+     — `active` on the box, `waiting (timer)` on the node inside it. */
+  const graph = await page.evaluate(() => {
+    const container = document.querySelector('.run-container');
+    const node = document.querySelector('.run-node');
+    return {
+      boxLabel: container?.querySelector('.flow-container-label')?.textContent?.trim() ?? '',
+      boxClasses: container?.className ?? '',
+      boxAria: container?.closest('.react-flow__node')?.getAttribute('aria-label') ?? '',
+      nodeStatus: node?.querySelector('.run-node-status')?.textContent?.trim() ?? '',
+    };
+  });
+
+  // The engine's identifier reaches NEITHER surface — not the label, and not
+  // the accessible name, which is how U11's "never by colour alone" commitment
+  // is actually delivered for a box that carries no status text of its own.
+  expect(graph.boxLabel).not.toContain('active');
+  expect(graph.boxAria).toContain('running');
+  expect(graph.boxAria).not.toContain('active');
+  // Named in full, so a truncated or reordered accessible name trips.
+  expect(graph.boxAria).toBe('stage container, 1 activity, running');
+
+  /* The hue is PINNED here, not discriminated: `active` is the one member whose
+     label and tone are the same word, so this assertion reads identically
+     whether the class is keyed off the status or off the label. It is worth
+     asserting anyway — it proves the class RESOLVED on the box the operator is
+     looking at — but the seam itself is guarded where it can actually fail, in
+     `runFlow.test.ts`, which walks all five members and catches the four whose
+     label and tone diverge. */
+  expect(graph.boxClasses).toContain('run-container-running');
+
+  /* The honest limit, asserted rather than left to be discovered: a container
+     has no park member, so a live stage whose only child is parked reads
+     `running` above a child reading `waiting (timer)`. That is correct — the box
+     IS live, and WHAT it waits on is the child's fact — and pinning it here
+     stops a later reader "fixing" the pair into agreement by inventing a
+     container park word the engine cannot back. */
+  expect(graph.nodeStatus).toBe('waiting (timer)');
+
+  await expectQuiet(page, problems);
+});
