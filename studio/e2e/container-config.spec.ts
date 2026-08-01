@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
-import { expectQuiet } from './support/console-guard';
-import { openSeededCanvas, seedVersion } from './support/seedDoc';
+import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { openSeededCanvas } from './support/seedDoc';
 
 /**
  * U23 (#839) — editing an EXISTING container's config.
@@ -53,16 +53,16 @@ async function captureConfirm(page: Page, act: () => Promise<void>): Promise<str
 async function savedContainers(page: Page, pipelineId: string): Promise<unknown[]> {
   return page.evaluate(async (id: string) => {
     const res = await fetch(`/api/pipelines/${id}/versions`, { credentials: 'same-origin' });
-    const body = (await res.json()) as { data: { version: number; containers: unknown[] }[] };
-    const latest = body.data.reduce((a, b) => (a.version >= b.version ? a : b));
+    const versions = (await res.json()) as { version: number; containers: unknown[] }[];
+    const latest = versions.reduce((a, b) => (a.version >= b.version ? a : b));
     return latest.containers;
   }, pipelineId);
 }
 
 test.describe('U23 — container config editing', () => {
   test('an exitWhen typo is fixed in place, and reaches the saved version', async ({ page }) => {
-    const problems = expectQuiet(page);
-    const pipelineId = await openSeededCanvas(page, 'u23 exitwhen', {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, 'u23 fix in place', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [
         { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 2)}' },
@@ -70,7 +70,7 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    const field = page.getByLabel('exitWhen', { exact: false });
+    const field = page.getByLabel(/^exitWhen/);
     await expect(field).toHaveValue('${equals(1, 2)}');
     await field.fill('${equals(1, 1)}');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
@@ -81,7 +81,7 @@ test.describe('U23 — container config editing', () => {
     expect(await savedContainers(page, pipelineId)).toEqual([
       { id: 'loop_1', kind: 'loop', children: ['n_a'], exitWhen: '${equals(1, 1)}' },
     ]);
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -90,7 +90,7 @@ test.describe('U23 — container config editing', () => {
    * either was the API.
    */
   test('authors a field the create form never offered', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     const pipelineId = await openSeededCanvas(page, 'u23 new fields', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [
@@ -99,8 +99,8 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel('timeout', { exact: false }).fill('45');
-    await page.getByLabel('join', { exact: false }).selectOption('any');
+    await page.getByLabel(/^timeout/).fill('45');
+    await page.getByLabel(/^join/).selectOption('any');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -116,7 +116,7 @@ test.describe('U23 — container config editing', () => {
         join: 'any',
       },
     ]);
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -128,7 +128,7 @@ test.describe('U23 — container config editing', () => {
    * as the same empty control.
    */
   test('clearing a numeric field removes the key rather than storing 0', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     const pipelineId = await openSeededCanvas(page, 'u23 clear', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [
@@ -143,8 +143,8 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await expect(page.getByLabel('maxRounds', { exact: false })).toHaveValue('7');
-    await page.getByLabel('maxRounds', { exact: false }).fill('');
+    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('7');
+    await page.getByLabel(/^maxRounds/).fill('');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -158,7 +158,7 @@ test.describe('U23 — container config editing', () => {
       exitWhen: '${equals(1, 1)}',
     });
     expect(Object.keys(saved as object)).not.toContain('maxRounds');
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -166,7 +166,7 @@ test.describe('U23 — container config editing', () => {
    * to the stored value on a refusal loses the edit and says nothing.
    */
   test('a refused value keeps the typed text and says why', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 refuse', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [
@@ -175,13 +175,13 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel('timeout', { exact: false }).fill('1.5');
+    await page.getByLabel(/^timeout/).fill('1.5');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
     await expect(page.getByRole('alert')).toContainText('timeout');
-    await expect(page.getByLabel('timeout', { exact: false })).toHaveValue('1.5');
+    await expect(page.getByLabel(/^timeout/)).toHaveValue('1.5');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -190,7 +190,7 @@ test.describe('U23 — container config editing', () => {
    * and the operator is told before the edit lands — not after, by a badge.
    */
   test('warns before an exitWhen edit that makes the doc unsavable', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 consequence', {
       nodes: [
         { id: 'n_a', position: AT },
@@ -202,7 +202,7 @@ test.describe('U23 — container config editing', () => {
     });
 
     await configure(page, 'loop 1');
-    await page.getByLabel('exitWhen', { exact: false }).fill('${nodes.n_b.status == "success"}');
+    await page.getByLabel(/^exitWhen/).fill('${nodes.n_b.status == "success"}');
     const message = await captureConfirm(page, async () => {
       await page.getByRole('button', { name: 'Apply container settings' }).click();
     });
@@ -212,12 +212,12 @@ test.describe('U23 — container config editing', () => {
     // The recovery sentence names the PREVIOUS value, not a generic instruction.
     expect(message).toContain('${equals(1, 1)}');
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /** An edit that costs the doc nothing must not interrupt the operator. */
   test('does not confirm a harmless edit', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 harmless', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [
@@ -227,12 +227,12 @@ test.describe('U23 — container config editing', () => {
 
     await configure(page, 'loop 1');
     const message = await captureConfirm(page, async () => {
-      await page.getByLabel('timeout', { exact: false }).fill('30');
+      await page.getByLabel(/^timeout/).fill('30');
       await page.getByRole('button', { name: 'Apply container settings' }).click();
     });
 
     expect(message).toBeNull();
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -241,7 +241,7 @@ test.describe('U23 — container config editing', () => {
    * panel, so `onPaneClick` is the only way out.
    */
   test('the panel opens on the right box and closes on a pane click', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 selection', {
       nodes: [
         { id: 'n_a', position: AT },
@@ -255,7 +255,7 @@ test.describe('U23 — container config editing', () => {
 
     // Two loops, so the ordinal is what tells the two ⚙ buttons apart at all.
     await configure(page, 'loop 2');
-    await expect(page.getByLabel('exitWhen', { exact: false })).toHaveValue('${equals(2, 2)}');
+    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${equals(2, 2)}');
     await expect(page.locator('.react-flow__node[data-id="loop_2"] .flow-container')).toHaveClass(
       /flow-container--selected/,
     );
@@ -265,47 +265,57 @@ test.describe('U23 — container config editing', () => {
 
     // Switching subjects must carry no draft across — the panel is keyed per
     // container for exactly this.
-    await page.getByLabel('exitWhen', { exact: false }).fill('${equals(9, 9)}');
+    await page.getByLabel(/^exitWhen/).fill('${equals(9, 9)}');
     await configure(page, 'loop 1');
-    await expect(page.getByLabel('exitWhen', { exact: false })).toHaveValue('${equals(1, 1)}');
+    await expect(page.getByLabel(/^exitWhen/)).toHaveValue('${equals(1, 1)}');
 
     await page.locator('.react-flow__pane').click({ position: { x: 8, y: 8 } });
     await expect(page.getByRole('heading', { name: 'loop 1' })).toHaveCount(0);
     await expect(page.locator('.react-flow__node[data-id="loop_1"] .flow-container')).not.toHaveClass(
       /flow-container--selected/,
     );
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 
   /**
-   * The repair path for a doc the canvas could not have authored.
+   * The repair path for a field that is DEAD on this container's kind.
    *
-   * A `stage` carrying a `timeout` is refused by `validateDoc` — reachable
-   * through the API, which is how this one is seeded. Before U23 that was a
-   * dead end: the badge names a field, `kind` is not editable, and the panel
-   * showed nothing to fix. The field is rendered as an advisory so clearing it
-   * removes the key.
+   * The seeded doc is `stage` + `maxRounds`, and the choice is forced: every
+   * other illegal combination is refused by the server's own write gate, so it
+   * cannot be minted at all. `maxRounds` on a `stage` is the ONE that gets
+   * through, because `validateDoc` refuses it on a `foreach` and forgets to on a
+   * `stage` — the hole this work found and filed as #859. `CONTAINER_CONFIG_FIELDS`
+   * declares it unpinnable for exactly that reason, and this spec is where the
+   * consequence of the hole is visible to an operator.
+   *
+   * Before U23 there was nothing to do about it: `kind` is not editable, and no
+   * panel showed the field. Rendering it makes the existing "blank an optional
+   * control to drop the key" rule the repair, with no new mechanism.
    */
-  test('offers a repair for a field that is illegal on this kind', async ({ page }) => {
-    const problems = expectQuiet(page);
-    const { pipelineId } = await seedVersion(page, 'u23 illegal', {
+  test('offers a repair for a field that is dead on this kind', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const pipelineId = await openSeededCanvas(page, 'u23 dead field', {
       nodes: [{ id: 'n_a', position: AT }],
-      containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], timeout: 30 }],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], maxRounds: 3 }],
     });
-    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
-    await page.locator('.react-flow__renderer').waitFor();
-
-    await expect(page.locator('.badge-list li')).toContainText('timeout is only meaningful');
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
     await configure(page, 'stage 1');
-    await expect(page.locator('.contract-advisory')).toContainText('timeout');
-    await page.getByLabel('timeout', { exact: false }).fill('');
+    await expect(page.locator('.contract-advisory')).toContainText('maxRounds');
+    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('3');
+    await page.getByLabel(/^maxRounds/).fill('');
     await page.getByRole('button', { name: 'Apply container settings' }).click();
 
-    await expect(page.locator('.badge-list li')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
-    expect(problems.messages()).toEqual([]);
+    // Gone from the panel too: the field was only rendered because the doc
+    // carried it, so the repair removes the control along with the key.
+    await expect(page.locator('.contract-advisory')).toHaveCount(0);
+    await expect(page.getByLabel(/^maxRounds/)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+    expect(await savedContainers(page, pipelineId)).toEqual([
+      { id: 'stage_1', kind: 'stage', children: ['n_a'] },
+    ]);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -314,7 +324,7 @@ test.describe('U23 — container config editing', () => {
    * fix `getByLabel(/^join/)` matched a control named "join (optional) all any".
    */
   test('the join picker is named by its field, not by its options', async ({ page }) => {
-    const problems = expectQuiet(page);
+    const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u23 a11y', {
       nodes: [{ id: 'n_a', position: AT }],
       containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'] }],
@@ -324,6 +334,6 @@ test.describe('U23 — container config editing', () => {
     const join = page.getByLabel('join (optional)', { exact: true });
     await expect(join).toBeVisible();
     await expect(join).toHaveRole('combobox');
-    expect(problems.messages()).toEqual([]);
+    await expectQuiet(page, problems);
   });
 });
