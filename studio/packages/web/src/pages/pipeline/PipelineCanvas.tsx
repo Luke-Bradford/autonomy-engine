@@ -1272,4 +1272,3 @@ export function NodePanel({
     </aside>
   );
 }
-
