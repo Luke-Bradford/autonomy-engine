@@ -138,6 +138,9 @@ describe('formatNodeDuration (#867)', () => {
     // measurement nothing took; this is the difference between "instant" and
     // "not measured", and only one of them is true.
     expect(formatNodeDuration(node({}))).toBe('—');
+    // An end with no start is UNREACHABLE from the fold (`closeSpan` declines to
+    // write one for a span that never opened), and is pinned as a defensive
+    // case: this function is exported and takes any row-shaped value.
     expect(formatNodeDuration(node({ endedAtMs: 4_000 }))).toBe('—');
   });
 
@@ -149,7 +152,11 @@ describe('formatNodeDuration (#867)', () => {
     expect(formatNodeDuration(node({ startedAtMs: 1_000 }))).toBe('—');
   });
 
-  it('clamps a backwards clock to zero rather than printing a negative span', () => {
-    expect(formatNodeDuration(node({ startedAtMs: 4_000, endedAtMs: 1_000 }))).toBe('0ms');
+  it('says nothing for a BACKWARDS span rather than clamping it to 0ms', () => {
+    // Both stamps come from one single-writer append path, so an end before its
+    // start means the wall clock stepped backwards — a corrupt log, not a fast
+    // node. `0ms` would print exactly the measurement-nobody-took this function
+    // exists to refuse, and would hide the corruption behind a plausible number.
+    expect(formatNodeDuration(node({ startedAtMs: 4_000, endedAtMs: 1_000 }))).toBe('—');
   });
 });

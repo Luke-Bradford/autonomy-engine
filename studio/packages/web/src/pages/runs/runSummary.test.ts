@@ -1237,6 +1237,36 @@ describe('reconcileNodeActivity', () => {
     expect(ids).not.toContain('w@2');
     expect(ids).not.toContain('w');
   });
+
+  it('#867 — drops an OPEN span when the engine reports the node terminal', () => {
+    /* The reducer can settle a node with no node event at all:
+       `container.timedOut` flips a live child to `skipped` through
+       `abandonLiveChildren`. The fold is then left holding a start whose close
+       can never arrive, and rendering that as an unsettled attempt describes a
+       node that will never run again as still running. */
+    const state = stateOf(aSucceededLog());
+    const abandoned = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'skipped' as const, attempts: 1, retries: 0 } },
+    };
+    const [only] = reconcileNodeActivity([row({ nodeId: 'a', startedAtMs: 1_000 })], abandoned);
+    expect(only!.status).toBe('skipped');
+    expect(only!.startedAtMs).toBeUndefined();
+  });
+
+  it('#867 — leaves a CLOSED span alone, because it is a measurement that happened', () => {
+    const state = stateOf(aSucceededLog());
+    const done = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'success' as const, attempts: 1, retries: 0 } },
+    };
+    const [only] = reconcileNodeActivity(
+      [row({ nodeId: 'a', status: 'success', startedAtMs: 1_000, endedAtMs: 4_000 })],
+      done,
+    );
+    expect(only!.startedAtMs).toBe(1_000);
+    expect(only!.endedAtMs).toBe(4_000);
+  });
 });
 
 /**
@@ -1451,6 +1481,39 @@ describe('deriveNodeActivity — duration span (#867)', () => {
       ),
     ];
     const row = rowFor(events, 'w');
+    expect(row.startedAtMs).toBeUndefined();
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
+  it('forgets the previous attempt\u2019s span while a node is re-opened for retry', () => {
+    // The window between `node.retryDue` and the re-dispatch is a real live-tail
+    // frame — and it freezes permanently if the process dies after the boot
+    // reconciler's `node.retryRequested`. Keeping the old span there shows the
+    // duration of the attempt BEFORE last beside a node that is running again,
+    // under a label that says "the latest attempt".
+    const events = [
+      envelope(
+        { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#0', idempotent: true },
+        1_000,
+      ),
+      envelope(
+        {
+          type: 'node.failed',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          error: 'boom',
+          kind: 'transient',
+        },
+        1_200,
+      ),
+      envelope(
+        { type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' },
+        61_000,
+      ),
+    ];
+    const row = rowFor(events, 'a');
+    expect(row.status).toBe('dispatched');
     expect(row.startedAtMs).toBeUndefined();
     expect(row.endedAtMs).toBeUndefined();
   });

@@ -42,10 +42,14 @@ import type { NodeActivity } from './runSummary';
  *    and `isError` IN THE CLEAR (only args/result are chars+hash), so "which
  *    tools ran, in which exchange, which errored" is renderable today. It is
  *    deferred as its own slice, NOT because the data is missing;
- *  - a per-attempt DURATION — the envelope timestamps would give a span that
- *    silently includes retry holds and park idle, and six engine-evaluated
- *    activity kinds have no dispatch event to start it from. A wrong number is
- *    worse than no number.
+ *
+ * The per-attempt DURATION was on that list and no longer is: #867 shipped it.
+ * Both objections that kept it off were answered rather than waived — the span
+ * is per-ATTEMPT, so a retry hold falls between two spans instead of inside
+ * one, and the engine-evaluated kinds that have no start event are rendered as
+ * unmeasured rather than given a manufactured `0ms`. What is still deferred is
+ * a LIVE counter for an attempt in flight, which needs a clock this page does
+ * not have (#890).
  */
 /** The panel's DOM id, so the table's disclosure button can `aria-controls` it. */
 export const PANEL_ID = 'node-activity-panel';
@@ -116,7 +120,9 @@ export function NodeActivityPanel({
         from start to settle, including any wait it parked on and excluding time held between
         retries.{' '}
         {node.startedAtMs === undefined &&
-          'This node is evaluated by the engine in a single step, which records no span to measure.'}
+          (node.attempts === 0
+            ? 'This node has not started, so there is nothing to measure yet.'
+            : 'No span was recorded for this attempt.')}
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
           'This attempt has not settled yet, so its span is not complete.'}

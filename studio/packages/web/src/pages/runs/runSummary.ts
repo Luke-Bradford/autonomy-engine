@@ -2,6 +2,7 @@ import {
   docNodeIdOf,
   EngineEventSchema,
   parseInstanceKey,
+  TerminalNodeStatusSchema,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
   type EngineEvent,
@@ -315,12 +316,17 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * A terminal with no open span (a `fail`/`filter` node's only event) is a
    * no-op: it leaves the row with no start, which IS "no span".
    */
+  /** Forget the span entirely — no start, no end, and no claim about either. */
+  const dropSpan = (n: NodeActivity): void => {
+    n.startedAtMs = undefined;
+    n.endedAtMs = undefined;
+    spanInstance.delete(n.nodeId);
+  };
+
   const closeSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
     if (n.startedAtMs === undefined) return;
     if (spanInstance.get(n.nodeId) !== instanceOf(rawNodeId)) {
-      n.startedAtMs = undefined;
-      n.endedAtMs = undefined;
-      spanInstance.delete(n.nodeId);
+      dropSpan(n);
       return;
     }
     n.endedAtMs = at;
@@ -385,6 +391,15 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'dispatched';
         clearResult(n);
+        /* And the span goes with the result, for the same reason. These events
+           re-open the node WITHOUT starting an attempt (the `node.dispatched`
+           that follows does that), so between the two the row would otherwise
+           show the PREVIOUS attempt's completed span beside a `dispatched`
+           status — "200ms" over a node that is running again, from an attempt
+           before last. That window is a real live-tail frame, and it freezes
+           permanently if the process dies after the boot reconciler's
+           `node.retryRequested` and before the re-dispatch. */
+        dropSpan(n);
         break;
       }
       case 'node.retryScheduled': {
@@ -476,6 +491,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // loop), and gating would silently drop exactly that documented case.
         n.outputValues = e.outputs;
         n.instanceId = instanceOf(e.callNodeId);
+        /* A no-op today — a call node has no start event, so there is no span
+           to close. It is wired anyway because #796 adds `call.started`: the
+           day it lands, a call node's span would open here and never close,
+           every call node would silently read as unmeasured, and no test would
+           fail. `closeSpan` is documented as a no-op without an open span. */
+        closeSpan(n, e.callNodeId, row.ts);
         countIfUnstarted(n); // a call node's only event
         break;
       }
@@ -585,7 +606,19 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
 export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): NodeActivity[] {
   const reconciled = rows.map((row) => {
     const engine = state.nodes[row.nodeId];
-    return engine === undefined ? row : { ...row, status: engine.status };
+    if (engine === undefined) return row;
+    /* #867 — an OPEN span cannot survive the engine calling the node terminal.
+       The reducer can settle a node with no node event at all: `container.timedOut`
+       flips a live child to `skipped` via `abandonLiveChildren`, so the fold is
+       left holding a start whose close will never be appended. Keeping it would
+       render "skipped" beside a span the UI describes as still in flight. The
+       engine is the authority on the status, so it is the authority on whether
+       an attempt is still running. */
+    const open = row.startedAtMs !== undefined && row.endedAtMs === undefined;
+    const settled = TerminalNodeStatusSchema.safeParse(engine.status).success;
+    return open && settled
+      ? { ...row, status: engine.status, startedAtMs: undefined }
+      : { ...row, status: engine.status };
   });
 
   const seen = new Set(reconciled.map((row) => row.nodeId));

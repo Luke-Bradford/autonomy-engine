@@ -7,7 +7,7 @@ export function formatWhen(ms: number | null): string {
 }
 
 /** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
-export function formatElapsed(ms: number): string {
+function formatElapsed(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   const totalSeconds = Math.floor(ms / 1_000);
   const seconds = totalSeconds % 60;
@@ -55,9 +55,10 @@ export function formatRunDuration(
  *
  * 1. **No start stamp.** An `if`/`switch`, a `fail`/`filter` and a
  *    `call_pipeline` node are started and settled by ONE event, so nothing ever
- *    measured a span for them. `0ms` there would state a measurement nobody
- *    took — the difference between "instant" and "not measured", and only one
- *    of them is true.
+ *    measured a span for them — they hold NEITHER stamp, since `closeSpan`
+ *    declines to write an end for a span that never opened. `0ms` here would
+ *    state a measurement nobody took: the difference between "instant" and
+ *    "not measured", and only one of them is true.
  * 2. **No end stamp.** The attempt has not settled (or the run died mid-flight
  *    and never will). Deliberately NOT rendered as a live "3s so far": this
  *    page has no ticking clock by design, so such a counter could only be
@@ -76,7 +77,15 @@ export function formatRunDuration(
  */
 export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs'>): string {
   if (node.startedAtMs === undefined || node.endedAtMs === undefined) return '—';
-  return formatElapsed(Math.max(0, node.endedAtMs - node.startedAtMs));
+  const span = node.endedAtMs - node.startedAtMs;
+  /* A NEGATIVE span is a corrupt log, not a fast node: both stamps are
+     `Date.now()` taken by one single-writer append path, so an end before its
+     start means the wall clock stepped backwards. Clamping it to `0ms` would
+     print exactly the measurement-nobody-took this function refuses two
+     paragraphs above, and would hide the corruption behind a plausible number.
+     (`formatRunDuration` clamps because its inputs are two DB columns written
+     by different paths — a different question, deliberately left alone.) */
+  return span < 0 ? '—' : formatElapsed(span);
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */
