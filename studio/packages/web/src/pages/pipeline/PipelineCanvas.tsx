@@ -1050,10 +1050,9 @@ function ContainerSection({
  * that field would actually accept.
  *
  * Naming lives on this side of the boundary deliberately. `availableRefs`
- * returns identity only — a node's operator-facing name comes from the activity
- * catalog (`activityLabel`, the same text its box carries) and a container's
- * from `containerLabels`' document-order ordinals, neither reachable from
- * `shared`. Computing a label there would be a second answer to "what is this
+ * returns identity only — a node's operator-facing name comes from
+ * `activityLabels`' within-kind ordinals (#878, the same text its box carries)
+ * and a container's from `containerLabels`', neither reachable from `shared`. Computing a label there would be a second answer to "what is this
  * node called", free to disagree with the canvas.
  *
  * The per-FIELD half is why `resolve` exists rather than a plain list.
@@ -1077,6 +1076,8 @@ function useExpressionPicker(
   containers: Container[],
   params: Param[],
   nodeId: string,
+  /** The panel's ONE answer to "what is each activity called" — see `nodeName`. */
+  nodeNames: ReadonlyMap<string, string>,
 ): FieldPicker {
   return useMemo(() => {
     const doc = { params, nodes, edges, containers };
@@ -1095,7 +1096,6 @@ function useExpressionPicker(
     // was a real if accidental aid. That link is gone from the option text. The
     // canvas is where an author identifies a node, and the ordinal is the only
     // name that exists on both surfaces.
-    const nodeNames = activityLabels(nodes);
     const producerName = (id: string) => nodeNames.get(id) ?? labels.get(id) ?? id;
 
     const issuesWith = (fieldName: string, value: string) =>
@@ -1135,7 +1135,7 @@ function useExpressionPicker(
         };
       },
     };
-  }, [nodes, edges, containers, params, nodeId]);
+  }, [nodes, edges, containers, params, nodeId, nodeNames]);
 }
 
 /**
@@ -1183,10 +1183,24 @@ export function NodePanel({
   const docEdges = useStore(store, (s) => s.edges);
   const docContainers = useStore(store, (s) => s.containers);
   const docParams = useStore(store, (s) => s.params);
-  const picker = useExpressionPicker(docNodes, docEdges, docContainers, docParams, nodeId);
+  /**
+   * Every activity's identifying name (#878), built ONCE for this panel and read
+   * by both surfaces that need one — the heading below and the expression
+   * picker's producer list. Two constructions would be two answers that merely
+   * happen to agree.
+   */
+  const nodeNames = useMemo(() => activityLabels(docNodes), [docNodes]);
+  const picker = useExpressionPicker(
+    docNodes,
+    docEdges,
+    docContainers,
+    docParams,
+    nodeId,
+    nodeNames,
+  );
 
   /**
-   * What this panel is a panel FOR (#878).
+   * What this panel is a panel FOR.
    *
    * It used to read `entry?.title` — a fourth hand-rolled copy of
    * `activityLabel`, and one that names the activity's KIND. With two
@@ -1195,10 +1209,7 @@ export function NodePanel({
    * docblock exists to prevent. Falls back to the catalog title, then the raw
    * type, for a node the doc no longer holds.
    */
-  const nodeName = useMemo(
-    () => activityLabels(docNodes).get(nodeId) ?? entry?.title ?? nodeType,
-    [docNodes, nodeId, entry, nodeType],
-  );
+  const nodeName = nodeNames.get(nodeId) ?? entry?.title ?? nodeType;
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the

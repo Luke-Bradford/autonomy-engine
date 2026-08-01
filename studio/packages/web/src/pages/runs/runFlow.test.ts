@@ -131,7 +131,8 @@ describe('runFlowNodes', () => {
 
   it('puts the status in the accessible name, so it is not conveyed by colour alone', () => {
     const nodes = runFlowNodes(DOC, projected());
-    // The label is the activity's TITLE (the author canvas's own rule), not its id.
+    // The label is the activity's identifying name (the author canvas's own
+    // rule, #878), not its id.
     expect(nodes.find((n) => n.id === 'a')!.ariaLabel).toBe('HTTP Request 1, success');
   });
 

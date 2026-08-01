@@ -149,8 +149,9 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
           bare kind: two loops on screen would otherwise give two buttons with
           one name, which is ambiguous to a screen reader and unaddressable to a
           spec. The BOX's own label stays the bare kind — putting the ordinal
-          there is a U6c render change (#839 part 3), deliberately not smuggled
-          in here. */}
+          there is a U6c render change, deliberately not smuggled in here — and
+          since #878 drew the ACTIVITY ordinal on its box, the asymmetry has a
+          ticket of its own (#883). */}
       <button
         type="button"
         className="flow-container-configure nodrag nopan"
@@ -373,7 +374,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             // #878 — the box carries the IDENTIFYING name ("HTTP Request 2"),
             // not the kind. Every message that points at one activity now names
             // it this way, and a name the canvas cannot show is a name the
-            // operator cannot act on.
+            // operator cannot act on. The fallback is unreachable: `nodeLabels`
+            // is built from this very array.
             title: nodeLabels.get(n.id) ?? activityLabel(n),
             hasConnection: n.connectionId != null,
           } satisfies ActivityData,

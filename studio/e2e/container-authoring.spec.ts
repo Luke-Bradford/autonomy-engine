@@ -340,8 +340,11 @@ test.describe('#840 — a container edit states the routing it changes', () => {
     ).not.toBeNull();
     expect(message).toContain('changes that inferred routing');
     expect(message).toContain('Saving mints');
-    // Qualitative by design: `activityLabel` is keyed on TYPE, so naming the
-    // activities would repeat one word rather than identify anything.
+    // Qualitative by design. It was once a hard constraint — `activityLabel` is
+    // keyed on TYPE, so naming the activities repeated one word — and since #878
+    // it is a scope decision instead: `activityLabels` could name them, and
+    // `RoutingChange` carries the ids. Deferred to #881; this pins the sentence
+    // that ships today.
     expect(message).not.toContain('HTTP Request');
 
     await expect(page.getByLabel('Container membership')).toHaveValue('');

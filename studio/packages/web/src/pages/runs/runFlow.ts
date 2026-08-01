@@ -1,6 +1,6 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import type { PipelineVersion, RunState } from '@autonomy-studio/shared';
-import { activityLabels } from '../pipeline/activityLabel';
+import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import {
   containerAriaLabel,
   containerHandles,
@@ -77,11 +77,17 @@ export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone
 export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
-     would otherwise be two boxes reading "HTTP Request", and a monitor whose
-     whole job is to say WHICH node failed cannot afford that. */
+     would otherwise be two boxes reading "HTTP Request", in the view whose job
+     is to say WHICH node failed.
+
+     The GRAPH only. The node table and drill-in panel on the same page still
+     name a node by its raw id, so this page currently carries two vocabularies
+     for one node — filed as #882, because those rows come from the run
+     projection rather than the doc and need a rule for a row with no doc node. */
   const names = activityLabels(doc.nodes);
   const activities: FlowNode[] = doc.nodes.map((n) => {
-    const name = names.get(n.id) ?? n.id;
+    // Unreachable fallback: `names` is built from this very array.
+    const name = names.get(n.id) ?? activityLabel(n);
     const status = state?.nodes[n.id]?.status ?? null;
     /* U25 — the node says the same word the table's pill does. The TONE still
        comes off the raw engine status; only what an operator reads is worded. */

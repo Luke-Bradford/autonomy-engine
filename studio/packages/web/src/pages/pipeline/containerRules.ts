@@ -237,7 +237,7 @@ export function containerEditConsequence(
  * The honest cost, stated rather than hidden: the ordinal is not DRAWN on the
  * box, so with two loops on screen "loop 2" identifies the option but not the
  * rectangle. Putting it on the box is a U6c render change, still deferred
- * (#839 part 3).
+ * (#883 — #839 closed without it, so it now has a ticket of its own).
  *
  * U23 narrowed that cost without closing it. The ⚙ button's accessible name is
  * this label, so the ordinal is now addressable on the box to a screen reader

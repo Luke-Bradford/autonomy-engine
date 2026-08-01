@@ -997,8 +997,10 @@ Decisions worth not re-deriving:
   `newLocalId`, so the first draft read *"'n_7c44a16f-…' → 'n_9c4bb103-…' would close a
   forward cycle"* with every unit spec green — the fixtures used ids a human would pick (`'a'`),
   which makes `toContain("'a'")` pass either way. The specs now use id-SHAPED fixtures and assert
-  the ids do NOT appear. Two same-typed nodes share a label, which is accepted: the text is
-  transient feedback about the two ports just dragged, and `Node` has no per-node name.
+  the ids do NOT appear. Two same-typed nodes used to share a label, accepted on the grounds that
+  the text is transient feedback about the two ports just dragged. **#878 ended that**:
+  `activityLabels` mints an identifying name (kind + within-kind ordinal, `HTTP Request 2`) and the
+  refusal names both ends by it — `Node` still has no per-node name FIELD, but it now has a name.
 - **The `duplicate` rule is per-CONDITION, so it must not become "one edge per pair".** `a
   -success-> b` and `a -failure-> b` are both legal; the canvas cannot DRAW the second yet (a drawn
   edge is always `success`), and **U19** — one source port per outcome — is what makes it drawable.

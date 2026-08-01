@@ -674,8 +674,8 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
    * #878, the render half — and the half that makes every message above
    * actionable. An advisory naming "HTTP Request 2" is worth nothing if the two
    * rectangles on screen both read "HTTP Request": the operator can read the
-   * sentence and still not know which box it means. This is the same cost #839
-   * part 3 records for the container ordinal, which is NOT drawn; an activity's
+   * sentence and still not know which box it means. This is the same cost #883
+   * records for the container ordinal, which is NOT drawn; an activity's
    * box label has nowhere else to live, so it is drawn here.
    */
   it('draws the identifying name on the box, not the bare kind', () => {

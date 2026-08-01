@@ -89,8 +89,6 @@ export interface ConnectPrecheck {
   endpoints: ReadonlySet<string>;
   /** `authoringEdgeKey` of every existing edge. */
   edgeKeys: ReadonlySet<string>;
-  /** Nodes by id, for naming an endpoint the way the canvas labels it. */
-  byId: ReadonlyMap<string, Node>;
   /** Each activity's identifying name (#878) — what a refusal calls its ends. */
   nodeLabels: ReadonlyMap<string, string>;
   /** Containers by id — an endpoint can be one, and it is named by its KIND. */
@@ -126,7 +124,6 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     graph,
     endpoints: edgeEndpointIds(graph.nodes, graph.containers),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
-    byId: new Map(graph.nodes.map((n) => [n.id, n])),
     nodeLabels: activityLabels(graph.nodes),
     containerById: new Map(graph.containers.map((c) => [c.id, c])),
     childOwner: containerMembership(graph.containers).owner,

@@ -4,10 +4,14 @@ import { getActivity, type Node } from '@autonomy-studio/shared';
  * What KIND of activity this is: its catalog title, keyed on `node.type`.
  *
  * This names a TYPE, not an instance — three `http_request` nodes all answer
- * "HTTP Request". Use `activityLabels` below to name a particular one; this is
- * the raw ingredient it is built from, and is exported for the surfaces that
- * genuinely mean the kind (a palette entry, a property panel heading for the one
- * node already on screen).
+ * "HTTP Request". To name a PARTICULAR one, use `activityLabels` below.
+ *
+ * It stays exported for exactly two uses, and neither is a surface: it is the
+ * ingredient `activityLabels` is built from, and it is the total fallback at the
+ * two map lookups that feed a canvas (`FlowCanvas`, `runFlow`). Those fallbacks
+ * are unreachable by construction — each map is built from the very array being
+ * mapped over — so they are there to keep the type total, not to run. No surface
+ * names an activity with this any more.
  *
  * One function rather than the expression, because the canvas had grown three
  * hand-rolled copies of it — the node's own label (`FlowCanvas`), a connection
@@ -32,15 +36,21 @@ export function activityLabel(node: Node): string {
  * not identify (`activityLabel`, keyed on TYPE) and a raw id that is not
  * readable — `newLocalId` mints `n_7c44a16f-98f1-4958-…` for anything drawn on
  * the canvas, which is the exact unreadable-id defect `readableIssue` and
- * `endpointLabel` were both written against. Every surface that points at a
- * particular activity reads this.
+ * `endpointLabel` were both written against.
+ *
+ * Every AUTHORING surface reads this, and so does the run graph. Three surfaces
+ * do NOT yet, each ticketed rather than left to be discovered: the run detail's
+ * node table and drill-in panel (#882), the canvas validation badge list, which
+ * has never gone through `readableIssue` at all (#884), and the pre-edit routing
+ * confirmation, which names no activity by design (#881).
  *
  * THE ORDINAL IS DRAWN ON THE BOX, unlike the container ordinal, which
- * `FlowCanvas` deliberately keeps off its box (#839 part 3). Not an
+ * `FlowCanvas` deliberately keeps off its box (#883). Not an
  * inconsistency: a container's box label is a separate render path, so putting
  * its ordinal there is a real U6c change, whereas an activity's box label IS
  * this function's output — there is nowhere else for the name to live. And the
- * cost #839 documents for containers is precisely the cost of NOT drawing it: a
+ * cost #883 records for the container ordinal is precisely the cost of NOT
+ * drawing it: a
  * sighted operator reading "HTTP Request 2" in a message cannot match it to one
  * of two identical rectangles. Shipping a message that names something the
  * canvas cannot show would reproduce a defect already on file.

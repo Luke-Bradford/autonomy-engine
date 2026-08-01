@@ -68,8 +68,8 @@ describe('ExpressionPicker in NodePanel', () => {
   it('lists an upstream output the author had no other way to discover', () => {
     const ui = mount([FETCH, CALL], CHAIN, [], 'call');
     ui.open('url');
-    // Named by the activity's CATALOG title — the same text its box carries —
-    // not by the raw node id the reference is built from.
+    // Named by the activity's IDENTIFYING name (#878) — the same text its box
+    // carries — not by the raw node id the reference is built from.
     expect(screen.getByRole('button', { name: /HTTP Request 1 → body/ })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Upstream outputs' })).toBeTruthy();
   });
