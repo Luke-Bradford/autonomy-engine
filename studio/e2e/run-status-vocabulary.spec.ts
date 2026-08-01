@@ -176,6 +176,19 @@ test('#873 — a live container says "running", the same word its node and its r
   const box = canvas.locator('.run-container .flow-container-label');
   await expect(box).toHaveText('stage · running', { timeout: 20_000 });
 
+  /* And wait on the CHILD's park too, before reading anything one-shot below.
+     The container turns `active` at ENTER, which is strictly earlier in the
+     lifecycle than its child parking — the driver appends `timer.waitScheduled`
+     only once it has armed the alarm, a separate event in a separate frame. So
+     the box can already read `running` while the node still reads `ready`, and
+     the single `evaluate` below has no retry to save it. This is the assertion
+     that closes that window; it replaces #870's run-row poll, which this spec
+     deliberately does not borrow, and it does so without assuming anything
+     about what the ROW says for a wait nested in a container. */
+  await expect(canvas.locator('.run-node .run-node-status')).toHaveText('waiting (timer)', {
+    timeout: 20_000,
+  });
+
   /* One evaluate, every remaining assertion. The pairing is the point of the
      ticket: the container and the node it encloses are two levels of one graph,
      and before this they answered "what is happening here?" in two vocabularies
@@ -200,10 +213,13 @@ test('#873 — a live container says "running", the same word its node and its r
   // Named in full, so a truncated or reordered accessible name trips.
   expect(graph.boxAria).toBe('stage container, 1 activity, running');
 
-  // The TONE is still keyed off the RAW status, which is why the hue survives
-  // the wording — `palette.test.ts` enumerates `.run-container-<tone>` from
-  // `ContainerRunStatusSchema`, and a class built from the LABEL would match no
-  // rule and silently fall through to unstyled.
+  /* The hue is PINNED here, not discriminated: `active` is the one member whose
+     label and tone are the same word, so this assertion reads identically
+     whether the class is keyed off the status or off the label. It is worth
+     asserting anyway — it proves the class RESOLVED on the box the operator is
+     looking at — but the seam itself is guarded where it can actually fail, in
+     `runFlow.test.ts`, which walks all five members and catches the four whose
+     label and tone diverge. */
   expect(graph.boxClasses).toContain('run-container-running');
 
   /* The honest limit, asserted rather than left to be discovered: a container

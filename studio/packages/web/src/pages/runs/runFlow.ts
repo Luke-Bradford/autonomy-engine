@@ -46,9 +46,12 @@ export interface RunContainerData extends Record<string, unknown> {
   /**
    * AS WORDED FOR AN OPERATOR, the same commitment `RunNodeData.status` above
    * makes, and `string` rather than `ContainerRunStatus` for the same reason:
-   * the engine's identifier is not what reaches the screen. Until #873 the
-   * container half passed the identifier straight through — the widened type
-   * was already promising a wording that no producer performed.
+   * the engine's identifier is not what reaches the screen.
+   *
+   * Both have been `string` since U11 (`d432814`), when the engine's own word
+   * WAS what reached the screen for each — so the width was never a promise of
+   * wording. U25 made the node half honest by wording its producer; #873 does
+   * the same for this one.
    */
   status: string | null;
   tone: StatusTone | null;

@@ -5,8 +5,9 @@ import type { ContainerRunStatus, NodeRunStatus } from '@autonomy-studio/shared'
  * and `ContainerRunStatus`, plus how to draw each and how to word each.
  *
  * (The first sentence said "node-status" and named only `NodeRunStatus` until
- * #873, while the file had held `CONTAINER_TONES` since U11 — the drift that
- * let the container half ship a tone with no label for two tickets.)
+ * #873, while this module has carried `CONTAINER_TONES` since it was split out
+ * of `runFlow.ts` at U25 — and that tone has existed since U11. The drift is
+ * what let the container half ship a tone with no label for two tickets.)
  *
  * Before this module the run detail page answered the same question twice, in
  * two vocabularies. The graph folded the real reducer (10 statuses) while the
