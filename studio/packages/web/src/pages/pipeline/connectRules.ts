@@ -8,6 +8,7 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
+import { containerLabels } from './containerRules';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
 
 /**
@@ -91,8 +92,8 @@ export interface ConnectPrecheck {
   edgeKeys: ReadonlySet<string>;
   /** Each activity's identifying name (#878) — what a refusal calls its ends. */
   nodeLabels: ReadonlyMap<string, string>;
-  /** Containers by id — an endpoint can be one, and it is named by its KIND. */
-  containerById: ReadonlyMap<string, Container>;
+  /** Each container's identifying name (#883) — the text its box draws. */
+  containerNames: ReadonlyMap<string, string>;
   /**
    * Which container owns each child, FIRST-declared-wins
    * (`containerMembership`, the reducer's and the save gate's own SSOT).
@@ -125,7 +126,7 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     endpoints: edgeEndpointIds(graph.nodes, graph.containers),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     nodeLabels: activityLabels(graph.nodes),
-    containerById: new Map(graph.containers.map((c) => [c.id, c])),
+    containerNames: containerLabels(graph.containers),
     childOwner: containerMembership(graph.containers).owner,
   };
 }
@@ -148,11 +149,12 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  * but the two ends of a refused connection are the one thing this sentence is
  * about, and naming them identically made the panel unreadable in exactly the
  * graph an operator is most likely to be building.
- * A CONTAINER endpoint is named by its KIND — "loop", "stage", "foreach" — which
- * is the same word its box is labelled with on the canvas (U6c), so the sentence
- * points at something the operator can actually see. A container has no activity
- * and no name field, and falling through to the raw id here would reproduce the
- * exact unreadable-id defect above in its container form.
+ * #883 — a CONTAINER endpoint is named by its `containerLabels` ordinal ("loop
+ * 2"), which is the text its box now draws, so the sentence points at ONE
+ * rectangle the operator can see. It used to be the bare kind, on the grounds
+ * that that was the box's label; the box's label changed, and a refusal naming
+ * "the loop container" with two loops on screen is the unreadable-id defect above
+ * in a politer form — the operator still cannot tell which box is meant.
  *
  * An endpoint that is neither — an id from a stale view — degrades to the raw id
  * rather than inventing a name.
@@ -160,19 +162,31 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
 function endpointLabel(pre: ConnectPrecheck, id: string): string {
   const name = pre.nodeLabels.get(id);
   if (name !== undefined) return name;
-  const container = pre.containerById.get(id);
-  if (container !== undefined) return `${container.kind} container`;
+  const container = pre.containerNames.get(id);
+  if (container !== undefined) return `${container} container`;
   return id;
 }
 
-/** How a container is named when it is the OBSTACLE rather than an endpoint. */
-function containerKind(pre: ConnectPrecheck, id: string | undefined): string | undefined {
-  return id === undefined ? undefined : pre.containerById.get(id)?.kind;
-}
-
+/**
+ * How a container is named when it is the OBSTACLE rather than an endpoint.
+ *
+ * Same `containerLabels` name as `endpointLabel` uses (#883), for the same
+ * reason: a crossing refused by "the loop container" is unactionable while two
+ * loops are on screen.
+ *
+ * `containerNames` is the ONLY lookup, with no `?? kind` behind it, and that is a
+ * correctness point rather than brevity. It is built by `containerLabels` from
+ * `graph.containers` — the same array `childOwner` is built from — so an id known
+ * to either of them is known to both. A kind
+ * fallback would be unreachable code advertising a degradation that cannot
+ * happen, which is worse than none: a reader would take it as evidence that a
+ * container can be nameless. `containerById` went the same way — replacing its
+ * two readers with `containerNames` left it dead, and a dead field on a hot
+ * precompute is a claim that something still needs it.
+ */
 function containerName(pre: ConnectPrecheck, id: string | undefined): string {
-  const kind = containerKind(pre, id);
-  return kind === undefined ? 'a container' : `the ${kind} container`;
+  const named = id === undefined ? undefined : pre.containerNames.get(id);
+  return named === undefined ? 'a container' : `the ${named} container`;
 }
 
 /** The edge a candidate would become — the value both remaining rules read. */
@@ -238,24 +252,22 @@ export function connectRejection(
     const toOwner = pre.childOwner.get(to);
     // Which side is enclosed decides BOTH how the sentence reads and what it can
     // honestly suggest. Both enclosed (in DIFFERENT containers) is the third
-    // case, and it is the one with the traps:
-    //  - naming both by kind says nothing when the kinds MATCH — "the stage
-    //    container and the stage container" reads as a contradiction. The id is
-    //    not available as the disambiguator (`containerName`: a raw `c_<uuid>`
-    //    is what U6b's browser pass caught), so the shared-kind sentence names
-    //    the two NODES instead, which is what the operator can see on screen;
-    //  - the one-sided suggestion is false here. With both ends enclosed there
-    //    is no "outside step" to wait on the container, so it points at the two
-    //    containers instead.
+    // case, and it is the one with the trap: the one-sided suggestion is false
+    // here, because with both ends enclosed there is no "outside step" to wait on
+    // the container, so it points at the two containers instead.
+    //
+    // #883 DELETED the other trap along with a special case. Naming both by KIND
+    // said nothing when the kinds matched — "the stage container and the stage
+    // container" reads as a contradiction — and the id was not available as the
+    // disambiguator (a raw `c_<uuid>` is what U6b's browser pass caught), so a
+    // shared-kind branch named the two NODES instead. `containerLabels` is now
+    // that disambiguator and is drawn on the box, so both ends are named the same
+    // way whether or not the kinds collide, and the branch is gone rather than
+    // left as the one surface still naming a container by kind alone.
     const bothEnclosed = fromOwner !== undefined && toOwner !== undefined;
-    const fromKind = containerKind(pre, fromOwner);
-    const sharedKind =
-      bothEnclosed && fromKind === containerKind(pre, toOwner) ? fromKind : undefined;
     const detail = bothEnclosed
-      ? sharedKind !== undefined
-        ? `'${fromName}' and '${toName}' are in different ${sharedKind} containers`
-        : `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
-          `inside ${containerName(pre, toOwner)}`
+      ? `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
+        `inside ${containerName(pre, toOwner)}`
       : fromOwner !== undefined
         ? `'${fromName}' is inside ${containerName(pre, fromOwner)}`
         : `'${toName}' is inside ${containerName(pre, toOwner)}`;

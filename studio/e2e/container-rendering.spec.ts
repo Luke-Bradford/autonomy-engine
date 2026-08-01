@@ -142,8 +142,8 @@ async function emptyPointInsideBox(
 
 test.describe('U6c container rendering', () => {
   /**
-   * The headline: the box is drawn, labelled by KIND, and actually ENCLOSES the
-   * activities it owns — and only those.
+   * The headline: the box is drawn, labelled by its NAME (kind plus within-kind
+   * ordinal, #883), and actually ENCLOSES the activities it owns — and only those.
    *
    * Enclosure is asserted against the rendered rects rather than against
    * `containerRects`' return value, because every interesting way this fails
@@ -161,18 +161,23 @@ test.describe('U6c container rendering', () => {
 
     const box = page.locator('.flow-container');
     await expect(box).toHaveCount(1);
-    // The KIND, in words — the epic's non-colour status encoding, and the same
-    // word `connectRules` refuses a boundary crossing by.
-    await expect(box.locator('.flow-container-label')).toHaveText('loop');
+    // In words — the epic's non-colour status encoding — and since #883 with the
+    // WITHIN-KIND ORDINAL, the same text `connectRules` refuses a boundary
+    // crossing by and the same text the membership picker offers. Before #883 the
+    // box drew the bare kind while every surface that OFFERED a container drew
+    // 'loop 2', so the name identified an option and not a rectangle.
+    await expect(box.locator('.flow-container-label')).toHaveText('loop 1');
     /* The accessible name/role are on the NODE element React Flow renders (via the
        node's `ariaRole`/`ariaLabel`), not on the inner box — which is
        `pointer-events: none` inside a wrapper that, being non-focusable, would
        carry no role of its own. Asserted through the a11y tree rather than by
        selector, so it fails if the name stops being reachable. */
-    await expect(page.getByRole('group', { name: 'loop container, 2 activities' })).toHaveCount(1);
+    await expect(page.getByRole('group', { name: 'loop 1 container, 2 activities' })).toHaveCount(
+      1,
+    );
     await expect(page.locator('.react-flow__node[data-id="loop_1"]')).toHaveAttribute(
       'aria-label',
-      'loop container, 2 activities',
+      'loop 1 container, 2 activities',
     );
 
     const boxRect = await rectOf(page, '.flow-container');
@@ -328,8 +333,9 @@ test.describe('U6c container rendering', () => {
     const refusal = page.locator('.canvas-refusal');
     await expect(refusal).toBeVisible();
     await expect(refusal).toContainText('already');
-    // Named by KIND — the word printed on the box — not by its raw id.
-    await expect(refusal).toContainText('loop container');
+    // Named the way the box is (#883) — the ordinal, not the bare kind and not
+    // the raw id.
+    await expect(refusal).toContainText('loop 1 container');
     await expect(refusal).not.toContainText('loop_1');
     await expect(edgeGroup(page)).toHaveCount(2); // nothing authored
 
@@ -416,7 +422,7 @@ test.describe('U6c container rendering', () => {
    * forwards and named the wrong end backwards. The sentence must be identical
    * either way: it is a fact about the edge, not about the gesture.
    */
-  test('connecting out of a container is refused, naming the container by kind', async ({
+  test('connecting out of a container is refused, naming the container by NAME', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -432,8 +438,12 @@ test.describe('U6c container rendering', () => {
         'cross a container boundary',
       );
       await expect(refusal, `${direction}: the enclosed end is named wrong`).toContainText(
-        "'HTTP Request 2' is inside the loop container",
+        "'HTTP Request 2' is inside the loop 1 container",
       );
+      // The minted id, not the name — `loop_1` (underscore) is the seeded id,
+      // `loop 1` (space) is what #883 draws on the box. Near-identical here only
+      // because the seed chose a readable id; on a canvas-authored doc the id is
+      // a uuid, which is the case `canvas-issue-legibility.spec.ts` covers.
       await expect(refusal).not.toContainText('loop_1');
       // Nothing authored: still the two edges the doc was seeded with.
       await expect(edgeGroup(page)).toHaveCount(2);

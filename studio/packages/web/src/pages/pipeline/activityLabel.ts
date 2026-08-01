@@ -38,22 +38,18 @@ export function activityLabel(node: Node): string {
  * the canvas, which is the exact unreadable-id defect `readableIssue` and
  * `endpointLabel` were both written against.
  *
- * Every AUTHORING surface reads this, and so does the run graph. Three surfaces
- * do NOT yet, each ticketed rather than left to be discovered: the run detail's
- * node table and drill-in panel (#882), the canvas validation badge list, which
- * has never gone through `readableIssue` at all (#884), and the pre-edit routing
- * confirmation, which names no activity by design (#881).
+ * Every AUTHORING surface reads this, and so does the run graph. #884 added the
+ * canvas validation badge list, which had never gone through `readableIssue` at
+ * all. Two surfaces still do NOT, each ticketed rather than left to be
+ * discovered: the run detail's node table and drill-in panel (#882), and the
+ * pre-edit routing confirmation, which names no activity by design (#881).
  *
- * THE ORDINAL IS DRAWN ON THE BOX, unlike the container ordinal, which
- * `FlowCanvas` deliberately keeps off its box (#883). Not an
- * inconsistency: a container's box label is a separate render path, so putting
- * its ordinal there is a real U6c change, whereas an activity's box label IS
- * this function's output — there is nowhere else for the name to live. And the
- * cost #883 records for the container ordinal is precisely the cost of NOT
- * drawing it: a
- * sighted operator reading "HTTP Request 2" in a message cannot match it to one
- * of two identical rectangles. Shipping a message that names something the
- * canvas cannot show would reproduce a defect already on file.
+ * THE ORDINAL IS DRAWN ON THE BOX, and since #883 the container ordinal is too —
+ * so the rule is now uniform rather than an activity-only property with a
+ * documented exception. That symmetry is the point, not a tidiness: a sighted
+ * operator reading "HTTP Request 2" in a message must be able to match it to one
+ * of two otherwise identical rectangles, and a message naming one end by a drawn
+ * name and the other by a bare kind is only half readable.
  *
  * The ordinal is UNCONDITIONAL — a lone activity is "HTTP Request 1", exactly as
  * a lone container is "stage 1". Numbering only on collision was considered and

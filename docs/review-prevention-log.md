@@ -809,3 +809,51 @@ Two corollaries:
   (`expect(x).toBe('DUMP')`), not re-reading the assertion. An assertion you
   expected to fail and which passed is evidence about the *harness*, not a happy
   accident.
+- **Two subagents dispatched together are two writers.** Hit on the #884 branch:
+  the pre-PR CORRECTNESS and FIT lenses were launched in one message, as the
+  workflow encourages. The correctness lens mutation-tests — that is its job — so
+  it wrote to the tree while the FIT lens ran `vitest`, `typecheck` and `lint`
+  against it. FIT reported the collision itself, and correctly flagged its own
+  green runs as provisional and a `lint` failure that was really the other agent's
+  scratch probe. The rule above already says "or a subagent"; what is easy to miss
+  is that *you* create the collision by fanning out, and that the reviewer's report
+  arrives looking authoritative. **Run a mutating lens serially, or give it
+  `isolation: "worktree"`.** Read any parallel reviewer's tool output as void, not
+  as evidence.
+
+## 33. A COMPOUND mutation proves only that the compound matters — mutate one property at a time
+
+Mutation-proving answers "can this test fail?". It only answers "can it fail *for
+the reason stated*" if the mutation breaks **exactly one** property.
+
+Measured on the #884 branch. A regex was anchored at index 0 on purpose —
+`/^nodes?\.([^.\s:]+)(\.?)/` — because the same pattern occurs later in the string
+where it must NOT be rewritten. The test claiming to guard the anchor was
+mutation-proved by changing the regex to `/\bnodes?\.…/g`: two tests went red, and
+the anchor was recorded as pinned.
+
+It was not. That mutation changed **two** things — the anchor *and* the global
+flag — and the red came from the global flag alone. A review lens removed only
+the `^`, leaving the regex non-global, and **all 1172 tests passed**.
+`String.replace` with a non-global regex rewrites only the FIRST match, and in
+every fixture that test used, the first match *was* the location. The anchor was
+untested, and a real message existed that the missing anchor corrupted.
+
+**Rule: the mutation must be the minimal edit that falsifies the property the test
+names.** If the test says "anchored", delete the `^` and nothing else. If it says
+"short-circuits", remove the early return and nothing else. A mutation that
+touches two properties tells you at least one of them is guarded — which is not
+what the test claims.
+
+Corollaries:
+
+- **Write the mutation from the test's SENTENCE, not from the code.** "leaves a
+  reference in the body verbatim" names the anchor; reaching for the nearest
+  plausible edit instead is what produced the compound.
+- **A fixture can hide a property.** The anchor is only load-bearing when the
+  first match is in the body, which no fixture produced. When a minimal mutation
+  comes back green, the fixture is usually the reason — fix the fixture, not the
+  assertion.
+- Same shape as #25 (*the guard your comment ARGUES FOR is the one nothing
+  tests*). #25 is about the untested guard; this is about the test that looks like
+  it covers one and does not.

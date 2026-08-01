@@ -93,10 +93,18 @@ interface ContainerData extends Record<string, unknown> {
 /**
  * U6c — a container, drawn as the box its children sit in.
  *
- * The header states the KIND in words ('loop' / 'stage' / 'foreach'), not by
- * colour or shape alone — the epic's non-color-status-labels criterion, and the
- * same word `connectRules` names the container by when it refuses a boundary
+ * The header states the container in WORDS ('loop 2' / 'stage 1'), not by colour
+ * or shape alone — the epic's non-color-status-labels criterion — and it is the
+ * same text `connectRules` names the container by when it refuses a boundary
  * crossing, so a refusal points at something on screen.
+ *
+ * #883 put the within-kind ORDINAL in that header. It used to be the bare kind,
+ * on the reasoning that the kind is what the box IS; but `containerLabels` had
+ * already made "loop 2" the name every surface that OFFERS a container uses, so
+ * the box was the one place the name could not be matched to a rectangle. #878
+ * settled the question by drawing the activity ordinal on its box: leaving the
+ * container's off made a single sentence identify one end and not the other
+ * ("'HTTP Request 2' is inside the loop container").
  *
  * BOTH handle types, with the ids every edge names. `flowEdges` sets
  * `sourceHandle: 'out'` / `targetHandle: 'in'` on every edge uniformly, so a
@@ -112,7 +120,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   return (
     <div className={`flow-container${d.selected ? ' flow-container--selected' : ''}`}>
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <span className="flow-container-label">{d.kind}</span>
+      <span className="flow-container-label">{d.label}</span>
       {/* #748 — the box's own chrome is inert, and this is the one part of it
           that is not. (The edge HANDLES above are hit-testable too, and predate
           this: two opt-ins, not one.) A container cannot be made `selectable` —
@@ -133,8 +141,8 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
       <button
         type="button"
         className="flow-container-delete nodrag nopan"
-        aria-label={`Delete ${d.kind} container`}
-        title={`Delete ${d.kind} container`}
+        aria-label={`Delete ${d.label} container`}
+        title={`Delete ${d.label} container`}
         onClick={() => d.onDelete(id, d.kind)}
       >
         ✕
@@ -148,10 +156,9 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
           Its accessible name carries the WITHIN-KIND ORDINAL (`loop 2`), not the
           bare kind: two loops on screen would otherwise give two buttons with
           one name, which is ambiguous to a screen reader and unaddressable to a
-          spec. The BOX's own label stays the bare kind — putting the ordinal
-          there is a U6c render change, deliberately not smuggled in here — and
-          since #878 drew the ACTIVITY ordinal on its box, the asymmetry has a
-          ticket of its own (#883). */}
+          spec. Since #883 the ✕ beside it and the BOX's own label read the same
+          `label`, so this is no longer the one place on the box the ordinal
+          reaches — it is simply how a container is named. */}
       <button
         type="button"
         className="flow-container-configure nodrag nopan"
@@ -489,8 +496,19 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       const routing = routingSentence(
         routingChangeBetween(state, { ...state, ...cascadeDeleteContainer(state, id) }),
       );
+      // #883 — the container is named the way its box now is. Naming the button
+      // "Delete loop 2 container" and then asking "Delete this loop container?"
+      // would relocate the one-end-identified split rather than close it, and
+      // with two loops on screen the dialog would not say which one is going.
+      //
+      // Recomputed from `state` rather than read off the `containerLabelsById`
+      // memo above, and that is the correctness point: this callback is memoised
+      // on `[store]` alone, so closing over the memo would name the container
+      // from the render that created the callback, not from the doc as it stands
+      // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
+      const name = containerLabels(state.containers).get(id) ?? kind;
       const confirmed = window.confirm(
-        `Delete this ${kind} container?\n\n` +
+        `Delete this ${name} container?\n\n` +
           'Its settings and the edges connected to it are removed, and this cannot be undone. ' +
           'The activities inside are kept — they move out to the top level.' +
           (kind === 'foreach'
@@ -597,7 +615,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            component renders inside. `ariaRole` is needed explicitly because a
            non-focusable node otherwise gets no role at all. */
         ariaRole: 'group',
-        ariaLabel: containerAriaLabel(c.kind, rect.childCount),
+        // #883 — the ordinal, so two same-kinded boxes are two distinguishable
+        // groups to a screen reader, matching the text the box now draws.
+        ariaLabel: containerAriaLabel(labels.get(c.id) ?? c.kind, rect.childCount),
         /* Still NOT selectable, and that is now a decision rather than a default
            (#748). The box carries one edit — its delete button — and the obvious
            way to have offered that was to make the container selectable and give

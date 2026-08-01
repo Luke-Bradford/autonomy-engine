@@ -1,5 +1,5 @@
 import { Position, type NodeHandle } from '@xyflow/react';
-import { containerMembership, type Container, type ContainerKind } from '@autonomy-studio/shared';
+import { containerMembership, type Container } from '@autonomy-studio/shared';
 import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
 
 /**
@@ -54,7 +54,7 @@ export interface Rect {
  * make the announcement disagree with the picture the moment the two sets differ
  * — a phantom child (deleted node, id still listed) or a child an earlier
  * container already claimed both count in the raw array and are both absent from
- * the box. That reads as "loop container, 2 activities" over an empty fallback
+ * the box. That reads as "loop 1 container, 2 activities" over an empty fallback
  * box: not a rounding error, a straight lie about what is on screen.
  */
 export interface ContainerBox extends Rect {
@@ -402,7 +402,23 @@ export function containerHandles(width: number, height: number): NodeHandle[] {
  *
  * Counted from the box's OWN `childCount`, not `container.children.length`: see
  * `ContainerBox`. What is announced is what is drawn.
+ *
+ * `name` is whatever its CALLER draws on the box, not the kind — that is the
+ * whole contract, and it widened in #883. The author canvas passes the
+ * `containerLabels` ordinal ('loop 2'), because its box draws that. The run graph
+ * (`runs/runFlow.ts`) still passes the bare kind, deliberately: its box still
+ * draws the bare kind, and announcing an ordinal the run graph shows nowhere
+ * would move the mismatch rather than close it. Closing it there is #886.
+ *
+ * The parameter is therefore `string` and no longer `ContainerKind`, which does
+ * cost a compiler check — nothing now stops a caller passing a kind where its box
+ * shows a name. Both existing call sites are pinned by an e2e that asserts the
+ * exact announced string, so the check is not simply lost: the author canvas by
+ * `container-rendering.spec.ts` ('loop 1 container, 2 activities') and the run
+ * graph by `run-status-vocabulary.spec.ts` ('stage container, 1 activity,
+ * running'). A THIRD caller would have neither, and should extend that list
+ * rather than guess.
  */
-export function containerAriaLabel(kind: ContainerKind, childCount: number): string {
-  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
+export function containerAriaLabel(name: string, childCount: number): string {
+  return `${name} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
 }
