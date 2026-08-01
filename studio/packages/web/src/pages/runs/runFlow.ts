@@ -1,6 +1,6 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
 import type { PipelineVersion, RunState } from '@autonomy-studio/shared';
-import { activityLabel } from '../pipeline/activityLabel';
+import { activityLabels } from '../pipeline/activityLabel';
 import {
   containerAriaLabel,
   containerHandles,
@@ -75,7 +75,13 @@ export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone
  * a finished run never ran. Every node then carries `status: null` and no tone.
  */
 export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
+  /* #878 — the run graph names an activity the same way the authoring canvas
+     does: kind plus within-kind ordinal. Two `http_request` nodes in one run
+     would otherwise be two boxes reading "HTTP Request", and a monitor whose
+     whole job is to say WHICH node failed cannot afford that. */
+  const names = activityLabels(doc.nodes);
   const activities: FlowNode[] = doc.nodes.map((n) => {
+    const name = names.get(n.id) ?? n.id;
     const status = state?.nodes[n.id]?.status ?? null;
     /* U25 — the node says the same word the table's pill does. The TONE still
        comes off the raw engine status; only what an operator reads is worded. */
@@ -88,11 +94,11 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       selectable: false,
       connectable: false,
       data: {
-        title: activityLabel(n),
+        title: name,
         status: label,
         tone: status === null ? null : nodeStatusTone(status),
       } satisfies RunNodeData,
-      ariaLabel: `${activityLabel(n)}, ${label ?? NO_STATUS_LABEL}`,
+      ariaLabel: `${name}, ${label ?? NO_STATUS_LABEL}`,
     };
   });
 

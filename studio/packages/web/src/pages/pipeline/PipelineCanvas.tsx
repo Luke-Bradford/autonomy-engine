@@ -30,7 +30,7 @@ import {
 } from './canvasStore';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { ContainerPanel } from './ContainerPanel';
-import { activityLabel } from './activityLabel';
+import { activityLabels } from './activityLabel';
 import { insertModeFor } from './expressionInsert';
 import {
   assembleConfig,
@@ -1082,21 +1082,21 @@ function useExpressionPicker(
     const doc = { params, nodes, edges, containers };
     const suggestions = availableRefs(doc, { kind: 'node', nodeId });
     const labels = containerLabels(containers);
-    const nodeNames = new Map(nodes.map((n) => [n.id, activityLabel(n)]));
-
-    // An activity TITLE names a type, not an instance, so two `http_request`
-    // producers would both read "HTTP Request → body" with nothing to tell them
-    // apart — in a list whose whole job is to identify one of them. The doc id is
-    // appended only where the title is ambiguous, so the common case stays clean.
-    const titleCounts = new Map<string, number>();
-    for (const title of nodeNames.values()) {
-      titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
-    }
-    const producerName = (id: string) => {
-      const title = nodeNames.get(id);
-      if (title === undefined) return labels.get(id) ?? id;
-      return (titleCounts.get(title) ?? 0) > 1 ? `${title} (${id})` : title;
-    };
+    // #878 — an activity is offered under the SAME name its box carries, which
+    // is what lets the author match an option to a rectangle. This replaced a
+    // hand-rolled disambiguator that appended the raw doc id where two producers
+    // rendered the same title ("HTTP Request (n_7c44a16f-…)"). It bought
+    // uniqueness with a string the canvas shows nowhere; `activityLabels` is
+    // unique too — it counts by rendered name, so two types cannot collide into
+    // one label — and it is readable.
+    //
+    // The cost, stated: the id used to double as the link between an option and
+    // the `${nodes.<id>.output.…}` text it inserts, which for a hand-authored doc
+    // was a real if accidental aid. That link is gone from the option text. The
+    // canvas is where an author identifies a node, and the ordinal is the only
+    // name that exists on both surfaces.
+    const nodeNames = activityLabels(nodes);
+    const producerName = (id: string) => nodeNames.get(id) ?? labels.get(id) ?? id;
 
     const issuesWith = (fieldName: string, value: string) =>
       validateCanvas(
@@ -1184,6 +1184,21 @@ export function NodePanel({
   const docContainers = useStore(store, (s) => s.containers);
   const docParams = useStore(store, (s) => s.params);
   const picker = useExpressionPicker(docNodes, docEdges, docContainers, docParams, nodeId);
+
+  /**
+   * What this panel is a panel FOR (#878).
+   *
+   * It used to read `entry?.title` — a fourth hand-rolled copy of
+   * `activityLabel`, and one that names the activity's KIND. With two
+   * `http_request` nodes on the canvas the box now reads "HTTP Request 2" while
+   * its own panel said "HTTP Request", which is the disagreement `activityLabel`'s
+   * docblock exists to prevent. Falls back to the catalog title, then the raw
+   * type, for a node the doc no longer holds.
+   */
+  const nodeName = useMemo(
+    () => activityLabels(docNodes).get(nodeId) ?? entry?.title ?? nodeType,
+    [docNodes, nodeId, entry, nodeType],
+  );
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -1307,7 +1322,7 @@ export function NodePanel({
   if (isStructuralCallActivity(nodeType)) {
     return (
       <aside className="property-panel" aria-label="Properties">
-        <h3>{entry?.title ?? nodeType}</h3>
+        <h3>{nodeName}</h3>
         <p className="page-hint">This activity is configured via the call-node editor (#425).</p>
         {/* Rendered in the STUB too, not just in the editor below. Membership is
             orthogonal to `node.config`, so this early return must not swallow it:
@@ -1320,7 +1335,7 @@ export function NodePanel({
 
   return (
     <aside className="property-panel" aria-label="Properties">
-      <h3>{entry?.title ?? nodeType}</h3>
+      <h3>{nodeName}</h3>
       {entry && entry.connectionKinds.length > 0 && (
         <label>
           Connection

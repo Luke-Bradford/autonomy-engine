@@ -7,7 +7,7 @@ import {
   type Param,
   type RoutingPartition,
 } from '@autonomy-studio/shared';
-import { activityLabel } from './activityLabel';
+import { activityLabels } from './activityLabel';
 import { validateCanvas } from './canvasDoc';
 
 /**
@@ -275,13 +275,10 @@ export function readableIssue(
   edges: Edge[],
   containers: Container[],
 ): string {
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const edgeById = new Map(edges.map((e) => [e.id, e]));
   const labels = containerLabels(containers);
-  const label = (id: string): string | undefined => {
-    const node = nodeById.get(id);
-    return node !== undefined ? activityLabel(node) : labels.get(id);
-  };
+  const nodeLabels = activityLabels(nodes);
+  const label = (id: string): string | undefined => nodeLabels.get(id) ?? labels.get(id);
   // COUPLING: both passes below read the validator's MESSAGE FORMAT, not a
   // structured field, so a change to how `validateExitWhen`/`validateForeachItems`
   // (packages/shared/src/engine/params.ts) render a location silently degrades this
@@ -312,15 +309,16 @@ export function readableIssue(
 /**
  * How a routing change is put to the operator, or `null` when there is none.
  *
- * Every arm is QUALITATIVE — it names no activity. That is a constraint, not a
- * shortcut: `activityLabel` is keyed on an activity's TYPE, so three
- * `http_request` nodes are all "HTTP Request", and there is no identifying
- * node-side counterpart to `containerLabels` yet. Enumerating "these now start in
- * parallel: HTTP Request, HTTP Request" would be a confident claim the operator
- * cannot act on, and a wrong-looking one. Describing the CHANGE is honest at the
- * fidelity actually available; the canvas advisory panel, which can afford ids,
- * is where the detail goes. #878 is the identifying activity name that would let
- * these sentences name what moved.
+ * Every arm is QUALITATIVE — it names no activity — and since #878 that is a
+ * SCOPE decision rather than the constraint it used to be. The blocker was that
+ * `activityLabel` names a TYPE, so "these now start in parallel: HTTP Request,
+ * HTTP Request" was a confident claim the operator could not act on;
+ * `activityLabels` now mints an identifying name, and `RoutingChange` already
+ * carries the ids (`chain.order`, `partition.roots`/`follows`) — so enumerating
+ * is a wording change with its own test surface, not a data change. Deferred to
+ * #881, deliberately and not for want of the name. Describing the CHANGE stays
+ * honest meanwhile; the canvas advisory panel is where the per-activity detail
+ * is today.
  *
  * Every arm also ends on what SAVING does, because that is the real cost: the
  * inferred routing is minted into the next version, and a version is immutable.
