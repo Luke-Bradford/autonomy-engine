@@ -869,7 +869,9 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
     await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
     expect(
-      within(screen.getByRole('complementary', { name: /Node HTTP Request 1/ })).getByText('running'),
+      within(screen.getByRole('complementary', { name: /Node HTTP Request 1/ })).getByText(
+        'running',
+      ),
     ).toBeInTheDocument();
 
     useRunStreamMock.mockReturnValue(

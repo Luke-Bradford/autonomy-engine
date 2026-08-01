@@ -182,7 +182,15 @@ test('U25 — the node table and the graph give every node the same word, includ
     }
     const table: Record<string, string> = {};
     for (const row of document.querySelectorAll('tbody tr')) {
-      const id = row.querySelector('.node-drill-in')?.textContent?.trim();
+      /* The row's node-id cell, NOT the drill-in button — since #882 the button
+         holds the activity NAME ('Fail 3') while the graph wrapper is keyed on
+         the doc id, so keying off the button would compare two different things
+         and report a difference that is not one. The button is still the
+         fallback, because it is what holds the id when the pipeline version will
+         not resolve and there is no name to show. */
+      const id =
+        row.querySelector('.node-id')?.textContent?.trim() ??
+        row.querySelector('.node-drill-in')?.textContent?.trim();
       const status = row.querySelector('.node-status')?.textContent?.trim();
       if (id !== undefined && status !== undefined) table[id] = status;
     }
