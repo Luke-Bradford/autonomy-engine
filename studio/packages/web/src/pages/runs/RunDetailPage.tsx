@@ -2,7 +2,10 @@ import { Suspense, useEffect, useMemo, useState } from 'react';
 import { TERMINAL_RUN_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import { getRun, getRunDetail } from '../../api/runs';
+import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
+import { messageOf } from '../../api/client';
+import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
+import { runDetailPath } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import {
   deriveNodeActivity,
@@ -18,9 +21,9 @@ import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 
-function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+/* The local `message(err)` this file used to declare was one of the twenty-odd
+   inline copies `messageOf` was named to replace; `api/client.ts` asks each to
+   migrate as its file is touched, so it did. */
 
 /** Cap on the raw event feed's rendered rows (most recent kept) — bounds the
  * DOM on a chatty run. Node activity is still folded from the full log. */
@@ -58,6 +61,40 @@ export function RunDetailPage({ runId }: { runId: string }) {
   const [run, setRun] = useState<Run | null>(null);
   const [doc, setDoc] = useState<PipelineVersion | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [rerunning, setRerunning] = useState(false);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+
+  /**
+   * RS2 — start a rerun-from-failed of THIS run and follow the new one.
+   *
+   * The server replies `202 { runId }` as soon as R2 is durably created; R2 then
+   * drives in the background. So there is nothing to wait for beyond the
+   * acknowledgement, and the right destination is R2's own page, where the live
+   * tail takes over and shows the rerun actually happening.
+   *
+   * `rerunning` guards a double-click: without it a second click before the
+   * request resolves would start a SECOND rerun, and unlike a re-read that is
+   * not idempotent — it would spend money twice and leave an orphan run.
+   *
+   * Failures are shown, not swallowed. A `409` here is the expected, meaningful
+   * case (the server found the run ineligible after all) and its message is the
+   * server's own sentence; anything else surfaces just as plainly rather than
+   * leaving a button that silently did nothing.
+   */
+  const onRerun = () => {
+    if (rerunning) return;
+    setRerunning(true);
+    setRerunError(null);
+    rerunFromFailed(runId).then(
+      ({ runId: newRunId }) => void navigate(runDetailPath(newRunId)),
+      (err: unknown) => {
+        /* No `aborted` check: this is a user action with no AbortController, and
+           the component only unmounts here by navigating away on success. */
+        setRerunError(messageOf(err));
+        setRerunning(false);
+      },
+    );
+  };
 
   // `RunDetailRoute` renders this with `key={runId}`, so a different run
   // remounts the component fresh (state back to null) rather than us resetting
@@ -82,12 +119,12 @@ export function RunDetailPage({ runId }: { runId: string }) {
           (r) => {
             setRun(r);
             setLoadError(
-              `The pipeline graph could not be loaded, so there is no node overlay: ${message(detailErr)}`,
+              `The pipeline graph could not be loaded, so there is no node overlay: ${messageOf(detailErr)}`,
             );
           },
           () => {
             if (ac.signal.aborted) return;
-            setLoadError(message(detailErr));
+            setLoadError(messageOf(detailErr));
           },
         );
       });
@@ -200,6 +237,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
   /* The REST row carries no park reason (`RunSchema` has no such column), so
      the fallback tail is `null` rather than a guess — see `runStatusLabel`. */
   const waitingReason = view?.waitingReason ?? null;
+  /* Bound once so the lineage row below narrows without a non-null assertion —
+     `run.rerunOf` inside a callback would not stay narrowed. */
+  const rerunOf = run?.rerunOf ?? null;
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
@@ -230,6 +270,26 @@ export function RunDetailPage({ runId }: { runId: string }) {
         </span>
       </p>
 
+      {/* RS2 — the rerun action, offered only on a run that FAILED. `status` is
+          the page's one status value (the log's, falling back to the row), so the
+          control appears on exactly what the header says failed. The spec's cost
+          warning sits beside the button rather than behind a confirm: it is the
+          fact an operator needs BEFORE deciding, and "Fire now" on the triggers
+          page sets the precedent that starting work is a direct action here. */}
+      {canRerunFromFailed(status) && (
+        <div className="run-actions">
+          <button type="button" onClick={onRerun} disabled={rerunning}>
+            {rerunning ? 'Starting rerun…' : 'Rerun from failed'}
+          </button>
+          <span className="page-hint">{RERUN_COST_WARNING}</span>
+        </div>
+      )}
+      {rerunError && (
+        <p role="alert" className="error">
+          {rerunError}
+        </p>
+      )}
+
       {loadError && (
         <p role="alert" className="error">
           {loadError}
@@ -249,6 +309,26 @@ export function RunDetailPage({ runId }: { runId: string }) {
           </dd>
           <dt>Trigger</dt>
           <dd>{run.triggerId ? <code>{run.triggerId}</code> : '—'}</dd>
+          {/* RS6 lineage — shown only when there IS a source run. `rerunOf` is
+              the durable row projection of `run.started.rerunOf`, written in the
+              same transaction as the reseed pair, so it cannot disagree with the
+              log. A row reading "—" on every ordinary run would be noise; the
+              absence of this row is what "not a rerun" looks like.
+
+              This is the LINK half only. The copied-vs-executed render — a
+              copied frontier node saying "reused from run R1" rather than a
+              plain "success" — is the rest of RS6 and is NOT built here; see
+              #438. */}
+          {rerunOf !== null && (
+            <>
+              <dt>Rerun of</dt>
+              <dd>
+                <button type="button" onClick={() => void navigate(runDetailPath(rerunOf))}>
+                  <code>{rerunOf}</code>
+                </button>
+              </dd>
+            </>
+          )}
           <dt>Started</dt>
           <dd>{formatWhen(run.startedAt)}</dd>
           <dt>Finished</dt>

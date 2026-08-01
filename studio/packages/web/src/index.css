@@ -733,6 +733,18 @@ body {
   max-width: 60ch;
 }
 
+/* RS2 — the run monitor's action row. The button and the cost warning sit on one
+   line and wrap together on a narrow viewport, so the warning can never be
+   separated from the button it qualifies. `align-items: center` keeps a
+   multi-line warning centred against the control rather than top-aligned. */
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;

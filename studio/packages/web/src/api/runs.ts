@@ -15,12 +15,20 @@ const RunListSchema = z.array(RunSummarySchema);
 const RunEventListSchema = z.array(RunEventSchema);
 
 /**
- * The read half of the run model the P6 live monitor sits on. Runs are created
- * by the engine/scheduler, never by this API (there is no `POST /api/runs`), so
- * this client is deliberately read-only: a list, one run, and its append-only
- * event log. The live tail (`useRunStream`) rides the WebSocket beside these;
- * the REST replay here is what a page loads first, before (or without) tailing.
- * Every response is parsed through the SAME shared schema the server validates
+ * The run model the P6 live monitor sits on: a list, one run, its append-only
+ * event log — and ONE write.
+ *
+ * This client was read-only until the rerun action landed, and its docblock said
+ * so. That is no longer true, so it does not say so: `rerunFromFailed` below
+ * starts a new run. The narrower claim it replaces still holds and is the one
+ * that matters — there is no `POST /api/runs`, so a run is never created from
+ * WHOLE CLOTH here. Every run still originates in the engine/scheduler; a rerun
+ * asks the server to resume an existing failed one, which is a different act
+ * from authoring a run and is the only write this module performs.
+ *
+ * The live tail (`useRunStream`) rides the WebSocket beside these; the REST
+ * replay here is what a page loads first, before (or without) tailing. Every
+ * READ response is parsed through the SAME shared schema the server validates
  * against — a contract check, not a formality.
  */
 
@@ -67,6 +75,46 @@ export function getRunDetail(id: string, signal?: AbortSignal): Promise<RunDetai
 export function getRunEvents(id: string, signal?: AbortSignal): Promise<RunEvent[]> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/events`, {
     schema: RunEventListSchema,
+    signal,
+  });
+}
+
+/**
+ * The accepted-rerun body. Declared HERE rather than in `@autonomy-studio/shared`,
+ * which is the exception to this module's shared-schema rule and is called out
+ * rather than glossed: the route replies with an inline object literal
+ * (`reply.status(202).send({ runId })` — `server/src/routes/runs.ts`) and has no
+ * shared response schema to borrow. Introducing one that only the client used
+ * would look like a contract check while checking nothing on the server side, so
+ * this stays a local shape assertion: it proves the field arrived and is a
+ * non-empty string, and nothing more.
+ */
+const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
+
+/**
+ * RS2 — start a rerun-from-failed of a terminal FAILED run.
+ *
+ * The server computes the reusable frontier from the source run's log, appends
+ * the reseed pair, and returns `202 { runId }` for the NEW run (R2) as soon as
+ * it is durably created — R2 then drives in the background, so this resolves
+ * long before the rerun finishes. The caller's job is to send the operator to
+ * R2's page and let the live tail take over.
+ *
+ * R2 reuses R1's params and pipeline version EXACTLY; there is deliberately no
+ * override body. The copied frontier outputs were computed under R1's params, so
+ * mixing new params with old cached outputs would be a silent inconsistency —
+ * param override belongs to a simple full rerun (F11), which copies nothing.
+ *
+ * Eligibility is the SERVER's to decide, from the event log. Both refusals
+ * arrive as `ApiError(409)` carrying a human-readable reason:
+ *  - `RerunNotEligibleError` — no log, not terminated, or it succeeded;
+ *  - `DocUnresolvableError` — the pinned immutable version no longer resolves.
+ * Surface that message verbatim; do not second-guess it (see `rerunAction.ts`).
+ */
+export function rerunFromFailed(id: string, signal?: AbortSignal): Promise<{ runId: string }> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/rerun-from-failed`, {
+    method: 'POST',
+    schema: RerunAcceptedSchema,
     signal,
   });
 }
