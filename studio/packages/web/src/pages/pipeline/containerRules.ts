@@ -234,16 +234,19 @@ export function containerEditConsequence(
  * `stage` options cannot tell which box they are about to join. So the kind
  * carries a document-order ordinal within its kind.
  *
- * The honest cost, stated rather than hidden: the ordinal is not DRAWN on the
- * box, so with two loops on screen "loop 2" identifies the option but not the
- * rectangle. Putting it on the box is a U6c render change, still deferred
- * (#883 — #839 closed without it, so it now has a ticket of its own).
+ * #883 CLOSED the cost this docblock used to state. The ordinal was not DRAWN on
+ * the box, so with two loops on screen "loop 2" identified the option but not the
+ * rectangle — U23 narrowed that (the ⚙ button's accessible name carries it, so it
+ * was addressable to a screen reader and to a spec) without closing it for a
+ * SIGHTED operator. `ContainerNode` now renders this label, so the ordinal names
+ * the same rectangle in the picker, on the box, and in every refusal.
  *
- * U23 narrowed that cost without closing it. The ⚙ button's accessible name is
- * this label, so the ordinal is now addressable on the box to a screen reader
- * and to a spec, and the container being configured is outlined while its panel
- * is open — but a SIGHTED operator reading the picker still cannot match "loop
- * 2" to a rectangle without clicking one.
+ * That makes this the single answer to "which container is this", and every
+ * surface naming one is expected to read it: `connectRules.endpointLabel`, the
+ * membership picker, `readableIssue`, the ⚙ and ✕ buttons, and the delete
+ * confirmation. A surface that falls back to the bare kind is not a smaller
+ * version of the name — it is a DIFFERENT name for the same box, which is the
+ * defect #883 was filed for.
  */
 export function containerLabels(containers: Container[]): Map<string, string> {
   const seen = new Map<string, number>();
@@ -268,6 +271,19 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * An edge has no name of its own, so it is named by its ENDS, which is how the
  * operator sees it. A quoted token that resolves to nothing (a kind, a word the
  * validator happened to quote) is left exactly as it was.
+ *
+ * The validator writes an id in FOUR shapes, and each needs its own pass because
+ * only one of them is quoted: a leading `container.<id>.` location, a leading
+ * `node.<id>`/`nodes.<id>.` one, a brace-wrapped comma list mid-sentence, and a
+ * quoted token anywhere. #884 is what a missing pass costs — this function was
+ * written against the quoted shape alone, so wiring it into the badge list
+ * unchanged would have left the two commonest canvas errors still printing a raw
+ * uuid, while looking from the outside like the defect had been fixed.
+ *
+ * DISPLAY ONLY, and it must stay at the render site. `ContainerPanel` filters
+ * `validateCanvas` output by matching `container '<id>'` as a raw substring
+ * (`ContainerPanel.tsx:142`) — a structural read of the same strings. Moving this
+ * rewrite inside `validateCanvas` would silently break that filter.
  */
 export function readableIssue(
   issue: string,
@@ -279,7 +295,7 @@ export function readableIssue(
   const labels = containerLabels(containers);
   const nodeLabels = activityLabels(nodes);
   const label = (id: string): string | undefined => nodeLabels.get(id) ?? labels.get(id);
-  // COUPLING: both passes below read the validator's MESSAGE FORMAT, not a
+  // COUPLING: every pass below reads the validator's MESSAGE FORMAT, not a
   // structured field, so a change to how `validateExitWhen`/`validateForeachItems`
   // (packages/shared/src/engine/params.ts) render a location silently degrades this
   // to raw uuids rather than breaking a type. The pass-1 regex keys on the
@@ -297,7 +313,49 @@ export function readableIssue(
     const l = labels.get(id);
     return l === undefined ? whole : `container '${l}' `;
   });
-  return located.replace(/'([^']+)'/g, (whole, id: string) => {
+  // Pass 2 — the NODE half of pass 1, and the reason #884 could not be closed by
+  // wiring this function into the badge list unchanged. Every node location in
+  // `params.ts` carries the id UNQUOTED too, in two shapes: `node.<id>.<field>`
+  // (`:2335` condition, `:2411` message, `:2433`, `:2475`) and a bare `node.<id>`
+  // with no field (`:2005`, `:2010`, `:2501`, `:2530`, `:2547`, `:2588`-`:2649`),
+  // plus a PLURAL `nodes.<id>.config.…` (`:2676`, `:2770`). Together those are the
+  // commonest issue a canvas author meets — a bad ref in a config field — so
+  // without this pass the badge list would still have shown a raw uuid.
+  //
+  // ANCHORED at index 0, and that is load-bearing rather than an optimisation:
+  // `${nodes.<id>.output.<name>}` appears in the BODY of those same messages
+  // (`:3846`, `:3875`) and is the operator's own expression text — the literal
+  // string they must go and edit. Rewriting it would hand them a sentence telling
+  // them to fix an expression that does not appear in their config. Every message
+  // is built `${where}: …` with `where` first, so the location is always at 0.
+  //
+  // The trailing dot is captured rather than required because the two shapes
+  // punctuate differently: consuming `node.<id>.` leaves `config.url: …` needing a
+  // separating space, while consuming a bare `node.<id>` leaves `: …`, which must
+  // NOT gain one.
+  const nodeLocated = located.replace(
+    /^nodes?\.([^.\s:]+)(\.?)/,
+    (whole, id: string, dot: string) => {
+      const l = nodeLabels.get(id);
+      return l === undefined ? whole : `node '${l}'${dot === '' ? '' : ' '}`;
+    },
+  );
+  // Pass 3 — `forwardCycleErrors` (`params.ts:2962`) is the one message that names
+  // ids in NEITHER of the other two shapes: a brace-wrapped comma list, unquoted
+  // and mid-sentence (`forward cycle detected involving {n_7c…, n_9c…}`). It is
+  // also among the most reachable authoring errors, so leaving it would have
+  // falsified this ticket's acceptance on the very doc it was written for.
+  //
+  // A `${…}` expression in a message body also matches `{…}`, and is left intact
+  // by construction rather than by exclusion: its contents (`nodes.x.output.y`)
+  // resolve to no id, so every token falls through unchanged and the replacement
+  // is byte-identical to what it replaced.
+  const listed = nodeLocated.replace(/\{([^{}]*)\}/g, (whole, body: string) => {
+    const parts = body.split(', ');
+    const named = parts.map((id) => label(id) ?? id);
+    return named.some((name, i) => name !== parts[i]) ? `{${named.join(', ')}}` : whole;
+  });
+  return listed.replace(/'([^']+)'/g, (whole, id: string) => {
     const direct = label(id);
     if (direct !== undefined) return `'${direct}'`;
     const edge = edgeById.get(id);

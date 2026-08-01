@@ -402,7 +402,19 @@ export function containerHandles(width: number, height: number): NodeHandle[] {
  *
  * Counted from the box's OWN `childCount`, not `container.children.length`: see
  * `ContainerBox`. What is announced is what is drawn.
+ *
+ * `name` is whatever its CALLER draws on the box, not the kind — that is the
+ * whole contract, and it widened in #883. The author canvas passes the
+ * `containerLabels` ordinal ('loop 2'), because its box draws that. The run graph
+ * (`runs/runFlow.ts`) still passes the bare kind, deliberately: its box still
+ * draws the bare kind, and announcing an ordinal the run graph shows nowhere
+ * would move the mismatch rather than close it. Closing it there is #886.
+ *
+ * The parameter is therefore `string` and no longer `ContainerKind`, which does
+ * cost a compiler check — nothing now stops a caller passing a kind where its box
+ * shows a name. The rule is stated here rather than typed because both call sites
+ * are named above; a third one should extend that list, not guess.
  */
-export function containerAriaLabel(kind: ContainerKind, childCount: number): string {
-  return `${kind} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
+export function containerAriaLabel(name: string, childCount: number): string {
+  return `${name} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;
 }

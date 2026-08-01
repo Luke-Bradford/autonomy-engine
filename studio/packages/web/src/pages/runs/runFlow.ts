@@ -163,6 +163,10 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
         round: cs?.round ?? null,
       } satisfies RunContainerData,
       ariaRole: 'group',
+      // The bare KIND, where the author canvas passes the `containerLabels`
+      // ordinal (#883). Not an oversight: this graph's box draws the kind, so an
+      // ordinal here would announce a name the run graph shows nowhere. Naming
+      // both is #886 — one change, box and announcement together.
       ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
     };
   });

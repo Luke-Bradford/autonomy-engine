@@ -8,6 +8,7 @@ import {
   type Node,
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
+import { containerLabels } from './containerRules';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
 
 /**
@@ -91,8 +92,10 @@ export interface ConnectPrecheck {
   edgeKeys: ReadonlySet<string>;
   /** Each activity's identifying name (#878) — what a refusal calls its ends. */
   nodeLabels: ReadonlyMap<string, string>;
-  /** Containers by id — an endpoint can be one, and it is named by its KIND. */
+  /** Containers by id — an endpoint can be one. */
   containerById: ReadonlyMap<string, Container>;
+  /** Each container's identifying name (#883) — the text its box draws. */
+  containerNames: ReadonlyMap<string, string>;
   /**
    * Which container owns each child, FIRST-declared-wins
    * (`containerMembership`, the reducer's and the save gate's own SSOT).
@@ -126,6 +129,7 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     nodeLabels: activityLabels(graph.nodes),
     containerById: new Map(graph.containers.map((c) => [c.id, c])),
+    containerNames: containerLabels(graph.containers),
     childOwner: containerMembership(graph.containers).owner,
   };
 }
@@ -148,11 +152,12 @@ export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
  * but the two ends of a refused connection are the one thing this sentence is
  * about, and naming them identically made the panel unreadable in exactly the
  * graph an operator is most likely to be building.
- * A CONTAINER endpoint is named by its KIND — "loop", "stage", "foreach" — which
- * is the same word its box is labelled with on the canvas (U6c), so the sentence
- * points at something the operator can actually see. A container has no activity
- * and no name field, and falling through to the raw id here would reproduce the
- * exact unreadable-id defect above in its container form.
+ * #883 — a CONTAINER endpoint is named by its `containerLabels` ordinal ("loop
+ * 2"), which is the text its box now draws, so the sentence points at ONE
+ * rectangle the operator can see. It used to be the bare kind, on the grounds
+ * that that was the box's label; the box's label changed, and a refusal naming
+ * "the loop container" with two loops on screen is the unreadable-id defect above
+ * in a politer form — the operator still cannot tell which box is meant.
  *
  * An endpoint that is neither — an id from a stale view — degrades to the raw id
  * rather than inventing a name.
@@ -161,18 +166,27 @@ function endpointLabel(pre: ConnectPrecheck, id: string): string {
   const name = pre.nodeLabels.get(id);
   if (name !== undefined) return name;
   const container = pre.containerById.get(id);
-  if (container !== undefined) return `${container.kind} container`;
+  if (container !== undefined) return `${pre.containerNames.get(id) ?? container.kind} container`;
   return id;
 }
 
-/** How a container is named when it is the OBSTACLE rather than an endpoint. */
+/**
+ * How a container is named when it is the OBSTACLE rather than an endpoint.
+ *
+ * Same `containerLabels` name as `endpointLabel` uses (#883), for the same
+ * reason: a crossing refused by "the loop container" is unactionable while two
+ * loops are on screen. `containerKind` stays the KIND, unnamed and unordinalled —
+ * its callers ask a question about the kind ("is this a foreach?"), not about
+ * which box.
+ */
 function containerKind(pre: ConnectPrecheck, id: string | undefined): string | undefined {
   return id === undefined ? undefined : pre.containerById.get(id)?.kind;
 }
 
 function containerName(pre: ConnectPrecheck, id: string | undefined): string {
-  const kind = containerKind(pre, id);
-  return kind === undefined ? 'a container' : `the ${kind} container`;
+  if (id === undefined) return 'a container';
+  const named = pre.containerNames.get(id) ?? containerKind(pre, id);
+  return named === undefined ? 'a container' : `the ${named} container`;
 }
 
 /** The edge a candidate would become — the value both remaining rules read. */

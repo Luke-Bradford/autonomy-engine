@@ -38,7 +38,7 @@ import {
   seedFieldInputs,
   unrepresentableFields,
 } from './configForm';
-import { confirmContainerEdit, containerLabels } from './containerRules';
+import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import {
   coerceDefaultInput,
   defaultAdvisory,
@@ -114,8 +114,23 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   // (`ParamSchema.name.min(1)` + `refuseDuplicateNames`), which
   // `validatePipelineDoc` never runs — folding it in would break that function's
   // stated contract of being exactly the gate the server calls.
+  //
+  // #884 — the `validateCanvas` half goes through `readableIssue`, the
+  // `nameIssues` half does NOT, and the asymmetry is checkable rather than a
+  // judgement call: `nameIssues` messages contain no node or container id at all
+  // (`param #1 has no name`, `duplicate param name 'x'`), so there is nothing for
+  // the rewrite to do, while every id it WOULD find in one is a param name the
+  // operator typed and must keep reading verbatim.
+  //
+  // Mapping happens here, at the render site, and not inside `validateCanvas` —
+  // `ContainerPanel` reads those same strings structurally (see `readableIssue`).
   const issues = useMemo(
-    () => [...validateCanvas(nodes, edges, containers, params), ...nameIssues(params, outputs)],
+    () => [
+      ...validateCanvas(nodes, edges, containers, params).map((issue) =>
+        readableIssue(issue, nodes, edges, containers),
+      ),
+      ...nameIssues(params, outputs),
+    ],
     [nodes, edges, containers, params, outputs],
   );
 
