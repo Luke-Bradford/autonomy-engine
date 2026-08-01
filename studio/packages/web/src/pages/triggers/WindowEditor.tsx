@@ -145,9 +145,10 @@ export function WindowEditor({
         </p>
       )}
 
-      {/* #854 ships editors for the geometry and bounds only. A window authored
-          through the API can carry a retry policy or a self-dependency; say so
-          rather than let it look absent, since a save DOES write it back. */}
+      {/* #854 ships editors for the geometry and bounds only; #861 adds the rest.
+          A window authored through the API can carry a retry policy or a
+          self-dependency — say so rather than let it look absent, since a save
+          DOES write it back. */}
       {(value.retry !== undefined || value.selfDependency !== undefined) && (
         <p className="page-hint" data-testid="window-preserved">
           {'This window also carries '}
@@ -158,7 +159,7 @@ export function WindowEditor({
             .filter((s) => s !== null)
             .join(' and ')}
           {
-            ', authored outside this form. There is no control for it here yet; it is preserved unchanged when you save.'
+            ', authored outside this form. There is no control for it here yet (#861); it is preserved unchanged when you save.'
           }
         </p>
       )}

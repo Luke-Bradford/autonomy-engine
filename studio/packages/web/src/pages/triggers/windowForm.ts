@@ -23,7 +23,7 @@ import { parseWholeNumber, resolveBound, utcIsoToLocalInput } from './formFields
  *    must round-trip that state; but silently reading half-typed geometry as
  *    "no window" would discard what the operator typed and save clean doing it.
  * 3. **What this editor cannot show, it still carries.** `retry` and
- *    `selfDependency` have no controls in this release, so they are held
+ *    `selfDependency` have no controls in this release (#861), so they are held
  *    verbatim and written back — editing a window authored through the API must
  *    not silently drop them.
  *
@@ -50,7 +50,7 @@ export interface WindowFormState {
    */
   startTimeIso: string;
   endTimeIso: string;
-  /** Preserved verbatim — see rule 3. No controls in this release. */
+  /** Preserved verbatim — see rule 3. No controls in this release (#861). */
   retry: WindowConfig['retry'];
   selfDependency: WindowConfig['selfDependency'];
 }
