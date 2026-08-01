@@ -1052,8 +1052,9 @@ function ContainerSection({
  * Naming lives on this side of the boundary deliberately. `availableRefs`
  * returns identity only — a node's operator-facing name comes from
  * `activityLabels`' within-kind ordinals (#878, the same text its box carries)
- * and a container's from `containerLabels`', neither reachable from `shared`. Computing a label there would be a second answer to "what is this
- * node called", free to disagree with the canvas.
+ * and a container's from `containerLabels`, neither reachable from `shared`.
+ * Computing a label there would be a second answer to "what is this node
+ * called", free to disagree with the canvas.
  *
  * The per-FIELD half is why `resolve` exists rather than a plain list.
  * `availableRefs` answers at NODE granularity — is this reference resolvable and
