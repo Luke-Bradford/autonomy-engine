@@ -1101,3 +1101,117 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     expect(within(panel).getByText(/excluding time held between retries/i)).toBeInTheDocument();
   });
 });
+
+describe('RunDetailPage — #866 the drill-in says what a node SPENT and which tools it ran', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'run_1',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+  const metered = (fields: Record<string, unknown> = {}): EngineEvent =>
+    ({
+      type: 'activity.metered',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    }) as EngineEvent;
+
+  /** Open the drill-in for `greet` and hand back the panel. */
+  async function openPanel(events: EngineEvent[]) {
+    useRunStreamMock.mockReturnValue(stream({ events: events.map((e) => envelope(e)) }));
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    return screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
+  }
+
+  it('states a priced node’s cost, its model and its token usage', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1200, outputTokens: 340, costEstimate: 0.0055 }),
+    ]);
+    expect(within(panel).getByText('$0.0055')).toBeInTheDocument();
+    expect(within(panel).getByText('claude-opus-4-8')).toBeInTheDocument();
+    expect(within(panel).getByText('1,200 in · 340 out')).toBeInTheDocument();
+  });
+
+  it('never renders a spent-but-unpriceable node as $0.00', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      // A model with no known price: tokens counted, no `costEstimate` stamped.
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(panel).queryByText('$0.00')).not.toBeInTheDocument();
+  });
+
+  it('renders a lower bound when only SOME exchanges priced', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }),
+      metered({ inputTokens: 10, outputTokens: 5 }),
+    ]);
+    expect(within(panel).getByText('At least $0.02')).toBeInTheDocument();
+  });
+
+  it('renders an agent_cli node as a covered cost with tokens UNREPORTED, not zero', async () => {
+    // `cliSpendFact`: provider `agent_cli`, unpriced, and no token counts at all.
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' }),
+    ]);
+    expect(within(panel).getByText('No marginal cost')).toBeInTheDocument();
+    expect(within(panel).getByText('not reported')).toBeInTheDocument();
+    expect(within(panel).queryByText(/0 in · 0 out/)).not.toBeInTheDocument();
+    // And the count is named as a floor, because a CLI reports none of the model
+    // calls it drives internally.
+    expect(within(panel).getByText(/floor, not a census/)).toBeInTheDocument();
+  });
+
+  it('shows no cost section at all for a node that never billed anything', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      { type: 'node.succeeded', runId: 'run_1', nodeId: 'greet', attemptId: 'greet#0', outputs: {} },
+    ]);
+    expect(within(panel).queryByRole('heading', { name: 'Cost & usage' })).not.toBeInTheDocument();
+  });
+
+  it('lists the tools the node ran, flagging the ones that errored', async () => {
+    const toolCall = (fields: Record<string, unknown>): EngineEvent =>
+      ({
+        type: 'activity.toolCalled',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        round: 0,
+        toolName: 'read_file',
+        argsChars: 12,
+        resultChars: 400,
+        isError: false,
+        ...fields,
+      }) as EngineEvent;
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      toolCall({ toolName: 'read_file' }),
+      toolCall({ toolName: 'grep', round: 1, isError: true }),
+    ]);
+    expect(within(panel).getByRole('heading', { name: 'Tool calls' })).toBeInTheDocument();
+    expect(within(panel).getByText('read_file')).toBeInTheDocument();
+    expect(within(panel).getByText('grep')).toBeInTheDocument();
+    expect(within(panel).getByText(/1 of which returned an error/)).toBeInTheDocument();
+  });
+
+  it('shows no tool-call section for a node that ran none', async () => {
+    const panel = await openPanel([
+      dispatched('greet', 'greet#0'),
+      metered({ inputTokens: 1, outputTokens: 1, costEstimate: 0.5 }),
+    ]);
+    expect(within(panel).queryByRole('heading', { name: 'Tool calls' })).not.toBeInTheDocument();
+  });
+});
