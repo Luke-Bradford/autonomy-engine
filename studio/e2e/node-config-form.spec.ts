@@ -77,8 +77,12 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
 
-    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue('https://example.test/hook');
-    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue('POST');
+    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+      'https://example.test/hook',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue(
+      'POST',
+    );
     expect(await persistedConfig(page, id)).toMatchObject({
       url: 'https://example.test/hook',
       method: 'POST',

@@ -98,7 +98,12 @@ describe('ExpressionPicker in NodePanel', () => {
     // An `if` condition must be one whole `${...}` and nothing else, so splicing
     // into it would produce a doc the save gate refuses.
     const gate: Node = { id: 'gate', type: 'if', config: { condition: 'stale' }, position: at };
-    const ui = mount([FETCH, gate], [{ id: 'e1', from: 'fetch', to: 'gate', on: 'success' }], [], 'gate');
+    const ui = mount(
+      [FETCH, gate],
+      [{ id: 'e1', from: 'fetch', to: 'gate', on: 'success' }],
+      [],
+      'gate',
+    );
 
     ui.open('condition');
     expect(screen.getByText(/REPLACES its current value/)).toBeTruthy();

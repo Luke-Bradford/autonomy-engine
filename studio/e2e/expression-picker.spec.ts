@@ -111,7 +111,9 @@ test.describe('U8a — expression insert flyout', () => {
     // Said BEFORE the author commits: this field takes one expression, so the
     // choice is destructive.
     await expect(panel(page).getByText(/REPLACES its current value/)).toBeVisible();
-    await panel(page).getByRole('button', { name: /HTTP Request → body/ }).click();
+    await panel(page)
+      .getByRole('button', { name: /HTTP Request → body/ })
+      .click();
     await panel(page).getByRole('button', { name: 'Apply config' }).click();
 
     // The whole point. A spliced value (`${default(…)}${nodes.…}`) is not a
