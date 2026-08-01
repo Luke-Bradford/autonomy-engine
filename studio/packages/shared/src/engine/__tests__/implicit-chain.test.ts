@@ -95,7 +95,8 @@ describe('implicitRouting (#788)', () => {
 describe('implicitRouting partition (#840)', () => {
   function partitionOf(d: ReturnType<typeof doc>) {
     const routing = implicitRouting(d);
-    if (routing?.kind !== 'partitioned') throw new Error(`expected partitioned, got ${routing?.kind}`);
+    if (routing?.kind !== 'partitioned')
+      throw new Error(`expected partitioned, got ${routing?.kind}`);
     return routing.partition;
   }
 
@@ -109,7 +110,9 @@ describe('implicitRouting partition (#840)', () => {
    */
   it('distinguishes a membership move that changes only WHERE a pair runs', () => {
     const nodes = () => [node('a'), node('b'), node('c')];
-    const inside = partitionOf(doc(nodes(), [], [{ id: 'c1', kind: 'stage', children: ['b', 'c'] }]));
+    const inside = partitionOf(
+      doc(nodes(), [], [{ id: 'c1', kind: 'stage', children: ['b', 'c'] }]),
+    );
     const moved = partitionOf(doc(nodes(), [], [{ id: 'c1', kind: 'stage', children: ['b'] }]));
 
     expect(inside).toEqual({
@@ -134,12 +137,13 @@ describe('implicitRouting partition (#840)', () => {
    * the plan for this ticket guessed `['a']` and the walk says `['a', 'c1']`.
    */
   it('keeps an emptied container as a parallel root, and claims no children for it', () => {
-    expect(partitionOf(doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: [] }])))
-      .toEqual({
-        roots: ['a', 'c1'],
-        containerRoots: [{ containerId: 'c1', children: [] }],
-        follows: [{ from: 'a', to: 'b', scope: null }],
-      });
+    expect(
+      partitionOf(doc([node('a'), node('b')], [], [{ id: 'c1', kind: 'stage', children: [] }])),
+    ).toEqual({
+      roots: ['a', 'c1'],
+      containerRoots: [{ containerId: 'c1', children: [] }],
+      follows: [{ from: 'a', to: 'b', scope: null }],
+    });
   });
 
   /**

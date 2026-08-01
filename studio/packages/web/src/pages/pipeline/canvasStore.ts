@@ -723,9 +723,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       set((s) => {
         const next = cascadeDeleteContainer(s, id);
         const kept = new Set(next.edges.map((e) => e.id));
-        const removedEdgeIds = new Set(
-          s.edges.filter((e) => !kept.has(e.id)).map((e) => e.id),
-        );
+        const removedEdgeIds = new Set(s.edges.filter((e) => !kept.has(e.id)).map((e) => e.id));
         return {
           containers: next.containers,
           edges: next.edges,

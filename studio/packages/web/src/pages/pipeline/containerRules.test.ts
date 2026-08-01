@@ -110,8 +110,9 @@ describe('routingChangeBetween', () => {
   const withStage: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b'] }];
 
   it('is null when the walk is unchanged', () => {
-    expect(routingChangeBetween(doc({ containers: withStage }), doc({ containers: withStage })))
-      .toBeNull();
+    expect(
+      routingChangeBetween(doc({ containers: withStage }), doc({ containers: withStage })),
+    ).toBeNull();
   });
 
   it('reports the flip back to a chain when the LAST container goes', () => {
@@ -127,8 +128,9 @@ describe('routingChangeBetween', () => {
       { id: 'stage_1', kind: 'stage', children: ['n_b'] },
       { id: 'stage_2', kind: 'stage', children: ['n_c'] },
     ];
-    expect(routingChangeBetween(doc({ containers: two }), doc({ containers: [two[1]!] })))
-      .not.toBeNull();
+    expect(
+      routingChangeBetween(doc({ containers: two }), doc({ containers: [two[1]!] })),
+    ).not.toBeNull();
   });
 
   /**
@@ -305,7 +307,7 @@ describe('consequenceMessage', () => {
     const msg = consequenceMessage(
       {
         newIssues: [`container 'stage_1': child 'n_x' is not a node in this pipeline`],
-        routingChange: { from: 'chain', to: 'partitioned' },
+        routingChange: routingChangeBetween(doc(), doc({ containers: STAGE })),
       },
       [A, B, C],
       [],

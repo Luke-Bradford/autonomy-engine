@@ -4358,8 +4358,7 @@ export interface RoutingPartition {
  * own edges, or has fewer than two nodes and so has no sequence to speak of.
  */
 export type ImplicitRouting =
-  | { kind: 'chain'; order: string[] }
-  | { kind: 'partitioned'; partition: RoutingPartition };
+  { kind: 'chain'; order: string[] } | { kind: 'partitioned'; partition: RoutingPartition };
 
 /**
  * The partition of an edge-less containered doc, DERIVED — never re-derived.
@@ -4380,7 +4379,11 @@ function routingPartition(
   doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
 ): RoutingPartition {
   const { owner } = containerMembership(doc.containers);
-  const { endpointIds, topIncoming, childIncoming } = partitionReadiness(doc, doc.containers, owner);
+  const { endpointIds, topIncoming, childIncoming } = partitionReadiness(
+    doc,
+    doc.containers,
+    owner,
+  );
 
   const roots: string[] = [];
   const follows: RoutingFollow[] = [];
