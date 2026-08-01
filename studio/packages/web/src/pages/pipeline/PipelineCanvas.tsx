@@ -26,6 +26,13 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
+import { ConfigFieldControl } from './ConfigFieldControl';
+import {
+  assembleConfig,
+  deriveConfigFields,
+  seedFieldInputs,
+  unrepresentableFields,
+} from './configForm';
 import { consequenceMessage, containerEditConsequence, containerLabels } from './containerRules';
 import {
   coerceDefaultInput,
@@ -1012,13 +1019,23 @@ function ContainerSection({
 }
 
 /**
- * Editor for one activity node. Config is edited as JSON (minus the internal
- * `outputs` contract, which `lowerPipelineNodes` seeds — on creation AND on load
- * since #526 — and which this slice does not surface);
- * Apply parses the JSON and validates it against the activity's `configSchema`
- * before committing, so an invalid blob never reaches the store. The connection
- * dropdown is filtered to the kinds this activity accepts. Container membership
- * (U6d) is `ContainerSection` above.
+ * Editor for one activity node.
+ *
+ * Settings are authored through a FORM derived from the activity's own
+ * `configSchema` (U7 — `configForm.ts` owns the derivation and the apply
+ * semantics). The whole-config JSON editor it replaced remains reachable two
+ * ways: as an opt-in toggle, and as the automatic surface when a value already
+ * saved cannot round-trip through its control. Either path validates against
+ * `configSchema` before committing, so an invalid blob never reaches the store —
+ * a UX pre-check only; `validateDoc` on the server remains the gate.
+ *
+ * The internal `outputs` contract — seeded by `lowerPipelineNodes` on creation
+ * AND on load since #526 — is not surfaced by either editor, and is preserved
+ * across an apply by the same rule that preserves every other key no derived
+ * field owns.
+ *
+ * The connection dropdown is filtered to the kinds this activity accepts.
+ * Container membership (U6d) is `ContainerSection` above.
  */
 export function NodePanel({
   store,
@@ -1038,8 +1055,50 @@ export function NodePanel({
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
   const { outputs, ...editable } = config;
+
+  // U7 — the per-activity form, derived from the activity's own `configSchema`
+  // (see `configForm.ts` for why the schema, not hand-written metadata, is the
+  // source). `null` when the schema is not object-rooted.
+  const fields = useMemo(() => (entry ? deriveConfigFields(entry.configSchema) : null), [entry]);
+
+  // Recomputed every render from the CURRENT config, deliberately: a value whose
+  // type disagrees with its control cannot round-trip, so the node falls back to
+  // the JSON editor rather than corrupting the doc on an apply the author thinks
+  // touched one other field — but the moment they REPAIR it there, the form must
+  // become available and this advisory must stop naming a field that is now fine.
+  // Memoising it on mount left both stuck saying otherwise.
+  const unrenderable = fields ? unrepresentableFields(fields, editable) : [];
+  const formAvailable = fields !== null && unrenderable.length === 0;
+
   const [text, setText] = useState(() => JSON.stringify(editable, null, 2));
+  const [inputs, setInputs] = useState(() => seedFieldInputs(fields, editable));
   const [error, setError] = useState<string | null>(null);
+  // The author's PREFERENCE, not the mode: the mode is this OR forced. Kept
+  // apart so that repairing an unrenderable value hands the form back, instead of
+  // leaving the author in an editor they never chose.
+  const [jsonPreferred, setJsonPreferred] = useState(false);
+  const jsonMode = jsonPreferred || !formAvailable;
+
+  // Re-seed both editors whenever a DIFFERENT config object arrives.
+  //
+  // The two editors hold independent drafts of the same doc, so without this they
+  // desync the moment one of them commits: applying in JSON mode and then
+  // switching back to the form would apply the form's MOUNT-TIME values over the
+  // author's JSON edit — silently reverting work with no message. Re-seeding on
+  // identity is `ParamRow`'s precedent above, and safe for the same reason: the
+  // store's `map` preserves element identity for untouched nodes, so a new
+  // `config` object arrives exactly when this node's config was replaced.
+  //
+  // A render-phase set-on-prop-change, not an effect — React's derived-state
+  // pattern, which this repo's React 19 lint permits where `useEffect` + setState
+  // would not be.
+  const [syncedConfig, setSyncedConfig] = useState(config);
+  if (syncedConfig !== config) {
+    setSyncedConfig(config);
+    setText(JSON.stringify(editable, null, 2));
+    setInputs(seedFieldInputs(fields, editable));
+    setError(null);
+  }
 
   // Kinds this activity accepts, PLUS whatever is currently bound — so a node
   // bound to an off-kind connection (e.g. loaded from an older doc) still shows
@@ -1048,7 +1107,22 @@ export function NodePanel({
     ? connections.filter((c) => entry.connectionKinds.includes(c.kind) || c.id === connectionId)
     : connections;
 
-  function apply() {
+  /**
+   * Validate a candidate settings blob against the activity's own schema.
+   *
+   * A UX PRE-CHECK, never the gate. Several activities' `configSchema` is palette
+   * metadata whose real constraints live server-side in `validateDoc`, so a clean
+   * result here does not mean the version will save — it only spares the author a
+   * round-trip to a 400 they were going to get anyway.
+   */
+  function schemaIssues(candidate: unknown): string | null {
+    if (!entry) return null;
+    const check = entry.configSchema.safeParse(candidate);
+    if (check.success) return null;
+    return check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+  }
+
+  function applyJson() {
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -1060,16 +1134,36 @@ export function NodePanel({
       setError('Config must be a JSON object.');
       return;
     }
-    if (entry) {
-      const check = entry.configSchema.safeParse(parsed);
-      if (!check.success) {
-        setError(check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
-        return;
-      }
+    const issues = schemaIssues(parsed);
+    if (issues) {
+      setError(issues);
+      return;
     }
     setError(null);
     // Preserve the seeded `outputs` contract, which is edited elsewhere.
     store.getState().updateNodeConfig(nodeId, { ...(parsed as Record<string, unknown>), outputs });
+  }
+
+  function applyForm() {
+    if (!fields) return;
+    // The FULL config is the original, `outputs` included — no key is re-attached
+    // afterwards. `assembleConfig` preserves everything no derived field owns, so
+    // the F13 outputs contract is carried by that ONE rule rather than by a
+    // special case beside it. Re-attaching it here would work, and would also
+    // MASK the general rule: a regression that dropped every other undeclared key
+    // would still leave `outputs` intact and look correct.
+    const assembled = assembleConfig(config, fields, inputs);
+    if (!assembled.ok) {
+      setError(assembled.message);
+      return;
+    }
+    const issues = schemaIssues(assembled.owned);
+    if (issues) {
+      setError(issues);
+      return;
+    }
+    setError(null);
+    store.getState().updateNodeConfig(nodeId, assembled.config);
   }
 
   // A structural-call activity (`execute_pipeline`) stores its settings in
@@ -1117,22 +1211,58 @@ export function NodePanel({
         </label>
       )}
       <ContainerSection store={store} nodeId={nodeId} />
-      <label>
-        Config (JSON)
-        <textarea
-          value={text}
-          rows={10}
-          spellCheck={false}
-          onChange={(e) => setText(e.target.value)}
-        />
-      </label>
+
+      {formAvailable && (
+        <label className="contract-check">
+          <input
+            type="checkbox"
+            checked={jsonPreferred}
+            onChange={(e) => setJsonPreferred(e.target.checked)}
+          />
+          Edit as JSON
+        </label>
+      )}
+
+      {/* Not a preference the author can dismiss: the form genuinely cannot
+          round-trip what is saved, so saying which fields is the only way they
+          can repair it in the JSON editor they have been given instead. */}
+      {fields !== null && unrenderable.length > 0 && (
+        <p className="contract-advisory">
+          {`Saved settings this form cannot show (${unrenderable.join(', ')}) — editing as JSON.`}
+        </p>
+      )}
+
+      {jsonMode || fields === null ? (
+        <label>
+          Config (JSON)
+          <textarea
+            value={text}
+            rows={10}
+            spellCheck={false}
+            onChange={(e) => setText(e.target.value)}
+          />
+        </label>
+      ) : (
+        <div className="contract-section">
+          {fields.length === 0 && <p className="page-hint">This activity has no settings.</p>}
+          {fields.map((field) => (
+            <ConfigFieldControl
+              key={field.name}
+              field={field}
+              value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
+              onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+            />
+          ))}
+        </div>
+      )}
+
       {error && (
         <p className="error" role="alert">
           {error}
         </p>
       )}
       <div className="form-actions">
-        <button type="button" onClick={apply}>
+        <button type="button" onClick={jsonMode || fields === null ? applyJson : applyForm}>
           Apply config
         </button>
         <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
