@@ -358,12 +358,12 @@ describe('connectRejection — container boundaries', () => {
   });
 
   /**
-   * Naming by KIND is right until there are two of a kind, and then it says
-   * nothing: *"they are in different containers (the stage container and the
-   * stage container)"* reads as a contradiction. The id cannot be the
-   * disambiguator — the test above exists precisely because a raw `c_<uuid>` is
-   * unreadable — so the sentence disambiguates by what the operator CAN see on
-   * the canvas: the two nodes it already names.
+   * Naming by KIND said nothing once there were two of a kind: *"they are in
+   * different containers (the stage container and the stage container)"* reads as
+   * a contradiction. The id cannot be the disambiguator — the test above exists
+   * precisely because a raw `c_<uuid>` is unreadable — so #883 made the ORDINAL
+   * the disambiguator, and drew it on the box so the sentence points at a
+   * rectangle the operator can pick out.
    */
   it('does not name two containers of the same kind identically', () => {
     const g = graph(
@@ -377,7 +377,8 @@ describe('connectRejection — container boundaries', () => {
     const message = reject(g, 'a', 'b')?.message;
     expect(message).toBeDefined();
     expect(message).not.toContain('the stage container and the stage container');
-    expect(message).toContain('different stage containers');
+    expect(message).toContain('the stage 1 container');
+    expect(message).toContain('the stage 2 container');
     expect(message).not.toContain('c_11111111');
     expect(message).not.toContain('c_22222222');
   });
@@ -393,8 +394,8 @@ describe('connectRejection — container boundaries', () => {
       ],
     );
     const message = reject(g, 'a', 'b')?.message;
-    expect(message).toContain('the loop container');
-    expect(message).toContain('the stage container');
+    expect(message).toContain('the loop 1 container');
+    expect(message).toContain('the stage 1 container');
   });
 
   /**

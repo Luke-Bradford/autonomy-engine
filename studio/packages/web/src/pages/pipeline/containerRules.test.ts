@@ -260,6 +260,92 @@ describe('readableIssue', () => {
     const out = readableIssue(`node 'n_c' is broken`, [C], [], []);
     expect(out).toBe(`node 'not_in_catalog 1' is broken`);
   });
+
+  /**
+   * #884 — the NODE half of the unquoted-location pass, and the reason this
+   * function could not simply be pointed at the badge list. `validateRefs` writes
+   * `node.<id>.<field>` (`params.ts:2475`), so the commonest canvas error of all —
+   * a bad reference in a config field — carried a raw uuid straight through the
+   * two passes that existed before.
+   */
+  it('rewrites the unquoted node.<id>.<field> location', () => {
+    const out = readableIssue(
+      'node.n_a.config.url: ${nodes.ghost.output.body} does not name an upstream node',
+      [A, B, C],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "node 'HTTP Request 1' config.url: ${nodes.ghost.output.body} does not name an upstream node",
+    );
+  });
+
+  /**
+   * The operator's OWN expression text, and the reason the location pass is
+   * anchored at index 0 rather than global. `n_d` is a real node here, so a global
+   * pass WOULD rewrite it — and would then be telling the operator to go and fix
+   * `${nodes.HTTP Request 2.output.body}`, a string that appears nowhere in their
+   * config and is not even valid expression syntax.
+   */
+  it('leaves a ${nodes.<id>...} reference in the message BODY verbatim', () => {
+    const out = readableIssue(
+      'node.n_a.config.url: ${nodes.n_d.output.body} is not guaranteed here',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} is not guaranteed here",
+    );
+  });
+
+  /**
+   * The dot-less shape (`node.<id>:`, `params.ts:2501` and ten others) is the
+   * majority of node locations, and it punctuates differently: consuming the id
+   * must NOT leave a space before the colon.
+   */
+  it('rewrites a bare node.<id> location without stranding a space before the colon', () => {
+    const out = readableIssue('node.n_a: connectionParams have no effect', [A], [], []);
+    expect(out).toBe("node 'HTTP Request 1': connectionParams have no effect");
+  });
+
+  it('rewrites the PLURAL nodes.<id>.config location the LLM validators write', () => {
+    const out = readableIssue('nodes.n_a.config.history: must be an array', [A], [], []);
+    expect(out).toBe("node 'HTTP Request 1' config.history: must be an array");
+  });
+
+  it('leaves a location whose id resolves to nothing exactly as it was', () => {
+    expect(readableIssue('node.n_gone.config.url: broken', [A], [], [])).toBe(
+      'node.n_gone.config.url: broken',
+    );
+  });
+
+  /**
+   * `forwardCycleErrors` (`params.ts:2962`) names its ids in a third shape — a
+   * brace-wrapped comma list, unquoted and mid-sentence — which neither location
+   * pass nor the quoted pass can see. A forward cycle is among the most reachable
+   * authoring errors, so this was the other message that would have reached the
+   * badge list as raw uuids.
+   */
+  it('names every id in a brace-wrapped cycle list', () => {
+    const out = readableIssue(
+      'forward cycle detected involving {n_a, n_d, stage_1} — the forward graph must be a DAG',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      'forward cycle detected involving {HTTP Request 1, HTTP Request 2, stage 1} — ' +
+        'the forward graph must be a DAG',
+    );
+  });
+
+  it('leaves a ${…} expression alone even though it is brace-wrapped', () => {
+    const msg = 'node.n_a.config.url: ${default(nodes.n_d.output.body, "x")} is malformed';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
+      msg.replace('node.n_a.config.url', "node 'HTTP Request 1' config.url"),
+    );
+  });
 });
 
 describe('consequenceMessage', () => {

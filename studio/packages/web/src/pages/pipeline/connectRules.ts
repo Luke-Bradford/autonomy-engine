@@ -252,24 +252,22 @@ export function connectRejection(
     const toOwner = pre.childOwner.get(to);
     // Which side is enclosed decides BOTH how the sentence reads and what it can
     // honestly suggest. Both enclosed (in DIFFERENT containers) is the third
-    // case, and it is the one with the traps:
-    //  - naming both by kind says nothing when the kinds MATCH — "the stage
-    //    container and the stage container" reads as a contradiction. The id is
-    //    not available as the disambiguator (`containerName`: a raw `c_<uuid>`
-    //    is what U6b's browser pass caught), so the shared-kind sentence names
-    //    the two NODES instead, which is what the operator can see on screen;
-    //  - the one-sided suggestion is false here. With both ends enclosed there
-    //    is no "outside step" to wait on the container, so it points at the two
-    //    containers instead.
+    // case, and it is the one with the trap: the one-sided suggestion is false
+    // here, because with both ends enclosed there is no "outside step" to wait on
+    // the container, so it points at the two containers instead.
+    //
+    // #883 DELETED the other trap along with a special case. Naming both by KIND
+    // said nothing when the kinds matched — "the stage container and the stage
+    // container" reads as a contradiction — and the id was not available as the
+    // disambiguator (a raw `c_<uuid>` is what U6b's browser pass caught), so a
+    // shared-kind branch named the two NODES instead. `containerLabels` is now
+    // that disambiguator and is drawn on the box, so both ends are named the same
+    // way whether or not the kinds collide, and the branch is gone rather than
+    // left as the one surface still naming a container by kind alone.
     const bothEnclosed = fromOwner !== undefined && toOwner !== undefined;
-    const fromKind = containerKind(pre, fromOwner);
-    const sharedKind =
-      bothEnclosed && fromKind === containerKind(pre, toOwner) ? fromKind : undefined;
     const detail = bothEnclosed
-      ? sharedKind !== undefined
-        ? `'${fromName}' and '${toName}' are in different ${sharedKind} containers`
-        : `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
-          `inside ${containerName(pre, toOwner)}`
+      ? `'${fromName}' is inside ${containerName(pre, fromOwner)} and '${toName}' is ` +
+        `inside ${containerName(pre, toOwner)}`
       : fromOwner !== undefined
         ? `'${fromName}' is inside ${containerName(pre, fromOwner)}`
         : `'${toName}' is inside ${containerName(pre, toOwner)}`;

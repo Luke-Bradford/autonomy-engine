@@ -220,13 +220,14 @@ describe('FlowCanvas container rendering (U6c)', () => {
     return el!;
   }
 
-  it('renders a loaded container as its own node type, labelled by KIND', () => {
+  it('renders a loaded container as its own node type, labelled by its NAME', () => {
     const { container } = withContainer();
     const box = container.querySelector('.flow-container');
     expect(box).not.toBeNull();
-    // The word, not a colour or a shape — the same one `connectRules` refuses a
-    // boundary crossing by, so a refusal points at something on screen.
-    expect(box!.querySelector('.flow-container-label')?.textContent).toBe('stage');
+    // Words, not a colour or a shape — and since #883 the WITHIN-KIND ORDINAL,
+    // the same text `connectRules` refuses a boundary crossing by and the same
+    // text the membership picker offers, so all three name one rectangle.
+    expect(box!.querySelector('.flow-container-label')?.textContent).toBe('stage 1');
   });
 
   /**
@@ -242,7 +243,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
     const { container } = withContainer();
     const wrapper = nodeWrapper(container, 'c_1');
     expect(wrapper.getAttribute('role')).toBe('group');
-    expect(wrapper.getAttribute('aria-label')).toBe('stage container, 2 activities');
+    expect(wrapper.getAttribute('aria-label')).toBe('stage 1 container, 2 activities');
     // And NOT on the inner div, which cannot be reached or focused.
     expect(container.querySelector('.flow-container')!.hasAttribute('aria-label')).toBe(false);
   });
@@ -266,7 +267,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
   it('announces the children it DRAWS, not the ids it lists', () => {
     const { container } = withContainer([{ id: 'c_1', kind: 'stage', children: ['n_a', 'ghost'] }]);
     expect(nodeWrapper(container, 'c_1').getAttribute('aria-label')).toBe(
-      'stage container, 1 activity',
+      'stage 1 container, 1 activity',
     );
   });
 
@@ -373,15 +374,15 @@ describe('FlowCanvas container delete (#748)', () => {
    * word the label already shows and the same one `connectRules` refuses a
    * boundary crossing by.
    */
-  it('offers a delete control named for the container KIND', () => {
+  it('offers a delete control named for the container, ordinal and all', () => {
     const { box } = withBoxedGraph('loop');
-    expect(within(box).getByRole('button', { name: 'Delete loop container' })).toBeTruthy();
+    expect(within(box).getByRole('button', { name: 'Delete loop 1 container' })).toBeTruthy();
   });
 
   it('deletes the container, and its incident edges, once confirmed', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const { store, box } = withBoxedGraph();
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage 1 container' }));
     const st = store.getState();
     expect(st.containers).toEqual([]);
     expect(st.edges).toEqual([]);
@@ -392,7 +393,7 @@ describe('FlowCanvas container delete (#748)', () => {
   it('does nothing at all when the confirmation is declined', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { store, box } = withBoxedGraph();
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage 1 container' }));
     const st = store.getState();
     expect(st.containers.map((c) => c.id)).toEqual(['c_1']);
     expect(st.edges.map((e) => e.id)).toEqual(['e_out']);
@@ -410,9 +411,13 @@ describe('FlowCanvas container delete (#748)', () => {
   it('warns that the config goes and the activities stay', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { box } = withBoxedGraph('loop');
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop 1 container' }));
     const message = confirm.mock.calls[0]![0] as string;
-    expect(message).toContain('loop');
+    // #883 — the ORDINAL, not a bare `toContain('loop')` that a bare-kind dialog
+    // would also satisfy. Naming the button "Delete loop 1 container" and then
+    // asking "Delete this loop container?" would relocate the half-named split
+    // rather than close it, and with two loops the dialog would not say which.
+    expect(message).toContain('Delete this loop 1 container?');
     expect(message).toMatch(/activities.*kept|kept.*activities/i);
     expect(message).toMatch(/cannot be undone/i);
   });
@@ -434,14 +439,14 @@ describe('FlowCanvas container delete (#748)', () => {
   it('warns that a foreach un-groups its children out of ${item} scope', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { box } = withBoxedGraph('foreach');
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete foreach container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete foreach 1 container' }));
     expect(confirm.mock.calls[0]![0] as string).toContain('${item}');
   });
 
   it('does NOT warn about ${item} for a kind that never scoped it', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { box } = withBoxedGraph('loop');
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete loop 1 container' }));
     expect(confirm.mock.calls[0]![0] as string).not.toContain('${item}');
   });
 
@@ -456,7 +461,7 @@ describe('FlowCanvas container delete (#748)', () => {
   it('warns that deleting the box leaves routing INFERRED, when the cascade empties the edges', () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const { box } = withBoxedGraph();
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage 1 container' }));
     const message = confirm.mock.calls[0]![0] as string;
     expect(message).toContain('no authored edges');
     expect(message).toContain('one sequence');
@@ -503,7 +508,7 @@ describe('FlowCanvas container delete (#748)', () => {
       </ReactFlowProvider>,
     );
     const box = container.querySelector<HTMLElement>('.react-flow__node[data-id="c_1"]')!;
-    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage container' }));
+    fireEvent.click(within(box).getByRole('button', { name: 'Delete stage 1 container' }));
     const message = confirm.mock.calls[0]![0] as string;
     expect(message).not.toContain('inferred');
     expect(message).not.toContain('one sequence');
