@@ -36,4 +36,5 @@ export * from './pricing/price-table.js';
 
 // #2 L6 — the run-cost projection: a pure fold that SUMS the stamped
 // `costEstimate` per run + per pipeline (fail-closed on an absent estimate).
+export * from './pricing/display.js';
 export * from './pricing/run-cost.js';
