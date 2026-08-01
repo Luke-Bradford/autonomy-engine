@@ -13,7 +13,12 @@ import { useNavigate } from 'react-router';
 import { ApiError } from '../api/client';
 import { RecurrenceEditor } from './triggers/RecurrenceEditor';
 import { WindowEditor } from './triggers/WindowEditor';
-import { blankEventForm, eventToForm, formToEvent, type EventFormState } from './triggers/eventForm';
+import {
+  blankEventForm,
+  eventToForm,
+  formToEvent,
+  type EventFormState,
+} from './triggers/eventForm';
 import {
   blankWindowForm,
   formToWindow,

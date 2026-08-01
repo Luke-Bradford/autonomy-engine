@@ -34,8 +34,7 @@ export function eventToForm(event: EventConfig): EventFormState {
 }
 
 export type EventConversion =
-  | { ok: true; event: EventConfig | null }
-  | { ok: false; reason: string };
+  { ok: true; event: EventConfig | null } | { ok: false; reason: string };
 
 /**
  * Build an `EventConfig` from the form, or report why it cannot be.

@@ -90,8 +90,7 @@ function isUntouched(form: WindowFormState): boolean {
 }
 
 export type WindowConversion =
-  | { ok: true; window: WindowConfig | null }
-  | { ok: false; reason: string };
+  { ok: true; window: WindowConfig | null } | { ok: false; reason: string };
 
 /** The optional whole-number caps, paired with the field name an error uses. */
 const CAP_FIELDS: ReadonlyArray<{

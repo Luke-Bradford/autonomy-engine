@@ -157,7 +157,9 @@ export function WindowEditor({
           ]
             .filter((s) => s !== null)
             .join(' and ')}
-          {', authored outside this form. There is no control for it here yet; it is preserved unchanged when you save.'}
+          {
+            ', authored outside this form. There is no control for it here yet; it is preserved unchanged when you save.'
+          }
         </p>
       )}
 

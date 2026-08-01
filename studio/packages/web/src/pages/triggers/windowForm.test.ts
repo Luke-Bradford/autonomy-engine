@@ -83,9 +83,7 @@ describe('formToWindow — every rule beyond "is this a number" comes from the s
   });
 
   it('refuses a backfill cap above MAX_BACKFILL_WINDOWS_CAP', () => {
-    expect(reasonOf(form({ ...START, maxBackfillWindows: '1001' }))).toMatch(
-      /maxBackfillWindows/,
-    );
+    expect(reasonOf(form({ ...START, maxBackfillWindows: '1001' }))).toMatch(/maxBackfillWindows/);
   });
 
   it('refuses a concurrent-window cap above MAX_CONCURRENT_WINDOWS_CAP', () => {

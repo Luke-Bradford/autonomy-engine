@@ -22,8 +22,7 @@
 export const WHOLE_NUMBER = /^[+-]?\d+$/;
 
 export type WholeNumberParse =
-  | { ok: true; value: number | undefined }
-  | { ok: false; reason: string };
+  { ok: true; value: number | undefined } | { ok: false; reason: string };
 
 /**
  * Parse a single whole number typed into a text/number input. A blank input is
