@@ -230,12 +230,7 @@ describe('readableIssue', () => {
    * replaced.
    */
   it('tells two activities of the SAME type apart', () => {
-    const out = readableIssue(
-      `edge 'n_a' → 'n_d' is broken`,
-      [A, B, C, D],
-      [],
-      containers,
-    );
+    const out = readableIssue(`edge 'n_a' → 'n_d' is broken`, [A, B, C, D], [], containers);
     expect(out).toBe(`edge 'HTTP Request 1' → 'HTTP Request 2' is broken`);
   });
 

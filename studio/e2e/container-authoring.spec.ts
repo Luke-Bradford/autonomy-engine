@@ -144,8 +144,11 @@ test.describe('U6d — creating a container from the canvas', () => {
 
     expect(message).toContain('unsavable');
     expect(message).toContain('crosses a container boundary');
-    // Named by its ENDS, never by the uuid `newLocalId` minted for it.
-    expect(message).toContain('HTTP Request → HTTP Request');
+    // Named by its ENDS, never by the uuid `newLocalId` minted for it — and
+    // since #878 the two ends are TOLD APART. This doc is two `http_request`
+    // nodes, which used to render "HTTP Request → HTTP Request": true, and no
+    // more use to the operator than the two uuids it replaced.
+    expect(message).toContain('HTTP Request 1 → HTTP Request 2');
     expect(message).not.toMatch(/'e_[0-9a-f]{8}/);
 
     expect((await validationIssues(page)).join('\n')).toContain('crosses a container boundary');

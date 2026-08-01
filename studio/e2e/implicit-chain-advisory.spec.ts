@@ -58,7 +58,12 @@ test.describe('implicit-chain advisory (#788)', () => {
        operator can see that it is array order and not anything they drew. */
     const advisory = page.locator(ADVISORY);
     await expect(advisory).toContainText('run in one sequence');
-    await expect(advisory).toContainText('a → b → c');
+    /* #878 — the activities are named the way their BOXES are. The doc ids
+       (`a`, `b`, `c`) appear nowhere on the canvas, so naming them here pointed
+       at nothing the operator could see; for a canvas-authored doc they are
+       `n_7c44a16f-…` uuids. */
+    await expect(advisory).toContainText('HTTP Request 1 → HTTP Request 2 → HTTP Request 3');
+    await expect(advisory).not.toContainText('a → b → c');
     // And what it COSTS: the inferred routing is what the next Save mints into a
     // version that cannot be edited afterwards.
     await expect(advisory).toContainText('Saving mints');
@@ -72,9 +77,23 @@ test.describe('implicit-chain advisory (#788)', () => {
     const problems = collectPageProblems(page);
     // The import / git-checkout path — the operator did not author this state,
     // so it is the one they are least likely to have reasoned about.
-    await openSeededCanvas(page, 'implicit chain — seeded', chainDoc(['first', 'second', 'third']));
+    /* The MIDDLE activity is a different type on purpose. `activityLabels`
+       numbers within a kind and in document order, so three same-type activities
+       read "HTTP Request 1 → 2 → 3" for EVERY possible array order — an
+       assertion that cannot fail. A distinct kind in the middle puts the
+       identity of each position back into the sentence. */
+    await openSeededCanvas(page, 'implicit chain — seeded', {
+      nodes: [
+        { id: 'first', position: { x: 0, y: 0 } },
+        { id: 'second', type: 'file_write', position: { x: 220, y: 0 } },
+        { id: 'third', position: { x: 440, y: 0 } },
+      ],
+    });
 
-    await expect(page.locator(ADVISORY)).toContainText('first → second → third');
+    await expect(page.locator(ADVISORY)).toContainText(
+      'HTTP Request 1 → Write File 1 → HTTP Request 2',
+    );
+    await expect(page.locator(ADVISORY)).not.toContainText('first → second → third');
     await expectQuiet(page, problems);
   });
 
@@ -97,8 +116,10 @@ test.describe('implicit-chain advisory (#788)', () => {
 
     const advisory = page.locator(ADVISORY);
     await expect(advisory).toContainText('2 things start in parallel');
-    // The container by its within-kind ordinal, the activity by its id.
-    await expect(advisory).toContainText('a, stage 1');
+    // Both by their within-kind ordinal — `activityLabels` for the activity
+    // (#878), `containerLabels` for the container. The arm used to mix a name
+    // with a raw doc id.
+    await expect(advisory).toContainText('HTTP Request 1, stage 1');
     await expect(advisory).not.toContainText('run in one sequence');
     await expect(advisory).toContainText('Saving mints');
 

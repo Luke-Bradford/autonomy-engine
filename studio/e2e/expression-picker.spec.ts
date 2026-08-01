@@ -66,12 +66,14 @@ test.describe('U8a — expression insert flyout', () => {
     await nodeById(page, 'call').click();
     await panel(page).getByRole('button', { name: 'Insert reference into url' }).click();
 
-    // The discovery this ticket exists for: the producer is named by the title
+    // The discovery this ticket exists for: the producer is named by the text
     // its BOX carries, and its declared output name is spelled out — neither of
-    // which the author had any way to read off the canvas before. The id is
-    // appended because this doc has TWO `http_request` nodes, so the title alone
-    // would not say which box the reference points at.
-    const option = panel(page).getByRole('button', { name: /HTTP Request \(fetch\) → body/ });
+    // which the author had any way to read off the canvas before. This doc has
+    // TWO `http_request` nodes, and #878's ordinal is what says which box the
+    // reference points at; it used to be the raw doc id in brackets, a string
+    // shown nowhere on the canvas.
+    const option = panel(page).getByRole('button', { name: /HTTP Request 1 → body/ });
+    await expect(panel(page).getByRole('button', { name: /HTTP Request 2 → / })).toHaveCount(0);
     await expect(option).toBeVisible();
     await option.click();
 
@@ -123,8 +125,10 @@ test.describe('U8a — expression insert flyout', () => {
     await nodeById(page, 'pick').click();
     await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
 
-    await expect(panel(page).getByRole('button', { name: /HTTP Request → rows/ })).toBeVisible();
-    await expect(panel(page).getByRole('button', { name: /HTTP Request → label/ })).toHaveCount(0);
+    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → rows/ })).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: /HTTP Request 1 → label/ })).toHaveCount(
+      0,
+    );
     await expect(panel(page).getByRole('button', { name: /^runId/ })).toHaveCount(0);
 
     await expectQuiet(page, problems);
@@ -155,7 +159,7 @@ test.describe('U8a — expression insert flyout', () => {
     // choice is destructive.
     await expect(panel(page).getByText(/REPLACES its current value/)).toBeVisible();
     await panel(page)
-      .getByRole('button', { name: /HTTP Request → body/ })
+      .getByRole('button', { name: /HTTP Request 1 → body/ })
       .click();
     await panel(page).getByRole('button', { name: 'Apply config' }).click();
 
