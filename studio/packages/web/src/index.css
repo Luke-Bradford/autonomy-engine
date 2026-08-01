@@ -1747,7 +1747,7 @@ td button + button {
 }
 
 .run-status-running,
-.node-status-running,
+.node-status-dispatched,
 .stream-phase-replaying,
 .stream-phase-connecting {
   color: var(--accent);
@@ -1774,12 +1774,20 @@ td button + button {
   color: var(--muted);
 }
 
-/* #483 — a PARKED node (a `wait`'s timer, a `webhook`'s callback). Muted, since
-   a park is routine. Split out of the group above to carry a matching
-   `border-color`: every other node pill rings itself in its own colour, and this
-   one kept the default `--border` ring. That was invisible until now — the node
-   table had no `waiting` status before this sweep, so the class never painted. */
-.node-status-waiting {
+/* #483 — a PARKED node. Muted, since a park is routine. Split out of the group
+   above to carry a matching `border-color`: every other node pill rings itself
+   in its own colour, and this one kept the default `--border` ring. That was
+   invisible until #483 — the node table had no parked status before it, so the
+   class never painted.
+
+   U25 split the one `waiting` class into the engine's three parks (a timer, an
+   inbound callback, a child run in flight). They deliberately SHARE a colour:
+   the reason is carried by the label, and giving each park its own hue would
+   claim a difference in urgency that does not exist between them. What must not
+   be shared is the retry hue below. */
+.node-status-waiting,
+.node-status-wait_pending,
+.node-status-external_wait_pending {
   color: var(--muted);
   border-color: var(--muted);
 }
@@ -1787,11 +1795,28 @@ td button + button {
 /* #483 — a node HELD for its retry interval. Amber, deliberately NOT the red it
    used to inherit from its `node.failed`: the run is healthy and the node is
    coming back, so it must not read as a failure. Amber rather than the muted
-   grey a parked `waiting` node takes, because a retry follows a failure and is
-   worth an operator's attention; a park is routine. */
-.node-status-retrying {
+   grey a parked node takes, because a retry follows a failure and is worth an
+   operator's attention; a park is routine.
+
+   This is also why the table's pills are keyed by STATUS and not by the graph's
+   six tones: `holding` covers a retry backoff AND a routine park, so tone-keying
+   would have collapsed exactly the distinction #483 established. */
+.node-status-retry_pending {
   color: var(--warning);
   border-color: var(--warning);
+}
+
+/* U25 — the three statuses only the doc-aware projection can report, so they
+   had no pill until the table read it. Muted: nothing has happened to a
+   `pending`/`ready` node, and a `skipped` one was routed around and never will
+   run. `skipped` shares the grey rather than taking a colour of its own, which
+   matches the settled edge encoding (a skipped edge is grey) and the graph's
+   own `skipped` tone — "this did not run" reads the same everywhere. */
+.node-status-pending,
+.node-status-ready,
+.node-status-skipped {
+  color: var(--muted);
+  border-color: var(--muted);
 }
 
 /* The blinking "● live" indicator, so a running stream is unmistakable. */

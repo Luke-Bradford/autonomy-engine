@@ -504,11 +504,17 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
     reconciled.push({
       nodeId,
       status: engine.status,
-      // The engine's own count, because there is no fold to prefer here: this
-      // node appears in no event, so `deriveNodeActivity` never made it a row.
-      // In practice that is 0 — a node with attempts would have a dispatch —
-      // but reading the field is more honest than asserting the zero.
-      attempts: engine.attempts,
+      /* ZERO, and deliberately NOT `engine.attempts`, which was tried and is
+         wrong here. The reducer mints an attempt id as a node becomes READY and
+         bumps the counter then, so a node that has not run yet reports
+         `attempts: 1` — measured, not assumed (the test pins it). This column
+         means "how many times the node has been STARTED", so copying that
+         across would print "1 attempt" beside `ready` and restate, in the
+         attempts column, exactly the kind of falsehood this reconciliation
+         exists to remove. A row reaches this branch precisely BECAUSE no event
+         mentions the node — no dispatch, no evaluation, no park — so nothing
+         has started it, and 0 is a fact rather than a fallback. */
+      attempts: 0,
       outputs: 0,
       lastOutputName: undefined,
       error: undefined,

@@ -6,7 +6,7 @@ import {
   NodeRunStatusSchema,
 } from '@autonomy-studio/shared';
 import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
-import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/runProjection';
+import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/nodeStatus';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -128,6 +128,32 @@ describe('U6a edge variant hues', () => {
    * container status is `holding`), which is exactly the kind of asymmetry that
    * rots — so each side is enumerated from the CODE, not from a copy of it.
    */
+  /**
+   * U25 — the same argument one level down, for the TABLE's pills.
+   *
+   * `RunDetailPage` and `NodeActivityPanel` build their class the same way
+   * (`node-status-${status}`), and the status is now the engine's full
+   * `NodeRunStatus` rather than the five words the table used to fold for
+   * itself. A member with no rule is a pill that silently falls through to the
+   * unstyled default — which is exactly what would have happened to `pending`,
+   * `ready`, `skipped` and the two split parks had this test not been written
+   * alongside them.
+   */
+  it('has a node-status pill rule for every engine status the table can show', () => {
+    for (const status of NodeRunStatusSchema.options) {
+      /* Matched as a rule HEAD (`… ,` or `… {`) rather than through `ruleBody`,
+         which finds only a selector that opens its own block: most of these
+         pills deliberately share a declaration with a sibling, and the parks
+         share one with each other. The boundary character is what keeps
+         `.node-status-pending` from being satisfied by `.node-status-
+         wait_pending`. */
+      expect(
+        new RegExp(`\\.node-status-${status}\\s*[,{]`).test(css),
+        `no .node-status-${status} rule`,
+      ).toBe(true);
+    }
+  });
+
   it('has a run-overlay rule for every tone the projection can emit, and no others', () => {
     const nodeTones = new Set(NodeRunStatusSchema.options.map(nodeStatusTone));
     for (const tone of nodeTones) {
