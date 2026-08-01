@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   filterRunsByTab,
+  isRunTab,
   RUN_ORIGIN_LABEL,
   RUN_ORIGINS,
   RUN_TAB_LABEL,
@@ -87,5 +88,27 @@ describe('filterRunsByTab', () => {
     const out = filterRunsByTab(input, 'all');
     expect(out).not.toBe(input);
     expect(input).toHaveLength(3);
+  });
+});
+
+describe('isRunTab', () => {
+  it('accepts every rendered tab and nothing else', () => {
+    for (const key of RUN_TABS) expect(isRunTab(key)).toBe(true);
+    expect(isRunTab('Manual')).toBe(false);
+    expect(isRunTab('')).toBe(false);
+    expect(isRunTab(null)).toBe(false);
+  });
+
+  /**
+   * The guard takes `unknown` because it narrows Fluent's `TabValue` as well as
+   * a URL search param, and `TabValue` is `unknown`. A non-string reaching it
+   * must be REJECTED rather than coerced: a `String(value)` shape would let an
+   * object whose `toString()` happened to read `manual` select a tab.
+   */
+  it('rejects a non-string without coercing it', () => {
+    expect(isRunTab(undefined)).toBe(false);
+    expect(isRunTab(0)).toBe(false);
+    expect(isRunTab({ toString: () => 'manual' })).toBe(false);
+    expect(isRunTab(['manual'])).toBe(false);
   });
 });

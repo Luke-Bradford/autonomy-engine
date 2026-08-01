@@ -86,17 +86,17 @@ export function RunsPage() {
     return () => controller.abort();
   }, [reloadKey]);
 
-  // One pass for both the visible rows and every tab's count, so a tab can
-  // never advertise a number of rows it then declines to show.
-  const { visible, counts } = useMemo(() => {
-    const all = runs ?? [];
-    return {
-      visible: filterRunsByTab(all, tab),
-      counts: Object.fromEntries(
-        RUN_TABS.map((key) => [key, filterRunsByTab(all, key).length]),
+  // Both derived by the SAME predicate, so a tab can never advertise a number
+  // of rows it then declines to show — but keyed separately, because the counts
+  // describe every tab and so do not change when the selected one does.
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        RUN_TABS.map((key) => [key, filterRunsByTab(runs ?? [], key).length]),
       ) as Record<RunTab, number>,
-    };
-  }, [runs, tab]);
+    [runs],
+  );
+  const visible = useMemo(() => filterRunsByTab(runs ?? [], tab), [runs, tab]);
 
   return (
     <section aria-labelledby="runs-heading">
@@ -131,7 +131,11 @@ export function RunsPage() {
               row of plain buttons claims and does not implement. */}
           <TabList
             selectedValue={tab}
-            onTabSelect={(_, data) => selectTab(data.value as RunTab)}
+            // Fluent types `data.value` as `unknown`, so it is narrowed by the
+            // same guard the URL param uses rather than asserted to be a tab.
+            onTabSelect={(_, data) => {
+              if (isRunTab(data.value)) selectTab(data.value);
+            }}
             aria-label="Filter runs by origin"
           >
             {RUN_TABS.map((key) => (

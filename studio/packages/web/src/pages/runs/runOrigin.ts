@@ -96,10 +96,10 @@ export function filterRunsByTab<T extends Pick<Run, 'triggerId' | 'parentRunId'>
 }
 
 /**
- * Narrow an untrusted string — a URL search param — to a tab. Anything else is
- * not a tab, and the caller falls back to `all` rather than rendering a filter
- * nobody selected.
+ * Narrow an untrusted value — a URL search param, or Fluent's `TabValue`, which
+ * is typed `unknown` — to a tab. Anything else is not a tab, and the caller
+ * falls back to `all` rather than rendering a filter nobody selected.
  */
-export function isRunTab(value: string | null): value is RunTab {
-  return value !== null && (RUN_TABS as readonly string[]).includes(value);
+export function isRunTab(value: unknown): value is RunTab {
+  return typeof value === 'string' && (RUN_TABS as readonly string[]).includes(value);
 }
