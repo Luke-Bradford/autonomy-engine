@@ -1,4 +1,4 @@
-import { EngineEventSchema } from '../engine/types.js';
+import { EngineEventSchema, type EngineEvent } from '../engine/types.js';
 
 /**
  * #2 L6 — the run-cost PROJECTION. A pure, deterministic fold over a run's event
@@ -184,55 +184,154 @@ export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostR
   };
 }
 
+/** The `activity.metered` member of the engine event union — what the fold reads. */
+type MeteredEvent = Extract<EngineEvent, { type: 'activity.metered' }>;
+
+/**
+ * #866 — the MUTABLE scalars a metered fold accumulates, and the single place the
+ * fail-closed three-way categorisation is written.
+ *
+ * It exists because per-NODE cost (the run monitor's drill-in) needs the same
+ * categorisation as per-RUN cost, folded inside a walk that is already happening
+ * (the web `deriveNodeActivity` — see #849, the run detail page already folds its
+ * log three times per frame, so a fourth walk is a known cost). Copying the rule
+ * into that fold would make it a second, drifting authority. `rollupFromAggregates`
+ * set the precedent: ONE derivation site, so the paths cannot diverge.
+ *
+ * It carries MORE than {@link RunCost} projects, deliberately. The extra fields are
+ * per-node facts that are meaningless diluted across a whole run but are the entire
+ * reading of a single node; {@link runCostFromTotals} simply drops them, so the
+ * run-level shape (and the #599 SQL aggregate path that mirrors it) is untouched.
+ */
+export interface MeteredTotals {
+  totalCostEstimate: number;
+  responseCount: number;
+  pricedResponseCount: number;
+  unpricedResponseCount: number;
+  costUnknownResponseCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  /**
+   * Responses that reported AT LEAST ONE token count.
+   *
+   * Without it, `inputTokens: 0` is ambiguous between "this really used no tokens"
+   * and "nobody counted" — and the second is the COMMON case per node: an
+   * `agent_cli` spend fact (`cliSpendFact`) carries no token counts at all, so an
+   * `agent_task` node would render `0 in / 0 out` for a subprocess that may have
+   * driven dozens of model calls internally. That is a measurement nobody took,
+   * printed as a measurement — the same manufactured-zero shape `formatNodeDuration`
+   * refuses when it renders an unmeasured span as an em-dash rather than `0ms`.
+   *
+   * A PARTIAL count (one side present) counts as reported: it reported the side it
+   * had, and the missing side is already visible as `meteringStatus:'unknown'`.
+   */
+  tokenReportedResponseCount: number;
+  /** Distinct `provider` values seen, in first-seen order. */
+  providers: Set<string>;
+  /** Distinct `model` values seen, in first-seen order. */
+  models: Set<string>;
+}
+
+/** A fresh, zeroed accumulator. */
+export function emptyMeteredTotals(): MeteredTotals {
+  return {
+    totalCostEstimate: 0,
+    responseCount: 0,
+    pricedResponseCount: 0,
+    unpricedResponseCount: 0,
+    costUnknownResponseCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    tokenReportedResponseCount: 0,
+    providers: new Set(),
+    models: new Set(),
+  };
+}
+
+/**
+ * Fold ONE metered response into `totals`. The fail-closed categorisation lives
+ * here and nowhere else.
+ */
+export function accumulateMetered(totals: MeteredTotals, e: MeteredEvent): void {
+  totals.responseCount += 1;
+  totals.providers.add(e.provider);
+  totals.models.add(e.model);
+  if (e.inputTokens !== undefined) totals.inputTokens += e.inputTokens;
+  if (e.outputTokens !== undefined) totals.outputTokens += e.outputTokens;
+  if (e.inputTokens !== undefined || e.outputTokens !== undefined) {
+    totals.tokenReportedResponseCount += 1;
+  }
+
+  // Three disjoint, exhaustive categories. `costEstimate` presence wins first —
+  // it is stamped ONLY when a price resolved AND both tokens were present, so its
+  // presence means a fully-known cost regardless of status.
+  if (e.costEstimate !== undefined) {
+    totals.totalCostEstimate += e.costEstimate;
+    totals.pricedResponseCount += 1;
+  } else if (e.meteringStatus === 'unpriced') {
+    // L14: a subscription/CLI call — cost is a known flat/covered zero-marginal,
+    // NOT a measurement gap, so it does not flip `complete`.
+    totals.unpricedResponseCount += 1;
+  } else {
+    // FAIL-CLOSED: a genuine gap (unpriced model / unknown usage). No manufactured
+    // 0 — the absence is recorded, not padded, and flips `complete`.
+    totals.costUnknownResponseCount += 1;
+  }
+}
+
+/** Project accumulated totals into the run-level {@link RunCost} shape. */
+export function runCostFromTotals(totals: MeteredTotals): RunCost {
+  return {
+    currency: 'USD',
+    totalCostEstimate: totals.totalCostEstimate,
+    responseCount: totals.responseCount,
+    pricedResponseCount: totals.pricedResponseCount,
+    unpricedResponseCount: totals.unpricedResponseCount,
+    costUnknownResponseCount: totals.costUnknownResponseCount,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    complete: totals.costUnknownResponseCount === 0,
+  };
+}
+
+/**
+ * A ONE-NODE cost slice: every {@link RunCost} field, plus the facts a per-node
+ * reading needs and a whole-run reading cannot use.
+ *
+ * `providers`/`models` are the answer to "which model did this node actually run",
+ * which is answerable nowhere else in the UI — and `providers` is also what lets a
+ * reader tell an `agent_cli` node apart, whose `responseCount` means something
+ * DIFFERENT (see {@link RunCost.responseCount}: per invocation, a floor rather than
+ * a census, because the CLI reports none of the model calls it drives internally).
+ */
+export interface NodeCost extends RunCost {
+  tokenReportedResponseCount: number;
+  providers: string[];
+  models: string[];
+}
+
+/** Project accumulated totals into the per-node {@link NodeCost} shape. */
+export function nodeCostFromTotals(totals: MeteredTotals): NodeCost {
+  return {
+    ...runCostFromTotals(totals),
+    tokenReportedResponseCount: totals.tokenReportedResponseCount,
+    providers: [...totals.providers],
+    models: [...totals.models],
+  };
+}
+
 /** Fold one run's events into a `RunCost`. Pure, deterministic, order-independent,
  * never throws. */
 export function computeRunCost(events: readonly { payload: unknown }[]): RunCost {
-  let totalCostEstimate = 0;
-  let responseCount = 0;
-  let pricedResponseCount = 0;
-  let unpricedResponseCount = 0;
-  let costUnknownResponseCount = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-
+  const totals = emptyMeteredTotals();
   for (const row of events) {
     const parsed = EngineEventSchema.safeParse(row.payload);
     if (!parsed.success) continue;
     const e = parsed.data;
     if (e.type !== 'activity.metered') continue;
-
-    responseCount += 1;
-    if (e.inputTokens !== undefined) inputTokens += e.inputTokens;
-    if (e.outputTokens !== undefined) outputTokens += e.outputTokens;
-
-    // Three disjoint, exhaustive categories. `costEstimate` presence wins first —
-    // it is stamped ONLY when a price resolved AND both tokens were present, so its
-    // presence means a fully-known cost regardless of status.
-    if (e.costEstimate !== undefined) {
-      totalCostEstimate += e.costEstimate;
-      pricedResponseCount += 1;
-    } else if (e.meteringStatus === 'unpriced') {
-      // L14: a subscription/CLI call — cost is a known flat/covered zero-marginal,
-      // NOT a measurement gap, so it does not flip `complete`.
-      unpricedResponseCount += 1;
-    } else {
-      // FAIL-CLOSED: a genuine gap (unpriced model / unknown usage). No manufactured
-      // 0 — the absence is recorded, not padded, and flips `complete`.
-      costUnknownResponseCount += 1;
-    }
+    accumulateMetered(totals, e);
   }
-
-  return {
-    currency: 'USD',
-    totalCostEstimate,
-    responseCount,
-    pricedResponseCount,
-    unpricedResponseCount,
-    costUnknownResponseCount,
-    inputTokens,
-    outputTokens,
-    complete: costUnknownResponseCount === 0,
-  };
+  return runCostFromTotals(totals);
 }
 
 /** Roll up an ARRAY of per-run costs into a per-pipeline total — the pure

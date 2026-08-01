@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { computeRunCost, rollupFromAggregates, rollupPipelineCost } from '../run-cost.js';
+import {
+  accumulateMetered,
+  computeRunCost,
+  emptyMeteredTotals,
+  nodeCostFromTotals,
+  rollupFromAggregates,
+  rollupPipelineCost,
+  runCostFromTotals,
+} from '../run-cost.js';
 import { BUILTIN_PRICE_TABLE_VERSION } from '../price-table.js';
+import { EngineEventSchema } from '../../engine/types.js';
 
 /**
  * L6 — the run-cost projection SUMS `activity.metered` events deterministically.
@@ -345,5 +354,86 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
     // 6 - 3 - 2 = 1 genuine cost-unknown response → incomplete.
     expect(rollup.costUnknownResponseCount).toBe(1);
     expect(rollup.complete).toBe(false);
+  });
+});
+
+/**
+ * #866 — the accumulator `computeRunCost` was refactored onto, so a PER-NODE
+ * fold can reuse the fail-closed three-way categorisation instead of copying it.
+ * `rollupFromAggregates` set the precedent: one derivation site, so the two
+ * paths cannot drift.
+ */
+/** Parse a `metered()` row into the discriminated `activity.metered` member. */
+function meteredEvent(fields: Record<string, unknown>) {
+  const parsed = EngineEventSchema.parse(metered(fields).payload);
+  if (parsed.type !== 'activity.metered') throw new Error('fixture is not activity.metered');
+  return parsed;
+}
+
+describe('the metered accumulator (#866)', () => {
+  it('starts empty, and an empty fold is a complete $0', () => {
+    const totals = emptyMeteredTotals();
+    const cost = runCostFromTotals(totals);
+    expect(cost.responseCount).toBe(0);
+    expect(cost.totalCostEstimate).toBe(0);
+    expect(cost.complete).toBe(true);
+  });
+
+  it('reproduces computeRunCost exactly, so the two paths cannot drift', () => {
+    const rows = [
+      metered({ inputTokens: 100, outputTokens: 200, costEstimate: 0.0055 }),
+      metered({ meteringStatus: 'unpriced', provider: 'agent_cli' }),
+      metered({ inputTokens: 10, meteringStatus: 'unknown' }),
+    ];
+    const totals = emptyMeteredTotals();
+    for (const row of rows) {
+      const parsed = EngineEventSchema.parse(row.payload);
+      if (parsed.type === 'activity.metered') accumulateMetered(totals, parsed);
+    }
+    expect(runCostFromTotals(totals)).toEqual(computeRunCost(rows));
+  });
+
+  it('counts responses that REPORTED a token count, so an absent count is not a zero', () => {
+    const totals = emptyMeteredTotals();
+    // An `agent_cli` spend fact carries NO token counts at all (`cliSpendFact`).
+    accumulateMetered(totals, meteredEvent({ meteringStatus: 'unpriced', provider: 'agent_cli' }));
+    expect(totals.responseCount).toBe(1);
+    expect(totals.inputTokens).toBe(0);
+    expect(totals.tokenReportedResponseCount).toBe(0);
+
+    // A PARTIAL count still counts as reported — it reported the side it had.
+    accumulateMetered(totals, meteredEvent({ inputTokens: 7, meteringStatus: 'unknown' }));
+    expect(totals.tokenReportedResponseCount).toBe(1);
+    expect(totals.inputTokens).toBe(7);
+  });
+
+  it('records the distinct providers and models a fold saw, in first-seen order', () => {
+    const totals = emptyMeteredTotals();
+    accumulateMetered(totals, meteredEvent({ model: 'claude-opus-4-8', costEstimate: 0.1 }));
+    accumulateMetered(totals, meteredEvent({ model: 'claude-opus-4-8', costEstimate: 0.1 }));
+    accumulateMetered(
+      totals,
+      meteredEvent({ provider: 'agent_cli', model: 'cli', meteringStatus: 'unpriced' }),
+    );
+    const node = nodeCostFromTotals(totals);
+    expect(node.providers).toEqual(['anthropic_api', 'agent_cli']);
+    expect(node.models).toEqual(['claude-opus-4-8', 'cli']);
+  });
+
+  it('projects a node cost that is a RunCost plus the per-node facts', () => {
+    const totals = emptyMeteredTotals();
+    accumulateMetered(totals, meteredEvent({ inputTokens: 1, outputTokens: 2, costEstimate: 0.5 }));
+    const node = nodeCostFromTotals(totals);
+    // Every `RunCost` field is present and agrees with the run-level projection.
+    expect(node).toMatchObject(runCostFromTotals(totals));
+    expect(node.tokenReportedResponseCount).toBe(1);
+  });
+
+  it('never mutates a caller through a shared totals object', () => {
+    const a = emptyMeteredTotals();
+    const b = emptyMeteredTotals();
+    accumulateMetered(a, meteredEvent({ costEstimate: 1 }));
+    expect(b.responseCount).toBe(0);
+    expect(b.providers.size).toBe(0);
   });
 });
