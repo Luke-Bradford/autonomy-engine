@@ -161,9 +161,9 @@ test('U25 — the node table and the graph give every node the same word, includ
 
   // The drill-in panel is the third surface that renders a status, so it reads
   // from the same map — a node routed around says so there too.
-  await page.getByRole('button', { name: 'neverRan', exact: true }).click();
+  await page.getByRole('button', { name: 'Fail 3', exact: true }).click();
   await expect(
-    page.getByRole('complementary', { name: 'Node neverRan' }).getByText('skipped', {
+    page.getByRole('complementary', { name: 'Node Fail 3' }).getByText('skipped', {
       exact: true,
     }),
   ).toBeVisible();

@@ -49,20 +49,41 @@ import type { NodeActivity } from './runSummary';
 /** The panel's DOM id, so the table's disclosure button can `aria-controls` it. */
 export const PANEL_ID = 'node-activity-panel';
 
-export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClose: () => void }) {
+/**
+ * `name` is what the graph and the node table call this node — the
+ * `activityLabels` ordinal, e.g. `HTTP Request 1` (#882). It is `null`, and only
+ * `null`, when the bound doc does not name this node: the pipeline version will
+ * not resolve, or the run carries a row the doc no longer has. The panel then
+ * falls back to the raw id, which is what it showed before this and is the one
+ * thing still true about the node — never an invented placeholder.
+ *
+ * The RAW ID is rendered either way. It is what the `${nodes.<id>.output.…}`
+ * expressions in the doc and the ids in the run's event feed are keyed on, so
+ * naming the node without it would close one lookup by breaking another.
+ */
+export function NodeActivityPanel({
+  node,
+  name,
+  onClose,
+}: {
+  node: NodeActivity;
+  name: string | null;
+  onClose: () => void;
+}) {
   const outputNames = node.outputValues === undefined ? [] : Object.keys(node.outputValues);
   return (
     <aside
       id={PANEL_ID}
       className="property-panel node-detail-panel"
-      aria-label={`Node ${node.nodeId}`}
+      aria-label={`Node ${name ?? node.nodeId}`}
     >
       {/* `.page-header` is the existing title-plus-action row. The sibling
           property panels have no action in their heading, so none of them uses
           it; this one needs a Close beside the title rather than a new rule. */}
       <div className="page-header">
         <h3>
-          Node <code>{node.nodeId}</code>
+          Node {name ?? <code>{node.nodeId}</code>}
+          {name !== null && <code className="node-id">{node.nodeId}</code>}
         </h3>
         <button type="button" onClick={onClose}>
           Close

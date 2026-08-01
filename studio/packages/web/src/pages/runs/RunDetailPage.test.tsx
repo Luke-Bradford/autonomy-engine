@@ -153,7 +153,7 @@ describe('RunDetailPage', () => {
     );
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    const row = (await screen.findByText('greet')).closest('tr')!;
+    const row = (await screen.findByRole('button', { name: 'HTTP Request 1' })).closest('tr')!;
     // The engine calls this `dispatched`, which names the ENGINE's act. The
     // operator is asking what the NODE is doing.
     expect(within(row).getByText('running')).toBeInTheDocument();
@@ -187,7 +187,7 @@ describe('RunDetailPage', () => {
 
     // The parked row is the fold's, and it says WHICH alarm — one word
     // ("waiting") could not tell a timer from an awaited inbound callback.
-    const row = (await screen.findByText('greet')).closest('tr')!;
+    const row = (await screen.findByRole('button', { name: 'HTTP Request 1' })).closest('tr')!;
     expect(within(row).getByText('waiting (timer)')).toBeInTheDocument();
     // …and no row was minted for the node the projection would have seeded.
     expect(screen.queryByText('never')).not.toBeInTheDocument();
@@ -225,7 +225,7 @@ describe('RunDetailPage', () => {
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     // Node table shows the node lit green.
-    const nodeCell = await screen.findByText('greet');
+    const nodeCell = await screen.findByRole('button', { name: 'HTTP Request 1' });
     const nodeRow = nodeCell.closest('tr')!;
     expect(within(nodeRow).getByText('success')).toBeInTheDocument();
 
@@ -585,17 +585,111 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
-    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('complementary', { name: /Node HTTP Request 1/ }),
+    ).not.toBeInTheDocument();
 
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     // The class the table compresses into one line, spelled out as fields.
     expect(within(panel).getByText('transient')).toBeInTheDocument();
     expect(within(panel).getByText('rate_limit')).toBeInTheDocument();
     expect(within(panel).getByText('boom')).toBeInTheDocument();
 
     await user.click(within(panel).getByRole('button', { name: 'Close' }));
-    expect(screen.queryByRole('complementary', { name: /Node greet/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('complementary', { name: /Node HTTP Request 1/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * #882 — the node table and the drill-in name a node the way the GRAPH beside
+   * them does.
+   *
+   * The graph has said `HTTP Request 1` since #878 while these two said
+   * `n_7c44a16f-98f1-4958-…`, so an operator reading "HTTP Request 1 failed" off
+   * the picture could not find that row in the table directly underneath it, and
+   * could not search for it either. One view, two vocabularies — the exact defect
+   * #878 exists to prevent, arriving inside the view it was built for.
+   *
+   * The raw id is KEPT, beside the name rather than instead of it. It is the only
+   * string that matches the `${nodes.<id>.output.…}` expressions in the doc and
+   * the ids in the raw event feed further down this same page, so a straight swap
+   * would close one lookup by breaking another.
+   *
+   * It sits OUTSIDE the disclosure button on purpose: text inside a button
+   * becomes part of its accessible name, and `HTTP Request 1 n_7c44a16f-98f1-…`
+   * is what a screen reader would then have to read out on every row. Outside, the
+   * button's visible label and its accessible name are the same string — which is
+   * also what WCAG 2.5.3 asks for — and the id is still on screen to copy.
+   */
+  describe('#882 — the table and the drill-in name a node, not an id', () => {
+    it('names the row by its activity, and keeps the raw id beside it', async () => {
+      useRunStreamMock.mockReturnValue(failedStream());
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+
+      // The name is the button — the thing the graph says and the operator reads.
+      const button = await screen.findByRole('button', { name: 'HTTP Request 1' });
+      const row = button.closest('tr')!;
+      // …and the id is still THERE, just not the label.
+      expect(within(row).getByText('greet')).toBeInTheDocument();
+      expect(button).not.toHaveAccessibleName(/greet/);
+    });
+
+    it('falls back to the raw id when the pipeline version will not resolve', async () => {
+      /* The doc is the ONLY source of a name, and this page is built to keep
+         working without it (U11). So the honest fallback is the id it has always
+         shown — never an invented placeholder, which would be a THIRD name for
+         the same node. */
+      getRunDetailMock.mockRejectedValue(new Error('pipeline version not found'));
+      vi.mocked(runsApi.getRun).mockResolvedValue(run());
+      useRunStreamMock.mockReturnValue(failedStream());
+
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+
+      expect(await screen.findByRole('button', { name: 'greet' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'HTTP Request 1' })).not.toBeInTheDocument();
+    });
+
+    it('falls back to the raw id for a row the bound doc does not name', async () => {
+      /* The rows come from the RUN, the names from the DOC, and the two lists are
+         not the same list: a rerun can carry a node the doc no longer has. That
+         row is named by the only thing that is true about it. */
+      getRunDetailMock.mockResolvedValue({
+        run: run(),
+        pipelineVersion: version({
+          nodes: [{ id: 'greet', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
+          edges: [],
+        }),
+      });
+      useRunStreamMock.mockReturnValue(
+        stream({
+          events: [
+            envelope({
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'ghost',
+              attemptId: 'ghost#0',
+              idempotent: true,
+            }),
+          ],
+        }),
+      );
+
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+      expect(await screen.findByRole('button', { name: 'ghost' })).toBeInTheDocument();
+    });
+
+    it('names the drill-in panel by the activity, with the id inside it', async () => {
+      useRunStreamMock.mockReturnValue(failedStream());
+      const user = userEvent.setup();
+      renderWithRouter(<RunDetailPage runId="run_1" />);
+
+      await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+      const panel = screen.getByRole('complementary', { name: 'Node HTTP Request 1' });
+      // The id the panel's `${nodes.<id>…}` expressions and the event feed use.
+      expect(within(panel).getByText('greet')).toBeInTheDocument();
+    });
   });
 
   it('shows a succeeded node’s DECLARED outputs — the thing nothing rendered before', async () => {
@@ -621,8 +715,8 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     );
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText('{"body":"hello","status":200}')).toBeInTheDocument();
   });
 
@@ -650,8 +744,8 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     );
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText(/without a machine-readable class/i)).toBeInTheDocument();
   });
 
@@ -678,8 +772,8 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     );
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText('greet@1')).toBeInTheDocument();
     expect(within(panel).getByText(/fold onto the one node you drew/i)).toBeInTheDocument();
     // It names the KEY, never a cause: a SEQUENTIAL doc may legitimately
@@ -718,8 +812,8 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     );
     const user = userEvent.setup();
     renderWithRouter(<RunDetailPage runId="run_1" />);
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText(/reports another run/i)).toBeInTheDocument();
   });
 
@@ -773,9 +867,9 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     useRunStreamMock.mockReturnValue(stream({ events: [dispatched] }));
     const user = userEvent.setup();
     const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
-    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
     expect(
-      within(screen.getByRole('complementary', { name: /Node greet/ })).getByText('running'),
+      within(screen.getByRole('complementary', { name: /Node HTTP Request 1/ })).getByText('running'),
     ).toBeInTheDocument();
 
     useRunStreamMock.mockReturnValue(
@@ -799,7 +893,7 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
         <RunDetailPage runId="run_1" />
       </MemoryRouter>,
     );
-    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText('failure')).toBeInTheDocument();
     expect(within(panel).getByText('auth')).toBeInTheDocument();
   });

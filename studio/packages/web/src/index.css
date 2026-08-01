@@ -1716,6 +1716,20 @@ td button + button {
   border-color: var(--accent);
 }
 
+/* #882 — the raw node id, SECONDARY to the name beside it. It has to stay on
+   screen (it is what the doc's `${nodes.<id>…}` expressions and the ids in the
+   event feed below are keyed on) without competing with the name for the eye, so
+   it is dimmed and set smaller rather than dropped.
+
+   `display: block` puts it on its own line under the name: a minted id is
+   `n_7c44a16f-98f1-4958-…`, which inline would set the table's first column wider
+   than every other column combined. */
+.node-id {
+  display: block;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
 /* The drill-in panel opens beneath the node table, not inside the row — a
    <tr>-nested panel would have to be a full-width <td>, and the table is already
    the page's densest region. */

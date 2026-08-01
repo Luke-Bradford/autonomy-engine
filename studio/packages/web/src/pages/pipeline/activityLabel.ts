@@ -38,11 +38,18 @@ export function activityLabel(node: Node): string {
  * the canvas, which is the exact unreadable-id defect `readableIssue` and
  * `endpointLabel` were both written against.
  *
- * Every AUTHORING surface reads this, and so does the run graph. #884 added the
- * canvas validation badge list, which had never gone through `readableIssue` at
- * all. Two surfaces still do NOT, each ticketed rather than left to be
- * discovered: the run detail's node table and drill-in panel (#882), and the
- * pre-edit routing confirmation, which names no activity by design (#881).
+ * Every AUTHORING surface reads this, and so does the whole run monitor — the
+ * graph since #878, the node table and the drill-in panel since #882. #884 added
+ * the canvas validation badge list, which had never gone through `readableIssue`
+ * at all. ONE surface still does not, ticketed rather than left to be discovered:
+ * the pre-edit routing confirmation, which names no activity by design (#881).
+ *
+ * The run monitor's two halves resolve it differently, and the difference is the
+ * whole of #882: the graph walks the DOC, so every node it draws has a name,
+ * while the table and panel walk the RUN's rows, which are not the same list. A
+ * row this map does not name keeps its raw id — the doc may be unresolvable
+ * (U11) or a rerun may carry a node the doc has since dropped, and in both cases
+ * the id is the only true thing left to say.
  *
  * THE ORDINAL IS DRAWN ON THE BOX, and since #883 the container ordinal is too —
  * so the rule is now uniform rather than an activity-only property with a

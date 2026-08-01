@@ -174,7 +174,7 @@ test('#873 — a live container says "running", the same word its node and its r
      strictly MORE than #870's poll — the SPA navigation, the lazy `RunGraph`
      chunk and the WS replay on top — so it cannot take the 5s default. */
   const box = canvas.locator('.run-container .flow-container-label');
-  await expect(box).toHaveText('stage · running', { timeout: 20_000 });
+  await expect(box).toHaveText('stage 1 · running', { timeout: 20_000 });
 
   /* And wait on the CHILD's park too, before reading anything one-shot below.
      The container turns `active` at ENTER, which is strictly earlier in the
@@ -211,7 +211,7 @@ test('#873 — a live container says "running", the same word its node and its r
   expect(graph.boxAria).toContain('running');
   expect(graph.boxAria).not.toContain('active');
   // Named in full, so a truncated or reordered accessible name trips.
-  expect(graph.boxAria).toBe('stage container, 1 activity, running');
+  expect(graph.boxAria).toBe('stage 1 container, 1 activity, running');
 
   /* The hue is PINNED here, not discriminated: `active` is the one member whose
      label and tone are the same word, so this assertion reads identically

@@ -248,10 +248,10 @@ export function containerEditConsequence(
  * version of the name — it is a DIFFERENT name for the same box, which is the
  * defect #883 was filed for.
  *
- * ONE surface does not, and it is named rather than left to be discovered: the
- * RUN graph (`runs/runFlow.ts`) still draws and announces the bare kind. Not an
- * oversight — giving its announcement an ordinal its box does not draw would move
- * the mismatch rather than close it. #886 does both halves together.
+ * The RUN graph reads it too, since #886 — box and announcement together, which
+ * is why it was one change and not two. So no surface that names a container
+ * falls back to the bare kind any more, and a new one that did would be showing
+ * a DIFFERENT name for the same box rather than a smaller version of this one.
  */
 export function containerLabels(containers: Container[]): Map<string, string> {
   const seen = new Map<string, number>();

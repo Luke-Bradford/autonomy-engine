@@ -7,6 +7,7 @@ import {
   containerRects,
   UNMEASURED_NODE_SIZE,
 } from '../pipeline/containerLayout';
+import { containerLabels } from '../pipeline/containerRules';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
   containerStatusLabel,
@@ -42,7 +43,13 @@ export interface RunNodeData extends Record<string, unknown> {
 }
 
 export interface RunContainerData extends Record<string, unknown> {
-  kind: PipelineVersion['containers'][number]['kind'];
+  /**
+   * What the box DRAWS, and therefore what `containerAriaLabel` announces —
+   * the `containerLabels` ordinal (`loop 2`), not the bare kind (#886). It is
+   * the kind that is not identifying: a doc with two loops has two boxes whose
+   * kind is the same string, which is what the author canvas learned in #883.
+   */
+  name: string;
   /**
    * AS WORDED FOR AN OPERATOR, the same commitment `RunNodeData.status` above
    * makes, and `string` rather than `ContainerRunStatus` for the same reason:
@@ -80,10 +87,11 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
      would otherwise be two boxes reading "HTTP Request", in the view whose job
      is to say WHICH node failed.
 
-     The GRAPH only. The node table and drill-in panel on the same page still
-     name a node by its raw id, so this page currently carries two vocabularies
-     for one node — filed as #882, because those rows come from the run
-     projection rather than the doc and need a rule for a row with no doc node. */
+     The node table and the drill-in panel on this same page read the same
+     `activityLabels` map since #882, so one node has one name across the whole
+     view. They resolve it against the RUN's rows rather than the doc's, so they
+     also carry the fallback this branch has no need of: a row the doc does not
+     name keeps its raw id. */
   const names = activityLabels(doc.nodes);
   const activities: FlowNode[] = doc.nodes.map((n) => {
     // Unreachable fallback: `names` is built from this very array.
@@ -124,8 +132,16 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
     ),
   );
 
+  /* #886 — the same ordinal the author canvas draws, so a doc authored as
+     `loop 1` / `loop 2` is not drawn as `loop` / `loop` the moment it runs. The
+     activities inside these boxes have been named this way since #878; before
+     this, the two halves of one picture named the same rectangle differently. */
+  const containerNames = containerLabels(containers);
+
   const boxes: FlowNode[] = containers.map((c) => {
     const rect = rects.get(c.id)!;
+    // Unreachable fallback: `containerNames` is built from this very array.
+    const name = containerNames.get(c.id) ?? c.kind;
     const cs = state?.containers[c.id] ?? null;
     const status = cs?.status ?? null;
     /* #873 — worded HERE, not at the render site the ticket suggested, so the
@@ -157,17 +173,16 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       selectable: false,
       connectable: false,
       data: {
-        kind: c.kind,
+        name,
         status: label,
         tone: status === null ? null : containerStatusTone(status),
         round: cs?.round ?? null,
       } satisfies RunContainerData,
       ariaRole: 'group',
-      // The bare KIND, where the author canvas passes the `containerLabels`
-      // ordinal (#883). Not an oversight: this graph's box draws the kind, so an
-      // ordinal here would announce a name the run graph shows nowhere. Naming
-      // both is #886 — one change, box and announcement together.
-      ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
+      // The box below draws this same `name`, which is the whole contract
+      // `containerAriaLabel` documents — announcing an ordinal the picture does
+      // not show would move the mismatch rather than close it.
+      ariaLabel: `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
     };
   });
 
