@@ -140,8 +140,16 @@ export type Recurrence = z.infer<typeof RecurrenceSchema>;
 /** Which `schedule` sub-fields each frequency HONOURS. A field outside this set is
  * meaningless for that frequency (e.g. `weekDays` on a daily recurrence) and is
  * REFUSED at write time rather than silently dropped. `minute` honours none — a
- * per-minute recurrence fires every minute. */
-const HONOURED_FIELDS: Record<RecurrenceFrequency, ReadonlyArray<keyof RecurrenceSchedule>> = {
+ * per-minute recurrence fires every minute.
+ *
+ * EXPORTED so an authoring UI renders exactly the fields a given frequency
+ * honours, and prunes the rest on a frequency change, from THIS map rather than
+ * a parallel list of its own — a UI list that drifted from this one would offer
+ * a control whose value the write boundary then refuses (#439 U14b). */
+export const HONOURED_FIELDS: Record<
+  RecurrenceFrequency,
+  ReadonlyArray<keyof RecurrenceSchedule>
+> = {
   minute: [],
   hour: ['minutes'],
   day: ['minutes', 'hours'],
@@ -151,8 +159,11 @@ const HONOURED_FIELDS: Record<RecurrenceFrequency, ReadonlyArray<keyof Recurrenc
 
 /** Fields a frequency REQUIRES: without them the recurrence is not a well-defined
  * cron pattern. `week` needs `weekDays` (a "week" with no day would compile to a
- * daily `* * *`); `month` needs `monthDays` (same, monthly). */
-const REQUIRED_FIELDS: Partial<Record<RecurrenceFrequency, keyof RecurrenceSchedule>> = {
+ * daily `* * *`); `month` needs `monthDays` (same, monthly).
+ *
+ * EXPORTED alongside `HONOURED_FIELDS` so an authoring UI can mark the field
+ * required from the same source that enforces it. */
+export const REQUIRED_FIELDS: Partial<Record<RecurrenceFrequency, keyof RecurrenceSchedule>> = {
   week: 'weekDays',
   month: 'monthDays',
 };
