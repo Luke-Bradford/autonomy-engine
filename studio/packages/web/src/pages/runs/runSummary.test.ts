@@ -156,6 +156,11 @@ describe('deriveNodeActivity', () => {
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        // `{}`, not `undefined`: this event's `outputs` is a REQUIRED record, so
+        // the child genuinely declared none — which the panel renders as "this
+        // node declared no outputs" rather than hiding the section as it does
+        // for a node that has not reported yet.
+        outputValues: {},
       },
     ]);
   });
@@ -710,6 +715,30 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
     const [a] = deriveNodeActivity(events);
     expect(a!.outputs).toBe(1); // the streamed observability count, unchanged
     expect(a!.outputValues).toEqual({ text: 'hi there', tokens: 12 });
+  });
+
+  it('captures a call node DECLARED outputs off `call.returned`, on either outcome', () => {
+    // A call node never gets a `node.succeeded` — `call.returned` is its ONE
+    // terminal event, so it is the only door its outputs can come through. The
+    // `failure` half is not symmetry for its own sake: the event schema records
+    // that a failed child may still carry projected outputs (the findings loop),
+    // so gating the fold on success would drop that documented case silently.
+    const returned = (callNodeId: string, childOutcome: 'success' | 'failure') =>
+      envelope({
+        type: 'call.returned' as const,
+        runId: 'r',
+        callNodeId,
+        attemptId: `${callNodeId}#0`,
+        childRunId: `run_${callNodeId}`,
+        childOutcome,
+        outputs: { findings: 3, report: 'ok' },
+      });
+
+    const [ok, bad] = deriveNodeActivity([returned('c', 'success'), returned('d', 'failure')]);
+    expect(ok!.status).toBe('success');
+    expect(ok!.outputValues).toEqual({ findings: 3, report: 'ok' });
+    expect(bad!.status).toBe('failure');
+    expect(bad!.outputValues).toEqual({ findings: 3, report: 'ok' });
   });
 
   it('names the INSTANCE a collapsed result came from, and nothing for an ordinary node', () => {

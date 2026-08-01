@@ -350,6 +350,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.callNodeId);
         clearResult(n);
         n.status = e.childOutcome === 'success' ? 'success' : 'failure';
+        // A call node's declared outputs arrive on THIS event rather than a
+        // `node.succeeded` — it is the only terminal event a call node gets — so
+        // without this the Outputs section stayed empty on the one activity that
+        // can carry a whole child run's result. Folded on BOTH outcomes, not
+        // gated on success: `call.returned`'s own schema records that a
+        // `failure` child may still carry projected `outputs` (the findings
+        // loop), and gating would silently drop exactly that documented case.
+        n.outputValues = e.outputs;
         n.instanceId = instanceOf(e.callNodeId);
         countIfUnstarted(n); // a call node's only event
         break;
