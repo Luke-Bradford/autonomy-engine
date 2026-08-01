@@ -1177,7 +1177,13 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
   it('shows no cost section at all for a node that never billed anything', async () => {
     const panel = await openPanel([
       dispatched('greet', 'greet#0'),
-      { type: 'node.succeeded', runId: 'run_1', nodeId: 'greet', attemptId: 'greet#0', outputs: {} },
+      {
+        type: 'node.succeeded',
+        runId: 'run_1',
+        nodeId: 'greet',
+        attemptId: 'greet#0',
+        outputs: {},
+      },
     ]);
     expect(within(panel).queryByRole('heading', { name: 'Cost & usage' })).not.toBeInTheDocument();
   });

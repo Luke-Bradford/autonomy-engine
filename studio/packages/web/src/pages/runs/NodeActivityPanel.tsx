@@ -205,9 +205,7 @@ export function NodeActivityPanel({
         </section>
       )}
 
-      {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && (
-        <CostSection node={node} />
-      )}
+      {(node.cost.responseCount > 0 || node.toolCalls.length > 0) && <CostSection node={node} />}
 
       {node.toolCalls.length > 0 && <ToolCallSection calls={node.toolCalls} />}
 

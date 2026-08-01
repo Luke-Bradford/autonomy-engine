@@ -1148,7 +1148,10 @@ describe('reconcileNodeActivity', () => {
   });
 
   it('#866 — a SYNTHESIZED row carries an empty cost and no tool calls, as measured', () => {
-    const reconciled = reconcileNodeActivity(deriveNodeActivity(aSucceededLog()), stateOf(aSucceededLog()));
+    const reconciled = reconcileNodeActivity(
+      deriveNodeActivity(aSucceededLog()),
+      stateOf(aSucceededLog()),
+    );
     const c = reconciled.find((n) => n.nodeId === 'c');
     // The row exists BECAUSE no event named this node, so nothing billed under
     // it: an empty cost is the measurement, not a stand-in for a missing one.

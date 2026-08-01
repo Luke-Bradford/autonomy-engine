@@ -76,9 +76,8 @@ describe('readNodeCost (#866)', () => {
         .exchangesAreFloor,
     ).toBe(true);
     expect(
-      readNodeCost(
-        cost({ responseCount: 1, pricedResponseCount: 1, providers: ['anthropic_api'] }),
-      ).exchangesAreFloor,
+      readNodeCost(cost({ responseCount: 1, pricedResponseCount: 1, providers: ['anthropic_api'] }))
+        .exchangesAreFloor,
     ).toBe(false);
   });
 

@@ -75,8 +75,7 @@ export function readNodeCost(cost: NodeCost): NodeCostReading {
     exchangesAreFloor: cost.providers.includes(AGENT_CLI_CONNECTION_KIND),
     tokensReported: cost.tokenReportedResponseCount > 0,
     tokensPartial:
-      cost.tokenReportedResponseCount > 0 &&
-      cost.tokenReportedResponseCount < cost.responseCount,
+      cost.tokenReportedResponseCount > 0 && cost.tokenReportedResponseCount < cost.responseCount,
   };
 
   if (cost.responseCount === 0) return { ...base, kind: 'none' };
