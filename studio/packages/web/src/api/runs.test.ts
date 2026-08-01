@@ -18,6 +18,19 @@ const sampleRun = {
   finishedAt: null,
 };
 
+/**
+ * R2 — what `GET /api/runs` now returns: a run PLUS the joined names. Kept
+ * separate from `sampleRun` (which the single-run route still returns bare) so
+ * each fixture matches the shape of the route it stands for.
+ */
+const sampleRunSummary = {
+  ...sampleRun,
+  pipelineId: 'pl_1',
+  pipelineName: 'Nightly report',
+  pipelineVersion: 3,
+  triggerName: 'Every morning',
+};
+
 const sampleEvent = {
   id: 'evt_1',
   runId: 'run_1',
@@ -43,18 +56,28 @@ afterEach(() => {
 
 describe('runs API', () => {
   it('lists runs and hits GET /api/runs', async () => {
-    const fetchMock = stubFetch(200, [sampleRun]);
+    const fetchMock = stubFetch(200, [sampleRunSummary]);
     const out = await listRuns();
-    expect(out).toEqual([sampleRun]);
+    expect(out).toEqual([sampleRunSummary]);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/runs');
     expect(init?.method ?? 'GET').toBe('GET');
   });
 
   it('applies the shared run schema — a malformed row rejects', async () => {
-    const bad: Record<string, unknown> = { ...sampleRun };
+    const bad: Record<string, unknown> = { ...sampleRunSummary };
     delete bad.status;
     stubFetch(200, [bad]);
+    await expect(listRuns()).rejects.toThrow();
+  });
+
+  /**
+   * R2 — the list contract is the SUMMARY, not a bare `Run`. A server that
+   * regressed to returning rows without the joined names must fail here loudly
+   * rather than leave the page rendering `undefined` in its identity column.
+   */
+  it('rejects a bare Run — the list route must serve the joined names', async () => {
+    stubFetch(200, [sampleRun]);
     await expect(listRuns()).rejects.toThrow();
   });
 
