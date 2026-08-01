@@ -1618,7 +1618,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
         runId: 'run_1',
         nodeId: 'approve',
         attemptId: 'approve#0',
-        expiresAt: WAIT.expiresAt,
+        dueAt: WAIT.expiresAt,
       }),
     ];
     useRunStreamMock.mockReturnValue(stream({ events: first }));
@@ -1635,7 +1635,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
             type: 'externalWait.completed',
             runId: 'run_1',
             nodeId: 'approve',
-            attemptId: 'approve#0',
+            previousAttemptId: 'approve#0',
             outputs: {},
           }),
           envelope({ type: 'run.waiting', runId: 'run_1', reason: 'waiting_external' }),
@@ -1644,7 +1644,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
             runId: 'run_1',
             nodeId: 'approve',
             attemptId: 'approve#1',
-            expiresAt: WAIT.expiresAt,
+            dueAt: WAIT.expiresAt,
           }),
         ],
       }),
