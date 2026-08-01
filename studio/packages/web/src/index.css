@@ -2159,3 +2159,114 @@ td button + button {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+/* --- U22 slice 1: pipeline version history (#903) ------------------------- */
+
+.version-history {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* The list is the SHORT half of the page — it must never take the height the
+     canvas below it needs, so it scrolls inside itself once a pipeline has a
+     long history. */
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.version-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.version-history-row {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.version-history-row:hover {
+  background: var(--bg);
+}
+
+/* The previewed row, marked by more than colour — `aria-pressed` carries it to
+   a screen reader, and the border carries it where colour alone would not. */
+.version-history-row.is-previewing {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+.version-history-tag {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.version-history-when,
+.version-history-shape {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+/* Pushes the shape summary to the right edge, so the version numbers and the
+   dates stay in scannable columns. */
+.version-history-shape {
+  margin-left: auto;
+}
+
+.canvas-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  /* Takes the leftover height exactly as `.canvas-grid` does — swapping between
+     the editor and a preview must not resize the page. */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.canvas-preview .run-canvas {
+  /* The monitor's `.run-canvas` is a fixed 60vh frame inside a scrolling page.
+     Here the parent flex column already owns the height, so the frame yields to
+     it rather than fighting it. */
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.version-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.version-preview-bar .form-actions {
+  margin-left: auto;
+}
+
+.version-preview-refusal {
+  color: var(--warning);
+  font-size: 0.85rem;
+}

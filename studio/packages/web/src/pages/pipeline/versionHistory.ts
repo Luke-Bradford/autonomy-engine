@@ -13,7 +13,8 @@
  * covered by an e2e and everything decidable is decided out here, where a unit
  * test can reach it.
  */
-import type { PipelineVersion, PipelineVersionWrite } from '@autonomy-studio/shared';
+import type { PipelineVersion } from '@autonomy-studio/shared';
+import type { PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
 
 /** One row of the history list — a version summarised, never its whole doc. */
@@ -109,7 +110,11 @@ export interface RestoreCheck {
  * is already current, an operator with unsaved work would go on clicking rather
  * than go and save.
  */
-export function restoreRefusal({ dirty, selectedVersion, headVersion }: RestoreCheck): string | null {
+export function restoreRefusal({
+  dirty,
+  selectedVersion,
+  headVersion,
+}: RestoreCheck): string | null {
   if (dirty) {
     return 'Save or discard your unsaved changes before restoring — restoring reopens the canvas on the new version.';
   }

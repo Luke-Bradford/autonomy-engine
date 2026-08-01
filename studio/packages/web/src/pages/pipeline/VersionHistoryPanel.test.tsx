@@ -73,7 +73,11 @@ describe('VersionHistoryPanel', () => {
   it('asks for the version a row names when it is clicked', async () => {
     const onPreview = vi.fn();
     render(
-      <VersionHistoryPanel entries={[entry({ version: 7 })]} previewing={null} onPreview={onPreview} />,
+      <VersionHistoryPanel
+        entries={[entry({ version: 7 })]}
+        previewing={null}
+        onPreview={onPreview}
+      />,
     );
     await userEvent.click(screen.getByRole('button'));
     expect(onPreview).toHaveBeenCalledWith(7);
