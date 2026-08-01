@@ -615,8 +615,8 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
       }),
     ];
     const [a] = deriveNodeActivity(events);
-    expect(a.failureKind).toBe('permanent');
-    expect(a.failureCode).toBeUndefined();
+    expect(a!.failureKind).toBe('permanent');
+    expect(a!.failureCode).toBeUndefined();
   });
 
   it('KEEPS the class through the retry hold, and clears it at every site that clears `error`', () => {
@@ -643,11 +643,10 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
         runId: 'r',
         nodeId: 'a',
         attemptId: 'a#0',
-        attempt: 1,
         nextAttemptAt: 10,
       }),
     ])[0];
-    expect(held).toMatchObject({ status: 'retrying', error: 'boom', failureKind: 'transient' });
+    expect(held!).toMatchObject({ status: 'retrying', error: 'boom', failureKind: 'transient' });
 
     const reopened = deriveNodeActivity([
       envelope(dispatched('a', 'a#0')),
@@ -656,22 +655,20 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
         type: 'node.retryDue',
         runId: 'r',
         nodeId: 'a',
-        attemptId: 'a#1',
         previousAttemptId: 'a#0',
-        attempt: 1,
       }),
     ])[0];
-    expect(reopened.error).toBeUndefined();
-    expect(reopened.failureKind).toBeUndefined();
-    expect(reopened.failureCode).toBeUndefined();
+    expect(reopened!.error).toBeUndefined();
+    expect(reopened!.failureKind).toBeUndefined();
+    expect(reopened!.failureCode).toBeUndefined();
 
     const redispatched = deriveNodeActivity([
       envelope(dispatched('a', 'a#0')),
       envelope(failed),
       envelope(dispatched('a', 'a#1')),
     ])[0];
-    expect(redispatched.failureKind).toBeUndefined();
-    expect(redispatched.failureCode).toBeUndefined();
+    expect(redispatched!.failureKind).toBeUndefined();
+    expect(redispatched!.failureCode).toBeUndefined();
   });
 
   it('has NO class for an expired external wait — that failure carries no `node.failed`', () => {
@@ -693,9 +690,9 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
       }),
     ];
     const [w] = deriveNodeActivity(events);
-    expect(w.status).toBe('failure');
-    expect(w.error).toBeDefined();
-    expect(w.failureKind).toBeUndefined();
+    expect(w!.status).toBe('failure');
+    expect(w!.error).toBeDefined();
+    expect(w!.failureKind).toBeUndefined();
   });
 
   it('captures the DECLARED outputs off `node.succeeded`, distinct from the streamed count', () => {
@@ -711,8 +708,8 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
       }),
     ];
     const [a] = deriveNodeActivity(events);
-    expect(a.outputs).toBe(1); // the streamed observability count, unchanged
-    expect(a.outputValues).toEqual({ text: 'hi there', tokens: 12 });
+    expect(a!.outputs).toBe(1); // the streamed observability count, unchanged
+    expect(a!.outputValues).toEqual({ text: 'hi there', tokens: 12 });
   });
 
   it('names the INSTANCE a collapsed result came from, and nothing for an ordinary node', () => {
@@ -729,13 +726,13 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
         outputs: { n: 1 },
       }),
     ]);
-    expect(w.nodeId).toBe('w');
-    expect(w.instanceId).toBe('w@1');
+    expect(w!.nodeId).toBe('w');
+    expect(w!.instanceId).toBe('w@1');
 
     const [a] = deriveNodeActivity([
       envelope(dispatched('a', 'a#0')),
       envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
     ]);
-    expect(a.instanceId).toBeUndefined();
+    expect(a!.instanceId).toBeUndefined();
   });
 });

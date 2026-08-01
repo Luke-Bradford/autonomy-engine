@@ -33,13 +33,7 @@ import type { NodeActivity } from './runSummary';
  *    activity kinds have no dispatch event to start it from. A wrong number is
  *    worse than no number.
  */
-export function NodeActivityPanel({
-  node,
-  onClose,
-}: {
-  node: NodeActivity;
-  onClose: () => void;
-}) {
+export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClose: () => void }) {
   const outputNames = node.outputValues === undefined ? [] : Object.keys(node.outputValues);
   return (
     <aside className="property-panel node-detail-panel" aria-label={`Node ${node.nodeId}`}>
@@ -74,9 +68,7 @@ export function NodeActivityPanel({
                expiry alarm, with no `node.failed` to classify it. Say so rather
                than leave the section looking truncated, and never guess a kind:
                how the reducer treats an expired wait is the reducer's fact. */
-            <p className="page-hint">
-              This failure was recorded without a machine-readable class.
-            </p>
+            <p className="page-hint">This failure was recorded without a machine-readable class.</p>
           ) : (
             <dl className="run-meta">
               <dt>Kind</dt>

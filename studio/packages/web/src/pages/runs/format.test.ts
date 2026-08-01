@@ -8,9 +8,9 @@ function evt(payload: unknown): RunEvent {
 
 describe('eventGloss', () => {
   it('glosses the well-known display fields', () => {
-    expect(
-      eventGloss(evt({ type: 'node.output', nodeId: 'a', name: 'text', value: 'hi' })),
-    ).toBe('node=a name=text');
+    expect(eventGloss(evt({ type: 'node.output', nodeId: 'a', name: 'text', value: 'hi' }))).toBe(
+      'node=a name=text',
+    );
   });
 
   it('names the failure CLASS, not just the message (#1 F0 / U24)', () => {
