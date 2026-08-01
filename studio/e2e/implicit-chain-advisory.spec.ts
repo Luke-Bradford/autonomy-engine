@@ -96,7 +96,7 @@ test.describe('implicit-chain advisory (#788)', () => {
     });
 
     const advisory = page.locator(ADVISORY);
-    await expect(advisory).toContainText('2 that start in parallel');
+    await expect(advisory).toContainText('2 things start in parallel');
     // The container by its within-kind ordinal, the activity by its id.
     await expect(advisory).toContainText('a, stage 1');
     await expect(advisory).not.toContainText('run in one sequence');

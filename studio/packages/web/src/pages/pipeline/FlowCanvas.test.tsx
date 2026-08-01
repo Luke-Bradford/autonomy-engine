@@ -646,9 +646,43 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
    */
   it('names the parallel roots, and does not list a container’s child among them', () => {
     const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
-    expect(advisory!.textContent).toContain('2 that start in parallel');
+    expect(advisory!.textContent).toContain('2 things start in parallel');
     expect(advisory!.textContent).toContain('a, stage 1');
     expect(advisory!.textContent).not.toContain('c_1');
+  });
+
+  /**
+   * ONE root is a real shape, not a corner: dropping the FIRST activity into a
+   * container makes the container the only thing that starts, because the
+   * synthesized `a → b` now targets a child and is discarded, leaving `b` gated
+   * on the stage. The sentence must not read "1 that start in parallel" — that is
+   * ungrammatical AND claims a parallelism that is not there.
+   */
+  it('does not claim parallelism when exactly one thing starts', () => {
+    const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['a'] }]);
+    expect(advisory!.textContent).toContain('It starts at stage 1.');
+    expect(advisory!.textContent).not.toContain('in parallel');
+    expect(advisory!.textContent).toContain('Saving mints');
+  });
+
+  /**
+   * The partitioned arm truncates like the chain arm does, and for the same
+   * reason: a panel that names forty roots across the top of the canvas has
+   * stopped being an advisory and become an occlusion. Seven empty stages plus
+   * the first activity is eight roots — `b` is gated by `a`, every stage is a
+   * root because nothing precedes it.
+   */
+  it('truncates a long root list rather than growing without bound', () => {
+    const stages = Array.from({ length: 7 }, (_, i) => ({
+      id: `c_${i + 1}`,
+      kind: 'stage' as const,
+      children: [],
+    }));
+    const { advisory } = withGraph(['a', 'b'], [], stages);
+    expect(advisory!.textContent).toContain('8 things start in parallel');
+    expect(advisory!.textContent).toContain('+2 more');
+    // The 7th and 8th roots are summarised, not spelled out.
+    expect(advisory!.textContent).not.toContain('stage 7');
   });
 
   /**

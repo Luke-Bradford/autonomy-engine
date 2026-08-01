@@ -331,7 +331,10 @@ test.describe('#840 — a container edit states the routing it changes', () => {
       await page.getByLabel('Container membership').selectOption('');
     });
 
-    expect(message, 'the membership move raised no warning at all — #840 regressed?').not.toBeNull();
+    expect(
+      message,
+      'the membership move raised no warning at all — #840 regressed?',
+    ).not.toBeNull();
     expect(message).toContain('changes that inferred routing');
     expect(message).toContain('Saving mints');
     // Qualitative by design: `activityLabel` is keyed on TYPE, so naming the

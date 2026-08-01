@@ -96,7 +96,7 @@ export interface ContainerEditConsequence {
    * inferred for it, so there is no inferred routing to change. A membership move
    * on an authored doc CAN still change readiness without raising an issue
    * (moving an edge-less node into a container gates it on the container). That
-   * is a real and separate hole, filed rather than silently folded in here.
+   * is a real and separate hole, filed as #877 rather than silently folded in.
    */
   routingChange: RoutingChange | null;
 }
@@ -109,7 +109,21 @@ function sameFollows(a: RoutingPartition, b: RoutingPartition): boolean {
   });
 }
 
+/**
+ * Compile-time backstop for the cost named above: adding a field to
+ * `RoutingPartition` without comparing it here would silently WITHHOLD a warning,
+ * which is the failure mode this whole ticket exists to end. This map has to gain
+ * the key before the type checks, which turns a silent omission into a build
+ * error at the one place that must not miss one.
+ */
+const COMPARED_PARTITION_FIELDS: Record<keyof RoutingPartition, true> = {
+  roots: true,
+  containerRoots: true,
+  follows: true,
+};
+
 function samePartition(a: RoutingPartition, b: RoutingPartition): boolean {
+  void COMPARED_PARTITION_FIELDS;
   const sameChildren =
     a.containerRoots.length === b.containerRoots.length &&
     a.containerRoots.every((c, i) => {
@@ -129,13 +143,21 @@ function samePartition(a: RoutingPartition, b: RoutingPartition): boolean {
 }
 
 /**
- * Field-wise rather than a deep-equal: there is no shared deep-equal to reach for
- * (`deepEquals` is module-private to the expression functions), and `RoutingPartition`
- * is deliberately a small closed shape whose arrays are all emitted in document
- * order by one function. Comparing it explicitly is what makes the ORDERING part
- * of the contract instead of an accident — two docs that run the same thing must
- * compare equal, or every routine edit raises a dialog and the warning becomes
- * noise the operator learns to dismiss.
+ * Field-wise rather than `JSON.stringify(a) === JSON.stringify(b)`, and that is
+ * this directory's settled position rather than a preference: `sameContainerConfig`
+ * (`canvasStore.ts`) REPLACED exactly that comparison, because it made a "did
+ * anything change?" question depend on the key order an unrelated module happened
+ * to construct its objects in. The same objection applies here — both operands
+ * come from `routingPartition` today, but nothing in the type says they must.
+ *
+ * (An ordering argument would NOT justify this: stringify is just as
+ * order-sensitive over arrays as a field-wise walk. The array ordering is a
+ * property of `routingPartition`, pinned by its own tests, not of this function.)
+ *
+ * There is also no shared deep-equal to reach for — `deepEquals` is module-private
+ * to the expression functions. The cost of hand-rolling is stated plainly: a new
+ * field on `RoutingPartition` is IGNORED here until someone adds it, which would
+ * silently withhold a warning. `samePartition` is the one place to change.
  */
 function sameRouting(a: ImplicitRouting | null, b: ImplicitRouting | null): boolean {
   if (a === null || b === null) return a === b;
@@ -297,7 +319,8 @@ export function readableIssue(
  * parallel: HTTP Request, HTTP Request" would be a confident claim the operator
  * cannot act on, and a wrong-looking one. Describing the CHANGE is honest at the
  * fidelity actually available; the canvas advisory panel, which can afford ids,
- * is where the detail goes.
+ * is where the detail goes. #878 is the identifying activity name that would let
+ * these sentences name what moved.
  *
  * Every arm also ends on what SAVING does, because that is the real cost: the
  * inferred routing is minted into the next version, and a version is immutable.
@@ -305,6 +328,13 @@ export function readableIssue(
 export function routingSentence(change: RoutingChange | null): string | null {
   if (change === null) return null;
   const { from, to } = change;
+  // DEFENSIVE, and reachable from no caller today: `to === null` needs the
+  // candidate doc to author edges, which `containerEditConsequence` never adds
+  // and `cascadeDeleteContainer` only removes — so every real call with a
+  // non-null `from` also has a non-null `to`. Kept because this function is
+  // EXPORTED and a future caller (an undo, an import-into-canvas) could produce
+  // it, and returning nothing there would be the silent withholding this whole
+  // ticket is about. Pinned by a direct unit test rather than left unexercised.
   if (to === null) {
     return (
       'This pipeline now authors its own edges, so its routing is no longer inferred from the ' +
@@ -313,7 +343,7 @@ export function routingSentence(change: RoutingChange | null): string | null {
   }
   if (to.kind === 'chain') {
     return (
-      'This pipeline is left with no authored edges, so its routing is inferred: the activities ' +
+      'This pipeline has no authored edges, so its routing is inferred: the activities ' +
       'run as one sequence, in the order they were added. Saving mints that as the next ' +
       "version's routing."
     );

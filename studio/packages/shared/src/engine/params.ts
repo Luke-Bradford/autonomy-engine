@@ -4336,9 +4336,15 @@ export interface RoutingFollow {
  * What an edge-less doc WITH containers actually runs, as a comparable value.
  *
  * Every field is read off `partitionReadiness` — the same buckets the reducer
- * reads — so this describes the walk rather than re-deriving it. Ordering is
- * deterministic (document order throughout) so two of these can be compared
- * field-wise for "did this edit change the routing".
+ * reads — so this describes the walk rather than re-deriving it.
+ *
+ * Ordering is deterministic, which is what lets two of these be compared
+ * field-wise, but it is NOT one flat document order and a surface rendering the
+ * list verbatim should know it: `roots` is every top-level node in `doc.nodes`
+ * order and THEN every container in `doc.containers` order (that is
+ * `topIncoming`'s insertion order, which this deliberately preserves rather than
+ * re-sorting). `containerRoots` follows `doc.containers`, and each `children`
+ * follows that container's own `children`.
  */
 export interface RoutingPartition {
   /** Top-level entities (top nodes and containers) that start at once, in parallel. */
@@ -4367,6 +4373,13 @@ export type ImplicitRouting =
  * makes it safe for a surface to state: if the walk's bucketing changes, this
  * changes with it rather than going quietly stale.
  *
+ * The one rule NOT taken verbatim from a bucket is "an empty incoming list means
+ * this starts immediately" — `reduce.ts`'s `computeReadiness` owns that, and this
+ * re-expresses it in two lines. It is a seam where drift could appear, so it is
+ * named rather than left to be discovered; the anti-drift test in
+ * `implicit-chain.test.ts` checks a claimed chain against the real buckets for
+ * the same reason.
+ *
  * Two degenerate memberships are resolved the way the walk resolves them, not
  * the way `Container.children` reads. A child DECLARED but absent from
  * `doc.nodes` (the dangling ref of #746/#425) is excluded via `endpointIds`,
@@ -4379,11 +4392,7 @@ function routingPartition(
   doc: Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>,
 ): RoutingPartition {
   const { owner } = containerMembership(doc.containers);
-  const { endpointIds, topIncoming, childIncoming } = partitionReadiness(
-    doc,
-    doc.containers,
-    owner,
-  );
+  const { topIncoming, childIncoming } = partitionReadiness(doc, doc.containers, owner);
 
   const roots: string[] = [];
   const follows: RoutingFollow[] = [];
@@ -4394,16 +4403,22 @@ function routingPartition(
 
   const containerRoots = doc.containers.map((c) => {
     const children: string[] = [];
-    const counted = new Set<string>();
-    for (const child of c.children) {
-      // First-wins ownership and the ghost filter, both taken from the walk. The
-      // `counted` guard covers one container listing the same child TWICE, which
-      // `containerMembership` treats as resolving to itself rather than as a
-      // duplicate — legal, and it must still run once.
-      if (owner.get(child) !== c.id || !endpointIds.has(child) || counted.has(child)) continue;
-      counted.add(child);
-      const incoming = childIncoming.get(child) ?? [];
-      if (incoming.length === 0) children.push(child);
+    // Walked over `doc.nodes`, NOT over `c.children`, and that choice does three
+    // jobs at once. It makes the result INVARIANT under a reorder of `children`
+    // — two docs that run the same thing must compare equal, or a pure reorder
+    // reads as a routing change and the warning becomes noise. It drops a GHOST
+    // child (declared but absent from `doc.nodes` — the dangling ref of
+    // #746/#425) without needing a separate id-set test, and a surface must not
+    // claim a ghost runs. And it makes a container id listed as a child — only
+    // reachable from an imported/POSTed doc, since `validateDoc` refuses it and
+    // the UI cannot author it — describable as the top-level entity the walk
+    // actually treats it as, rather than as both a root and someone's child.
+    // Listing each node once also subsumes the duplicate cases: first-wins
+    // ownership across containers, and one container naming a child twice.
+    for (const n of doc.nodes) {
+      if (owner.get(n.id) !== c.id) continue;
+      const incoming = childIncoming.get(n.id) ?? [];
+      if (incoming.length === 0) children.push(n.id);
       for (const e of incoming) follows.push({ from: e.from, to: e.to, scope: c.id });
     }
     return { containerId: c.id, children };

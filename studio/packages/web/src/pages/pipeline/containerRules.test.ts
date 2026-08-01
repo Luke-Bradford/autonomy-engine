@@ -6,6 +6,7 @@ import {
   containerLabels,
   readableIssue,
   routingChangeBetween,
+  routingSentence,
   type ContainerEditDoc,
 } from './containerRules';
 
@@ -17,6 +18,8 @@ const C: Node = { id: 'n_c', type: 'not_in_catalog', config: {}, position: { x: 
 function doc(overrides: Partial<ContainerEditDoc> = {}): ContainerEditDoc {
   return { nodes: [A, B, C], edges: [], containers: [], params: [], ...overrides };
 }
+
+const D: Node = { id: 'n_d', type: 'http_request', config: {}, position: { x: 300, y: 0 } };
 
 const AB: Edge = { id: 'e_ab', from: 'n_a', to: 'n_b', on: 'success' };
 const STAGE: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b'] }];
@@ -89,13 +92,28 @@ describe('containerEditConsequence', () => {
     expect(change?.to?.kind).toBe('partitioned');
   });
 
-  it('reports nothing for a membership move that leaves the walk identical', () => {
-    // `n_b` and `n_c` swap places WITHIN the same stage: same members, same
-    // buckets, same everything. The comparison must not fire on the array order
-    // of `children`, or every warning becomes noise.
-    const before: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b', 'n_c'] }];
-    const next: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_c', 'n_b'] }];
-    expect(containerEditConsequence(doc({ containers: before }), next).routingChange).toBeNull();
+  /**
+   * A pure REORDER of `children` is not a routing change — same members, same
+   * buckets, same walk — and must not raise a dialog, or the warning becomes
+   * noise the operator learns to dismiss.
+   *
+   * The fixture is four nodes for a reason. With three, the stage holds exactly
+   * one container-root and exactly one follow, so a projection that DID leak
+   * `children` order still emits one-element arrays that compare equal — the
+   * test passes whether or not the property holds. Measured on the first version
+   * of this test, which is why it is written out here: with `n_b` and `n_d` both
+   * container-roots, the emitted `children` is `['n_b','n_d']` under one order
+   * and `['n_d','n_b']` under the other unless the projection walks `doc.nodes`.
+   */
+  it('reports nothing for a pure reorder of a container’s children', () => {
+    const four = { nodes: [A, B, C, D] };
+    const before: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_b', 'n_d'] }];
+    const next: Container[] = [{ id: 'stage_1', kind: 'stage', children: ['n_d', 'n_b'] }];
+    const change = containerEditConsequence(
+      doc({ ...four, containers: before }),
+      next,
+    ).routingChange;
+    expect(change).toBeNull();
   });
 });
 
@@ -147,6 +165,25 @@ describe('routingChangeBetween', () => {
     );
     expect(change?.from).toBeNull();
     expect(change?.to?.kind).toBe('chain');
+  });
+});
+
+/**
+ * The DEFENSIVE arm, tested directly because no caller can reach it: an edit
+ * that gives a doc authored edges would stop routing being inferred at all.
+ * `routingSentence` is exported, so "unreachable today" is a property of the
+ * current callers rather than of the function — and an exported branch that has
+ * never once been executed is where a typo lives forever.
+ */
+describe('routingSentence', () => {
+  it('is null when nothing changed', () => {
+    expect(routingSentence(null)).toBeNull();
+  });
+
+  it('states routing ceasing to be inferred, if a caller ever produces that', () => {
+    const msg = routingSentence({ from: { kind: 'chain', order: ['n_a', 'n_b'] }, to: null });
+    expect(msg).toContain('no longer inferred');
+    expect(msg).toContain('Saving mints');
   });
 });
 

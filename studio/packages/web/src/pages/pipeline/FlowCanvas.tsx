@@ -1051,15 +1051,34 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
                 . Saving mints that as this version&rsquo;s routing.
               </>
             ) : (
+              /* The count is BRANCHED ON rather than interpolated, because one
+                 root is a real and common shape — drop the first activity into a
+                 stage and the stage is the only thing that starts — and "split
+                 that chain into 1 that start in parallel" is both ungrammatical
+                 and a claim of parallelism where there is none.
+
+                 Neither arm claims to describe the WHOLE graph: it says what
+                 STARTS, which is what the flat node list cannot show. Things that
+                 run after a root still run; naming the roots does not deny
+                 them. */
               <>
                 No edges authored — routing is <strong>inferred</strong> from the order activities
-                were added, and this graph&rsquo;s containers split that chain into{' '}
-                {parallelRoots.length} that start in parallel:{' '}
-                <strong>{parallelRoots.slice(0, IMPLICIT_CHAIN_PREVIEW).join(', ')}</strong>
-                {parallelRoots.length > IMPLICIT_CHAIN_PREVIEW
-                  ? ` +${parallelRoots.length - IMPLICIT_CHAIN_PREVIEW} more`
-                  : ''}
-                . Saving mints the inferred routing as this version&rsquo;s routing.
+                were added, and this graph&rsquo;s containers reshape that chain.{' '}
+                {parallelRoots.length === 1 ? (
+                  <>
+                    It starts at <strong>{parallelRoots[0]}</strong>.
+                  </>
+                ) : (
+                  <>
+                    {parallelRoots.length} things start in parallel:{' '}
+                    <strong>{parallelRoots.slice(0, IMPLICIT_CHAIN_PREVIEW).join(', ')}</strong>
+                    {parallelRoots.length > IMPLICIT_CHAIN_PREVIEW
+                      ? ` +${parallelRoots.length - IMPLICIT_CHAIN_PREVIEW} more`
+                      : ''}
+                    .
+                  </>
+                )}{' '}
+                Saving mints the inferred routing as this version&rsquo;s routing.
               </>
             )}
           </Panel>
