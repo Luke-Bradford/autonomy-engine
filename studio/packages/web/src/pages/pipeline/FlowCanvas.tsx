@@ -24,6 +24,7 @@ import '@xyflow/react/dist/style.css';
 import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel } from './activityLabel';
+import { containerLabels } from './containerRules';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
@@ -74,8 +75,14 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
 
 interface ContainerData extends Record<string, unknown> {
   kind: ContainerKind;
+  /** This container's within-kind name (`loop 2`) — `containerLabels`' ordinal. */
+  label: string;
+  /** Whether this container is the property panel's current subject (U23). */
+  selected: boolean;
   /** Confirm, then remove this container — see `confirmDeleteContainer` (#748). */
   onDelete: (id: string, kind: ContainerKind) => void;
+  /** Make this container the property panel's subject — U23's config form. */
+  onConfigure: (id: string) => void;
 }
 
 /**
@@ -98,7 +105,7 @@ interface ContainerData extends Record<string, unknown> {
 const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   const d = data as ContainerData;
   return (
-    <div className="flow-container">
+    <div className={`flow-container${d.selected ? ' flow-container--selected' : ''}`}>
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.kind}</span>
       {/* #748 — the box's own chrome is inert, and this is the one part of it
@@ -126,6 +133,28 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
         onClick={() => d.onDelete(id, d.kind)}
       >
         ✕
+      </button>
+      {/* U23 — the SECOND opt-in to hit-testing on this box, and it exists for
+          exactly the reason the ✕ above does: a container cannot be selected, so
+          a config panel cannot be reached the way every other element's is. This
+          button IS the selection gesture. Same `nodrag nopan` + stylesheet
+          `pointer-events` opt-in, same id-from-RF's-own-prop.
+
+          Its accessible name carries the WITHIN-KIND ORDINAL (`loop 2`), not the
+          bare kind: two loops on screen would otherwise give two buttons with
+          one name, which is ambiguous to a screen reader and unaddressable to a
+          spec. The BOX's own label stays the bare kind — putting the ordinal
+          there is a U6c render change (#839 part 3), deliberately not smuggled
+          in here. */}
+      <button
+        type="button"
+        className="flow-container-configure nodrag nopan"
+        aria-label={`Configure ${d.label}`}
+        title={`Configure ${d.label}`}
+        aria-pressed={d.selected}
+        onClick={() => d.onConfigure(id)}
+      >
+        ⚙
       </button>
       <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
     </div>
@@ -382,6 +411,20 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * direction, and is nearly hypothetical anyway — iterating without using the
    * item is what a `foreach` is for.
    */
+  /**
+   * U23 — make a container the property panel's subject.
+   *
+   * A plain `select`, not a toggle. The ⚙ is the only way IN, but a pane click
+   * and the ✕ are both ways out, so a second press re-selecting what is already
+   * selected is a harmless no-op rather than a hidden second gesture.
+   */
+  const selectContainer = useCallback(
+    (id: string) => {
+      store.getState().select({ kind: 'container', id });
+    },
+    [store],
+  );
+
   const confirmDeleteContainer = useCallback(
     (id: string, kind: ContainerKind) => {
       const confirmed = window.confirm(
@@ -433,6 +476,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }, [containers, nodes, flowNodes]);
 
   const containerNodes: FlowNode[] = useMemo(() => {
+    // The SAME within-kind ordinals the membership `<select>` offers and
+    // `readableIssue` quotes, so "loop 2" names one container everywhere it
+    // appears rather than three things that happen to agree.
+    const labels = containerLabels(containers);
     return containers.map((c) => {
       const rect = containerBoxes.get(c.id)!;
       return {
@@ -476,7 +523,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         handles: containerHandles(rect.width, rect.height),
         data: {
           kind: c.kind,
+          label: labels.get(c.id) ?? c.kind,
+          // Re-derived from the store, never carried forward — the same rule
+          // and the same reason as the activity nodes' `selected` above.
+          selected: selected?.kind === 'container' && selected.id === c.id,
           onDelete: confirmDeleteContainer,
+          onConfigure: selectContainer,
         } satisfies ContainerData,
         /* On the node, so RF puts them on the element it owns — the wrapper this
            component renders inside. `ariaRole` is needed explicitly because a
@@ -496,13 +548,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
 
            Creating a container and moving a node in or out is the property
            panel's, as of U6d — a `<select>` on the NODE, precisely because the box
-           itself cannot be selected. DRAGGING one in, and the RF `parentId`
-           mapping that would make a container draggable as a group, is U23's. */
+           cannot be RF-selected. U23 gave the box its own CONFIG panel without
+           relaxing this line: the ⚙ writes the store's `Selection` directly, so
+           a container is selectable in the STORE's sense and not in RF's, which
+           is the whole point. DRAGGING one in, and the RF `parentId` mapping that
+           would make a container draggable as a group, is still U23's part 2. */
         selectable: false,
         draggable: false,
         /* `deletable: false` is a THIRD redundant guard, honestly labelled as one
            rather than dressed up as load-bearing: RF's Backspace path only
-           targets a SELECTED node and a container cannot be selected, container
+           targets a node RF considers selected, and a container is never in RF's
+           selection (the store's own container selection is a different fact and
+           RF cannot see it), container
            ids are filtered at the change seam before any branch runs, and a
            `remove` that somehow reached `deleteNode(<container id>)` would find
            no node and no-op. Nothing can reach `deleteContainer` except the
@@ -515,7 +572,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         zIndex: 0,
       } satisfies FlowNode;
     });
-  }, [containers, containerBoxes, confirmDeleteContainer]);
+  }, [containers, containerBoxes, selected, confirmDeleteContainer, selectContainer]);
 
   /**
    * #785 — a container that has just become EMPTY is panned into view.
@@ -881,6 +938,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        /* U23 — the ONLY way a container selection can be cleared by clicking
+           away. Every other kind clears through React Flow: it emits a
+           `select:false` change for the element that was selected, which
+           `applySelectChange` folds into the store. A container is never in RF's
+           selection at all (the change seam filters container ids out, and the
+           node is `selectable: false`), so RF has nothing to deselect and the
+           config panel would otherwise stay open forever.
+
+           Harmless for the other kinds rather than merely tolerable: clicking
+           the pane already clears them, so setting `null` here is idempotent
+           with the change RF is about to emit. */
+        onPaneClick={() => store.getState().select(null)}
         onConnectStart={() => setAttempted(null)}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}

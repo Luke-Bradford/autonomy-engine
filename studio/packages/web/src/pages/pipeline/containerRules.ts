@@ -135,10 +135,16 @@ export function containerEditConsequence(
  * `stage` options cannot tell which box they are about to join. So the kind
  * carries a document-order ordinal within its kind.
  *
- * The honest cost, stated rather than hidden: the ordinal is not drawn on the
+ * The honest cost, stated rather than hidden: the ordinal is not DRAWN on the
  * box, so with two loops on screen "loop 2" identifies the option but not the
- * rectangle. Putting it on the box is a U6c render change; deferred to U23
- * (#839) rather than smuggled in here.
+ * rectangle. Putting it on the box is a U6c render change, still deferred
+ * (#839 part 3).
+ *
+ * U23 narrowed that cost without closing it. The ⚙ button's accessible name is
+ * this label, so the ordinal is now addressable on the box to a screen reader
+ * and to a spec, and the container being configured is outlined while its panel
+ * is open — but a SIGHTED operator reading the picker still cannot match "loop
+ * 2" to a rectangle without clicking one.
  */
 export function containerLabels(containers: Container[]): Map<string, string> {
   const seen = new Map<string, number>();
@@ -242,10 +248,11 @@ export function consequenceMessage(
         'saving mints the split routing into the next version.',
     );
   }
-  // No `to === 'chain'` arm: both callers only GROW the container array
-  // (`assignContainerChild` is length-preserving, `containersWithNew` appends),
-  // so a doc can only gain its first container here. Removing the LAST one is
-  // `deleteContainer`'s edit (#748), which does not come through this module.
+  // No `to === 'chain'` arm: no caller SHRINKS the container array
+  // (`assignContainerChild` and U23's config edit are length-preserving,
+  // `containersWithNew` appends), so a doc can only gain its first container
+  // here. Removing the LAST one is `deleteContainer`'s edit (#748), which does
+  // not come through this module.
 
   if (consequence.newIssues.length > 0) {
     const lines = consequence.newIssues.map(
@@ -259,4 +266,35 @@ export function consequenceMessage(
   }
   if (parts.length === 0) return null;
   return `${parts.join('\n\n')}\n\nApply it anyway?`;
+}
+
+/**
+ * Measure a container edit's consequence, ask the operator, and report whether
+ * to proceed. `true` = apply it.
+ *
+ * Hoisted out of `ContainerSection` (U6d) when U23 added the second call site.
+ * A copy would have been the cheaper edit and the wrong one: this gate decides
+ * whether an edit that makes the pipeline UNSAVABLE goes through, and two
+ * copies of that decision can drift into disagreeing about what counts — the
+ * one thing a pre-hoc warning must never do. One function, one behaviour, both
+ * kinds of container edit.
+ *
+ * `deleteContainer`'s own confirmation (`FlowCanvas.confirmDeleteContainer`) is
+ * NOT a caller and should not become one: it warns about what deleting destroys
+ * — settings, edges, `${item}` references — which is not a diff of the
+ * validator's issues, and folding the two would make each one vaguer.
+ */
+export function confirmContainerEdit(
+  doc: ContainerEditDoc,
+  nextContainers: Container[],
+  recovery: string,
+): boolean {
+  const message = consequenceMessage(
+    containerEditConsequence(doc, nextContainers),
+    doc.nodes,
+    doc.edges,
+    nextContainers,
+    recovery,
+  );
+  return message === null || window.confirm(message);
 }

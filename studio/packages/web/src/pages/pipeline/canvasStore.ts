@@ -33,9 +33,19 @@ export interface ConnectOptions {
   back?: boolean;
 }
 
-/** What the property panel is currently editing. */
+/**
+ * What the property panel is currently editing.
+ *
+ * `container` is NOT driven by React Flow. A container node is deliberately
+ * `selectable: false` — RF writes `pointer-events: all` on a selectable node's
+ * wrapper, and a container's wrapper spans a REGION of the canvas, so the box
+ * would swallow every pane click aimed between its children (mutation-proved by
+ * `e2e/container-rendering.spec.ts`). A container is selected only by the
+ * explicit button on its box, and cleared only by a pane click or by its own
+ * deletion — never by `nextSelection`, which speaks for RF.
+ */
 export interface Selection {
-  kind: 'node' | 'edge';
+  kind: 'node' | 'edge' | 'container';
   id: string;
 }
 
@@ -166,6 +176,54 @@ export function assignContainerChild(
       : { ...c, children: c.children.filter((ch) => ch !== nodeId) };
   });
   return changed ? next : containers;
+}
+
+/**
+ * Are these two containers the same, field for field?
+ *
+ * Order-INSENSITIVE, unlike the `JSON.stringify(a) === JSON.stringify(b)` this
+ * replaces. That comparison was correct for every path that can reach it today
+ * — `assembleConfig` builds from `{ ...original }` and assigns in place, so key
+ * order is preserved by construction — but it made a "did anything change?"
+ * question depend on a property of an unrelated module's object construction.
+ * The failure it invited is quiet: a no-op Apply marks the canvas dirty, and an
+ * unchanged graph that reports itself as edited is how an unsaved-changes prompt
+ * loses the operator's trust.
+ *
+ * Per-key `Object.is` first, and that is the case that actually fires: every key
+ * no form field owns is copied by REFERENCE from the original, so untouched
+ * values — `children`, and any key a git-imported container carries that this
+ * schema version does not know about — are reference-identical. The
+ * `JSON.stringify` fallback is only reached for a key whose value the form
+ * rewrote, which is a primitive.
+ */
+function sameContainerConfig(a: Container, b: Container): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  const ra = a as unknown as Record<string, unknown>;
+  const rb = b as unknown as Record<string, unknown>;
+  return keys.every(
+    (k) => (k in rb && Object.is(ra[k], rb[k])) || JSON.stringify(ra[k]) === JSON.stringify(rb[k]),
+  );
+}
+
+/**
+ * The containers array a doc would have once `container`'s config is applied.
+ *
+ * The third member of the family `assignContainerChild`/`containersWithNew`
+ * belong to, and exported for the same reason they are: the panel measures an
+ * edit's consequence against the array this returns, and the store COMMITS the
+ * same array. One function, so the doc the operator was warned about and the
+ * doc that lands cannot come to disagree.
+ *
+ * Length-preserving, unlike its two siblings — which is why
+ * `consequenceMessage` can still assume no caller shrinks the array.
+ * Copy-on-write: an array holding no container of that id comes back by
+ * reference.
+ */
+export function containersWithUpdated(containers: Container[], container: Container): Container[] {
+  if (!containers.some((c) => c.id === container.id)) return containers;
+  return containers.map((c) => (c.id === container.id ? container : c));
 }
 
 /** The containers array a doc would have once `container` is added to it. */
@@ -320,6 +378,51 @@ export interface CanvasState {
    * reverses the edit.
    */
   setNodeContainer(nodeId: string, containerId: string | null): void;
+  /**
+   * U23 — replace the container `id` with `next`, its config edited.
+   *
+   * Takes the WHOLE container rather than a patch, the `updateNodeConfig`
+   * precedent: the merge belongs in the panel, where `assembleConfig` already
+   * carries the proven "preserve every key no field owns" rule, not restated
+   * here as a second merge that could disagree with it.
+   *
+   * Refuses (silent no-op) an unknown id, a container the schema rejects, and
+   * any change to `id`, `kind` or `children` — the three STRUCTURAL fields,
+   * which this action does not own. (Three, matching `validate-doc.test.ts`'s
+   * `STRUCTURAL` list; an earlier version of this note said two and omitted
+   * `kind`, which the guard then omitted too.)
+   *
+   * A rename would strand the id's three other readers (an edge endpoint, a
+   * `containerMembership` key, the selection's own handle). `kind` decides which
+   * config fields are legal AND how the reducer runs the box, so reclassifying a
+   * loop as a stage through a CONFIG action would silently leave `exitWhen`
+   * behind on a kind that refuses it. A membership write belongs to
+   * `setNodeContainer`, which alone takes the child out of whatever container
+   * held it, and to `deleteNode`, which prunes (#746); routing membership
+   * through here would bypass both and could author the duplicate-child doc
+   * `validateDoc` refuses — or the empty container `createContainer` is careful
+   * never to mint (#748).
+   *
+   * None of the three is reachable from `ContainerPanel`, which filters all
+   * three out of its form and lets `assembleConfig` pass them through from the
+   * original. They are guarded because this action re-checks what the panel has
+   * already checked — it is the defence-in-depth seam, so it should not have
+   * holes the layer above happens to cover.
+   *
+   * Silent for the reason `createContainer` is: the canvas explains refusals,
+   * because it is where the operator is.
+   *
+   * Stores the INPUT, never `parsed.data`. `ContainerSchema` is a plain
+   * `z.object`, so it strips unknown keys; storing the parse result would drop
+   * whatever a git-imported container carries that this schema version does not
+   * know about — the same silent-loss shape `assembleConfig` exists to prevent.
+   *
+   * Deliberately does NOT refuse an edit that leaves the DOC invalid (a blanked
+   * `exitWhen`, say). That is `setNodeContainer`'s posture and it is deliberate:
+   * the badge (#444) blocks the save and the same panel reverses the edit,
+   * whereas refusing here would make a half-finished edit unrepresentable.
+   */
+  updateContainer(id: string, next: Container): void;
   /**
    * Append an edge from `from` to `to` carrying `condition`. Refuses (no-op) a
    * candidate `connectRejection` rejects — a self-loop, an endpoint that is not
@@ -600,10 +703,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         return {
           containers: s.containers.filter((c) => c.id !== id),
           edges: s.edges.filter((e) => e.from !== id && e.to !== id),
-          // A container is not a `Selection` kind — nothing can select one — so
-          // only a selected EDGE the cascade just removed can be stranded.
+          // Two ways to strand a selection here: an EDGE the cascade removed,
+          // and — since U23 — the deleted CONTAINER itself. RF drives neither
+          // clear (it never sees a container at all, and the edge is gone
+          // before it could emit a deselect), so both are this action's job.
           selected:
-            s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id) ? null : s.selected,
+            (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id)) ||
+            (s.selected?.kind === 'container' && s.selected.id === id)
+              ? null
+              : s.selected,
           dirty: true,
         };
       });
@@ -637,6 +745,32 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       // have unsaved changes" prompt loses the operator's trust.
       if (next === s.containers) return;
       set({ containers: next, dirty: true });
+    },
+
+    updateContainer(id, next) {
+      const s = get();
+      const current = s.containers.find((c) => c.id === id);
+      if (current === undefined) return;
+      // `id`, `kind` and `children` are structural, not config — see the note.
+      if (next.id !== id) return;
+      if (next.kind !== current.kind) return;
+      // Vacuous for `ContainerPanel`, and deliberately kept anyway: its
+      // `assembleConfig` shallow-copies, so `next.children` IS `current.children`
+      // and this can never fire from there. It guards the seam, not that caller.
+      // (The sharing is harmless — every writer here is copy-on-write and nothing
+      // mutates a children array in place — but it is the shape `loadVersion`'s
+      // deep copy exists to keep away from `loaded`, so: no in-place membership
+      // edits, ever.)
+      if (
+        next.children.length !== current.children.length ||
+        next.children.some((ch, i) => ch !== current.children[i])
+      ) {
+        return;
+      }
+      if (!ContainerSchema.safeParse(next).success) return;
+      // Pressing Apply without typing must not mark the canvas dirty.
+      if (sameContainerConfig(current, next)) return;
+      set((st) => ({ containers: containersWithUpdated(st.containers, next), dirty: true }));
     },
 
     /**

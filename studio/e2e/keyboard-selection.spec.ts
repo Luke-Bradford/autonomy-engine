@@ -86,7 +86,7 @@ test.describe('#737 keyboard selection', () => {
     await expect(canvasNodes(page)).toHaveCount(1);
 
     const panel = page.getByRole('complementary', { name: 'Properties' });
-    await expect(panel.getByText('Select a node or an edge to edit it.')).toBeVisible();
+    await expect(panel.getByText(/^Select a node or an edge to edit it/)).toBeVisible();
 
     await tabToFocus(page, 'react-flow__node');
     await page.keyboard.press('Enter');
@@ -131,7 +131,7 @@ test.describe('#737 keyboard selection', () => {
     await expect(canvasNodes(page).first()).toHaveClass(/\bselected\b/);
 
     await page.getByRole('button', { name: 'Save version' }).click();
-    await expect(panel.getByText('Select a node or an edge to edit it.')).toBeVisible();
+    await expect(panel.getByText(/^Select a node or an edge to edit it/)).toBeVisible();
     // The half a panel-only assertion would miss: React Flow must agree.
     await expect(canvasNodes(page).first()).not.toHaveClass(/\bselected\b/);
 
