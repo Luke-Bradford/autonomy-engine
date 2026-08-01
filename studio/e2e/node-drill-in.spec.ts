@@ -27,7 +27,10 @@ const DOC = {
     {
       id: 'handled',
       type: 'fail',
-      config: { message: 'also planned' },
+      /* NOT a substring of `start`'s message, deliberately: a text locator that
+         matches both rows is a strict-mode violation, and the near-miss version
+         of that is worse — an assertion that passes against the WRONG row. */
+      config: { message: 'downstream' },
       position: { x: 260, y: 0 },
     },
   ],
@@ -45,7 +48,9 @@ test('U24 — a failed node names its failure CLASS, and opens a drill-in', asyn
 
   // The node table's Detail column now carries the class beside the message.
   // Retrying assertion: it can only hold once the stream has replayed.
-  await expect(page.getByText('planned (permanent · forced_fail)')).toBeVisible();
+  await expect(
+    page.getByRole('cell', { name: 'planned (permanent · forced_fail)', exact: true }),
+  ).toBeVisible();
 
   // No drill-in until one is asked for.
   await expect(page.getByRole('complementary', { name: 'Node start' })).toHaveCount(0);
