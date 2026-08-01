@@ -18,11 +18,14 @@ import {
   getRun,
   listParsedRuns,
   listRuns,
+  listRunSummaries,
   nextQueuedRunForTrigger,
   queuedTriggerCandidatesForPipeline,
   updateRun,
 } from '../runs.js';
 import { freshDb } from './helpers.js';
+import { runs } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
 
 function setupPipelineVersion(db: ReturnType<typeof freshDb>['db']) {
   const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -580,5 +583,125 @@ describe('#646 — nextQueuedRunForTrigger picks PAST a corrupt FIFO head', () =
     const skipped: string[] = [];
     expect(nextQueuedRunForTrigger(db, trigger.id, undefined, (id) => skipped.push(id))).toBeNull();
     expect(skipped).toEqual([bad.id]);
+  });
+});
+
+describe('listRunSummaries (R2)', () => {
+  function setup() {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Nightly report' });
+    const version = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    return { db, pipeline, version };
+  }
+
+  function makeTrigger(db: ReturnType<typeof freshDb>['db'], versionId: string, name: string) {
+    return createTrigger(db, {
+      ownerId: 'local',
+      name,
+      pipelineVersionId: versionId,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled: false,
+    });
+  }
+
+  it('resolves the pipeline name, version NUMBER and trigger name', () => {
+    const { db, version } = setup();
+    const trigger = makeTrigger(db, version.id, 'Every morning');
+    const run = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+
+    const summaries = listRunSummaries(db);
+    expect(summaries).toHaveLength(1);
+    const summary = summaries[0];
+    expect(summary?.id).toBe(run.id);
+    expect(summary?.pipelineName).toBe('Nightly report');
+    // The version NUMBER an operator reads as "v1", not the opaque `pv_…` id.
+    expect(summary?.pipelineVersion).toBe(version.version);
+    expect(summary?.pipelineVersion).not.toBe(version.id);
+    expect(summary?.triggerName).toBe('Every morning');
+    // Additive over `Run` — every original field survives untouched.
+    expect(summary?.status).toBe(run.status);
+    expect(summary?.pipelineVersionId).toBe(version.id);
+  });
+
+  /**
+   * The LEFT-join guard. An INNER join to `triggers` would drop every run that
+   * has no trigger — which is not an exotic case: a rerun sets `triggerId=null`
+   * deliberately, and so does a child run. Those runs vanishing from the
+   * operator's list would be indistinguishable from having none.
+   */
+  it('KEEPS runs with no trigger, naming them null rather than dropping them', () => {
+    const { db, version } = setup();
+    const trigger = makeTrigger(db, version.id, 'Every morning');
+    const triggered = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
+    const rerun = createRun(db, buildRunInput(version.id, { triggerId: null }));
+    const parent = createRun(db, buildRunInput(version.id, { triggerId: null }));
+    const child = createRun(db, buildRunInput(version.id, { parentRunId: parent.id }));
+
+    const summaries = listRunSummaries(db);
+    expect(summaries.map((s) => s.id).sort()).toEqual(
+      [triggered.id, rerun.id, parent.id, child.id].sort(),
+    );
+    const byId = new Map(summaries.map((s) => [s.id, s]));
+    expect(byId.get(triggered.id)?.triggerName).toBe('Every morning');
+    expect(byId.get(rerun.id)?.triggerName).toBeNull();
+    expect(byId.get(child.id)?.triggerName).toBeNull();
+  });
+
+  it('orders newest-first, breaking a startedAt tie CHRONOLOGICALLY', () => {
+    const { db, version } = setup();
+    const oldest = createRun(db, buildRunInput(version.id));
+    // FIVE tied runs, not two, so an accidental agreement is 1/120 rather than
+    // a coin flip.
+    const tied = [1, 2, 3, 4, 5].map(() => createRun(db, buildRunInput(version.id)));
+
+    // Stamp the clock directly: `startedAt` is not patchable through the repo
+    // (`RunLifecyclePatchSchema` is strict and omits it by design), and runs
+    // created in the same millisecond is exactly the tie this order must break.
+    db.update(runs).set({ startedAt: 1_000 }).where(eq(runs.id, oldest.id)).run();
+    for (const run of tied) {
+      db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, run.id)).run();
+    }
+
+    const ordered = listRunSummaries(db).map((s) => s.id);
+    // The tie-break is `rowid` — INSERTION order — so the tied block comes back
+    // newest-inserted first. Asserting reverse-CREATION order (rather than
+    // reverse-sorted ids) is what pins the tie-break as CHRONOLOGICAL: run ids
+    // are random nanoids, so swapping `rowid` for `id` fails this every time
+    // (measured, 6/6).
+    //
+    // MEASURED LIMIT, stated so nobody reads more into this test than it earns:
+    // deleting the tie-break clause ENTIRELY still passes (measured, 8/8),
+    // because SQLite's temp-b-tree sort happens to emit the tied block in rowid
+    // order anyway. That incidental agreement is exactly why the clause is
+    // written explicitly — an undocumented sort detail is not a guarantee — but
+    // this fixture cannot falsify its absence, and pretending otherwise would
+    // make it the kind of test that certifies nothing while looking like proof.
+    expect(ordered).toEqual(
+      [...tied]
+        .reverse()
+        .map((r) => r.id)
+        .concat(oldest.id),
+    );
+  });
+
+  it('owner-scopes the list in SQL', () => {
+    const { db, version } = setup();
+    const mine = createRun(db, buildRunInput(version.id, { ownerId: 'local' }));
+    createRun(db, buildRunInput(version.id, { ownerId: 'someone_else' }));
+
+    const summaries = listRunSummaries(db, { ownerId: 'local' });
+    expect(summaries.map((s) => s.id)).toEqual([mine.id]);
   });
 });

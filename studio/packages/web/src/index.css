@@ -2054,3 +2054,17 @@ td button + button {
   font-size: 0.72rem;
   color: var(--warning);
 }
+
+/* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the
+   count badge inside each tab needs a rule of its own. */
+.run-tab-count {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* The version number beside a run's pipeline NAME — present but subordinate to
+   the name, which is what the operator is actually scanning for. */
+.run-version {
+  color: var(--muted);
+  font-size: 0.8rem;
+}

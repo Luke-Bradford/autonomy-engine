@@ -2,14 +2,16 @@ import { z } from 'zod';
 import {
   RunDetailSchema,
   RunSchema,
+  RunSummarySchema,
   RunEventSchema,
   type Run,
+  type RunSummary,
   type RunDetail,
   type RunEvent,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
-const RunListSchema = z.array(RunSchema);
+const RunListSchema = z.array(RunSummarySchema);
 const RunEventListSchema = z.array(RunEventSchema);
 
 /**
@@ -22,8 +24,19 @@ const RunEventListSchema = z.array(RunEventSchema);
  * against — a contract check, not a formality.
  */
 
-/** Owner-scoped list of runs, newest-first as the server returns them. */
-export function listRuns(signal?: AbortSignal): Promise<Run[]> {
+/**
+ * Owner-scoped list of runs, newest-first — an order the server now genuinely
+ * imposes (`started_at DESC, rowid DESC`). It did not before: `listRuns` issued
+ * no `ORDER BY` at all, so this docblock's previous "newest-first as the server
+ * returns them" described SQLite's incidental row order, not a promise. The
+ * tie-break is `rowid` — insert order, so chronological — and NOT `id`, which
+ * is a random nanoid and would order same-instant runs arbitrarily.
+ *
+ * R2 — each element is a `RunSummary`, the run row PLUS the pipeline name +
+ * version number and trigger name the list renders. Strictly additive over
+ * `Run`, so this is a widening, not a breaking change.
+ */
+export function listRuns(signal?: AbortSignal): Promise<RunSummary[]> {
   return apiFetch('/api/runs', { schema: RunListSchema, signal });
 }
 

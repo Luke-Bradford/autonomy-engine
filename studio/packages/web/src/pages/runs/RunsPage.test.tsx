@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
-import { RunStatusSchema, type Run } from '@autonomy-studio/shared';
+import { RunStatusSchema, type RunSummary } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
@@ -21,7 +21,7 @@ vi.mock('../../api/runs', async (importActual) => ({
 
 const listMock = vi.mocked(runsApi.listRuns);
 
-function run(overrides: Partial<Run> = {}): Run {
+function run(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
     id: 'run_1',
     ownerId: 'local',
@@ -37,6 +37,10 @@ function run(overrides: Partial<Run> = {}): Run {
     rerunOf: null,
     startedAt: 1_700_000_000_000,
     finishedAt: null,
+    // R2 — the joined names the list renders.
+    pipelineName: 'Nightly report',
+    pipelineVersion: 3,
+    triggerName: 'Every morning',
     ...overrides,
   };
 }
@@ -118,5 +122,160 @@ describe('RunsPage', () => {
     listMock.mockRejectedValue(new Error('nope'));
     renderWithRouter(<RunsPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('nope');
+  });
+
+  /**
+   * R2 — the identity column. The list used to render `pipelineVersionId` raw,
+   * so every row read `pv_…` and an operator with two pipelines could not tell
+   * their runs apart. Asserting the id is ABSENT as text is the half that
+   * matters: rendering the name *beside* the opaque id would pass a
+   * name-only check while leaving the column just as unreadable.
+   */
+  it('names the pipeline and its version instead of the raw version id', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_abc', pipelineVersionId: 'pv_opaque', pipelineName: 'Nightly report' }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    expect(await screen.findByText(/Nightly report/)).toBeInTheDocument();
+    expect(screen.getByText('v3')).toBeInTheDocument();
+    expect(screen.queryByText('pv_opaque')).not.toBeInTheDocument();
+    // Not lost, just demoted: the opaque key stays reachable as the cell title.
+    expect(screen.getByTitle('pv_opaque')).toBeInTheDocument();
+  });
+
+  it('names the trigger, and em-dashes a run that has none', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_t', triggerName: 'Every morning' }),
+      run({ id: 'run_m', triggerId: null, triggerName: null }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    expect(await screen.findByText('Every morning')).toBeInTheDocument();
+    // Scoped to the trigger-less run's own TRIGGER cell: an unscoped `—` search
+    // would also match the Duration column, and pass even if the trigger cell
+    // rendered nothing at all.
+    const manualRow = screen.getByRole('row', { name: /run_m/ });
+    expect(within(manualRow).getAllByRole('cell')[2]).toHaveTextContent('—');
+  });
+
+  it('renders a finished run duration, and marks an unfinished one "so far"', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_done', status: 'success', startedAt: 1_000, finishedAt: 8_000 }),
+      run({ id: 'run_live', status: 'running', startedAt: 1_000, finishedAt: null }),
+    ]);
+    vi.spyOn(Date, 'now').mockReturnValue(4_000);
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_done');
+    expect(screen.getByText('7s')).toBeInTheDocument();
+    expect(screen.getByText('3s so far')).toBeInTheDocument();
+  });
+
+  /**
+   * U10 — the origin tabs. Every tab is asserted, because the risk is a tab
+   * that renders but filters nothing: a no-op filter would still show the
+   * triggered run under "Triggered" and pass a single-tab check.
+   */
+  it('filters the list by run origin, and marks the selected tab', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_trig');
+
+    await userEvent.click(screen.getByRole('tab', { name: /Triggered/ }));
+    expect(screen.getByText('run_trig')).toBeInTheDocument();
+    expect(screen.queryByText('run_manual')).not.toBeInTheDocument();
+    expect(screen.queryByText('run_child')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Triggered/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'false');
+
+    await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
+    expect(screen.getByText('run_manual')).toBeInTheDocument();
+    expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /Child/ }));
+    expect(screen.getByText('run_child')).toBeInTheDocument();
+    expect(screen.queryByText('run_manual')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /^All/ }));
+    expect(screen.getByText('run_trig')).toBeInTheDocument();
+    expect(screen.getByText('run_manual')).toBeInTheDocument();
+    expect(screen.getByText('run_child')).toBeInTheDocument();
+  });
+
+  it('counts each tab with the same filter the table applies', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+      run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
+      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_trig');
+    expect(screen.getByRole('tab', { name: /^All/ })).toHaveTextContent('3');
+    expect(screen.getByRole('tab', { name: /Triggered/ })).toHaveTextContent('2');
+    expect(screen.getByRole('tab', { name: /Child/ })).toHaveTextContent('1');
+    expect(screen.getByRole('tab', { name: /Manual/ })).toHaveTextContent('0');
+  });
+
+  it('says so when a tab has no runs, rather than showing an empty table', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    renderWithRouter(<RunsPage />);
+    await screen.findByText('run_trig');
+    await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
+    expect(screen.getByText(/No manual runs/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  /**
+   * U10 — the filter tab is a URL slot the Shell section names as this ticket's
+   * ("monitor filter tab (U10)"). Read FROM the url on first paint: a link to a
+   * filtered view has to arrive filtered, not flash All and then correct itself.
+   */
+  it('takes the selected tab from the URL', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+    ]);
+    renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
+    expect(await screen.findByText('run_manual')).toBeInTheDocument();
+    expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Manual/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('falls back to All on an unrecognised ?tab, rather than showing nothing', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    renderWithRouter(<RunsPage />, '/monitor/runs?tab=not-a-tab');
+    expect(await screen.findByText('run_trig')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  /**
+   * And WRITTEN back, so the filtered view is linkable and Back undoes it. `all`
+   * is expressed by the param's ABSENCE — one canonical URL per view.
+   */
+  it('writes the selected tab to the URL, and clears it for All', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+    render(<RouterProvider router={router} />);
+    await screen.findByText('run_trig');
+
+    await userEvent.click(screen.getByRole('tab', { name: /Triggered/ }));
+    expect(router.state.location.search).toBe('?tab=triggered');
+
+    await userEvent.click(screen.getByRole('tab', { name: /^All/ }));
+    expect(router.state.location.search).toBe('');
+  });
+
+  /**
+   * U10 owns turning the row action into a REAL link (the Shell section says so
+   * explicitly). An anchor with an href is hoverable, copyable and
+   * middle-clickable; the `useNavigate()` button it replaced was none of those.
+   */
+  it('renders the row action as a link with a real href', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_abc' })]);
+    renderWithRouter(<RunsPage />);
+    const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
   });
 });

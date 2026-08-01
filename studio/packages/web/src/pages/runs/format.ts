@@ -1,8 +1,48 @@
-import type { RunEvent } from '@autonomy-studio/shared';
+import type { Run, RunEvent } from '@autonomy-studio/shared';
 
 /** Epoch-ms → a human date+time, or an em-dash for a null (not-yet) timestamp. */
 export function formatWhen(ms: number | null): string {
   return ms === null ? '—' : new Date(ms).toLocaleString();
+}
+
+/** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
+function formatElapsed(ms: number): string {
+  if (ms < 1_000) return `${ms}ms`;
+  const totalSeconds = Math.floor(ms / 1_000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes === 0) return `${seconds}s`;
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  if (hours === 0) return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+  return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+}
+
+/**
+ * R2/U10 — how long a run took, for the Monitor's Duration column.
+ *
+ * A `queued` run renders an em-dash rather than a number, and that is the whole
+ * reason this takes the run instead of two timestamps. A queued run's
+ * `started_at` is an ENQUEUE-time placeholder that admission later re-stamps
+ * (`repo/runs.ts::admitQueuedRun`, and `queuedTriggerCandidatesForPipeline`
+ * relies on the same fact: "a queued row's started_at is an enqueue-time
+ * placeholder, not a service"). Subtracting it would render queue age in a
+ * column labelled Duration — a wrong number, not a missing one.
+ *
+ * An unfinished run is measured against `now` and marked "so far". `now` is the
+ * CALLER's, captured once per load: this list is a documented point-in-time
+ * snapshot refreshed on demand, not a ticking clock, and taking the clock as an
+ * argument is also what keeps this pure and testable.
+ */
+export function formatRunDuration(
+  run: Pick<Run, 'status' | 'startedAt' | 'finishedAt'>,
+  now: number,
+): string {
+  if (run.status === 'queued') return '—';
+  if (run.finishedAt !== null) {
+    return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
+  }
+  return `${formatElapsed(Math.max(0, now - run.startedAt))} so far`;
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

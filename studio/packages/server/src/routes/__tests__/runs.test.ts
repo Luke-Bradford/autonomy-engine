@@ -1,6 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { CATALOG_VERSION, RunDetailSchema } from '@autonomy-studio/shared';
+import { z } from 'zod';
+import {
+  CATALOG_VERSION,
+  RunDetailSchema,
+  RunSchema,
+  RunSummarySchema,
+} from '@autonomy-studio/shared';
 import {
   appendRunEvent,
   createPipeline,
@@ -264,6 +270,36 @@ describe('runs routes (read-only)', () => {
       url: `/api/runs/${other.id}/rerun-from-failed`,
     });
     expect(otherRes.statusCode).toBe(404);
+  });
+
+  /**
+   * R2 — the list route serves a `RunSummary`, not a bare `Run`. Every response
+   * element is parsed through the SHARED schema, so this is a contract check
+   * against the type the web client parses with, not a hand-written shape.
+   */
+  it('lists runs as RunSummary — pipeline name, version number and trigger name joined', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/api/runs' });
+    expect(res.statusCode).toBe(200);
+    const rows = z.array(RunSummarySchema).parse(res.json());
+    const summary = rows.find((r) => r.id === run.id);
+    expect(summary).toBeDefined();
+    expect(typeof summary?.pipelineName).toBe('string');
+    expect(summary?.pipelineName.length).toBeGreaterThan(0);
+    expect(typeof summary?.pipelineVersion).toBe('number');
+    // No trigger on this run — named null, and NOT dropped from the list.
+    expect(summary?.triggerName).toBeNull();
+    // Still additive over `Run`: an old reader parsing with RunSchema survives.
+    // Parsed from THIS run's summary, not `[0]` — the new ORDER BY no longer
+    // guarantees which run is first.
+    expect(() => RunSchema.parse(summary)).not.toThrow();
   });
 
   it('there is no POST /api/runs route (runs are created by the engine/scheduler, not this API)', async () => {
