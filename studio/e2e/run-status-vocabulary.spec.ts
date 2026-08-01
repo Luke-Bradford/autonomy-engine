@@ -160,9 +160,10 @@ test('#873 — a live container says "running", the same word its node and its r
   /* Wait on the ASSERTION TARGET itself rather than on the run row's status.
      The row reaching `waiting` while the `wait` sits inside a container is a
      fact this spec has no need to assume — and the retry cannot paper over the
-     defect here, because with the wording reverted the box reads `stage · active`
+     defect here, because with the wording reverted the box reads `stage 1 · active`
      and never becomes `running` however long it is given. The box is drawn from
-     the R1 doc fetch before the WebSocket replay lands, so it says `stage` ALONE
+     the R1 doc fetch before the WebSocket replay lands, so it says `stage 1` ALONE (the ORDINAL is doc-derived, so it is
+     there from that first paint — #886)
      first — `RunCanvas` short-circuits the whole ` · <status>` fragment when
      nothing is projected, so the visible label omits the status entirely and
      `NO_STATUS_LABEL` reaches only the accessible name. This is the assertion

@@ -620,8 +620,10 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
    * It sits OUTSIDE the disclosure button on purpose: text inside a button
    * becomes part of its accessible name, and `HTTP Request 1 n_7c44a16f-98f1-…`
    * is what a screen reader would then have to read out on every row. Outside, the
-   * button's visible label and its accessible name are the same string — which is
-   * also what WCAG 2.5.3 asks for — and the id is still on screen to copy.
+   * button's visible label and its accessible name are the same string, and the id
+   * is still on screen to copy. (Both shapes satisfy WCAG 2.5.3, which asks only
+   * that the accessible name CONTAIN the visible label — so the SC does not decide
+   * this; the uuid-per-row readout does.)
    */
   describe('#882 — the table and the drill-in name a node, not an id', () => {
     it('names the row by its activity, and keeps the raw id beside it', async () => {
@@ -653,12 +655,20 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
 
     it('falls back to the raw id for a row the bound doc does not name', async () => {
       /* The rows come from the RUN, the names from the DOC, and the two lists are
-         not the same list: a rerun can carry a node the doc no longer has. That
-         row is named by the only thing that is true about it. */
+         not the same list. The fixture is the case that is actually REACHABLE,
+         which is narrower than "the doc changed": a rerun cannot produce one
+         (`reseed` pins the run's own immutable `pipelineVersionId`). What can is
+         the instance-key fold — `deriveNodeActivity` folds `x@2` onto `x`, and a
+         doc whose LITERAL node id is `x@2` is folded with it, so a doc carrying
+         `x@2` and no `x` yields a row `x` that no doc node names.
+
+         Left as `x`, therefore: the fold key, which is what the event feed is
+         keyed on. Never an invented placeholder — `nameOf` returning something
+         readable-but-false here is the defect, not the fallback. */
       getRunDetailMock.mockResolvedValue({
         run: run(),
         pipelineVersion: version({
-          nodes: [{ id: 'greet', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
+          nodes: [{ id: 'x@2', type: 'http_request', position: { x: 0, y: 0 }, config: {} }],
           edges: [],
         }),
       });
@@ -668,8 +678,8 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
             envelope({
               type: 'node.dispatched',
               runId: 'run_1',
-              nodeId: 'ghost',
-              attemptId: 'ghost#0',
+              nodeId: 'x@2',
+              attemptId: 'x@2#0',
               idempotent: true,
             }),
           ],
@@ -677,7 +687,10 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
       );
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await screen.findByRole('button', { name: 'ghost' })).toBeInTheDocument();
+      // The FOLD key, not the doc id — `x@2`'s events land on row `x`, which
+      // `activityLabels` (keyed on `x@2`) cannot name.
+      expect(await screen.findByRole('button', { name: 'x' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'HTTP Request 1' })).not.toBeInTheDocument();
     });
 
     it('names the drill-in panel by the activity, with the id inside it', async () => {

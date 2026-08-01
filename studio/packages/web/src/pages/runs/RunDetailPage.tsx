@@ -126,13 +126,26 @@ export function RunDetailPage({ runId }: { runId: string }) {
      `activityLabels` map off the same doc, so the table and the picture beside
      it cannot come to call one node two things.
 
-     Two cases have no name and are not given an invented one. `doc` is null
-     whenever the bound version will not resolve, which this page is built to
-     survive (U11) — the whole table still renders, from the doc-free fold. And
-     the rows come from the RUN while the names come from the DOC, which are not
-     the same list: a rerun can carry a node the doc no longer has. Both fall
-     back to the raw id, the one string that is still true about the row. A
-     placeholder would be a THIRD name for the same node, which is the defect. */
+     Two cases have no name and are not given an invented one.
+
+     `doc` is null whenever the bound version will not resolve, which this page
+     is built to survive (U11) — the whole table still renders, from the doc-free
+     fold. That is the common one.
+
+     The other is narrower than it first looks, and worth stating exactly rather
+     than hand-waving at "the lists differ". A RERUN cannot cause it: `reseed`
+     pins R1's own `pipelineVersionId` and versions are immutable, so a rerun's
+     rows are always the bound doc's nodes. What can is the instance-key fold —
+     `deriveNodeActivity` folds a parallel foreach's `w@1`/`w@2` events onto the
+     canvas node `w`, and a doc carrying a LITERAL node id shaped `x@2` is folded
+     onto `x` with it (`runSummary.ts` records this, and save-time refuses such
+     ids only for parallel docs). A doc with `x@2` and no `x` therefore yields a
+     row `x` that this map cannot name.
+
+     Both fall back to the raw id — the fold key, which is what the event feed
+     below is keyed on and so still leads somewhere, even in the `x@2` case where
+     it names no doc node. A placeholder would be a THIRD name for the same node,
+     which is the defect this closes rather than a smaller version of it. */
   const nodeNames = useMemo(() => (doc === null ? null : activityLabels(doc.nodes)), [doc]);
   const nameOf = (nodeId: string) => nodeNames?.get(nodeId) ?? null;
 
@@ -301,8 +314,8 @@ export function RunDetailPage({ runId }: { runId: string }) {
                         joins its accessible name, so an id in here would make
                         every row announce "HTTP Request 1 n_7c44a16f-98f1-…".
                         Outside, the visible label and the accessible name are one
-                        string (what WCAG 2.5.3 asks for) and the id is still on
-                        screen — which it must be, because it is the only thing
+                        string, and the id is still on screen — which it must be,
+                        because it is the only thing
                         that matches the `${nodes.<id>.output.…}` expressions in
                         the doc and the ids in the event feed below. */}
                     <button

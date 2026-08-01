@@ -38,18 +38,25 @@ export function activityLabel(node: Node): string {
  * the canvas, which is the exact unreadable-id defect `readableIssue` and
  * `endpointLabel` were both written against.
  *
- * Every AUTHORING surface reads this, and so does the whole run monitor — the
- * graph since #878, the node table and the drill-in panel since #882. #884 added
- * the canvas validation badge list, which had never gone through `readableIssue`
- * at all. ONE surface still does not, ticketed rather than left to be discovered:
- * the pre-edit routing confirmation, which names no activity by design (#881).
+ * Every AUTHORING surface reads this, and so do the run monitor's NAMING
+ * surfaces — the graph since #878, the node table and the drill-in panel since
+ * #882. #884 added the canvas validation badge list, which had never gone
+ * through `readableIssue` at all.
  *
- * The run monitor's two halves resolve it differently, and the difference is the
- * whole of #882: the graph walks the DOC, so every node it draws has a name,
- * while the table and panel walk the RUN's rows, which are not the same list. A
- * row this map does not name keeps its raw id — the doc may be unresolvable
- * (U11) or a rerun may carry a node the doc has since dropped, and in both cases
- * the id is the only true thing left to say.
+ * Two surfaces still show a raw id, for opposite reasons. The run's event feed
+ * (`runs/format.ts::eventGloss`) does so BY DESIGN: it is the log's own join key,
+ * and it is exactly what the id rendered beside a node's name exists to let an
+ * operator match. The pre-edit routing confirmation names no activity at all
+ * (#881), which is a gap rather than a decision.
+ *
+ * The run monitor's two halves resolve this map differently, and the difference
+ * is the whole of #882: the graph walks the DOC, so every node it draws has a
+ * name, while the table and panel walk the RUN's rows, which are not the same
+ * list. A row this map does not name keeps its raw id. That happens when the
+ * bound version will not resolve (U11), and — narrowly — when the instance-key
+ * fold lands events on a key the doc has no node for; NOT on a rerun, which
+ * reuses the run's own immutable version. `RunDetailPage` records the exact
+ * case.
  *
  * THE ORDINAL IS DRAWN ON THE BOX, and since #883 the container ordinal is too —
  * so the rule is now uniform rather than an activity-only property with a

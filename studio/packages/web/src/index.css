@@ -1694,9 +1694,11 @@ td button + button {
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
 /* U24 — the node table's drill-in trigger. A real <button> (so it takes its
-   accessible name from the id and is keyboard-operable without inventing key
-   handling), stripped back to read as the ID it opens rather than as a chunky
-   form control — otherwise the Node column stops scanning as a column of ids. */
+   accessible name from its own content and is keyboard-operable without
+   inventing key handling), stripped back to read as the NAME it opens rather
+   than as a chunky form control — otherwise the Node column stops scanning as a
+   column of names. Since #882 that content is the activity name (`HTTP Request
+   1`); the raw id is a sibling below it, not inside the button. */
 .node-drill-in {
   background: none;
   border: 1px solid transparent;
@@ -1723,7 +1725,13 @@ td button + button {
 
    `display: block` puts it on its own line under the name: a minted id is
    `n_7c44a16f-98f1-4958-…`, which inline would set the table's first column wider
-   than every other column combined. */
+   than every other column combined.
+
+   `em`, not `rem` — the only relative font-size in this file, and deliberately
+   so. The rule is used in two places at two type sizes (a table cell, and the
+   drill-in panel's <h3>), and what it has to be is SMALLER THAN WHATEVER NAMES
+   IT in each. A fixed `rem` would be correct in the cell and nearly the heading's
+   own size in the panel. */
 .node-id {
   display: block;
   font-size: 0.8em;
