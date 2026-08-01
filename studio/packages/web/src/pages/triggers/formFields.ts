@@ -96,3 +96,56 @@ export function resolveBound(local: string, originalIso: string): string | null 
   if (originalIso !== '' && utcIsoToLocalInput(originalIso) === local) return originalIso;
   return localInputToUtcIso(local);
 }
+
+/**
+ * Flatten a Zod failure into one operator-facing line.
+ *
+ * Every trigger-config builder delegates its validation WHOLE to a shared write
+ * schema, so every one of them needs this — and each carrying its own copy is
+ * how three subtly different renderings of the same failure appear on one page.
+ * (`packages/web` has the same duplication at a larger scale: see #856.)
+ */
+export function formatZodIssues(error: {
+  issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>;
+}): string {
+  return error.issues
+    .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
+    .join('; ');
+}
+
+/** The two `datetime-local` bound controls every builder shares. */
+export interface BoundFields {
+  startTime: string;
+  endTime: string;
+  startTimeIso: string;
+  endTimeIso: string;
+}
+
+/**
+ * Resolve the `startTime`/`endTime` controls onto `candidate`, omitting a blank
+ * one. Returns `null` on success, or the reason the bound could not be read.
+ *
+ * Shared so the two builders cannot drift on what a bound means: a blank one is
+ * ABSENT, and an untouched one is written back exactly as it was loaded.
+ */
+export function resolveBoundsInto(
+  form: BoundFields,
+  candidate: Record<string, unknown>,
+): string | null {
+  for (const bound of ['startTime', 'endTime'] as const) {
+    if (form[bound].trim() === '') continue;
+    const iso = resolveBound(form[bound], form[`${bound}Iso`]);
+    if (iso === null) return `${bound}: '${form[bound]}' is not a valid date and time`;
+    candidate[bound] = iso;
+  }
+  return null;
+}
+
+/**
+ * The absolute instant a bound control will submit, for an editor to ECHO —
+ * `null` when the control is blank. Thin, but shared so what the two editors
+ * display is resolved the same way the write path resolves it.
+ */
+export function boundEcho(local: string, originalIso: string): string | null {
+  return local.trim() === '' ? null : resolveBound(local, originalIso);
+}

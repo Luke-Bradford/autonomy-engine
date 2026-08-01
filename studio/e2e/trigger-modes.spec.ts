@@ -118,6 +118,11 @@ test.describe('#854 tumbling mode', () => {
     // so its accessible name is the label text ALONE. Wrapping a select in its
     // label folds every option's text into that name (#857) — this assertion is
     // what stops the new control regressing to it.
+    //
+    // THIS spec is the only guard for that. Playwright's text extraction
+    // recurses into <option>, so a re-wrapped select fails here; the vitest
+    // counterpart does NOT catch it, because RTL strips nested labelled controls
+    // when computing a label's text. Do not read the unit assertion as cover.
     await form.getByLabel('Window frequency', { exact: true }).selectOption('hour');
     await form.getByLabel(/Each window covers/).fill('2');
     await form.getByLabel(/^Start time/).fill('2026-08-01T09:00');

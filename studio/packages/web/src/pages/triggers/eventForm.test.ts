@@ -58,3 +58,18 @@ describe('eventToForm — an API-authored subscription survives a UI edit', () =
     expect(eventOf(sneaky)).toEqual({ name: 'edited' });
   });
 });
+
+describe('formToEvent — a preserved subscription is authored state', () => {
+  it('refuses to clear the name while catchall extras ride on it', () => {
+    // Blanking a one-field control must not be a silent delete of config the
+    // form never showed. The window builder treats a preserved sub-object the
+    // same way; removing a subscription deliberately is a MODE switch.
+    const converted = formToEvent({ name: '', extras: { filter: { region: 'eu' } } });
+    expect(converted.ok).toBe(false);
+    if (!converted.ok) expect(converted.reason).toMatch(/would discard/i);
+  });
+
+  it('still reads a blank name as absent when there is nothing to lose', () => {
+    expect(formToEvent({ name: '  ', extras: {} })).toEqual({ ok: true, event: null });
+  });
+});

@@ -126,22 +126,33 @@ function formForEdit(t: TriggerPublic): FormState {
   // a midnight cron it never had. The blank cron field round-trips to `null`,
   // which is what was actually stored.
   const hasRecurrence = t.recurrence !== null;
-  return {
-    id: t.id,
-    name: t.name,
-    pipelineVersionId: t.pipelineVersionId ?? '',
-    mode: t.mode,
-    scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
-    schedule: hasRecurrence ? '' : (t.schedule ?? ''),
-    recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
-    event: t.event !== null ? eventToForm(t.event) : blankEventForm(),
-    window: t.window !== null ? windowToForm(t.window) : blankWindowForm(),
-    concurrencyPolicy: t.concurrency.policy,
-    concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
-    enabled: t.enabled,
-    paramsText: JSON.stringify(t.params, null, 2),
-    runWindowsText: t.runWindows === null ? '' : JSON.stringify(t.runWindows, null, 2),
-  };
+  // The LOAD path settles the same invariants the mode-switch path does. A
+  // stored tumbling trigger can carry a non-`queue` policy — the import and
+  // workspace-apply write paths preserve `concurrency` verbatim and never run
+  // `assertWindowConsistent` — and the Concurrency select is DISABLED under
+  // tumbling. Loading such a row without settling would pin a disabled control
+  // on a value the server refuses, so every save 400s and the one control that
+  // could repair it is the one that was switched off. A repair affordance must
+  // ENFORCE the repair, not merely display it.
+  return withMode(
+    {
+      id: t.id,
+      name: t.name,
+      pipelineVersionId: t.pipelineVersionId ?? '',
+      mode: t.mode,
+      scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
+      schedule: hasRecurrence ? '' : (t.schedule ?? ''),
+      recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
+      event: t.event !== null ? eventToForm(t.event) : blankEventForm(),
+      window: t.window !== null ? windowToForm(t.window) : blankWindowForm(),
+      concurrencyPolicy: t.concurrency.policy,
+      concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
+      enabled: t.enabled,
+      paramsText: JSON.stringify(t.params, null, 2),
+      runWindowsText: t.runWindows === null ? '' : JSON.stringify(t.runWindows, null, 2),
+    },
+    t.mode,
+  );
 }
 
 /**
@@ -515,7 +526,11 @@ function TriggerForm({
 
     // Mirror `assertEventConsistent` / `assertWindowConsistent` for a friendlier
     // message. Both are ENABLED-conditional on the server, and so are these: a
-    // disabled trigger is legally allowed to sit half-configured.
+    // disabled trigger may legally store NO subscription and NO window at all.
+    // That is narrower than "anything goes while disabled" — a form left partly
+    // filled is still refused above, by the conversion, in either state, because
+    // discarding half-typed config would be the silent loss this module exists
+    // to prevent.
     if (form.enabled && form.mode === 'event' && eventConfig === null) {
       setError('An enabled event trigger must carry an event name (or disable it).');
       return;
@@ -678,6 +693,18 @@ function TriggerForm({
             Fires when <code>POST /api/events</code> is called with this exact name. An enabled
             event trigger must carry one.
           </p>
+          {/* The subscription schema has a catchall, so one authored through the
+              API can carry keys this form has no control for. Say so — otherwise
+              it looks like there is nothing else there, and the name field is a
+              one-character path to destroying it. */}
+          {Object.keys(form.event.extras).length > 0 && (
+            <p className="page-hint" data-testid="event-preserved">
+              This subscription also carries{' '}
+              <code>{Object.keys(form.event.extras).sort().join(', ')}</code>, authored outside this
+              form. There is no control for it here; it is preserved unchanged while this trigger
+              stays in event mode, and the name cannot be cleared while it is there.
+            </p>
+          )}
         </>
       )}
 
@@ -717,8 +744,10 @@ function TriggerForm({
 
       {form.mode === 'tumbling' && (
         <p className="page-hint">
-          A tumbling trigger processes its windows in order, so <code>queue</code> is the only
-          policy the write boundary accepts for one.
+          A tumbling trigger must use <code>queue</code>: <code>skip_if_running</code> would drop a
+          window&rsquo;s one materialization and strand it forever, and per-window parallelism is
+          set by &ldquo;Max concurrent windows&rdquo; above rather than by the <code>parallel</code>{' '}
+          policy.
         </p>
       )}
 

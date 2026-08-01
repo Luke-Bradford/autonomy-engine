@@ -794,8 +794,8 @@ td button + button {
 
 /* #439 U14b / #854 — the recurrence and tumbling-window builders read as
    grouped sub-forms within the trigger form (a bare <fieldset> would otherwise
-   inherit the browser default border and collapse its stacked children). One
-   rule for both, so a second builder cannot drift from the first. */
+   inherit the browser default border and collapse its stacked children). Both
+   share one rule; a THIRD builder has to add itself to these selector lists. */
 .trigger-form .recurrence-editor,
 .trigger-form .window-editor {
   display: flex;

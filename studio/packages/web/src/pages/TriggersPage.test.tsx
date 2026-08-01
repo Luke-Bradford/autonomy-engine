@@ -677,3 +677,101 @@ describe('#854 — the trigger modes that had no config UI', () => {
     expect(form.getByText(/not dispatched yet/i)).toBeInTheDocument();
   });
 });
+
+describe('#854 review follow-ups', () => {
+  it('repairs a stored tumbling trigger whose concurrency policy is illegal', () => {
+    // The Concurrency select is DISABLED under tumbling, so the LOAD path has to
+    // settle the same invariant the mode-switch path does. A non-`queue`
+    // tumbling row is reachable: the import and workspace-apply write paths
+    // preserve `concurrency` verbatim and never run `assertWindowConsistent`.
+    // Without the settle, editing one pins a disabled control on a value the
+    // server refuses — every save 400s and the control that could fix it is off.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Imported windows',
+        mode: 'tumbling',
+        schedule: null,
+        enabled: false,
+        concurrency: { policy: 'parallel', max: 2 },
+        window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
+      }),
+    ]);
+    return (async () => {
+      renderWithRouter(<TriggersPage />);
+      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+      expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
+      // The `parallel`-only control is gone with it, so no orphan `max` survives
+      // (`ConcurrencyWriteSchema` forbids `max` off `parallel`).
+      expect(form.queryByLabelText(/Max parallel runs/i)).toBeNull();
+
+      await user.click(form.getByRole('button', { name: /Save changes/i }));
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(updateMock.mock.calls[0]![1].concurrency).toEqual({ policy: 'queue' });
+    })();
+  });
+
+  it('echoes the epoch a save will actually write, not a re-derived one', () => {
+    // A `datetime-local` holds no sub-seconds. If the echo re-derived the
+    // instant from the control it would advertise a DIFFERENT instant from the
+    // one submitted — and `startTime` is the window epoch, so a silent shift
+    // re-keys every window boundary the trigger ever computes.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Sub-second epoch',
+        mode: 'tumbling',
+        schedule: null,
+        enabled: false,
+        concurrency: { policy: 'queue' },
+        window: { frequency: 'minute', interval: 15, startTime: '2026-08-01T08:00:30.500Z' },
+      }),
+    ]);
+    return (async () => {
+      renderWithRouter(<TriggersPage />);
+      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+      expect(form.getByTestId('window-bounds-utc')).toHaveTextContent('2026-08-01T08:00:30.500Z');
+    })();
+  });
+
+  it('names the subscription config it is carrying but cannot show', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Filtered',
+        mode: 'event',
+        schedule: null,
+        enabled: false,
+        event: { name: 'order.placed', filter: { region: 'eu' }, source: 'checkout' },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(form.getByTestId('event-preserved')).toHaveTextContent('filter, source');
+  });
+
+  it('refuses to clear a subscription name that is guarding other config', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Filtered',
+        mode: 'event',
+        schedule: null,
+        enabled: false,
+        event: { name: 'order.placed', filter: { region: 'eu' } },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.clear(form.getByLabelText('Event name'));
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    expect(await form.findByRole('alert')).toHaveTextContent(/would discard/i);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});

@@ -1,4 +1,5 @@
 import { EventConfigSchema, type EventConfig } from '@autonomy-studio/shared';
+import { formatZodIssues } from './formFields';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the event-subscription editor.
@@ -41,21 +42,34 @@ export type EventConversion =
  *
  * A blank name is an ABSENT subscription (`null`), never `{name:''}` — the
  * schema's `.min(1)` refuses the latter, so an empty string is not a benign
- * "nothing chosen". Clearing the name therefore CLEARS the subscription, extras
- * included; that is a deliberate destructive edit, not an incidental one, and
- * the server refuses the result only if the trigger is also enabled.
+ * "nothing chosen".
+ *
+ * But a subscription carrying `extras` is AUTHORED STATE, and a one-character
+ * edit must not destroy it: blanking the name of such a subscription is REFUSED
+ * rather than read as "remove it", exactly as `windowForm` refuses to collapse a
+ * window that carries a preserved sub-object. Removing a subscription
+ * deliberately is what switching the trigger's mode does. Without this the
+ * module cited #473 in its own docstring and then failed open in the one place
+ * it could.
  */
 export function formToEvent(form: EventFormState): EventConversion {
   const name = form.name.trim();
-  if (name === '') return { ok: true, event: null };
+  if (name === '') {
+    if (Object.keys(form.extras).length > 0) {
+      return {
+        ok: false,
+        reason:
+          'this subscription carries configuration authored outside this form, which clearing the name would discard — switch the trigger to another mode to remove the subscription deliberately',
+      };
+    }
+    return { ok: true, event: null };
+  }
   // `name` last so the edited value always wins over a stale catchall copy.
   const parsed = EventConfigSchema.safeParse({ ...form.extras, name });
   if (!parsed.success) {
     return {
       ok: false,
-      reason: parsed.error.issues
-        .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-        .join('; '),
+      reason: formatZodIssues(parsed.error),
     };
   }
   return { ok: true, event: parsed.data };

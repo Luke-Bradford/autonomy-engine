@@ -7,9 +7,10 @@ import {
   type RecurrenceSchedule,
 } from '@autonomy-studio/shared';
 import {
+  formatZodIssues,
   pad,
   parseWholeNumber,
-  resolveBound,
+  resolveBoundsInto,
   utcIsoToLocalInput,
   WHOLE_NUMBER,
 } from './formFields';
@@ -191,21 +192,14 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   if (Object.keys(schedule).length > 0) candidate.schedule = schedule as RecurrenceSchedule;
   if (form.timeZone.trim() !== '') candidate.timeZone = form.timeZone.trim();
 
-  for (const bound of ['startTime', 'endTime'] as const) {
-    if (form[bound].trim() === '') continue;
-    const iso = resolveBound(form[bound], form[`${bound}Iso`]);
-    if (iso === null)
-      return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
-    candidate[bound] = iso;
-  }
+  const boundProblem = resolveBoundsInto(form, candidate);
+  if (boundProblem !== null) return { ok: false, reason: boundProblem };
 
   const parsed = RecurrenceWriteSchema.safeParse(candidate);
   if (!parsed.success) {
     return {
       ok: false,
-      reason: parsed.error.issues
-        .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-        .join('; '),
+      reason: formatZodIssues(parsed.error),
     };
   }
   return { ok: true, recurrence: parsed.data };

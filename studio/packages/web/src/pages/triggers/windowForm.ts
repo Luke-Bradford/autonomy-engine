@@ -3,7 +3,12 @@ import {
   type WindowConfig,
   type WindowFrequency,
 } from '@autonomy-studio/shared';
-import { parseWholeNumber, resolveBound, utcIsoToLocalInput } from './formFields';
+import {
+  formatZodIssues,
+  parseWholeNumber,
+  resolveBoundsInto,
+  utcIsoToLocalInput,
+} from './formFields';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the tumbling-window builder:
@@ -92,10 +97,9 @@ function isUntouched(form: WindowFormState): boolean {
 export type WindowConversion =
   { ok: true; window: WindowConfig | null } | { ok: false; reason: string };
 
-/** The optional whole-number caps, paired with the field name an error uses. */
-const CAP_FIELDS: ReadonlyArray<{
-  key: 'maxBackfillWindows' | 'maxConcurrentWindows';
-}> = [{ key: 'maxBackfillWindows' }, { key: 'maxConcurrentWindows' }];
+/** The optional whole-number caps. Both are read the same way, so they are a
+ * plain list rather than a table of one-field rows. */
+const CAP_FIELDS = ['maxBackfillWindows', 'maxConcurrentWindows'] as const;
 
 /**
  * Build a `WindowConfig` from the form, or report the first reason it cannot be.
@@ -105,13 +109,16 @@ export function formToWindow(form: WindowFormState): WindowConversion {
 
   const parsedInterval = parseWholeNumber(form.interval);
   if (!parsedInterval.ok) return { ok: false, reason: `interval: ${parsedInterval.reason}` };
-  // A blank interval is the plainest window there is — one period.
+  // `WindowConfigSchema.interval` is REQUIRED and has NO default (unlike
+  // `RecurrenceSchema.interval`), so a blank control is the CLIENT supplying the
+  // plainest window there is — one period — not a schema default being honoured.
+  // Copying the recurrence builder must not copy a premise that does not hold.
   const candidate: Record<string, unknown> = {
     frequency: form.frequency,
     interval: parsedInterval.value ?? 1,
   };
 
-  for (const { key } of CAP_FIELDS) {
+  for (const key of CAP_FIELDS) {
     const parsed = parseWholeNumber(form[key]);
     if (!parsed.ok) return { ok: false, reason: `${key}: ${parsed.reason}` };
     // Rule 1: blank means the cap is absent, not that it is zero.
@@ -123,14 +130,8 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   if (form.startTime.trim() === '') {
     return { ok: false, reason: 'startTime: a tumbling window needs a start time' };
   }
-  for (const bound of ['startTime', 'endTime'] as const) {
-    if (form[bound].trim() === '') continue;
-    const iso = resolveBound(form[bound], form[`${bound}Iso`]);
-    if (iso === null) {
-      return { ok: false, reason: `${bound}: '${form[bound]}' is not a valid date and time` };
-    }
-    candidate[bound] = iso;
-  }
+  const boundProblem = resolveBoundsInto(form, candidate);
+  if (boundProblem !== null) return { ok: false, reason: boundProblem };
 
   // Rule 3: carried through untouched, so the write is not a silent truncation
   // of what was loaded.
@@ -141,9 +142,7 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   if (!parsed.success) {
     return {
       ok: false,
-      reason: parsed.error.issues
-        .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-        .join('; '),
+      reason: formatZodIssues(parsed.error),
     };
   }
   return { ok: true, window: parsed.data };

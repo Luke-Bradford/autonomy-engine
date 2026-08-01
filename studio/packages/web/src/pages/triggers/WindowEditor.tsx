@@ -7,7 +7,7 @@ import {
   type WindowFrequency,
 } from '@autonomy-studio/shared';
 import { formToWindow, type WindowFormState } from './windowForm';
-import { resolveBound } from './formFields';
+import { boundEcho } from './formFields';
 
 const FREQUENCIES = WindowFrequencySchema.options;
 
@@ -46,12 +46,11 @@ export function WindowEditor({
   const problem = conversion.ok ? null : conversion.reason;
   const built = conversion.ok ? conversion.window : null;
 
-  /** The instant the epoch control will actually SUBMIT — resolved through the
-   * same `resolveBound` the write path uses, so an untouched sub-second bound is
-   * echoed as what will be written rather than as a truncated re-derivation. */
-  const startUtc =
-    value.startTime.trim() === '' ? null : resolveBound(value.startTime, value.startTimeIso);
-  const endUtc = value.endTime.trim() === '' ? null : resolveBound(value.endTime, value.endTimeIso);
+  /** The instants the bound controls will actually SUBMIT — resolved through the
+   * same path the write uses, so an untouched sub-second bound is echoed as what
+   * will be written rather than as a truncated re-derivation. */
+  const startUtc = boundEcho(value.startTime, value.startTimeIso);
+  const endUtc = boundEcho(value.endTime, value.endTimeIso);
 
   return (
     <fieldset className="window-editor">
@@ -106,26 +105,26 @@ export function WindowEditor({
       </label>
 
       <label>
-        Max backfill windows (optional)
+        Max backfill windows (optional — blank means none)
         <input
           type="number"
           min={1}
           max={MAX_BACKFILL_WINDOWS_CAP}
           value={value.maxBackfillWindows}
           onChange={(e) => set({ maxBackfillWindows: e.target.value })}
-          placeholder="unlimited"
+          placeholder="no backfill"
         />
       </label>
 
       <label>
-        Max concurrent windows (optional)
+        Max concurrent windows (optional — blank means one)
         <input
           type="number"
           min={1}
           max={MAX_CONCURRENT_WINDOWS_CAP}
           value={value.maxConcurrentWindows}
           onChange={(e) => set({ maxConcurrentWindows: e.target.value })}
-          placeholder="unlimited"
+          placeholder="one at a time"
         />
       </label>
 
@@ -159,7 +158,7 @@ export function WindowEditor({
             .filter((s) => s !== null)
             .join(' and ')}
           {
-            ', authored outside this form. There is no control for it here yet (#861); it is preserved unchanged when you save.'
+            ', authored outside this form. There is no control for it here yet (#861); it is preserved unchanged while this trigger stays in tumbling mode. A self-dependency is measured against the window size, so changing the frequency or interval above can put it out of range.'
           }
         </p>
       )}

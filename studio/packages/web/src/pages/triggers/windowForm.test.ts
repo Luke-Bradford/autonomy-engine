@@ -33,7 +33,14 @@ describe('formToWindow — the absent/present boundary', () => {
   it('refuses a form that was filled in but has no start time', () => {
     // The opposite fail-open: silently returning null here would DISCARD what
     // the operator typed, and (on a disabled trigger) save clean while doing it.
-    expect(reasonOf(form({ interval: '4' }))).toMatch(/startTime/);
+    //
+    // Asserting the MESSAGE, not just the path: the schema emits its own
+    // `startTime: Required`, so a path-only assertion passes with this explicit
+    // refusal deleted — and the whole point of it is to name the CONTROL the
+    // operator is looking at rather than the shape.
+    expect(reasonOf(form({ interval: '4' }))).toBe(
+      'startTime: a tumbling window needs a start time',
+    );
   });
 
   it('builds a window from the three fields that give it its geometry', () => {
