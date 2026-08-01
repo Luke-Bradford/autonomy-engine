@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
@@ -150,7 +150,11 @@ describe('RunsPage', () => {
     ]);
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText('Every morning')).toBeInTheDocument();
-    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
+    // Scoped to the trigger-less run's own TRIGGER cell: an unscoped `—` search
+    // would also match the Duration column, and pass even if the trigger cell
+    // rendered nothing at all.
+    const manualRow = screen.getByRole('row', { name: /run_m/ });
+    expect(within(manualRow).getAllByRole('cell')[2]).toHaveTextContent('—');
   });
 
   it('renders a finished run duration, and marks an unfinished one "so far"', async () => {

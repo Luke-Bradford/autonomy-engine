@@ -111,11 +111,18 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * silently, and indistinguishably from "you have no reruns". A child run will
  * join them once P3b lands the spawn seam (#796); nothing creates one yet.
  *
- * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`).
+ * ORDER is a total, deterministic newest-first (`started_at DESC, rowid DESC`).
+ * The tie-break is `rowid`, not `id`: run ids are random nanoids, so ordering a
+ * millisecond tie by id would be stable but ARBITRARY — "newest-first" would
+ * quietly stop being true exactly at the tie. `rowid` is SQLite's insertion
+ * order, so it breaks the tie chronologically, which is what the column claims.
+ * Same tie-breaker `nextQueuedRunForTrigger` uses for two fires enqueued in the
+ * same millisecond, and QUALIFIED for the same reason: the join makes a bare
+ * `rowid` ambiguous.
  * MEASURED, not assumed: on the production path (the route always passes
  * `ownerId`) SQLite picks `runs_owner_id_idx` and sorts through a
  * `USE TEMP B-TREE FOR ORDER BY`; `runs_started_at_idx` is used only for an
- * UNFILTERED list, and even then the `id` tie-break needs a temp b-tree for the
+ * UNFILTERED list, and even then the tie-break needs a temp b-tree for the
  * last term. That cost is accepted at U10's "client-side small-data v1" scale —
  * this is a correctness claim about the ORDER, not a performance claim about the
  * index. `listRuns` issues no `ORDER BY` at all, yet the page consuming it
@@ -148,7 +155,7 @@ export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummar
     .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
     .leftJoin(triggers, eq(runs.triggerId, triggers.id));
   const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
-    .orderBy(desc(runs.startedAt), desc(runs.id))
+    .orderBy(desc(runs.startedAt), desc(sql`${runs}.rowid`))
     .all();
   return rows.map((row) =>
     RunSummarySchema.parse({

@@ -297,7 +297,9 @@ describe('runs routes (read-only)', () => {
     // No trigger on this run — named null, and NOT dropped from the list.
     expect(summary?.triggerName).toBeNull();
     // Still additive over `Run`: an old reader parsing with RunSchema survives.
-    expect(() => RunSchema.parse(res.json()[0])).not.toThrow();
+    // Parsed from THIS run's summary, not `[0]` — the new ORDER BY no longer
+    // guarantees which run is first.
+    expect(() => RunSchema.parse(summary)).not.toThrow();
   });
 
   it('there is no POST /api/runs route (runs are created by the engine/scheduler, not this API)', async () => {

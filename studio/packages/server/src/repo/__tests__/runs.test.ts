@@ -659,22 +659,41 @@ describe('listRunSummaries (R2)', () => {
     expect(byId.get(child.id)?.triggerName).toBeNull();
   });
 
-  it('orders newest-first, with a deterministic id tie-break on an equal startedAt', () => {
+  it('orders newest-first, breaking a startedAt tie CHRONOLOGICALLY', () => {
     const { db, version } = setup();
-    const a = createRun(db, buildRunInput(version.id));
-    const b = createRun(db, buildRunInput(version.id));
-    const c = createRun(db, buildRunInput(version.id));
+    const oldest = createRun(db, buildRunInput(version.id));
+    // FIVE tied runs, not two, so an accidental agreement is 1/120 rather than
+    // a coin flip.
+    const tied = [1, 2, 3, 4, 5].map(() => createRun(db, buildRunInput(version.id)));
+
     // Stamp the clock directly: `startedAt` is not patchable through the repo
-    // (`RunLifecyclePatchSchema` is strict and omits it by design), and two runs
+    // (`RunLifecyclePatchSchema` is strict and omits it by design), and runs
     // created in the same millisecond is exactly the tie this order must break.
-    db.update(runs).set({ startedAt: 1_000 }).where(eq(runs.id, a.id)).run();
-    db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, b.id)).run();
-    db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, c.id)).run();
+    db.update(runs).set({ startedAt: 1_000 }).where(eq(runs.id, oldest.id)).run();
+    for (const run of tied) {
+      db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, run.id)).run();
+    }
 
     const ordered = listRunSummaries(db).map((s) => s.id);
-    // b and c share a startedAt, so the id DESC tie-break decides them.
-    const [hi, lo] = [b.id, c.id].sort().reverse();
-    expect(ordered).toEqual([hi, lo, a.id]);
+    // The tie-break is `rowid` — INSERTION order — so the tied block comes back
+    // newest-inserted first. Asserting reverse-CREATION order (rather than
+    // reverse-sorted ids) is what pins the tie-break as CHRONOLOGICAL: run ids
+    // are random nanoids, so swapping `rowid` for `id` fails this every time
+    // (measured, 6/6).
+    //
+    // MEASURED LIMIT, stated so nobody reads more into this test than it earns:
+    // deleting the tie-break clause ENTIRELY still passes (measured, 8/8),
+    // because SQLite's temp-b-tree sort happens to emit the tied block in rowid
+    // order anyway. That incidental agreement is exactly why the clause is
+    // written explicitly — an undocumented sort detail is not a guarantee — but
+    // this fixture cannot falsify its absence, and pretending otherwise would
+    // make it the kind of test that certifies nothing while looking like proof.
+    expect(ordered).toEqual(
+      [...tied]
+        .reverse()
+        .map((r) => r.id)
+        .concat(oldest.id),
+    );
   });
 
   it('owner-scopes the list in SQL', () => {

@@ -6,7 +6,14 @@ import { listRuns } from '../../api/runs';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath } from './runPath';
 import { runStatusLabel } from './runStatus';
-import { filterRunsByTab, isRunTab, RUN_TABS, RUN_TAB_LABEL, type RunTab } from './runOrigin';
+import {
+  filterRunsByTab,
+  isRunTab,
+  RUN_TAB_HINT,
+  RUN_TAB_LABEL,
+  RUN_TABS,
+  type RunTab,
+} from './runOrigin';
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created by the
@@ -128,7 +135,7 @@ export function RunsPage() {
             aria-label="Filter runs by origin"
           >
             {RUN_TABS.map((key) => (
-              <Tab key={key} value={key} id={`run-tab-${key}`}>
+              <Tab key={key} value={key} id={`run-tab-${key}`} title={RUN_TAB_HINT[key]}>
                 {RUN_TAB_LABEL[key]} <span className="run-tab-count">{counts[key]}</span>
               </Tab>
             ))}

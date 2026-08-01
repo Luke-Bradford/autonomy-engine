@@ -65,6 +65,20 @@ export const RUN_TAB_LABEL: Record<RunTab, string> = {
 };
 
 /**
+ * What each tab actually contains, for the tab's `title`. The labels are the
+ * spec's and stay as written, but two of them would mislead on their own:
+ * firing a trigger by hand still stamps `triggerId` (`launcher.fire` → `launch`),
+ * so "Manual" is NOT "the ones I started myself" — it is the runs with no
+ * trigger at all, which today means reruns. And "Child" is empty until P3b.
+ */
+export const RUN_TAB_HINT: Record<RunTab, string> = {
+  all: 'Every run',
+  triggered: 'Started by a trigger, including a manual fire of one',
+  manual: 'Runs with no trigger — today, reruns',
+  child: 'Runs spawned by a parent pipeline (not yet produced — see #796)',
+};
+
+/**
  * The filter itself. `all` passes everything through; every other tab keeps the
  * runs of exactly its own origin.
  *
