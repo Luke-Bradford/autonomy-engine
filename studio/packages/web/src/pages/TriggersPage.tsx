@@ -3,13 +3,23 @@ import {
   ConcurrencyPolicySchema,
   TriggerModeSchema,
   type ConcurrencyPolicy,
+  type EventConfig,
   type Recurrence,
   type TriggerMode,
+  type WindowConfig,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { ApiError } from '../api/client';
 import { RecurrenceEditor } from './triggers/RecurrenceEditor';
+import { WindowEditor } from './triggers/WindowEditor';
+import { blankEventForm, eventToForm, formToEvent, type EventFormState } from './triggers/eventForm';
+import {
+  blankWindowForm,
+  formToWindow,
+  windowToForm,
+  type WindowFormState,
+} from './triggers/windowForm';
 import {
   blankRecurrenceForm,
   formToRecurrence,
@@ -54,12 +64,29 @@ type FormState = {
   scheduleKind: ScheduleKind;
   schedule: string; // raw cron, for `scheduleKind === 'cron'`; '' = null
   recurrence: RecurrenceFormState; // for `scheduleKind === 'recurrence'`
+  /** #854 — the other two configurable modes. Held alongside the schedule half
+   * for the same reason: the write boundary refuses config that does not match
+   * the mode, so every save sends the modes it is NOT in as an explicit null. */
+  event: EventFormState;
+  window: WindowFormState;
   concurrencyPolicy: ConcurrencyPolicy;
   concurrencyMax: string; // only meaningful for `parallel`; '' = unset
   enabled: boolean;
   paramsText: string; // JSON object
   runWindowsText: string; // JSON array; '' = null
 };
+
+/**
+ * #854 — switching INTO tumbling settles the one concurrency policy the write
+ * boundary allows there: `assertWindowConsistent` refuses a tumbling trigger
+ * whose policy is anything but `queue`, so the control is settled in STATE
+ * rather than coerced at save time, and shows what will actually be written.
+ * Switching away leaves it — `queue` is legal in every mode.
+ */
+function withMode(form: FormState, mode: TriggerMode): FormState {
+  if (mode !== 'tumbling') return { ...form, mode };
+  return { ...form, mode, concurrencyPolicy: 'queue', concurrencyMax: '' };
+}
 
 function blankForm(): FormState {
   return {
@@ -70,6 +97,8 @@ function blankForm(): FormState {
     scheduleKind: 'recurrence',
     schedule: '',
     recurrence: blankRecurrenceForm(),
+    event: blankEventForm(),
+    window: blankWindowForm(),
     concurrencyPolicy: 'skip_if_running',
     concurrencyMax: '',
     enabled: false,
@@ -100,6 +129,8 @@ function formForEdit(t: TriggerPublic): FormState {
     scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
     schedule: hasRecurrence ? '' : (t.schedule ?? ''),
     recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
+    event: t.event !== null ? eventToForm(t.event) : blankEventForm(),
+    window: t.window !== null ? windowToForm(t.window) : blankWindowForm(),
     concurrencyPolicy: t.concurrency.policy,
     concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
     enabled: t.enabled,
@@ -443,12 +474,51 @@ function TriggerForm({
       }
     }
 
+    // #854 — the event and tumbling halves, built exactly like the schedule one
+    // above: declared null and assigned only inside their own mode branch, so a
+    // mode switch clears what the trigger left behind BY CONSTRUCTION. Both are
+    // then sent unconditionally, because on a PATCH an omitted key means
+    // "untouched" — a stale `event`/`window` under a mode that does not match is
+    // refused by `assertEventConsistent`/`assertWindowConsistent`, which is the
+    // 400 that made these modes uneditable once configured.
+    let eventConfig: EventConfig | null = null;
+    let windowConfig: WindowConfig | null = null;
+    if (form.mode === 'event') {
+      const converted = formToEvent(form.event);
+      if (!converted.ok) {
+        setError(`Invalid event subscription — ${converted.reason}`);
+        return;
+      }
+      eventConfig = converted.event;
+    } else if (form.mode === 'tumbling') {
+      const converted = formToWindow(form.window);
+      if (!converted.ok) {
+        setError(`Invalid tumbling window — ${converted.reason}`);
+        return;
+      }
+      windowConfig = converted.window;
+    }
+
     const pipelineVersionId = form.pipelineVersionId === '' ? null : form.pipelineVersionId;
 
     // Mirror the server's `assertBindableIfEnabled` for a friendlier message
     // (the server still enforces it).
     if (form.enabled && pipelineVersionId === null) {
       setError('An enabled trigger must be bound to a pipeline version (or disable it).');
+      return;
+    }
+
+    // Mirror `assertEventConsistent` / `assertWindowConsistent` for a friendlier
+    // message. Both are ENABLED-conditional on the server, and so are these: a
+    // disabled trigger is legally allowed to sit half-configured.
+    if (form.enabled && form.mode === 'event' && eventConfig === null) {
+      setError('An enabled event trigger must carry an event name (or disable it).');
+      return;
+    }
+    if (form.enabled && form.mode === 'tumbling' && windowConfig === null) {
+      setError(
+        'An enabled tumbling trigger must carry a window — give it a start time (or disable it).',
+      );
       return;
     }
 
@@ -466,6 +536,8 @@ function TriggerForm({
       mode: form.mode,
       schedule,
       recurrence,
+      event: eventConfig,
+      window: windowConfig,
       webhook: null,
       concurrency,
       runWindows: runWindows as TriggerWrite['runWindows'],
@@ -539,7 +611,7 @@ function TriggerForm({
         Mode
         <select
           value={form.mode}
-          onChange={(e) => onChange({ ...form, mode: e.target.value as TriggerMode })}
+          onChange={(e) => onChange(withMode(form, e.target.value as TriggerMode))}
         >
           {MODES.map((mode) => (
             <option key={mode} value={mode}>
@@ -583,6 +655,38 @@ function TriggerForm({
         </>
       )}
 
+      {form.mode === 'event' && (
+        <>
+          <label>
+            Event name
+            <input
+              type="text"
+              value={form.event.name}
+              onChange={(e) =>
+                onChange({ ...form, event: { ...form.event, name: e.target.value } })
+              }
+              placeholder="order.placed"
+              spellCheck={false}
+            />
+          </label>
+          <p className="page-hint">
+            Fires when <code>POST /api/events</code> is called with this exact name. An enabled
+            event trigger must carry one.
+          </p>
+        </>
+      )}
+
+      {form.mode === 'tumbling' && (
+        <WindowEditor value={form.window} onChange={(window) => onChange({ ...form, window })} />
+      )}
+
+      {form.mode === 'continuous' && (
+        <p className="page-hint">
+          Continuous triggers are not dispatched yet — nothing schedules one. It can be saved and
+          run with “Fire now”, but it will never fire on its own.
+        </p>
+      )}
+
       {form.mode === 'webhook' && (
         <p className="page-hint">
           Save the trigger, then use “Webhook secret” on its row to mint the signing secret.
@@ -593,6 +697,7 @@ function TriggerForm({
         Concurrency
         <select
           value={form.concurrencyPolicy}
+          disabled={form.mode === 'tumbling'}
           onChange={(e) =>
             onChange({ ...form, concurrencyPolicy: e.target.value as ConcurrencyPolicy })
           }
@@ -604,6 +709,13 @@ function TriggerForm({
           ))}
         </select>
       </label>
+
+      {form.mode === 'tumbling' && (
+        <p className="page-hint">
+          A tumbling trigger processes its windows in order, so <code>queue</code> is the only
+          policy the write boundary accepts for one.
+        </p>
+      )}
 
       {form.concurrencyPolicy === 'parallel' && (
         <label>

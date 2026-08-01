@@ -792,10 +792,12 @@ td button + button {
   gap: 0.5rem;
 }
 
-/* #439 U14b — the recurrence builder reads as a grouped sub-form within the
-   trigger form (a bare <fieldset> would otherwise inherit the browser default
-   border and collapse its stacked children). */
-.trigger-form .recurrence-editor {
+/* #439 U14b / #854 — the recurrence and tumbling-window builders read as
+   grouped sub-forms within the trigger form (a bare <fieldset> would otherwise
+   inherit the browser default border and collapse its stacked children). One
+   rule for both, so a second builder cannot drift from the first. */
+.trigger-form .recurrence-editor,
+.trigger-form .window-editor {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -805,7 +807,8 @@ td button + button {
   border-radius: 6px;
 }
 
-.trigger-form .recurrence-editor legend {
+.trigger-form .recurrence-editor legend,
+.trigger-form .window-editor legend {
   padding: 0 0.35rem;
   font-size: 0.85rem;
   color: var(--muted);
