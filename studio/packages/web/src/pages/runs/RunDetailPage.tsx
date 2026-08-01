@@ -1,11 +1,12 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
-import type { PipelineVersion, Run, RunLifecycleStatus } from '@autonomy-studio/shared';
+import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRun, getRunDetail } from '../../api/runs';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle, reconcileNodeActivity } from './runSummary';
 import { eventGloss, failureClass, formatClock, formatWhen } from './format';
 import { nodeStatusLabel } from './nodeStatus';
+import { runStatusLabel } from './runStatus';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
@@ -123,7 +124,32 @@ export function RunDetailPage({ runId }: { runId: string }) {
     () => nodes.find((n) => n.nodeId === openNodeId) ?? null,
     [nodes, openNodeId],
   );
-  const status: RunLifecycleStatus | string = lifecycle ?? run?.status ?? 'pending';
+  /* #870 — U25's split of authority, one level up: the ENGINE settles the RUN's
+     status too, wherever it has an opinion about this run.
+
+     The doc-free fold sees only run-level events, and that is not enough to
+     un-park correctly. `run.resumed` is appended ONLY by boot-reconcile and
+     lease-reclaim, so a run parked on a timer and resumed by `timer.due` reads
+     `waiting` in the fold while the row and the reducer have both moved on.
+     #870 taught the fold the reducer's remaining unpark events, which fixes that
+     for the fold's own case — but where the doc resolves there is no reason to
+     re-derive at all: `RunState` already carries `status` AND `waitingReason`,
+     computed by the same reducer the driver runs.
+
+     Gated on `lifecycle !== null` as well as `overlay.ready`, and that guard is
+     load-bearing. The engine's seed state is `pending` — a placeholder, not an
+     observation — so a run with no lifecycle event in its log yet would have its
+     row status MASKED by that seed, turning a `queued` run into a `pending` one
+     on the very page this ticket is making truthful. A null fold means no
+     run-level event has landed, which is exactly when the projection has no
+     opinion to prefer. */
+  const engineView = overlay.ready && lifecycle !== null ? overlay.state : null;
+  const status: RunStatus =
+    engineView?.status ?? lifecycle?.status ?? run?.status ?? 'pending';
+  /* The REST row carries no park reason (`RunSchema` has no such column), so
+     the fallback tail is `null` rather than a guess — a bare `waiting`, which is
+     what the runs list shows for the same run. */
+  const waitingReason = engineView?.waitingReason ?? lifecycle?.waitingReason ?? null;
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
@@ -146,7 +172,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
       </div>
 
       <p className="page-hint">
-        <span className={`run-status run-status-${status}`}>{status}</span>{' '}
+        <span className={`run-status run-status-${status}`}>
+          {runStatusLabel(status, waitingReason)}
+        </span>{' '}
         <span className={`stream-phase stream-phase-${stream.phase}`} role="status">
           {phaseLabel(stream.phase)}
         </span>

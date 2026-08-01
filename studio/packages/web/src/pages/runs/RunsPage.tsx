@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router';
 import { listRuns } from '../../api/runs';
 import { formatWhen } from './format';
 import { runDetailPath } from './runPath';
+import { runStatusLabel } from './runStatus';
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created by the
@@ -84,7 +85,17 @@ export function RunsPage() {
                   <code>{r.pipelineVersionId}</code>
                 </td>
                 <td>
-                  <span className={`run-status run-status-${r.status}`}>{r.status}</span>
+                  {/* #870 — the WORD comes from the Monitor's one run-status
+                      vocabulary; the CLASS still comes from the status itself,
+                      so the pill's hue and its label cannot drift apart (and
+                      `palette.test.ts` keeps a rule for every member). This list
+                      reads the DB row, which carries no park reason, so a parked
+                      run reads a bare `waiting` here and `waiting (timer)` on
+                      the detail page — one surface knowing more, not two
+                      disagreeing. */}
+                  <span className={`run-status run-status-${r.status}`}>
+                    {runStatusLabel(r.status)}
+                  </span>
                 </td>
                 <td>{formatWhen(r.startedAt)}</td>
                 <td>{formatWhen(r.finishedAt)}</td>

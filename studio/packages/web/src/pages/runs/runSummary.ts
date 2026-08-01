@@ -3,11 +3,13 @@ import {
   EngineEventSchema,
   parseInstanceKey,
   terminalStatusOf,
+  type EngineEvent,
   type FailureKind,
   type NodeRunStatus,
   type RunEvent,
   type RunLifecycleStatus,
   type RunState,
+  type WaitingReason,
 } from '@autonomy-studio/shared';
 
 /**
@@ -541,9 +543,48 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
 }
 
 /**
+ * #870 — the events that RESUME a parked run, other than the two this fold
+ * already handled. Kept in step with the reducer's own `UNPARK_EVENTS`
+ * (`reduce.ts`), from which it is copied minus `run.resumed` (handled above,
+ * unconditionally, to preserve the deliberate resume-after-terminal divergence
+ * pinned in this module's tests).
+ *
+ * `Set<RunEventType>` rather than a hand-written `||` chain so that the two
+ * sides are comparable by eye — this list is a MIRROR of engine behaviour, and
+ * the day the engine adds a fifth unpark event, the diff should be one line in
+ * an obviously-corresponding place. There is no compile-time link between them;
+ * `runSummary.test.ts` pins the correspondence instead.
+ */
+const UNPARK_EVENTS = new Set<EngineEvent['type']>([
+  'timer.due',
+  'externalWait.completed',
+  'externalWait.expired',
+]);
+
+/** The run's lifecycle status and, when it is parked, WHY. */
+export interface RunLifecycle {
+  status: RunLifecycleStatus;
+  /**
+   * Non-null only while `status === 'waiting'`. The reducer nulls it on every
+   * edge out of `waiting` (`unparkIfWaiting`) and this fold mirrors that, so a
+   * stale reason cannot survive an unpark and be rendered over a running run.
+   */
+  waitingReason: WaitingReason | null;
+}
+
+/**
  * The run's lifecycle status AS THE LOG SEES IT, or `null` if no lifecycle event
  * has landed yet (the caller then shows the run row's REST status). Later events
  * win, so a `run.finished` after `run.started` yields the terminal outcome.
+ *
+ * #870 — this is now the run detail page's FALLBACK, not its primary answer.
+ * Where the version doc resolves, the page reads the run's status and park
+ * reason off the ENGINE's projection instead, which is U25's settled split of
+ * authority applied one level up: the reducer sees the whole run, this fold sees
+ * only the run-level events. The fold is kept, and improved rather than
+ * simplified, because it is what still renders for a run whose version no longer
+ * resolves and while the stream is mid-replay — exactly the cases a broken run
+ * most needs reading. See `RunDetailPage`.
  *
  * The terminal events map through `terminalStatusOf` — the engine's SSOT (#443),
  * shared with the reducer and the boot reconciler, so this page and `runs.status`
@@ -556,8 +597,9 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
  * resume must never erase the terminal under it. Same mapping, different rule, by
  * intent.
  */
-export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | null {
+export function deriveRunLifecycle(events: RunEvent[]): RunLifecycle | null {
   let status: RunLifecycleStatus | null = null;
+  let waitingReason: WaitingReason | null = null;
   for (const row of events) {
     const parsed = EngineEventSchema.safeParse(row.payload);
     if (!parsed.success) continue;
@@ -565,17 +607,49 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycleStatus | nul
     const terminal = terminalStatusOf(e);
     if (terminal !== null) {
       status = terminal;
+      waitingReason = null;
     } else if (e.type === 'run.started' || e.type === 'run.resumed') {
       // A resume/(re)start tailing in shows the run running again — and CLEARS a
       // prior `waiting` (the live-view reverse edge, mirroring the reducer's
       // waiting→running un-park, wired in #619 as `unparkIfWaiting`).
       status = 'running';
+      waitingReason = null;
     } else if (e.type === 'run.waiting') {
       // #5 S3 — the run parked on an external event. Live VIEW: show it `waiting`
-      // (not the stale `running`) until a `run.started`/`run.resumed` returns it.
-      // Non-exhaustive if/else, so this case is added by hand (no compile guard).
-      status = 'waiting';
+      // (not the stale `running`) until an unpark returns it.
+      //
+      // #870 — GUARDED ON `running`, mirroring the reducer's own S3 status guard
+      // instead of taking the last `run.waiting` in the log. Three of the
+      // reducer's pinned behaviours fall out of that one condition, and
+      // last-wins would have broken the middle one: a `run.waiting` before
+      // `run.started` is ignored; a SECOND `run.waiting` on an already-parked
+      // run is ignored, so the FIRST reason stands (consecutive parks do occur
+      // in real logs — see `run-waiting-status.test.ts`); and a post-terminal
+      // one is ignored. Now that the reason is RENDERED, taking the wrong one
+      // would put a specific, confident, wrong noun on the screen.
+      if (status === 'running') {
+        status = 'waiting';
+        waitingReason = e.reason;
+      }
+    } else if (UNPARK_EVENTS.has(e.type)) {
+      // #870 — the REST of the reducer's unpark set. Without these the fold
+      // stayed `waiting` forever on the common path: `run.resumed` is appended
+      // only by boot-reconcile and lease-reclaim, so a run parked on a timer and
+      // resumed by `timer.due` kept a stale `waiting` here while the row and the
+      // reducer had both moved on. That was survivable while the word was bare;
+      // with a reason attached it becomes a confident lie — "waiting (timer)"
+      // over a running run — and the runs LIST, reading the row, would say
+      // `running` for that same run. Precisely the cross-surface drift #870
+      // exists to close.
+      //
+      // Conditional on `waiting`, exactly as `unparkIfWaiting` is: these are
+      // node-level facts that no-op on a run which is not parked, and must never
+      // resurrect a terminal one.
+      if (status === 'waiting') {
+        status = 'running';
+        waitingReason = null;
+      }
     }
   }
-  return status;
+  return status === null ? null : { status, waitingReason };
 }
