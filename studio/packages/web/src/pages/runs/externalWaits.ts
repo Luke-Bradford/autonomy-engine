@@ -66,7 +66,14 @@ export function describeCallbackBody(node: Node | null): string | null {
 
   const contract = outputContract(node);
   if (contract.kind === 'invalid') {
-    return 'This webhook’s declared output contract cannot be read, so the callback body cannot be described here.';
+    /* Stronger than "cannot be described", because the consequence is worse than
+       not knowing. `checkInboundOutputs` classifies a corrupt contract as a
+       `contract` failure — not caller-correctable — so the route answers 422 to
+       EVERY body, the node stays parked, and the wait runs out its expiry. The
+       callback URL below is revealed anyway (it is what an operator would quote in
+       a bug report), but telling them to go and try it would be sending them at a
+       door that cannot open. Only reachable on a pre-F13a row. */
+    return 'This webhook’s declared output contract cannot be read, so NO callback body will be accepted — every attempt is refused and the wait will expire. Re-author the node’s declared outputs to repair it.';
   }
   if (contract.kind === 'absent' || contract.outputs.length === 0) {
     /* `declared: []` is the LOWERED default for a webhook that declares nothing,
@@ -99,7 +106,13 @@ function nameList(outputs: ReadonlyArray<{ name: string; type: string }>): strin
  * retried webhook parks again under a NEW attempt — and `attemptId` alone is not
  * unique across nodes, so the key is the pair the correlation row itself is keyed
  * on (`(runId, nodeId, attemptId)`, minus the run this list already belongs to).
+ *
+ * JSON rather than a joined string, so the docblock above is actually true. Node
+ * ids are author-supplied and an imported doc can carry a separator character in
+ * one, which would let two distinct pairs collapse to one key — a React list key
+ * collision, and two waits rendering as one. Encoding removes the question instead
+ * of picking a character nobody will type.
  */
 export function waitKey(wait: Pick<PendingExternalWait, 'nodeId' | 'attemptId'>): string {
-  return `${wait.nodeId} ${wait.attemptId}`;
+  return JSON.stringify([wait.nodeId, wait.attemptId]);
 }

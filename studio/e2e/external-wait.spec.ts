@@ -19,6 +19,15 @@ import { fluentRootReady } from './support/theme';
  * resuming through the live tail. A spec that only asserted the URL was on screen
  * would pass just as happily on a URL that resumes nothing.
  *
+ * ONE known caveat, recorded rather than dropped. `playwright.config.ts` keeps a
+ * trace on failure, so a FAILING run's artifact carries both the revealed DOM text
+ * and the POST url — i.e. the capability token. It is accepted rather than worked
+ * around: the token is `HMAC(masterKey, …)` over the e2e master key, which is
+ * auto-generated per run into a throwaway `data/e2e` tree alongside the throwaway
+ * db, so the artifact holds a credential to a database that no longer exists.
+ * Suppressing it would mean not revealing the token in the spec, which is the
+ * behaviour under test.
+ *
  * The fixture is egress-free, `fireAndSettle`'s standing requirement: `webhook` is
  * a `kind:'control'` activity needing no connection and making no outbound call —
  * it parks on an alarm and waits. It is also why `fireManualTrigger` is the right

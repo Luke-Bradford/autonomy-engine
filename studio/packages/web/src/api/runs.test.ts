@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getRun, getRunEvents, listRuns } from './runs';
+import { getRun, getRunEvents, listExternalWaits, listRuns } from './runs';
 
 const sampleRun = {
   id: 'run_1',
@@ -49,6 +49,14 @@ function stubFetch(status: number, jsonBody: unknown) {
   return fetchMock;
 }
 
+/** One pending external wait, in the shape the route serves (#900). */
+const samplePendingWait = {
+  nodeId: 'approve',
+  attemptId: 'approve#0',
+  expiresAt: 1_700_000_900_000,
+  callbackPath: '/api/external-wait/tok_abc',
+};
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -92,5 +100,31 @@ describe('runs API', () => {
     const out = await getRunEvents('run_1');
     expect(out).toEqual([sampleEvent]);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/runs/run_1/events');
+  });
+
+  /* #900 — the pending external waits, and the callback path that resumes each. */
+
+  it('lists external waits and hits GET /api/runs/:id/external-waits (id encoded)', async () => {
+    const fetchMock = stubFetch(200, [samplePendingWait]);
+    const out = await listExternalWaits('run 1');
+    expect(out).toEqual([samplePendingWait]);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/runs/run%201/external-waits');
+  });
+
+  it('returns an empty list for a run that owes no callback', async () => {
+    // Not an error case: a run parked on a TIMER is equally `waiting` and has no
+    // pending wait, so `[]` must parse rather than throw.
+    stubFetch(200, []);
+    await expect(listExternalWaits('run_1')).resolves.toEqual([]);
+  });
+
+  it('applies the shared contract — a wait with no callbackPath rejects', async () => {
+    /* The field the whole surface exists to render. A server that dropped it must
+       fail loudly here, not leave the monitor showing a reveal button that reveals
+       nothing. */
+    const bad: Record<string, unknown> = { ...samplePendingWait };
+    delete bad.callbackPath;
+    stubFetch(200, [bad]);
+    await expect(listExternalWaits('run_1')).rejects.toThrow();
   });
 });

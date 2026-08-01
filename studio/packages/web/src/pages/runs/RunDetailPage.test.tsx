@@ -1593,12 +1593,28 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     expect(screen.queryByRole('button', { name: 'Show callback URL' })).not.toBeInTheDocument();
   });
 
-  it('distinguishes a settled wait from one still loading', async () => {
-    // Parked, but the list came back empty — the wait settled between the status
+  it('says it is still LOADING before the list arrives', async () => {
+    let release!: (waits: (typeof WAIT)[]) => void;
+    listExternalWaitsMock.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    await mountParked();
+    expect(await screen.findByText(/Loading the pending callbacks/)).toBeVisible();
+    // And it is genuinely a WAITING state, not the empty one wearing a spinner.
+    expect(screen.queryByText(/No callback is pending/)).not.toBeInTheDocument();
+    release([WAIT]);
+    expect(within(await pendingList()).getByText('Webhook (external wait) 1')).toBeVisible();
+  });
+
+  it('says a settled wait is settled, rather than loading forever', async () => {
+    // Parked, but the list came back EMPTY — the wait settled between the status
     // frame and this fetch. A spinner that never resolves would be a lie.
     listExternalWaitsMock.mockResolvedValue([]);
     await mountParked();
     expect(await screen.findByText(/No callback is pending/)).toBeVisible();
+    expect(screen.queryByText(/Loading the pending callbacks/)).not.toBeInTheDocument();
   });
 
   it('re-asks on a NEW park, so a second webhook never shows the first dead token', async () => {
@@ -1663,5 +1679,77 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     await vi.waitFor(() => expect(listExternalWaitsMock).toHaveBeenCalledTimes(2));
     await userEvent.click(await screen.findByRole('button', { name: 'Show callback URL' }));
     expect(screen.getByText(/tok_2/)).toBeInTheDocument();
+    // The title's actual claim: the FIRST park's token is gone, not merely that
+    // the second one arrived.
+    expect(screen.queryByText(/tok_abc/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The case a `created`-only tick could not see, and the reason the epoch counts
+   * settlements too.
+   *
+   * TWO webhooks parked at once — a fork, or a `foreach` webhook body. Completing
+   * one leaves the other parked, so the reducer answers `waiting_external` again
+   * and the run re-parks with NO new `externalWait.created`. A tick that counted
+   * only parks would not move, the list would never be re-asked, and the completed
+   * wait's dead token would stay on screen.
+   */
+  it('re-asks when one of TWO concurrent waits completes, dropping the dead one', async () => {
+    const second = { ...WAIT, nodeId: 'approve2', attemptId: 'approve2#0' };
+    listExternalWaitsMock.mockResolvedValue([WAIT, second]);
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'waiting' }),
+      pipelineVersion: approvalDoc(),
+    });
+    const bothParked = [
+      ...parkedOn('waiting_external'),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'run_1',
+        nodeId: 'approve',
+        attemptId: 'approve#0',
+        dueAt: WAIT.expiresAt,
+      }),
+      envelope({
+        type: 'externalWait.created',
+        runId: 'run_1',
+        nodeId: 'approve2',
+        attemptId: 'approve2#0',
+        dueAt: WAIT.expiresAt,
+      }),
+    ];
+    useRunStreamMock.mockReturnValue(stream({ events: bothParked }));
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await pendingList();
+    expect(listExternalWaitsMock).toHaveBeenCalledTimes(1);
+
+    // One completes. The run STAYS parked on the other — note there is no further
+    // `externalWait.created` in this batch, which is the whole point.
+    listExternalWaitsMock.mockResolvedValue([second]);
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          ...bothParked,
+          envelope({
+            type: 'externalWait.completed',
+            runId: 'run_1',
+            nodeId: 'approve',
+            previousAttemptId: 'approve#0',
+            outputs: {},
+          }),
+          envelope({ type: 'run.waiting', runId: 'run_1', reason: 'waiting_external' }),
+        ],
+      }),
+    );
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => expect(listExternalWaitsMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () =>
+      expect(within(await pendingList()).getAllByRole('listitem')).toHaveLength(1),
+    );
   });
 });

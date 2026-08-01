@@ -43,14 +43,22 @@ describe('PendingExternalWaitSchema', () => {
     expect(() => PendingExternalWaitSchema.parse({ ...WAIT, expiresAt: null })).toThrow();
   });
 
-  it('does not carry the stored token hash or the row status through', () => {
-    const parsed = PendingExternalWaitSchema.parse({
-      ...WAIT,
-      tokenHash: 'abc',
-      status: 'pending',
-    }) as Record<string, unknown>;
-    expect(parsed['tokenHash']).toBeUndefined();
-    expect(parsed['status']).toBeUndefined();
+  /* The projection's "the row's own fields never cross the wire" property is NOT
+     asserted here. A test that parsed `{...WAIT, tokenHash, status}` and found them
+     stripped would be asserting `z.object`'s behaviour, not this schema's — it
+     would pass just as happily on `z.object({})`. What actually pins it is the
+     exact key set of the REAL response, which only the route can produce; that
+     assertion lives in `server/src/routes/__tests__/external-wait.test.ts`. */
+
+  it.each([
+    ['negative', -1],
+    ['zero', 0],
+    ['fractional', 3.7],
+    ['NaN', Number.NaN],
+  ])('refuses a %s expiresAt', (_label, expiresAt) => {
+    // The docblock promises epoch ms. Without these the contract admits all four,
+    // and every reader has to re-assert the range to get back what it was told.
+    expect(() => PendingExternalWaitSchema.parse({ ...WAIT, expiresAt })).toThrow();
   });
 });
 

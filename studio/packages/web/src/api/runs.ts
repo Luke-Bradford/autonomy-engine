@@ -120,7 +120,9 @@ export function listExternalWaits(
  * exactly the cure for the objection above. Matching that is ~2 lines in shared
  * plus a `satisfies` on the route, and it is deferred here only to keep this
  * change client-only, because the argument for building it at all rests on
- * touching no server code. Worth doing the next time that route is opened.
+ * touching no server code. Worth doing the next time that route is opened —
+ * tracked as **#899**, and already done for the external-waits route above
+ * (`PendingExternalWaitSchema`), which is what that fix looks like.
  */
 const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
 

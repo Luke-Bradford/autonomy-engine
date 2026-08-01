@@ -2,10 +2,10 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { TERMINAL_RUN_STATUS } from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import type { PendingExternalWait } from '@autonomy-studio/shared';
-import { getRun, getRunDetail, listExternalWaits, rerunFromFailed } from '../../api/runs';
+import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
 import { messageOf } from '../../api/client';
-import { describeCallbackBody, owesCallback, parkedDocNode, waitKey } from './externalWaits';
+import { owesCallback } from './externalWaits';
+import { PendingCallbacks } from './PendingCallbacks';
 import { canRerunFromFailed, RERUN_COST_WARNING } from './rerunAction';
 import { runDetailPath } from './runPath';
 import { useRunStream, type StreamPhase } from './useRunStream';
@@ -268,72 +268,48 @@ export function RunDetailPage({ runId }: { runId: string }) {
      `run.rerunOf` inside a callback would not stay narrowed. */
   const rerunOf = run?.rerunOf ?? null;
 
-  /* #900 — the run's PENDING external waits, and the callback path that resumes
-     each. The producer has been here since A13 and had no client at all, so a run
-     parked on a human-approval webhook was a dead end: the monitor said `waiting
-     (callback)` and offered no way to find out WHERE that callback goes.
+  /* #900 — whether this run owes an inbound callback, and a tick that changes
+     whenever the set of pending ones does.
 
      Gated on the waiting REASON, not the bare `waiting` status. A `wait`-timer park
      is equally `waiting` and owes no callback, so the status alone would fire a
      request on every timer park and then render an empty section under a heading
      claiming a callback is owed. The reducer gives `waiting_external` precedence
-     when a run is parked on both, so the reason loses no case.
-
-     `null` is NOT-YET-LOADED and `[]` is loaded-and-empty; they read differently
-     below, because a genuinely empty list while parked means the wait settled
-     between the status frame and this fetch — a real race worth saying out loud
-     rather than rendering as a spinner that never resolves. */
+     when a run is parked on both, so the reason loses no case. */
   const parkedOnCallback = owesCallback(waitingReason);
 
-  /* Why an EPOCH and not just `parkedOnCallback`: a run with two webhook nodes in
-     sequence completes one and parks on the next, and those frames can arrive in a
-     single stream batch. React would then never render the un-parked state in
-     between, the effect would not re-run, and the section would keep displaying the
-     FIRST wait's now-dead token. Counting `externalWait.created` gives one
-     monotonic tick per park, which no batching can collapse.
+  /* The tick counts EVERY event that changes the pending set — created, completed
+     AND expired — and all three are load-bearing. It is the `key` of the section
+     below, so a change to it REMOUNTS that component: fresh list, cleared error,
+     and no revealed token surviving the wait it belonged to.
+
+     Counting only `created` was the first cut, and it was wrong. Two webhooks in
+     SEQUENCE is the easy case it did handle: one completes and the next parks, and
+     those frames can arrive in one stream batch, so React may never render the
+     un-parked state in between and a `parkedOnCallback` dep alone would not
+     re-fire. Two webhooks in PARALLEL is the case it could not see at all — a fork,
+     or a `foreach` webhook body, which this surface explicitly supports. Completing
+     one leaves the OTHER parked, so `parkReason` answers `waiting_external` again
+     and the run re-parks with NO new `externalWait.created`: the tick would not
+     move, the list would never be re-asked, and the completed wait's dead token
+     would stay on screen — the exact failure the tick exists to prevent.
 
      A fourth walk of the log on this page (#849 — it already folds three times a
      frame); this one is a bare counter rather than a fold, and it rides the same
      memoized `stream.events`. It belongs in #849's consolidation, not ahead of it. */
-  const parkEpoch = useMemo(
-    () => stream.events.reduce((n, e) => (e.type === 'externalWait.created' ? n + 1 : n), 0),
+  const waitEpoch = useMemo(
+    () =>
+      stream.events.reduce(
+        (n, e) =>
+          e.type === 'externalWait.created' ||
+          e.type === 'externalWait.completed' ||
+          e.type === 'externalWait.expired'
+            ? n + 1
+            : n,
+        0,
+      ),
     [stream.events],
   );
-
-  /* The fetched list, STAMPED with the park it describes. Stamped rather than
-     cleared, because clearing means writing state from the effect body on every
-     un-park, and a synchronous setState in an effect is a cascading render (the
-     `react-hooks/set-state-in-effect` rule). Freshness is a comparison instead:
-     a list stamped with a previous park simply is not this park's, so it never
-     renders. Same argument for the reveal below, whose key carries the epoch —
-     a token revealed under one park cannot survive into the next. */
-  const [waitsState, setWaitsState] = useState<{
-    epoch: number;
-    waits: PendingExternalWait[];
-    error: string | null;
-  } | null>(null);
-  const [revealedWait, setRevealedWait] = useState<string | null>(null);
-  const fresh = waitsState !== null && waitsState.epoch === parkEpoch ? waitsState : null;
-  const waits = fresh?.waits ?? null;
-  const waitsError = fresh?.error ?? null;
-
-  useEffect(() => {
-    if (!parkedOnCallback) return;
-    const ac = new AbortController();
-    listExternalWaits(runId, ac.signal).then(
-      (pending) => {
-        if (!ac.signal.aborted) setWaitsState({ epoch: parkEpoch, waits: pending, error: null });
-      },
-      (err: unknown) => {
-        /* Shown, never swallowed. Without this the section's absence would be
-           indistinguishable from "this run owes no callback" — the failure would
-           read as a fact about the run. */
-        if (!ac.signal.aborted)
-          setWaitsState({ epoch: parkEpoch, waits: [], error: messageOf(err) });
-      },
-    );
-    return () => ac.abort();
-  }, [runId, parkedOnCallback, parkEpoch]);
 
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
@@ -435,97 +411,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
       )}
 
       {/* #900 — the parked-on-a-callback surface. Rendered only for an EXTERNAL
-          park, so it never appears over a timer wait. */}
+          park, so it never appears over a timer wait, and KEYED on the wait epoch
+          so any change to the pending set remounts it (see `waitEpoch` above —
+          that key is the component's entire freshness model). */}
       {parkedOnCallback && (
-        <>
-          <h3>Waiting on a callback</h3>
-          <p className="page-hint">
-            This run is parked until an inbound callback resumes it. Until then nothing below
-            advances; if no callback arrives the wait expires and the node fails, which is the path
-            its <code>failure</code> edge takes.
-          </p>
-
-          {waitsError !== null && (
-            <p role="alert" className="error">
-              The pending callbacks could not be loaded, so none are listed: {waitsError}
-            </p>
-          )}
-
-          {waits === null && waitsError === null && <p>Loading the pending callbacks…</p>}
-
-          {waits !== null && waits.length === 0 && waitsError === null && (
-            <p>No callback is pending. The run may have just been resumed.</p>
-          )}
-
-          {waits !== null && waits.length > 0 && (
-            <ul className="external-waits" aria-label="Pending callbacks">
-              {waits.map((wait) => {
-                /* Epoch-scoped, so a reveal cannot outlive the park it belongs
-                   to: after the run re-parks, that token is dead and a POST to it
-                   could only come back as the route's indistinguishable 404. */
-                const key = `${parkEpoch} ${waitKey(wait)}`;
-                /* The parked id is an INSTANCE key inside a parallel foreach
-                   (`w@1`), so it is resolved to its doc node before being named —
-                   `nameOf` is keyed on doc ids and would otherwise draw a blank on
-                   exactly the node the operator is being asked to unpark. */
-                const docNode = parkedDocNode(doc, wait.nodeId);
-                const name = docNode === null ? null : nameOf(docNode.id);
-                /* Shown ONLY when it says something the name cannot: which foreach
-                   instance parked. On an ordinary node it is the same node twice,
-                   and on a canvas-authored one it is a raw `n_<uuid>` — the noise
-                   #884 removed from the validator's messages. */
-                const instance =
-                  docNode !== null && docNode.id !== wait.nodeId ? wait.nodeId : null;
-                const bodyHint = describeCallbackBody(docNode);
-                return (
-                  <li key={key}>
-                    <p>
-                      <strong>{name ?? wait.nodeId}</strong>
-                      {instance !== null && (
-                        <>
-                          {' · instance '}
-                          <code>{instance}</code>
-                        </>
-                      )}
-                      {' · expires '}
-                      {formatWhen(wait.expiresAt)}
-                    </p>
-                    {bodyHint !== null && <p className="page-hint">{bodyHint}</p>}
-                    {revealedWait === key ? (
-                      /* Reveal-on-demand, matching the webhook-secret block on the
-                         triggers page — for the same reason and not merely for
-                         consistency. The path carries a derived capability token:
-                         holding it IS the authorization to complete this wait, so
-                         it is a live credential and does not belong on screen (or
-                         in a screen-share) unless it was asked for.
-
-                         Deliberately TEXT and not an `<a href>`: this is a POST
-                         target, a link would navigate somewhere useless, and a
-                         link would leak the token to any external navigation
-                         through the Referer header. */
-                      <div role="status" className="secret-reveal">
-                        <p>
-                          POST to this path to resume the run. Anyone holding it can complete this
-                          wait, so treat it as a secret — it is not an identifier.
-                        </p>
-                        <p>
-                          <code>POST {wait.callbackPath}</code>
-                        </p>
-                        <button type="button" onClick={() => setRevealedWait(null)}>
-                          Hide callback URL
-                        </button>
-                      </div>
-                    ) : (
-                      <button type="button" onClick={() => setRevealedWait(key)}>
-                        Show callback URL
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </>
+        <PendingCallbacks key={waitEpoch} runId={runId} doc={doc} nameOf={nameOf} />
       )}
 
       <h3>Graph</h3>

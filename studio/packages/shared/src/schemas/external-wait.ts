@@ -44,13 +44,18 @@ export type ExternalWaitStatus = z.infer<typeof ExternalWaitStatusSchema>;
  *
  * `nodeId` is the PARKED node's id, which for a parallel `foreach` body is an instance
  * key (`w@1`), not a doc id — resolve it through `resolveDocNode`/`docNodeIdOf` before
- * looking it up in a pipeline doc. `expiresAt` is epoch ms and never null: A13 requires
- * a webhook's timeout, so a parked wait always has a live expiry alarm.
+ * looking it up in a pipeline doc.
+ *
+ * `expiresAt` is epoch ms and never null: A13 requires a webhook's timeout, so a parked
+ * wait always has a live expiry alarm. Constrained to a positive INTEGER rather than a
+ * bare number, so the schema says what that paragraph says — a bare `z.number()` admits
+ * `-1`, `3.7` and `NaN`, and a reader would then have to re-assert the range at every
+ * call site to get back what the contract was supposed to have guaranteed.
  */
 export const PendingExternalWaitSchema = z.object({
   nodeId: z.string().min(1),
   attemptId: z.string().min(1),
-  expiresAt: z.number(),
+  expiresAt: z.number().int().positive(),
   callbackPath: z.string().min(1),
 });
 export type PendingExternalWait = z.infer<typeof PendingExternalWaitSchema>;
