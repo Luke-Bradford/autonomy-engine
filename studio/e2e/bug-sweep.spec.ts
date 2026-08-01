@@ -151,7 +151,7 @@ test.describe('#483 held/parked node pills', () => {
    *
    * THE ASSERTION THAT MATTERS is that each pill resolves to the token it is
    * SUPPOSED to paint. An earlier cut of this spec only asserted "opaque, ≥4.5:1,
-   * and the two differ", and it passed with `.node-status-retrying` DELETED —
+   * and the two differ", and it passed with the retry pill's rule DELETED —
    * `color` is an inherited property, so an unmatched class quietly computes to
    * the body's `--text` (15.4:1, and a different string from `--muted`), and all
    * three assertions held. Verified by deleting the rule and watching it stay
