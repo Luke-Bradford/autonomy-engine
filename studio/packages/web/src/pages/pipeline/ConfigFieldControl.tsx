@@ -131,8 +131,19 @@ export function ConfigFieldControl({
         />
       </label>
       {/* A SIBLING of the label, not a child: a button inside a `<label>` still
-          triggers the label's focus behaviour, which would fight the picker. */}
-      {picker && (
+          triggers the label's focus behaviour, which would fight the picker.
+
+          NOT offered on a `json` field, and that is a refusal rather than an
+          oversight. A `json` control parses its text with `JSON.parse` on apply
+          (`configForm.parseFieldInput`), so a bare `${...}` — which is what the
+          engine wants stored, and what every other field takes — is not valid
+          JSON and the apply would simply fail. Inserting the QUOTED form instead
+          would be right at a value slot and wrong inside an existing string
+          literal, a distinction only a JSON-aware caret could make. So the
+          control is withheld rather than made to offer a dead end; the four
+          `llm_call` fields this most affects are getting richer editors under
+          #852, and the expression half is noted in #864. */}
+      {picker && field.kind !== 'json' && (
         <ExpressionPicker
           fieldName={field.name}
           suggestions={picker.suggestions}

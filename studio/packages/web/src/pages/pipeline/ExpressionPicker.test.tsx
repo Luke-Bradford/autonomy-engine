@@ -135,6 +135,17 @@ describe('ExpressionPicker in NodePanel', () => {
     expect(ui.storedConfig()['url']).toBe('');
   });
 
+  it('withholds the control on a JSON field, which could not apply the insert', () => {
+    // A `json` control parses its text with `JSON.parse` on apply, so a bare
+    // `${...}` is not applicable there at all — offering the picker would be a
+    // dead end rather than an affordance.
+    const ui = mount([FETCH, CALL], CHAIN, [], 'call');
+    expect(screen.getByRole('button', { name: 'Insert reference into url' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Insert reference into headers' })).toBeNull();
+    // The json field itself is still rendered — this is about the picker only.
+    expect(screen.getByRole('textbox', { name: /headers/ })).toBeTruthy();
+  });
+
   it('keeps the control alive for the FIRST node, which has no upstream at all', () => {
     // `fetch` runs first: no upstream producer, no params — but `run`/`trigger`
     // are always available, so the control must still be there. The empty case
