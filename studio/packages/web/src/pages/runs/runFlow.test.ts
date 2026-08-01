@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { RunState } from '@autonomy-studio/shared';
+import { ContainerRunStatusSchema, type RunState } from '@autonomy-studio/shared';
+import { containerStatusLabel } from './nodeStatus';
 import { projectRun } from './runProjection';
 import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
 
@@ -141,16 +142,39 @@ describe('runFlowNodes', () => {
     expect(nodes[0]!.width!).toBeGreaterThan(240);
   });
 
-  it('carries a container’s own status and round', () => {
+  it('carries a container’s own status — WORDED — and its round', () => {
     const state: RunState = {
       ...projected(),
       containers: { stg: { status: 'active', round: 2, outputs: {} } },
     };
     const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
-    expect(box.data.status).toBe('active');
+    /* #873 — these four assertions INVERT what they pinned before, which is the
+       point: this test was the only thing holding the raw identifier on screen.
+       `active` is the container's `dispatched`, so the box now says the word the
+       node and the run already said, and the engine's identifier reaches
+       neither the label nor the accessible name. */
+    expect(box.data.status).toBe('running');
+    expect(box.data.status).not.toBe('active');
+    expect(box.ariaLabel).toContain('running');
+    expect(box.ariaLabel).not.toContain('active');
+    // The TONE still comes off the RAW status — wording the label must not
+    // reach the hue, which `palette.test.ts` enumerates by tone.
     expect(box.data.tone).toBe('running');
     expect(box.data.round).toBe(2);
-    expect(box.ariaLabel).toContain('active');
+  });
+
+  it('words a container status the same way the shared map does, for every member', () => {
+    // Guards the SEAM rather than one status: a projection that worded `active`
+    // by hand and passed the rest through would satisfy the test above.
+    for (const status of ContainerRunStatusSchema.options) {
+      const state: RunState = {
+        ...projected(),
+        containers: { stg: { status, round: 0, outputs: {} } },
+      };
+      const box = runFlowNodes(CONTAINER_DOC, state)[0]!;
+      expect(box.data.status).toBe(containerStatusLabel(status));
+      expect(box.ariaLabel).toContain(containerStatusLabel(status));
+    }
   });
 });
 

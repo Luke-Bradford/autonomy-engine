@@ -1,8 +1,12 @@
 import type { ContainerRunStatus, NodeRunStatus } from '@autonomy-studio/shared';
 
 /**
- * U25 — the Monitor's ONE node-status vocabulary: the engine's own
- * `NodeRunStatus`, plus how to draw it and how to word it.
+ * U25 — the Monitor's ONE graph vocabulary: the engine's own `NodeRunStatus`
+ * and `ContainerRunStatus`, plus how to draw each and how to word each.
+ *
+ * (The first sentence said "node-status" and named only `NodeRunStatus` until
+ * #873, while the file had held `CONTAINER_TONES` since U11 — the drift that
+ * let the container half ship a tone with no label for two tickets.)
  *
  * Before this module the run detail page answered the same question twice, in
  * two vocabularies. The graph folded the real reducer (10 statuses) while the
@@ -139,4 +143,40 @@ const NODE_STATUS_LABELS: Record<NodeRunStatus, string> = {
 
 export function nodeStatusLabel(status: NodeRunStatus): string {
   return NODE_STATUS_LABELS[status];
+}
+
+/**
+ * What an OPERATOR is told a CONTAINER is doing — the last surface still
+ * printing an engine identifier (#873), and the third and final level of the
+ * same reconciliation U25 did for nodes and #870 did for runs.
+ *
+ * Four of the five follow rule 1 above and keep their own identifiers. The one
+ * that changes is `active`, and the argument for it is CROSS-LEVEL rather than
+ * rule 2 alone. Rule 2 says the engine's word names the engine's act, which is
+ * true here — `active` is a container's `dispatched`. But `active` is not
+ * jargon the way `dispatched` is, so on its own that reads like a preference.
+ * The fact that settles it: a node already says "running" (`dispatched` above)
+ * and a run already says "running" (`runStatus.ts`), so a container saying
+ * "active" put a THIRD word for "this is live" on one page, for the identical
+ * idea, at the one level between the two that already agreed.
+ *
+ * The honest limit, stated here so the graph is not read as claiming more than
+ * it knows: `active` covers "live, but every child is parked". A node
+ * distinguishes its three parks by status; `ContainerRunStatusSchema` has no
+ * park member, so a container structurally cannot, and a stage reading
+ * "running" directly above a child reading "waiting (timer)" is correct rather
+ * than contradictory — the box IS live, and what it is waiting on is the
+ * child's fact to state. Inventing a container park word here would be a
+ * vocabulary the engine cannot back.
+ */
+const CONTAINER_STATUS_LABELS: Record<ContainerRunStatus, string> = {
+  pending: 'pending',
+  active: 'running',
+  success: 'success',
+  failure: 'failure',
+  skipped: 'skipped',
+};
+
+export function containerStatusLabel(status: ContainerRunStatus): string {
+  return CONTAINER_STATUS_LABELS[status];
 }

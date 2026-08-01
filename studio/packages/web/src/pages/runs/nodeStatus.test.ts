@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ContainerRunStatusSchema, NodeRunStatusSchema } from '@autonomy-studio/shared';
-import { containerStatusTone, nodeStatusLabel, nodeStatusTone } from './nodeStatus';
+import {
+  containerStatusLabel,
+  containerStatusTone,
+  nodeStatusLabel,
+  nodeStatusTone,
+} from './nodeStatus';
 
 describe('status tones', () => {
   it('maps every engine node status — no status is left without a tone', () => {
@@ -65,6 +70,41 @@ describe('nodeStatusLabel', () => {
 
   it('words no two statuses the same — a label an operator cannot invert is not a label', () => {
     const labels = NodeRunStatusSchema.options.map((s) => nodeStatusLabel(s));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+});
+
+describe('containerStatusLabel', () => {
+  it('words every engine container status — none reaches the screen as an identifier', () => {
+    for (const status of ContainerRunStatusSchema.options) {
+      const label = containerStatusLabel(status);
+      expect(label).toBeTruthy();
+      expect(label).not.toContain('_');
+    }
+  });
+
+  it('calls a live container "running", the same word the node and the run use', () => {
+    // THE member this map exists for, and the only one whose label differs from
+    // its identifier — so a test that did not name `active` would pass with the
+    // wording reverted.
+    expect(containerStatusLabel('active')).toBe('running');
+    // The defect, stated as an assertion: `active` is the engine's word for its
+    // own act, and it was a THIRD word for "this is live" on a page that already
+    // says "running" at node level and at run level.
+    expect(containerStatusLabel('active')).toBe(nodeStatusLabel('dispatched'));
+    expect(containerStatusLabel('active')).not.toBe('active');
+  });
+
+  it('leaves the four statuses that already read as English alone', () => {
+    // U25 rule 1 — inventing synonyms for these would be the second vocabulary
+    // this module exists to end.
+    for (const status of ['pending', 'success', 'failure', 'skipped'] as const) {
+      expect(containerStatusLabel(status)).toBe(status);
+    }
+  });
+
+  it('words no two container statuses the same', () => {
+    const labels = ContainerRunStatusSchema.options.map((s) => containerStatusLabel(s));
     expect(new Set(labels).size).toBe(labels.length);
   });
 });

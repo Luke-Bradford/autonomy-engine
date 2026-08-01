@@ -9,6 +9,7 @@ import {
 } from '../pipeline/containerLayout';
 import { toFlowEdge } from '../pipeline/edgeCondition';
 import {
+  containerStatusLabel,
   containerStatusTone,
   nodeStatusLabel,
   nodeStatusTone,
@@ -42,6 +43,13 @@ export interface RunNodeData extends Record<string, unknown> {
 
 export interface RunContainerData extends Record<string, unknown> {
   kind: PipelineVersion['containers'][number]['kind'];
+  /**
+   * AS WORDED FOR AN OPERATOR, the same commitment `RunNodeData.status` above
+   * makes, and `string` rather than `ContainerRunStatus` for the same reason:
+   * the engine's identifier is not what reaches the screen. Until #873 the
+   * container half passed the identifier straight through — the widened type
+   * was already promising a wording that no producer performed.
+   */
   status: string | null;
   tone: StatusTone | null;
   /** A container's own progress; `null` until it has started. */
@@ -105,6 +113,11 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
     const rect = rects.get(c.id)!;
     const cs = state?.containers[c.id] ?? null;
     const status = cs?.status ?? null;
+    /* #873 — worded HERE, not at the render site the ticket suggested, so the
+       box and its accessible name below cannot come to disagree, and so nothing
+       has to cast `data.status` back to `ContainerRunStatus` to word it. Same
+       shape as the activity branch above; the TONE still reads the raw status. */
+    const label = status === null ? null : containerStatusLabel(status);
     return {
       id: c.id,
       type: 'runContainer',
@@ -123,12 +136,12 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       connectable: false,
       data: {
         kind: c.kind,
-        status,
+        status: label,
         tone: status === null ? null : containerStatusTone(status),
         round: cs?.round ?? null,
       } satisfies RunContainerData,
       ariaRole: 'group',
-      ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${status ?? NO_STATUS_LABEL}`,
+      ariaLabel: `${containerAriaLabel(c.kind, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
     };
   });
 
