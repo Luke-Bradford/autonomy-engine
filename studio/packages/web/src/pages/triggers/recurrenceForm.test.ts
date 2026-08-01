@@ -5,15 +5,13 @@ import {
   cronPreview,
   formToRecurrence,
   formatNumberList,
-  localInputToUtcIso,
   parseNumberList,
   pruneForFrequency,
   recurrenceToForm,
-  resolveBound,
-  utcIsoToLocalInput,
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
+import { localInputToUtcIso, resolveBound, utcIsoToLocalInput } from './formFields';
 
 /** A form in the state the editor would be in after the operator filled it. */
 function form(over: Partial<RecurrenceFormState> = {}): RecurrenceFormState {

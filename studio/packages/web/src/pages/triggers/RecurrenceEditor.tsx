@@ -10,10 +10,10 @@ import {
   cronPreview,
   formToRecurrence,
   pruneForFrequency,
-  resolveBound,
   WEEK_DAY_NAMES,
   type RecurrenceFormState,
 } from './recurrenceForm';
+import { boundEcho } from './formFields';
 
 const FREQUENCIES = RecurrenceFrequencySchema.options;
 
@@ -66,11 +66,9 @@ export function RecurrenceEditor({
 
   /** The absolute instants the bounds resolve to, echoed so the browser-local
    * anchoring of the controls is visible rather than implied. Resolved through
-   * the same `resolveBound` the write path uses, so an untouched sub-second
-   * bound is echoed as the instant that will actually be submitted rather than
-   * as the truncated re-derivation. */
-  const boundEcho = (local: string, originalIso: string): string | null =>
-    local.trim() === '' ? null : resolveBound(local, originalIso);
+   * the same path the write uses, so an untouched sub-second bound is echoed as
+   * the instant that will actually be submitted rather than as the truncated
+   * re-derivation. */
   const startUtc = boundEcho(value.startTime, value.startTimeIso);
   const endUtc = boundEcho(value.endTime, value.endTimeIso);
 

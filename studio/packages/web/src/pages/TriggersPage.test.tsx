@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
@@ -502,5 +502,276 @@ describe('TriggersPage', () => {
 
     expect(router.state.location.pathname).toBe('/monitor/runs/run_9');
     expect(await screen.findByRole('heading', { name: /run_9/ })).toBeInTheDocument();
+  });
+});
+
+describe('#854 — the trigger modes that had no config UI', () => {
+  it('authors an event subscription and enables the trigger', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'On order');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'event');
+    await user.type(form.getByLabelText('Event name'), 'order.placed');
+    await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const body = createMock.mock.calls[0]![0];
+    expect(body.mode).toBe('event');
+    expect(body.event).toEqual({ name: 'order.placed' });
+  });
+
+  it('refuses to enable an event trigger that has no subscription', async () => {
+    // Mirrors `assertEventConsistent`, which refuses exactly this — the form
+    // says so before the round trip rather than surfacing a raw 400.
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Nameless');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'event');
+    await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(await form.findByRole('alert')).toHaveTextContent(/must carry an event name/i);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('authors a tumbling window, and settles concurrency on the only legal policy', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Hourly windows');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'tumbling');
+
+    // `assertWindowConsistent` refuses a tumbling trigger on any other policy,
+    // so the control is settled rather than left to be rejected at save.
+    expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
+    expect(form.getByLabelText('Concurrency')).toBeDisabled();
+
+    await user.selectOptions(form.getByLabelText('Window frequency'), 'hour');
+    await user.type(form.getByLabelText(/Each window covers/i), '2');
+    fireEvent.change(form.getByLabelText(/^Start time/i), {
+      target: { value: '2026-08-01T09:00' },
+    });
+    await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const body = createMock.mock.calls[0]![0];
+    expect(body.mode).toBe('tumbling');
+    expect(body.concurrency).toEqual({ policy: 'queue' });
+    expect(body.window).toEqual({
+      frequency: 'hour',
+      interval: 2,
+      startTime: new Date('2026-08-01T09:00').toISOString(),
+    });
+  });
+
+  it('refuses to enable a tumbling trigger that has no window', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Windowless');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'tumbling');
+    await user.click(form.getByRole('checkbox', { name: /Enabled/i }));
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(await form.findByRole('alert')).toHaveTextContent(/must carry a window/i);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('clears the window when a tumbling trigger is switched to another mode', async () => {
+    // THE defect this ticket closes. On a PATCH an omitted key means
+    // "untouched", so a trigger switched out of tumbling kept its `window` and
+    // `assertWindowConsistent` refused every subsequent save — the trigger was
+    // stuck in a mode the UI could not leave.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Windowed',
+        mode: 'tumbling',
+        schedule: null,
+        concurrency: { policy: 'queue' },
+        window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0]![1].window).toBeNull();
+  });
+
+  it('clears the subscription when an event trigger is switched to another mode', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Subscribed',
+        mode: 'event',
+        schedule: null,
+        enabled: false,
+        event: { name: 'order.placed' },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.selectOptions(form.getByLabelText('Mode'), 'manual');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0]![1].event).toBeNull();
+  });
+
+  it('preserves a window sub-object it has no control for through an unrelated edit', async () => {
+    // The editor ships geometry + bounds only. Renaming a trigger whose window
+    // carries an API-authored retry policy must not truncate it.
+    const user = userEvent.setup();
+    const window = {
+      frequency: 'hour' as const,
+      interval: 1,
+      startTime: '2026-08-01T08:00:00.000Z',
+      retry: { count: 3, intervalInSeconds: 60 },
+    };
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Retrying',
+        mode: 'tumbling',
+        schedule: null,
+        concurrency: { policy: 'queue' },
+        window,
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(form.getByTestId('window-preserved')).toHaveTextContent(/retry policy/i);
+    await user.type(form.getByLabelText('Name'), ' renamed');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    expect(updateMock.mock.calls[0]![1].window).toEqual(window);
+  });
+
+  it('says plainly that a continuous trigger is never dispatched', async () => {
+    // Nothing in the server branches on `continuous` — it can only be fired by
+    // hand. The control keeps offering the mode (the API and the DB CHECK both
+    // accept it) but stops implying it will do something.
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.selectOptions(form.getByLabelText('Mode'), 'continuous');
+    expect(form.getByText(/not dispatched yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('#854 review follow-ups', () => {
+  it('repairs a stored tumbling trigger whose concurrency policy is illegal', () => {
+    // The Concurrency select is DISABLED under tumbling, so the LOAD path has to
+    // settle the same invariant the mode-switch path does. A non-`queue`
+    // tumbling row is reachable: the import and workspace-apply write paths
+    // preserve `concurrency` verbatim and never run `assertWindowConsistent`.
+    // Without the settle, editing one pins a disabled control on a value the
+    // server refuses — every save 400s and the control that could fix it is off.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Imported windows',
+        mode: 'tumbling',
+        schedule: null,
+        enabled: false,
+        concurrency: { policy: 'parallel', max: 2 },
+        window: { frequency: 'hour', interval: 1, startTime: '2026-08-01T08:00:00.000Z' },
+      }),
+    ]);
+    return (async () => {
+      renderWithRouter(<TriggersPage />);
+      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+      expect(form.getByLabelText('Concurrency')).toHaveValue('queue');
+      // The `parallel`-only control is gone with it, so no orphan `max` survives
+      // (`ConcurrencyWriteSchema` forbids `max` off `parallel`).
+      expect(form.queryByLabelText(/Max parallel runs/i)).toBeNull();
+
+      await user.click(form.getByRole('button', { name: /Save changes/i }));
+      await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+      expect(updateMock.mock.calls[0]![1].concurrency).toEqual({ policy: 'queue' });
+    })();
+  });
+
+  it('echoes the epoch a save will actually write, not a re-derived one', () => {
+    // A `datetime-local` holds no sub-seconds. If the echo re-derived the
+    // instant from the control it would advertise a DIFFERENT instant from the
+    // one submitted — and `startTime` is the window epoch, so a silent shift
+    // re-keys every window boundary the trigger ever computes.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Sub-second epoch',
+        mode: 'tumbling',
+        schedule: null,
+        enabled: false,
+        concurrency: { policy: 'queue' },
+        window: { frequency: 'minute', interval: 15, startTime: '2026-08-01T08:00:30.500Z' },
+      }),
+    ]);
+    return (async () => {
+      renderWithRouter(<TriggersPage />);
+      await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+      const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+      expect(form.getByTestId('window-bounds-utc')).toHaveTextContent('2026-08-01T08:00:30.500Z');
+    })();
+  });
+
+  it('names the subscription config it is carrying but cannot show', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Filtered',
+        mode: 'event',
+        schedule: null,
+        enabled: false,
+        event: { name: 'order.placed', filter: { region: 'eu' }, source: 'checkout' },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(form.getByTestId('event-preserved')).toHaveTextContent('filter, source');
+  });
+
+  it('refuses to clear a subscription name that is guarding other config', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Filtered',
+        mode: 'event',
+        schedule: null,
+        enabled: false,
+        event: { name: 'order.placed', filter: { region: 'eu' } },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.clear(form.getByLabelText('Event name'));
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    expect(await form.findByRole('alert')).toHaveTextContent(/would discard/i);
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
