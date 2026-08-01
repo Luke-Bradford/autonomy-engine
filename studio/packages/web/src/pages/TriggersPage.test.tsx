@@ -157,7 +157,7 @@ describe('TriggersPage', () => {
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
   });
 
-  it('creates a schedule trigger bound to a pipeline version', async () => {
+  it('creates a schedule trigger from a raw cron, via the escape-hatch mode', async () => {
     const user = userEvent.setup();
     renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /New trigger/i }));
@@ -167,7 +167,10 @@ describe('TriggersPage', () => {
     await user.type(form.getByLabelText('Name'), 'Nightly');
     await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
     await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
-    await user.type(form.getByLabelText(/Schedule/i), '0 2 * * *');
+    // #439 U14b — a new schedule trigger now opens on the RECURRENCE builder;
+    // the raw cron is the deliberate escape hatch behind this toggle.
+    await user.selectOptions(form.getByLabelText(/Schedule authored as/i), 'cron');
+    await user.type(form.getByLabelText(/Schedule \(cron\)/i), '0 2 * * *');
 
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
 
@@ -177,6 +180,177 @@ describe('TriggersPage', () => {
     expect(body.pipelineVersionId).toBe('plv_1');
     expect(body.mode).toBe('schedule');
     expect(body.schedule).toBe('0 2 * * *');
+    // The unselected side must be an EXPLICIT null, not omitted: on a PATCH an
+    // omitted `recurrence` means "untouched", which would leave a stale one in
+    // place and be refused by `assertRecurrenceConsistent`.
+    expect(body.recurrence).toBeNull();
+  });
+
+  it('creates a schedule trigger from the structured recurrence builder', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+
+    const formEl = screen.getByRole('form', { name: /Trigger form/i });
+    const form = within(formEl);
+    await user.type(form.getByLabelText('Name'), 'Weekdays 9am London');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'week');
+    await user.click(form.getByRole('checkbox', { name: 'Mon' }));
+    await user.click(form.getByRole('checkbox', { name: 'Wed' }));
+    await user.type(form.getByLabelText(/^Hours/i), '9');
+    await user.type(form.getByLabelText(/Time zone/i), 'Europe/London');
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const body = createMock.mock.calls[0]![0];
+    expect(body.mode).toBe('schedule');
+    expect(body.recurrence).toEqual({
+      frequency: 'week',
+      interval: 1,
+      schedule: { hours: [9], weekDays: [1, 3] },
+      timeZone: 'Europe/London',
+    });
+    // A recurrence DERIVES its cron server-side, so the client must not also
+    // author one — the write boundary refuses a body carrying both.
+    expect(body.schedule).toBeNull();
+  });
+
+  it('offers only the schedule sub-fields the chosen frequency honours', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+
+    // `day` honours minutes + hours, but not weekDays or monthDays.
+    expect(form.queryByRole('checkbox', { name: 'Mon' })).not.toBeInTheDocument();
+    expect(form.queryByLabelText(/Days of month/i)).not.toBeInTheDocument();
+    expect(form.getByLabelText(/^Hours/i)).toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Frequency'), 'month');
+    expect(form.getByLabelText(/Days of month/i)).toBeInTheDocument();
+    expect(form.queryByRole('checkbox', { name: 'Mon' })).not.toBeInTheDocument();
+
+    // `minute` honours nothing — a per-minute recurrence fires every minute.
+    await user.selectOptions(form.getByLabelText('Frequency'), 'minute');
+    expect(form.queryByLabelText(/^Hours/i)).not.toBeInTheDocument();
+    expect(form.queryByLabelText(/^Minutes/i)).not.toBeInTheDocument();
+  });
+
+  it('forgets a selection the new frequency does not honour, and never submits it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Switched');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'week');
+    await user.click(form.getByRole('checkbox', { name: 'Mon' }));
+
+    // Switching to `day`, which does not honour weekDays. The selection must be
+    // FORGOTTEN, not merely hidden: coming back to `week` shows it untouched.
+    // (The submitted body below is guarded independently by `formToRecurrence`,
+    // so asserting only the body would not distinguish "cleared" from "hidden".)
+    await user.selectOptions(form.getByLabelText('Frequency'), 'day');
+    await user.selectOptions(form.getByLabelText('Frequency'), 'week');
+    expect(form.getByRole('checkbox', { name: 'Mon' })).not.toBeChecked();
+
+    await user.selectOptions(form.getByLabelText('Frequency'), 'day');
+    await user.type(form.getByLabelText(/^Hours/i), '9');
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    const body = createMock.mock.calls[0]![0];
+    expect(body.recurrence).toEqual({
+      frequency: 'day',
+      interval: 1,
+      schedule: { hours: [9] },
+    });
+  });
+
+  it('reports an invalid recurrence instead of sending it', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'No day picked');
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.selectOptions(form.getByLabelText('Mode'), 'schedule');
+    // A weekly recurrence REQUIRES weekDays; none are ticked.
+    await user.selectOptions(form.getByLabelText('Frequency'), 'week');
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/recurrence/i);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('does not manufacture a schedule for a schedule trigger that has none', async () => {
+    // A `mode: 'schedule'` trigger with neither a cron nor a recurrence is a
+    // legal stored row. Opening it on the recurrence builder would be wrong:
+    // the builder has no "nothing selected" state — its blank form is a valid
+    // DAILY recurrence — so renaming such a trigger would silently grant it a
+    // midnight cron it never had. Same fail-open shape as #473, one level up.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({ name: 'Inert', mode: 'schedule', schedule: null, recurrence: null }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(form.getByLabelText(/Schedule authored as/i)).toHaveValue('cron');
+    await user.type(form.getByLabelText('Name'), ' renamed');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const patch = updateMock.mock.calls[0]![1];
+    expect(patch.schedule).toBeNull();
+    expect(patch.recurrence).toBeNull();
+  });
+
+  it('re-edits a recurrence trigger without re-authoring its derived cron', async () => {
+    // The defect this closes: `formForEdit` used to load the DERIVED cron into
+    // the raw-cron field, so any save of a recurrence-backed trigger authored
+    // both a recurrence and a cron — which `assertRecurrenceConsistent` refuses
+    // with a 400. A recurrence trigger could not be edited at all.
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([
+      trigger({
+        name: 'Weekly',
+        mode: 'schedule',
+        schedule: '0 9 * * 1',
+        recurrence: { frequency: 'week', interval: 1, schedule: { weekDays: [1], hours: [9] } },
+      }),
+    ]);
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /^Edit$/i }));
+
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    // The builder round-trips the stored recurrence, and the raw-cron field is
+    // not even on screen.
+    expect(form.getByLabelText('Frequency')).toHaveValue('week');
+    expect(form.getByRole('checkbox', { name: 'Mon' })).toBeChecked();
+    expect(form.queryByLabelText(/Schedule \(cron\)/i)).not.toBeInTheDocument();
+
+    await user.type(form.getByLabelText('Name'), ' nightly');
+    await user.click(form.getByRole('button', { name: /Save changes/i }));
+
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+    const patch = updateMock.mock.calls[0]![1];
+    expect(patch.schedule).toBeNull();
+    expect(patch.recurrence).toEqual({
+      frequency: 'week',
+      interval: 1,
+      schedule: { weekDays: [1], hours: [9] },
+    });
   });
 
   it('blocks saving an enabled but unbound trigger with a friendly message', async () => {

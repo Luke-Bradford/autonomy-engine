@@ -1,13 +1,22 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import {
   ConcurrencyPolicySchema,
   TriggerModeSchema,
   type ConcurrencyPolicy,
+  type Recurrence,
   type TriggerMode,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { ApiError } from '../api/client';
+import { RecurrenceEditor } from './triggers/RecurrenceEditor';
+import {
+  blankRecurrenceForm,
+  formToRecurrence,
+  recurrenceToForm,
+  type RecurrenceFormState,
+  type ScheduleKind,
+} from './triggers/recurrenceForm';
 
 import { listPipelines, listPipelineVersions } from '../api/pipelines';
 import { runDetailPath } from './runs/runPath';
@@ -37,7 +46,14 @@ type FormState = {
   name: string;
   pipelineVersionId: string; // '' = unbound (maps to null)
   mode: TriggerMode;
-  schedule: string; // cron; '' = null
+  /** #439 U14b — which of the two mutually-exclusive schedule authoring modes is
+   * active. The server refuses a write carrying BOTH a `recurrence` and a raw
+   * cron `schedule`, so the form always sends the unselected side as an
+   * explicit `null` rather than omitting it (on a PATCH, omitting means
+   * "untouched", which would leave the old one in place and 400). */
+  scheduleKind: ScheduleKind;
+  schedule: string; // raw cron, for `scheduleKind === 'cron'`; '' = null
+  recurrence: RecurrenceFormState; // for `scheduleKind === 'recurrence'`
   concurrencyPolicy: ConcurrencyPolicy;
   concurrencyMax: string; // only meaningful for `parallel`; '' = unset
   enabled: boolean;
@@ -51,7 +67,9 @@ function blankForm(): FormState {
     name: '',
     pipelineVersionId: '',
     mode: 'manual',
+    scheduleKind: 'recurrence',
     schedule: '',
+    recurrence: blankRecurrenceForm(),
     concurrencyPolicy: 'skip_if_running',
     concurrencyMax: '',
     enabled: false,
@@ -61,12 +79,27 @@ function blankForm(): FormState {
 }
 
 function formForEdit(t: TriggerPublic): FormState {
+  // A recurrence-backed trigger also carries a `schedule` — the cron DERIVED
+  // from it. Loading that into the raw-cron field would make every save author
+  // both, which the server refuses; so the recurrence, when present, wins and
+  // the cron field stays empty.
+  //
+  // Everything else opens on the CRON side, including a schedule trigger that
+  // has no schedule at all (a legal stored row: nothing server-side forces one).
+  // Opening THAT on the recurrence builder would be the wrong default, because
+  // the builder has no "nothing selected" state — its blank form is a valid
+  // daily recurrence — so merely renaming such a trigger would silently grant it
+  // a midnight cron it never had. The blank cron field round-trips to `null`,
+  // which is what was actually stored.
+  const hasRecurrence = t.recurrence !== null;
   return {
     id: t.id,
     name: t.name,
     pipelineVersionId: t.pipelineVersionId ?? '',
     mode: t.mode,
-    schedule: t.schedule ?? '',
+    scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
+    schedule: hasRecurrence ? '' : (t.schedule ?? ''),
+    recurrence: t.recurrence !== null ? recurrenceToForm(t.recurrence) : blankRecurrenceForm(),
     concurrencyPolicy: t.concurrency.policy,
     concurrencyMax: t.concurrency.max !== undefined ? String(t.concurrency.max) : '',
     enabled: t.enabled,
@@ -356,6 +389,7 @@ function TriggerForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const scheduleKindId = useId();
   const editing = form.id !== null;
 
   async function onSubmit(event: React.FormEvent) {
@@ -387,6 +421,28 @@ function TriggerForm({
       }
     }
 
+    // #439 U14b — the schedule half. A recurrence and a raw cron are mutually
+    // exclusive at the write boundary (`assertRecurrenceConsistent`), and the
+    // unselected side must be sent as an EXPLICIT null: on a PATCH an omitted
+    // `recurrence` means "untouched", so a trigger switched from recurrence to
+    // cron would otherwise keep its old recurrence and be refused. Both are
+    // nulled outside schedule mode, so switching mode never leaves either
+    // behind.
+    let recurrence: Recurrence | null = null;
+    let schedule: string | null = null;
+    if (form.mode === 'schedule') {
+      if (form.scheduleKind === 'recurrence') {
+        const converted = formToRecurrence(form.recurrence);
+        if (!converted.ok) {
+          setError(`Invalid recurrence — ${converted.reason}`);
+          return;
+        }
+        recurrence = converted.recurrence;
+      } else {
+        schedule = form.schedule.trim() === '' ? null : form.schedule.trim();
+      }
+    }
+
     const pipelineVersionId = form.pipelineVersionId === '' ? null : form.pipelineVersionId;
 
     // Mirror the server's `assertBindableIfEnabled` for a friendlier message
@@ -408,10 +464,8 @@ function TriggerForm({
       pipelineVersionId,
       params,
       mode: form.mode,
-      // A cron only makes sense for a schedule trigger; null it out otherwise so
-      // switching modes never leaves a stale schedule behind.
-      schedule:
-        form.mode === 'schedule' && form.schedule.trim() !== '' ? form.schedule.trim() : null,
+      schedule,
+      recurrence,
       webhook: null,
       concurrency,
       runWindows: runWindows as TriggerWrite['runWindows'],
@@ -496,16 +550,37 @@ function TriggerForm({
       </label>
 
       {form.mode === 'schedule' && (
-        <label>
-          Schedule (cron)
-          <input
-            type="text"
-            value={form.schedule}
-            onChange={(e) => onChange({ ...form, schedule: e.target.value })}
-            placeholder="0 2 * * *"
-            spellCheck={false}
-          />
-        </label>
+        <>
+          {/* Labelled by `htmlFor`/`id` rather than wrapped: wrapping folds every
+           * option's text into the control's accessible name (#857). */}
+          <label htmlFor={scheduleKindId}>Schedule authored as</label>
+          <select
+            id={scheduleKindId}
+            value={form.scheduleKind}
+            onChange={(e) => onChange({ ...form, scheduleKind: e.target.value as ScheduleKind })}
+          >
+            <option value="recurrence">Recurrence</option>
+            <option value="cron">Cron expression</option>
+          </select>
+
+          {form.scheduleKind === 'recurrence' ? (
+            <RecurrenceEditor
+              value={form.recurrence}
+              onChange={(recurrence) => onChange({ ...form, recurrence })}
+            />
+          ) : (
+            <label>
+              Schedule (cron)
+              <input
+                type="text"
+                value={form.schedule}
+                onChange={(e) => onChange({ ...form, schedule: e.target.value })}
+                placeholder="0 2 * * *"
+                spellCheck={false}
+              />
+            </label>
+          )}
+        </>
       )}
 
       {form.mode === 'webhook' && (
