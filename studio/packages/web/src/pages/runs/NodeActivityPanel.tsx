@@ -320,6 +320,22 @@ function tokenSummary(reading: NodeCostReading, cost: NodeCost): string {
   return `${input} · ${output}`;
 }
 
+/**
+ * Whether a `lower-bound` reading's priced part is worth stating — the ONE place
+ * that threshold is decided, because the headline and the sentence below it must
+ * agree or the panel contradicts itself.
+ *
+ * `formatUsd` renders a sub-threshold amount as its own bound (`< $0.000001`), so
+ * "At least < $0.000001" is a contradiction on its face; a genuine
+ * `costEstimate: 0` (a free model in the price table) hits the same wall from the
+ * other side, where "At least $0.00" is the very reading this surface exists to
+ * prevent. Both collapse to one true statement: the priced part tells us nothing,
+ * and there is more we could not price.
+ */
+function statesAnAmount(reading: NodeCostReading): boolean {
+  return reading.amount >= 0.000001;
+}
+
 /** The headline, which for three readings is deliberately not a money amount. */
 function costFigure(reading: NodeCostReading): string {
   switch (reading.kind) {
@@ -330,13 +346,7 @@ function costFigure(reading: NodeCostReading): string {
     case 'unknown':
       return 'Cost unknown';
     case 'lower-bound':
-      /* `formatUsd` renders a sub-threshold amount as its OWN bound
-         (`< $0.000001`), and "At least < $0.000001" is a contradiction on its
-         face. A genuine `costEstimate: 0` (a free model in the price table) hits
-         the same wall from the other side: "At least $0.00" is the very reading
-         this surface exists to prevent. Both collapse to the one true statement —
-         the priced part tells us nothing, and there is more we could not price. */
-      return reading.amount < 0.000001 ? 'Cost unknown' : `At least ${formatUsd(reading.amount)}`;
+      return statesAnAmount(reading) ? `At least ${formatUsd(reading.amount)}` : 'Cost unknown';
     case 'exact':
       return formatUsd(reading.amount);
   }
@@ -352,7 +362,11 @@ function costSentence(reading: NodeCostReading): string {
     case 'unknown':
       return `${exchanges}, and none of them could be priced (an unpriced model, or usage the provider did not report). A number is deliberately not shown: the sum would be $0.00, which reads as free.`;
     case 'lower-bound':
-      return `${exchanges}, of which ${reading.unknownCount} could not be priced. The figure is what the rest cost, so the real total is higher.`;
+      /* Gated on the SAME predicate as the headline. Without that, the sentence
+         promises "the figure" in exactly the case the headline withheld one. */
+      return statesAnAmount(reading)
+        ? `${exchanges}, of which ${reading.unknownCount} could not be priced. The figure is what the rest cost, so the real total is higher.`
+        : `${exchanges}, of which ${reading.unknownCount} could not be priced — and what did price came to less than a millionth of a dollar. No figure is shown, because the priced part says nothing about the total.`;
     case 'exact':
       /* No subscription-call clause here. `meteringStatus:'unpriced'` is minted
          at exactly one site (`cliSpendFact`, `agent_cli`) and a node binds ONE

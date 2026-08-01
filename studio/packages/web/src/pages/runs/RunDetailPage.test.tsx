@@ -1310,6 +1310,11 @@ describe('RunDetailPage — #866 the drill-in says what a node SPENT and which t
     ]);
     expect(within(panel).getByText('Cost unknown')).toBeInTheDocument();
     expect(within(panel).queryByText(/At least/)).not.toBeInTheDocument();
+    /* And the SENTENCE agrees with the headline. Promising "the figure" while
+       the headline deliberately withheld one is the contradiction the shared
+       `statesAnAmount` predicate exists to stop. */
+    expect(within(panel).queryByText(/The figure is what the rest cost/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/less than a millionth of a dollar/)).toBeInTheDocument();
   });
 
   it('says an unsettled node’s spend is SO FAR, not a final figure', async () => {
