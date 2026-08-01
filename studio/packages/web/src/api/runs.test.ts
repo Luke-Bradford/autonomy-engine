@@ -25,7 +25,6 @@ const sampleRun = {
  */
 const sampleRunSummary = {
   ...sampleRun,
-  pipelineId: 'pl_1',
   pipelineName: 'Nightly report',
   pipelineVersion: 3,
   triggerName: 'Every morning',

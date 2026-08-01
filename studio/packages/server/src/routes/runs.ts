@@ -37,7 +37,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * name, joined server-side so U10's list needn't N+1 its way to a human label.
    *
    * The response shape widened from `Run[]` to `RunSummary[]`, which is safe
-   * because `RunSummarySchema` is a strict `RunSchema.extend` — additive only.
+   * because `RunSummarySchema` is strictly ADDITIVE over `RunSchema` — it adds
+   * keys and changes none.
    * Any reader still parsing an element through `RunSchema` keeps working (zod
    * strips the extra keys); nothing about the existing fields moved or changed
    * meaning. The per-run route (`GET /api/runs/:id`) deliberately keeps

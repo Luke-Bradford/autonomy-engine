@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Tab, TabList } from '@fluentui/react-components';
 import type { RunSummary } from '@autonomy-studio/shared';
-import { useNavigate } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { listRuns } from '../../api/runs';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath } from './runPath';
 import { runStatusLabel } from './runStatus';
-import { filterRunsByTab, RUN_TABS, RUN_TAB_LABEL, type RunTab } from './runOrigin';
+import { filterRunsByTab, isRunTab, RUN_TABS, RUN_TAB_LABEL, type RunTab } from './runOrigin';
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created by the
@@ -22,10 +23,8 @@ import { filterRunsByTab, RUN_TABS, RUN_TAB_LABEL, type RunTab } from './runOrig
  * exactly the "client-side small-data v1" U10 specifies.
  */
 export function RunsPage() {
-  const navigate = useNavigate();
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<RunTab>('all');
   /**
    * The clock the Duration column measures an UNFINISHED run against, captured
    * once when a load resolves rather than read per render. The page is a
@@ -38,6 +37,32 @@ export function RunsPage() {
   // effect owns the fetch so its AbortController cleanly cancels an in-flight
   // request on unmount or a re-refresh.
   const [reloadKey, setReloadKey] = useState(0);
+
+  /**
+   * U10 — the selected tab lives in the URL, which the Shell section names as a
+   * slot this ticket owns ("monitor filter tab (U10)"). Component state would
+   * make the filtered view unlinkable, lost on reload, and invisible to Back.
+   * The URL is the single authority here — there is no `useState` mirror of it
+   * to disagree with, which is the same reason `SecondaryPane` refused a
+   * component that wanted its own `selectedValue`.
+   *
+   * An unrecognised `?tab=` is not an error to shout about: it falls back to
+   * `all`, so a hand-edited or stale link still shows the operator their runs.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: RunTab = isRunTab(rawTab) ? rawTab : 'all';
+
+  function selectTab(next: RunTab) {
+    const params = new URLSearchParams(searchParams);
+    // `all` is the default view, so it is expressed by the ABSENCE of the param
+    // rather than by `?tab=all` — one canonical URL per view.
+    if (next === 'all') params.delete('tab');
+    else params.set('tab', next);
+    // A push, not a replace: Back undoing a filter change is the behaviour a
+    // URL-addressable tab is for.
+    setSearchParams(params);
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,7 +79,17 @@ export function RunsPage() {
     return () => controller.abort();
   }, [reloadKey]);
 
-  const visible = useMemo(() => filterRunsByTab(runs ?? [], tab), [runs, tab]);
+  // One pass for both the visible rows and every tab's count, so a tab can
+  // never advertise a number of rows it then declines to show.
+  const { visible, counts } = useMemo(() => {
+    const all = runs ?? [];
+    return {
+      visible: filterRunsByTab(all, tab),
+      counts: Object.fromEntries(
+        RUN_TABS.map((key) => [key, filterRunsByTab(all, key).length]),
+      ) as Record<RunTab, number>,
+    };
+  }, [runs, tab]);
 
   return (
     <section aria-labelledby="runs-heading">
@@ -84,28 +119,22 @@ export function RunsPage() {
 
       {runs !== null && runs.length > 0 && (
         <>
-          {/* U10 — the origin tabs. Counts come from the SAME filter the table
-              applies, so a tab can never advertise a number of rows it then
-              declines to show. */}
-          <div className="run-tabs" role="tablist" aria-label="Filter runs by origin">
+          {/* Fluent's own TabList, not a hand-rolled strip: it brings the roving
+              tabindex and arrow-key movement the `tab` role advertises, which a
+              row of plain buttons claims and does not implement. */}
+          <TabList
+            selectedValue={tab}
+            onTabSelect={(_, data) => selectTab(data.value as RunTab)}
+            aria-label="Filter runs by origin"
+          >
             {RUN_TABS.map((key) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                id={`run-tab-${key}`}
-                aria-selected={tab === key}
-                aria-controls="runs-table-panel"
-                className={`run-tab${tab === key ? ' run-tab-selected' : ''}`}
-                onClick={() => setTab(key)}
-              >
-                {RUN_TAB_LABEL[key]}{' '}
-                <span className="run-tab-count">{filterRunsByTab(runs, key).length}</span>
-              </button>
+              <Tab key={key} value={key} id={`run-tab-${key}`}>
+                {RUN_TAB_LABEL[key]} <span className="run-tab-count">{counts[key]}</span>
+              </Tab>
             ))}
-          </div>
+          </TabList>
 
-          <div id="runs-table-panel" role="tabpanel" aria-labelledby={`run-tab-${tab}`}>
+          <div role="tabpanel" aria-labelledby={`run-tab-${tab}`}>
             {visible.length === 0 ? (
               <p>No {RUN_TAB_LABEL[tab].toLowerCase()} runs.</p>
             ) : (
@@ -136,8 +165,8 @@ export function RunsPage() {
                           {r.pipelineName} <span className="run-version">v{r.pipelineVersion}</span>
                         </span>
                       </td>
-                      {/* `null` for a rerun, a child run, or a run whose trigger
-                          was deleted — an em-dash, never a manufactured name. */}
+                      {/* `null` for a rerun, or a run whose trigger was deleted —
+                          an em-dash, never a manufactured name. */}
                       <td>{r.triggerName ?? '—'}</td>
                       <td>
                         {/* #870 — the WORD comes from the Monitor's one run-status
@@ -151,15 +180,19 @@ export function RunsPage() {
                         </span>
                       </td>
                       <td>{formatWhen(r.startedAt)}</td>
-                      <td>{formatRunDuration(r, loadedAt)}</td>
+                      {/* Duration replaced the Finished column (U10 fixes the column
+                          set). The finish TIMESTAMP is not lost with it — it is the
+                          cell's title, the same demotion the pipeline cell applies to
+                          the version id. */}
+                      <td title={formatWhen(r.finishedAt)}>{formatRunDuration(r, loadedAt)}</td>
                       <td>
-                        <button
-                          type="button"
-                          onClick={() => void navigate(runDetailPath(r.id))}
-                          aria-label={`Watch run ${r.id}`}
-                        >
+                        {/* A real link, not `useNavigate()` on a button: the Shell
+                            section records that U10 owns this conversion. It gives
+                            the row action a hoverable/copyable/middle-clickable
+                            target, which a button never had. */}
+                        <Link to={runDetailPath(r.id)} aria-label={`Watch run ${r.id}`}>
                           Watch
-                        </button>
+                        </Link>
                       </td>
                     </tr>
                   ))}

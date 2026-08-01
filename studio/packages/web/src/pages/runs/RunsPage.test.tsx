@@ -38,7 +38,6 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     startedAt: 1_700_000_000_000,
     finishedAt: null,
     // R2 — the joined names the list renders.
-    pipelineId: 'pl_1',
     pipelineName: 'Nightly report',
     pipelineVersion: 3,
     triggerName: 'Every morning',
@@ -222,5 +221,57 @@ describe('RunsPage', () => {
     await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
     expect(screen.getByText(/No manual runs/i)).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  /**
+   * U10 — the filter tab is a URL slot the Shell section names as this ticket's
+   * ("monitor filter tab (U10)"). Read FROM the url on first paint: a link to a
+   * filtered view has to arrive filtered, not flash All and then correct itself.
+   */
+  it('takes the selected tab from the URL', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+    ]);
+    renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
+    expect(await screen.findByText('run_manual')).toBeInTheDocument();
+    expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Manual/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('falls back to All on an unrecognised ?tab, rather than showing nothing', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    renderWithRouter(<RunsPage />, '/monitor/runs?tab=not-a-tab');
+    expect(await screen.findByText('run_trig')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  /**
+   * And WRITTEN back, so the filtered view is linkable and Back undoes it. `all`
+   * is expressed by the param's ABSENCE — one canonical URL per view.
+   */
+  it('writes the selected tab to the URL, and clears it for All', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+    render(<RouterProvider router={router} />);
+    await screen.findByText('run_trig');
+
+    await userEvent.click(screen.getByRole('tab', { name: /Triggered/ }));
+    expect(router.state.location.search).toBe('?tab=triggered');
+
+    await userEvent.click(screen.getByRole('tab', { name: /^All/ }));
+    expect(router.state.location.search).toBe('');
+  });
+
+  /**
+   * U10 owns turning the row action into a REAL link (the Shell section says so
+   * explicitly). An anchor with an href is hoverable, copyable and
+   * middle-clickable; the `useNavigate()` button it replaced was none of those.
+   */
+  it('renders the row action as a link with a real href', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_abc' })]);
+    renderWithRouter(<RunsPage />);
+    const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
+    expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
   });
 });

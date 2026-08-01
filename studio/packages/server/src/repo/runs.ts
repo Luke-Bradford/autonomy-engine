@@ -72,6 +72,14 @@ function listRunsConditions(filter: ListRunsFilter) {
   return conditions;
 }
 
+/**
+ * The strict, UN-joined list primitive. Since R2 moved `GET /api/runs` onto
+ * `listRunSummaries`, this has no production caller left — it is kept
+ * deliberately, not stranded: it is the plain-`Run` read the repo's own tests
+ * assert against throughout, and the base any future caller that wants rows
+ * without the name join should use. The lenient boot/sweep scans use
+ * `listParsedRuns` instead, for the reason its own docblock gives.
+ */
 export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
   const conditions = listRunsConditions(filter);
   const rows =
@@ -89,40 +97,48 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * R2 — `listRuns` as the Monitor's list read-model: every run PLUS the human
  * names U10's columns need, in ONE query instead of an N+1 walk from the client.
  *
- * `runs ⋈ pipeline_versions ⋈ pipelines` is the same two-hop join
- * `countActiveRunsForPipeline` and `queuedTriggerCandidatesForPipeline` already
- * use — a run row carries only its immutable `pipelineVersionId`, and the
- * pipeline identity lives on the version row. Both hops are INNER: the FKs are
- * `restrict`/`cascade`, so a surviving run necessarily pins both rows.
+ * `runs ⋈ pipeline_versions` is the join `countActiveRunsForPipeline` and
+ * `queuedTriggerCandidatesForPipeline` already use — a run row carries only its
+ * immutable `pipelineVersionId`, and the pipeline identity lives on the version
+ * row. This EXTENDS it with a second hop to `pipelines` for the name. Both hops
+ * are INNER: the FKs are `restrict`/`cascade`, so a surviving run necessarily
+ * pins both rows.
  *
- * The trigger hop is a LEFT JOIN, and that asymmetry is load-bearing.
- * `runs.trigger_id` is nullable and `onDelete: 'set null'`, and three ordinary
- * runs have no trigger at all: a rerun (`run/reseed.ts` sets `triggerId = null`
- * deliberately), a child run, and any run whose trigger was later deleted. An
- * INNER join would drop every one of them from the operator's own list —
- * silently, and indistinguishably from "you have no reruns".
+ * The trigger hop is a LEFT JOIN, and that asymmetry is load-bearing. Two REAL
+ * cases have no trigger: a rerun (`run/reseed.ts` sets `triggerId = null`
+ * deliberately) and any run whose trigger was later deleted (`onDelete:
+ * 'set null'`). An INNER join would drop both from the operator's own list —
+ * silently, and indistinguishably from "you have no reruns". A child run will
+ * join them once P3b lands the spawn seam (#796); nothing creates one yet.
  *
- * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`),
- * backed by `runs_started_at_idx`. `listRuns` issues no `ORDER BY` at all, yet
- * the page consuming it claimed rows arrived "newest-first as the server returns
- * them" — SQLite's row order is an implementation detail, so that was never a
- * promise anything kept. The `id` tie-break makes two runs stamped in the same
- * millisecond stably ordered rather than arbitrarily.
+ * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`).
+ * MEASURED, not assumed: on the production path (the route always passes
+ * `ownerId`) SQLite picks `runs_owner_id_idx` and sorts through a
+ * `USE TEMP B-TREE FOR ORDER BY`; `runs_started_at_idx` is used only for an
+ * UNFILTERED list, and even then the `id` tie-break needs a temp b-tree for the
+ * last term. That cost is accepted at U10's "client-side small-data v1" scale —
+ * this is a correctness claim about the ORDER, not a performance claim about the
+ * index. `listRuns` issues no `ORDER BY` at all, yet the page consuming it
+ * claimed rows arrived "newest-first as the server returns them" — SQLite's row
+ * order is an implementation detail, so that was never a promise anything kept.
+ * The `id` tie-break makes two runs stamped in the same millisecond stably
+ * ordered rather than arbitrarily.
  *
  * SECURITY — the ownership proof is the RUN's, exactly as `GET /api/runs/:id/detail`
  * documents. `ownerId` filters the RUNS table; the joined version and pipeline
  * are reachable only from a run that filter already cleared, and a run's binding
  * is established at trigger-create time under `requireOwnedPipelineVersion` and
- * is immutable thereafter. No owner filter is applied to `pipelines` — a version
- * row carries no `ownerId` (owner scoping rides the pipeline FK), and filtering
- * there could only ever DROP one of the caller's own runs from their list.
+ * is immutable thereafter, or is copied from an owned run's binding
+ * (`run/reseed.ts`) — the same two creation paths the `/detail` docblock names.
+ * No owner filter is applied to `pipelines` — a version row carries no `ownerId`
+ * (owner scoping rides the pipeline FK), and filtering there could only ever
+ * DROP one of the caller's own runs from their list.
  */
 export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummary[] {
   const conditions = listRunsConditions(filter);
   const query = db
     .select({
       run: runs,
-      pipelineId: pipelines.id,
       pipelineName: pipelines.name,
       pipelineVersion: pipelineVersions.version,
       triggerName: triggers.name,
@@ -137,7 +153,6 @@ export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummar
   return rows.map((row) =>
     RunSummarySchema.parse({
       ...row.run,
-      pipelineId: row.pipelineId,
       pipelineName: row.pipelineName,
       pipelineVersion: row.pipelineVersion,
       triggerName: row.triggerName,

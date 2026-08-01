@@ -20,13 +20,18 @@ export type RunOrigin = (typeof RUN_ORIGINS)[number];
  * a child run's defining fact is that a parent spawned it, and that stays true
  * however it was bound.
  *
- * Each origin is reachable with real data, which is what the spec means by
- * "backed by current data":
- *  - `child` — a `call_pipeline` node spawns a run carrying `parentRunId`.
+ * MEASURED reachability, because "backed by current data" is a claim about the
+ * engine as it stands, not about the schema:
  *  - `triggered` — the ordinary path; a fired trigger stamps `triggerId`.
  *  - `manual` — a RERUN. `run/reseed.ts` sets `triggerId = null, parentRunId = null`
  *    deliberately ("a rerun is an explicit operator action"), so reruns are
  *    precisely the runs no trigger and no parent produced.
+ *  - `child` — **carries no rows today.** Every production `createRun` call
+ *    passes `parentRunId: null` (`run/launcher.ts`, `run/reseed.ts`); the
+ *    `call_pipeline` spawn seam that would set it is P3b's obligation and is not
+ *    built (#796). The tab is the pre-wired seam for that ticket, and the branch
+ *    below is what keeps this classification TOTAL when it lands — not a claim
+ *    that child runs exist now.
  *
  * KNOWN LIMITATION, stated rather than papered over: `runs.trigger_id` is
  * `onDelete: 'set null'`, so deleting a trigger re-classifies its historical runs
@@ -74,4 +79,13 @@ export function filterRunsByTab<T extends Pick<Run, 'triggerId' | 'parentRunId'>
   tab: RunTab,
 ): T[] {
   return tab === 'all' ? [...runs] : runs.filter((run) => runOriginOf(run) === tab);
+}
+
+/**
+ * Narrow an untrusted string — a URL search param — to a tab. Anything else is
+ * not a tab, and the caller falls back to `all` rather than rendering a filter
+ * nobody selected.
+ */
+export function isRunTab(value: string | null): value is RunTab {
+  return value !== null && (RUN_TABS as readonly string[]).includes(value);
 }

@@ -625,7 +625,6 @@ describe('listRunSummaries (R2)', () => {
     expect(summaries).toHaveLength(1);
     const summary = summaries[0];
     expect(summary?.id).toBe(run.id);
-    expect(summary?.pipelineId).toBe(pipeline.id);
     expect(summary?.pipelineName).toBe('Nightly report');
     // The version NUMBER an operator reads as "v1", not the opaque `pv_…` id.
     expect(summary?.pipelineVersion).toBe(version.version);

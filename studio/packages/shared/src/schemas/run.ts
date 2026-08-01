@@ -99,26 +99,27 @@ export type Run = z.infer<typeof RunSchema>;
  * `GET /api/runs` response-shape change safe: every existing reader parsing a
  * summary through `RunSchema` still succeeds (zod strips the extra keys).
  *
- * `triggerName` is NULLABLE and the join behind it must be a LEFT join. Not
- * every run has a trigger: a rerun deliberately sets `triggerId = null`
- * (`run/reseed.ts` — "a rerun is an explicit operator action"), a child run is
- * spawned by its parent, and `runs.trigger_id` is `onDelete: 'set null'`, so a
- * deleted trigger leaves its runs behind with no name to resolve. An INNER join
- * here would silently drop exactly those runs from the operator's own list.
+ * `triggerName` is NULLABLE and the join behind it must be a LEFT join. Two
+ * REAL, reachable cases have no trigger: a rerun deliberately sets
+ * `triggerId = null` (`run/reseed.ts` — "a rerun is an explicit operator
+ * action"), and `runs.trigger_id` is `onDelete: 'set null'`, so deleting a
+ * trigger leaves its runs behind with no name to resolve. An INNER join here
+ * would silently drop exactly those runs from the operator's own list. (A child
+ * run will be a third such case once P3b lands the spawn seam — see #796 — but
+ * nothing creates one today, so it is not offered as a reason.)
  *
  * DURATION is deliberately NOT a field. The spec lists it among what the list
  * shows, but `startedAt`/`finishedAt` already determine it, and a server-stamped
  * elapsed for a still-running run would be stale the instant it was serialized —
  * a second, immediately-wrong authority for a value the row already fixes. The
- * client derives it (`pages/runs/format.ts::formatDuration`).
+ * client derives it (`pages/runs/format.ts::formatRunDuration`).
  */
 export const RunSummarySchema = RunSchema.extend({
-  pipelineId: z.string().min(1),
   pipelineName: z.string(),
   /** The version NUMBER (`pipeline_versions.version`), not its id — what an
    * operator reads as "v3". */
   pipelineVersion: z.number().int(),
-  /** `null` for a rerun, a child run, or a run whose trigger has been deleted. */
+  /** `null` for a rerun, or for a run whose trigger has been deleted. */
   triggerName: z.string().nullable(),
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
