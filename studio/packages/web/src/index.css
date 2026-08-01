@@ -1699,6 +1699,14 @@ td button + button {
    than as a chunky form control — otherwise the Node column stops scanning as a
    column of names. Since #882 that content is the activity name (`HTTP Request
    1`); the raw id is a sibling below it, not inside the button. */
+/* #867 — the per-node Duration cell. Tabular figures so a column of spans
+   lines up on the digit rather than jittering per row, which is the whole
+   reason a numeric column gets its own class. */
+.node-duration {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .node-drill-in {
   background: none;
   border: 1px solid transparent;

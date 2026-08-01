@@ -1,4 +1,5 @@
 import { nodeStatusLabel } from './nodeStatus';
+import { formatNodeDuration } from './format';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -40,11 +41,15 @@ import type { NodeActivity } from './runSummary';
  *  - tool calls — `activity.toolCalled` carries `toolName`, `round`, `callId`
  *    and `isError` IN THE CLEAR (only args/result are chars+hash), so "which
  *    tools ran, in which exchange, which errored" is renderable today. It is
- *    deferred as its own slice, NOT because the data is missing;
- *  - a per-attempt DURATION — the envelope timestamps would give a span that
- *    silently includes retry holds and park idle, and six engine-evaluated
- *    activity kinds have no dispatch event to start it from. A wrong number is
- *    worse than no number.
+ *    deferred as its own slice, NOT because the data is missing.
+ *
+ * The per-attempt DURATION was on that list and no longer is: #867 shipped it.
+ * Both objections that kept it off were answered rather than waived — the span
+ * is per-ATTEMPT, so a retry hold falls between two spans instead of inside
+ * one, and the engine-evaluated kinds that have no start event are rendered as
+ * unmeasured rather than given a manufactured `0ms`. What is still deferred is
+ * a LIVE counter for an attempt in flight, which needs a clock this page does
+ * not have (#890).
  */
 /** The panel's DOM id, so the table's disclosure button can `aria-controls` it. */
 export const PANEL_ID = 'node-activity-panel';
@@ -97,6 +102,40 @@ export function NodeActivityPanel({
           {nodeStatusLabel(node.status)}
         </span>{' '}
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
+      </p>
+
+      {/* #867 — the duration, and the one place there is room to say what it
+          MEANS. The table's column can only carry the number.
+
+          Both halves are load-bearing. "Wall clock" and "including any wait"
+          keep it from being read as execution time — for a `wait`/`webhook`
+          node the span IS the park, and an LLM node's `activity.captured`
+          latency is a smaller, different number it must not be confused with.
+          The em-dash case is the honest one: an `if`, a `switch`, a `fail`, a
+          `filter` and a `call_pipeline` are started and settled by a SINGLE
+          event, so nothing ever measured a span for them, and saying so beats
+          printing a `0ms` nobody observed. */}
+      <p className="page-hint">
+        {/* A COLON, not a dash: the value is itself an em-dash whenever no span
+            was measured, and "Duration — — wall clock…" is what a dash gave. */}
+        Duration: <strong>{formatNodeDuration(node)}</strong> — wall clock for the latest attempt,
+        from start to settle, including any wait it parked on and excluding time held between
+        retries.{' '}
+        {node.startedAtMs === undefined &&
+          (node.attempts === 0
+            ? 'This node has not started, so there is nothing to measure yet.'
+            : 'No span was recorded for this attempt.')}
+        {node.startedAtMs !== undefined &&
+          node.endedAtMs === undefined &&
+          'This attempt has not settled yet, so its span is not complete.'}
+        {/* The corrupt-log case. `formatNodeDuration` renders it as unmeasured
+            rather than clamping to `0ms`, and without this arm it would be the
+            ONE em-dash on this panel with no sentence explaining it — which
+            reads as a rendering bug rather than as the finding it is. */}
+        {node.startedAtMs !== undefined &&
+          node.endedAtMs !== undefined &&
+          node.endedAtMs < node.startedAtMs &&
+          'The recorded end precedes the start, so the log’s clock is inconsistent and no span can be stated.'}
       </p>
 
       {node.instanceId !== undefined && (

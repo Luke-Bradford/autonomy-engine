@@ -1,4 +1,5 @@
 import type { Run, RunEvent } from '@autonomy-studio/shared';
+import type { NodeActivity } from './runSummary';
 
 /** Epoch-ms → a human date+time, or an em-dash for a null (not-yet) timestamp. */
 export function formatWhen(ms: number | null): string {
@@ -43,6 +44,48 @@ export function formatRunDuration(
     return formatElapsed(Math.max(0, run.finishedAt - run.startedAt));
   }
   return `${formatElapsed(Math.max(0, now - run.startedAt))} so far`;
+}
+
+/**
+ * #867 — how long a NODE took, for the Monitor's per-node Duration column.
+ *
+ * A span exists only when the log holds BOTH stamps for the latest attempt.
+ * Two different absences render the same em-dash, and neither is a gap in this
+ * function:
+ *
+ * 1. **No start stamp.** An `if`/`switch`, a `fail`/`filter` and a
+ *    `call_pipeline` node are started and settled by ONE event, so nothing ever
+ *    measured a span for them — they hold NEITHER stamp, since `closeSpan`
+ *    declines to write an end for a span that never opened. `0ms` here would
+ *    state a measurement nobody took: the difference between "instant" and
+ *    "not measured", and only one of them is true.
+ * 2. **No end stamp.** The attempt has not settled (or the run died mid-flight
+ *    and never will). Deliberately NOT rendered as a live "3s so far": this
+ *    page has no ticking clock by design, so such a counter could only be
+ *    re-read when a FRAME lands — and for the node an operator actually watches
+ *    (dispatched, grinding, emitting nothing) the dispatch IS the last frame,
+ *    so it would sit at ~0ms while the node ran for minutes. A wrong number is
+ *    worse than an absent one, which is the whole premise of this ticket. #890
+ *    tracks the live counter, which needs a clock, not a format change.
+ *
+ * The number is WALL CLOCK for the latest attempt, from start to settle. That
+ * INCLUDES a `wait`/`webhook` park (for those nodes waiting is the work) and
+ * excludes time held between retries (the hold sits between two spans). It is
+ * deliberately not called execution time, and it is not
+ * `activity.captured.latencyMs` — that is one provider call's wall time, a
+ * different number on a different scope.
+ */
+export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs'>): string {
+  if (node.startedAtMs === undefined || node.endedAtMs === undefined) return '—';
+  const span = node.endedAtMs - node.startedAtMs;
+  /* A NEGATIVE span is a corrupt log, not a fast node: both stamps are
+     `Date.now()` taken by one single-writer append path, so an end before its
+     start means the wall clock stepped backwards. Clamping it to `0ms` would
+     print exactly the measurement-nobody-took this function refuses two
+     paragraphs above, and would hide the corruption behind a plausible number.
+     (`formatRunDuration` clamps because its inputs are two DB columns written
+     by different paths — a different question, deliberately left alone.) */
+  return span < 0 ? '—' : formatElapsed(span);
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

@@ -2,6 +2,7 @@ import {
   docNodeIdOf,
   EngineEventSchema,
   parseInstanceKey,
+  TERMINAL_NODE,
   terminalStatusOf,
   UNPARK_EVENTS as ENGINE_UNPARK_EVENTS,
   type EngineEvent,
@@ -153,6 +154,39 @@ export interface NodeActivity {
    * reader may infer "this is a parallel foreach" from its presence.
    */
   instanceId: string | undefined;
+  /**
+   * #867 — the envelope `ts` of the event that STARTED the latest attempt, and
+   * the `ts` of the event that ENDED it. `undefined`/`undefined` is the common
+   * and correct answer for a whole class of nodes; see below.
+   *
+   * The log's append stamps are the only clock available. The reducer is pure
+   * and stamps no per-node time, and `activity.captured.latencyMs` is a
+   * DIFFERENT number — one provider call's wall time, on two activity kinds —
+   * so it cannot answer "how long did this node take".
+   *
+   * The span is per-ATTEMPT, which is what keeps it honest: a retry hold
+   * (`node.retryScheduled` → `node.retryDue`, minutes under policy) sits
+   * BETWEEN attempt n's end and attempt n+1's start, so it falls outside every
+   * span rather than inside one. A first-dispatch→terminal span would swallow
+   * it and present the total as runtime.
+   *
+   * Which events count is NOT the same question as which ones count an
+   * `attempt` above, and conflating them is the trap here. A start may only be
+   * an event with a DISTINCT later terminal — `node.dispatched`,
+   * `timer.waitScheduled`, `externalWait.created`. An `if`/`switch` is started
+   * AND succeeded by its single `condition.evaluated`/`switch.evaluated`, as a
+   * `fail`/`filter`/`call_pipeline` node is by its single terminal event, so
+   * those get no start at all and render as "no span" — never as `0ms`, which
+   * would state a measurement nothing made.
+   *
+   * For a `wait`/`webhook` the span deliberately IS the park: for those nodes
+   * waiting is the work, and `timer.due`/`externalWait.completed` are their
+   * success event (no `node.succeeded` follows). So the rendered number is wall
+   * clock from start to settle, INCLUDING any park — which is why the UI says
+   * so rather than calling it execution time.
+   */
+  startedAtMs: number | undefined;
+  endedAtMs: number | undefined;
 }
 
 /**
@@ -199,6 +233,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         failureCode: undefined,
         outputValues: undefined,
         instanceId: undefined,
+        startedAtMs: undefined,
+        endedAtMs: undefined,
       };
       byNode.set(nodeId, n);
     }
@@ -245,6 +281,64 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     if (n.attempts === 0) n.attempts = 1;
   };
 
+  /**
+   * #867 — which foreach INSTANCE the currently-open span belongs to, kept here
+   * rather than on the row because it is bookkeeping for the fold, not a fact
+   * about the node that any reader should render.
+   */
+  const spanInstance = new Map<string, string | undefined>();
+
+  /**
+   * Open the latest attempt's span, discarding the previous attempt's end. The
+   * reset is the point: a re-dispatched node that kept its old `endedAtMs`
+   * would render the PREVIOUS attempt's duration beside a row that is running
+   * again.
+   */
+  const openSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
+    n.startedAtMs = at;
+    n.endedAtMs = undefined;
+    spanInstance.set(n.nodeId, instanceOf(rawNodeId));
+  };
+
+  /**
+   * Forget the span entirely — no start, no end, and no claim about either.
+   *
+   * The map delete keeps the invariant "an entry exists iff a span is open"
+   * true. Nothing reads a stale entry today (`openSpan` is the only writer of
+   * `startedAtMs` and always rewrites it), so it is belt-and-braces rather than
+   * load-bearing — stated so a later reader does not mistake it for a fix.
+   */
+  const dropSpan = (n: NodeActivity): void => {
+    n.startedAtMs = undefined;
+    n.endedAtMs = undefined;
+    spanInstance.delete(n.nodeId);
+  };
+
+  /**
+   * Close the span — unless the terminal came from a DIFFERENT instance than
+   * the one that opened it, in which case there is no honest span to state and
+   * the whole pair is dropped.
+   *
+   * A parallel foreach's items are not serialised, so `dispatched w@1` then
+   * `succeeded w@2` folds onto one `w` row. Subtracting across that pair yields
+   * a number that is neither item's runtime — a fabricated measurement, which
+   * is strictly worse than the em-dash dropping it leaves. The same collapse is
+   * why every terminal branch sets `instanceId`; this is that rule applied to
+   * the one field where a mismatched pair invents data rather than misattributes
+   * it.
+   *
+   * A terminal with no open span (a `fail`/`filter` node's only event) is a
+   * no-op: it leaves the row with no start, which IS "no span".
+   */
+  const closeSpan = (n: NodeActivity, rawNodeId: string, at: number): void => {
+    if (n.startedAtMs === undefined) return;
+    if (spanInstance.get(n.nodeId) !== instanceOf(rawNodeId)) {
+      dropSpan(n);
+      return;
+    }
+    n.endedAtMs = at;
+  };
+
   for (const row of events) {
     const parsed = EngineEventSchema.safeParse(row.payload);
     if (!parsed.success) continue;
@@ -255,6 +349,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'dispatched';
         n.attempts += 1;
         clearResult(n);
+        openSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'node.output': {
@@ -269,6 +364,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'success';
         n.outputValues = e.outputs;
         n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
         countIfUnstarted(n); // a `filter`'s only event
         break;
       }
@@ -288,6 +384,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.failureKind = statedKind ? e.kind : undefined;
         n.failureCode = e.code;
         n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
         countIfUnstarted(n); // a `fail` control node's only event
         break;
       }
@@ -301,6 +398,15 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'dispatched';
         clearResult(n);
+        /* And the span goes with the result, for the same reason. These events
+           re-open the node WITHOUT starting an attempt (the `node.dispatched`
+           that follows does that), so between the two the row would otherwise
+           show the PREVIOUS attempt's completed span beside a `dispatched`
+           status — "200ms" over a node that is running again, from an attempt
+           before last. That window is a real live-tail frame, and it freezes
+           permanently if the process dies after the boot reconciler's
+           `node.retryRequested` and before the re-dispatch. */
+        dropSpan(n);
         break;
       }
       case 'node.retryScheduled': {
@@ -330,6 +436,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'wait_pending';
         n.attempts += 1;
         clearResult(n);
+        openSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'externalWait.created': {
@@ -337,6 +444,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'external_wait_pending';
         n.attempts += 1;
         clearResult(n);
+        openSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'timer.due':
@@ -348,6 +456,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         clearResult(n);
         n.status = 'success';
         n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'externalWait.expired': {
@@ -360,6 +469,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'failure';
         n.error = 'external wait expired before a callback arrived';
         n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
         break;
       }
       case 'condition.evaluated':
@@ -388,6 +498,12 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // loop), and gating would silently drop exactly that documented case.
         n.outputValues = e.outputs;
         n.instanceId = instanceOf(e.callNodeId);
+        /* A no-op today — a call node has no start event, so there is no span
+           to close. It is wired anyway because #796 adds `call.started`: the
+           day it lands, a call node's span would open here and never close,
+           every call node would silently read as unmeasured, and no test would
+           fail. `closeSpan` is documented as a no-op without an open span. */
+        closeSpan(n, e.callNodeId, row.ts);
         countIfUnstarted(n); // a call node's only event
         break;
       }
@@ -497,7 +613,19 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
 export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): NodeActivity[] {
   const reconciled = rows.map((row) => {
     const engine = state.nodes[row.nodeId];
-    return engine === undefined ? row : { ...row, status: engine.status };
+    if (engine === undefined) return row;
+    /* #867 — an OPEN span cannot survive the engine calling the node terminal.
+       The reducer can settle a node with no node event at all: `container.timedOut`
+       flips a live child to `skipped` via `abandonLiveChildren`, so the fold is
+       left holding a start whose close will never be appended. Keeping it would
+       render "skipped" beside a span the UI describes as still in flight. The
+       engine is the authority on the status, so it is the authority on whether
+       an attempt is still running. */
+    const open = row.startedAtMs !== undefined && row.endedAtMs === undefined;
+    const settled = TERMINAL_NODE.has(engine.status);
+    return open && settled
+      ? { ...row, status: engine.status, startedAtMs: undefined }
+      : { ...row, status: engine.status };
   });
 
   const seen = new Set(reconciled.map((row) => row.nodeId));
@@ -538,6 +666,11 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       failureCode: undefined,
       outputValues: undefined,
       instanceId: undefined,
+      /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
+         Same rule as the fields above: an absent fact is rendered as absent,
+         never manufactured (#867). */
+      startedAtMs: undefined,
+      endedAtMs: undefined,
     });
   }
   return reconciled;
