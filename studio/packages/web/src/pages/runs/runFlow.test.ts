@@ -29,6 +29,21 @@ const CONTAINER_DOC: RunDoc = {
   containers: [{ id: 'stg', kind: 'stage', children: ['a', 'b'] }],
 };
 
+/** Two containers of ONE kind — the case a bare kind cannot tell apart. */
+const TWO_LOOP_DOC: RunDoc = {
+  nodes: [
+    { id: 'a', type: 'http_request', position: { x: 0, y: 0 }, config: {} },
+    { id: 'b', type: 'http_request', position: { x: 240, y: 0 }, config: {} },
+    { id: 'c', type: 'http_request', position: { x: 0, y: 400 }, config: {} },
+    { id: 'd', type: 'http_request', position: { x: 240, y: 400 }, config: {} },
+  ],
+  edges: [],
+  containers: [
+    { id: 'lp1', kind: 'loop', children: ['a', 'b'] },
+    { id: 'lp2', kind: 'loop', children: ['c', 'd'] },
+  ],
+};
+
 /** A projection of `DOC` in which `a` succeeded, so `b` is ready and `c` skipped. */
 function projected(): RunState {
   const base = {
@@ -180,6 +195,28 @@ describe('runFlowNodes', () => {
     expect(box.ariaLabel).not.toContain('active');
     expect(box.data.tone).toBe('running');
     expect(box.data.round).toBe(2);
+  });
+
+  /* #886 — the run graph names a container the way the AUTHOR canvas does.
+     Before this, its box drew and announced the bare `kind`, so a pipeline
+     authored as `loop 1` / `loop 2` ran as `loop` / `loop`: the two halves of
+     one picture, disagreeing about which rectangle is which. The activities
+     beside them have been named this way since #878. */
+  it('names a container box by its ordinal, not by its bare kind', () => {
+    const box = runFlowNodes(CONTAINER_DOC, projected())[0]!;
+    expect(box.data.name).toBe('stage 1');
+    expect(box.ariaLabel).toContain('stage 1 container');
+  });
+
+  it('tells two containers of ONE kind apart, in the box and in its accessible name', () => {
+    const boxes = runFlowNodes(TWO_LOOP_DOC, null).filter((n) => n.type === 'runContainer');
+    // The bare kind — what this drew before — is the same string for both, so
+    // only the ordinal can carry the difference.
+    expect(boxes.map((b) => b.data.name)).toEqual(['loop 1', 'loop 2']);
+    expect(boxes.map((b) => b.ariaLabel)).toEqual([
+      expect.stringContaining('loop 1 container'),
+      expect.stringContaining('loop 2 container'),
+    ]);
   });
 
   it('words a container status the same way the shared map does, and keeps the tone off the RAW status', () => {

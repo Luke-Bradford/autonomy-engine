@@ -161,9 +161,9 @@ test('U25 — the node table and the graph give every node the same word, includ
 
   // The drill-in panel is the third surface that renders a status, so it reads
   // from the same map — a node routed around says so there too.
-  await page.getByRole('button', { name: 'neverRan', exact: true }).click();
+  await page.getByRole('button', { name: 'Fail 3', exact: true }).click();
   await expect(
-    page.getByRole('complementary', { name: 'Node neverRan' }).getByText('skipped', {
+    page.getByRole('complementary', { name: 'Node Fail 3' }).getByText('skipped', {
       exact: true,
     }),
   ).toBeVisible();
@@ -174,19 +174,37 @@ test('U25 — the node table and the graph give every node the same word, includ
      row's own node-id cell. */
   const words = await page.evaluate(() => {
     const graph: Record<string, string> = {};
+    /* #882 — the NAMES the two surfaces show for one node, harvested in this
+       same evaluate so pinning them costs no extra round trip. Until this, the
+       claim "the table names a node the way the graph does" was pinned only by
+       each side matching an independent literal, which cannot catch the two
+       drifting apart — the very defect #882 closes. */
+    const graphNames: Record<string, string> = {};
     for (const el of document.querySelectorAll('.react-flow__node')) {
       const inner = el.querySelector('.run-node');
       if (inner === null) continue;
-      graph[(el as HTMLElement).dataset.id ?? '?'] =
-        inner.querySelector('.run-node-status')?.textContent?.trim() ?? '';
+      const id = (el as HTMLElement).dataset.id ?? '?';
+      graph[id] = inner.querySelector('.run-node-status')?.textContent?.trim() ?? '';
+      graphNames[id] = inner.querySelector('strong')?.textContent?.trim() ?? '';
     }
+    const tableNames: Record<string, string> = {};
     const table: Record<string, string> = {};
     for (const row of document.querySelectorAll('tbody tr')) {
-      const id = row.querySelector('.node-drill-in')?.textContent?.trim();
+      /* The row's node-id cell, NOT the drill-in button — since #882 the button
+         holds the activity NAME ('Fail 3') while the graph wrapper is keyed on
+         the doc id, so keying off the button would compare two different things
+         and report a difference that is not one. The button is still the
+         fallback, because it is what holds the id when the pipeline version will
+         not resolve and there is no name to show. */
+      const id =
+        row.querySelector('.node-id')?.textContent?.trim() ??
+        row.querySelector('.node-drill-in')?.textContent?.trim();
       const status = row.querySelector('.node-status')?.textContent?.trim();
       if (id !== undefined && status !== undefined) table[id] = status;
+      const name = row.querySelector('.node-drill-in')?.textContent?.trim();
+      if (id !== undefined && name !== undefined) tableNames[id] = name;
     }
-    return { graph, table };
+    return { graph, table, graphNames, tableNames };
   });
 
   // Every node the graph draws has a table row — that equivalence is new, and
@@ -198,6 +216,16 @@ test('U25 — the node table and the graph give every node the same word, includ
   // word could not pass the equality above in silence.
   expect(words.table.neverRan).toBe('skipped');
   expect(words.table.start).toBe('failure');
+
+  /* #882/#886 — and the two surfaces agree on the NAME as well as the word. This
+     is the headline claim of #882, and nothing else asserts it: the graph and the
+     table are otherwise pinned only to independent literals, which cannot catch
+     one being renamed without the other. Keyed by doc id on both sides, so a
+     mismatch names the node it happened to. */
+  expect(words.tableNames).toEqual(words.graphNames);
+  // Pinned outright too, so a change that renamed BOTH surfaces the same wrong
+  // way could not pass the equality above in silence.
+  expect(words.graphNames).toEqual({ start: 'Fail 1', handled: 'Fail 2', neverRan: 'Fail 3' });
 
   await expectQuiet(page, problems);
 });

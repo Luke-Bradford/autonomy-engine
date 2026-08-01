@@ -92,7 +92,7 @@ const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
     <div className={`flow-container run-container${toneClass('run-container', d.tone)}`}>
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">
-        {d.kind}
+        {d.name}
         {d.status !== null && ` · ${d.status}`}
         {d.round !== null && d.round > 0 && ` · round ${d.round}`}
       </span>

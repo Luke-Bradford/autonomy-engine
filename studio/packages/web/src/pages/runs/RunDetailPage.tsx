@@ -11,6 +11,7 @@ import {
   type RunLifecycle,
 } from './runSummary';
 import { eventGloss, failureClass, formatClock, formatWhen } from './format';
+import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
@@ -120,6 +121,33 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [folded, overlay],
   );
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
+
+  /* #882 — the ONE name a node has in this view. The graph below reads the same
+     `activityLabels` map off the same doc, so the table and the picture beside
+     it cannot come to call one node two things.
+
+     Two cases have no name and are not given an invented one.
+
+     `doc` is null whenever the bound version will not resolve, which this page
+     is built to survive (U11) — the whole table still renders, from the doc-free
+     fold. That is the common one.
+
+     The other is narrower than it first looks, and worth stating exactly rather
+     than hand-waving at "the lists differ". A RERUN cannot cause it: `reseed`
+     pins R1's own `pipelineVersionId` and versions are immutable, so a rerun's
+     rows are always the bound doc's nodes. What can is the instance-key fold —
+     `deriveNodeActivity` folds a parallel foreach's `w@1`/`w@2` events onto the
+     canvas node `w`, and a doc carrying a LITERAL node id shaped `x@2` is folded
+     onto `x` with it (`runSummary.ts` records this, and save-time refuses such
+     ids only for parallel docs). A doc with `x@2` and no `x` therefore yields a
+     row `x` that this map cannot name.
+
+     Both fall back to the raw id — the fold key, which is what the event feed
+     below is keyed on and so still leads somewhere, even in the `x@2` case where
+     it names no doc node. A placeholder would be a THIRD name for the same node,
+     which is the defect this closes rather than a smaller version of it. */
+  const nodeNames = useMemo(() => (doc === null ? null : activityLabels(doc.nodes)), [doc]);
+  const nameOf = (nodeId: string) => nodeNames?.get(nodeId) ?? null;
 
   // U24 — which node's drill-in is open. Held as an ID and RESOLVED against the
   // live fold rather than storing the row itself, so the panel tracks a running
@@ -273,12 +301,26 @@ export function RunDetailPage({ runId }: { runId: string }) {
                  failure carries none, which is a real state (an expired
                  external wait), so it renders as nothing rather than a guess. */
               const cls = failureClass(n.failureKind, n.failureCode);
+              /* One lookup per row, read twice below: the button renders the
+                 name, and the sibling `<code>` exists only when there IS one. */
+              const name = nameOf(n.nodeId);
               return (
                 <tr key={n.nodeId}>
                   <td>
                     {/* A real <button> rather than a clickable/aria-ified <tr>:
-                        it takes its accessible name from the node id for free
-                        and is keyboard-operable without inventing key handling. */}
+                        it takes its accessible name from its own content for
+                        free and is keyboard-operable without inventing key
+                        handling.
+
+                        #882 — the button's content is the NAME, and the raw id
+                        sits beside it rather than inside it. Text inside a button
+                        joins its accessible name, so an id in here would make
+                        every row announce "HTTP Request 1 n_7c44a16f-98f1-…".
+                        Outside, the visible label and the accessible name are one
+                        string, and the id is still on screen — which it must be,
+                        because it is the only thing
+                        that matches the `${nodes.<id>.output.…}` expressions in
+                        the doc and the ids in the event feed below. */}
                     <button
                       type="button"
                       className="node-drill-in"
@@ -286,8 +328,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
                       onClick={() => setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId)}
                     >
-                      <code>{n.nodeId}</code>
+                      {name ?? <code>{n.nodeId}</code>}
                     </button>
+                    {name !== null && <code className="node-id">{n.nodeId}</code>}
                   </td>
                   <td>
                     {/* U25 — the word comes from `nodeStatus.ts`, which the
@@ -319,7 +362,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
       )}
 
       {openNode !== null && (
-        <NodeActivityPanel node={openNode} onClose={() => setOpenNodeId(null)} />
+        <NodeActivityPanel
+          node={openNode}
+          name={nameOf(openNode.nodeId)}
+          onClose={() => setOpenNodeId(null)}
+        />
       )}
 
       <h3>Events</h3>

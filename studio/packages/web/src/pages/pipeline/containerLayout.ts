@@ -404,18 +404,17 @@ export function containerHandles(width: number, height: number): NodeHandle[] {
  * `ContainerBox`. What is announced is what is drawn.
  *
  * `name` is whatever its CALLER draws on the box, not the kind — that is the
- * whole contract, and it widened in #883. The author canvas passes the
- * `containerLabels` ordinal ('loop 2'), because its box draws that. The run graph
- * (`runs/runFlow.ts`) still passes the bare kind, deliberately: its box still
- * draws the bare kind, and announcing an ordinal the run graph shows nowhere
- * would move the mismatch rather than close it. Closing it there is #886.
+ * whole contract, and it widened in #883. Both callers now pass the
+ * `containerLabels` ordinal ('loop 2') because both boxes draw it: the author
+ * canvas since #883, the run graph since #886. There is no longer a caller
+ * announcing something its box does not show.
  *
  * The parameter is therefore `string` and no longer `ContainerKind`, which does
- * cost a compiler check — nothing now stops a caller passing a kind where its box
+ * cost a compiler check — nothing stops a caller passing a kind where its box
  * shows a name. Both existing call sites are pinned by an e2e that asserts the
  * exact announced string, so the check is not simply lost: the author canvas by
  * `container-rendering.spec.ts` ('loop 1 container, 2 activities') and the run
- * graph by `run-status-vocabulary.spec.ts` ('stage container, 1 activity,
+ * graph by `run-status-vocabulary.spec.ts` ('stage 1 container, 1 activity,
  * running'). A THIRD caller would have neither, and should extend that list
  * rather than guess.
  */
