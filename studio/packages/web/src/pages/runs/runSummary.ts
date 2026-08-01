@@ -2,6 +2,7 @@ import {
   docNodeIdOf,
   EngineEventSchema,
   terminalStatusOf,
+  type FailureKind,
   type RunEvent,
   type RunLifecycleStatus,
 } from '@autonomy-studio/shared';
@@ -97,6 +98,34 @@ export interface NodeActivity {
   lastOutputName: string | undefined;
   /** The failure message, once the node has failed. */
   error: string | undefined;
+  /**
+   * #1 F0's machine-readable failure CLASS, off the `node.failed` that set
+   * `error` — the difference between "the provider throttled us" and "the
+   * credential is wrong", which the raw message is not obliged to say.
+   *
+   * `undefined` is a real answer, not a gap: two failure paths never produce a
+   * `node.failed` at all (`externalWait.expired`, whose expiry alarm fails the
+   * node directly), so a red row can legitimately have no class. Readers must
+   * render the absence rather than substitute a default — the reducer's own
+   * reading of an expired wait as permanent lives in the reducer, and restating
+   * it here would make this a second, drifting authority on it.
+   */
+  failureKind: FailureKind | undefined;
+  /** The optional machine detail beside `failureKind` (`FAILURE_CODES`, open). */
+  failureCode: string | undefined;
+  /**
+   * The DECLARED outputs of the most recent `node.succeeded` — the node's typed
+   * result contract, distinct from `outputs`/`lastOutputName` above, which count
+   * the streamed `node.output` observability frames.
+   */
+  outputValues: Record<string, unknown> | undefined;
+  /**
+   * The RAW node id the result on show came from, when it differed from the
+   * canvas node id this row folds onto — i.e. a parallel foreach's item instance
+   * (`w@1` → `w`). `undefined` for an ordinary node, so the collapse is named
+   * exactly where it happened instead of being caveated everywhere.
+   */
+  instanceId: string | undefined;
 }
 
 /**
@@ -139,11 +168,35 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: undefined,
+        instanceId: undefined,
       };
       byNode.set(nodeId, n);
     }
     return n;
   };
+
+  /**
+   * Drop the node's last TERMINAL result, because the node has re-opened. One
+   * helper rather than five assignments at each of the three re-open sites: the
+   * message, its class, the outputs and the instance they came from are one
+   * fact, and splitting them is how a stale kind outlives the message it
+   * classifies. Deliberately NOT called on `node.retryScheduled` — the hold
+   * keeps its reason on screen (see that case).
+   */
+  const clearResult = (n: NodeActivity): void => {
+    n.error = undefined;
+    n.failureKind = undefined;
+    n.failureCode = undefined;
+    n.outputValues = undefined;
+    n.instanceId = undefined;
+  };
+
+  /** The raw id, when this event came from a foreach ITEM INSTANCE of the node. */
+  const instanceOf = (rawNodeId: string): string | undefined =>
+    docNodeIdOf(rawNodeId) === rawNodeId ? undefined : rawNodeId;
 
   /**
    * A TERMINAL event for a node we never saw start. That happens for the
@@ -167,7 +220,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'running';
         n.attempts += 1;
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'node.output': {
@@ -179,6 +232,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'node.succeeded': {
         const n = ensure(e.nodeId);
         n.status = 'success';
+        n.outputValues = e.outputs;
+        n.instanceId = instanceOf(e.nodeId);
         countIfUnstarted(n); // a `filter`'s only event
         break;
       }
@@ -186,6 +241,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'failure';
         n.error = e.error;
+        n.failureKind = e.kind;
+        n.failureCode = e.code;
+        n.instanceId = instanceOf(e.nodeId);
         countIfUnstarted(n); // a `fail` control node's only event
         break;
       }
@@ -198,7 +256,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // retry firing; they differ in the engine, not in what the monitor shows.)
         const n = ensure(e.nodeId);
         n.status = 'running';
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'node.retryScheduled': {
@@ -207,6 +265,9 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // coming back. `error` is deliberately KEPT: it is the reason for the
         // hold, and the detail column is the only place it appears. It is cleared
         // by the `node.retryDue`/`node.dispatched` that re-open the node.
+        // U24: the failure CLASS is kept for the same reason and cleared by the
+        // same events — `clearResult` moves the whole result as one fact, so the
+        // kind can never outlive the message it classifies.
         ensure(e.nodeId).status = 'retrying';
         break;
       }
@@ -219,7 +280,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         const n = ensure(e.nodeId);
         n.status = 'waiting';
         n.attempts += 1;
-        n.error = undefined;
+        clearResult(n);
         break;
       }
       case 'timer.due':

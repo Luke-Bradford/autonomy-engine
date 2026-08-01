@@ -74,6 +74,10 @@ describe('deriveNodeActivity', () => {
         outputs: 2,
         lastOutputName: 'text',
         error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: {},
+        instanceId: undefined,
       },
       {
         nodeId: 'b',
@@ -82,6 +86,12 @@ describe('deriveNodeActivity', () => {
         outputs: 0,
         lastOutputName: undefined,
         error: 'boom',
+        // U24 — the class the message no longer carries. `code` is genuinely
+        // absent here: this producer stated none.
+        failureKind: 'permanent',
+        failureCode: undefined,
+        outputValues: undefined,
+        instanceId: undefined,
       },
     ]);
   });
@@ -324,6 +334,12 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
         outputs: 0,
         lastOutputName: undefined,
         error: undefined,
+        // The transient failure that opened the loop left NO residue once the
+        // node re-opened and then succeeded — message and class went together.
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: {},
+        instanceId: undefined,
       },
     ]);
   });
@@ -551,5 +567,175 @@ describe('activity.warned is inert in the FE fold (#750)', () => {
       envelope(warned),
     ];
     expect(deriveRunLifecycle(events)).toBe('running');
+  });
+});
+
+describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24 / #1 F0)', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+
+  it('captures `kind` and `code` off `node.failed`, not just the message', () => {
+    // The regression this closes: F0 moved the failure class out of the message
+    // string and into fields, and nothing in the monitor read them — so a
+    // throttled call and a bad credential were indistinguishable on screen.
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+    ];
+    expect(deriveNodeActivity(events)[0]).toMatchObject({
+      error: 'boom',
+      failureKind: 'transient',
+      failureCode: 'rate_limit',
+    });
+  });
+
+  it('leaves `code` undefined when the producer stated none (it is optional)', () => {
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        error: 'boom',
+        kind: 'permanent',
+      }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a.failureKind).toBe('permanent');
+    expect(a.failureCode).toBeUndefined();
+  });
+
+  it('KEEPS the class through the retry hold, and clears it at every site that clears `error`', () => {
+    // `error` is cleared in three branches — `node.dispatched`, the
+    // `retryRequested`/`retryDue` re-open, and the `waitScheduled`/`created`
+    // park — and deliberately KEPT on `retryScheduled` (the hold's reason).
+    // The class must travel with it at all four, or a stale kind outlives the
+    // message it classifies.
+    const failed: EngineEvent = {
+      type: 'node.failed',
+      runId: 'r',
+      nodeId: 'a',
+      attemptId: 'a#0',
+      error: 'boom',
+      kind: 'transient',
+      code: 'rate_limit',
+    };
+
+    const held = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope({
+        type: 'node.retryScheduled',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        attempt: 1,
+        nextAttemptAt: 10,
+      }),
+    ])[0];
+    expect(held).toMatchObject({ status: 'retrying', error: 'boom', failureKind: 'transient' });
+
+    const reopened = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope({
+        type: 'node.retryDue',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#1',
+        previousAttemptId: 'a#0',
+        attempt: 1,
+      }),
+    ])[0];
+    expect(reopened.error).toBeUndefined();
+    expect(reopened.failureKind).toBeUndefined();
+    expect(reopened.failureCode).toBeUndefined();
+
+    const redispatched = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope(failed),
+      envelope(dispatched('a', 'a#1')),
+    ])[0];
+    expect(redispatched.failureKind).toBeUndefined();
+    expect(redispatched.failureCode).toBeUndefined();
+  });
+
+  it('has NO class for an expired external wait — that failure carries no `node.failed`', () => {
+    // #4 A13 fails the node from the expiry alarm itself, so there is no kind to
+    // read. The panel must render the absence rather than manufacture one.
+    const events = [
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 5,
+      }),
+      envelope({
+        type: 'externalWait.expired',
+        runId: 'r',
+        nodeId: 'w',
+        previousAttemptId: 'w#0',
+      }),
+    ];
+    const [w] = deriveNodeActivity(events);
+    expect(w.status).toBe('failure');
+    expect(w.error).toBeDefined();
+    expect(w.failureKind).toBeUndefined();
+  });
+
+  it('captures the DECLARED outputs off `node.succeeded`, distinct from the streamed count', () => {
+    const events = [
+      envelope(dispatched('a', 'a#0')),
+      envelope({ type: 'node.output', runId: 'r', nodeId: 'a', name: 'text', value: 'hi' }),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'a',
+        attemptId: 'a#0',
+        outputs: { text: 'hi there', tokens: 12 },
+      }),
+    ];
+    const [a] = deriveNodeActivity(events);
+    expect(a.outputs).toBe(1); // the streamed observability count, unchanged
+    expect(a.outputValues).toEqual({ text: 'hi there', tokens: 12 });
+  });
+
+  it('names the INSTANCE a collapsed result came from, and nothing for an ordinary node', () => {
+    // A parallel foreach's item instances (`w@1`) fold onto the one node the
+    // author drew (`w`), last-write-wins. The row cannot avoid the collapse, but
+    // it can say which instance the result on show belongs to.
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { n: 1 },
+      }),
+    ]);
+    expect(w.nodeId).toBe('w');
+    expect(w.instanceId).toBe('w@1');
+
+    const [a] = deriveNodeActivity([
+      envelope(dispatched('a', 'a#0')),
+      envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
+    ]);
+    expect(a.instanceId).toBeUndefined();
   });
 });
