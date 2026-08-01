@@ -5,8 +5,10 @@ import {
   ContainerKindSchema,
   OutputTypeSchema,
   ParamTypeSchema,
+  availableRefs,
   getActivity,
   isStructuralCallActivity,
+  type RefSuggestion,
   type Container,
   type ConnectionPublic,
   type ContainerKind,
@@ -26,8 +28,10 @@ import {
   containersWithNew,
   createCanvasStore,
 } from './canvasStore';
-import { ConfigFieldControl } from './ConfigFieldControl';
+import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { ContainerPanel } from './ContainerPanel';
+import { activityLabel } from './activityLabel';
+import { insertModeFor } from './expressionInsert';
 import {
   assembleConfig,
   deriveConfigFields,
@@ -1041,6 +1045,100 @@ function ContainerSection({
 }
 
 /**
+ * The U8a flyout's context for one node: which references this node can use, how
+ * each is NAMED, and — per field — how choosing one is applied and which of them
+ * that field would actually accept.
+ *
+ * Naming lives on this side of the boundary deliberately. `availableRefs`
+ * returns identity only — a node's operator-facing name comes from the activity
+ * catalog (`activityLabel`, the same text its box carries) and a container's
+ * from `containerLabels`' document-order ordinals, neither reachable from
+ * `shared`. Computing a label there would be a second answer to "what is this
+ * node called", free to disagree with the canvas.
+ *
+ * The per-FIELD half is why `resolve` exists rather than a plain list.
+ * `availableRefs` answers at NODE granularity — is this reference resolvable and
+ * is its producer guaranteed to have run — which is everything the graph decides
+ * and nothing the field decides. The save gate ALSO type-checks some fields: a
+ * `filter`'s `items` wants an array and its `predicate` a boolean, and an
+ * `llm_call`'s `history` wants a turn list. On those fields most references are
+ * refused, and because they are also whole-value fields the picker is in REPLACE
+ * mode there — so an unfiltered list would destroy the author's working
+ * expression AND leave the doc unsavable.
+ *
+ * Rather than restating the type rules (a second reader of `FUNCTIONS` that
+ * would still miss `scanLlmHistoryRef`), each candidate is run through the SAME
+ * whole-doc validator the mode probe uses and dropped if it adds an issue. One
+ * mechanism, no rules copied, and it covers validators added later for free.
+ */
+function useExpressionPicker(
+  nodes: Node[],
+  edges: Edge[],
+  containers: Container[],
+  params: Param[],
+  nodeId: string,
+): FieldPicker {
+  return useMemo(() => {
+    const doc = { params, nodes, edges, containers };
+    const suggestions = availableRefs(doc, { kind: 'node', nodeId });
+    const labels = containerLabels(containers);
+    const nodeNames = new Map(nodes.map((n) => [n.id, activityLabel(n)]));
+
+    // An activity TITLE names a type, not an instance, so two `http_request`
+    // producers would both read "HTTP Request → body" with nothing to tell them
+    // apart — in a list whose whole job is to identify one of them. The doc id is
+    // appended only where the title is ambiguous, so the common case stays clean.
+    const titleCounts = new Map<string, number>();
+    for (const title of nodeNames.values()) {
+      titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+    }
+    const producerName = (id: string) => {
+      const title = nodeNames.get(id);
+      if (title === undefined) return labels.get(id) ?? id;
+      return (titleCounts.get(title) ?? 0) > 1 ? `${title} (${id})` : title;
+    };
+
+    const issuesWith = (fieldName: string, value: string) =>
+      validateCanvas(
+        nodes.map((n) =>
+          n.id === nodeId ? { ...n, config: { ...n.config, [fieldName]: value } } : n,
+        ),
+        edges,
+        containers,
+        params,
+      );
+
+    return {
+      describe: (s: RefSuggestion) => {
+        if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
+        if (s.kind === 'nodeStatus') return `${producerName(s.producerId ?? '')} → status`;
+        if (s.kind === 'item') return 'item — the element this round is processing';
+        return s.name ?? s.ref;
+      },
+      // Run only when a flyout OPENS, never per render: this validates the whole
+      // doc once for the mode and once more per candidate.
+      resolve: (fieldName: string) => {
+        const mode = insertModeFor((value) => issuesWith(fieldName, value));
+        // In INSERT mode the field becomes an interpolated template, which always
+        // resolves to a string whatever is spliced in — so no candidate can be
+        // type-refused, and the node-level answer is already exact. Only REPLACE
+        // mode makes the field BECOME the reference, which is where a field's own
+        // type check can reject it.
+        if (mode === 'insert') return { mode, suggestions };
+        const baseline = validateCanvas(nodes, edges, containers, params);
+        return {
+          mode,
+          suggestions: suggestions.filter((s) => {
+            const after = issuesWith(fieldName, s.insert);
+            return !after.some((issue) => !baseline.includes(issue));
+          }),
+        };
+      },
+    };
+  }, [nodes, edges, containers, params, nodeId]);
+}
+
+/**
  * Editor for one activity node.
  *
  * Settings are authored through a FORM derived from the activity's own
@@ -1077,6 +1175,15 @@ export function NodePanel({
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
   const { outputs, ...editable } = config;
+
+  // U8a — the whole doc, read reactively, because which references are legal
+  // here is a property of the GRAPH: adding an upstream edge changes the answer
+  // while this panel is open.
+  const docNodes = useStore(store, (s) => s.nodes);
+  const docEdges = useStore(store, (s) => s.edges);
+  const docContainers = useStore(store, (s) => s.containers);
+  const docParams = useStore(store, (s) => s.params);
+  const picker = useExpressionPicker(docNodes, docEdges, docContainers, docParams, nodeId);
 
   // U7 — the per-activity form, derived from the activity's own `configSchema`
   // (see `configForm.ts` for why the schema, not hand-written metadata, is the
@@ -1273,6 +1380,7 @@ export function NodePanel({
               field={field}
               value={inputs[field.name] ?? (field.kind === 'boolean' ? false : '')}
               onChange={(next) => setInputs((prev) => ({ ...prev, [field.name]: next }))}
+              picker={picker}
             />
           ))}
         </div>

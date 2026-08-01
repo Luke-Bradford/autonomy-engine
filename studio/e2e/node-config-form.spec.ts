@@ -21,6 +21,13 @@ import { openSeededCanvas } from './support/seedDoc';
  * can see it, and a regression there is silent data loss.
  */
 
+/**
+ * NOTE on the queries below: a config control is reached by ROLE, not by label.
+ * U8a's expression-picker toggle sits beside each text field and carries that
+ * field's name in its accessible name ("Insert reference into url"), so a
+ * `getByLabel('url')` now matches the textarea AND the button. Naming the role
+ * is the precise question this spec was always asking.
+ */
 function panel(page: Page) {
   return page.getByRole('complementary', { name: 'Properties' });
 }
@@ -51,14 +58,14 @@ test.describe('U7 — per-activity node config form', () => {
     // The hole this ticket closes: the settings are NAMED on screen. `url` and
     // `method` are not strings this spec invented — they are the keys of
     // `http_request`'s own `configSchema`, so a control per key is the assertion.
-    await expect(panel(page).getByLabel('url')).toBeVisible();
-    await expect(panel(page).getByLabel('method (optional)')).toBeVisible();
+    await expect(panel(page).getByRole('textbox', { name: 'url' })).toBeVisible();
+    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toBeVisible();
     // And the blob editor an author used to have to understand is not the
     // default surface any more.
     await expect(panel(page).getByLabel('Config (JSON)')).toHaveCount(0);
 
-    await panel(page).getByLabel('url').fill('https://example.test/hook');
-    await panel(page).getByLabel('method (optional)').fill('POST');
+    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://example.test/hook');
+    await panel(page).getByRole('textbox', { name: 'method (optional)' }).fill('POST');
     await panel(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -70,8 +77,12 @@ test.describe('U7 — per-activity node config form', () => {
     await page.locator('.react-flow__renderer').waitFor();
     await canvasNodes(page).first().click();
 
-    await expect(panel(page).getByLabel('url')).toHaveValue('https://example.test/hook');
-    await expect(panel(page).getByLabel('method (optional)')).toHaveValue('POST');
+    await expect(panel(page).getByRole('textbox', { name: 'url' })).toHaveValue(
+      'https://example.test/hook',
+    );
+    await expect(panel(page).getByRole('textbox', { name: 'method (optional)' })).toHaveValue(
+      'POST',
+    );
     expect(await persistedConfig(page, id)).toMatchObject({
       url: 'https://example.test/hook',
       method: 'POST',
@@ -111,7 +122,7 @@ test.describe('U7 — per-activity node config form', () => {
     });
 
     await canvasNodes(page).first().click();
-    await panel(page).getByLabel('url').fill('https://after');
+    await panel(page).getByRole('textbox', { name: 'url' }).fill('https://after');
     await panel(page).getByRole('button', { name: 'Apply config' }).click();
 
     await page.getByRole('button', { name: 'Save version' }).click();
@@ -154,7 +165,7 @@ test.describe('U7 — per-activity node config form', () => {
     // content includes the JSON being edited — which here literally contains the
     // word "url". A substring match would resolve to the escape hatch itself and
     // pass for the wrong reason.
-    await expect(panel(page).getByLabel('url', { exact: true })).toHaveCount(0);
+    await expect(panel(page).getByRole('textbox', { name: 'url', exact: true })).toHaveCount(0);
     await expect(
       panel(page).getByText(/Saved settings this form cannot show \(url\)/),
     ).toBeVisible();
