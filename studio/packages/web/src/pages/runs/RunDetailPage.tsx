@@ -10,7 +10,7 @@ import {
   reconcileNodeActivity,
   type RunLifecycle,
 } from './runSummary';
-import { eventGloss, failureClass, formatClock, formatWhen } from './format';
+import { eventGloss, failureClass, formatClock, formatNodeDuration, formatWhen } from './format';
 import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
@@ -291,6 +291,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
               <th scope="col">Node</th>
               <th scope="col">Status</th>
               <th scope="col">Attempts</th>
+              {/* #867 — wall clock for the node's LATEST attempt. The full
+                  sentence lives in the drill-in panel, where there is room to
+                  say what it includes; a header cannot carry it, and a `title`
+                  on a `th` is not reliably announced. */}
+              <th scope="col">Duration</th>
               <th scope="col">Outputs</th>
               <th scope="col">Detail</th>
             </tr>
@@ -344,6 +349,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                     </span>
                   </td>
                   <td>{n.attempts}</td>
+                  <td className="node-duration">{formatNodeDuration(n)}</td>
                   <td>{n.outputs}</td>
                   <td>
                     {n.error !== undefined

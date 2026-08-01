@@ -1,4 +1,5 @@
 import { nodeStatusLabel } from './nodeStatus';
+import { formatNodeDuration } from './format';
 import type { NodeActivity } from './runSummary';
 
 /**
@@ -97,6 +98,28 @@ export function NodeActivityPanel({
           {nodeStatusLabel(node.status)}
         </span>{' '}
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
+      </p>
+
+      {/* #867 — the duration, and the one place there is room to say what it
+          MEANS. The table's column can only carry the number.
+
+          Both halves are load-bearing. "Wall clock" and "including any wait"
+          keep it from being read as execution time — for a `wait`/`webhook`
+          node the span IS the park, and an LLM node's `activity.captured`
+          latency is a smaller, different number it must not be confused with.
+          The em-dash case is the honest one: an `if`, a `switch`, a `fail`, a
+          `filter` and a `call_pipeline` are started and settled by a SINGLE
+          event, so nothing ever measured a span for them, and saying so beats
+          printing a `0ms` nobody observed. */}
+      <p className="page-hint">
+        Duration <strong>{formatNodeDuration(node)}</strong> — wall clock for the latest attempt,
+        from start to settle, including any wait it parked on and excluding time held between
+        retries.{' '}
+        {node.startedAtMs === undefined &&
+          'This node is evaluated by the engine in a single step, which records no span to measure.'}
+        {node.startedAtMs !== undefined &&
+          node.endedAtMs === undefined &&
+          'This attempt has not settled yet, so its span is not complete.'}
       </p>
 
       {node.instanceId !== undefined && (

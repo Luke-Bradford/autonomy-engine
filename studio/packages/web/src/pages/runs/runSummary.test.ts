@@ -1110,6 +1110,8 @@ describe('reconcileNodeActivity', () => {
       failureCode: undefined,
       outputValues: undefined,
       instanceId: undefined,
+      startedAtMs: undefined,
+      endedAtMs: undefined,
       ...over,
     };
   }
@@ -1298,7 +1300,10 @@ describe('deriveNodeActivity — duration span (#867)', () => {
         },
         1_200,
       ),
-      envelope({ type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' }, 61_000),
+      envelope(
+        { type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' },
+        61_000,
+      ),
       envelope(
         { type: 'node.dispatched', runId: 'r', nodeId: 'a', attemptId: 'a#1', idempotent: true },
         61_010,
@@ -1370,7 +1375,6 @@ describe('deriveNodeActivity — duration span (#867)', () => {
           runId: 'r',
           nodeId: 'h',
           attemptId: 'h#0',
-          token: 't',
           dueAt: 50_000,
         },
         2_000,
@@ -1432,7 +1436,13 @@ describe('deriveNodeActivity — duration span (#867)', () => {
     // — a fabricated fact, which is worse than the em-dash this leaves.
     const events = [
       envelope(
-        { type: 'node.dispatched', runId: 'r', nodeId: 'w@1', attemptId: 'w@1#0', idempotent: true },
+        {
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'w@1',
+          attemptId: 'w@1#0',
+          idempotent: true,
+        },
         1_000,
       ),
       envelope(
@@ -1448,7 +1458,13 @@ describe('deriveNodeActivity — duration span (#867)', () => {
   it('keeps the span when the SAME foreach instance starts and terminates', () => {
     const events = [
       envelope(
-        { type: 'node.dispatched', runId: 'r', nodeId: 'w@1', attemptId: 'w@1#0', idempotent: true },
+        {
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'w@1',
+          attemptId: 'w@1#0',
+          idempotent: true,
+        },
         1_000,
       ),
       envelope(

@@ -28,14 +28,15 @@ const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
 
 let seq = 0;
-function envelope(event: EngineEvent): RunEvent {
+/** `at` pins the envelope `ts` — the append clock the #867 duration reads. */
+function envelope(event: EngineEvent, at?: number): RunEvent {
   return {
     id: `evt_${seq}`,
     runId: event.runId,
     seq: seq++,
     type: event.type,
     payload: event,
-    ts: seq,
+    ts: at ?? seq,
   };
 }
 
@@ -911,5 +912,86 @@ describe('RunDetailPage — U24 the states a single well-formed failure does not
     const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
     expect(within(panel).getByText('failure')).toBeInTheDocument();
     expect(within(panel).getByText('auth')).toBeInTheDocument();
+  });
+});
+
+describe('RunDetailPage — how long a node took (#867)', () => {
+  it('states the span of the latest attempt, and says nothing for a node that never started', async () => {
+    // The fixture routes `greet --failure--> never`, so a successful `greet`
+    // leaves `never` skipped — a row with no events at all, and therefore no
+    // span. It is the em-dash case sitting right beside the measured one.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope(
+            {
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              idempotent: true,
+            },
+            1_000,
+          ),
+          envelope(
+            {
+              type: 'node.succeeded',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              outputs: {},
+            },
+            4_200,
+          ),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const row = (await screen.findByRole('button', { name: 'HTTP Request 1' })).closest('tr')!;
+    expect(within(row).getByText('3s')).toBeInTheDocument();
+
+    const skippedRow = screen.getByText('never').closest('tr')!;
+    expect(within(skippedRow).getByText('—')).toBeInTheDocument();
+  });
+
+  it('the drill-in panel says what the number MEANS, not just the number', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope(
+            {
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              idempotent: true,
+            },
+            1_000,
+          ),
+          envelope(
+            {
+              type: 'node.succeeded',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              outputs: {},
+            },
+            4_200,
+          ),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+
+    const panel = screen.getByRole('complementary');
+    // Wall-clock, park-inclusive, retry-hold-exclusive: the three facts that
+    // stop this being read as execution time or as an LLM call's latency.
+    expect(within(panel).getByText(/wall clock for the latest attempt/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/including any wait it parked on/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/excluding time held between retries/i)).toBeInTheDocument();
   });
 });

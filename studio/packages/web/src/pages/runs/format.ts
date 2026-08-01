@@ -1,4 +1,4 @@
-import { TerminalNodeStatusSchema, type Run, type RunEvent } from '@autonomy-studio/shared';
+import type { Run, RunEvent } from '@autonomy-studio/shared';
 import type { NodeActivity } from './runSummary';
 
 /** Epoch-ms → a human date+time, or an em-dash for a null (not-yet) timestamp. */
@@ -49,18 +49,23 @@ export function formatRunDuration(
 /**
  * #867 — how long a NODE took, for the Monitor's per-node Duration column.
  *
- * Two guards, and each of them is the difference between a fact and a guess:
+ * A span exists only when the log holds BOTH stamps for the latest attempt.
+ * Two different absences render the same em-dash, and neither is a gap in this
+ * function:
  *
- * 1. **No start stamp → an em-dash.** An `if`/`switch`, a `fail`/`filter` and a
- *    `call_pipeline` node are started and settled by ONE event, so no span was
- *    ever measured for them. Rendering `0ms` there would state a measurement
- *    nothing took; the em-dash says "not measured", which is true.
- * 2. **An open span on a SETTLED node → an em-dash, not "so far".** "so far"
- *    counts against the caller's clock, so on a node the log left open — a run
- *    that died between a dispatch and its terminal, or any future single-event
- *    kind nobody wired a close for — it would grow forever and read as a node
- *    still working hours after the run ended. The node's own status is the
- *    authority on whether it is still going.
+ * 1. **No start stamp.** An `if`/`switch`, a `fail`/`filter` and a
+ *    `call_pipeline` node are started and settled by ONE event, so nothing ever
+ *    measured a span for them. `0ms` there would state a measurement nobody
+ *    took — the difference between "instant" and "not measured", and only one
+ *    of them is true.
+ * 2. **No end stamp.** The attempt has not settled (or the run died mid-flight
+ *    and never will). Deliberately NOT rendered as a live "3s so far": this
+ *    page has no ticking clock by design, so such a counter could only be
+ *    re-read when a FRAME lands — and for the node an operator actually watches
+ *    (dispatched, grinding, emitting nothing) the dispatch IS the last frame,
+ *    so it would sit at ~0ms while the node ran for minutes. A wrong number is
+ *    worse than an absent one, which is the whole premise of this ticket. #890
+ *    tracks the live counter, which needs a clock, not a format change.
  *
  * The number is WALL CLOCK for the latest attempt, from start to settle. That
  * INCLUDES a `wait`/`webhook` park (for those nodes waiting is the work) and
@@ -68,21 +73,10 @@ export function formatRunDuration(
  * deliberately not called execution time, and it is not
  * `activity.captured.latencyMs` — that is one provider call's wall time, a
  * different number on a different scope.
- *
- * `now` is the CALLER's, on the same convention `formatRunDuration` sets above:
- * a point-in-time snapshot, not a ticking clock, which is also what keeps this
- * pure and testable.
  */
-export function formatNodeDuration(
-  node: Pick<NodeActivity, 'status' | 'startedAtMs' | 'endedAtMs'>,
-  now: number,
-): string {
-  if (node.startedAtMs === undefined) return '—';
-  if (node.endedAtMs !== undefined) {
-    return formatElapsed(Math.max(0, node.endedAtMs - node.startedAtMs));
-  }
-  if (TerminalNodeStatusSchema.safeParse(node.status).success) return '—';
-  return `${formatElapsed(Math.max(0, now - node.startedAtMs))} so far`;
+export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs'>): string {
+  if (node.startedAtMs === undefined || node.endedAtMs === undefined) return '—';
+  return formatElapsed(Math.max(0, node.endedAtMs - node.startedAtMs));
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

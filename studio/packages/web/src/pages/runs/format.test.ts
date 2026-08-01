@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RunEvent } from '@autonomy-studio/shared';
-import { eventGloss, failureClass, formatRunDuration } from './format';
+import { eventGloss, failureClass, formatNodeDuration, formatRunDuration } from './format';
 
 function evt(payload: unknown): RunEvent {
   return { id: 'e', runId: 'r', seq: 1, type: 'x', payload, ts: 0 } as RunEvent;
@@ -114,5 +114,42 @@ describe('formatRunDuration', () => {
   it('never renders a negative duration from a clock that ran backwards', () => {
     expect(formatRunDuration(run({ status: 'running', finishedAt: null }), 0)).toBe('0ms so far');
     expect(formatRunDuration(run({ startedAt: 8_000, finishedAt: 1_000 }), 0)).toBe('0ms');
+  });
+});
+
+describe('formatNodeDuration (#867)', () => {
+  const node = (over: Partial<Parameters<typeof formatNodeDuration>[0]>) => ({
+    startedAtMs: undefined,
+    endedAtMs: undefined,
+    ...over,
+  });
+
+  it('is the span between the attempt start and its settle', () => {
+    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 4_200 }))).toBe('3s');
+  });
+
+  it('renders sub-second spans in ms rather than rounding them to 0s', () => {
+    expect(formatNodeDuration(node({ startedAtMs: 1_000, endedAtMs: 1_820 }))).toBe('820ms');
+  });
+
+  it('says NOTHING for a node with no start stamp — never 0ms', () => {
+    // An `if`/`switch`, a `fail`/`filter` and a `call_pipeline` are started and
+    // settled by ONE event, so no span was ever measured. `0ms` would state a
+    // measurement nothing took; this is the difference between "instant" and
+    // "not measured", and only one of them is true.
+    expect(formatNodeDuration(node({}))).toBe('—');
+    expect(formatNodeDuration(node({ endedAtMs: 4_000 }))).toBe('—');
+  });
+
+  it('says nothing for an attempt that has not settled, rather than counting it up', () => {
+    // No live counter, deliberately: the page has no ticking clock, so the
+    // value could only refresh when a FRAME lands — and for a node that is
+    // grinding and emitting nothing, its own dispatch IS the last frame. The
+    // counter would read ~0 while the node ran for minutes.
+    expect(formatNodeDuration(node({ startedAtMs: 1_000 }))).toBe('—');
+  });
+
+  it('clamps a backwards clock to zero rather than printing a negative span', () => {
+    expect(formatNodeDuration(node({ startedAtMs: 4_000, endedAtMs: 1_000 }))).toBe('0ms');
   });
 });
