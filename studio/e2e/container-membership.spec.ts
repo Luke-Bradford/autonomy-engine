@@ -279,7 +279,9 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-ungroup', stageDoc());
 
-    await nodeById(page, 'stage_1').getByRole('button', { name: 'Delete stage 1 container' }).click();
+    await nodeById(page, 'stage_1')
+      .getByRole('button', { name: 'Delete stage 1 container' })
+      .click();
 
     await expect(nodeById(page, 'stage_1')).toHaveCount(0);
     await expect(nodeById(page, 'a')).toHaveCount(1);
