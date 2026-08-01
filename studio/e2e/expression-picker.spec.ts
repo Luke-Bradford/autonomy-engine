@@ -87,6 +87,47 @@ test.describe('U8a — expression insert flyout', () => {
     await expectQuiet(page, problems);
   });
 
+  test('a type-checked field offers only what it would accept', async ({ page }) => {
+    // A `filter`'s `items` must resolve to an ARRAY and is whole-value, so the
+    // picker is in REPLACE mode there. Offering a string reference would destroy
+    // the author's working expression and leave the doc unsavable — the one
+    // combination that must never ship.
+    const problems = collectPageProblems(page);
+    await openSeededCanvas(page, 'u8a type checked field', {
+      nodes: [
+        {
+          id: 'src',
+          type: 'http_request',
+          position: { x: 0, y: 0 },
+          config: {
+            url: 'https://seed.test',
+            method: 'GET',
+            outputs: [
+              { name: 'rows', type: 'json' },
+              { name: 'label', type: 'string' },
+            ],
+          },
+        },
+        {
+          id: 'pick',
+          type: 'filter',
+          position: { x: 260, y: 0 },
+          config: { items: '${nodes.src.output.rows}', predicate: '${item}' },
+        },
+      ],
+      edges: [{ id: 'e1', from: 'src', to: 'pick', on: 'success' }],
+    });
+
+    await nodeById(page, 'pick').click();
+    await panel(page).getByRole('button', { name: 'Insert reference into items' }).click();
+
+    await expect(panel(page).getByRole('button', { name: /HTTP Request → rows/ })).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: /HTTP Request → label/ })).toHaveCount(0);
+    await expect(panel(page).getByRole('button', { name: /^runId/ })).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
   test('a whole-value field is REPLACED, so the doc it produces still saves', async ({ page }) => {
     const problems = collectPageProblems(page);
     const id = await openSeededCanvas(page, 'u8a whole value field', {

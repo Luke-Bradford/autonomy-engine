@@ -8,6 +8,7 @@ import type {
 } from './types.js';
 import { ParamResolveError, SubstituteError, TERMINAL_NODE } from './types.js';
 import type { TriggerContext } from '../schemas/trigger-context.js';
+import type { OutputType, ParamType } from '../schemas/pipeline.js';
 import type { OutputContract } from './outputs.js';
 import { containerOutputContract, outputContract } from './outputs.js';
 import type { Expr, ExprSegment, TemplateMode } from './expr.js';
@@ -1361,8 +1362,18 @@ export type RefSuggestion = {
   producerId?: string;
   /** Output name, param name, or run/trigger field. Absent for `${item}`. */
   name?: string;
-  /** The statically-known type, or `any` where the language does not know one. */
-  type: string;
+  /**
+   * The type as DECLARED where the reference is declared — a param's `type`, an
+   * output's `type`, or the fixed shape of a run/trigger field. For the author's
+   * orientation, so it is the type they WROTE.
+   *
+   * Deliberately NOT `refRootType`'s answer, which is the type the static
+   * checker INFERS, and which differs: `refRootType` reports `${trigger.body}`
+   * as `any` (E7's deep-address escape hatch), where the field is declared
+   * `json`. Naming that divergence rather than quietly picking one — a caller
+   * reasoning about assignability must ask `refRootType`, not this.
+   */
+  declaredType: ParamType | OutputType | 'any';
   /**
    * `needs-default` — the reference is legal ONLY inside `default()`'s first
    * argument, and `insert` is already wrapped accordingly. The distinction is
@@ -1384,6 +1395,18 @@ export type RefSuggestion = {
  * mirrors `checkRefRoot`'s accept/reject decisions one for one. `available-refs.
  * test.ts` pins the property directly by feeding every suggestion back through
  * `validatePipelineDoc`.
+ *
+ * THE PROPERTY IS SCOPED, and the scope is load-bearing: it covers ROOT LEGALITY
+ * and AVAILABILITY (is this reference resolvable, and is its producer guaranteed
+ * to have run) — the questions that depend on the graph. It does NOT cover the
+ * per-field TYPE checks the save gate also runs, because the site here is a
+ * NODE, not a field, and a type answer needs the field. A `filter`'s `items`
+ * wants an array and its `predicate` a boolean, so most of what this offers is
+ * type-refused there; `available-refs.test.ts` pins that gap as a
+ * characterization test rather than leaving it invisible, and #864 closes it by
+ * widening the site to `{ nodeId, field }`. The UI mitigates it in the meantime
+ * the way it mitigates every other bad edit: the badge list names the refusal
+ * and Save stays gated.
  *
  * It errs toward UNDER-offering wherever the answer is unknowable rather than
  * illegal:
@@ -1420,7 +1443,9 @@ export function availableRefs(
       ref: 'item',
       insert: '${item}',
       kind: 'item',
-      type: 'any',
+      // E4 decided the element shape is run-time-only — there is no declared
+      // type for a foreach element, and inventing one would be a claim.
+      declaredType: 'any',
       availability: 'available',
     });
   }
@@ -1434,7 +1459,7 @@ export function availableRefs(
       insert: `\${params.${p.name}}`,
       kind: 'param',
       name: p.name,
-      type: p.type,
+      declaredType: p.type,
       availability: 'available',
     });
   }
@@ -1461,7 +1486,7 @@ export function availableRefs(
         kind: 'nodeOutput',
         producerId: id,
         name: declared.name,
-        type: declared.type,
+        declaredType: declared.type,
         availability: dominates ? 'available' : 'needs-default',
       });
     }
@@ -1478,7 +1503,7 @@ export function availableRefs(
       insert: `\${nodes.${id}.status}`,
       kind: 'nodeStatus',
       producerId: id,
-      type: 'string',
+      declaredType: 'string',
       availability: 'available',
     });
   }
@@ -1489,7 +1514,7 @@ export function availableRefs(
       insert: `\${run.${field}}`,
       kind: 'run',
       name: field,
-      type: 'string',
+      declaredType: 'string',
       availability: 'available',
     });
   }
@@ -1502,12 +1527,18 @@ export function availableRefs(
       insert: `\${trigger.${field}}`,
       kind: 'trigger',
       name: field,
-      type: field === 'body' ? 'json' : 'string',
+      declaredType: field === 'body' ? 'json' : 'string',
       availability: 'available',
     });
   }
 
-  return out;
+  // Deduped by `ref`, because a doc with a DUPLICATE node id emits each of that
+  // id's references twice. Such a doc is already unsavable (`validateDoc` reports
+  // the duplicate), but it still renders and its panel still opens — and a
+  // consumer keying a list on `ref` would collide on a key. One reference, one
+  // entry, whatever the doc is doing.
+  const seen = new Set<string>();
+  return out.filter((s) => (seen.has(s.ref) ? false : (seen.add(s.ref), true)));
 }
 
 // --- secret-sink gate (item 7 / S2) ----------------------------------------

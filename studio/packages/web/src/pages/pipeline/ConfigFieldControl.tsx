@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { RefSuggestion } from '@autonomy-studio/shared';
 import type { ConfigField } from './configForm';
-import { ExpressionPicker } from './ExpressionPicker';
-import { applyInsert, type InsertMode } from './expressionInsert';
+import { ExpressionPicker, type FieldOptions } from './ExpressionPicker';
+import { applyInsert } from './expressionInsert';
 
 /**
  * Everything the U8a flyout needs that only the OWNING panel can supply: the
@@ -11,9 +11,9 @@ import { applyInsert, type InsertMode } from './expressionInsert';
  * (`ContainerPanel`, whose container fields are #864) simply omits it.
  */
 export type FieldPicker = {
-  suggestions: RefSuggestion[];
   describe: (suggestion: RefSuggestion) => string;
-  resolveMode: (fieldName: string) => InsertMode;
+  /** Resolved lazily, per OPENING — it runs the whole-doc validator repeatedly. */
+  resolve: (fieldName: string) => FieldOptions;
 };
 
 /**
@@ -55,6 +55,13 @@ export function ConfigFieldControl({
   // re-render. Held in a ref rather than state so restoring it does not itself
   // cause one.
   const caret = useRef<number | null>(null);
+  // Whether the author has ever put the caret in THIS field. A textarea nobody
+  // has focused reports `selectionStart === 0`, which is indistinguishable from
+  // a deliberate caret at the start — so without this, the commonest flow of all
+  // (select a node, click Insert reference without clicking into the field
+  // first) PREPENDS the reference to the value already there. Untouched means
+  // "append", which is what an author who never placed a caret means.
+  const touched = useRef(false);
   useEffect(() => {
     const at = caret.current;
     if (at === null || textareaRef.current === null) return;
@@ -124,42 +131,57 @@ export function ConfigFieldControl({
         <textarea
           ref={textareaRef}
           value={text}
+          onSelect={() => {
+            touched.current = true;
+          }}
           rows={field.kind === 'json' || field.kind === 'stringList' ? 4 : 2}
           spellCheck={false}
           placeholder={field.defaultText}
           onChange={(e) => onChange(e.target.value)}
         />
       </label>
-      {/* A SIBLING of the label, not a child: a button inside a `<label>` still
-          triggers the label's focus behaviour, which would fight the picker.
+      {/* A SIBLING of the label, not a child, because a button INSIDE the label
+          contaminates the textarea's accessible name — which is exactly why
+          `e2e/node-config-form.spec.ts` had to move off `getByLabel`. (It does
+          NOT steal focus: per the HTML standard a label's activation behaviour
+          does nothing for an event targeted at interactive content inside it,
+          and Chromium leaves `activeElement` on BODY. An earlier version of this
+          comment claimed otherwise — right decision, wrong reason.)
 
-          NOT offered on a `json` field, and that is a refusal rather than an
-          oversight. A `json` control parses its text with `JSON.parse` on apply
-          (`configForm.parseFieldInput`), so a bare `${...}` — which is what the
-          engine wants stored, and what every other field takes — is not valid
-          JSON and the apply would simply fail. Inserting the QUOTED form instead
-          would be right at a value slot and wrong inside an existing string
-          literal, a distinction only a JSON-aware caret could make. So the
-          control is withheld rather than made to offer a dead end; the four
-          `llm_call` fields this most affects are getting richer editors under
-          #852, and the expression half is noted in #864. */}
-      {picker && field.kind !== 'json' && (
+          Offered on `text` fields ONLY, and the two exclusions are refusals
+          rather than oversights:
+
+          - `json` parses its text with `JSON.parse` on apply
+            (`configForm.parseFieldInput`), so the bare `${...}` every other
+            field takes is not valid JSON and the apply would simply fail. The
+            QUOTED form would be right at a value slot and wrong inside an
+            existing string literal — a distinction only a JSON-aware caret could
+            make. The four `llm_call` fields this most affects are getting richer
+            editors under #852.
+          - `stringList` is `switch.cases` and nothing else in today's catalog
+            (the only `z.array(z.string())` in the registry), and a switch's case
+            labels are matched LITERALLY: `evalSwitchBranch` compares
+            `rawCases.includes(out)` straight off `node.config` with no
+            `substitute` call (`engine/reduce.ts`). So a `${}` inserted there
+            saves clean — `validateRefs` scans it like any other string — and
+            then silently never matches, routing every value to `default`. That
+            is the worst shape of false offer: it passes every gate and fails at
+            run looking like a benign fallthrough.
+
+          Both are recorded on #864. */}
+      {picker && field.kind === 'text' && (
         <ExpressionPicker
           fieldName={field.name}
-          suggestions={picker.suggestions}
           describe={picker.describe}
-          resolveMode={() => picker.resolveMode(field.name)}
+          resolve={() => picker.resolve(field.name)}
           onSelect={(insert, mode) => {
             // The selection survives the toggle click (focus moves, the caret
-            // does not), so a mid-string insert lands where the author left it.
+            // does not), so a mid-string insert lands where the author left it —
+            // but only if they ever placed one. See `touched`.
             const el = textareaRef.current;
-            const next = applyInsert(
-              text,
-              el?.selectionStart ?? text.length,
-              el?.selectionEnd ?? text.length,
-              insert,
-              mode,
-            );
+            const at = touched.current && el !== null ? el.selectionStart : text.length;
+            const to = touched.current && el !== null ? el.selectionEnd : text.length;
+            const next = applyInsert(text, at, to, insert, mode);
             caret.current = next.caret;
             onChange(next.value);
           }}

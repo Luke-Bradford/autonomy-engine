@@ -3,89 +3,103 @@ import type { RefSuggestion } from '@autonomy-studio/shared';
 import type { InsertMode } from './expressionInsert';
 
 /**
+ * What the flyout offers for ONE field: the references that survive that
+ * field's own checks, and how choosing one is applied.
+ *
+ * Resolved lazily — see `resolve` on the component — because computing it runs
+ * the whole-doc validator once per candidate.
+ */
+export type FieldOptions = { mode: InsertMode; suggestions: RefSuggestion[] };
+
+/**
  * The U8a expression-insert flyout: pick a `${}` reference instead of knowing
  * the syntax and the surrounding graph by heart.
  *
  * Before this, wiring one activity's output into another's input meant typing
  * `${nodes.<id>.output.<name>}` from memory — nothing in the app said which ids
  * existed, which of their outputs were declared, or which were readable from
- * where you were standing. The catalog behind this list is `availableRefs`,
- * which reads the SAME dominance analysis the save-gate reads, so every option
- * shown is one the doc will actually accept (its "no false offer" property).
+ * where you were standing.
+ *
+ * IN-FLOW, not an overlay. `index.css` carries a note against `.content`
+ * (`overflow-y: auto`) warning that an absolutely-positioned in-page overlay
+ * must portal to body or be CLIPPED, and naming this ticket. Rather than
+ * portalling — which buys a floating layer this list does not need — the list
+ * opens in the flow of the panel and pushes the form below it down. Nothing can
+ * clip it, there is no z-index to lose, and the panel's own scrolling reaches it.
  *
  * DELIBERATELY not a live region. The canvas already runs two polite announcers
  * and one assertive refusal, and `FlowCanvas` records the decision not to add a
  * third — so this is a plain disclosure: the toggle owns `aria-expanded`, the
- * list is `aria-labelledby` it, and Escape closes and hands focus back.
+ * list is `aria-labelledby` it, and Escape (handled on the WRAPPER, so it works
+ * from the toggle where focus actually sits after opening) closes and returns.
  */
 export function ExpressionPicker({
   fieldName,
-  suggestions,
   describe,
-  resolveMode,
+  resolve,
   onSelect,
 }: {
   fieldName: string;
-  suggestions: RefSuggestion[];
   /** How a suggestion is NAMED — web-side, because the node labels live here. */
   describe: (suggestion: RefSuggestion) => string;
   /**
-   * Asked once per opening rather than per render: it probes the validator, and
-   * a field's shape cannot change while the list is open.
+   * Asked once per OPENING, never per render: it runs the whole-doc validator
+   * once to settle the mode and once per candidate to drop the references this
+   * field would refuse. A field's shape cannot change while the list is open.
    */
-  resolveMode: () => InsertMode;
+  resolve: () => FieldOptions;
   onSelect: (text: string, mode: InsertMode) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState<InsertMode>('insert');
+  const [options, setOptions] = useState<FieldOptions | null>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const listId = useId();
   const toggleId = useId();
+  const open = options !== null;
 
-  // An activity whose every producer is downstream has nothing to offer; a
-  // control that opens onto an empty list is worse than no control.
-  if (suggestions.length === 0) return null;
-
-  const close = (refocus: boolean) => {
-    setOpen(false);
-    if (refocus) toggleRef.current?.focus();
+  const close = () => {
+    setOptions(null);
+    toggleRef.current?.focus();
   };
 
   return (
-    <div className="expression-picker">
+    <div
+      className="expression-picker"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) close();
+      }}
+    >
       <button
         type="button"
         id={toggleId}
         ref={toggleRef}
         className="expression-picker-toggle"
         aria-expanded={open}
-        aria-controls={listId}
+        // Only while the list EXISTS: `aria-controls` naming an absent element
+        // is an invalid attribute value, which axe reports.
+        aria-controls={open ? listId : undefined}
         aria-label={`Insert reference into ${fieldName}`}
-        onClick={() => {
-          if (!open) setMode(resolveMode());
-          setOpen(!open);
-        }}
+        onClick={() => setOptions(open ? null : resolve())}
       >
         Insert reference
       </button>
 
-      {open && (
-        <div
-          id={listId}
-          className="expression-picker-list"
-          role="group"
-          aria-labelledby={toggleId}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') close(true);
-          }}
-        >
+      {options !== null && (
+        <div id={listId} className="expression-picker-list" role="group" aria-labelledby={toggleId}>
           <p className="page-hint">
-            {mode === 'replace'
+            {options.mode === 'replace'
               ? `${fieldName} takes one whole expression — choosing a reference REPLACES its current value.`
               : `Inserted at the cursor in ${fieldName}.`}
           </p>
+          {/* Reachable, and worth saying rather than showing an empty box: a
+              field with a narrow type (a `filter`'s array or boolean) can refuse
+              every reference this graph has to offer. */}
+          {options.suggestions.length === 0 && (
+            <p className="page-hint">
+              No reference in this pipeline fits {fieldName} — it would be refused at save.
+            </p>
+          )}
           {GROUPS.map(({ kind, heading }) => {
-            const rows = suggestions.filter((s) => s.kind === kind);
+            const rows = options.suggestions.filter((s) => s.kind === kind);
             if (rows.length === 0) return null;
             return (
               <section key={kind}>
@@ -96,12 +110,12 @@ export function ExpressionPicker({
                       <button
                         type="button"
                         onClick={() => {
-                          onSelect(suggestion.insert, mode);
-                          close(true);
+                          onSelect(suggestion.insert, options.mode);
+                          close();
                         }}
                       >
                         <span className="expression-picker-name">{describe(suggestion)}</span>
-                        <span className="expression-picker-type">{suggestion.type}</span>
+                        <span className="expression-picker-type">{suggestion.declaredType}</span>
                         {suggestion.availability === 'needs-default' && (
                           // Said plainly rather than hidden behind a longer
                           // string: the author asked for one reference and is

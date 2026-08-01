@@ -1045,8 +1045,9 @@ function ContainerSection({
 }
 
 /**
- * The U8a flyout's context for one node: which references are legal here, how to
- * NAME each, and how to tell whether a given field takes a whole expression.
+ * The U8a flyout's context for one node: which references this node can use, how
+ * each is NAMED, and — per field — how choosing one is applied and which of them
+ * that field would actually accept.
  *
  * Naming lives on this side of the boundary deliberately. `availableRefs`
  * returns identity only — a node's operator-facing name comes from the activity
@@ -1054,6 +1055,21 @@ function ContainerSection({
  * from `containerLabels`' document-order ordinals, neither reachable from
  * `shared`. Computing a label there would be a second answer to "what is this
  * node called", free to disagree with the canvas.
+ *
+ * The per-FIELD half is why `resolve` exists rather than a plain list.
+ * `availableRefs` answers at NODE granularity — is this reference resolvable and
+ * is its producer guaranteed to have run — which is everything the graph decides
+ * and nothing the field decides. The save gate ALSO type-checks some fields: a
+ * `filter`'s `items` wants an array and its `predicate` a boolean, and an
+ * `llm_call`'s `history` wants a turn list. On those fields most references are
+ * refused, and because they are also whole-value fields the picker is in REPLACE
+ * mode there — so an unfiltered list would destroy the author's working
+ * expression AND leave the doc unsavable.
+ *
+ * Rather than restating the type rules (a second reader of `FUNCTIONS` that
+ * would still miss `scanLlmHistoryRef`), each candidate is run through the SAME
+ * whole-doc validator the mode probe uses and dropped if it adds an issue. One
+ * mechanism, no rules copied, and it covers validators added later for free.
  */
 function useExpressionPicker(
   nodes: Node[],
@@ -1067,30 +1083,57 @@ function useExpressionPicker(
     const suggestions = availableRefs(doc, { kind: 'node', nodeId });
     const labels = containerLabels(containers);
     const nodeNames = new Map(nodes.map((n) => [n.id, activityLabel(n)]));
-    const producerName = (id: string) => nodeNames.get(id) ?? labels.get(id) ?? id;
+
+    // An activity TITLE names a type, not an instance, so two `http_request`
+    // producers would both read "HTTP Request → body" with nothing to tell them
+    // apart — in a list whose whole job is to identify one of them. The doc id is
+    // appended only where the title is ambiguous, so the common case stays clean.
+    const titleCounts = new Map<string, number>();
+    for (const title of nodeNames.values()) {
+      titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+    }
+    const producerName = (id: string) => {
+      const title = nodeNames.get(id);
+      if (title === undefined) return labels.get(id) ?? id;
+      return (titleCounts.get(title) ?? 0) > 1 ? `${title} (${id})` : title;
+    };
+
+    const issuesWith = (fieldName: string, value: string) =>
+      validateCanvas(
+        nodes.map((n) =>
+          n.id === nodeId ? { ...n, config: { ...n.config, [fieldName]: value } } : n,
+        ),
+        edges,
+        containers,
+        params,
+      );
 
     return {
-      suggestions,
       describe: (s: RefSuggestion) => {
         if (s.kind === 'nodeOutput') return `${producerName(s.producerId ?? '')} → ${s.name}`;
         if (s.kind === 'nodeStatus') return `${producerName(s.producerId ?? '')} → status`;
         if (s.kind === 'item') return 'item — the element this round is processing';
         return s.name ?? s.ref;
       },
-      // Probed only when a flyout OPENS, not per render: each call runs the
-      // whole-doc validator twice, and a field's shape cannot change underneath
-      // an open list.
-      resolveMode: (fieldName: string) =>
-        insertModeFor((value) =>
-          validateCanvas(
-            nodes.map((n) =>
-              n.id === nodeId ? { ...n, config: { ...n.config, [fieldName]: value } } : n,
-            ),
-            edges,
-            containers,
-            params,
-          ),
-        ),
+      // Run only when a flyout OPENS, never per render: this validates the whole
+      // doc once for the mode and once more per candidate.
+      resolve: (fieldName: string) => {
+        const mode = insertModeFor((value) => issuesWith(fieldName, value));
+        // In INSERT mode the field becomes an interpolated template, which always
+        // resolves to a string whatever is spliced in — so no candidate can be
+        // type-refused, and the node-level answer is already exact. Only REPLACE
+        // mode makes the field BECOME the reference, which is where a field's own
+        // type check can reject it.
+        if (mode === 'insert') return { mode, suggestions };
+        const baseline = validateCanvas(nodes, edges, containers, params);
+        return {
+          mode,
+          suggestions: suggestions.filter((s) => {
+            const after = issuesWith(fieldName, s.insert);
+            return !after.some((issue) => !baseline.includes(issue));
+          }),
+        };
+      },
     };
   }, [nodes, edges, containers, params, nodeId]);
 }
