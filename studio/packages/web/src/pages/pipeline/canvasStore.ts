@@ -33,9 +33,19 @@ export interface ConnectOptions {
   back?: boolean;
 }
 
-/** What the property panel is currently editing. */
+/**
+ * What the property panel is currently editing.
+ *
+ * `container` is NOT driven by React Flow. A container node is deliberately
+ * `selectable: false` — RF writes `pointer-events: all` on a selectable node's
+ * wrapper, and a container's wrapper spans a REGION of the canvas, so the box
+ * would swallow every pane click aimed between its children (mutation-proved by
+ * `e2e/container-rendering.spec.ts`). A container is selected only by the
+ * explicit button on its box, and cleared only by a pane click or by its own
+ * deletion — never by `nextSelection`, which speaks for RF.
+ */
 export interface Selection {
-  kind: 'node' | 'edge';
+  kind: 'node' | 'edge' | 'container';
   id: string;
 }
 
@@ -321,6 +331,37 @@ export interface CanvasState {
    */
   setNodeContainer(nodeId: string, containerId: string | null): void;
   /**
+   * U23 — replace the container `id` with `next`, its config edited.
+   *
+   * Takes the WHOLE container rather than a patch, the `updateNodeConfig`
+   * precedent: the merge belongs in the panel, where `assembleConfig` already
+   * carries the proven "preserve every key no field owns" rule, not restated
+   * here as a second merge that could disagree with it.
+   *
+   * Refuses (silent no-op) an unknown id, a container the schema rejects, and
+   * any change to `id` or `children` — the two STRUCTURAL fields, which this
+   * action does not own. A rename would strand the id's three other readers (an
+   * edge endpoint, a `containerMembership` key, the selection's own handle); a
+   * membership write belongs to `setNodeContainer`, which alone takes the child
+   * out of whatever container held it, and to `deleteNode`, which prunes (#746).
+   * Routing membership through here would bypass both and could author the
+   * duplicate-child doc `validateDoc` refuses — or the empty container
+   * `createContainer` is careful never to mint (#748). Silent for the reason
+   * `createContainer` is: the canvas explains refusals, because it is where the
+   * operator is.
+   *
+   * Stores the INPUT, never `parsed.data`. `ContainerSchema` is a plain
+   * `z.object`, so it strips unknown keys; storing the parse result would drop
+   * whatever a git-imported container carries that this schema version does not
+   * know about — the same silent-loss shape `assembleConfig` exists to prevent.
+   *
+   * Deliberately does NOT refuse an edit that leaves the DOC invalid (a blanked
+   * `exitWhen`, say). That is `setNodeContainer`'s posture and it is deliberate:
+   * the badge (#444) blocks the save and the same panel reverses the edit,
+   * whereas refusing here would make a half-finished edit unrepresentable.
+   */
+  updateContainer(id: string, next: Container): void;
+  /**
    * Append an edge from `from` to `to` carrying `condition`. Refuses (no-op) a
    * candidate `connectRejection` rejects — a self-loop, an endpoint that is not
    * a current node/container, a duplicate, or an edge that would close a forward
@@ -600,10 +641,15 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         return {
           containers: s.containers.filter((c) => c.id !== id),
           edges: s.edges.filter((e) => e.from !== id && e.to !== id),
-          // A container is not a `Selection` kind — nothing can select one — so
-          // only a selected EDGE the cascade just removed can be stranded.
+          // Two ways to strand a selection here: an EDGE the cascade removed,
+          // and — since U23 — the deleted CONTAINER itself. RF drives neither
+          // clear (it never sees a container at all, and the edge is gone
+          // before it could emit a deselect), so both are this action's job.
           selected:
-            s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id) ? null : s.selected,
+            (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id)) ||
+            (s.selected?.kind === 'container' && s.selected.id === id)
+              ? null
+              : s.selected,
           dirty: true,
         };
       });
@@ -637,6 +683,27 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       // have unsaved changes" prompt loses the operator's trust.
       if (next === s.containers) return;
       set({ containers: next, dirty: true });
+    },
+
+    updateContainer(id, next) {
+      const s = get();
+      const current = s.containers.find((c) => c.id === id);
+      if (current === undefined) return;
+      // `id` and `children` are structural, not config — see the interface note.
+      if (next.id !== id) return;
+      if (
+        next.children.length !== current.children.length ||
+        next.children.some((ch, i) => ch !== current.children[i])
+      ) {
+        return;
+      }
+      if (!ContainerSchema.safeParse(next).success) return;
+      // Pressing Apply without typing must not mark the canvas dirty.
+      if (JSON.stringify(current) === JSON.stringify(next)) return;
+      set((st) => ({
+        containers: st.containers.map((c) => (c.id === id ? next : c)),
+        dirty: true,
+      }));
     },
 
     /**

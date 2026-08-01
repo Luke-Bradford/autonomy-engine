@@ -1221,6 +1221,151 @@ describe('canvasStore — container membership (U6d)', () => {
       expect(canSave({ saving: false, ready: true, issues })).toBe(false);
     });
   });
+
+  describe('updateContainer (U23)', () => {
+    function withLoop() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version({ containers: [LOOP] }));
+      return s;
+    }
+
+    it('replaces the container and marks the canvas dirty', () => {
+      const s = withLoop();
+      s.getState().updateContainer('loop_1', { ...LOOP, exitWhen: '${equals(2, 2)}' });
+      expect(s.getState().containers[0]!.exitWhen).toBe('${equals(2, 2)}');
+      expect(s.getState().dirty).toBe(true);
+    });
+
+    it('no-ops on an unknown id', () => {
+      const s = withLoop();
+      const before = s.getState().containers;
+      s.getState().updateContainer('nope', { ...LOOP, id: 'nope', exitWhen: '${equals(2, 2)}' });
+      expect(s.getState().containers).toBe(before);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    /**
+     * Re-applying an identical container must not mark the canvas dirty —
+     * `setNodeContainer`'s rule, for its reason: an unchanged graph that reports
+     * itself as edited is how an unsaved-changes prompt loses the operator's
+     * trust. Reachable by opening the panel and pressing Apply without typing.
+     */
+    it('does not dirty the canvas on an unchanged container', () => {
+      const s = withLoop();
+      s.getState().updateContainer('loop_1', { ...LOOP });
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    /**
+     * The non-vacuous half. `Container`'s TypeScript type is WIDER than
+     * `ContainerSchema`'s runtime constraint — `maxRounds: number` admits 0 and
+     * 1.5, which `.int().positive()` refuses — so `safeParse` on the INPUT is a
+     * real check, unlike re-parsing the store's own output, which could never
+     * fail. A refusal must leave the array byte-identical, not half-applied.
+     */
+    it.each([
+      ['maxRounds: 0', { maxRounds: 0 }],
+      ['maxRounds: 1.5', { maxRounds: 1.5 }],
+      ['timeout: -1', { timeout: -1 }],
+      ['batchCount: 51', { batchCount: 51 }],
+    ])('refuses %s without half-applying it', (_label, patch) => {
+      const s = withLoop();
+      const before = s.getState().containers;
+      s.getState().updateContainer('loop_1', { ...LOOP, ...patch } as Container);
+      expect(s.getState().containers).toBe(before);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    /**
+     * `createContainer` stores `parsed.data`, which is safe for a container it
+     * just built. An EDIT is different: `ContainerSchema` is a plain `z.object`,
+     * so it STRIPS unknown keys, and storing the parse result would silently
+     * drop whatever a git-imported or API-authored container carries that this
+     * schema version does not know about. Validate the input, store the input.
+     */
+    it('keeps a key the schema does not know rather than stripping it', () => {
+      const s = withLoop();
+      const carried = { ...LOOP, exitWhen: '${equals(2, 2)}', futureField: 'keep me' };
+      s.getState().updateContainer('loop_1', carried as Container);
+      expect(s.getState().containers[0]).toEqual(carried);
+    });
+
+    /**
+     * `id` and `children` are STRUCTURAL, owned by other affordances. A config
+     * panel that could rewrite them would strand the id's other readers, or
+     * author a membership the disjointness rules never saw — so both are
+     * refused outright rather than merged.
+     */
+    it.each([
+      ['a rename', { id: 'loop_renamed' }],
+      ['a membership ADD', { children: ['n_a', 'n_b', 'n_c'] }],
+      ['a membership REMOVAL', { children: ['n_a'] }],
+      ['a membership EMPTYING', { children: [] }],
+      ['a membership REORDER', { children: ['n_b', 'n_a'] }],
+    ])('refuses %s — that is not a config edit', (_label, patch) => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version({ containers: [{ ...LOOP, children: ['n_a', 'n_b'] }] }));
+      const before = s.getState().containers;
+      s.getState().updateContainer('loop_1', {
+        ...before[0]!,
+        timeout: 30,
+        ...patch,
+      } as Container);
+      expect(s.getState().containers).toBe(before);
+    });
+
+    it('leaves every other container untouched', () => {
+      const s = createCanvasStore();
+      const stage: Container = { id: 'stage_1', kind: 'stage', children: ['n_b'] };
+      s.getState().loadVersion(version({ containers: [LOOP, stage] }));
+      s.getState().updateContainer('loop_1', { ...LOOP, timeout: 30 });
+      expect(s.getState().containers[1]).toEqual(stage);
+    });
+  });
+
+  describe('a container selection (U23)', () => {
+    function selected() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version({ containers: [LOOP] }));
+      s.getState().select({ kind: 'container', id: 'loop_1' });
+      return s;
+    }
+
+    /**
+     * React Flow never sees a container (the change seam filters container ids
+     * out), so it can never emit the deselect that clears every other kind.
+     * Deleting the container therefore has to clear the selection itself, or
+     * the panel is left editing a container that no longer exists.
+     */
+    it('is cleared when that container is deleted', () => {
+      const s = selected();
+      s.getState().deleteContainer('loop_1');
+      expect(s.getState().selected).toBeNull();
+    });
+
+    it('survives the deletion of a DIFFERENT container', () => {
+      const s = createCanvasStore();
+      s.getState().loadVersion(
+        version({ containers: [LOOP, { id: 'stage_1', kind: 'stage', children: ['n_b'] }] }),
+      );
+      s.getState().select({ kind: 'container', id: 'loop_1' });
+      s.getState().deleteContainer('stage_1');
+      expect(s.getState().selected).toEqual({ kind: 'container', id: 'loop_1' });
+    });
+
+    /**
+     * `nextSelection` speaks for React Flow, which knows nothing about
+     * containers. A node's deselect arriving while a container is selected must
+     * not clear it — that batch is emitted for every element on every click.
+     */
+    it('is not cleared by a node deselect', () => {
+      const s = selected();
+      expect(nextSelection(s.getState().selected, { kind: 'node', id: 'n_a' }, false)).toEqual({
+        kind: 'container',
+        id: 'loop_1',
+      });
+    });
+  });
 });
 
 describe('canvasStore — params/outputs as WORKING state (U16)', () => {
