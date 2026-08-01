@@ -14,6 +14,14 @@ import type { NodeActivity } from './runSummary';
  * panel adds no fourth walk over the log (see #849 — the page already folds it
  * three times, and this reuses the fold the node table already ran).
  *
+ * The declared outputs are ALSO in the reducer's own `RunState.outputs`, which
+ * `projectRun` folds on this same page — and where the two disagree the engine
+ * is right. The doc-free fold is used anyway because it is the one that renders
+ * when the pipeline version will not resolve, which is exactly when a failed run
+ * most needs reading. Cost of that choice, stated rather than hidden: an RS1
+ * rerun-from-failed seeds its copied frontier through `run.reseeded`, which this
+ * fold ignores, so a copied node shows no outputs here.
+ *
  * READ-ONLY by design (U28): no cancel, no rerun, no retry. Those are
  * control-plane WRITES with no engine primitive behind them today, and inventing
  * a control here would cross the "no engine execution-semantics changes"
@@ -25,18 +33,32 @@ import type { NodeActivity } from './runSummary';
  *    doc, but that is the un-substituted text, not what executed);
  *  - per-node cost/tokens — `activity.metered` carries them and
  *    `computeRunCost` already folds them, but that is its own slice;
- *  - prompt/completion and tool calls — the log holds only redacted SHAPE
- *    (chars + hash) until L9b/F4 lands raw capture, and a hash on screen is not
- *    worth a section;
+ *  - prompt/completion — `activity.captured` holds only redacted SHAPE (message
+ *    counts, char counts, content hashes) until L9b/F4 lands raw capture, and a
+ *    sha256 on screen is not worth a section;
+ *  - tool calls — `activity.toolCalled` carries `toolName`, `round`, `callId`
+ *    and `isError` IN THE CLEAR (only args/result are chars+hash), so "which
+ *    tools ran, in which exchange, which errored" is renderable today. It is
+ *    deferred as its own slice, NOT because the data is missing;
  *  - a per-attempt DURATION — the envelope timestamps would give a span that
  *    silently includes retry holds and park idle, and six engine-evaluated
  *    activity kinds have no dispatch event to start it from. A wrong number is
  *    worse than no number.
  */
+/** The panel's DOM id, so the table's disclosure button can `aria-controls` it. */
+export const PANEL_ID = 'node-activity-panel';
+
 export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClose: () => void }) {
   const outputNames = node.outputValues === undefined ? [] : Object.keys(node.outputValues);
   return (
-    <aside className="property-panel node-detail-panel" aria-label={`Node ${node.nodeId}`}>
+    <aside
+      id={PANEL_ID}
+      className="property-panel node-detail-panel"
+      aria-label={`Node ${node.nodeId}`}
+    >
+      {/* `.page-header` is the existing title-plus-action row. The sibling
+          property panels have no action in their heading, so none of them uses
+          it; this one needs a Close beside the title rather than a new rule. */}
       <div className="page-header">
         <h3>
           Node <code>{node.nodeId}</code>
@@ -53,16 +75,25 @@ export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClo
 
       {node.instanceId !== undefined && (
         <p className="page-hint">
-          Showing item instance <code>{node.instanceId}</code>. A parallel foreach&apos;s items all
-          fold onto the one node you drew, most recent result wins — so this is one item&apos;s
-          result, not the whole loop&apos;s.
+          Showing the result recorded under <code>{node.instanceId}</code>. Results keyed{' '}
+          <code>id@n</code> — how a parallel foreach writes its items — fold onto the one node you
+          drew, most recent wins. So this is one of them, not all of them.
         </p>
       )}
 
-      {node.error !== undefined && (
+      {node.status === 'failure' && (
         <section className="contract-section">
           <h4>Failure</h4>
-          <p>{node.error}</p>
+          {/* Gated on the STATUS, not on the message: a `call.returned` with a
+              failing child sets the row red and carries no message of its own,
+              and gating on `error` hid the whole section for it. */}
+          {node.error === undefined ? (
+            <p className="page-hint">
+              No message was recorded — this node reports another run&apos;s outcome.
+            </p>
+          ) : (
+            <p>{node.error}</p>
+          )}
           {node.failureKind === undefined ? (
             /* Not a gap — `externalWait.expired` fails a node straight off its
                expiry alarm, with no `node.failed` to classify it. Say so rather
@@ -94,7 +125,11 @@ export function NodeActivityPanel({ node, onClose }: { node: NodeActivity; onClo
           {outputNames.length === 0 ? (
             <p className="page-hint">This node declared no outputs.</p>
           ) : (
-            <code>{JSON.stringify(node.outputValues)}</code>
+            /* `JSON.stringify` emits no spaces, so a long value is one
+               unbreakable token; an agent node's `text` output is realistically
+               tens of KB. The class wraps and scrolls it rather than letting it
+               push the panel sideways. */
+            <code className="node-detail-outputs">{JSON.stringify(node.outputValues)}</code>
           )}
         </section>
       )}

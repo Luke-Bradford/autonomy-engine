@@ -31,8 +31,13 @@ export function eventGloss(event: RunEvent): string {
   /* #1 F0 / U24 — the failure CLASS. F0 correctly moved it out of the message
      string and into `kind`/`code` fields, and nothing here was taught to read
      them, so the feed rendered a throttle and a dead credential identically.
-     `kind` appears on no other event variant in `EngineEventSchema`, so there is
-     nothing else this can pick up. */
+
+     `kind` appears on no other event variant in `EngineEventSchema`. `code`
+     DOES: `activity.warned` declares one (`WARNING_CODES`), so warning rows gain
+     a `code=` gloss too. Deliberate, and an improvement — the warning's machine
+     code was previously invisible while its prose `reason` was not — but stated
+     here because it is a rendering change to an event this ticket is not about,
+     and it is pinned by a test. */
   push('kind', p.kind);
   push('code', p.code);
   return parts.join(' ');

@@ -37,6 +37,22 @@ describe('eventGloss', () => {
     );
   });
 
+  it('also glosses an activity.warned `code` — the other variant carrying one', () => {
+    // Not collateral: `code` is declared on `activity.warned` as well as
+    // `node.failed`, so the push above reaches it. Pinned so the widening is a
+    // decision rather than a surprise.
+    expect(
+      eventGloss(
+        evt({
+          type: 'activity.warned',
+          nodeId: 'a',
+          code: 'empty_truncated_completion',
+          reason: 'the model returned nothing',
+        }),
+      ),
+    ).toBe('node=a reason=the model returned nothing code=empty_truncated_completion');
+  });
+
   it('degrades to an empty gloss on an odd payload rather than throwing', () => {
     expect(eventGloss(evt(null))).toBe('');
     expect(eventGloss(evt({ nodeId: 42, kind: 7 }))).toBe('');

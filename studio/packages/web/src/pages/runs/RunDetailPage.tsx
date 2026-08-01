@@ -5,7 +5,7 @@ import { getRun, getRunDetail } from '../../api/runs';
 import { useRunStream, type StreamPhase } from './useRunStream';
 import { deriveNodeActivity, deriveRunLifecycle } from './runSummary';
 import { eventGloss, failureClass, formatClock, formatWhen } from './format';
-import { NodeActivityPanel } from './NodeActivityPanel';
+import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunGraph } from './RunGraph.lazy';
 
 function message(err: unknown): string {
@@ -204,6 +204,7 @@ export function RunDetailPage({ runId }: { runId: string }) {
                       type="button"
                       className="node-drill-in"
                       aria-expanded={openNodeId === n.nodeId}
+                      aria-controls={openNodeId === n.nodeId ? PANEL_ID : undefined}
                       onClick={() => setOpenNodeId(openNodeId === n.nodeId ? null : n.nodeId)}
                     >
                       <code>{n.nodeId}</code>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import type { EngineEvent, PipelineVersion, Run, RunEvent } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, PipelineVersionSchema } from '@autonomy-studio/shared';
@@ -388,7 +389,7 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     expect(within(panel).getByText(/without a machine-readable class/i)).toBeInTheDocument();
   });
 
-  it('names the foreach ITEM INSTANCE a collapsed result came from', async () => {
+  it('names the instance KEY a collapsed result came from, without asserting a cause', async () => {
     useRunStreamMock.mockReturnValue(
       stream({
         events: [
@@ -414,7 +415,11 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     await user.click(await screen.findByRole('button', { name: 'greet' }));
     const panel = screen.getByRole('complementary', { name: /Node greet/ });
     expect(within(panel).getByText('greet@1')).toBeInTheDocument();
-    expect(within(panel).getByText(/most recent result wins/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/fold onto the one node you drew/i)).toBeInTheDocument();
+    // It names the KEY, never a cause: a SEQUENTIAL doc may legitimately
+    // carry a literal `x@2` id, so 'a parallel foreach' would be a claim the
+    // doc-free view cannot make.
+    expect(within(panel).queryByText(/parallel foreach's items all/i)).not.toBeInTheDocument();
   });
 
   it('the event feed names the failure class too', async () => {
@@ -423,5 +428,113 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
     expect(
       await screen.findByText('node=greet error=boom kind=transient code=rate_limit'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('RunDetailPage — U24 the states a single well-formed failure does not cover', () => {
+  it('a failed CALL node gets a Failure section, though it has no message of its own', async () => {
+    // Gating the section on `error` hid it entirely for a call node: the child
+    // run's verdict is the failure, and there is no message to quote.
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'call.returned',
+            runId: 'run_1',
+            callNodeId: 'greet',
+            attemptId: 'greet#0',
+            childRunId: 'run_child',
+            childOutcome: 'failure',
+            outputs: {},
+          }),
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText(/reports another run/i)).toBeInTheDocument();
+  });
+
+  it('keeps the class on screen through a retry HOLD — it is the reason for the hold', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({
+            type: 'node.dispatched',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            idempotent: true,
+          }),
+          envelope({
+            type: 'node.failed',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            error: 'throttled',
+            kind: 'transient',
+            code: 'rate_limit',
+          }),
+          envelope({
+            type: 'node.retryScheduled',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            nextAttemptAt: 1,
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    expect(
+      await screen.findByRole('cell', { name: 'throttled (transient · rate_limit)' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('retrying')).toBeInTheDocument();
+  });
+
+  it('the OPEN panel tracks the node as later frames arrive', async () => {
+    // The panel resolves its node from the live fold rather than snapshotting a
+    // row, which is the whole reason it can be opened on a running node.
+    const dispatched = envelope({
+      type: 'node.dispatched',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      idempotent: true,
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: [dispatched] }));
+    const user = userEvent.setup();
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await user.click(await screen.findByRole('button', { name: 'greet' }));
+    expect(
+      within(screen.getByRole('complementary', { name: /Node greet/ })).getByText('running'),
+    ).toBeInTheDocument();
+
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          dispatched,
+          envelope({
+            type: 'node.failed',
+            runId: 'run_1',
+            nodeId: 'greet',
+            attemptId: 'greet#0',
+            error: 'boom',
+            kind: 'permanent',
+            code: 'auth',
+          }),
+        ],
+      }),
+    );
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+    const panel = screen.getByRole('complementary', { name: /Node greet/ });
+    expect(within(panel).getByText('failure')).toBeInTheDocument();
+    expect(within(panel).getByText('auth')).toBeInTheDocument();
   });
 });

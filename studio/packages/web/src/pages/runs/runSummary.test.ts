@@ -619,12 +619,12 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
     expect(a!.failureCode).toBeUndefined();
   });
 
-  it('KEEPS the class through the retry hold, and clears it at every site that clears `error`', () => {
+  it('KEEPS the class through the retry hold, and clears it at both RE-OPEN sites', () => {
     // `error` is cleared in three branches — `node.dispatched`, the
     // `retryRequested`/`retryDue` re-open, and the `waitScheduled`/`created`
-    // park — and deliberately KEPT on `retryScheduled` (the hold's reason).
-    // The class must travel with it at all four, or a stale kind outlives the
-    // message it classifies.
+    // park — and deliberately KEPT on `retryScheduled` (the hold's reason). This
+    // covers the first two and the hold; the PARK site has its own test below,
+    // because this one never reaches it.
     const failed: EngineEvent = {
       type: 'node.failed',
       runId: 'r',
@@ -734,5 +734,146 @@ describe('deriveNodeActivity — the failure CLASS and the declared outputs (U24
       envelope({ type: 'node.succeeded', runId: 'r', nodeId: 'a', attemptId: 'a#0', outputs: {} }),
     ]);
     expect(a!.instanceId).toBeUndefined();
+  });
+});
+
+describe('deriveNodeActivity — a row that folds TWO instances (U24)', () => {
+  const dispatched = (nodeId: string, attemptId: string): EngineEvent => ({
+    type: 'node.dispatched',
+    runId: 'r',
+    nodeId,
+    attemptId,
+    idempotent: true,
+  });
+
+  // A parallel foreach's item instances are NOT serialised — `reduce-a4b` pins
+  // exactly this interleave — so both terminals land on the one canvas row. Each
+  // terminal must therefore own the WHOLE result: without that, the row keeps
+  // one instance's outputs beside another's failure, and `instanceId` then
+  // attributes the pair to whichever wrote last.
+  it('shows the LAST instance whole, never a green row wearing a red instance’s failure', () => {
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope(dispatched('w@2', 'w@2#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w@2',
+        attemptId: 'w@2#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { v: 1 },
+      }),
+    ]);
+    expect(w!.status).toBe('success');
+    expect(w!.instanceId).toBe('w@1');
+    expect(w!.outputValues).toEqual({ v: 1 });
+    // The red instance's residue must be gone, or the row reads green while its
+    // Detail column quotes a failure.
+    expect(w!.error).toBeUndefined();
+    expect(w!.failureKind).toBeUndefined();
+    expect(w!.failureCode).toBeUndefined();
+  });
+
+  it('and the mirror — a red row carries no earlier instance’s outputs', () => {
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w@1', 'w@1#0')),
+      envelope(dispatched('w@2', 'w@2#0')),
+      envelope({
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId: 'w@1',
+        attemptId: 'w@1#0',
+        outputs: { v: 1 },
+      }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w@2',
+        attemptId: 'w@2#0',
+        error: 'boom',
+        kind: 'transient',
+      }),
+    ]);
+    expect(w!.status).toBe('failure');
+    expect(w!.instanceId).toBe('w@2');
+    expect(w!.failureKind).toBe('transient');
+    expect(w!.outputValues).toBeUndefined();
+  });
+
+  it('attributes a PARKED instance too, not only a dispatched one', () => {
+    // `instanceId` is documented as "the raw id the result came from", so every
+    // terminal branch must set it — a parked `webhook` instance included.
+    const [w] = deriveNodeActivity([
+      envelope({
+        type: 'externalWait.created',
+        runId: 'r',
+        nodeId: 'w@3',
+        attemptId: 'w@3#0',
+        dueAt: 5,
+      }),
+      envelope({
+        type: 'externalWait.expired',
+        runId: 'r',
+        nodeId: 'w@3',
+        previousAttemptId: 'w@3#0',
+      }),
+    ]);
+    expect(w!.nodeId).toBe('w');
+    expect(w!.instanceId).toBe('w@3');
+  });
+
+  it('the PARK clears a previous failure’s class — the third clearResult site', () => {
+    // The two re-open sites are covered above; this is the one a `wait`/`webhook`
+    // reaches, and it is the site the earlier test's title did not actually reach.
+    const [w] = deriveNodeActivity([
+      envelope(dispatched('w', 'w#0')),
+      envelope({
+        type: 'node.failed',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        error: 'boom',
+        kind: 'transient',
+        code: 'rate_limit',
+      }),
+      envelope({
+        type: 'timer.waitScheduled',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#1',
+        dueAt: 10,
+      }),
+    ]);
+    expect(w!.status).toBe('waiting');
+    expect(w!.error).toBeUndefined();
+    expect(w!.failureKind).toBeUndefined();
+    expect(w!.failureCode).toBeUndefined();
+  });
+
+  it('a failure stored BEFORE F0 minted `kind` reads as unclassified, not as `permanent`', () => {
+    // `EngineEventSchema` gives `kind` a `.default('permanent')` as a PARSE
+    // boundary for exactly these events. Safe for the reducer, but reading the
+    // parsed value would print a machine-readable class onto an event whose
+    // producer never stated one — an absent fact dressed as a recorded one.
+    const preF0: RunEvent = {
+      id: 'evt_pre',
+      runId: 'r',
+      seq: 900,
+      type: 'node.failed',
+      payload: { type: 'node.failed', runId: 'r', nodeId: 'a', attemptId: 'a#0', error: 'boom' },
+      ts: 900,
+    };
+    const [a] = deriveNodeActivity([envelope(dispatched('a', 'a#0')), preF0]);
+    expect(a!.status).toBe('failure');
+    expect(a!.error).toBe('boom');
+    expect(a!.failureKind).toBeUndefined();
   });
 });
