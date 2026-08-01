@@ -54,7 +54,7 @@ export interface Rect {
  * make the announcement disagree with the picture the moment the two sets differ
  * — a phantom child (deleted node, id still listed) or a child an earlier
  * container already claimed both count in the raw array and are both absent from
- * the box. That reads as "loop container, 2 activities" over an empty fallback
+ * the box. That reads as "loop 1 container, 2 activities" over an empty fallback
  * box: not a rounding error, a straight lie about what is on screen.
  */
 export interface ContainerBox extends Rect {
@@ -412,8 +412,12 @@ export function containerHandles(width: number, height: number): NodeHandle[] {
  *
  * The parameter is therefore `string` and no longer `ContainerKind`, which does
  * cost a compiler check — nothing now stops a caller passing a kind where its box
- * shows a name. The rule is stated here rather than typed because both call sites
- * are named above; a third one should extend that list, not guess.
+ * shows a name. Both existing call sites are pinned by an e2e that asserts the
+ * exact announced string, so the check is not simply lost: the author canvas by
+ * `container-rendering.spec.ts` ('loop 1 container, 2 activities') and the run
+ * graph by `run-status-vocabulary.spec.ts` ('stage container, 1 activity,
+ * running'). A THIRD caller would have neither, and should extend that list
+ * rather than guess.
  */
 export function containerAriaLabel(name: string, childCount: number): string {
   return `${name} container, ${childCount} ${childCount === 1 ? 'activity' : 'activities'}`;

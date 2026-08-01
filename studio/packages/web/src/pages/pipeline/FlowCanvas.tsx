@@ -500,6 +500,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       // "Delete loop 2 container" and then asking "Delete this loop container?"
       // would relocate the one-end-identified split rather than close it, and
       // with two loops on screen the dialog would not say which one is going.
+      //
+      // Recomputed from `state` rather than read off the `containerLabelsById`
+      // memo above, and that is the correctness point: this callback is memoised
+      // on `[store]` alone, so closing over the memo would name the container
+      // from the render that created the callback, not from the doc as it stands
+      // when the ✕ is pressed. `state` is `store.getState()`, taken on the click.
       const name = containerLabels(state.containers).get(id) ?? kind;
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +

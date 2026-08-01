@@ -227,12 +227,12 @@ export function containerEditConsequence(
 /**
  * How each container is NAMED to the operator.
  *
- * `connectRules.endpointLabel` names a container by its KIND alone — the word
- * its box carries on the canvas — and accepts that two same-kinded containers
- * share a label, because that text is transient feedback about one gesture. A
- * PICKER cannot accept it: an operator choosing between two indistinguishable
- * `stage` options cannot tell which box they are about to join. So the kind
- * carries a document-order ordinal within its kind.
+ * The kind carries a document-order ordinal within its kind, because the kind
+ * alone cannot answer the question every surface here is asking. A PICKER makes
+ * that plainest: an operator choosing between two indistinguishable `stage`
+ * options cannot tell which box they are about to join. `connectRules` used to
+ * accept the bare kind on the grounds that a refusal is transient feedback about
+ * one gesture; #883 ended that split — see below.
  *
  * #883 CLOSED the cost this docblock used to state. The ordinal was not DRAWN on
  * the box, so with two loops on screen "loop 2" identified the option but not the
@@ -247,6 +247,11 @@ export function containerEditConsequence(
  * confirmation. A surface that falls back to the bare kind is not a smaller
  * version of the name — it is a DIFFERENT name for the same box, which is the
  * defect #883 was filed for.
+ *
+ * ONE surface does not, and it is named rather than left to be discovered: the
+ * RUN graph (`runs/runFlow.ts`) still draws and announces the bare kind. Not an
+ * oversight — giving its announcement an ordinal its box does not draw would move
+ * the mismatch rather than close it. #886 does both halves together.
  */
 export function containerLabels(containers: Container[]): Map<string, string> {
   const seen = new Map<string, number>();
@@ -280,10 +285,14 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * unchanged would have left the two commonest canvas errors still printing a raw
  * uuid, while looking from the outside like the defect had been fixed.
  *
- * DISPLAY ONLY, and it must stay at the render site. `ContainerPanel` filters
- * `validateCanvas` output by matching `container '<id>'` as a raw substring
- * (`ContainerPanel.tsx:142`) — a structural read of the same strings. Moving this
- * rewrite inside `validateCanvas` would silently break that filter.
+ * DISPLAY ONLY, and it must stay at the render site. TWO callers read these
+ * strings STRUCTURALLY: `ContainerPanel` filters them by matching
+ * `container '<id>'` as a raw substring (`ContainerPanel.tsx:143`), and the
+ * expression-insert probe takes a set difference against a baseline
+ * (`PipelineCanvas.tsx:1144`, `!baseline.includes(issue)`) — in the very file that
+ * now calls this function. Both call `validateCanvas` DIRECTLY rather than reading
+ * the mapped list, which is what keeps them correct; moving this rewrite inside
+ * `validateCanvas` would silently break both.
  */
 export function readableIssue(
   issue: string,
@@ -340,21 +349,31 @@ export function readableIssue(
       return l === undefined ? whole : `node '${l}'${dot === '' ? '' : ' '}`;
     },
   );
-  // Pass 3 — `forwardCycleErrors` (`params.ts:2962`) is the one message that names
+  // Pass 3 — `forwardCycleErrors` (`params.ts:2930`, message at `:2964`) is the one that names
   // ids in NEITHER of the other two shapes: a brace-wrapped comma list, unquoted
   // and mid-sentence (`forward cycle detected involving {n_7c…, n_9c…}`). It is
   // also among the most reachable authoring errors, so leaving it would have
   // falsified this ticket's acceptance on the very doc it was written for.
   //
-  // A `${…}` expression in a message body also matches `{…}`, and is left intact
-  // by construction rather than by exclusion: its contents (`nodes.x.output.y`)
-  // resolve to no id, so every token falls through unchanged and the replacement
-  // is byte-identical to what it replaced.
+  // It is NOT the only `{…}` in the message space, and the safety here is stated
+  // precisely rather than claimed as structural. A `${…}` expression body matches
+  // too, as does prose like `params.ts:2704`'s `an array of {role, content} turns`.
+  // Neither is rewritten because no comma-split token in them EQUALS an id — and
+  // when nothing resolves, the branch below returns the original substring, so the
+  // result is byte-identical rather than merely equivalent. That is data-dependent
+  // (a container literally named `role` would be rewritten in that prose), and it
+  // is unreachable for canvas-minted ids, which are always `n_`/`c_` uuids.
   const listed = nodeLocated.replace(/\{([^{}]*)\}/g, (whole, body: string) => {
     const parts = body.split(', ');
     const named = parts.map((id) => label(id) ?? id);
     return named.some((name, i) => name !== parts[i]) ? `{${named.join(', ')}}` : whole;
   });
+  // Pass 4 — the quoted shape, and the ONLY pass that is global and unanchored.
+  // That is deliberate but asymmetric with pass 2, so it is written down: a quoted
+  // id appears mid-sentence in real messages (`child '<id>'`, `edge '<id>'`), so it
+  // cannot be anchored. The cost is that a quoted token that happens to EQUAL an
+  // id is rewritten wherever it sits, including inside an expression body. Not
+  // reachable on canvas-minted ids for the same reason as pass 3.
   return listed.replace(/'([^']+)'/g, (whole, id: string) => {
     const direct = label(id);
     if (direct !== undefined) return `'${direct}'`;

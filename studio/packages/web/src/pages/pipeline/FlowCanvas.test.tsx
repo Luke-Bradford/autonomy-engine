@@ -370,9 +370,10 @@ describe('FlowCanvas container delete (#748)', () => {
   }
 
   /**
-   * Named by KIND, so the accessible name says which box is going — the same
-   * word the label already shows and the same one `connectRules` refuses a
-   * boundary crossing by.
+   * Named the way the box is (#883) — kind plus within-kind ordinal — so the
+   * accessible name says WHICH box is going. The bare kind said only what sort of
+   * box it was, which with two loops on screen named neither of them; it is also
+   * the same text `connectRules` refuses a boundary crossing by.
    */
   it('offers a delete control named for the container, ordinal and all', () => {
     const { box } = withBoxedGraph('loop');
@@ -679,9 +680,9 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
    * #878, the render half — and the half that makes every message above
    * actionable. An advisory naming "HTTP Request 2" is worth nothing if the two
    * rectangles on screen both read "HTTP Request": the operator can read the
-   * sentence and still not know which box it means. This is the same cost #883
-   * records for the container ordinal, which is NOT drawn; an activity's
-   * box label has nowhere else to live, so it is drawn here.
+   * sentence and still not know which box it means. #883 has since drawn the
+   * CONTAINER ordinal on its box for the same reason, so the two are now the one
+   * rule rather than an activity-only property with a documented exception.
    */
   it('draws the identifying name on the box, not the bare kind', () => {
     const { container } = withGraph(['a', { id: 'b', type: 'llm_call' }, 'c']);

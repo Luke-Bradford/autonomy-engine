@@ -142,8 +142,8 @@ async function emptyPointInsideBox(
 
 test.describe('U6c container rendering', () => {
   /**
-   * The headline: the box is drawn, labelled by KIND, and actually ENCLOSES the
-   * activities it owns — and only those.
+   * The headline: the box is drawn, labelled by its NAME (kind plus within-kind
+   * ordinal, #883), and actually ENCLOSES the activities it owns — and only those.
    *
    * Enclosure is asserted against the rendered rects rather than against
    * `containerRects`' return value, because every interesting way this fails

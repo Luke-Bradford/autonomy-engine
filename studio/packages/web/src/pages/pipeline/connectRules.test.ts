@@ -407,7 +407,7 @@ describe('connectRejection — container boundaries', () => {
     expect(message).not.toContain('c_22222222');
   });
 
-  /** Two DIFFERENT kinds still name both, since the kinds already distinguish them. */
+  /** Two DIFFERENT kinds, named the same way — by ordinal, exactly as matching kinds are. */
   it('names both kinds when the two containers differ', () => {
     const g = graph(
       [node('a'), node('b')],
