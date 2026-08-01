@@ -23,9 +23,14 @@ import { fluentRootReady } from './support/theme';
  * STAYS parked, which is exactly the state the ticket is about. It is fired
  * through the public API (`fireManualTrigger`) rather than settled, because
  * settling is what it will never do.
+ *
+ * `seconds` is a STRING holding a WHOLE-VALUE `${}` expression, like
+ * `if.condition` — `validateWaitConfig` refuses a bare literal at save time, so
+ * the hour is written as an expression the engine evaluates (`evalWaitSeconds`)
+ * rather than as a number.
  */
 const PARKED_DOC = {
-  nodes: [{ id: 'hold', type: 'wait', config: { seconds: 3600 }, position: { x: 0, y: 0 } }],
+  nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${3600}' }, position: { x: 0, y: 0 } }],
 };
 
 test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across both Monitor surfaces', async ({
@@ -103,5 +108,5 @@ test('#870 — a parked run says WHAT it is waiting on, in one vocabulary across
   // failure no screenshot catches.
   expect(pill!.color).toMatch(/^rgb\(/);
 
-  await expectQuiet(problems);
+  await expectQuiet(page, problems);
 });
