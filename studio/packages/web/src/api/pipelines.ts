@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
+  CreatePipelineVersionBodySchema,
   NewPipelineSchema,
-  NewPipelineVersionSchema,
   PipelineSchema,
   PipelineVersionSchema,
   paginatedResponseSchema,
@@ -40,7 +40,15 @@ export type PipelineWrite = z.input<typeof PipelineWriteSchema>;
  */
 const PipelineRenameSchema = PipelineWriteSchema.pick({ name: true });
 
-export const PipelineVersionWriteSchema = NewPipelineVersionSchema.omit({ pipelineId: true });
+/**
+ * #904 — the version-write body is the SHARED `CreatePipelineVersionBodySchema`
+ * rather than a second local `NewPipelineVersionSchema.omit({ pipelineId })`.
+ * That omit used to be written out here AND in `server/src/routes/pipelines.ts`
+ * — two copies of one contract, which is exactly what the CAS basis field must
+ * not become. Re-exported under the existing names so the canvas-doc tests and
+ * `restoreBodyFrom` keep their import.
+ */
+export const PipelineVersionWriteSchema = CreatePipelineVersionBodySchema;
 export type PipelineVersionWrite = z.input<typeof PipelineVersionWriteSchema>;
 
 /**
@@ -114,7 +122,12 @@ export function createPipelineVersion(
 ): Promise<PipelineVersion> {
   return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`, {
     method: 'POST',
-    body,
+    // #904 — parsed through the write schema before the POST, the convention
+    // this module's docblock states and `createPipeline` already follows. It
+    // was the one write here that did not, and the CAS basis is precisely the
+    // field worth catching locally: a caller that omits it now fails at the
+    // call site instead of as a 400 round-trip that reads like a server fault.
+    body: PipelineVersionWriteSchema.parse(body),
     schema: PipelineVersionSchema,
   });
 }
@@ -205,6 +218,12 @@ export async function duplicatePipeline(source: Pipeline, name: string): Promise
         edges: latest.edges,
         containers: latest.containers,
         catalogVersion: latest.catalogVersion,
+        // #904 — the CAS basis. The copy was created moments ago by the line
+        // above and has no versions, so `null` ("I expect none yet") is the
+        // literal truth rather than an opt-out. A 409 here would mean something
+        // else wrote to a pipeline this call had just minted; it lands inside
+        // the `try`, so the husk rollback below still fires.
+        basedOnVersionId: null,
       });
     }
     return copy;

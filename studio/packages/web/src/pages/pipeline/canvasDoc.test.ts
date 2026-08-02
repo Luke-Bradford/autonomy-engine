@@ -32,7 +32,7 @@ describe('toVersionBody', () => {
     const nodes = [node('a'), node('b')];
     const edges = [edge('e', 'a', 'b')];
     const containers = [{ id: 'c1', kind: 'stage' as const, children: [] }];
-    const body = toVersionBody(nodes, edges, containers, params, outputs);
+    const body = toVersionBody(nodes, edges, containers, params, outputs, 'pv_basis');
 
     // Every value is DISTINCT, so a transposed argument is red rather than
     // masked by two equal empty arrays. Five positional array parameters is
@@ -57,7 +57,7 @@ describe('toVersionBody', () => {
   });
 
   it('omits catalogVersion so the server stamps the current one on save', () => {
-    expect(toVersionBody([], [], [], [], [])).not.toHaveProperty('catalogVersion');
+    expect(toVersionBody([], [], [], [], [], null)).not.toHaveProperty('catalogVersion');
   });
 
   /**
@@ -72,14 +72,21 @@ describe('toVersionBody', () => {
    * when they are EMPTY, which is the state a carry-forward would have filled.
    */
   it('sends empty params/outputs when the canvas declares none', () => {
-    const body = toVersionBody([node('a')], [], [], [], []);
+    const body = toVersionBody([node('a')], [], [], [], [], null);
     expect(body.params).toEqual([]);
     expect(body.outputs).toEqual([]);
     expect(body.nodes).toHaveLength(1);
   });
 
   it('produces a body that parses cleanly through the shared write schema', () => {
-    const body = toVersionBody([node('a'), node('b')], [edge('e', 'a', 'b')], [], params, outputs);
+    const body = toVersionBody(
+      [node('a'), node('b')],
+      [edge('e', 'a', 'b')],
+      [],
+      params,
+      outputs,
+      'pv_basis',
+    );
     expect(() => PipelineVersionWriteSchema.parse(body)).not.toThrow();
   });
 });

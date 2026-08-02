@@ -1734,7 +1734,14 @@ describe('canvasStore — back-edges (U6e)', () => {
     const s = loaded();
     s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
     const st = s.getState();
-    const body = toVersionBody(st.nodes, st.edges, st.containers, st.params, st.outputs);
+    const body = toVersionBody(
+      st.nodes,
+      st.edges,
+      st.containers,
+      st.params,
+      st.outputs,
+      st.loaded?.id ?? null,
+    );
     const persisted = body.edges.find((e) => e.from === 'n_b');
     expect(persisted).toMatchObject({ back: true, maxBounces: DEFAULT_MAX_BOUNCES });
   });

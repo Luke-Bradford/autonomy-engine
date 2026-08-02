@@ -14,6 +14,7 @@
  * test can reach it.
  */
 import type { PipelineVersion } from '@autonomy-studio/shared';
+import { ApiError } from '../../api/client';
 import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
 
@@ -85,9 +86,18 @@ export function historyEntries(
  * server, the identity fields are server-minted, and the four `source*`
  * git-provenance fields are dropped — a restored version is newly AUTHORED, not
  * minted from a commit, and claiming otherwise would forge its provenance.
+ *
+ * #904 — `basedOnVersionId` is the CAS basis, and a restore is a save like any
+ * other: it is measured against the HEAD, so the caller passes the version its
+ * canvas is on (`canvasStore.loaded`). If another tab has moved the head since,
+ * the server refuses this exactly as it refuses a stale save — which is right,
+ * because the restore was chosen from a history list that is now out of date.
  */
-export function restoreBodyFrom(v: PipelineVersion): PipelineVersionWrite {
-  return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs);
+export function restoreBodyFrom(
+  v: PipelineVersion,
+  basedOnVersionId: string | null,
+): PipelineVersionWrite {
+  return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs, basedOnVersionId);
 }
 
 /**
@@ -128,6 +138,46 @@ export function docUnchanged(before: DocSnapshot, after: DocSnapshot): boolean {
     before.params === after.params &&
     before.outputs === after.outputs
   );
+}
+
+/**
+ * #904 — is this failure the server refusing a write against a stale basis?
+ *
+ * Branches on the `stale_write` CODE, never on the bare 409 status. The same
+ * route answers 409 `conflict` for any `SQLITE_CONSTRAINT` (the
+ * `pipeline_versions_pipeline_id_version_idx` UNIQUE index is the documented
+ * backstop on exactly this write), and offering a re-based "save anyway" on one
+ * of THOSE would re-POST straight into the same violation. The two 409s look
+ * identical from the status line and are opposite in what the operator should
+ * do about them.
+ */
+export function isStaleWrite(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.body?.error === 'stale_write';
+}
+
+/**
+ * What an operator reads when their save was refused because the pipeline moved
+ * underneath them.
+ *
+ * States all three facts, because omitting any one of them makes the next click
+ * a guess: their work is intact (nothing was lost — the refusal is the whole
+ * effect), the other save is intact too and reachable, and — the part it is
+ * tempting to leave out — saving from here does NOT merge, it advances past
+ * `headVersion` carrying only what is on this screen. An operator told merely
+ * "someone else saved" would reasonably assume the button reconciles.
+ */
+export function describeSaveConflict(headVersion: number): string {
+  return (
+    `Not saved: someone else saved v${String(headVersion)} while you were editing. ` +
+    'Your changes are still here, and nothing was overwritten. ' +
+    `Saving now creates v${String(headVersion + 1)} from what is on your screen — it will NOT include ` +
+    `v${String(headVersion)}'s changes, though v${String(headVersion)} is kept in Version history.`
+  );
+}
+
+/** The label of the informed-override button — it names the version it mints. */
+export function saveAnywayLabel(headVersion: number): string {
+  return `Save as v${String(headVersion + 1)} anyway`;
 }
 
 export interface RestoreCheck {

@@ -140,6 +140,7 @@ describe('pipelines API', () => {
       containers: [],
       nodes: [],
       edges: [],
+      basedOnVersionId: null,
     });
     expect(out).toEqual(version);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions');
