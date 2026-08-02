@@ -293,7 +293,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           <button
             type="button"
             aria-expanded={historyOpen}
-            aria-controls="version-history-panel"
+            // Only while the panel is actually MOUNTED. It is unmounted rather
+            // than hidden when collapsed (and `ready` gates it too), so naming
+            // it unconditionally points a screen reader at an element that is
+            // not in the DOM. `aria-expanded` alone carries the closed state.
+            aria-controls={historyOpen && ready ? 'version-history-panel' : undefined}
             disabled={!ready}
             onClick={() => {
               // Both setters at the TOP LEVEL. Calling `setPreviewing` inside

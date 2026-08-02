@@ -88,7 +88,20 @@ test.describe('pipeline version history', () => {
     await seedThreeVersions(page, 'history-list');
 
     await expect(page.getByTestId('version-history')).toHaveCount(0);
+
+    // While collapsed the panel is UNMOUNTED, so the toggle must not name it:
+    // an `aria-controls` pointing at an absent id resolves to nothing for a
+    // screen reader. `aria-expanded` is what carries the closed state.
+    await expect(historyButton(page)).toHaveAttribute('aria-expanded', 'false');
+    await expect(historyButton(page)).not.toHaveAttribute('aria-controls', /./);
+
     await historyButton(page).click();
+
+    // Open, it names the panel AND that id is really in the DOM.
+    await expect(historyButton(page)).toHaveAttribute('aria-expanded', 'true');
+    const controls = await historyButton(page).getAttribute('aria-controls');
+    expect(controls).toBe('version-history-panel');
+    await expect(page.locator(`#${controls}`)).toHaveCount(1);
 
     await expect(rows(page)).toHaveCount(3);
     await expect(rows(page).nth(0)).toContainText('v3');
