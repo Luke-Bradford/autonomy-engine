@@ -35,6 +35,14 @@ export function toVersionBody(
   containers: Container[],
   params: Param[],
   outputs: Output[],
+  // #904 — the version this write is based on (`canvasStore.loaded`), or `null`
+  // for "this pipeline has no versions yet". A REQUIRED parameter, deliberately
+  // not an optional one defaulting to `null`: a caller that forgets it must
+  // fail to compile rather than silently send the one value that is a real
+  // assertion about the server's state. The server refuses a write whose basis
+  // is not the current head (`StaleWriteError`), which is what stops a second
+  // author's save from orphaning the first's off the head.
+  basedOnVersionId: string | null,
 ): PipelineVersionWrite {
   return {
     params,
@@ -42,6 +50,7 @@ export function toVersionBody(
     containers,
     nodes,
     edges,
+    basedOnVersionId,
   };
 }
 

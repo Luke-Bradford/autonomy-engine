@@ -1,12 +1,13 @@
 /**
- * U22 slice 1 — the pure half of the pipeline version history (#903).
+ * U22 slice 1 — the pure half of the pipeline version history (#903, #904).
  *
  * Every canvas Save mints a NEW immutable version, and until this ticket the
  * canvas only ever opened the newest one (`latestVersion`). With no undo (U17
  * is unbuilt) a bad save had no route back, even though the good version was
- * sitting in the DB intact. This module owns the three decisions that ride on
- * that: how the list is ordered and marked, what a RESTORE actually sends, and
- * when a restore must be refused.
+ * sitting in the DB intact. This module owns the decisions that ride on that:
+ * how the list is ordered and marked, what a RESTORE actually sends, when a
+ * restore must be refused, and — since #904 — how a write refused against a
+ * stale basis is recognised and worded.
  *
  * It is a pure module for the reason `runFlow.ts` states about its own half —
  * React Flow does not render in jsdom, so the canvas page's rendering is
@@ -14,6 +15,7 @@
  * test can reach it.
  */
 import type { PipelineVersion } from '@autonomy-studio/shared';
+import { ApiError } from '../../api/client';
 import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
 
@@ -85,9 +87,23 @@ export function historyEntries(
  * server, the identity fields are server-minted, and the four `source*`
  * git-provenance fields are dropped — a restored version is newly AUTHORED, not
  * minted from a commit, and claiming otherwise would forge its provenance.
+ *
+ * #904 — `basedOnVersionId` is the CAS basis, and a restore declares one like
+ * any other write. But NOT the basis a SAVE declares: the caller passes the
+ * head of the version LIST the row was picked from, never `canvasStore.loaded`.
+ * The two part company exactly when it matters — a refused save leaves `loaded`
+ * pointing at the old version by construction, so a `loaded`-based basis would
+ * 409 every restore for as long as the conflict banner stood. That was live in
+ * the first cut of this ticket and is pinned by the e2e "a restore still works
+ * while a save conflict is on screen". If the head has moved since the list was
+ * fetched the server still refuses, which is right: the row was chosen against
+ * a history that is out of date.
  */
-export function restoreBodyFrom(v: PipelineVersion): PipelineVersionWrite {
-  return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs);
+export function restoreBodyFrom(
+  v: PipelineVersion,
+  basedOnVersionId: string | null,
+): PipelineVersionWrite {
+  return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs, basedOnVersionId);
 }
 
 /**
@@ -128,6 +144,67 @@ export function docUnchanged(before: DocSnapshot, after: DocSnapshot): boolean {
     before.params === after.params &&
     before.outputs === after.outputs
   );
+}
+
+/**
+ * #904 — is this failure the server refusing a write against a stale basis?
+ *
+ * Branches on the `stale_write` CODE, never on the bare 409 status. The same
+ * route answers 409 `conflict` for any `SQLITE_CONSTRAINT` (the
+ * `pipeline_versions_pipeline_id_version_idx` UNIQUE index is the documented
+ * backstop on exactly this write), and offering a re-based "save anyway" on one
+ * of THOSE would re-POST straight into the same violation. The two 409s look
+ * identical from the status line and are opposite in what the operator should
+ * do about them.
+ */
+export function isStaleWrite(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.body?.error === 'stale_write';
+}
+
+/**
+ * What an operator reads when their save was refused because the pipeline moved
+ * underneath them.
+ *
+ * States all three facts, because omitting any one of them makes the next click
+ * a guess: their work is intact (nothing was lost — the refusal is the whole
+ * effect), the other save is intact too and reachable, and — the part it is
+ * tempting to leave out — saving from here does NOT merge, it advances past
+ * `headVersion` carrying only what is on this screen. An operator told merely
+ * "someone else saved" would reasonably assume the button reconciles.
+ */
+export function describeSaveConflict(headVersion: number): string {
+  return (
+    `Not saved: someone else saved v${String(headVersion)} while you were editing. ` +
+    'Your changes are still here, and nothing was overwritten. ' +
+    `Saving now creates v${String(headVersion + 1)} from what is on your screen — it will NOT include ` +
+    `v${String(headVersion)}'s changes, though v${String(headVersion)} is kept in Version history.`
+  );
+}
+
+/**
+ * What an operator reads when a RESTORE was refused because the head moved.
+ *
+ * Its own sentence rather than `describeSaveConflict`'s, because the two
+ * surfaces offer different acts: a refused save can be advanced past with the
+ * working graph, while a refused restore just needs re-trying against the
+ * refreshed list. Both live out here for the same reason — the canvas has no
+ * unit test, so any prose left inline is prose nothing checks.
+ *
+ * `null` covers the case where the refreshed list came back empty: the write
+ * was still refused, and saying so vaguely beats naming a version that is not
+ * there.
+ */
+export function describeRestoreConflict(headVersion: number | null): string {
+  const moved =
+    headVersion === null
+      ? 'this pipeline’s versions changed while the history was open'
+      : `someone else saved v${String(headVersion)} while this history was open`;
+  return `Not restored: ${moved}. The list has been refreshed — nothing was changed, and you can restore again.`;
+}
+
+/** The label of the informed-override button — it names the version it mints. */
+export function saveAnywayLabel(headVersion: number): string {
+  return `Save as v${String(headVersion + 1)} anyway`;
 }
 
 export interface RestoreCheck {

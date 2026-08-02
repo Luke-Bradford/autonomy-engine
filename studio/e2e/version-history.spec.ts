@@ -58,9 +58,10 @@ const V2: SeedDoc = {
 
 /** Seed one pipeline carrying three versions, and open its canvas on the head. */
 async function seedThreeVersions(page: Page, name: string): Promise<string> {
-  const { pipelineId } = await seedVersion(page, name, V1);
-  await mintVersion(page, pipelineId, V2, name);
-  await mintVersion(page, pipelineId, V3, name);
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+  // #904 — each version declares the one it follows, so the chain is explicit.
+  const v2 = await mintVersion(page, pipelineId, V2, pipelineVersionId, name);
+  await mintVersion(page, pipelineId, V3, v2, name);
 
   await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
   await fluentRootReady(page);
@@ -327,5 +328,180 @@ test.describe('pipeline version history', () => {
     await expect(page.getByTestId('version-preview-bar')).toContainText('unsaved changes');
 
     await expectQuiet(page, problems);
+  });
+  /**
+   * #904 — a save refused because the pipeline moved underneath the author.
+   *
+   * Two tabs on one pipeline: A saves, then B — still open on the older version
+   * — saves. Before this ticket B's save simply succeeded and became the head
+   * carrying none of A's work, with neither of them told. Nothing was destroyed
+   * (versions are immutable) but A's save was orphaned off the head invisibly,
+   * which is the classic lost update.
+   *
+   * Only reachable here: it needs two real writers against one server, and the
+   * property that matters most — that the refused canvas still holds the
+   * operator's unsaved work — is a statement about the live React Flow editor,
+   * which does not render in jsdom.
+   */
+  test('a save refused by a newer version says so, keeps the work, and can be advanced past', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    // The OTHER tab saves. Straight to the API: this is a second writer, not
+    // something this page did, and routing it through the UI would prove
+    // something else.
+    await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+
+    // This tab, still based on v1, makes an edit and saves.
+    await addActivity(page, 'HTTP Request');
+    await page.getByRole('button', { name: 'Save version' }).click();
+
+    const banner = page.locator('.notice-conflict');
+    await expect(banner).toBeVisible();
+    // Names the version that landed AND the one a retry would mint, and states
+    // the fact it is tempting to omit: this does not merge.
+    await expect(banner).toContainText('v2');
+    await expect(banner).toContainText('NOT include');
+
+    // The work survived. Both halves: the editor is still live (not swapped for
+    // a preview or an error page), and the node just added is still on it.
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expect(page.locator('.react-flow__node')).toHaveCount(3);
+
+    // And the refusal wrote NOTHING — v2 is still the head.
+    const before = await page.request.get(
+      `/api/pipelines/${encodeURIComponent(pipelineId)}/versions`,
+    );
+    expect(((await before.json()) as unknown[]).length).toBe(2);
+
+    // The banner's first act: look at what landed, in the surface that exists
+    // for it. The editor unmounts behind the preview, which is also why the
+    // override must be inert while it is open.
+    await page.getByRole('button', { name: 'Preview v2' }).click();
+    await expect(page.locator('.canvas-grid')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Back to editing' }).click();
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+
+    // The second act: advance past v2 deliberately. This re-declares the CAS
+    // basis as v2 — an informed assertion, not a bypass, and not a force flag.
+    await page.getByRole('button', { name: 'Save as v3 anyway' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v3.');
+    await expect(banner).toHaveCount(0);
+
+    const after = await page.request.get(
+      `/api/pipelines/${encodeURIComponent(pipelineId)}/versions`,
+    );
+    const versions = (await after.json()) as { version: number; nodes: unknown[] }[];
+    expect(versions.length).toBe(3);
+    // v3 is THIS tab's graph (v1's two nodes plus the added one), which is what
+    // "does not merge" means concretely — and v2 is still there to go back to.
+    expect(versions.find((v) => v.version === 3)?.nodes).toHaveLength(3);
+    expect(versions.find((v) => v.version === 2)).toBeTruthy();
+
+    // The refused POST is provoked output, not a regression: the browser logs
+    // its own network entry for any non-2xx. Anchored on Chromium's wording
+    // rather than on `/409/`, which would also swallow anything the APP logged
+    // carrying that number.
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
+  });
+  /**
+   * #904 — a THIRD save landing while the conflict banner is up.
+   *
+   * The one client transition where the banner could go stale: the override
+   * re-declares the CAS basis as the head that refused it, so if the head has
+   * moved AGAIN in the meantime it must be refused a second time and re-point
+   * at the newer version — never forced through, and never left naming a
+   * version that is no longer newest. Correct only by inspection until now.
+   */
+  test('a save that lands during a conflict re-points the banner instead of being forced through', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict again ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    const v2 = await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+    await addActivity(page, 'HTTP Request');
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeEnabled();
+
+    // A third writer lands BEFORE the operator takes the override.
+    await mintVersion(page, pipelineId, V3, v2, name);
+    await page.getByRole('button', { name: 'Save as v3 anyway' }).click();
+
+    // Refused again, and the banner now names the NEW head — it did not force
+    // the save through on a basis that had gone stale in the operator's hand.
+    await expect(page.locator('.notice-conflict')).toContainText('v3');
+    await expect(page.getByRole('button', { name: 'Save as v4 anyway' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toHaveCount(0);
+
+    const mid = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`);
+    expect(((await mid.json()) as unknown[]).length).toBe(3);
+
+    await page.getByRole('button', { name: 'Save as v4 anyway' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v4.');
+
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
+  });
+  /**
+   * #904 — a restore still works while a save conflict is on screen.
+   *
+   * The regression this pins is subtle and was live in the first cut. A save
+   * declares its basis from `loaded` (the version the working graph came from),
+   * and NOTHING re-points `loaded` on a refusal — so a restore that borrowed
+   * that same basis would 409 for as long as the banner stood, leaving "save
+   * anyway" or a page reload as the only exits. A restore's honest basis is the
+   * head of the version LIST the operator picked the row from, which the
+   * refusal has just refetched.
+   */
+  test('a restore still works while a save conflict is on screen', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict restore ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    // Another tab saves. This canvas is left CLEAN on purpose — a restore is
+    // refused outright while dirty, so a dirty canvas would never reach the
+    // server and could not show this.
+    await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice-conflict')).toBeVisible();
+
+    // Now restore v1 from the refreshed history.
+    await page.getByRole('button', { name: 'Version history' }).click();
+    await page.getByRole('button', { name: /^v1\b/ }).click();
+    page.once('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: 'Restore v1' }).click();
+
+    await expect(page.locator('.notice')).toHaveText('Restored v1 as v3.');
+    // And the banner is gone: the head it named has been advanced past.
+    await expect(page.locator('.notice-conflict')).toHaveCount(0);
+
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
   });
 });

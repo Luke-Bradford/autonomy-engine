@@ -9,7 +9,19 @@ import {
 } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
-const emptyVersionBody = { params: [], outputs: [], nodes: [], edges: [] };
+/**
+ * #904 — the versions route now requires the save to declare the version it is
+ * based on. Every use here mints a FIRST version on a fresh pipeline, so the
+ * honest basis is `null` ("I expect no versions yet") rather than a value that
+ * opts out of the check.
+ */
+const emptyVersionBody = {
+  params: [],
+  outputs: [],
+  nodes: [],
+  edges: [],
+  basedOnVersionId: null,
+};
 
 describe('portability routes (export + import)', () => {
   let app: FastifyInstance;

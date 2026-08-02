@@ -20,6 +20,7 @@ import {
   type ParamType,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
+import { messageOf } from '../../api/client';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
@@ -63,11 +64,15 @@ import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import {
+  describeRestoreConflict,
+  describeSaveConflict,
   docUnchanged,
   historyEntries,
+  isStaleWrite,
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
+  saveAnywayLabel,
 } from './versionHistory';
 
 interface PipelineCanvasProps {
@@ -97,17 +102,34 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
   /**
-   * While a restore is in flight, EVERY route out of the preview is inert.
+   * #904 — the head this canvas was refused against, or `null` when there is no
+   * conflict outstanding.
    *
-   * Not politeness — the restore rebases the canvas onto the version it mints,
+   * Its own state and not `saveMsg`, which is a bare string with nowhere to put
+   * an action. A conflict is the one save outcome the operator must DECIDE
+   * about — look at the version that landed, or advance past it — so it needs
+   * to carry the version those two buttons act on.
+   */
+  const [conflict, setConflict] = useState<PipelineVersion | null>(null);
+  /**
+   * While a version write is in flight, EVERY route in or out of the preview is
+   * inert.
+   *
+   * Not politeness — a restore rebases the canvas onto the version it mints,
    * and it is only safe to do that into an editor that is not there. Leaving
    * the preview remounts the editor, and an operator who then types has work
    * that the arriving response would overwrite. There are three such routes
    * (this preview's own "Back to editing", the "Version history" toggle, and a
    * version row), so the lock is named once and applied to all three rather
    * than remembered at each.
+   *
+   * #904 — `saving` joins `restoring`, and it is the same argument run the
+   * other way: a SAVE writes the working graph, so ENTERING a preview while one
+   * is in flight would land "Saved vN" and a full rebase underneath a read-only
+   * view of a different version. The property both halves hold is that the
+   * canvas the operator can see is the canvas the in-flight write is about.
    */
-  const previewLocked = restoring;
+  const previewLocked = restoring || saving;
   /**
    * Why the "Version history" toggle is dead, or `null` while it is live.
    *
@@ -119,9 +141,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    */
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
-    : previewLocked
+    : restoring
       ? 'Restoring — wait for it to finish.'
-      : null;
+      : saving
+        ? 'Saving — wait for it to finish.'
+        : null;
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -157,7 +181,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   // Through `latestVersion`, whose docblock already claims to be the ONE rule
   // for "highest version" — a second reduce here would be exactly the drift it
   // names.
-  const headVersion = useMemo(() => latestVersion(versions)?.version ?? null, [versions]);
+  // #904 — the head as a WHOLE, not just its number: a restore's CAS basis is
+  // the head's id and is read off this same list, so deriving the two
+  // separately would be two readers of one fact, free to drift.
+  const head = useMemo(() => latestVersion(versions), [versions]);
+  const headVersion = head?.version ?? null;
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null),
     [versions, loaded],
@@ -196,77 +224,142 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     [nodes, edges, containers, params, outputs],
   );
 
-  const onSave = useCallback(async () => {
-    setSaving(true);
-    setSaveMsg(null);
-    // Snapshot the exact graph being saved. Store mutations always produce new
-    // array references, so reference-equality tells us whether the operator
-    // edited during the in-flight POST.
-    const savedNodes = store.getState().nodes;
-    const savedEdges = store.getState().edges;
-    // #746 — containers ride along in the snapshot and the race check below.
-    // Still redundant today, but no longer for the reason first written here,
-    // and the update is the point: that comment said EVERY writer of
-    // `containers` also writes `nodes`, and named the two that then existed
-    // (`deleteNode`, `loadVersion`). #748's `deleteContainer` is the third, and
-    // it does NOT write `nodes` — the case the line was added in anticipation of
-    // has arrived. What keeps it redundant now is `edges`: `deleteContainer`
-    // filters that array unconditionally, so it always hands back a fresh
-    // reference and the edge check catches the race first. A future
-    // container-ONLY mutator would leave this the only check standing, which is
-    // why it stays.
-    const savedContainers = store.getState().containers;
-    // U16 — the typed contract rides in the same snapshot, and in the same race
-    // check. Every param and output action writes `params`/`outputs` and nothing
-    // else, so an edit made during the in-flight POST would be invisible to all
-    // three of the checks above it.
-    //
-    // It is NOT the first such writer, though an earlier draft of this comment
-    // claimed so: `createContainer` and `setNodeContainer` both write
-    // `containers` alone. What the five checks together now assert is the
-    // property that actually matters — they cover every doc field the store
-    // owns, and every action mints a fresh array reference, so no concurrent
-    // edit can be silently overwritten by the rebase.
-    const savedParams = store.getState().params;
-    const savedOutputs = store.getState().outputs;
-    try {
-      const created = await createPipelineVersion(
-        pipelineId,
-        toVersionBody(savedNodes, savedEdges, savedContainers, savedParams, savedOutputs),
-      );
-      const s = store.getState();
-      if (
-        docUnchanged(
-          {
-            nodes: savedNodes,
-            edges: savedEdges,
-            containers: savedContainers,
-            params: savedParams,
-            outputs: savedOutputs,
-          },
-          s,
-        )
-      ) {
-        // Nothing changed during the request: rebase fully onto the new
-        // immutable version (clears `dirty`, and the next save carries THIS
-        // version's params/outputs).
-        s.loadVersion(created);
-      } else {
-        // The operator kept editing while the save was in flight — keep their
-        // edits (and `dirty`), but point `loaded` at the new version so the
-        // next save carries forward from it.
-        s.rebaseLoaded(created);
+  /**
+   * Save the working graph as a new version, based on `basedOnVersionId`.
+   *
+   * #904 — the basis is a PARAMETER rather than read from `loaded` inside,
+   * because the two callers disagree about it on purpose. An ordinary Save
+   * declares the version the canvas is open on; "save anyway" (after a refusal)
+   * declares the head that refused it, which is the operator explicitly saying
+   * "yes, advance past that one". Both are honest CAS assertions — neither is a
+   * force flag, and there is deliberately no server-side way to skip the check.
+   */
+  const saveWith = useCallback(
+    async (basedOnVersionId: string | null) => {
+      setSaving(true);
+      setSaveMsg(null);
+      // Snapshot the exact graph being saved. Store mutations always produce new
+      // array references, so reference-equality tells us whether the operator
+      // edited during the in-flight POST.
+      const savedNodes = store.getState().nodes;
+      const savedEdges = store.getState().edges;
+      // #746 — containers ride along in the snapshot and the race check below.
+      // Still redundant today, but no longer for the reason first written here,
+      // and the update is the point: that comment said EVERY writer of
+      // `containers` also writes `nodes`, and named the two that then existed
+      // (`deleteNode`, `loadVersion`). #748's `deleteContainer` is the third, and
+      // it does NOT write `nodes` — the case the line was added in anticipation of
+      // has arrived. What keeps it redundant now is `edges`: `deleteContainer`
+      // filters that array unconditionally, so it always hands back a fresh
+      // reference and the edge check catches the race first. A future
+      // container-ONLY mutator would leave this the only check standing, which is
+      // why it stays.
+      const savedContainers = store.getState().containers;
+      // U16 — the typed contract rides in the same snapshot, and in the same race
+      // check. Every param and output action writes `params`/`outputs` and nothing
+      // else, so an edit made during the in-flight POST would be invisible to all
+      // three of the checks above it.
+      //
+      // It is NOT the first such writer, though an earlier draft of this comment
+      // claimed so: `createContainer` and `setNodeContainer` both write
+      // `containers` alone. What the five checks together now assert is the
+      // property that actually matters — they cover every doc field the store
+      // owns, and every action mints a fresh array reference, so no concurrent
+      // edit can be silently overwritten by the rebase.
+      const savedParams = store.getState().params;
+      const savedOutputs = store.getState().outputs;
+      try {
+        const created = await createPipelineVersion(
+          pipelineId,
+          toVersionBody(
+            savedNodes,
+            savedEdges,
+            savedContainers,
+            savedParams,
+            savedOutputs,
+            basedOnVersionId,
+          ),
+        );
+        const s = store.getState();
+        if (
+          docUnchanged(
+            {
+              nodes: savedNodes,
+              edges: savedEdges,
+              containers: savedContainers,
+              params: savedParams,
+              outputs: savedOutputs,
+            },
+            s,
+          )
+        ) {
+          // Nothing changed during the request: rebase fully onto the new
+          // immutable version (clears `dirty`, and the next save carries THIS
+          // version's params/outputs).
+          s.loadVersion(created);
+        } else {
+          // The operator kept editing while the save was in flight — keep their
+          // edits (and `dirty`), but point `loaded` at the new version so the
+          // next save carries forward from it.
+          s.rebaseLoaded(created);
+        }
+        // #903 — the history is appended to rather than refetched: the server
+        // just told us the whole row, and a refetch would race the next save.
+        setVersions((prev) => [...prev, created]);
+        // #904 — the save landed, so whatever conflict sent us here is over.
+        setConflict(null);
+        setSaveMsg(`Saved v${created.version}.`);
+      } catch (err) {
+        if (isStaleWrite(err)) {
+          // #904 — someone else saved while this canvas was open. The store is
+          // NOT touched: their work is on the server, this operator's is on
+          // screen, and the whole effect of the refusal is that neither moved.
+          //
+          // The versions are REFETCHED rather than left as they were, and that is
+          // load-bearing three times over: the message names the head, the
+          // history panel is fed from this array (so a "look at it" that led to a
+          // list without it in would be a dead end), and `headVersion` — which
+          // every restore refusal and confirmation is measured against — would
+          // otherwise keep naming a version that is no longer newest. The refetch
+          // is the one thing that makes the page honest again.
+          try {
+            const fresh = await listPipelineVersions(pipelineId);
+            setVersions(fresh);
+            const head = latestVersion(fresh);
+            if (head) {
+              setConflict(head);
+              setSaveMsg(null);
+              return;
+            }
+          } catch {
+            // Fall through to the plain message: a refusal we cannot describe is
+            // still a refusal, and reporting it as a success would be the one
+            // unacceptable outcome. No conflict is set, so no "save anyway"
+            // button offers a basis we failed to read.
+          }
+        }
+        setConflict(null);
+        setSaveMsg(
+          // A stale write we could not describe (the refetch above threw) must
+          // NOT print the server's own sentence: it names an internal pipeline
+          // id, exactly as the restore path documents. Any other failure is the
+          // server's to explain and passes through.
+          isStaleWrite(err)
+            ? 'Not saved: this pipeline changed while you were editing, and the version list could not be refreshed. Your changes are still here — reload the page to see what landed.'
+            : `Save failed: ${messageOf(err)}`,
+        );
+      } finally {
+        setSaving(false);
       }
-      // #903 — the history is appended to rather than refetched: the server
-      // just told us the whole row, and a refetch would race the next save.
-      setVersions((prev) => [...prev, created]);
-      setSaveMsg(`Saved v${created.version}.`);
-    } catch (err) {
-      setSaveMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setSaving(false);
-    }
-  }, [pipelineId, store]);
+    },
+    [pipelineId, store],
+  );
+
+  /** An ordinary Save: the basis is the version this canvas is open on. */
+  const onSave = useCallback(
+    () => saveWith(store.getState().loaded?.id ?? null),
+    [saveWith, store],
+  );
 
   /**
    * #903 — restore the previewed version by minting a NEW version from ITS doc.
@@ -310,12 +403,29 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       // destroys an edit", and that belongs in the write, not in three
       // `disabled` attributes a fourth exit route would quietly bypass.
       const before = store.getState();
-      const created = await createPipelineVersion(pipelineId, restoreBodyFrom(previewed));
+      // #904 — a restore is a save and declares a CAS basis too, but NOT the
+      // one a save declares. A save asserts about the version its working graph
+      // came from (`loaded`); a restore asserts about the version list the
+      // operator was reading when they picked a row, which is `versions`.
+      //
+      // The two part company exactly when it matters. After a refused save
+      // `loaded` still points at the old version by construction — nothing
+      // re-points it on that path — so a `loaded`-based basis would make EVERY
+      // restore 409 for as long as the conflict banner stood, with the only
+      // exits being "save anyway" or a page reload. `versions` is refetched by
+      // that same refusal, so it is both truthful and current.
+      const created = await createPipelineVersion(
+        pipelineId,
+        restoreBodyFrom(previewed, head?.id ?? null),
+      );
       setVersions((prev) => [...prev, created]);
       const s = store.getState();
       if (docUnchanged(before, s)) {
         s.loadVersion(created);
         setPreviewing(null);
+        // The restore advanced the head, so any earlier save conflict is over —
+        // its banner would otherwise stand naming versions that now exist.
+        setConflict(null);
         setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
       } else {
         // BELT AND SUSPENDERS, not a live path: with `previewLocked` holding
@@ -337,11 +447,30 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         );
       }
     } catch (err) {
-      setSaveMsg(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (isStaleWrite(err)) {
+        // #904 — the head moved while this history list was on screen, so the
+        // row that was clicked was chosen against a list that is now out of
+        // date. Refetch and say so, rather than printing the server's sentence:
+        // that names an internal pipeline id, and it leaves the list — and
+        // every `v{head+1}` promise measured off it — stale.
+        //
+        // Deliberately NOT the save-conflict banner: that offers to save the
+        // WORKING graph, which is not what was being attempted here.
+        try {
+          const fresh = await listPipelineVersions(pipelineId);
+          setVersions(fresh);
+          setSaveMsg(describeRestoreConflict(latestVersion(fresh)?.version ?? null));
+          return;
+        } catch {
+          // Fall through: a refusal we cannot describe is still a refusal, and
+          // reporting it as a success would be the one unacceptable outcome.
+        }
+      }
+      setSaveMsg(`Restore failed: ${messageOf(err)}`);
     } finally {
       setRestoring(false);
     }
-  }, [dirty, headVersion, pipelineId, previewed, store]);
+  }, [dirty, head, headVersion, pipelineId, previewed, store]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -399,6 +528,60 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       </div>
 
       {saveMsg && <p className="notice">{saveMsg}</p>}
+
+      {/* #904 — a refused save. `role="alert"` because it is the ONE save
+          outcome that is not self-explanatory and that the operator must act
+          on: unannounced, the Save button simply appears to have done nothing.
+          Distinct from the `.notice` above rather than folded into it, because
+          this one carries the two acts that resolve it. */}
+      {conflict && (
+        <div className="notice-conflict" role="alert">
+          <p>{describeSaveConflict(conflict.version)}</p>
+          <div className="form-actions">
+            <button
+              type="button"
+              onClick={() => {
+                // Show them the version that landed, in the surface that
+                // already exists for it (#903) — a prose pointer to a panel
+                // they then have to find is not the same thing.
+                setHistoryOpen(true);
+                setPreviewing(conflict.version);
+              }}
+              // The same lock every other route into the preview carries: this
+              // is a fourth one, and the reported bug was precisely a route
+              // nobody had enumerated.
+              disabled={previewLocked}
+              // The NAMED reason, not a second hardcoded sentence: this button
+              // is locked by `restoring` too, and a fixed "Saving…" would be
+              // flatly wrong on that arm — reachable, and walked by the e2e.
+              title={historyDisabledReason ?? undefined}
+            >
+              {`Preview v${String(conflict.version)}`}
+            </button>
+            <button
+              type="button"
+              // Re-declares the CAS basis as the head that refused us — an
+              // informed assertion, not a bypass. If a THIRD save has landed in
+              // the meantime, this is refused again and lands right back here
+              // with the newer head, which is the correct behaviour and not a
+              // loop to be short-circuited.
+              onClick={() => void saveWith(conflict.id)}
+              // The same guard the Save button carries, for the same reason:
+              // this writes the WORKING graph, which is not what is on screen
+              // while a version is being previewed. Without it, the one route
+              // this banner offers would mint a version of something the
+              // operator cannot see — the very class of surprise write the
+              // ticket is about.
+              disabled={saving || previewing !== null}
+              title={
+                previewing !== null ? 'Leave the preview to save your working graph.' : undefined
+              }
+            >
+              {saveAnywayLabel(conflict.version)}
+            </button>
+          </div>
+        </div>
+      )}
       {loadError && <p className="error" role="alert">{`Could not load pipeline: ${loadError}`}</p>}
 
       {issues.length > 0 && (

@@ -2,8 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
   ActivePipelineVersionResponseSchema,
+  CreatePipelineVersionBodySchema,
   NewPipelineSchema,
-  NewPipelineVersionSchema,
   PublishPipelineBodySchema,
   PublishPipelineResultSchema,
   canonicalStringify,
@@ -18,6 +18,7 @@ import {
   createPipelineVersion,
   deletePipeline,
   getActivePublishedVersion,
+  getHeadVersionRef,
   getPipeline,
   getPipelineVersion,
   getWorkspaceGit,
@@ -25,7 +26,7 @@ import {
   listPipelinesPage,
   updatePipeline,
 } from '../repo/index.js';
-import { NotFoundError, PublishRefusedError } from '../errors.js';
+import { NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
 import { pageArgsFromQuery, requireOwned } from './util.js';
 import { exportPipeline } from '../portability/index.js';
 
@@ -42,9 +43,6 @@ const PipelineWriteBodySchema = NewPipelineSchema.omit({ ownerId: true });
 const PipelinePatchBodySchema = PipelineWriteBodySchema.extend({
   concurrency: z.number().int().positive().nullable(),
 }).partial();
-
-/** `pipelineId` comes from the `:id` route param, never the body. */
-const PipelineVersionWriteBodySchema = NewPipelineVersionSchema.omit({ pipelineId: true });
 
 export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
@@ -263,8 +261,45 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
         'pipeline',
         request.params.id,
       );
-      const body = PipelineVersionWriteBodySchema.parse(request.body);
-      const created = createPipelineVersion(db, { ...body, pipelineId: pipeline.id });
+      const { basedOnVersionId, ...doc } = CreatePipelineVersionBodySchema.parse(request.body);
+      // #904 — CAS on the head, in the same transaction as the mint.
+      //
+      // Without it, `createPipelineVersion` takes `max(version)+1`
+      // unconditionally: two authors with the same pipeline open both save, and
+      // the second one's version becomes the head carrying NONE of the first's
+      // work. Nothing was destroyed (versions are immutable) but the first
+      // author's save is silently orphaned off the head, and neither of them is
+      // told — the classic lost update.
+      //
+      // The check lives HERE and not in `createPipelineVersion`, exactly as the
+      // publish CAS lives in its route: the repo function is also the write path
+      // for import, workspace-apply and the git reconcile, none of which have —
+      // or should be made to invent — an author's basis. This is a rule about an
+      // INTERACTIVE save, so it belongs on the interactive surface.
+      //
+      // The transaction is for symmetry with publish and to state the intent;
+      // it is not what makes this atomic. better-sqlite3 is one synchronous
+      // connection and there is no `await` between the head read and the
+      // insert, so nothing can interleave either way. `createPipelineVersion`'s
+      // own transaction composes rather than conflicts because better-sqlite3
+      // drops to a SAVEPOINT when it is already inside one (drizzle delegates
+      // straight to it here — the callback's `tx` is deliberately unused, so
+      // drizzle's own savepoint path is never the one taken).
+      const created = db.transaction(() => {
+        const head = getHeadVersionRef(db, pipeline.id);
+        const headId = head?.id ?? null;
+        if (headId !== basedOnVersionId) {
+          // Names the head's version NUMBER, never the caller's
+          // `basedOnVersionId` — an error may echo only ids this handler
+          // resolved and owner-checked itself.
+          throw new StaleWriteError(
+            head === null
+              ? `stale save for pipeline "${pipeline.id}": it has no versions yet, but the save declared a basis`
+              : `stale save for pipeline "${pipeline.id}": it is now at v${String(head.version)}, which is not the version this save was based on — reload or save again from v${String(head.version)}`,
+          );
+        }
+        return createPipelineVersion(db, { ...doc, pipelineId: pipeline.id });
+      });
       reply.status(201).send(created);
     },
   );

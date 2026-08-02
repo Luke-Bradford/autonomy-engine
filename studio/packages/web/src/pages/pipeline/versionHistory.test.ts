@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
+import { ApiError } from '../../api/client';
 import {
+  describeRestoreConflict,
+  describeSaveConflict,
   docUnchanged,
   historyEntries,
+  isStaleWrite,
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
+  saveAnywayLabel,
 } from './versionHistory';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -89,12 +94,14 @@ describe('restoreBodyFrom', () => {
       outputs: [{ name: 'o', type: 'string' }],
     });
 
-    expect(restoreBodyFrom(v)).toEqual({
+    expect(restoreBodyFrom(v, 'pv_head')).toEqual({
       nodes: v.nodes,
       edges: v.edges,
       containers: v.containers,
       params: v.params,
       outputs: v.outputs,
+      // #904 — a restore declares its CAS basis like any other save.
+      basedOnVersionId: 'pv_head',
     });
   });
 
@@ -106,7 +113,7 @@ describe('restoreBodyFrom', () => {
     const v = version({
       containers: [{ id: 'c_1', kind: 'loop', children: ['n_a'] }],
     });
-    expect(restoreBodyFrom(v).containers).toEqual(v.containers);
+    expect(restoreBodyFrom(v, null).containers).toEqual(v.containers);
   });
 
   /* The server re-stamps `catalogVersion` and mints the identity, so sending
@@ -114,7 +121,7 @@ describe('restoreBodyFrom', () => {
      `source*` git-provenance fields must NOT ride along, because a restore is a
      newly authored version, not one minted from a commit. */
   it('sends no identity, catalog or git-provenance fields', () => {
-    const body = restoreBodyFrom(version()) as Record<string, unknown>;
+    const body = restoreBodyFrom(version(), 'pv_head') as Record<string, unknown>;
     for (const forbidden of [
       'id',
       'resourceId',
@@ -200,5 +207,104 @@ describe('docUnchanged', () => {
   it('fails on a fresh array with identical contents', () => {
     const before = { ...doc(), nodes: [{ id: 'n1' }] };
     expect(docUnchanged(before, { ...before, nodes: [{ id: 'n1' }] })).toBe(false);
+  });
+});
+
+/**
+ * #904 — the two decisions the refused-save banner rides on. Both are here
+ * rather than in the component for the reason this module exists: React Flow
+ * does not render in jsdom, so `PipelineCanvas` has no unit test and anything
+ * decidable has to be decidable out here.
+ */
+describe('isStaleWrite', () => {
+  const staleBody = { error: 'stale_write' as const, message: 'it is now at v4' };
+
+  it('is true for the server‘s stale-basis refusal', () => {
+    expect(isStaleWrite(new ApiError(409, 'stale', staleBody))).toBe(true);
+  });
+
+  /* The load-bearing case. The SAME route answers 409 `conflict` for any
+     SQLITE_CONSTRAINT — including the unique index on (pipelineId, version)
+     that guards this very write — and the banner's whole purpose is to offer a
+     re-based retry. Offering that on a constraint violation would re-POST
+     straight into the same failure, so a bare `status === 409` test here would
+     be worse than none. */
+  it('is false for the generic 409 conflict on the same route', () => {
+    expect(
+      isStaleWrite(new ApiError(409, 'conflict', { error: 'conflict', message: 'nope' })),
+    ).toBe(false);
+  });
+
+  it('is false for a stale_write code carried on a non-409 status', () => {
+    expect(isStaleWrite(new ApiError(400, 'stale', staleBody))).toBe(false);
+  });
+
+  it('is false for a 409 with no body at all', () => {
+    expect(isStaleWrite(new ApiError(409, 'conflict'))).toBe(false);
+  });
+
+  /* A network failure is not a refusal — narrowing has to survive a plain
+     Error, which is what `catch` actually binds. */
+  it('is false for a non-ApiError', () => {
+    expect(isStaleWrite(new Error('offline'))).toBe(false);
+    expect(isStaleWrite(null)).toBe(false);
+  });
+});
+
+describe('describeSaveConflict', () => {
+  const msg = describeSaveConflict(5);
+
+  it('names the version that landed, and the one a retry would mint', () => {
+    expect(msg).toContain('v5');
+    expect(msg).toContain('v6');
+  });
+
+  /* Each of the three facts gets its own assertion, because dropping any one of
+     them makes the next click a guess — and the third is the one it is tempting
+     to leave out. */
+  it('says the operator‘s own work survived', () => {
+    expect(msg).toContain('still here');
+  });
+
+  it('says the other save survived and is reachable', () => {
+    expect(msg).toContain('Version history');
+  });
+
+  it('says plainly that saving again does NOT merge the other version in', () => {
+    expect(msg).toContain('NOT include');
+  });
+});
+
+describe('saveAnywayLabel', () => {
+  /* The button names the version it MINTS, not the one it skips: an operator
+     reads the label as a description of the act they are about to perform. */
+  it('names the version the override would create', () => {
+    expect(saveAnywayLabel(5)).toBe('Save as v6 anyway');
+  });
+});
+
+describe('describeRestoreConflict', () => {
+  /* One assertion per fact, like its save-side sibling: each is a separate
+     thing an operator needs, and a single `toBe` on the whole string would go
+     red for a comma. */
+  it('names the version that landed', () => {
+    expect(describeRestoreConflict(7)).toContain('v7');
+  });
+
+  it('says nothing was changed', () => {
+    expect(describeRestoreConflict(7)).toContain('nothing was changed');
+  });
+
+  it('says the list is now current, so the act can simply be retried', () => {
+    expect(describeRestoreConflict(7)).toContain('restore again');
+  });
+
+  /* The refreshed list came back EMPTY. The write was still refused, and being
+     vague beats naming a version that is not there — the #473 rule applied to
+     prose: an absent fact must not be manufactured. */
+  it('does not invent a version number when there is no head to name', () => {
+    const msg = describeRestoreConflict(null);
+    expect(msg).toContain('Not restored');
+    expect(msg).not.toMatch(/v\d/);
   });
 });

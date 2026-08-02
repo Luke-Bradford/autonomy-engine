@@ -37,6 +37,13 @@ export const ApiErrorCodeSchema = z.enum([
   // #3 G2 — the server host has no usable `git` binary (503: a local
   // precondition, not the caller's fault; connect again once git exists).
   'git_unavailable',
+  // #904 — a version write whose declared CAS basis is not the pipeline's
+  // current head (409). Its OWN code rather than the generic `conflict`,
+  // because the client acts on it: it is the one 409 on that route an operator
+  // can resolve (re-base and save again), and `conflict` is already answered
+  // there for any `SQLITE_CONSTRAINT` — offering a "save anyway" on one of
+  // those would re-POST straight into the same violation.
+  'stale_write',
 ]);
 export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
 
