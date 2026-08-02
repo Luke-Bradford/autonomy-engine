@@ -126,7 +126,9 @@ describe('VersionHistoryPanel', () => {
   });
 
   it('says a pipeline has no versions rather than rendering an empty list', () => {
-    render(<VersionHistoryPanel entries={[]} previewing={null} locked={false} onPreview={vi.fn()} />);
+    render(
+      <VersionHistoryPanel entries={[]} previewing={null} locked={false} onPreview={vi.fn()} />,
+    );
     expect(screen.queryAllByRole('button')).toHaveLength(0);
     expect(screen.getByTestId('version-history').textContent).toMatch(/no versions yet/i);
   });
