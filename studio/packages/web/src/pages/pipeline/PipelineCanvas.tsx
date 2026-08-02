@@ -108,6 +108,20 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    * than remembered at each.
    */
   const previewLocked = restoring;
+  /**
+   * Why the "Version history" toggle is dead, or `null` while it is live.
+   *
+   * Named rather than inlined because it has TWO causes and a nested ternary in
+   * the attribute reads as one. `!ready` is checked first to match the
+   * `disabled` expression beside it: during the initial load nothing has been
+   * restored yet, so "restoring" would be the wrong sentence even if both were
+   * somehow true.
+   */
+  const historyDisabledReason = !ready
+    ? 'Loading this pipeline’s versions…'
+    : previewLocked
+      ? 'Restoring — wait for it to finish.'
+      : null;
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -304,6 +318,14 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         setPreviewing(null);
         setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
       } else {
+        // BELT AND SUSPENDERS, not a live path: with `previewLocked` holding
+        // all three exits shut, nothing can edit the doc between the snapshot
+        // above and here, so this branch is currently unreachable through the
+        // UI. It stays because the thing it guards is a GUARANTEE and the locks
+        // are only an affordance — the reported bug was precisely an exit route
+        // nobody had noticed, and a fourth one added later would reach here
+        // rather than destroy work. Kept deliberately rather than trimmed.
+        //
         // The restore SUCCEEDED — v`created` exists and holds the restored doc.
         // Only the canvas rebase is withheld, so say exactly that rather than
         // reporting a failure the server did not have. `rebaseLoaded` also
@@ -341,7 +363,10 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
             // which would remount the editor mid-restore. That is the same
             // escape "Back to editing" offers, just wearing a different button.
             disabled={!ready || previewLocked}
-            title={previewLocked ? 'Restoring — wait for it to finish.' : undefined}
+            // Both disabled cases get a reason. `!ready` is the commoner of the
+            // two — it covers the whole initial load — and an unexplained dead
+            // control is exactly what a title exists to prevent.
+            title={historyDisabledReason ?? undefined}
             onClick={() => {
               // Both setters at the TOP LEVEL. Calling `setPreviewing` inside
               // the `setHistoryOpen` updater made that updater impure, which
