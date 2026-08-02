@@ -888,11 +888,13 @@ td button + button {
    Deliberately not `--muted` like the plain `.notice` it sits beside, and NOT
    carrying that class either: several specs locate `.notice` strictly, and this
    banner can be on screen at the same time. This one is an outcome the operator
-   must decide about, and it carries the two buttons that resolve it. `--warning` and not an error red — nothing failed and nothing was
-   lost; the save was declined, and both versions are intact. Both are theme
-   tokens, so the banner tracks light and dark rather than pinning a hex. */
+   must decide about, and it carries the two buttons that resolve it.
+   `--warning` and not an error red — nothing failed and nothing was lost; the
+   save was declined, and both versions are intact. Both are theme tokens
+   (`--text`, which is what every other banner here uses — there is no `--fg`),
+   so the banner tracks light and dark rather than pinning a hex. */
 .notice-conflict {
-  color: var(--fg);
+  color: var(--text);
   border: 1px solid var(--warning);
   border-radius: 6px;
   padding: 0.75rem 1rem;

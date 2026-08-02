@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
 import {
+  describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
   historyEntries,
@@ -279,5 +280,31 @@ describe('saveAnywayLabel', () => {
      reads the label as a description of the act they are about to perform. */
   it('names the version the override would create', () => {
     expect(saveAnywayLabel(5)).toBe('Save as v6 anyway');
+  });
+});
+
+describe('describeRestoreConflict', () => {
+  /* One assertion per fact, like its save-side sibling: each is a separate
+     thing an operator needs, and a single `toBe` on the whole string would go
+     red for a comma. */
+  it('names the version that landed', () => {
+    expect(describeRestoreConflict(7)).toContain('v7');
+  });
+
+  it('says nothing was changed', () => {
+    expect(describeRestoreConflict(7)).toContain('nothing was changed');
+  });
+
+  it('says the list is now current, so the act can simply be retried', () => {
+    expect(describeRestoreConflict(7)).toContain('restore again');
+  });
+
+  /* The refreshed list came back EMPTY. The write was still refused, and being
+     vague beats naming a version that is not there — the #473 rule applied to
+     prose: an absent fact must not be manufactured. */
+  it('does not invent a version number when there is no head to name', () => {
+    const msg = describeRestoreConflict(null);
+    expect(msg).toContain('Not restored');
+    expect(msg).not.toMatch(/v\d/);
   });
 });

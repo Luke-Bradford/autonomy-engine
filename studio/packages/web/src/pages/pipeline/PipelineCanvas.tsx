@@ -20,6 +20,7 @@ import {
   type ParamType,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
+import { messageOf } from '../../api/client';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
@@ -63,6 +64,7 @@ import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import {
+  describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
   historyEntries,
@@ -179,7 +181,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   // Through `latestVersion`, whose docblock already claims to be the ONE rule
   // for "highest version" — a second reduce here would be exactly the drift it
   // names.
-  const headVersion = useMemo(() => latestVersion(versions)?.version ?? null, [versions]);
+  // #904 — the head as a WHOLE, not just its number: a restore's CAS basis is
+  // the head's id and is read off this same list, so deriving the two
+  // separately would be two readers of one fact, free to drift.
+  const head = useMemo(() => latestVersion(versions), [versions]);
+  const headVersion = head?.version ?? null;
   const entries = useMemo(
     () => historyEntries(versions, loaded?.version ?? null),
     [versions, loaded],
@@ -333,7 +339,15 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           }
         }
         setConflict(null);
-        setSaveMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
+        setSaveMsg(
+          // A stale write we could not describe (the refetch above threw) must
+          // NOT print the server's own sentence: it names an internal pipeline
+          // id, exactly as the restore path documents. Any other failure is the
+          // server's to explain and passes through.
+          isStaleWrite(err)
+            ? 'Not saved: this pipeline changed while you were editing, and the version list could not be refreshed. Your changes are still here — reload the page to see what landed.'
+            : `Save failed: ${messageOf(err)}`,
+        );
       } finally {
         setSaving(false);
       }
@@ -402,7 +416,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       // that same refusal, so it is both truthful and current.
       const created = await createPipelineVersion(
         pipelineId,
-        restoreBodyFrom(previewed, latestVersion(versions)?.id ?? null),
+        restoreBodyFrom(previewed, head?.id ?? null),
       );
       setVersions((prev) => [...prev, created]);
       const s = store.getState();
@@ -445,23 +459,18 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         try {
           const fresh = await listPipelineVersions(pipelineId);
           setVersions(fresh);
-          const head = latestVersion(fresh);
-          setSaveMsg(
-            head
-              ? `Not restored: someone else saved v${head.version} while this history was open. The list has been refreshed — nothing was changed, and you can restore again.`
-              : 'Not restored: this pipeline’s versions changed while the history was open. The list has been refreshed.',
-          );
+          setSaveMsg(describeRestoreConflict(latestVersion(fresh)?.version ?? null));
           return;
         } catch {
           // Fall through: a refusal we cannot describe is still a refusal, and
           // reporting it as a success would be the one unacceptable outcome.
         }
       }
-      setSaveMsg(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+      setSaveMsg(`Restore failed: ${messageOf(err)}`);
     } finally {
       setRestoring(false);
     }
-  }, [dirty, headVersion, pipelineId, previewed, store, versions]);
+  }, [dirty, head, headVersion, pipelineId, previewed, store]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -542,7 +551,10 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
               // is a fourth one, and the reported bug was precisely a route
               // nobody had enumerated.
               disabled={previewLocked}
-              title={previewLocked ? 'Saving — wait for it to finish.' : undefined}
+              // The NAMED reason, not a second hardcoded sentence: this button
+              // is locked by `restoring` too, and a fixed "Saving…" would be
+              // flatly wrong on that arm — reachable, and walked by the e2e.
+              title={historyDisabledReason ?? undefined}
             >
               {`Preview v${String(conflict.version)}`}
             </button>
