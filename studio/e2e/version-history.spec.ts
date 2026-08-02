@@ -416,4 +416,92 @@ test.describe('pipeline version history', () => {
       /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
     ]);
   });
+  /**
+   * #904 — a THIRD save landing while the conflict banner is up.
+   *
+   * The one client transition where the banner could go stale: the override
+   * re-declares the CAS basis as the head that refused it, so if the head has
+   * moved AGAIN in the meantime it must be refused a second time and re-point
+   * at the newer version — never forced through, and never left naming a
+   * version that is no longer newest. Correct only by inspection until now.
+   */
+  test('a save that lands during a conflict re-points the banner instead of being forced through', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict again ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    const v2 = await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+    await addActivity(page, 'HTTP Request');
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toBeEnabled();
+
+    // A third writer lands BEFORE the operator takes the override.
+    await mintVersion(page, pipelineId, V3, v2, name);
+    await page.getByRole('button', { name: 'Save as v3 anyway' }).click();
+
+    // Refused again, and the banner now names the NEW head — it did not force
+    // the save through on a basis that had gone stale in the operator's hand.
+    await expect(page.locator('.notice-conflict')).toContainText('v3');
+    await expect(page.getByRole('button', { name: 'Save as v4 anyway' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Save as v3 anyway' })).toHaveCount(0);
+
+    const mid = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`);
+    expect(((await mid.json()) as unknown[]).length).toBe(3);
+
+    await page.getByRole('button', { name: 'Save as v4 anyway' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v4.');
+
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
+  });
+  /**
+   * #904 — a restore still works while a save conflict is on screen.
+   *
+   * The regression this pins is subtle and was live in the first cut. A save
+   * declares its basis from `loaded` (the version the working graph came from),
+   * and NOTHING re-points `loaded` on a refusal — so a restore that borrowed
+   * that same basis would 409 for as long as the banner stood, leaving "save
+   * anyway" or a page reload as the only exits. A restore's honest basis is the
+   * head of the version LIST the operator picked the row from, which the
+   * refusal has just refetched.
+   */
+  test('a restore still works while a save conflict is on screen', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    const name = `Conflict restore ${String(Date.now())}`;
+
+    const { pipelineId, pipelineVersionId } = await seedVersion(page, name, V1);
+    await page.goto(`/#/author/pipelines/${encodeURIComponent(pipelineId)}`);
+    await fluentRootReady(page);
+    await expect(nodeById(page, 'n_a')).toHaveClass(/\bdraggable\b/);
+    await viewportSettled(page);
+
+    // Another tab saves. This canvas is left CLEAN on purpose — a restore is
+    // refused outright while dirty, so a dirty canvas would never reach the
+    // server and could not show this.
+    await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice-conflict')).toBeVisible();
+
+    // Now restore v1 from the refreshed history.
+    await page.getByRole('button', { name: 'Version history' }).click();
+    await page.getByRole('button', { name: /^v1\b/ }).click();
+    page.once('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: 'Restore v1' }).click();
+
+    await expect(page.locator('.notice')).toHaveText('Restored v1 as v3.');
+    // And the banner is gone: the head it named has been advanced past.
+    await expect(page.locator('.notice-conflict')).toHaveCount(0);
+
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
+  });
 });

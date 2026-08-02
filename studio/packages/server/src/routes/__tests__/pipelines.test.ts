@@ -452,13 +452,20 @@ describe('pipelines routes', () => {
       expect(res.json().error).toBe('validation_error');
     });
 
-    it('does not echo the caller‘s basis id back in the refusal', async () => {
-      const pipeline = mkPipeline('NoEcho');
-      await post(pipeline.id, emptyVersionBody);
+    /* BOTH refusal branches, because they build their message separately and
+       only one of them was covered: the `head === null` arm is the one that
+       receives a basis for a pipeline with no versions, so it is if anything
+       the likelier place to reach for the caller's id. An error may name only
+       ids the handler resolved and owner-checked itself — never request
+       input. */
+    it.each([
+      ['a pipeline that has versions', true],
+      ['a pipeline that has none', false],
+    ])('does not echo the caller‘s basis id back in the refusal — %s', async (_label, seed) => {
+      const pipeline = mkPipeline(`NoEcho ${String(seed)}`);
+      if (seed) await post(pipeline.id, emptyVersionBody);
       const res = await post(pipeline.id, versionBodyOn('pv_<script>alert(1)</script>'));
       expect(res.statusCode).toBe(409);
-      // An error may name only ids the handler resolved and owner-checked
-      // itself — never request input.
       expect(res.body).not.toContain('script');
     });
 

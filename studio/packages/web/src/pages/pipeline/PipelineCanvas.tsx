@@ -110,17 +110,24 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    */
   const [conflict, setConflict] = useState<PipelineVersion | null>(null);
   /**
-   * While a restore is in flight, EVERY route out of the preview is inert.
+   * While a version write is in flight, EVERY route in or out of the preview is
+   * inert.
    *
-   * Not politeness — the restore rebases the canvas onto the version it mints,
+   * Not politeness — a restore rebases the canvas onto the version it mints,
    * and it is only safe to do that into an editor that is not there. Leaving
    * the preview remounts the editor, and an operator who then types has work
    * that the arriving response would overwrite. There are three such routes
    * (this preview's own "Back to editing", the "Version history" toggle, and a
    * version row), so the lock is named once and applied to all three rather
    * than remembered at each.
+   *
+   * #904 — `saving` joins `restoring`, and it is the same argument run the
+   * other way: a SAVE writes the working graph, so ENTERING a preview while one
+   * is in flight would land "Saved vN" and a full rebase underneath a read-only
+   * view of a different version. The property both halves hold is that the
+   * canvas the operator can see is the canvas the in-flight write is about.
    */
-  const previewLocked = restoring;
+  const previewLocked = restoring || saving;
   /**
    * Why the "Version history" toggle is dead, or `null` while it is live.
    *
@@ -132,9 +139,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    */
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
-    : previewLocked
+    : restoring
       ? 'Restoring — wait for it to finish.'
-      : null;
+      : saving
+        ? 'Saving — wait for it to finish.'
+        : null;
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -380,19 +389,29 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       // destroys an edit", and that belongs in the write, not in three
       // `disabled` attributes a fourth exit route would quietly bypass.
       const before = store.getState();
-      // #904 — a restore is a save, and declares the same basis: the version
-      // this canvas is open on. If another tab moved the head since this list
-      // was fetched, the server refuses — correctly, because the row that was
-      // clicked came from a history that is now out of date.
+      // #904 — a restore is a save and declares a CAS basis too, but NOT the
+      // one a save declares. A save asserts about the version its working graph
+      // came from (`loaded`); a restore asserts about the version list the
+      // operator was reading when they picked a row, which is `versions`.
+      //
+      // The two part company exactly when it matters. After a refused save
+      // `loaded` still points at the old version by construction — nothing
+      // re-points it on that path — so a `loaded`-based basis would make EVERY
+      // restore 409 for as long as the conflict banner stood, with the only
+      // exits being "save anyway" or a page reload. `versions` is refetched by
+      // that same refusal, so it is both truthful and current.
       const created = await createPipelineVersion(
         pipelineId,
-        restoreBodyFrom(previewed, before.loaded?.id ?? null),
+        restoreBodyFrom(previewed, latestVersion(versions)?.id ?? null),
       );
       setVersions((prev) => [...prev, created]);
       const s = store.getState();
       if (docUnchanged(before, s)) {
         s.loadVersion(created);
         setPreviewing(null);
+        // The restore advanced the head, so any earlier save conflict is over —
+        // its banner would otherwise stand naming versions that now exist.
+        setConflict(null);
         setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
       } else {
         // BELT AND SUSPENDERS, not a live path: with `previewLocked` holding
@@ -414,11 +433,35 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         );
       }
     } catch (err) {
+      if (isStaleWrite(err)) {
+        // #904 — the head moved while this history list was on screen, so the
+        // row that was clicked was chosen against a list that is now out of
+        // date. Refetch and say so, rather than printing the server's sentence:
+        // that names an internal pipeline id, and it leaves the list — and
+        // every `v{head+1}` promise measured off it — stale.
+        //
+        // Deliberately NOT the save-conflict banner: that offers to save the
+        // WORKING graph, which is not what was being attempted here.
+        try {
+          const fresh = await listPipelineVersions(pipelineId);
+          setVersions(fresh);
+          const head = latestVersion(fresh);
+          setSaveMsg(
+            head
+              ? `Not restored: someone else saved v${head.version} while this history was open. The list has been refreshed — nothing was changed, and you can restore again.`
+              : 'Not restored: this pipeline’s versions changed while the history was open. The list has been refreshed.',
+          );
+          return;
+        } catch {
+          // Fall through: a refusal we cannot describe is still a refusal, and
+          // reporting it as a success would be the one unacceptable outcome.
+        }
+      }
       setSaveMsg(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setRestoring(false);
     }
-  }, [dirty, headVersion, pipelineId, previewed, store]);
+  }, [dirty, headVersion, pipelineId, previewed, store, versions]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -495,6 +538,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
                 setHistoryOpen(true);
                 setPreviewing(conflict.version);
               }}
+              // The same lock every other route into the preview carries: this
+              // is a fourth one, and the reported bug was precisely a route
+              // nobody had enumerated.
+              disabled={previewLocked}
+              title={previewLocked ? 'Saving — wait for it to finish.' : undefined}
             >
               {`Preview v${String(conflict.version)}`}
             </button>

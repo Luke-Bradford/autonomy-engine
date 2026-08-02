@@ -279,10 +279,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       //
       // The transaction is for symmetry with publish and to state the intent;
       // it is not what makes this atomic. better-sqlite3 is one synchronous
-      // connection and there is no `await` between the head read and the insert,
-      // so nothing can interleave either way (drizzle nests via SAVEPOINT, so
-      // `createPipelineVersion`'s own transaction composes rather than
-      // conflicts).
+      // connection and there is no `await` between the head read and the
+      // insert, so nothing can interleave either way. `createPipelineVersion`'s
+      // own transaction composes rather than conflicts because better-sqlite3
+      // drops to a SAVEPOINT when it is already inside one (drizzle delegates
+      // straight to it here — the callback's `tx` is deliberately unused, so
+      // drizzle's own savepoint path is never the one taken).
       const created = db.transaction(() => {
         const head = getHeadVersionRef(db, pipeline.id);
         const headId = head?.id ?? null;
