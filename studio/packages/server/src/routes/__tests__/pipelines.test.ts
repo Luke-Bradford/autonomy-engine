@@ -397,7 +397,7 @@ describe('pipelines routes', () => {
    */
   describe('#904 — a version write declares the head it is based on', () => {
     const mkPipeline = (name: string) => createPipeline(app.db, { ownerId: 'local', name });
-    const post = (pipelineId: string, payload: unknown) =>
+    const post = async (pipelineId: string, payload: Record<string, unknown>) =>
       app.inject({ method: 'POST', url: `/api/pipelines/${pipelineId}/versions`, payload });
 
     it('refuses a save based on a version that is no longer the head (the lost update)', async () => {
