@@ -110,7 +110,8 @@ export async function seedVersion(
   expect(created.status(), `creating pipeline '${name}': ${await created.text()}`).toBe(201);
   const { id } = (await created.json()) as { id: string };
 
-  const pipelineVersionId = await mintVersion(page, id, doc, name);
+  // The pipeline was created on the line above and has no versions yet.
+  const pipelineVersionId = await mintVersion(page, id, doc, null, name);
   return { pipelineId: id, pipelineVersionId };
 }
 
@@ -127,6 +128,12 @@ export async function mintVersion(
   page: Page,
   pipelineId: string,
   doc: SeedDoc,
+  // #904 — the CAS basis every version write now declares: the id of the
+  // version this one is based on, or `null` for the pipeline's FIRST. Required
+  // rather than defaulted, for the reason the field itself is: a seed that
+  // chains versions has to state the chain, and one that guesses would be
+  // asserting something about server state it has not checked.
+  basedOnVersionId: string | null,
   label = pipelineId,
 ): Promise<string> {
   const minted = await page.request.post(
@@ -143,6 +150,7 @@ export async function mintVersion(
         // refuses duplicates on.
         edges: (doc.edges ?? []).map((e) => ({ id: `e_${e.from}_${e.to}_${e.on}`, ...e })),
         containers: doc.containers ?? [],
+        basedOnVersionId,
       },
     },
   );

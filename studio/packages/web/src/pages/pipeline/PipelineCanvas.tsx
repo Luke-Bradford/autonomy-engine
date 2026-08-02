@@ -483,7 +483,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           Distinct from the `.notice` above rather than folded into it, because
           this one carries the two acts that resolve it. */}
       {conflict && (
-        <div className="notice notice-conflict" role="alert">
+        <div className="notice-conflict" role="alert">
           <p>{describeSaveConflict(conflict.version)}</p>
           <div className="form-actions">
             <button
@@ -506,7 +506,18 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
               // with the newer head, which is the correct behaviour and not a
               // loop to be short-circuited.
               onClick={() => void saveWith(conflict.id)}
-              disabled={saving}
+              // The same guard the Save button carries, for the same reason:
+              // this writes the WORKING graph, which is not what is on screen
+              // while a version is being previewed. Without it, the one route
+              // this banner offers would mint a version of something the
+              // operator cannot see — the very class of surprise write the
+              // ticket is about.
+              disabled={saving || previewing !== null}
+              title={
+                previewing !== null
+                  ? 'Leave the preview to save your working graph.'
+                  : undefined
+              }
             >
               {saveAnywayLabel(conflict.version)}
             </button>
