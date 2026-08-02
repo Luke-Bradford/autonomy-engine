@@ -60,6 +60,29 @@ export class PublishRefusedError extends Error {
   }
 }
 
+/**
+ * #904 — a version write refused because its declared CAS basis
+ * (`basedOnVersionId`) is not the pipeline's current head: someone else saved
+ * while this author was editing, and minting anyway would orphan their work off
+ * the head with nobody told.
+ *
+ * Its own class, and its own `stale_write` code, rather than a
+ * `PublishRefusedError`: this is the one 409 on that route the CLIENT can act
+ * on (re-base and save again), while the generic `conflict` that route already
+ * answers for a `SQLITE_CONSTRAINT` is not.
+ *
+ * The message names the current head's version NUMBER and nothing else. It must
+ * never echo the caller's `basedOnVersionId` — the repo layer's rule (an error
+ * may name only ids it has itself resolved and owner-checked, never request
+ * input) applies here exactly.
+ */
+export class StaleWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StaleWriteError';
+  }
+}
+
 /** Narrow, non-message-only check (mirrors `repo/pipelines.ts`'s
  * `isForeignKeyRestrictError`): a `code` starting with `SQLITE_CONSTRAINT`
  * is better-sqlite3's family of extended result codes for every constraint
@@ -206,6 +229,18 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof PublishRefusedError) {
       request.log.warn({ err: error }, 'conflict: publish refused');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #904 — a version write against a stale basis. Distinct from the generic
+    // `conflict` beside it: the client offers an informed re-base on THIS code
+    // alone, so it must be separable from a constraint violation (which is also
+    // a 409 on the same route, and which a re-POST would only hit again).
+    if (error instanceof StaleWriteError) {
+      request.log.warn({ err: error }, 'conflict: stale version write');
+      reply
+        .status(409)
+        .send({ error: 'stale_write', message: error.message } satisfies ApiErrorBody);
       return;
     }
 

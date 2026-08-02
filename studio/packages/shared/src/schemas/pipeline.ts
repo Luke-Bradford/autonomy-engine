@@ -737,6 +737,37 @@ export const NewPipelineVersionSchema = PipelineVersionSchema.omit({
 export type NewPipelineVersion = z.input<typeof NewPipelineVersionSchema>;
 
 /**
+ * #904 — the `POST /api/pipelines/:id/versions` request body: the version doc,
+ * plus the CAS basis the write is made against.
+ *
+ * ONE shape, here, for both sides. Until this ticket the FE and the route each
+ * declared `NewPipelineVersionSchema.omit({ pipelineId: true })` independently
+ * (`web/src/api/pipelines.ts`, `server/src/routes/pipelines.ts`) — two copies of
+ * a contract that must agree, which is exactly what a shared schema exists to
+ * prevent.
+ *
+ * `basedOnVersionId` is the id of the version the author's canvas is based on
+ * (`canvasStore.loaded`), or `null` for "I expect this pipeline to have NO
+ * versions yet". It is REQUIRED and deliberately NOT defaulted, for the same
+ * reason `PublishPipelineBodySchema.expectedActiveVersionId` is not: a defaulted
+ * basis would be a fail-open CAS, manufacturing "whatever is current" out of an
+ * absent fact (the #473 rule). A caller that does not know what it is
+ * overwriting must be made to say so.
+ *
+ * It is a REQUEST field only — nothing persists it. Recording the basis as a
+ * COLUMN would give versions real lineage, but it is a migration plus an export
+ * decision (import re-mints ids, so a persisted basis would dangle on a
+ * round-trip), and the refusal below does not need it. Deliberately out of scope
+ * for #904; see the ticket.
+ */
+export const CreatePipelineVersionBodySchema = NewPipelineVersionSchema.omit({
+  pipelineId: true,
+}).extend({
+  basedOnVersionId: z.string().min(1).nullable(),
+});
+export type CreatePipelineVersionBody = z.input<typeof CreatePipelineVersionBodySchema>;
+
+/**
  * #3 G6c-1 — the current active/deployable pointer for a pipeline, a PROJECTION
  * of the `pipeline.published` workspace-audit log (never a stored mutable row).
  * `versionId` is the concrete immutable DB version id a trigger/run would bind;

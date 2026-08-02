@@ -1,4 +1,4 @@
-import { asc, eq, max } from 'drizzle-orm';
+import { asc, desc, eq, max } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   lowerPipelineNodes,
@@ -286,6 +286,32 @@ export function listVersionResourceIds(db: Db, ownerId: string): Set<string> {
 export function getLatestPipelineVersion(db: Db, pipelineId: string): PipelineVersion | null {
   const rows = listPipelineVersions(db, pipelineId);
   return rows.length > 0 ? rows[rows.length - 1]! : null;
+}
+
+/**
+ * #904 — the head version's IDENTITY (id + number) and nothing else, or `null`
+ * for a pipeline with no versions yet. The CAS basis check on the write path
+ * reads this.
+ *
+ * A two-column read, deliberately, and NOT `getLatestPipelineVersion` above:
+ * that one goes through `listPipelineVersions`, which `PipelineVersionSchema
+ * .parse`es EVERY version's whole doc — O(versions × doc) on every save, and a
+ * single legacy unparseable row would turn an author's save into a 500. Same
+ * rule `getPipelineIdForVersion` states for itself: a lookup that needs one
+ * column must not pay for, or be broken by, the rest of the row.
+ */
+export function getHeadVersionRef(
+  db: Db,
+  pipelineId: string,
+): { id: string; version: number } | null {
+  const row = db
+    .select({ id: pipelineVersions.id, version: pipelineVersions.version })
+    .from(pipelineVersions)
+    .where(eq(pipelineVersions.pipelineId, pipelineId))
+    .orderBy(desc(pipelineVersions.version))
+    .limit(1)
+    .get();
+  return row ?? null;
 }
 
 // No delete either: pipeline_versions rows are referenced by triggers

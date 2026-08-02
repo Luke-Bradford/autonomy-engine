@@ -12,7 +12,22 @@ import {
 } from '../../repo/index.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
-const emptyVersionBody = { params: [], outputs: [], nodes: [], edges: [] };
+/**
+ * A minimal version doc. #904 — the POST body also declares the version the
+ * save is BASED ON; `null` means "I expect this pipeline to have no versions
+ * yet", which is what every use of this constant is (each mints a first
+ * version). A second version on the same pipeline must chain — `versionBodyOn`.
+ */
+const emptyVersionBody = {
+  params: [],
+  outputs: [],
+  nodes: [],
+  edges: [],
+  basedOnVersionId: null,
+};
+
+/** The same doc, based on an existing head — for minting a SECOND version. */
+const versionBodyOn = (basedOnVersionId: string) => ({ ...emptyVersionBody, basedOnVersionId });
 
 describe('pipelines routes', () => {
   let app: FastifyInstance;
@@ -127,6 +142,7 @@ describe('pipelines routes', () => {
         outputs: [],
         nodes: [],
         edges: [],
+        basedOnVersionId: null,
       },
     });
     expect(v1Res.statusCode).toBe(201);
@@ -137,7 +153,7 @@ describe('pipelines routes', () => {
     const v2Res = await app.inject({
       method: 'POST',
       url: `/api/pipelines/${pipeline.id}/versions`,
-      payload: emptyVersionBody,
+      payload: versionBodyOn(v1.id),
     });
     const v2 = v2Res.json();
     expect(v2.version).toBe(2);
@@ -193,16 +209,16 @@ describe('pipelines routes', () => {
 
   it('GET /api/pipelines/:id/cost rolls up cost across ALL versions of the pipeline, fail-closed', async () => {
     const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'CostPipe' });
-    const mkVersion = async () => {
+    const mkVersion = async (basedOnVersionId: string | null) => {
       const res = await app.inject({
         method: 'POST',
         url: `/api/pipelines/${pipeline.id}/versions`,
-        payload: emptyVersionBody,
+        payload: { ...emptyVersionBody, basedOnVersionId },
       });
       return res.json().id as string;
     };
-    const v1 = await mkVersion();
-    const v2 = await mkVersion();
+    const v1 = await mkVersion(null);
+    const v2 = await mkVersion(v1);
 
     const mkRun = (pipelineVersionId: string) =>
       createRun(app.db, {
@@ -366,6 +382,96 @@ describe('pipelines routes', () => {
       url: `/api/pipelines/${pipeline.id}/versions/999`,
     });
     expect(versionRes.statusCode).toBe(404);
+  });
+
+  /**
+   * #904 — the save CAS. Two authors with the same pipeline open both save;
+   * without a basis check the second one's version becomes the head carrying
+   * NONE of the first's work, and neither is told (versions are immutable, so
+   * nothing is destroyed — the first author's save is simply orphaned off the
+   * head, invisibly).
+   *
+   * The basis is REQUIRED and NOT defaulted, so the refusal is total: there is
+   * no shape of this request that mints a version without stating what it
+   * believes it is advancing from.
+   */
+  describe('#904 — a version write declares the head it is based on', () => {
+    const mkPipeline = (name: string) => createPipeline(app.db, { ownerId: 'local', name });
+    const post = (pipelineId: string, payload: unknown) =>
+      app.inject({ method: 'POST', url: `/api/pipelines/${pipelineId}/versions`, payload });
+
+    it('refuses a save based on a version that is no longer the head (the lost update)', async () => {
+      const pipeline = mkPipeline('TwoTabs');
+      const v1 = (await post(pipeline.id, emptyVersionBody)).json();
+
+      // Author A saves, moving the head to v2.
+      const a = await post(pipeline.id, versionBodyOn(v1.id));
+      expect(a.statusCode).toBe(201);
+
+      // Author B, whose canvas is still open on v1, saves. Before this ticket
+      // this returned 201 and v3 became the head with none of A's work in it.
+      const b = await post(pipeline.id, versionBodyOn(v1.id));
+      expect(b.statusCode).toBe(409);
+      expect(b.json().error).toBe('stale_write');
+      // Names the head's NUMBER, so the client can say what it is rebasing onto.
+      expect(b.json().message).toContain('v2');
+
+      // And it wrote nothing: the refusal is not a partial mint.
+      const list = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+      });
+      expect(list.json().map((v: { version: number }) => v.version)).toEqual([1, 2]);
+    });
+
+    it('accepts a save based on the current head', async () => {
+      const pipeline = mkPipeline('InStep');
+      const v1 = (await post(pipeline.id, emptyVersionBody)).json();
+      const v2res = await post(pipeline.id, versionBodyOn(v1.id));
+      expect(v2res.statusCode).toBe(201);
+      expect(v2res.json().version).toBe(2);
+      // And again, chained off the new head — the basis advances with the save.
+      expect((await post(pipeline.id, versionBodyOn(v2res.json().id))).statusCode).toBe(201);
+    });
+
+    it('accepts a null basis ONLY while the pipeline has no versions', async () => {
+      const pipeline = mkPipeline('FirstOnly');
+      expect((await post(pipeline.id, emptyVersionBody)).statusCode).toBe(201);
+
+      // The same body a second time now claims "no versions yet", which is
+      // false. Refused — a null basis is a real assertion, not a way to opt out.
+      const second = await post(pipeline.id, emptyVersionBody);
+      expect(second.statusCode).toBe(409);
+      expect(second.json().error).toBe('stale_write');
+    });
+
+    it('refuses a body with NO basis at all (400 — no fail-open CAS default)', async () => {
+      const pipeline = mkPipeline('NoBasis');
+      const res = await post(pipeline.id, { params: [], outputs: [], nodes: [], edges: [] });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('validation_error');
+    });
+
+    it('does not echo the caller‘s basis id back in the refusal', async () => {
+      const pipeline = mkPipeline('NoEcho');
+      await post(pipeline.id, emptyVersionBody);
+      const res = await post(pipeline.id, versionBodyOn('pv_<script>alert(1)</script>'));
+      expect(res.statusCode).toBe(409);
+      // An error may name only ids the handler resolved and owner-checked
+      // itself — never request input.
+      expect(res.body).not.toContain('script');
+    });
+
+    it('refuses a basis belonging to a DIFFERENT pipeline', async () => {
+      const mine = mkPipeline('Mine');
+      const theirs = mkPipeline('Theirs');
+      const theirV1 = (await post(theirs.id, emptyVersionBody)).json();
+      // `mine` has no versions, so the only accepting basis is `null`. A real id
+      // from elsewhere is still not this pipeline's head.
+      const res = await post(mine.id, versionBodyOn(theirV1.id));
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('stale_write');
+    });
   });
 
   it('constraint violation: creating a version for a nonexistent pipeline 404s (owner-scoped lookup fails first)', async () => {
