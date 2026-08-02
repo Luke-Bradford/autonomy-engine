@@ -361,7 +361,7 @@ test.describe('pipeline version history', () => {
     await mintVersion(page, pipelineId, V3, pipelineVersionId, name);
 
     // This tab, still based on v1, makes an edit and saves.
-    await addActivity(page, 'HTTP request');
+    await addActivity(page, 'HTTP Request');
     await page.getByRole('button', { name: 'Save version' }).click();
 
     const banner = page.locator('.notice-conflict');
@@ -408,6 +408,12 @@ test.describe('pipeline version history', () => {
     expect(versions.find((v) => v.version === 3)?.nodes).toHaveLength(3);
     expect(versions.find((v) => v.version === 2)).toBeTruthy();
 
-    await expectQuiet(page, problems);
+    // The refused POST is provoked output, not a regression: the browser logs
+    // its own network entry for any non-2xx. Anchored on Chromium's wording
+    // rather than on `/409/`, which would also swallow anything the APP logged
+    // carrying that number.
+    await expectQuiet(page, problems, [
+      /^console\.error: Failed to load resource: the server responded with a status of 409 \(Conflict\)$/,
+    ]);
   });
 });
