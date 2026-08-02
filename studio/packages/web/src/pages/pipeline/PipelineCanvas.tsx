@@ -18,6 +18,7 @@ import {
   type OutputType,
   type Param,
   type ParamType,
+  type PipelineVersion,
 } from '@autonomy-studio/shared';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
@@ -59,6 +60,15 @@ import {
   type EdgeCondition,
 } from './edgeCondition';
 import { FlowCanvas } from './FlowCanvas';
+import { RunCanvas } from '../runs/RunCanvas';
+import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
+import {
+  docUnchanged,
+  historyEntries,
+  restoreBodyFrom,
+  restoreConfirmMessage,
+  restoreRefusal,
+} from './versionHistory';
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -78,6 +88,40 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // #903 — the versions the initial load already fetched. Before this ticket
+  // they were reduced to `latestVersion` and thrown away; the history is that
+  // same array, kept.
+  const [versions, setVersions] = useState<PipelineVersion[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  /** The version NUMBER being previewed read-only, or `null` while editing. */
+  const [previewing, setPreviewing] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  /**
+   * While a restore is in flight, EVERY route out of the preview is inert.
+   *
+   * Not politeness — the restore rebases the canvas onto the version it mints,
+   * and it is only safe to do that into an editor that is not there. Leaving
+   * the preview remounts the editor, and an operator who then types has work
+   * that the arriving response would overwrite. There are three such routes
+   * (this preview's own "Back to editing", the "Version history" toggle, and a
+   * version row), so the lock is named once and applied to all three rather
+   * than remembered at each.
+   */
+  const previewLocked = restoring;
+  /**
+   * Why the "Version history" toggle is dead, or `null` while it is live.
+   *
+   * Named rather than inlined because it has TWO causes and a nested ternary in
+   * the attribute reads as one. `!ready` is checked first to match the
+   * `disabled` expression beside it: during the initial load nothing has been
+   * restored yet, so "restoring" would be the wrong sentence even if both were
+   * somehow true.
+   */
+  const historyDisabledReason = !ready
+    ? 'Loading this pipeline’s versions…'
+    : previewLocked
+      ? 'Restoring — wait for it to finish.'
+      : null;
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -86,8 +130,9 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   useEffect(() => {
     const ctrl = new AbortController();
     Promise.all([listPipelineVersions(pipelineId, ctrl.signal), listConnections(ctrl.signal)])
-      .then(([versions, conns]) => {
-        store.getState().loadVersion(latestVersion(versions));
+      .then(([loadedVersions, conns]) => {
+        store.getState().loadVersion(latestVersion(loadedVersions));
+        setVersions(loadedVersions);
         setConnections(conns);
         setReady(true);
       })
@@ -104,6 +149,23 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   const params = useStore(store, (s) => s.params);
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
+  const loaded = useStore(store, (s) => s.loaded);
+
+  // #903 — three derived facts the history needs. `headVersion` is read off the
+  // versions this page holds rather than off `loaded`: the two part company the
+  // moment a save fails, and the head is what a restore is measured against.
+  // Through `latestVersion`, whose docblock already claims to be the ONE rule
+  // for "highest version" — a second reduce here would be exactly the drift it
+  // names.
+  const headVersion = useMemo(() => latestVersion(versions)?.version ?? null, [versions]);
+  const entries = useMemo(
+    () => historyEntries(versions, loaded?.version ?? null),
+    [versions, loaded],
+  );
+  const previewed = useMemo(
+    () => versions.find((v) => v.version === previewing) ?? null,
+    [versions, previewing],
+  );
 
   // U16 — `loaded` LEAVES the dep list: `params` moved into the store, and it
   // was the last thing this memo read off the opened version.
@@ -174,11 +236,16 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       );
       const s = store.getState();
       if (
-        s.nodes === savedNodes &&
-        s.edges === savedEdges &&
-        s.containers === savedContainers &&
-        s.params === savedParams &&
-        s.outputs === savedOutputs
+        docUnchanged(
+          {
+            nodes: savedNodes,
+            edges: savedEdges,
+            containers: savedContainers,
+            params: savedParams,
+            outputs: savedOutputs,
+          },
+          s,
+        )
       ) {
         // Nothing changed during the request: rebase fully onto the new
         // immutable version (clears `dirty`, and the next save carries THIS
@@ -190,6 +257,9 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         // next save carries forward from it.
         s.rebaseLoaded(created);
       }
+      // #903 — the history is appended to rather than refetched: the server
+      // just told us the whole row, and a refetch would race the next save.
+      setVersions((prev) => [...prev, created]);
       setSaveMsg(`Saved v${created.version}.`);
     } catch (err) {
       setSaveMsg(`Save failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -197,6 +267,81 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       setSaving(false);
     }
   }, [pipelineId, store]);
+
+  /**
+   * #903 — restore the previewed version by minting a NEW version from ITS doc.
+   *
+   * Three properties are load-bearing and each is easy to lose:
+   *
+   *  - the body comes from the previewed version (`restoreBodyFrom`), never
+   *    from the working canvas and never via `loadVersion`, which re-lowers
+   *    nodes and drops dangling edges without saying so;
+   *  - the refusal is re-checked HERE and not only on the disabled button,
+   *    because `dirty` can turn true between render and click;
+   *  - a REJECTED restore leaves the preview exactly as it was and does not
+   *    touch the store. An old doc can genuinely fail today's write gate —
+   *    `createPipelineVersion` runs `validatePipelineDoc` on the server
+   *    (`repo/pipeline-versions.ts:190`) and the rules have moved since some of
+   *    these versions were minted — so this is an expected path, not a
+   *    theoretical one, and it must not half-apply.
+   */
+  const onRestore = useCallback(async () => {
+    if (previewed === null) return;
+    const refusal = restoreRefusal({ dirty, selectedVersion: previewed.version, headVersion });
+    if (refusal !== null) {
+      setSaveMsg(refusal);
+      return;
+    }
+    if (
+      !window.confirm(restoreConfirmMessage({ selectedVersion: previewed.version, headVersion }))
+    ) {
+      return;
+    }
+    setRestoring(true);
+    setSaveMsg(null);
+    try {
+      // Snapshotted BEFORE the POST, for the same reason `onSave` does it.
+      // An earlier draft called the race check unnecessary here — "the editor
+      // is UNMOUNTED behind the preview, so there is no concurrent edit to
+      // overwrite" — and that was false: it held only while the operator could
+      // not LEAVE the preview mid-flight, which nothing enforced. Every exit is
+      // locked while `restoring` now (see `previewLocked`), so the editor
+      // really does stay unmounted — but the guarantee is "no write of ours
+      // destroys an edit", and that belongs in the write, not in three
+      // `disabled` attributes a fourth exit route would quietly bypass.
+      const before = store.getState();
+      const created = await createPipelineVersion(pipelineId, restoreBodyFrom(previewed));
+      setVersions((prev) => [...prev, created]);
+      const s = store.getState();
+      if (docUnchanged(before, s)) {
+        s.loadVersion(created);
+        setPreviewing(null);
+        setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
+      } else {
+        // BELT AND SUSPENDERS, not a live path: with `previewLocked` holding
+        // all three exits shut, nothing can edit the doc between the snapshot
+        // above and here, so this branch is currently unreachable through the
+        // UI. It stays because the thing it guards is a GUARANTEE and the locks
+        // are only an affordance — the reported bug was precisely an exit route
+        // nobody had noticed, and a fourth one added later would reach here
+        // rather than destroy work. Kept deliberately rather than trimmed.
+        //
+        // The restore SUCCEEDED — v`created` exists and holds the restored doc.
+        // Only the canvas rebase is withheld, so say exactly that rather than
+        // reporting a failure the server did not have. `rebaseLoaded` also
+        // avoids the second hazard `loadVersion` would hit on a remounted
+        // editor: it writes no node positions, so nothing lands half-applied.
+        s.rebaseLoaded(created);
+        setSaveMsg(
+          `Restored v${previewed.version} as v${created.version}, but your canvas was left alone — it has edits that a restore would have discarded. Preview v${created.version} to load it.`,
+        );
+      }
+    } catch (err) {
+      setSaveMsg(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRestoring(false);
+    }
+  }, [dirty, headVersion, pipelineId, previewed, store]);
 
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
@@ -208,8 +353,45 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           </button>
           <button
             type="button"
+            aria-expanded={historyOpen}
+            // Only while the panel is actually MOUNTED. It is unmounted rather
+            // than hidden when collapsed (and `ready` gates it too), so naming
+            // it unconditionally points a screen reader at an element that is
+            // not in the DOM. `aria-expanded` alone carries the closed state.
+            aria-controls={historyOpen && ready ? 'version-history-panel' : undefined}
+            // `previewLocked` — closing the list also drops the preview (below),
+            // which would remount the editor mid-restore. That is the same
+            // escape "Back to editing" offers, just wearing a different button.
+            disabled={!ready || previewLocked}
+            // Both disabled cases get a reason. `!ready` is the commoner of the
+            // two — it covers the whole initial load — and an unexplained dead
+            // control is exactly what a title exists to prevent.
+            title={historyDisabledReason ?? undefined}
+            onClick={() => {
+              // Both setters at the TOP LEVEL. Calling `setPreviewing` inside
+              // the `setHistoryOpen` updater made that updater impure, which
+              // StrictMode double-invokes in development — harmless while it is
+              // idempotent, and a silent double-apply the moment it is not.
+              //
+              // Closing the list also leaves any preview it opened: the preview
+              // is only reachable through a row, so one left on screen with no
+              // list would be stranded.
+              if (historyOpen) setPreviewing(null);
+              setHistoryOpen(!historyOpen);
+            }}
+          >
+            Version history
+          </button>
+          <button
+            type="button"
             onClick={() => void onSave()}
-            disabled={!canSave({ saving, ready, issues })}
+            /* Disabled while previewing: Save writes the WORKING graph, which
+               is not what is on screen, so the button would mint a version of
+               something the operator cannot see. */
+            disabled={!canSave({ saving, ready, issues }) || previewing !== null}
+            title={
+              previewing !== null ? 'Leave the preview to save your working graph.' : undefined
+            }
           >
             {saving ? 'Saving…' : 'Save version'}
           </button>
@@ -240,7 +422,63 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         </div>
       )}
 
-      {ready && (
+      {/* `ready` gates the panel, because `versions` is `[]` both before the
+          load resolves AND forever after it fails — and the panel's empty state
+          says "no versions yet", which would be a flat falsehood printed next
+          to the load-error banner. An unloaded page has no history to show, not
+          an empty one. */}
+      {historyOpen && ready && (
+        <VersionHistoryPanel
+          entries={entries}
+          previewing={previewing}
+          locked={previewLocked}
+          onPreview={(version) => {
+            setPreviewing((current) => (current === version ? null : version));
+          }}
+        />
+      )}
+
+      {/* The preview REPLACES the editor rather than hiding it, and that is
+          correctness rather than tidiness: React Flow owns a node's position
+          once its id is in the view array, so a restore into a live canvas
+          would write the restored positions to the domain and leave the head's
+          on screen. Unmounting here means the editor remounts empty after a
+          restore and reads the restored geometry. */}
+      {ready && previewed !== null && (
+        <div className="canvas-preview" data-testid="canvas-preview">
+          <VersionPreviewBar
+            version={previewed.version}
+            refusal={restoreRefusal({
+              dirty,
+              selectedVersion: previewed.version,
+              headVersion,
+            })}
+            restoring={restoring}
+            onRestore={() => void onRestore()}
+            onBackToEditing={() => {
+              setPreviewing(null);
+            }}
+          />
+          {/* `showStatus={false}` — there is no run behind a stored version, so
+              the monitor's "not projected" would be a sentence about a run that
+              does not exist. */}
+          {/* KEYED BY VERSION, and this is not cosmetic. `RunCanvas` was built
+              for a doc that is immutable for its whole lifetime, so switching
+              `doc` on a live instance leaves two things stale that nothing
+              rebuilds: `mergeRunNodes` keeps a container box WHOLE when its
+              `data` is unchanged, and a box's geometry, handles and child count
+              live OUTSIDE `data` — with no status to differ, two versions'
+              boxes compare equal, so a loop that gained a child would keep the
+              previous version's width and draw that child outside the container
+              it is in. And `fitView` is init-only, so a 2-node version followed
+              by a 20-node one would stay at the first version's viewport with
+              the rest culled by `onlyRenderVisibleElements`. Remounting is the
+              same answer this page already gives for the editor. */}
+          <RunCanvas key={previewed.id} doc={previewed} state={null} showStatus={false} />
+        </div>
+      )}
+
+      {ready && previewed === null && (
         <div className="canvas-grid">
           {/* The toolbox is OUTSIDE the provider; the canvas reads the drop
               position via `useReactFlow` on its own side of the drag. */}
@@ -254,7 +492,9 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         </div>
       )}
 
-      {dirty && <p className="page-hint">Unsaved changes — click “Save version” to persist.</p>}
+      {dirty && previewing === null && (
+        <p className="page-hint">Unsaved changes — click “Save version” to persist.</p>
+      )}
     </section>
   );
 }

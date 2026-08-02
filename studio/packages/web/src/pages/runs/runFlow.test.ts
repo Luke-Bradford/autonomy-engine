@@ -391,3 +391,60 @@ describe('U25 — the graph words a status for an operator', () => {
     expect(a.ariaLabel).toContain('waiting (timer)');
   });
 });
+
+/**
+ * #903 — the same renderer, pointed at a doc with NO RUN behind it (the version
+ * history's read-only preview on the authoring page).
+ *
+ * "not projected" is run vocabulary: it says a run exists whose state has not
+ * been folded yet. On a stored pipeline version there is no run to project, so
+ * saying it would state a falsehood about a fact the view has no opinion on.
+ */
+describe('runFlowNodes — statusless', () => {
+  it('says nothing at all about status, on activities and on container boxes alike', () => {
+    const nodes = runFlowNodes(CONTAINER_DOC, null, { showStatus: false });
+
+    for (const n of nodes) {
+      expect(n.data.status).toBeNull();
+      expect(n.data.tone).toBeNull();
+      // The accessible name is where the status leaked on BOTH node types — the
+      // box already dropped it from its drawn text but not from its aria-label.
+      expect(n.ariaLabel).not.toContain(NO_STATUS_LABEL);
+    }
+
+    /* The flag itself is carried only by the ACTIVITY node, which is the only
+       one that needs telling which absence it is rendering. Asserted on that
+       type alone, so a `showStatus` added to the container data would be dead
+       code this test failed to notice rather than dead code it pinned. */
+    for (const n of nodes.filter((x) => x.type === 'runActivity')) {
+      expect(n.data.showStatus).toBe(false);
+    }
+    for (const n of nodes.filter((x) => x.type === 'runContainer')) {
+      expect(n.data).not.toHaveProperty('showStatus');
+    }
+  });
+
+  it('still names each activity and each container box', () => {
+    const nodes = runFlowNodes(CONTAINER_DOC, null, { showStatus: false });
+    for (const n of nodes) expect(n.ariaLabel).toBeTruthy();
+    const activity = nodes.find((n) => n.type === 'runActivity')!;
+    expect(activity.ariaLabel).toBe(activity.data.title);
+  });
+
+  /* A run status is suppressed because the VIEW has no run — not because the
+     state happens to be null. Passing a projected state with the flag off must
+     still say nothing, or the flag would be a hint rather than a contract. */
+  it('suppresses a status even when a run state IS supplied', () => {
+    const nodes = runFlowNodes(DOC, projected(), { showStatus: false });
+    expect(nodes.map((n) => n.data.status)).toEqual([null, null, null]);
+    expect(nodes[0]!.ariaLabel).toBe('HTTP Request 1');
+  });
+
+  /* The regression the flag must not cause: every existing caller passes no
+     options and must keep the run wording. */
+  it('defaults to showing status, so the monitor is unchanged', () => {
+    const nodes = runFlowNodes(DOC, null);
+    for (const n of nodes) expect(n.data.showStatus).toBe(true);
+    expect(nodes[0]!.ariaLabel).toContain(NO_STATUS_LABEL);
+  });
+});

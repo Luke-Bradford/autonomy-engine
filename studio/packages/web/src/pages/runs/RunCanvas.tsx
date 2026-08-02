@@ -76,7 +76,13 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
     <div className={`flow-node run-node${toneClass('run-node', d.tone)}`}>
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <strong>{d.title}</strong>
-      <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
+      {/* #903 — no run behind this view means no status line at all, rather
+          than the "not projected" that a null `status` means when there IS a
+          run. The two absences are different facts and only `data` can tell
+          them apart here. */}
+      {d.showStatus && (
+        <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
+      )}
       <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
     </div>
   );
@@ -110,14 +116,36 @@ export interface RunCanvasProps {
   doc: RunDoc;
   /** The projected run state, or `null` for "not projected (yet)". */
   state: RunState | null;
+  /**
+   * `false` when there is NO run behind this doc — the version history's
+   * read-only preview (#903). Every run-status word is then suppressed, on the
+   * boxes and in the accessible names.
+   *
+   * This is what makes the component's second consumer honest rather than
+   * merely convenient: the docblock above argues that the status label is the
+   * whole reason this renderer exists instead of a `readOnly FlowCanvas`, and
+   * a viewer that kept it would tell an operator inspecting a stored version
+   * that its nodes are "not projected" — a sentence about a run that does not
+   * exist.
+   */
+  showStatus?: boolean;
 }
 
 /**
- * The graph, with the run over it. Self-contained — it supplies its own
- * `ReactFlowProvider`, because the `useReactFlow` family throws without one and
- * this page has no canvas shell to inherit it from.
+ * The graph, with the run over it — and, since #903, the same graph with NO run
+ * over it, which is what the authoring page's version-history preview needs.
+ * Self-contained: it supplies its own `ReactFlowProvider`, because the
+ * `useReactFlow` family throws without one and neither page has a canvas shell
+ * to inherit it from.
+ *
+ * The second consumer is on the AUTHOR side despite the run-shaped name, and
+ * that is reuse rather than a mis-fit: every argument the docblock above makes
+ * for this renderer over a `readOnly FlowCanvas` — no store, no handlers, no
+ * lossy `loadVersion` between the doc and the screen — is an argument a
+ * read-only version preview makes too, and `loadVersion` dropping edges is
+ * exactly what a version preview must not do.
  */
-export function RunCanvas({ doc, state }: RunCanvasProps) {
+export function RunCanvas({ doc, state, showStatus = true }: RunCanvasProps) {
   /* React Flow owns the VIEW array so it can attach and KEEP each node's
      measured dimensions across renders — the author canvas holds them the same
      way, and for the same reason. `onNodesChange` is wired for that alone: with
@@ -127,8 +155,8 @@ export function RunCanvas({ doc, state }: RunCanvasProps) {
   const edges = useMemo(() => runFlowEdges(doc), [doc]);
 
   useEffect(() => {
-    setNodes((prev) => mergeRunNodes(prev, runFlowNodes(doc, state)));
-  }, [doc, state, setNodes]);
+    setNodes((prev) => mergeRunNodes(prev, runFlowNodes(doc, state, { showStatus })));
+  }, [doc, state, showStatus, setNodes]);
 
   return (
     <div className="run-canvas" data-testid="run-canvas">

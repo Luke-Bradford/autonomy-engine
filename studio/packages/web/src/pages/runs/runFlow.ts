@@ -40,6 +40,16 @@ export interface RunNodeData extends Record<string, unknown> {
    */
   status: string | null;
   tone: StatusTone | null;
+  /**
+   * Whether this view has a RUN behind it at all (#903). `false` on the version
+   * history's read-only preview, where there is no run to be projected and so
+   * `NO_STATUS_LABEL` would state a falsehood rather than an absence.
+   *
+   * It has to reach the node's `data`, not just this module: the memoized node
+   * components render `status ?? NO_STATUS_LABEL`, so a null `status` alone
+   * cannot tell them which of the two absences they are looking at.
+   */
+  showStatus: boolean;
 }
 
 export interface RunContainerData extends Record<string, unknown> {
@@ -64,6 +74,26 @@ export interface RunContainerData extends Record<string, unknown> {
   tone: StatusTone | null;
   /** A container's own progress; `null` until it has started. */
   round: number | null;
+  /*
+   * Deliberately NO `showStatus` twin of `RunNodeData`'s. The box has only ONE
+   * absence to render: it already drops the whole ` · <status>` fragment when
+   * `status` is null (`RunCanvas`'s `RunContainerNode`), where the activity node
+   * falls back to `NO_STATUS_LABEL` and so has to be told which absence it is
+   * looking at. Suppression reaches the box through `status` being forced null,
+   * and its accessible name through the builder's own local flag — a field here
+   * would be set, pinned by a test, and read by nothing.
+   */
+}
+
+/** How a doc is drawn when there is no run behind it (#903). */
+export interface RunFlowOptions {
+  /**
+   * `false` suppresses every run-status word, on the boxes and in the
+   * accessible names. Stated as a property of the VIEW rather than inferred
+   * from `state === null`, which is a different fact: a run whose state is not
+   * folded yet still owes the operator "not projected".
+   */
+  showStatus?: boolean;
 }
 
 /** What a node says when the run has no state for it. */
@@ -81,7 +111,12 @@ export function toneClass(prefix: 'run-node' | 'run-container', tone: StatusTone
  * `run.started` folds, so drawing an unprojected run as all-pending would claim
  * a finished run never ran. Every node then carries `status: null` and no tone.
  */
-export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
+export function runFlowNodes(
+  doc: RunDoc,
+  state: RunState | null,
+  options: RunFlowOptions = {},
+): FlowNode[] {
+  const showStatus = options.showStatus ?? true;
   /* #878 — the run graph names an activity the same way the authoring canvas
      does: kind plus within-kind ordinal. Two `http_request` nodes in one run
      would otherwise be two boxes reading "HTTP Request", in the view whose job
@@ -96,7 +131,7 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
   const activities: FlowNode[] = doc.nodes.map((n) => {
     // Unreachable fallback: `names` is built from this very array.
     const name = names.get(n.id) ?? activityLabel(n);
-    const status = state?.nodes[n.id]?.status ?? null;
+    const status = showStatus ? (state?.nodes[n.id]?.status ?? null) : null;
     /* U25 — the node says the same word the table's pill does. The TONE still
        comes off the raw engine status; only what an operator reads is worded. */
     const label = status === null ? null : nodeStatusLabel(status);
@@ -111,8 +146,9 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
         title: name,
         status: label,
         tone: status === null ? null : nodeStatusTone(status),
+        showStatus,
       } satisfies RunNodeData,
-      ariaLabel: `${name}, ${label ?? NO_STATUS_LABEL}`,
+      ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };
   });
 
@@ -142,7 +178,7 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
     const rect = rects.get(c.id)!;
     // Unreachable fallback: `containerNames` is built from this very array.
     const name = containerNames.get(c.id) ?? c.kind;
-    const cs = state?.containers[c.id] ?? null;
+    const cs = showStatus ? (state?.containers[c.id] ?? null) : null;
     const status = cs?.status ?? null;
     /* #873 — worded HERE, not at the render site the ticket suggested, so the
        box and its accessible name below cannot come to disagree about WHICH WORD
@@ -182,7 +218,9 @@ export function runFlowNodes(doc: RunDoc, state: RunState | null): FlowNode[] {
       // The box below draws this same `name`, which is the whole contract
       // `containerAriaLabel` documents — announcing an ordinal the picture does
       // not show would move the mismatch rather than close it.
-      ariaLabel: `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`,
+      ariaLabel: showStatus
+        ? `${containerAriaLabel(name, rect.childCount)}, ${label ?? NO_STATUS_LABEL}`
+        : containerAriaLabel(name, rect.childCount),
     };
   });
 
