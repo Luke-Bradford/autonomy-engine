@@ -251,6 +251,64 @@ test.describe('pipeline version history', () => {
     await expectQuiet(page, problems);
   });
 
+  /**
+   * The data-loss window the review of this PR found. A restore rebases the
+   * canvas onto the version it mints, and that is only safe into an editor that
+   * is NOT mounted — every route out of the preview remounts one, so an operator
+   * who leaves mid-flight and types has work the arriving response overwrites.
+   *
+   * Only reachable here: it needs a REAL in-flight request, held open, which is
+   * exactly what a unit test cannot give. There are three such routes and the
+   * finding named one, so all three are asserted.
+   */
+  test('locks every route out of the preview while a restore is in flight', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedThreeVersions(page, 'history-inflight');
+
+    // Hold the POST open so the in-flight window is observable at all. Only the
+    // POST — the GET that lists versions must still answer, or the page never
+    // reaches the state under test.
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/pipelines/*/versions', async (route) => {
+      if (route.request().method() === 'POST') await held;
+      await route.continue();
+    });
+
+    await historyButton(page).click();
+    await rows(page).nth(2).click();
+    page.once('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: 'Restore v1' }).click();
+
+    // In flight: the restore is running…
+    await expect(page.getByRole('button', { name: 'Restoring…' })).toBeDisabled();
+    // …and NO exit is live. Back to editing is the one the review named.
+    const back = page.getByRole('button', { name: 'Back to editing' });
+    await expect(back).toBeDisabled();
+    // The history toggle clears the preview as it closes — the same exit
+    // wearing a different button.
+    await expect(historyButton(page)).toBeDisabled();
+    // A row toggles the preview: off entirely, or across to another version.
+    await expect(rows(page)).toHaveCount(3);
+    for (let i = 0; i < 3; i++) await expect(rows(page).nth(i)).toBeDisabled();
+
+    /* The property all four exist to hold: the editor is still not mounted, so
+       there is no canvas holding edits for the response to overwrite. */
+    await expect(page.locator('.canvas-grid')).toHaveCount(0);
+
+    release();
+
+    // Released, it completes normally and hands the controls back.
+    await expect(page.locator('.notice')).toContainText('Restored v1 as v4');
+    await expect(page.getByTestId('version-preview-bar')).toHaveCount(0);
+    await expect(page.locator('.canvas-grid')).toHaveCount(1);
+    await expect(historyButton(page)).toBeEnabled();
+
+    await expectQuiet(page, problems);
+  });
+
   test('refuses to restore while the canvas has unsaved edits', async ({ page }) => {
     const problems = collectPageProblems(page);
     await seedThreeVersions(page, 'history-refusal');
