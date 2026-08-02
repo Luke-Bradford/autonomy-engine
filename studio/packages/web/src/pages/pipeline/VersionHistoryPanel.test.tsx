@@ -30,6 +30,7 @@ describe('VersionHistoryPanel', () => {
           entry({ id: 'plv_1', version: 1 }),
         ]}
         previewing={null}
+        locked={false}
         onPreview={vi.fn()}
       />,
     );
@@ -47,6 +48,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ nodeCount: 4, edgeCount: 3, containerCount: 1, paramCount: 2 })]}
         previewing={null}
+        locked={false}
         onPreview={vi.fn()}
       />,
     );
@@ -67,6 +69,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ createdAt })]}
         previewing={null}
+        locked={false}
         onPreview={vi.fn()}
       />,
     );
@@ -78,6 +81,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
         previewing={1}
+        locked={false}
         onPreview={vi.fn()}
       />,
     );
@@ -92,6 +96,7 @@ describe('VersionHistoryPanel', () => {
       <VersionHistoryPanel
         entries={[entry({ version: 7 })]}
         previewing={null}
+        locked={false}
         onPreview={onPreview}
       />,
     );
@@ -99,8 +104,29 @@ describe('VersionHistoryPanel', () => {
     expect(onPreview).toHaveBeenCalledWith(7);
   });
 
+  /* A row toggles the preview, so while a restore is in flight it is an exit
+     from the preview like any other: leaving remounts the editor under a
+     response that is about to rebase the canvas, and switching versions yanks
+     the operator somewhere they did not ask to be. */
+  it('makes every row inert while a restore is in flight', async () => {
+    const onPreview = vi.fn();
+    render(
+      <VersionHistoryPanel
+        entries={[entry({ id: 'plv_2', version: 2 }), entry({ id: 'plv_1', version: 1 })]}
+        previewing={1}
+        locked
+        onPreview={onPreview}
+      />,
+    );
+    const rows = screen.getAllByRole('button');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toBeDisabled();
+    await userEvent.click(rows[0]!);
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
   it('says a pipeline has no versions rather than rendering an empty list', () => {
-    render(<VersionHistoryPanel entries={[]} previewing={null} onPreview={vi.fn()} />);
+    render(<VersionHistoryPanel entries={[]} previewing={null} locked={false} onPreview={vi.fn()} />);
     expect(screen.queryAllByRole('button')).toHaveLength(0);
     expect(screen.getByTestId('version-history').textContent).toMatch(/no versions yet/i);
   });
@@ -183,5 +209,26 @@ describe('VersionPreviewBar', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /back to editing/i }));
     expect(onBackToEditing).toHaveBeenCalledOnce();
+  });
+
+  /* The data-loss case. The restore rebases the canvas onto the version it is
+     minting, which is only safe into an editor that is NOT mounted — and this
+     button is what mounts one. An operator who leaves here mid-flight and types
+     would have that work overwritten by the arriving response, silently. */
+  it('refuses to leave the preview while the restore is still in flight', async () => {
+    const onBackToEditing = vi.fn();
+    render(
+      <VersionPreviewBar
+        version={2}
+        refusal={null}
+        restoring
+        onRestore={vi.fn()}
+        onBackToEditing={onBackToEditing}
+      />,
+    );
+    const back = screen.getByRole('button', { name: /back to editing/i });
+    expect(back).toBeDisabled();
+    await userEvent.click(back);
+    expect(onBackToEditing).not.toHaveBeenCalled();
   });
 });

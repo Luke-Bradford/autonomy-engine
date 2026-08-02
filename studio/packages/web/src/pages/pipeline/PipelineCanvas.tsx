@@ -63,6 +63,7 @@ import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import {
+  docUnchanged,
   historyEntries,
   restoreBodyFrom,
   restoreConfirmMessage,
@@ -95,6 +96,18 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
+  /**
+   * While a restore is in flight, EVERY route out of the preview is inert.
+   *
+   * Not politeness — the restore rebases the canvas onto the version it mints,
+   * and it is only safe to do that into an editor that is not there. Leaving
+   * the preview remounts the editor, and an operator who then types has work
+   * that the arriving response would overwrite. There are three such routes
+   * (this preview's own "Back to editing", the "Version history" toggle, and a
+   * version row), so the lock is named once and applied to all three rather
+   * than remembered at each.
+   */
+  const previewLocked = restoring;
 
   // Initial load: the promise-callback form keeps setState off the synchronous
   // effect body (React's `set-state-in-effect` guidance). The parent keys this
@@ -209,11 +222,16 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
       );
       const s = store.getState();
       if (
-        s.nodes === savedNodes &&
-        s.edges === savedEdges &&
-        s.containers === savedContainers &&
-        s.params === savedParams &&
-        s.outputs === savedOutputs
+        docUnchanged(
+          {
+            nodes: savedNodes,
+            edges: savedEdges,
+            containers: savedContainers,
+            params: savedParams,
+            outputs: savedOutputs,
+          },
+          s,
+        )
       ) {
         // Nothing changed during the request: rebase fully onto the new
         // immutable version (clears `dirty`, and the next save carries THIS
@@ -268,13 +286,34 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
     setRestoring(true);
     setSaveMsg(null);
     try {
+      // Snapshotted BEFORE the POST, for the same reason `onSave` does it.
+      // An earlier draft called the race check unnecessary here — "the editor
+      // is UNMOUNTED behind the preview, so there is no concurrent edit to
+      // overwrite" — and that was false: it held only while the operator could
+      // not LEAVE the preview mid-flight, which nothing enforced. Every exit is
+      // locked while `restoring` now (see `previewLocked`), so the editor
+      // really does stay unmounted — but the guarantee is "no write of ours
+      // destroys an edit", and that belongs in the write, not in three
+      // `disabled` attributes a fourth exit route would quietly bypass.
+      const before = store.getState();
       const created = await createPipelineVersion(pipelineId, restoreBodyFrom(previewed));
       setVersions((prev) => [...prev, created]);
-      // Safe without the save handler's race check: the editor is UNMOUNTED
-      // behind the preview, so there is no concurrent edit to overwrite.
-      store.getState().loadVersion(created);
-      setPreviewing(null);
-      setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
+      const s = store.getState();
+      if (docUnchanged(before, s)) {
+        s.loadVersion(created);
+        setPreviewing(null);
+        setSaveMsg(`Restored v${previewed.version} as v${created.version}.`);
+      } else {
+        // The restore SUCCEEDED — v`created` exists and holds the restored doc.
+        // Only the canvas rebase is withheld, so say exactly that rather than
+        // reporting a failure the server did not have. `rebaseLoaded` also
+        // avoids the second hazard `loadVersion` would hit on a remounted
+        // editor: it writes no node positions, so nothing lands half-applied.
+        s.rebaseLoaded(created);
+        setSaveMsg(
+          `Restored v${previewed.version} as v${created.version}, but your canvas was left alone — it has edits that a restore would have discarded. Preview v${created.version} to load it.`,
+        );
+      }
     } catch (err) {
       setSaveMsg(`Restore failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -298,7 +337,11 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
             // it unconditionally points a screen reader at an element that is
             // not in the DOM. `aria-expanded` alone carries the closed state.
             aria-controls={historyOpen && ready ? 'version-history-panel' : undefined}
-            disabled={!ready}
+            // `previewLocked` — closing the list also drops the preview (below),
+            // which would remount the editor mid-restore. That is the same
+            // escape "Back to editing" offers, just wearing a different button.
+            disabled={!ready || previewLocked}
+            title={previewLocked ? 'Restoring — wait for it to finish.' : undefined}
             onClick={() => {
               // Both setters at the TOP LEVEL. Calling `setPreviewing` inside
               // the `setHistoryOpen` updater made that updater impure, which
@@ -363,6 +406,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         <VersionHistoryPanel
           entries={entries}
           previewing={previewing}
+          locked={previewLocked}
           onPreview={(version) => {
             setPreviewing((current) => (current === version ? null : version));
           }}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import {
+  docUnchanged,
   historyEntries,
   restoreBodyFrom,
   restoreConfirmMessage,
@@ -166,5 +167,38 @@ describe('restoreConfirmMessage', () => {
     expect(msg).toContain('v2');
     expect(msg).toContain('v6');
     expect(msg).toMatch(/kept|nothing is (deleted|overwritten)/i);
+  });
+});
+
+describe('docUnchanged', () => {
+  /* The five arrays are compared by REFERENCE, never by value: every store
+     action mints a fresh array, so identity is what distinguishes "the operator
+     edited during the POST" from "nothing happened". */
+  function doc() {
+    return { nodes: [], edges: [], containers: [], params: [], outputs: [] };
+  }
+
+  it('holds when the write sees back the arrays it snapshotted', () => {
+    const before = doc();
+    expect(docUnchanged(before, { ...before })).toBe(true);
+  });
+
+  /* Each field gets its own case because each has a store action that writes it
+     ALONE — `createContainer` touches only `containers`, the param and output
+     actions only `params`/`outputs`. A check that skipped any one of them would
+     let that action's edits be silently overwritten by the rebase, which is the
+     exact data loss this guard exists to stop. */
+  for (const field of ['nodes', 'edges', 'containers', 'params', 'outputs'] as const) {
+    it(`fails when only \`${field}\` was replaced`, () => {
+      const before = doc();
+      expect(docUnchanged(before, { ...before, [field]: [] })).toBe(false);
+    });
+  }
+
+  /* Equal CONTENTS are not the question — a store action that rebuilt an array
+     to the same values still means the operator was editing. */
+  it('fails on a fresh array with identical contents', () => {
+    const before = { ...doc(), nodes: [{ id: 'n1' }] };
+    expect(docUnchanged(before, { ...before, nodes: [{ id: 'n1' }] })).toBe(false);
   });
 });

@@ -19,6 +19,15 @@ interface VersionHistoryProps {
   entries: VersionEntry[];
   /** The version being previewed, or `null` while the editor is on screen. */
   previewing: number | null;
+  /**
+   * Inert rows. Set while a restore is in flight: a row toggles the preview,
+   * and both directions (leaving it, or switching to another version) remount
+   * the editor under a response that is about to rebase the canvas.
+   *
+   * Required rather than defaulted to `false` — a caller that forgets it should
+   * fail to compile, not silently get the unlocked behaviour.
+   */
+  locked: boolean;
   onPreview: (version: number) => void;
 }
 
@@ -42,7 +51,12 @@ function shapeSummary(e: VersionEntry): string {
   return parts.join(' · ');
 }
 
-export function VersionHistoryPanel({ entries, previewing, onPreview }: VersionHistoryProps) {
+export function VersionHistoryPanel({
+  entries,
+  previewing,
+  locked,
+  onPreview,
+}: VersionHistoryProps) {
   if (entries.length === 0) {
     return (
       <div className="version-history" id="version-history-panel" data-testid="version-history">
@@ -64,6 +78,8 @@ export function VersionHistoryPanel({ entries, previewing, onPreview }: VersionH
               /* The pressed state is the honest role here: the row is a toggle
                  into a preview, not a navigation. */
               aria-pressed={e.version === previewing}
+              disabled={locked}
+              title={locked ? 'Restoring — wait for it to finish.' : undefined}
               onClick={() => {
                 onPreview(e.version);
               }}
@@ -113,7 +129,16 @@ export function VersionPreviewBar({
       <strong>Viewing v{version} — read-only.</strong>
       {refusal !== null && <span className="version-preview-refusal">{refusal}</span>}
       <div className="form-actions">
-        <button type="button" onClick={onBackToEditing}>
+        <button
+          type="button"
+          onClick={onBackToEditing}
+          /* The restore rebases the canvas onto the version it is minting, and
+             that is only safe into an editor that is not mounted. Leaving here
+             mid-flight remounts one, and anything typed into it would be
+             overwritten by the arriving response. */
+          disabled={restoring}
+          title={restoring ? 'Restoring — wait for it to finish.' : undefined}
+        >
           Back to editing
         </button>
         <button

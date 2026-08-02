@@ -90,6 +90,46 @@ export function restoreBodyFrom(v: PipelineVersion): PipelineVersionWrite {
   return toVersionBody(v.nodes, v.edges, v.containers, v.params, v.outputs);
 }
 
+/**
+ * The five doc fields the canvas store owns, snapshotted before an in-flight
+ * version write so the write can tell whether the operator edited underneath it.
+ *
+ * The element type is `unknown` on purpose: only reference identity is ever
+ * compared. Every store action mints a fresh array, so a CHANGED reference is a
+ * concurrent edit and an UNCHANGED one is the absence of one — reading into the
+ * elements would add precision this decision does not use.
+ */
+export interface DocSnapshot {
+  readonly nodes: readonly unknown[];
+  readonly edges: readonly unknown[];
+  readonly containers: readonly unknown[];
+  readonly params: readonly unknown[];
+  readonly outputs: readonly unknown[];
+}
+
+/**
+ * Did the doc survive an in-flight write untouched?
+ *
+ * `false` means an edit landed during the request, and the caller must NOT
+ * rebase the canvas onto what it just minted — that is the one move that
+ * silently destroys work. Both version writers ask this: `onSave` (which keeps
+ * the edits and re-points `loaded`) and `onRestore`.
+ *
+ * All five fields are checked because each can move alone — `createContainer`
+ * and `setNodeContainer` write only `containers`, the param/output actions
+ * write only `params`/`outputs`. Checking a subset would let those edits
+ * through invisibly.
+ */
+export function docUnchanged(before: DocSnapshot, after: DocSnapshot): boolean {
+  return (
+    before.nodes === after.nodes &&
+    before.edges === after.edges &&
+    before.containers === after.containers &&
+    before.params === after.params &&
+    before.outputs === after.outputs
+  );
+}
+
 export interface RestoreCheck {
   dirty: boolean;
   selectedVersion: number;
