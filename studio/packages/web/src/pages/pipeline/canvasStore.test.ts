@@ -2129,6 +2129,47 @@ describe('canvasStore — duplicateNode (U21)', () => {
     expect(st.edges.filter((e) => e.from === copyId)).toHaveLength(0);
   });
 
+  it('copies EVERY qualifying in-edge, not just the first one', () => {
+    // A join: two upstreams feed `n_b`. The loop must consider all of them —
+    // a `break` after the first would leave the copy half-fed, and half-fed is
+    // the case where a ref still resolves and the graph is still wrong.
+    const s = loaded({
+      nodes: [
+        { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
+        { id: 'n_c', type: 'http_request', config: {}, position: { x: 10, y: 90 } },
+        { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+      ],
+      edges: [
+        { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+        { id: 'e_2', from: 'n_c', to: 'n_b', on: 'success' },
+      ],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[3]!.id;
+    const froms = st.edges.filter((e) => e.to === copyId).map((e) => e.from);
+    expect(froms.sort()).toEqual(['n_a', 'n_c']);
+  });
+
+  it('drops an in-edge that would cross a container boundary', () => {
+    // A doc can ARRIVE holding an edge from outside a container to a node
+    // inside it (`loadVersion` drops only dangling endpoints, not this), and
+    // duplicating that node must not mint a second one the canvas itself would
+    // refuse to draw. The rule is `connectRejection`'s, not restated here.
+    const s = loaded({
+      containers: [{ id: 'c_1', kind: 'stage', children: ['n_b'] }],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    // The copy joined the container, so its inherited edge from the OUTSIDE
+    // node `n_a` now crosses the boundary and is left behind.
+    expect(st.containers[0]!.children).toContain(copyId);
+    expect(st.edges.filter((e) => e.to === copyId)).toHaveLength(0);
+  });
+
   it('drops an in-edge the canvas would refuse to draw — a back-edge', () => {
     const s = loaded({
       edges: [

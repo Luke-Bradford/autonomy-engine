@@ -2017,9 +2017,10 @@ export function NodePanel({
             of consequence, and because it acts on the node as SAVED into the
             store, not on the unapplied form state: the copy carries the config
             `Apply config` last wrote, which is why it sits after it. Ungated for
-            the same reason `Delete node` is — #907 disables Save on an archived
-            pipeline, not editing, and a copy that cannot be saved is still an
-            edit the operator can undo. */}
+            the same reason `Delete node` is — what #907 gated is the SAVE of an
+            archived pipeline, which the server REFUSES (the button itself stays
+            live); editing was left alone, and a copy that cannot yet be saved is
+            still an edit the operator can undo. */}
         <button type="button" onClick={() => store.getState().duplicateNode(nodeId)}>
           Duplicate node
         </button>

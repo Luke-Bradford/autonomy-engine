@@ -900,7 +900,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           const source = s.nodes.find((n) => n.id === id)!;
           const copyId = newLocalId('n');
           /* `structuredClone`, not a spread: `config` is a `z.record(unknown)`
-             that nests arbitrarily, and `NodePanel.assembleConfig` preserves the
+             that nests arbitrarily, and `assembleConfig` preserves the
              keys no field owns BY REFERENCE — so a shallow copy would leave the
              source and the copy sharing one `config.outputs` array, where
              editing either edits both. The value arrived as parsed JSON (or was
