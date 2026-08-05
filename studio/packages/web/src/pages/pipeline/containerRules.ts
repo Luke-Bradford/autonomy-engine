@@ -281,6 +281,13 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * longer the whole rule. Anything beyond naming an id belongs in R3's structured
  * diagnostics, not here.
  *
+ * The gloss reaches BOTH callers, which is a decision rather than a consequence
+ * of sharing a function. #840's pre-edit confirm dialog (`consequenceMessage`)
+ * is where it helps most: the issues a membership edit adds are largely
+ * `container.<id>.exitWhen` messages, whose expressions reference nodes by
+ * minted id — so the dialog asking "apply this edit?" was quoting a consequence
+ * naming a box the operator could not identify.
+ *
  * An edge has no name of its own, so it is named by its ENDS, which is how the
  * operator sees it. A quoted token that resolves to nothing (a kind, a word the
  * validator happened to quote) is left exactly as it was.
@@ -298,14 +305,18 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * those passes may touch — inside the operator's own expression — which is why
  * it glosses instead.
  *
- * DISPLAY ONLY, and it must stay at the render site. TWO callers read these
- * strings STRUCTURALLY: `ContainerPanel` filters them by matching
- * `container '<id>'` as a raw substring (`ContainerPanel.tsx:143`), and the
- * expression-insert probe takes a set difference against a baseline
- * (`PipelineCanvas.tsx:1572`, `!baseline.includes(issue)`) — in the very file that
- * now calls this function. Both call `validateCanvas` DIRECTLY rather than reading
- * the mapped list, which is what keeps them correct; moving this rewrite inside
- * `validateCanvas` would silently break both.
+ * DISPLAY ONLY, and it must stay at the render site. FOUR callers read these
+ * strings STRUCTURALLY, and the enumeration is what keeps them safe:
+ * `ContainerPanel` filters them by matching `container '<id>'` as a raw
+ * substring (`ContainerPanel.tsx:143`); the expression-insert probe takes a set
+ * difference against a baseline (`PipelineCanvas.tsx:1572`,
+ * `!baseline.includes(issue)`) — in the very file that
+ * now calls this function; `containerEditConsequence` below diffs two issue sets
+ * by exact string (`!known.has(issue)`); and `expressionInsert.insertModeFor`
+ * does the same against a whole-doc baseline (`expressionInsert.ts:77`). All
+ * four call `validateCanvas` DIRECTLY rather than reading the mapped list, which
+ * is what keeps them correct; moving this rewrite inside `validateCanvas` would
+ * silently break every one of them.
  */
 export function readableIssue(
   issue: string,
@@ -345,8 +356,8 @@ export function readableIssue(
   // without this pass the badge list would still have shown a raw uuid.
   //
   // ANCHORED at index 0, and that is load-bearing rather than an optimisation:
-  // `${nodes.<id>.output.<name>}` appears in the BODY of those same messages
-  // (`:3846`, `:3875`) and is the operator's own expression text — the literal
+  // a `${nodes.<id>.…}` reference appears in the BODY of those same messages
+  // (`:3846` output, `:3875` status) and is the operator's own expression text — the literal
   // string they must go and edit. Rewriting it would hand them a sentence telling
   // them to fix an expression that does not appear in their config. Every message
   // is built `${where}: …` with `where` first, so the location is always at 0.
@@ -428,10 +439,17 @@ export function readableIssue(
   // the engine's scanner (the SSOT `substitute` and `validateRefs` share) makes
   // that unrepresentable.
   //
-  // Input is NOT `protectEscapes`d, unlike `substitute`'s: that sentinel is not
-  // length-preserving, so protecting would invalidate the very indices the splice
-  // needs. The escape is handled positionally instead — a `${` preceded by a `$`
-  // is a LITERAL the operator escaped, not a reference, so it is skipped below.
+  // Input is NOT `protectEscapes`d, unlike `substitute`'s, and the reason is
+  // specific: the round trip is LOSSY for a display caller. `restoreEscapes`
+  // maps the sentinel back to `${`, not to `$${` — correct for SUBSTITUTION,
+  // where an escape is meant to resolve to a literal delimiter, and wrong here,
+  // where the operator's text must come back byte-for-byte. `ESC` is not
+  // exported either, so protecting cannot be undone by hand. (Indices would have
+  // been fine — `scanTemplateRefs` documents that a splicing caller slices the
+  // PROTECTED string — so the offsets are not what rules this out.)
+  //
+  // The escape is handled positionally instead: a `${` preceded by a `$` is a
+  // LITERAL the operator escaped, not a reference, so it is skipped below.
   //
   // That skip is load-bearing, not belt-and-braces, and the reasoning it replaces
   // was wrong. "A stray opener can only cost a spurious parenthetical, never a
@@ -449,6 +467,13 @@ export function readableIssue(
   // Skipping is also what the escape MEANS. `$${nodes.x.output.y}` is text the
   // operator asked to be shown literally; it references nothing, so there is
   // nothing to name.
+  //
+  // The residual cost, stated because the skip does not remove it: an escaped
+  // opener still CONSUMES the scan, so a real reference sharing a message with
+  // one — `$${a ${nodes.x.output.y}` — loses its gloss. That is the append-only
+  // failure this pass is designed to fail into (a missing name, never a wrong or
+  // misplaced one), and it takes a message mixing an escape with a live
+  // reference, which no validator emits today.
   // `unterminatedAt` is deliberately not read. `scanTemplateRefs` CAUTIONS a
   // caller against splicing `matches` without it, because a splicing caller would
   // silently truncate its output at the unterminated opener. That does not bind an
@@ -469,14 +494,17 @@ export function readableIssue(
     // `${default(nodes.x.output.v, "fb")}` — which `params.ts:3707` emits from
     // the author's own `expr.source`.
     //
-    // TEXTUAL, not parsed, and the two costs of that are bounded and stated. A
-    // node id MENTIONED inside a string literal (`default(a, "nodes.n_d…")`)
-    // glosses as though it were a reference, and an id excluded from the char
-    // class (`nodes.n_d[0]`) is missed. Parsing instead would need `parseExpr` in
-    // a try/catch, because the bodies a validator quotes are exactly the
-    // malformed ones — a worse trade for a display gloss. The leading
-    // `(?:^|[^\w.])` keeps `nodes.` from matching mid-path, so `${params.nodes.x}`
-    // is not read as a node reference.
+    // TEXTUAL, not parsed, and the costs of that are bounded and stated. A node
+    // id MENTIONED inside a string literal (`default(a, "nodes.n_d…")`) glosses
+    // as though it were a reference, and a bracketed root (`${nodes["n_d"]…}`)
+    // never matches `nodes.` at all, so it is missed. Parsing instead would need
+    // `parseExpr` in a try/catch, because the bodies a validator quotes are
+    // exactly the malformed ones — a worse trade for a display gloss.
+    //
+    // The char class excludes `[`/`]` so an INDEXED root (`${nodes.n_d[0]}`)
+    // still yields `n_d` rather than `n_d[0]`, and the leading `(?:^|[^\w.])`
+    // keeps `nodes.` from matching mid-path, so `${params.nodes.x}` is not read
+    // as a node reference.
     for (const m of span.body.matchAll(/(?:^|[^\w.])nodes\.([^.}[\]\s,)]+)/g)) {
       const l = nodeLabels.get(m[1] as string);
       if (l !== undefined && !names.includes(l)) names.push(l);

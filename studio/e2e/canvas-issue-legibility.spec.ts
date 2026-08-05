@@ -64,6 +64,13 @@ async function mintedId(page: Page, index: number): Promise<string> {
  * span, so it survives this blanking and is asserted on directly below; this
  * helper's job is unchanged, because the id itself still legitimately sits
  * inside a `${…}` and must not be rewritten there.
+ *
+ * The `[^}]*` here is the very scanner pass 5 refuses to use — a `${…}` body may
+ * carry a `}` inside a string literal, so this blanks such a span short. It stays
+ * because the failure modes are not comparable: pass 5 SPLICES, where a wrong
+ * boundary corrupts the operator's expression, while this only BLANKS before a
+ * `not.toContain('n_')` check, where blanking too little can only make the guard
+ * stricter. No message reaching this spec has a braced literal.
  */
 function outsideExpressions(message: string): string {
   return message.replace(/\$\{[^}]*\}/g, '${…}');
