@@ -480,13 +480,13 @@ except Exception:
 " 2>/dev/null
 }
 
-# --- quota_log_window: \$1=a quota JSON body. Logs WHEN the 7-day window reopens,
+# --- quota_log_window: $1=a quota JSON body. Logs WHEN the 7-day window reopens,
 # if the body says. Silent when it does not -- an absent reset is not a finding
 # and must not manufacture a line.
 #
 # STDOUT IS NOT OURS. This is called from inside `quota_read_url`, whose stdout
 # IS the percent the guard reads, inside a command substitution. `log` appends to
-# \$DLOG and returns nothing on stdout (checked), which is the only reason this
+# $DLOG and returns nothing on stdout (checked), which is the only reason this
 # can be called from there at all; an `echo` here would be captured as part of
 # the reading and land in the fail-open path. Same structural reason
 # `quota_shadow_probe`'s stdout is redirected at its call site.
