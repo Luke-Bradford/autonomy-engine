@@ -43,7 +43,22 @@
   <false/>
   <key>KeepAlive</key>
   <false/>
-  <!-- Scheduled starts: fires drive.sh at 03:05 + 21:05 local (BST) daily.
+  <!-- Scheduled starts: fires drive.sh at 03:05 + 09:05 + 15:05 + 21:05 local daily.
+
+       09:05 + 15:05 added 2026-08-05. Measured cause: the 7-day window reset at
+       02:59 on 2026-08-05, 55 minutes AFTER the 02:05 tick had already read 96%
+       and stopped -- so the next chance to notice was 21:05, an 18h idle gap on
+       a loop that was working correctly. Four ticks bound that gap to 6h.
+
+       THIS RELAXES THE "OUT OF WORK HOURS" PROPERTY the 21:05 note below records,
+       deliberately and with a narrower claim behind it: a tick only ever STARTS a
+       stopped driver, and a started driver already runs continuously for days
+       (the 2026-07-31 run spanned 30h and three ticks), so the loop was never in
+       fact confined to off-hours once running. What protects the operator's own
+       headroom is QUOTA_STOP_PCT=80%, which is evaluated on every tick -- not the
+       hour the tick lands on. A mid-day tick that finds the window busy costs one
+       ~10s no-op run and zero tokens (the auth check runs AFTER the quota gate).
+       If the operator wants off-hours starts back, delete these two dicts.
        03:05 set 2026-07-14 to start the ADF-grade foundation build ~13h out
        (operator near weekly token cap). 21:05 added 2026-07-23 so a stop whose
        cause clears during the day resumes the same evening instead of waiting
@@ -61,6 +76,14 @@
   <array>
     <dict>
       <key>Hour</key><integer>3</integer>
+      <key>Minute</key><integer>5</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>9</integer>
+      <key>Minute</key><integer>5</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>15</integer>
       <key>Minute</key><integer>5</integer>
     </dict>
     <dict>

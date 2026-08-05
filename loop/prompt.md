@@ -31,179 +31,35 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 `studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list IS your queue. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
 - `#1 foundation-domain-activity-framework.md` (F0-F15) · `#6 foundation-expression-language.md` (E1-E8) · `#5 foundation-scheduler-lifecycle.md` (S1-S12) · `#2 foundation-llm-activity-model.md` (L1-L14) · `#4 foundation-activity-library.md` (A0-A17) · `#3 foundation-git-publish.md` (G1-G10) · `RS foundation-rerun-from-failed.md` (RS1-RS6) · UI `adf-grade-ui-design.md` (U0-U29, R1-R3).
 
-## CURRENT PRIORITY — CUTOVER (operator, 2026-07-29) — do these THREE, in order, BEFORE resuming the numbered WORK ORDER below
+## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-The operator has verified studio end-to-end themselves (fired a manual trigger, watched the run
-reach `success` with a full event trail in the run-detail view) and has decided: **the old
-bash/python engine goes.** Nobody is using it. `#410` was operator-gated on exactly this decision
-and is now GO.
-
-**Do not skip steps to get there faster — the ordering exists because step 3 is destructive and
-step 1 is what makes it safe.**
-
-**C1. `#440` — native control room, INCLUDING a machine-readable quota endpoint.**
-The operator-facing live view is the headline, but the load-bearing part is smaller and must not be
-dropped: **this loop's own driver depends on the old dashboard.** `loop/drive.sh` `quota_pct()` reads
-`http://127.0.0.1:8787/api/state` as PRIMARY, then `loop/claude_usage.py` (relocated out of the
-engine by #764), then studio's `/api/quota` (added by C2). The dashboard is still old-engine
-code, and that figure drives `QUOTA_STOP_PCT`, the guard that stops you spending the operator out
-of their weekly window. Retiring the engine without a replacement **disarms your own spend guard.**
-Serve the 7-day utilization in the shape the existing parser already reads
-(`account.claude.seven_day.utilization`) so C2 is a URL change, not a rewrite. Two properties are
-load-bearing and pinned by `loop/test_quota_guard.sh` — preserve both: **UNREADABLE must stay
-distinct from `0`** (reporting `0%` for "I don't know" silently disarms the guard), and **keep a
-SECOND source** (the 2026-07-26 incident was both sources failing at once, which cost a $24 blind
-fire into a ~98% window). Read `#440`'s comment thread — the acceptance detail is there.
-
-**C2. DONE (2026-07-29) — but NOT in the shape specified, and that changes C3's gate.**
-Studio is wired into `quota_pct()` as the **THIRD** source, behind the dashboard and behind the
-loop's own usage reader that #766 fixed (#764 relocated that reader into `loop/`, so C3 retires
-the dashboard but NOT the reader). `DASH_URL` was deliberately **not** repointed. Verifying
-end-to-end showed studio's `/api/quota` returns `account.claude: null` on EVERY probe — its reader
-is lazy and its upstream `GET /api/oauth/usage` answers 429 to direct polls — so making studio
-primary would have disarmed the guard outright. Both endpoints share one rate-limit budget, so
-studio last costs nothing (it is polled only when both other sources have already failed) whereas
-studio first would put a direct poll on every read and could starve the sampler that keeps the
-working source warm. See **#765**.
-
-**C3. `#410` — PARK the old engine.** `bin/ lib/ tests/ templates/ start` — **PARK, NOT DELETE**:
-git history preserves it and the ticket says so explicitly. **BLOCKED ON #765 — do not start.**
-The old entry gate ("a scheduled fire has run green against the studio-served quota figure") is
-now UNSATISFIABLE and must not be read as met: studio is the THIRD source, so a healthy dashboard
-means every fire logs `quota source: dashboard` and the guard never falls through to studio. A fire
-running green proves nothing about studio. #765 has since delivered what the gate needs: Defect 2
-(`1381a4d`) put studio behind a supervised `com.autonomy.studio-server` LaunchAgent on 8788, so
-`/api/quota` is reachable at 03:05 rather than connection-refused, and every UNREADABLE it now logs
-is a real measurement of the READER instead of of "no server". The gate is NOT "add a background
-sampler": #770 measured a cold poll returning 200 and rejected a sampler on the evidence; studio
-backs off geometrically on a 429 instead.
-
-**TWO log lines are now valid evidence, and they are NOT interchangeable** (`quota_shadow_probe`,
-#765):
-- **`quota source: studio`** — the guard actually USED studio. Strongest evidence, and still the
-  thing C3 would most like to see. But it can only appear when sources 1 AND 2 have both failed, so
-  waiting for it is waiting for an outage of the very source C3 removes. Do not treat its absence as
-  a finding about studio.
-- **`quota shadow: studio <n>%`** — the once-per-hour DIAGNOSTIC probe asked studio on a fire the
-  dashboard was perfectly capable of answering, and studio returned a real figure. This answers the
-  question the gate is actually asking — *can source 3 serve a reading at fire time?* — without
-  needing an outage first. It is the WEAKER of the two: it says studio COULD have answered, not that
-  the fallthrough reached it. `quota shadow: studio UNREADABLE (<cause>)` is evidence in the other
-  direction — but **only for some causes**, which is why the cause is on the line (#825).
-
-**READ AN UNREADABLE BY ITS CAUSE, NOT BY ITS COUNT.** A bare tally of UNREADABLE lines is not a
-finding about studio, and treating it as one would get C3 exactly backwards: most of the contention
-producing them is the OLD DASHBOARD's sampler holding the shared account bucket, and that
-contention is removed BY C3. Measured 2026-07-31: studio sat rate-limited for ~7.8h straight, and
-the single probe taken in that window logged an UNREADABLE that said nothing about studio at all.
-Bucket them:
-
-- `(rate_limited)` — the shared account bucket was empty. **Not evidence against studio.** Expect
-  these to be common while the dashboard still samples, and to become rare once it stops.
-- `(unreachable)` — nothing answered. A LIFECYCLE fault (`com.autonomy.studio-server` down, wrong
-  port), not a reader fault. Fix it — `loop/install_studio_server.sh` — do not count it.
-- `(no_credential)` · `(provider_error)` · `(unrecognized_payload)` · `(reader_error)` ·
-  `(disabled)` — **these ARE evidence against studio**, and a run of any of them means C3 is NOT
-  ready. They say the reader could not do its job on a call the provider was willing to serve.
-- A bare `UNREADABLE` with no cause — an old studio, or something that is not studio, on the port.
-  Investigate rather than count. **This was measured and resolved on 2026-07-31 (#832): the
-  supervised service was SIXTEEN commits behind main (`ce88319..fcca7b3`), SIX of them touching
-  `studio/` — #773's drift, never reported at fire time. (#832's own body says eleven; that figure
-  was wrong, and under the `studio/`-tree rule below it is the six that decide the verdict.) So
-  it predated #825 and served no cause field at all. The three bare lines it produced (`10:53:51Z`, `12:45:12Z`, `14:25:20Z`) are VOID — they
-  measure a build from before the code they were meant to attest. Do not count them on either side.**
-
-**CHECK WHICH BUILD ANSWERED BEFORE YOU COUNT ANYTHING.** Every drift-report iteration now logs a
-`studio server:` line beside the shadow lines (#832). Read it first:
-
-- **`studio server: current`** — either identical to `origin/main`, or behind it while its `studio/`
-  tree is still byte-identical to main's. Either way the served build carries every `studio/` change
-  on main, so the shadow lines beside it are evidence about the code on main. **Count them.** (The
-  service is built from `studio/` alone, which is why a `loop/`-only merge does not disqualify it.)
-- `studio server: STALE` — its `studio/` tree differs from main's, or it has diverged from
-  main. Those shadow lines are evidence about THAT build, not about main: do not count them for or
-  against C3. Refresh with `loop/install_studio_server.sh --update` (a human act by design, #773)
-  and start collecting again. (The `not an ancestor` wording also covers a build *ahead* of the
-  checkout's `origin/main` — only reachable in the seconds between the drift fetch and a merge, and
-  harmless: `--update` just resets it to `origin/main`. Unlike `plane drift`, being ahead is not a
-  normal state here, because the installer only ever builds from `origin/main`.)
-- `studio server: UNKNOWN` — the line names the cause, and TWO of them demand action rather than a
-  shrug:
-  - **`served no usable build identity`** — something answered and it could not name itself. Do not
-    count its shadow lines, and **diagnose before acting**, because this one string covers four
-    different states and they have different remedies: a service predating `/api/version` (#792,
-    `521c4f2`) — at LEAST that stale, so `--update`; a *modern* build serving `commit: "dev"`
-    because it was built with no release manifest — also `--update`, but nothing was stale; a
-    non-JSON or empty body; or **something that is not studio at all owning the port** — where
-    `--update` is the wrong move entirely and `install_studio_server.sh --status` is where to look.
-    `curl -s http://127.0.0.1:8788/api/version` tells you which in one call (the log line names the
-    URL it used — use that one if it differs).
-  - **`has no studio/ tree`** — said of `origin/main`, the directory was renamed and the verdict is
-    unavailable until this half is taught the new path; said of *the served build*, that build
-    predates `studio/` existing (or was built from a tree without it), which is itself a reason to
-    `--update`. Either way nothing can be compared.
-  - `nothing answered` is a lifecycle fault to go fix (`loop/install_studio_server.sh`). The
-    remaining causes ("is not a git checkout to compare against", "could not be refreshed", "not a
-    commit this checkout knows", "could not be resolved in") mean the comparison could not be made
-    — no finding about studio, but no evidence either.
-- **No `studio server:` line at all** — unattributed, so **do not count it either way**. That is what
-  voids the three lines above. **Apply this STRUCTURALLY, never by date: "any shadow line with no
-  `studio server:` line above it in the same iteration."** A merge is not a deploy (#808) — a driver
-  still executing a pre-#832 `drive.sh` keeps logging bare shadow lines for as long as it runs, and
-  the 2026-07-26 run lasted 74.7 hours. So "logged after #832 merged" does NOT imply attributed, and
-  reading the rule by timestamp reintroduces exactly the mis-attribution it exists to stop. Also
-  covers any fire run with `DRIFT_REPORT=0`.
-
-So the outstanding EVIDENCE is: **scheduled fires that logged a real `quota shadow: studio <n>%`
-reading while the `studio server:` line for that same fire read `current`**, with **no run of
-reader-fault causes** against them (a `quota source: studio` line is better still if one ever
-occurs).
-
-**Read the two interleaved, in order — never as two separate tallies.** The attribution is
-per-fire, and `sort | uniq -c` destroys exactly the ordering it depends on, mixing every build the
-service has ever run into one number (which is the un-attributed count this whole ticket exists to
-prevent). Use:
-
-```sh
-grep -nE 'studio server:|quota shadow: studio' loop/logs/driver.log | tail -40
-```
-
-and read each shadow line against the `studio server:` line above it. Only `logs/driver.log`
-counts; agent transcripts are full of false hits.
-Parking the engine before then kills `/api/state`. Since #764 that leaves a PAIR (the relocated
-`loop/claude_usage.py` reader, then studio) rather than studio alone — but both are direct cold
-polls of one shared, rate-limited budget, sharing one Keychain credential and one macOS-only
-assumption, and the warm-cache source that rides through a 429 is exactly the one being removed. So
-C3 still materially weakens the guard. (The studio half HAS now returned a real number — an attended
-probe on 2026-07-30 read 0.16, matching the dashboard — but that was one attended reading, not the
-run of scheduled-fire evidence the gate wants.) `loop/` itself is NOT part of
-the old engine — it is the control plane and it STAYS. Note `.github/workflows/ci.yml` has a
-`lint-and-test` job scoped to the engine and a SEPARATE `loop` job: removing the engine means
-retiring the former and keeping the latter.
-
-**C1-C3 OUTRANK THE DEFECT-BACKLOG SWEEP RULE.** Read this before deciding what to do: the standing
-rule says sweep when ~8 loop-filed defects are open, and roughly ten are open right now — so that
-rule fires immediately and would send you into a sweep instead of the cutover. It does NOT apply to
-C1-C3. The operator prioritised the cutover on 2026-07-29 knowing the backlog was over the cap, and
-the defects are not what blocks retiring the engine. Do the cutover.
-
-**C3 IS NOW BLOCKED ON AN OPERATOR DECISION — DO NOT WAIT ON IT (operator, 2026-07-31).** #765 is
-answered: the shadow probe has logged four scheduled-fire readings, all `UNREADABLE`, the latest
-attributed `rate_limited`. Studio's reader is NOT broken — it is losing the account rate-limit
-budget to the prototype dashboard's continuous 60s sampler, i.e. C3's evidence gate is throttled by
-the very component C3 retires. The remaining lever is that sampler's cadence, which touches the
-loop's PRIMARY spend-guard source and is therefore the operator's call, not yours. **Do not build
-anything further for C3, and do not treat its absence as a reason to idle.**
-
-**Go straight to the UI epic (item 10) at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
-This is now the highest-priority available work — ahead of the defect sweep, which as amended in the
+**Go straight to the UI epic (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+This is the highest-priority available work — ahead of the defect sweep, which as amended in the
 STANDING RULE section below counts `[studio]` tickets only.
 
-**WHY THIS CHANGED (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs and
-**exactly one** of them altered anything a human can see in the app. The rest was `loop/`
+**WHY THIS IS THE PRIORITY (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs
+and **exactly one** of them altered anything a human can see in the app. The rest was `loop/`
 infrastructure and backend quota semantics. The operator's words: *"The app doesn't appear to have
 anything new to show."* The engineering was sound; the direction was not. The product is the point,
 and the loop exists to build it — not to build the loop.
+
+### CUTOVER C1-C3 — settled. Do NOT spend fires on it.
+- **C1 `#440`** native control room + machine-readable quota endpoint — **DONE** (issue CLOSED).
+- **C2** — **DONE** (2026-07-29). Studio is the **THIRD** source in `loop/drive.sh` `quota_pct()`,
+  behind the dashboard and behind the loop's own usage reader; `DASH_URL` was deliberately **not**
+  repointed, because studio's `/api/quota` returned `account.claude: null` on every probe and
+  promoting it would have disarmed the spend guard outright. See `#765`.
+- **C3 `#410` (park the old engine) — BLOCKED ON AN OPERATOR DECISION. DO NOT WAIT ON IT**
+  (operator, 2026-07-31). `#765` is answered: studio's reader is **not** broken — it is losing the
+  shared account rate-limit budget to the prototype dashboard's continuous 60s sampler, i.e. C3's
+  evidence gate is throttled by the very component C3 retires. The remaining lever is that sampler's
+  cadence, which touches the loop's PRIMARY spend-guard source and is therefore the operator's call,
+  not yours. **Do not build anything further for C3, do not collect further shadow-probe evidence,
+  and do not treat its absence as a reason to idle.**
+- If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
+  preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
+  plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
+  SEPARATE `loop` job: retiring the engine retires the former and keeps the latter.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
@@ -241,8 +97,6 @@ and the loop exists to build it — not to build the loop.
     **What a spec must assert (the honesty rule survives):** computed values, not vibes — a screenshot cannot prove a CSS custom property resolved. `getComputedStyle(...).getPropertyValue('--token')` and assert the concrete value; e.g. Fluent tokens resolve ON `.app-fluent-root`, and NO `--xy-*` override is left holding an unresolved `var(--colorX)` (the silent white-in-dark failure the bridge exists to kill). Zero console `error`/`warn`. A control the poll/tick can clobber: set it, wait 2–3 cycles, assert it survived. **MUTATION-CHECK every new spec** — break the thing it guards, see it go red, restore. A spec that cannot fail is worse than none.
 
     Clean up: kill every server you started, leave no listener and no `.playwright-mcp/` dirt (gitignored, but confirm `git status` is yours alone before staging). Quote the actual `test:e2e` result in the PR body under Testing — "looks correct" is not a verification.
-
-    **FIRST UI-ADJACENT ITEM = #713**, the `@playwright/test` e2e harness (`pnpm -C studio test:e2e`), because `studio/` has NO Playwright at all today — the "build Playwright specs" instruction above has been unfulfillable. Build it before or alongside the next U-ticket; its first spec asserts the #705 theme-bridge invariants (tokens resolve on `.app-fluent-root`, no `--xy-*` override left holding an unresolved `var(--colorX)`). Once it exists, this gate requires `test:e2e` GREEN **in addition to** the live browser pass, and step 3's "assert computed values" becomes enforceable in `studio-ci` instead of relying on a single fire's diligence.
 
     A verification you could not complete (app won't boot, a token genuinely resolves wrong and the fix is not obvious) is a **`[loop-blocked]`**, not an `[operator-decision]` — it is a broken thing, not a fork. Server-only / non-rendered tickets are unchanged: normal path, no browser needed. If a REGRESSION later proves this self-verification missed something a human would have caught, say so in an issue rather than quietly reinstating the marker — the operator will decide whether the attended gate comes back. **UI SUB-FORKS PRE-SETTLED (operator, 2026-07-23):**
     - **U28 cancel-run/cancel-activity/rerun — keep the UI READ-ONLY; do NOT cross the "no engine execution-semantics changes" boundary.** Cancel/rerun are control-plane WRITES with no engine primitive today → carve them into a SEPARATE engine-semantics epic; ship U28 read-only (grey-out the controls) or defer them. Never self-authorize breaking the stated boundary.
