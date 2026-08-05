@@ -1299,6 +1299,65 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
     expect(rows.map((n) => n.nodeId)).toEqual(['a']);
   });
 
+  it('folds a literal `x@2` frontier id onto its canvas row and names the key it came from', () => {
+    /* The instance-key collapse `ensure` applies everywhere, reaching this arm
+       too. RS2's contract is top-level ids, so this is the LITERAL-id case the
+       whole fold accepts as a known cost (save-time refuses such ids only for
+       `batchCount >= 2`, and a doc-free view cannot tell the two apart). Pinned
+       because the alternative — a row keyed `x@2` that no canvas node matches —
+       is a row the operator cannot act on. */
+    const [row] = deriveNodeActivity(
+      reseededLog({ frontier: ['x@2'], copiedOutputs: { 'x@2': { ok: true } } }),
+    );
+
+    expect(row?.nodeId).toBe('x');
+    expect(row?.instanceId).toBe('x@2');
+    expect(row?.outputValues).toEqual({ ok: true });
+  });
+
+  it('leaves no stale failure beside the copied success on a log the reducer would refuse', () => {
+    /* A FORGED log, and pinned as one. The producer appends this manifest into a
+       brand-new run's empty log, so the reducer's `progressed` guard refuses
+       exactly this shape — but the fold is doc-free and state-free, cannot make
+       that check, and is TOTAL, so it will still do something here. What it must
+       not do is leave the old failure's message and class sitting beside a green
+       badge, which is why the arm calls `clearResult` like every other terminal
+       branch rather than only assigning. */
+    const failedFirst = [
+      envelope({
+        type: 'node.dispatched',
+        runId: 'r2',
+        nodeId: 'a',
+        attemptId: 'att_0',
+        idempotent: true,
+      }),
+      envelope({
+        type: 'node.failed',
+        runId: 'r2',
+        nodeId: 'a',
+        attemptId: 'att_0',
+        error: 'boom',
+        kind: 'permanent',
+      }),
+    ];
+
+    /* THE FIXTURE'S OWN PREMISE, asserted rather than assumed. The first draft
+       wrote the failure as `message` — the field is `error` — so
+       `EngineEventSchema.safeParse` rejected the event, the fold skipped it
+       silently, and there was nothing left for `clearResult` to clear: the test
+       passed with the very line it claims to pin DELETED. Without this
+       assertion the test cannot tell "the arm cleared the failure" from "there
+       was never a failure". */
+    expect(deriveNodeActivity(failedFirst)[0]?.error).toBe('boom');
+
+    const rows = deriveNodeActivity([...failedFirst, ...reseededLog().slice(1)]);
+
+    expect(rows[0]?.status).toBe('success');
+    expect(rows[0]?.error).toBeUndefined();
+    expect(rows[0]?.failureKind).toBeUndefined();
+    expect(rows[0]?.copiedFromRunId).toBe('r1');
+  });
+
   it('drops the copy claim when the node is re-dispatched, so it cannot outlive the result it describes', () => {
     /* Unreachable from today's producers — `reseedFrontier` excludes every
        top-level node in a back-edge loop body, and a copied node has no
