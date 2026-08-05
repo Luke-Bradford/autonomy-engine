@@ -354,3 +354,46 @@ export function connectRejection(
 
   return null;
 }
+
+/** A refused gesture, as the canvas remembers it — see `FlowCanvas`'s `attempted`. */
+export interface DrawnAttempt {
+  from: string;
+  to: string;
+  /** The outcome the drag was drawn from; `null` when the port could not be read. */
+  condition: EdgeCondition | null;
+}
+
+/**
+ * U6e/U19 — the back-edge the canvas may OFFER in answer to a refusal, or `null`
+ * for no offer.
+ *
+ * Pure, and here rather than inline in `FlowCanvas`, for the reason
+ * `conditionFromConnection` states: the gesture that feeds it is not
+ * unit-testable (jsdom measures every element as zero and React Flow culls
+ * unmeasured nodes), so the DECISION has to be reachable without one.
+ *
+ * Two conditions, and the first is the point. **An undecodable port withholds
+ * the offer entirely.** The refusal MESSAGE may fall back to
+ * `DRAWN_EDGE_CONDITION` — explaining a near-miss gesture as `success` is still
+ * an explanation, and it writes nothing — but this offer is a button that
+ * AUTHORS an edge, and authoring `success` for a gesture whose outcome was never
+ * read is the same guess `isValidConnection` and `onConnect` refuse to make. It
+ * would also contradict `DRAWN_EDGE_CONDITION`'s own stated contract ("used for
+ * the refusal message only, never to author an edge"), which is how this was
+ * found. The operator loses nothing recoverable: redrawing from an actual
+ * outcome port brings the offer straight back.
+ *
+ * The second is the whole back-edge rule set for the edge that would ACTUALLY be
+ * authored, not the refusal's reason — cycle-closure implies the ancestry rule
+ * but not the progress rule, so an offer shown on reason alone would author a
+ * doc the save gate refuses on topology.
+ */
+export function backEdgeOffer(
+  pre: ConnectPrecheck,
+  attempt: DrawnAttempt,
+): { from: string; to: string; condition: EdgeCondition } | null {
+  const { from, to, condition } = attempt;
+  if (condition === null) return null;
+  if (connectRejection(pre, { from, to, condition, back: true }) !== null) return null;
+  return { from, to, condition };
+}

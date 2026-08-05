@@ -9,7 +9,12 @@ import {
   type Edge,
   type Node,
 } from '@autonomy-studio/shared';
-import { connectRejection, precomputeConnect, type ConnectGraph } from './connectRules';
+import {
+  backEdgeOffer,
+  connectRejection,
+  precomputeConnect,
+  type ConnectGraph,
+} from './connectRules';
 
 /**
  * U6b — the connect-time rules, unit-tested.
@@ -596,5 +601,54 @@ describe('connectRejection — back-edge candidates (U6e)', () => {
       const local = rejectBack(g, from, to);
       expect(local === null, `${from}->${to} shared=${String(shared)}`).toBe(shared === null);
     }
+  });
+});
+
+/**
+ * U19 — the offer is an AUTHORING act, so it may not inherit the refusal
+ * message's fallback.
+ *
+ * `FlowCanvas` keeps the ends of the last refused gesture and re-derives the
+ * reason from them. When the drag's outcome port could not be read, that reason
+ * is computed for the `success` candidate — a near-miss explained is still an
+ * explanation, and it writes nothing. The BUTTON beside it does write: it calls
+ * `store.connect(...)` with the condition, so the same fallback would author an
+ * outcome the operator never drew, which is exactly what `isValidConnection` and
+ * `onConnect` refuse to do for the ordinary drop.
+ */
+describe('backEdgeOffer (U6e/U19)', () => {
+  it('offers the back-edge the forward rule refuses, carrying the DRAWN outcome', () => {
+    const pre = precomputeConnect(CHAIN);
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' } })).toEqual({
+      from: 'c',
+      to: 'a',
+      condition: { on: 'failure' },
+    });
+  });
+
+  it('carries a BRANCH outcome through unchanged', () => {
+    const pre = precomputeConnect(CHAIN);
+    const condition = { on: 'branch', branch: 'retry' } as const;
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition })?.condition).toEqual(condition);
+  });
+
+  it('WITHHOLDS the offer when the gesture could not name an outcome', () => {
+    const pre = precomputeConnect(CHAIN);
+    // Same ends, same graph, and legal as a back-edge — the ONLY difference is
+    // that the port did not decode. Nothing may be authored on a guess.
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: null })).toBeNull();
+  });
+
+  it('withholds the offer when the back-edge itself is refused', () => {
+    const g = graph(
+      [node('a'), node('b'), node('x')],
+      [edge('a', 'C'), edge('C', 'b')],
+      [{ id: 'C', kind: 'stage', children: ['x'] }],
+    );
+    // Refused for `back-no-progress`, not for the condition — an offer shown on
+    // the refusal's REASON alone would author a doc the save gate rejects.
+    expect(
+      backEdgeOffer(precomputeConnect(g), { from: 'b', to: 'a', condition: { on: 'success' } }),
+    ).toBeNull();
   });
 });

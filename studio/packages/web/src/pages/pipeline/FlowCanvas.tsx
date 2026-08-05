@@ -33,7 +33,12 @@ import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { SourcePorts } from './SourcePorts';
-import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
+import {
+  backEdgeOffer,
+  connectRejection,
+  precomputeConnect,
+  type ConnectRejection,
+} from './connectRules';
 import {
   appearedIds,
   containerAriaLabel,
@@ -1051,16 +1056,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * "control that silently does nothing" defect this panel exists to fix. The
    * #748/U16 traps this feature guards against are the ones with NO way back;
    * this is not one of them.
+   *
+   * The decision itself is `backEdgeOffer` — pure, and tested there. Note it
+   * reads `attempted` RAW rather than through `drawnCandidate`: this offer
+   * AUTHORS an edge, so unlike the refusal message above it must not inherit the
+   * `success` fallback for a port the gesture could not name.
    */
-  const backOffer: { from: string; to: string; condition: EdgeCondition } | null = useMemo(() => {
-    if (attempted === null || refusal === null) return null;
-    const candidate = {
-      ...drawnCandidate(attempted.from, attempted.to, attempted.condition),
-      back: true,
-    };
-    if (connectRejection(connectPre, candidate) !== null) return null;
-    return { from: attempted.from, to: attempted.to, condition: candidate.condition };
-  }, [attempted, refusal, connectPre, drawnCandidate]);
+  const backOffer: { from: string; to: string; condition: EdgeCondition } | null = useMemo(
+    () => (attempted === null || refusal === null ? null : backEdgeOffer(connectPre, attempted)),
+    [attempted, refusal, connectPre],
+  );
 
   /**
    * Whether React Flow should allow this connection at all.
