@@ -22,9 +22,9 @@ import type { NodeActivity, NodeToolCall } from './runSummary';
  * `projectRun` folds on this same page — and where the two disagree the engine
  * is right. The doc-free fold is used anyway because it is the one that renders
  * when the pipeline version will not resolve, which is exactly when a failed run
- * most needs reading. Cost of that choice, stated rather than hidden: an RS1
- * rerun-from-failed seeds its copied frontier through `run.reseeded`, which this
- * fold ignores, so a copied node shows no outputs here.
+ * most needs reading. Since #918 that fold reads an RS1 rerun's copied frontier
+ * too — `run.reseeded` carries R1's stored outputs — and this panel names the
+ * source run rather than passing them off as this run's work.
  *
  * READ-ONLY by design (U28): no cancel, no retry, and no NODE-level rerun. The
  * reason is per-control, and one of the three has since changed, so it is worth
@@ -117,6 +117,18 @@ export function NodeActivityPanel({
         {node.attempts} attempt{node.attempts === 1 ? '' : 's'}
       </p>
 
+      {/* #918 / RS6 — ABOVE the duration and the outputs, because it is what
+          makes both of them readable: a copied node has no span and zero
+          attempts, and its Outputs section holds another run's values. Without
+          this sentence the panel presents R1's result as this run's work, and
+          the "0 attempts" under a green badge reads as a rendering bug. */}
+      {node.copiedFromRunId !== undefined && (
+        <p className="page-hint">
+          This node did not run in this run. The rerun reused its result from run{' '}
+          <code>{node.copiedFromRunId}</code>, so the outputs below were computed there.
+        </p>
+      )}
+
       {/* #867 — the duration, and the one place there is room to say what it
           MEANS. The table's column can only carry the number.
 
@@ -135,9 +147,16 @@ export function NodeActivityPanel({
         from start to settle, including any wait it parked on and excluding time held between
         retries.{' '}
         {node.startedAtMs === undefined &&
-          (node.attempts === 0
-            ? 'This node has not started, so there is nothing to measure yet.'
-            : 'No span was recorded for this attempt.')}
+          (node.copiedFromRunId !== undefined
+            ? /* #918 — a copied node hits the `attempts === 0` arm exactly, and
+                 "has not started" under a `success` badge and a full Outputs
+                 section is a sentence that contradicts the rest of the panel.
+                 It did start — in the run it was copied from, which is the one
+                 place a span for it exists. */
+              'This node was not executed in this run, so there is no span to measure here.'
+            : node.attempts === 0
+              ? 'This node has not started, so there is nothing to measure yet.'
+              : 'No span was recorded for this attempt.')}
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
           'This attempt has not settled yet, so its span is not complete.'}
