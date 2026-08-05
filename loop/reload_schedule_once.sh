@@ -1,7 +1,10 @@
 #!/bin/bash
 # ONE-SHOT: waits for the studio-build-driver to stop on its own, then reloads
-# its LaunchAgent so the plist's new 03:05 + 21:05 StartCalendarInterval takes
-# effect. Needed because `launchctl unload` KILLS a running driver (a fire was
+# its LaunchAgent so the plist's new schedule takes
+# effect. Deliberately schedule-AGNOSTIC: it reloads whatever the plist now says,
+# and every string below says so too. The previous wording hardcoded
+# "03:05 + 21:05" in two operator-facing LOG lines, which silently became a lie
+# the moment the schedule changed (it did, 2026-08-05: StartInterval hourly). Needed because `launchctl unload` KILLS a running driver (a fire was
 # in flight when the plist was edited, 2026-07-23). Safe to re-run; exits fast
 # if the job is already not running. Logs to logs/schedule_reload.log.
 set -u
@@ -22,8 +25,8 @@ while :; do
 done
 
 {
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] driver stopped -- reloading LaunchAgent for the 03:05+21:05 schedule"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] driver stopped -- reloading LaunchAgent to pick up the plist's current schedule"
   launchctl unload "$PLIST" 2>&1
   launchctl load "$PLIST" 2>&1
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] reloaded -- schedule now 03:05 + 21:05"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] reloaded -- the schedule is now whatever $PLIST specifies"
 } >>"$LOG" 2>&1

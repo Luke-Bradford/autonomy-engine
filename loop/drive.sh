@@ -437,6 +437,85 @@ except Exception:
 " 2>/dev/null
 }
 
+# --- quota_parse_reset: stdin=a quota JSON body; echoes the 7-day window's reset
+# instant as an integer epoch, or "" when there is none or it is not one this
+# loop will believe.
+#
+# DIAGNOSTIC ONLY -- the same contract as `quota_parse_reason` above, for the
+# same reason, and the tests pin it: this value reaches a LOG LINE and nothing
+# else. Never the guard's arithmetic, never `quota_pct`'s stdout. The guard's
+# decision is a comparison of a percent against QUOTA_STOP_PCT and this must not
+# become an input to it -- "the window resets soon" is not a licence to fire into
+# an exhausted one, and wiring a reset into that comparison is exactly how a
+# refuse-only guard turns fail-open.
+#
+# WHY IT EXISTS. On 2026-08-05 the window reset at 02:59, 55 minutes after the
+# 02:05 tick had read 96% and refused. The refusal said only "window resets
+# weekly", so a loop behaving perfectly read as a hung one and cost a full
+# session to diagnose. The instant was in the body all along; only the percent
+# was ever parsed.
+#
+# RANGE-BOUNDED, not merely numeric. The value is interpolated into a log line an
+# operator reads and greps, so the same log-injection argument `quota_parse_reason`
+# makes for a closed enum applies to a number: bound it in PYTHON, where the type
+# is real, rather than after it crosses into the shell. 1.4e9 (2014) to 4.1e9
+# (2100) keeps it a plausible epoch while staying ~9 orders of magnitude clear of
+# the signed-64-bit edge that makes bash 3.2's `test` return 2. A float, a string,
+# a bool, a nested object and a shell metacharacter all print "" and are dropped.
+quota_parse_reset() {
+  python3 -c "
+import sys, json
+try:
+    r = json.load(sys.stdin)['account']['claude']['seven_day']['resets_at']
+    # bool is a subclass of int in python -- exclude it explicitly, or True
+    # would print as 1 and become 1970.
+    if isinstance(r, bool) or not isinstance(r, int):
+        print('')
+    elif 1400000000 <= r <= 4102444800:
+        print(r)
+    else:
+        print('')
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+# --- quota_log_window: $1=a quota JSON body. Logs WHEN the 7-day window reopens,
+# if the body says. Silent when it does not -- an absent reset is not a finding
+# and must not manufacture a line.
+#
+# STDOUT IS NOT OURS. This is called from inside `quota_read_url`, whose stdout
+# IS the percent the guard reads, inside a command substitution. `log` appends to
+# $DLOG and returns nothing on stdout (checked), which is the only reason this
+# can be called from there at all; an `echo` here would be captured as part of
+# the reading and land in the fail-open path. Same structural reason
+# `quota_shadow_probe`'s stdout is redirected at its call site.
+quota_log_window() {
+  qlw_epoch="$(printf '%s' "${1:-}" | quota_parse_reset)"
+  [ -n "$qlw_epoch" ] || return 0
+  # NOT `date -u -r "$epoch"`. That is BSD/macOS syntax; under GNU coreutils `-r`
+  # means "reference FILE", so on linux it fails, this function returns early and
+  # the window line silently never prints. The engine targets the operator's Mac,
+  # but THIS SUITE RUNS IN UBUNTU CI -- which is exactly how the first cut of this
+  # was caught (#910: 1b-i/1b-ii red on ubuntu, green on darwin, every other
+  # assertion passing because the guard below degraded in the safe direction).
+  # `date -d @epoch` is the GNU spelling and fails on BSD, so neither is portable
+  # alone. python3 is already a hard dependency of this file (both parsers above
+  # are python), so formatting there costs no new dependency and behaves
+  # identically on both platforms.
+  qlw_when="$(python3 -c "
+import datetime, sys
+print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc)
+      .strftime('%Y-%m-%dT%H:%M:%SZ'))" "$qlw_epoch" 2>/dev/null)"
+  [ -n "$qlw_when" ] || return 0
+  qlw_left=$(( qlw_epoch - $(date +%s) ))
+  if [ "$qlw_left" -gt 0 ]; then
+    log "quota window: resets $qlw_when (in $((qlw_left / 3600))h$(( (qlw_left % 3600) / 60 ))m)"
+  else
+    log "quota window: resets $qlw_when (already elapsed -- the next reading should be low)"
+  fi
+}
+
 # --- quota_body_pct: stdin=a quota JSON body; echoes the percent the GUARD would
 # accept, or "". Parse + totality guard as one step, so the decision path and the
 # #825 shadow probe cannot drift apart -- the same reason this file keeps ONE
@@ -469,7 +548,32 @@ quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   # so no fallthrough) and only then blank it -- fail-safe in direction, but it
   # skips a working fallback. Validating where the value enters is what makes
   # "validate at boundaries" actually true here.
-  quota_fetch_url "$1" | quota_body_pct
+  # ONE fetch, TWO readers. The body is held rather than piped so the window's
+  # reset instant can be read from the SAME response the percent came from --
+  # a second fetch would be a second poll of an endpoint that rate-limits (the
+  # shared account bucket is exactly what #765 is about), and could answer
+  # differently, which would put a reset on the log beside a percent it did not
+  # come with.
+  #
+  # ORDER IS LOAD-BEARING: the percent is computed FIRST and is the return value.
+  # `quota_log_window` runs only after it, writes to $DLOG alone, and its failure
+  # cannot alter what this function echoes -- an unparseable reset degrades to
+  # "no window line", never to a changed or blanked reading. The guard's totality
+  # property is `quota_body_pct`'s, and it is untouched here.
+  qru_body="$(quota_fetch_url "$1")"
+  qru_pct="$(printf '%s' "$qru_body" | quota_body_pct)"
+  # GATED ON THE PERCENT, not merely on a parseable reset (#910 review WARNING).
+  # `quota_pct` may call this function TWICE in one guard evaluation -- dashboard
+  # first, studio on fallthrough -- so a reset that logged whenever it happened to
+  # parse would let a dashboard body with a readable `resets_at` but an UNREADABLE
+  # `utilization` print one window line, and studio's fallthrough print a second,
+  # differently-timed one for the same decision. That is precisely the cross-sample
+  # mismatch the single-fetch design above exists to prevent, reintroduced one line
+  # later. Gating on `qru_pct` means only the source that actually produced the
+  # guard's reading describes that reading's window: at most one line per
+  # evaluation, always from the sample the percent came from.
+  [ -n "$qru_pct" ] && quota_log_window "$qru_body"
+  printf '%s\n' "$qru_pct"
 }
 
 quota_pct() {
