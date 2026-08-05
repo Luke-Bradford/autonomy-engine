@@ -14,9 +14,7 @@ describe('redactUrlSecrets', () => {
   });
 
   it('takes the query string with it — a token could be followed by anything', () => {
-    expect(redactUrlSecrets(`/api/external-wait/${TOKEN}?replay=1`)).toBe(
-      '/api/external-wait/***',
-    );
+    expect(redactUrlSecrets(`/api/external-wait/${TOKEN}?replay=1`)).toBe('/api/external-wait/***');
   });
 
   it('redacts a token EMBEDDED in a sentence, stopping at whitespace', () => {

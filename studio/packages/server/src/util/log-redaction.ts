@@ -1,5 +1,3 @@
-import type { PinoLoggerOptions } from 'fastify';
-
 /**
  * #913 — keep a URL-borne capability token out of the server log.
  *
@@ -95,7 +93,15 @@ export function censorLoggedUrl(value: unknown): string {
   return typeof value === 'string' ? redactUrlSecrets(value) : SENTINEL;
 }
 
-type LogMethodHook = NonNullable<NonNullable<PinoLoggerOptions['hooks']>['logMethod']>;
+/**
+ * The log method the hook wraps. Typed STRUCTURALLY rather than as pino's `LogFn`,
+ * for the same reason `BuildAppOptions.loggerStream` is: this package declares
+ * `fastify`, not `pino`, so pino's types are not resolvable here — deriving the hook
+ * signature from `PinoLoggerOptions['hooks']` silently yields `any` (the import
+ * inside fastify's own `.d.ts` fails and `skipLibCheck` swallows it), which is worse
+ * than saying the shape out loud.
+ */
+type LogFnLike = (this: unknown, ...args: unknown[]) => void;
 
 /**
  * pino `hooks.logMethod` that redacts every STRING argument of every log call —
@@ -109,19 +115,15 @@ type LogMethodHook = NonNullable<NonNullable<PinoLoggerOptions['hooks']>['logMet
  * array allocated. It also cannot throw — `redactUrlSecrets` is string replacement
  * over a value already known to be a string.
  */
-export const redactingLogMethod: LogMethodHook = function redactingLogMethod(
-  args,
-  method,
-  _level,
-) {
-  let redacted: typeof args | undefined;
+export function redactingLogMethod(this: unknown, args: unknown[], method: LogFnLike): void {
+  let redacted: unknown[] | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (typeof arg !== 'string') continue;
     const clean = redactUrlSecrets(arg);
     if (clean === arg) continue;
-    redacted ??= args.slice() as typeof args;
+    redacted ??= args.slice();
     redacted[i] = clean;
   }
   method.apply(this, redacted ?? args);
-};
+}
