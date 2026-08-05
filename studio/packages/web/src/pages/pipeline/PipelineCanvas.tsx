@@ -20,6 +20,7 @@ import {
   type ParamType,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
+import { historyCommandFor, redoDisabledReason, undoDisabledReason } from './undoRedo';
 import { messageOf } from '../../api/client';
 import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
@@ -139,6 +140,46 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    * restored yet, so "restoring" would be the wrong sentence even if both were
    * somehow true.
    */
+  /**
+   * U17 — the undo/redo control state, and the shortcut that drives the same
+   * two actions.
+   *
+   * The stack DEPTHS are selected as booleans, not as arrays: a selector
+   * returning `s.past` would re-render this component on every recorded edit,
+   * where what it actually draws is only whether the button is live.
+   */
+  const canUndo = useStore(store, (s) => s.past.length > 0);
+  const canRedo = useStore(store, (s) => s.future.length > 0);
+  const undoReason = undoDisabledReason({ available: canUndo, previewing, busy: previewLocked });
+  const redoReason = redoDisabledReason({ available: canRedo, previewing, busy: previewLocked });
+
+  /**
+   * ⌘Z / ⇧⌘Z on the document, gated by the same two reasons the buttons are.
+   *
+   * On the DOCUMENT rather than on a wrapper div, because the shortcut has to
+   * work wherever the operator's focus happens to be on this page — the canvas
+   * pane, the property panel, a toolbox item — and a keydown handler on a
+   * container only sees what is focused inside it. `historyCommandFor` is what
+   * keeps that reach safe: it declines every keystroke aimed at a text-entry
+   * control, where ⌘Z means the browser's own text undo.
+   *
+   * `preventDefault` only for a keystroke actually taken, so a refused one still
+   * does whatever it would have done.
+   */
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const command = historyCommandFor(e);
+      if (command === null) return;
+      const reason = command === 'undo' ? undoReason : redoReason;
+      if (reason !== null) return;
+      e.preventDefault();
+      if (command === 'undo') store.getState().undo();
+      else store.getState().redo();
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [store, undoReason, redoReason]);
+
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
     : restoring
@@ -479,6 +520,31 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
         <div className="form-actions">
           <button type="button" onClick={onBack}>
             ← Back to pipelines
+          </button>
+          {/* U17 — undo/redo. Before the Save button because they act on the
+              working graph that Save is about to mint, and in that order.
+              `onMouseDown={preventDefault}` keeps the click from moving focus
+              off whatever the operator was editing: pressing Undo should not
+              also blur the field they are typing in. */}
+          <button
+            type="button"
+            aria-label="Undo"
+            onClick={() => store.getState().undo()}
+            disabled={undoReason !== null}
+            title={undoReason ?? 'Undo the last edit (⌘Z)'}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            ↶ Undo
+          </button>
+          <button
+            type="button"
+            aria-label="Redo"
+            onClick={() => store.getState().redo()}
+            disabled={redoReason !== null}
+            title={redoReason ?? 'Redo the last undone edit (⇧⌘Z)'}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            ↷ Redo
           </button>
           <button
             type="button"
@@ -1217,6 +1283,18 @@ function BounceCapField({
   const stored = edge.maxBounces === undefined ? '' : String(edge.maxBounces);
   const [draft, setDraft] = useState(stored);
   const [error, setError] = useState<string | null>(null);
+  /* U17 — re-seed when the STORED cap changes underneath the draft. The panel is
+     keyed by `edge.id`, so switching edges remounts; an undo changes the cap of
+     the SAME edge, which remounts nothing, and without this the field would go
+     on showing the value the operator had just undone. Render-phase derived
+     state, not an effect — `NodePanel`'s precedent, which this repo's React 19
+     lint permits where `useEffect` + setState would not be. */
+  const [syncedCap, setSyncedCap] = useState(stored);
+  if (syncedCap !== stored) {
+    setSyncedCap(stored);
+    setDraft(stored);
+    setError(null);
+  }
 
   function commit(text: string) {
     // A blur that changed nothing must not write — tabbing THROUGH the field

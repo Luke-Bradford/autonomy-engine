@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, within } from '@testing-library/react';
+import { act, fireEvent, render, within } from '@testing-library/react';
 import { ReactFlowProvider } from '@xyflow/react';
 import { PipelineVersionSchema } from '@autonomy-studio/shared';
 import { fakeDataTransfer } from '../../testing/fakeDataTransfer';
@@ -420,7 +420,11 @@ describe('FlowCanvas container delete (#748)', () => {
     // rather than close it, and with two loops the dialog would not say which.
     expect(message).toContain('Delete this loop 1 container?');
     expect(message).toMatch(/activities.*kept|kept.*activities/i);
-    expect(message).toMatch(/cannot be undone/i);
+    // U17 — the dialog names the way back, and must never again claim there is
+    // none: an operator who believes a reversible delete is permanent declines
+    // it, which is the same lost work by a different route.
+    expect(message).toMatch(/Undo/);
+    expect(message).not.toMatch(/cannot be undone/i);
   });
 
   /**
@@ -468,7 +472,7 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(message).toContain('one sequence');
     // The destruction half is still its own sentence — the two are composed, not
     // merged into one vaguer warning.
-    expect(message).toMatch(/cannot be undone/i);
+    expect(message).toMatch(/settings and the edges connected to it are removed/);
   });
 
   /**
@@ -736,4 +740,64 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     expect(advisory!.getAttribute('aria-live')).toBeNull();
     expect(advisory!.querySelector('[role="status"], [role="alert"], [aria-live]')).toBeNull();
   });
+});
+
+/**
+ * U17 — the "domain wins" escape hatch.
+ *
+ * The reconciler carries each surviving node's LIVE view position forward, which
+ * is what keeps React Flow from re-initialising a node mid-drag. Carried forward
+ * unconditionally, though, it also swallowed every programmatic domain-position
+ * write — so an undone move changed the store and nothing on screen. These cover
+ * the new half only; the PRESERVE half stays pinned by
+ * `e2e/canvas-drag-reconciliation.spec.ts`, which jsdom cannot reproduce.
+ */
+describe('FlowCanvas — a domain position write reaches the view (U17)', () => {
+  function mounted() {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [{ id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } }],
+        edges: [],
+        containers: [],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container };
+  }
+
+  function transformOf(container: HTMLElement, id: string): string {
+    const el = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`);
+    expect(el, `no rendered node ${id}`).not.toBeNull();
+    return el!.style.transform;
+  }
+
+  it('an undone move repaints the node at the position it came back to', () => {
+    const { store, container } = mounted();
+    expect(transformOf(container, 'n_a')).toContain('translate(10px,20px)');
+
+    act(() => store.getState().moveNode('n_a', { x: 300, y: 400 }));
+    expect(transformOf(container, 'n_a')).toContain('translate(300px,400px)');
+
+    act(() => store.getState().undo());
+    expect(transformOf(container, 'n_a')).toContain('translate(10px,20px)');
+  });
+
+  // NO jsdom spec for the PRESERVE half (the view leading the domain mid-drag).
+  // One was written and deleted: it survived mutating the hatch to "the domain
+  // always wins", because jsdom never diverges the two positions in the first
+  // place — the exact limit this file's reconciler docblock states. That half is
+  // `e2e/canvas-drag-reconciliation.spec.ts`'s, and stays there.
 });

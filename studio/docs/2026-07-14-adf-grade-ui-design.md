@@ -166,6 +166,7 @@ toolbox, properties panel, expression builder, live run visualisation).
 | U15 | Home hub + Settings | Manage |
 | **U16** | **Params/Variables/Outputs/Globals AUTHORING** (T14) — the bottom-pane tab to *define* what the `${}` flyout references; routed through `toVersionBody` (currently discards them) | Author | — PARAMS + OUTPUTS **AS BUILT** below (in the property panel, not a bottom pane); variables/globals have no doc schema and stay deferred |
 | **U17** | **Undo/redo** (T14) — reversible-command store; land EARLY (before U6*) | Author |
+| | **AS BUILT (2026-08-05 — snapshot history, not a command store).** It did NOT land early; U6a–U6e, U16 and U23 all shipped first, each making the canvas more destructively editable with no way back. **Snapshot-per-edit rather than the row's literal "reversible-command store",** deliberately: an inverse command for `deleteNode` would have to re-derive the cascade it performed (incident edges, container membership, the selection) and `deleteContainer` its own different one — a THIRD place the cascade rules are written and the first place they could disagree. A snapshot is six REFERENCES and cannot disagree with anything: it copies nothing, because every store action is already copy-on-write at both levels, and a `structuredClone` would additionally break `docUnchanged`'s reference-equality save-race check. **`edit()` is the one seam** every mutating action ends at, which is what keeps a REFUSED action from recording an entry (every refusal already early-returns before the write) — a dead undo press is how an undo loses trust. Three no-ops that were not refusals got guards in the same pass: a drag landing back on its own origin, and an out-of-range param/output row index. **COALESCING is load-bearing, not an optimisation.** A param name field writes through on every keystroke, so typing one identifier pushed a dozen entries and two names evicted every structural edit from the 50-deep cap; `edit()` takes a per-ROW key (`param:0`) and SKIPS the push while it is unchanged, so a burst is one step. **`dirty` is restored from the snapshot OR-ed with "the basis moved"** (`loadedId` vs the live `loaded`): restoring the recorded flag alone lies across a `rebaseLoaded`, and `dirty` is what stops a version-restore discarding work, so under-reporting it is the unsafe direction. The selection is PRUNED, never restored — undo is not a navigation. `loadVersion` clears both stacks (opening a document is not an edit of the one that was open); `rebaseLoaded` keeps them. **It also had to close the position carry-forward limit recorded below**, since an undo-of-a-move that does not repaint is a lie: `FlowCanvas` now remembers each node's last-reconciled DOMAIN position and lets the domain win for a node whose domain position changed — chosen over a store epoch because it needs no dependency wiring to stay in step and cannot fire mid-drag (`moveNode` commits only once a drag settles). It is AVAILABLE to U9 and to a future live-canvas U22 write — it is not a dependency of either, and U22 as shipped deliberately does not use it (see its own block below, which solves `fitView` and container-geometry problems this hatch has no opinion about). **Deferred:** a multi-step history UI; undo surviving a reload or a pipeline switch; restoring the viewport or the selection; persistence of any kind (so no schema and no server change — clean against this epic's read-model-only non-goal). | |
 | **U18** | **Save-vs-Publish reconciliation** (T14) — command-bar states: DB-only `Save→v` vs git-connected `Save/Commit→branch` + `Publish→active` + CAS-stale "pull first"; Manage **Git** section | Author/Manage |
 | **U19** | **Outcome-by-source-handle** (T14) — colored/labeled handles per ActivityDefinition (operational success/failure/completion/skipped; control `true/false`/case), NOT the retro dropdown. **Its three inherited #1 F1 debts were DISCHARGED by U6a** (2026-07-25), which landed first: `skipped` is authorable, a persisted value the source does not offer renders as a disabled `<option>` instead of silently showing another, and a branch edge is labelled by its routing key rather than the literal `"branch"`. What remains for U19 is the shape change itself — retiring the dropdown for per-outcome SOURCE HANDLES — plus the one open question U6a deliberately left it: whether `declaredBranchesOf` moves from `engine/params.ts` onto `ActivityDefinition` (it cannot be a plain data field — a `switch`'s labels derive from `node.config.cases`). | Author |
 | **U20** | **`call_pipeline` authoring** (T14) — target-pipeline picker + param-map + call-graph validation + Monitor child-run drill | Author/Monitor |
@@ -797,7 +798,7 @@ NOT in U5, with owners: selecting the newly-added node and editing it (**U7** �
 does not change selection, so click-add and drop behave identically); dropping ONTO a node or
 INTO a container (**U23**, which owns drag-into-container drop mechanics); a node-shaped drag
 PREVIEW instead of the default button drag image (**U9**/**U23** polish); undoing an add
-(**U17**, which the epic says should land before U6*); zoom-to-fit after an add (**U9**); the
+(**U17** — BUILT 2026-08-05, so an add IS undoable now); zoom-to-fit after an add (**U9**); the
 `execute_pipeline` entry staying hidden (**U20** / **#425**); pane-tree drag REORDERING
 (**#732**, filed by this ticket); persisting the group-collapse preference across a canvas
 remount (it is component state today, and `PipelineCanvasRoute` keys the canvas per pipeline, so
@@ -936,11 +937,21 @@ handlers once the node is `draggable`, and a `boundingBox()` read while `fitView
 is a screen box that has moved by the time the pointer arrives — the drag then never starts and the
 spec fails for a reason unrelated to the invariant.
 
-**KNOWN LIMIT recorded for U17/U9/U22:** `position` is carried forward UNCONDITIONALLY, so once a
-node is in the view array a DOMAIN position write never reaches the screen. Correct mid-drag, wrong
-for undo-of-a-move (**U17**), auto-layout (**U9**) and restore-version (**U22**), which are all
-domain position writes. Those need a "domain wins" escape hatch (a move epoch, or clearing the view
-entry on a programmatic move) — not a relaxation of the line the spec now pins.
+**KNOWN LIMIT recorded for U17/U9/U22 — CLOSED by U17 (2026-08-05).** `position` was carried
+forward UNCONDITIONALLY, so once a node was in the view array a DOMAIN position write never reached
+the screen. Correct mid-drag, wrong for undo-of-a-move (**U17**), auto-layout (**U9**) and
+restore-version (**U22**), which are all domain position writes. The "domain wins" escape hatch is
+`lastDomainPositions`: `FlowCanvas` remembers each node's DOMAIN position at the last reconcile and
+the carry-forward yields for a node whose domain position has changed since. It is not a relaxation
+of the line the spec pins — the preserve half is untouched and still pinned by
+`canvas-drag-reconciliation.spec.ts`. A remembered position was chosen over the move-epoch this note
+originally suggested: an epoch has to be threaded into the reconcile effect's dependencies to be
+consumed promptly (a bump that changes no node would otherwise sit armed and fire on a LATER
+reconcile, which can be mid-drag), where a remembered position is derived from the very values being
+reconciled and cannot go stale. **The new half is unit-tested and the old half is not, deliberately:**
+a jsdom spec for the preserve half was written and DELETED because it survived mutating the hatch to
+"the domain always wins" — jsdom never diverges the view from the domain, which is the limit this
+section already states.
 
 **U22 (#903, 2026-08-02) shipped restore-version WITHOUT that escape hatch, by never writing into a
 live canvas.** The read-only preview REPLACES the editor rather than hiding it, so `FlowCanvas`
@@ -949,10 +960,13 @@ array that reads the restored geometry as its initial positions. Mutation-proven
 keeping the editor mounted turns two e2e specs red. The same fact bites a second time INSIDE the
 preview, where `RunCanvas` gets a `key={version.id}`: swapping `doc` on a live instance keeps a
 container box whole (its geometry and child count live outside the `data` that `mergeRunNodes`
-compares) and never re-runs the init-only `fitView`. **The cost, and why the escape hatch is still
-owed:** remounting discards the viewport, so a restore re-fits rather than holding the operator's
-pan and zoom, and this answer only works where a full unmount is acceptable — U17's undo-of-a-move
-and U9's auto-layout must write into a canvas that stays live, so neither can borrow it.
+compares) and never re-runs the init-only `fitView`. **The cost, and why the escape hatch was still
+owed at the time:** remounting discards the viewport, so a restore re-fits rather than holding the
+operator's pan and zoom, and this answer only works where a full unmount is acceptable — U17's
+undo-of-a-move and U9's auto-layout must write into a canvas that stays live, so neither could
+borrow it. **U17 built that hatch (2026-08-05)**, so a live-canvas domain position write now
+repaints; U22's unmount-based answer is left exactly as it is, because it also solves the
+`fitView`-and-container-geometry problems the hatch has no opinion about.
 
 Bundle, measured with and without the diff: entry CSS 3.09 → 3.25 kB gzip, the LAZY
 `PipelineCanvasRoute` chunk 60.83 → 61.47 kB gzip (where the cost belongs), entry JS 110.04 →
@@ -1085,7 +1099,8 @@ clears it; zero console errors or warnings across the session.
 NOT in U6b, with owners: one source port per OUTCOME + retiring the condition dropdown (**U19**);
 back-edge authoring, which is the remedy the cycle refusal names (**U6e**, BUILT 2026-07-31); the container-BOUNDARY
 connect rule — real, and refused by the save gate, but container membership is not rendered yet, so
-a refusal's cause would be invisible (**U6c**/**U6d**); undo of a connection (**U17**).
+a refusal's cause would be invisible (**U6c**/**U6d**); undo of a connection (**U17**, BUILT
+2026-08-05 — `connect` records history like every other action).
 
 **A trap for the next canvas spec**, now encoded in `connect-validation.spec.ts`: at the default
 1280px viewport the canvas pane is 397px and `fitView` clamps at `maxZoom: 2`, so two 120px nodes
@@ -1171,7 +1186,8 @@ Decisions worth not re-deriving:
   pane clicks aimed between its children (mutation-proven against `selectable: false` in
   `e2e/container-rendering.spec.ts`). The button opts back into hit-testing on its own, as the edge
   handles do. Everything ELSE stays read-only — creating a container, editing its config, and
-  dragging nodes in and out are **U6d**/**#425**/**U23**, and undo does not exist. Container changes
+  dragging nodes in and out are **U6d**/**#425**/**U23**, and undo did not exist (**U17**, BUILT
+  2026-08-05, now covers every container action). Container changes
   other than that one click are still
   filtered at the change seam so the domain store never sees one — by container ids MINUS activity
   ids, because the two share one namespace and RF's Map-keyed lookup keeps the ACTIVITY on a
@@ -1308,7 +1324,7 @@ owns container-config forms and the domain-container↔RF-`parentId` drop mechan
 meanwhile: `deleteContainer` un-groups the children, then re-create); the within-kind ordinal on the
 BOX itself, so "stage 2" in the picker identifies a rectangle as well as an option; and the inline
 "delete this loop?" offer #748 raised. Elsewhere: grouping N nodes at once (**U21** multi-select) and
-undo (**U17**).
+undo (**U17**, BUILT 2026-08-05 — `createContainer` and `deleteContainer` both record history).
 
 ## Non-goals (YAGNI)
 

@@ -21,7 +21,11 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
+import {
+  implicitRouting,
+  type ContainerKind,
+  type Position as DomainPosition,
+} from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
@@ -247,13 +251,13 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * which jsdom can produce, and neither of which survives a settled drag. Both
  * halves of the carry-forward were mutation-checked against that spec.
  *
- * KNOWN LIMIT, for U17/U9/U22: `position` here is carried forward
- * UNCONDITIONALLY, so once a node is in the view array a DOMAIN position write
- * never reaches the screen. That is exactly right mid-drag and wrong for
- * undo-of-a-move (U17), auto-layout (U9) and restore-version (U22), which are
- * all domain position writes. Whoever builds those needs a "domain wins"
- * escape hatch (a move generation/epoch, or clearing the view entry on a
- * programmatic move) — not a relaxation of this line, which the spec above
+ * The limit this used to state — that the carry-forward was UNCONDITIONAL, so a
+ * DOMAIN position write never reached the screen once a node was in the view
+ * array — was CLOSED by U17, which owed the fix. The "domain wins" escape hatch
+ * is `lastDomainPositions` below: the carry-forward now yields for a node whose
+ * DOMAIN position changed since the last reconcile, which is what an undo, an
+ * auto-layout (U9) and a restore-version (U22) all are. It is not a relaxation
+ * of this line, which the spec above
  * pins.
  */
 export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
@@ -362,10 +366,47 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const paneWidth = useReactFlowStore((s) => s.width);
   const paneHeight = useReactFlowStore((s) => s.height);
 
+  /**
+   * U17 — the DOMAIN position each node held at the last reconcile.
+   *
+   * The escape hatch the carry-forward below owed to U17/U9/U22: it is how this
+   * effect tells "the view is ahead of the domain" (a drag — keep the view) from
+   * "the domain moved on its own" (an undo, an auto-layout, a version restore —
+   * the view is stale and must follow).
+   *
+   * A remembered position rather than a store epoch/generation counter, because
+   * it cannot mis-fire: it is derived from the very positions being reconciled,
+   * so it needs no dependency wiring to stay in step, and it covers every
+   * programmatic writer at once instead of each one remembering to signal.
+   *
+   * It cannot fire mid-drag either — `onNodesChange` commits `moveNode` only
+   * once a drag settles (`c.dragging !== true`), so the domain position is
+   * unchanged for the whole gesture, and at drag-end the domain position IS the
+   * view position, making the hatch a no-op exactly when the carry-forward
+   * matters.
+   */
+  const lastDomainPositions = useRef(new Map<string, DomainPosition>());
+
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
   // React Flow never re-initialises (and never flickers) an existing node.
   useEffect(() => {
+    // Both computed OUTSIDE the updater below, which must stay pure: StrictMode
+    // double-invokes it in development, and a ref written from inside would then
+    // record a reconcile that had not happened. (The second invocation is a
+    // no-op either way — by then the view array already carries the domain
+    // positions, so re-deciding "domain wins" changes nothing.)
+    const seen = lastDomainPositions.current;
+    const domainMoved = new Set(
+      nodes
+        .filter((n) => {
+          const was = seen.get(n.id);
+          return was === undefined || was.x !== n.position.x || was.y !== n.position.y;
+        })
+        .map((n) => n.id),
+    );
+    lastDomainPositions.current = new Map(nodes.map((n) => [n.id, n.position]));
+
     setFlowNodes((prev) => {
       const byId = new Map(prev.map((n) => [n.id, n]));
       return nodes.map((n) => {
@@ -375,8 +416,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           id: n.id,
           type: 'activity',
           // Keep React Flow's live position during/after a drag; fall back to
-          // the domain position for a freshly-added node.
-          position: existing?.position ?? n.position,
+          // the domain position for a freshly-added node — or take it when the
+          // DOMAIN is what moved (U17, above).
+          position: domainMoved.has(n.id) ? n.position : (existing?.position ?? n.position),
           data: {
             // #878 — the box carries the IDENTIFYING name ("HTTP Request 2"),
             // not the kind. Every message that points at one activity now names
@@ -436,8 +478,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
-   * surface can re-author yet (U23, #839) and there is no undo, so a mis-click is
-   * unrecoverable rather than merely annoying.
+   * surface can re-author yet (U23, #839), so a mis-click costs more than a
+   * mis-deleted node. U17 made it recoverable rather than unrecoverable — the
+   * dialog now names the undo instead of claiming permanence — which is why it
+   * is still a confirm and no longer a warning about something final.
    *
    * The message states BOTH halves — what goes and what stays. "Are you sure?"
    * would leave the operator guessing whether their activities are about to go
@@ -509,7 +553,13 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       const name = containerLabels(state.containers).get(id) ?? kind;
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
-          'Its settings and the edges connected to it are removed, and this cannot be undone. ' +
+          // U17 — this used to end "and this cannot be undone", which was true
+          // when it was written and is not any more. The destruction is
+          // unchanged and still worth confirming (the container's config and
+          // its incident edges both go); what changed is that the operator now
+          // has a way back, and a dialog that hides it would make them decline
+          // a reversible action.
+          'Its settings and the edges connected to it are removed — Undo (⌘Z) brings them back. ' +
           'The activities inside are kept — they move out to the top level.' +
           (kind === 'foreach'
             ? ' Any ${item} they reference will no longer resolve, and must be edited' +
