@@ -43,54 +43,50 @@
   <false/>
   <key>KeepAlive</key>
   <false/>
-  <!-- Scheduled starts: fires drive.sh at 03:05 + 09:05 + 15:05 + 21:05 local daily.
+  <!-- RETRY CADENCE: every hour, via StartInterval rather than a handful of
+       wall-clock ticks.
 
-       09:05 + 15:05 added 2026-08-05. Measured cause: the 7-day window reset at
-       02:59 on 2026-08-05, 55 minutes AFTER the 02:05 tick had already read 96%
-       and stopped -- so the next chance to notice was 21:05, an 18h idle gap on
-       a loop that was working correctly. Four ticks bound that gap to 6h.
+       OPERATOR MODEL (2026-08-05, in their words): "The loop should just run so
+       long as it's not above 80% of the weekly, it should back off if a 5 hour
+       window is hit and start again when cleared. After the weekly 80% quota is
+       hit, it should be able to pick up once that is cleared."
 
-       THIS RELAXES THE "OUT OF WORK HOURS" PROPERTY the 21:05 note below records,
-       deliberately and with a narrower claim behind it: a tick only ever STARTS a
-       stopped driver, and a started driver already runs continuously for days
-       (the 2026-07-31 run spanned 30h and three ticks), so the loop was never in
-       fact confined to off-hours once running. What protects the operator's own
-       headroom is QUOTA_STOP_PCT=80%, which is evaluated on every tick -- not the
-       hour the tick lands on. A mid-day tick that finds the window busy costs one
-       ~10s no-op run and zero tokens (the auth check runs AFTER the quota gate).
-       If the operator wants off-hours starts back, delete these two dicts.
-       03:05 set 2026-07-14 to start the ADF-grade foundation build ~13h out
-       (operator near weekly token cap). 21:05 added 2026-07-23 so a stop whose
-       cause clears during the day resumes the same evening instead of waiting
-       for 03:05 (kept OUT of work hours -- the loop shares the operator's
-       subscription quota). drive.sh loops the whole build back-to-back; a tick
-       on an already-running driver is a launchd no-op (single instance per
-       label), so these are harmless resume-if-stalled heartbeats.
-       To disable: launchctl unload this.
+       Two of those three already hold inside drive.sh and need nothing from
+       launchd: a 5-hour/rate limit is caught per-fire and BACKED OFF IN-PROCESS
+       ("retries automatically when the limit clears"), and MAX_FIRES=0 means no
+       per-window fire cap. The gap was only ever the THIRD: the weekly gate makes
+       the driver EXIT, and nothing then retried until the next wall-clock tick.
+       Measured 2026-08-05: the window reset at 02:59, 55 minutes after the 02:05
+       tick had read 96% and stopped, so the next attempt was 21:05 -- 18h idle on
+       a loop that was behaving perfectly.
 
-       DRIFT REPAIR (#765): this copy had only the 03:05 dict while the INSTALLED
-       agent has both -- the 21:05 entry was added live on 2026-07-23 and never
-       backported. Copying this file over the live one would have silently
-       deleted a scheduled fire. Reconciled here; diff the two before any sync. -->
-  <key>StartCalendarInterval</key>
-  <array>
-    <dict>
-      <key>Hour</key><integer>3</integer>
-      <key>Minute</key><integer>5</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>9</integer>
-      <key>Minute</key><integer>5</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>15</integer>
-      <key>Minute</key><integer>5</integer>
-    </dict>
-    <dict>
-      <key>Hour</key><integer>21</integer>
-      <key>Minute</key><integer>5</integer>
-    </dict>
-  </array>
+       An hourly StartInterval is the direct expression of "just keep trying":
+       resumption is bounded by an hour after ANY stop cause clears -- weekly
+       quota, an operator signal being closed, or a drained queue refilling --
+       instead of by where the next fixed tick happens to fall. It replaces the
+       03:05/21:05 pair (and a 4-tick variant that was proposed but never asked
+       for) rather than adding to them; two mechanisms for one job is how the
+       03:05-vs-21:05 drift in #765 happened.
+
+       COST OF A WASTED TICK IS ~10s AND ZERO TOKENS: the quota gate runs BEFORE
+       the auth probe and before any fire, so a tick that finds the window still
+       exhausted logs one refusal and exits. There is no work-hours exposure to
+       trade off, because a tick only ever STARTS a STOPPED driver -- and a
+       started driver already runs continuously for days (the 2026-07-31 run
+       spanned 30h). QUOTA_STOP_PCT=80% is what protects the operator's own
+       headroom, not the hour a tick lands on.
+
+       A tick on an already-running driver is a launchd no-op (single instance per
+       label) -- verified, not assumed: that 30h run spanned three scheduled ticks
+       and launchd started no second driver.
+
+       KeepAlive stays FALSE. StartInterval retries on a fixed cadence we control;
+       KeepAlive would restart the instant the process exits, which turns a clean
+       stop-condition exit into a thrash loop.
+
+       To disable: launchctl unload this. -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
 
   <key>StandardOutPath</key>
   <string>/Users/lukebradford/Dev/studio-loop/logs/driver.launchd.out.log</string>
