@@ -611,7 +611,12 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
     // `{}` (`onExternalWaitCompleted`) rather than to "no outputs recorded".
     // This reader agrees with the reducer instead of inventing a third answer.
     const [done] = deriveNodeActivity([
-      envelope({ type: 'externalWait.completed', runId: 'r', nodeId: 'h', previousAttemptId: 'h#0' }),
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+      }),
     ]);
     expect(done!.outputValues).toEqual({});
   });
