@@ -1,5 +1,9 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { TERMINAL_RUN_STATUS } from '@autonomy-studio/shared';
+import {
+  computeRunUsage,
+  TERMINAL_RUN_ROW_STATUS,
+  TERMINAL_RUN_STATUS,
+} from '@autonomy-studio/shared';
 import type { PipelineVersion, Run, RunStatus } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
 import { getRun, getRunDetail, rerunFromFailed } from '../../api/runs';
@@ -20,6 +24,7 @@ import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
+import { RunCostSummary } from './RunCostSummary';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 
@@ -190,6 +195,17 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [folded, overlay],
   );
   const lifecycle = useMemo(() => deriveRunLifecycle(stream.events), [stream.events]);
+  /* U27 (#930) — what the whole run spent. Folded INDEPENDENTLY of `folded`
+     rather than summed out of its per-node `cost` map, and the difference is a
+     money one: `deriveNodeActivity` drops an `activity.metered` event whose node
+     has no row (documented unreachable, but a drop nonetheless), whereas this
+     counts every metered row in the log — the same set `GET /api/runs/:id/cost`
+     sums, so the page and the route cannot disagree about spend.
+
+     A FIFTH walk of the log on this page (#849 — see `waitEpoch` above). It rides
+     the same memoized `stream.events` and belongs in #849's consolidation, not
+     ahead of it. */
+  const runUsage = useMemo(() => computeRunUsage(stream.events), [stream.events]);
 
   /* #882 — the ONE name a node has in this view. The graph below reads the same
      `activityLabels` map off the same doc, so the table and the picture beside
@@ -458,6 +474,24 @@ export function RunDetailPage({ runId }: { runId: string }) {
           }
         />
       )}
+
+      {/* U27 (#930) — the run-level spend. Placed AFTER the parked-callback block
+          and before the Graph: a pending callback is an ACTION the operator has
+          to take, and a read-only money figure must not sit above it. Rendered
+          unconditionally — see `RunCostSummary`, which owns every "should this
+          say anything" decision so the page cannot make a second one. */}
+      <RunCostSummary
+        usage={runUsage}
+        nodes={nodes}
+        /* The ROW-status set, not the lifecycle one: `status` here falls back to
+           `run.status`, which can be `queued` or `skipped` — neither of which the
+           lifecycle set knows about. See `TERMINAL_RUN_ROW_STATUS`. */
+        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
+        replayComplete={stream.replayComplete}
+        logTruncated={
+          (stream.phase === 'closed' || stream.phase === 'error') && !stream.replayComplete
+        }
+      />
 
       <h3>Graph</h3>
       {doc === null ? (

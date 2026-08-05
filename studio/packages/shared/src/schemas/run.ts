@@ -24,6 +24,34 @@ export const RunStatusSchema = z.enum([
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
 /**
+ * The ROW statuses at which a run has stopped advancing — the `RunStatus` twin of
+ * the engine's `TERMINAL_RUN_STATUS`, which answers the same question about the
+ * narrower `RunLifecycleStatus`.
+ *
+ * It exists (#930) because the two enums are NOT the same set and the difference
+ * is silent: `RunStatus` carries `queued` and `skipped`, which
+ * `RunLifecycleStatusSchema` deliberately does not. A surface holding a row status
+ * and asking `TERMINAL_RUN_STATUS.has(...)` therefore needs a cast, and the cast
+ * hides the answer rather than giving one — `skipped` is terminal (the run never
+ * ran and never will) and `queued` is not (it has not started yet), and a cast
+ * silently classifies both as terminal by dint of not being in the non-terminal
+ * three.
+ *
+ * Built the same way as its twin: by NAMING the non-terminal statuses and taking
+ * the rest, so adding a status to `RunStatusSchema` forces a deliberate decision
+ * here instead of defaulting to terminal by omission.
+ */
+export const TERMINAL_RUN_ROW_STATUS: ReadonlySet<RunStatus> = new Set<RunStatus>(
+  RunStatusSchema.options.filter(
+    (status) =>
+      status !== 'pending' &&
+      status !== 'queued' &&
+      status !== 'running' &&
+      status !== 'waiting',
+  ),
+);
+
+/**
  * One execution of a specific, immutable `PipelineVersion`. `leaseUntil` is the
  * execution LEASE: #5 S4 has a `running` run HOLD it (`now + LEASE_TTL_MS`,
  * projected from status by `syncRunLifecycle`) and a parked/terminal run RELEASE

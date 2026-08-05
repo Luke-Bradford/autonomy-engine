@@ -1,7 +1,13 @@
-import { formatTokenCount, formatUsd, TERMINAL_NODE, type NodeCost } from '@autonomy-studio/shared';
+import { TERMINAL_NODE, type NodeCost } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
-import { readNodeCost, type NodeCostReading } from './nodeCost';
+import {
+  costFigure,
+  costSentence,
+  readCost,
+  tokenSummary,
+  unsettledSentence,
+} from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 
 /**
@@ -272,7 +278,7 @@ export function NodeActivityPanel({
  * genuinely free exchange).
  */
 function CostSection({ node }: { node: NodeActivity }) {
-  const reading = readNodeCost(node.cost);
+  const reading = readCost(node.cost);
   const { cost } = node;
   return (
     <section className="contract-section">
@@ -280,7 +286,7 @@ function CostSection({ node }: { node: NodeActivity }) {
       <p>
         <strong>{costFigure(reading)}</strong>
       </p>
-      <p className="page-hint">{costSentence(reading)}</p>
+      <p className="page-hint">{costSentence(reading, 'node')}</p>
 
       {cost.models.length > 0 && (
         <dl className="run-meta">
@@ -333,103 +339,10 @@ function CostSection({ node }: { node: NodeActivity }) {
            answers one block up ("this attempt has not settled yet"): on a live
            tail an in-flight node's spend-so-far otherwise reads with exactly the
            confidence of a settled one. */
-        <p className="page-hint">
-          {/* Two wordings, because the headline is not always a number. Saying
-              "this is what it has spent so far" directly under "No billed
-              exchange" qualifies a figure that is not on screen — the same
-              contradiction the `lower-bound` sentence above already answers. */}
-          {showsAnAmount(reading)
-            ? 'This node has not settled, so this is what it has spent SO FAR — not a final figure.'
-            : 'This node has not settled, so more exchanges may still be billed to it.'}
-        </p>
+        <p className="page-hint">{unsettledSentence(reading, 'node')}</p>
       )}
     </section>
   );
-}
-
-/**
- * The token line. Each side answers for itself, so one measured side never lends
- * its credibility to an unmeasured one.
- */
-function tokenSummary(reading: NodeCostReading, cost: NodeCost): string {
-  if (!reading.inputTokensReported && !reading.outputTokensReported) return 'not reported';
-  const input = reading.inputTokensReported
-    ? `${formatTokenCount(cost.inputTokens)} in`
-    : 'input not reported';
-  const output = reading.outputTokensReported
-    ? `${formatTokenCount(cost.outputTokens)} out`
-    : 'output not reported';
-  return `${input} · ${output}`;
-}
-
-/**
- * Whether a `lower-bound` reading's priced part is worth stating — the ONE place
- * that threshold is decided, because the headline and the sentence below it must
- * agree or the panel contradicts itself.
- *
- * `formatUsd` renders a sub-threshold amount as its own bound (`< $0.000001`), so
- * "At least < $0.000001" is a contradiction on its face; a genuine
- * `costEstimate: 0` (a free model in the price table) hits the same wall from the
- * other side, where "At least $0.00" is the very reading this surface exists to
- * prevent. Both collapse to one true statement: the priced part tells us nothing,
- * and there is more we could not price.
- */
-function statesAnAmount(reading: NodeCostReading): boolean {
-  return reading.amount >= 0.000001;
-}
-
-/**
- * Whether the HEADLINE is a money figure at all.
- *
- * Three of the five readings deliberately render words instead of an amount
- * (`No billed exchange` · `No marginal cost` · `Cost unknown`), as does a
- * `lower-bound` too small to state. Anything hanging a caveat off "the figure"
- * has to ask this first, or it qualifies a number that is not on screen.
- */
-function showsAnAmount(reading: NodeCostReading): boolean {
-  return reading.kind === 'exact' || (reading.kind === 'lower-bound' && statesAnAmount(reading));
-}
-
-/** The headline, which for three readings is deliberately not a money amount. */
-function costFigure(reading: NodeCostReading): string {
-  switch (reading.kind) {
-    case 'none':
-      return 'No billed exchange';
-    case 'covered':
-      return 'No marginal cost';
-    case 'unknown':
-      return 'Cost unknown';
-    case 'lower-bound':
-      return statesAnAmount(reading) ? `At least ${formatUsd(reading.amount)}` : 'Cost unknown';
-    case 'exact':
-      return formatUsd(reading.amount);
-  }
-}
-
-function costSentence(reading: NodeCostReading): string {
-  const exchanges = `${reading.exchangeCount} billed exchange${reading.exchangeCount === 1 ? '' : 's'}`;
-  switch (reading.kind) {
-    case 'none':
-      return 'Nothing was billed under this node. A provider call that TIMED OUT records no exchange either — a timeout cannot tell a long generation from a request that never arrived, so counting it would invent spend.';
-    case 'covered':
-      return `${exchanges}, every one a subscription or CLI call. Those carry no unit price by design, so this zero is a known covered cost — not a figure nobody could work out.`;
-    case 'unknown':
-      return `${exchanges}, and none of them could be priced (an unpriced model, or usage the provider did not report). A number is deliberately not shown: the sum would be $0.00, which reads as free.`;
-    case 'lower-bound':
-      /* Gated on the SAME predicate as the headline. Without that, the sentence
-         promises "the figure" in exactly the case the headline withheld one. */
-      return statesAnAmount(reading)
-        ? `${exchanges}, of which ${reading.unknownCount} could not be priced. The figure is what the rest cost, so the real total is higher.`
-        : `${exchanges}, of which ${reading.unknownCount} could not be priced — and what did price came to less than a millionth of a dollar. No figure is shown, because the priced part says nothing about the total.`;
-    case 'exact':
-      /* No subscription-call clause here. `meteringStatus:'unpriced'` is minted
-         at exactly one site (`cliSpendFact`, `agent_cli`) and a node binds ONE
-         connection for the whole immutable run, so a node cannot hold both a
-         priced and an unpriced response — and a sentence saying "all priced. N of
-         them were subscription calls" contradicts itself. If a second producer of
-         `unpriced` ever lands, this arm is where it has to be re-read. */
-      return `${exchanges}, all priced. Retries are included — each attempt was billed.`;
-  }
 }
 
 /**
