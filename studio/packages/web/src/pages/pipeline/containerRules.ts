@@ -1,5 +1,6 @@
 import {
   implicitRouting,
+  scanTemplateRefs,
   type Container,
   type Edge,
   type ImplicitRouting,
@@ -273,6 +274,20 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * in its container form. Only the IDENTIFIERS change; the sentence stays the
  * validator's, so this cannot quietly become a second, drifting set of messages.
  *
+ * #887 widened that contract by exactly one category, and it is named here
+ * because it is a real widening: pass 5 ADDS a parenthetical gloss. It still
+ * writes none of the validator's prose and edits none of its text — every word
+ * and every expression byte survives — but "only the identifiers change" is no
+ * longer the whole rule. Anything beyond naming an id belongs in R3's structured
+ * diagnostics, not here.
+ *
+ * The gloss reaches BOTH callers, which is a decision rather than a consequence
+ * of sharing a function. #840's pre-edit confirm dialog (`consequenceMessage`)
+ * is where it helps most: the issues a membership edit adds are largely
+ * `container.<id>.exitWhen` messages, whose expressions reference nodes by
+ * minted id — so the dialog asking "apply this edit?" was quoting a consequence
+ * naming a box the operator could not identify.
+ *
  * An edge has no name of its own, so it is named by its ENDS, which is how the
  * operator sees it. A quoted token that resolves to nothing (a kind, a word the
  * validator happened to quote) is left exactly as it was.
@@ -285,14 +300,23 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * unchanged would have left the two commonest canvas errors still printing a raw
  * uuid, while looking from the outside like the defect had been fixed.
  *
- * DISPLAY ONLY, and it must stay at the render site. TWO callers read these
- * strings STRUCTURALLY: `ContainerPanel` filters them by matching
- * `container '<id>'` as a raw substring (`ContainerPanel.tsx:143`), and the
- * expression-insert probe takes a set difference against a baseline
- * (`PipelineCanvas.tsx:1144`, `!baseline.includes(issue)`) — in the very file that
- * now calls this function. Both call `validateCanvas` DIRECTLY rather than reading
- * the mapped list, which is what keeps them correct; moving this rewrite inside
- * `validateCanvas` would silently break both.
+ * Those four shapes are the id shapes the validator RENDERS, and they take
+ * passes 1-4. Pass 5 is not a fifth shape: it is the same id in a place none of
+ * those passes may touch — inside the operator's own expression — which is why
+ * it glosses instead.
+ *
+ * DISPLAY ONLY, and it must stay at the render site. FOUR callers read these
+ * strings STRUCTURALLY, and the enumeration is what keeps them safe:
+ * `ContainerPanel` filters them by matching `container '<id>'` as a raw
+ * substring (`ContainerPanel.tsx:143`); the expression-insert probe takes a set
+ * difference against a baseline (`PipelineCanvas.tsx:1572`,
+ * `!baseline.includes(issue)`) — in the very file that
+ * now calls this function; `containerEditConsequence` below diffs two issue sets
+ * by exact string (`!known.has(issue)`); and `expressionInsert.insertModeFor`
+ * does the same against a whole-doc baseline (`expressionInsert.ts:77`). All
+ * four call `validateCanvas` DIRECTLY rather than reading the mapped list, which
+ * is what keeps them correct; moving this rewrite inside `validateCanvas` would
+ * silently break every one of them.
  */
 export function readableIssue(
   issue: string,
@@ -332,8 +356,8 @@ export function readableIssue(
   // without this pass the badge list would still have shown a raw uuid.
   //
   // ANCHORED at index 0, and that is load-bearing rather than an optimisation:
-  // `${nodes.<id>.output.<name>}` appears in the BODY of those same messages
-  // (`:3846`, `:3875`) and is the operator's own expression text — the literal
+  // a `${nodes.<id>.…}` reference appears in the BODY of those same messages
+  // (`:3846` output, `:3875` status) and is the operator's own expression text — the literal
   // string they must go and edit. Rewriting it would hand them a sentence telling
   // them to fix an expression that does not appear in their config. Every message
   // is built `${where}: …` with `where` first, so the location is always at 0.
@@ -374,13 +398,122 @@ export function readableIssue(
   // cannot be anchored. The cost is that a quoted token that happens to EQUAL an
   // id is rewritten wherever it sits, including inside an expression body. Not
   // reachable on canvas-minted ids for the same reason as pass 3.
-  return listed.replace(/'([^']+)'/g, (whole, id: string) => {
+  const quoted = listed.replace(/'([^']+)'/g, (whole, id: string) => {
     const direct = label(id);
     if (direct !== undefined) return `'${direct}'`;
     const edge = edgeById.get(id);
     if (edge === undefined) return whole;
     return `'${label(edge.from) ?? edge.from} → ${label(edge.to) ?? edge.to}'`;
   });
+  // Pass 5 — #887, and the ONLY pass that does not rewrite. It ADDS a
+  // parenthetical after a `${…}` span, leaving the span byte-identical.
+  //
+  // The other four passes exist because a location is the validator's own
+  // rendering of an id. An expression body is NOT: it is the string the operator
+  // has to go and edit, so pass 2 is anchored precisely to keep out of it, and
+  // `${nodes.HTTP Request 2.output.body}` would name something that appears
+  // nowhere in their config and is not valid syntax. The cost was that the
+  // commonest reference error named one end the way the canvas draws it and the
+  // other as a raw uuid — and the uuid is usually MACHINE-inserted, spliced in by
+  // U8a's expression picker, so the operator never typed it and cannot recognise
+  // it. Glossing is the way to name both ends without touching the text:
+  //
+  //   node 'HTTP Request 1' config.url: ${nodes.n_7c4….output.body} (HTTP
+  //   Request 2) does not name an upstream node (…)
+  //
+  // The gloss is deliberately UNCONDITIONAL where it resolves, including on the
+  // two message shapes that also quote the id (`:3823` "declares no output",
+  // `:3869` "is not settled here"), where pass 4 has already turned the quoted
+  // copy into the name. That reads redundantly — `${nodes.n_7c….status} (Deploy)
+  // is not settled here — 'Deploy' may still be running` — and the redundancy is
+  // the POINT: binding the uuid to the name is exactly what the reader cannot do
+  // for themselves, and suppressing it would leave the one message where the
+  // binding is spelled out looking like the one message that forgot to gloss.
+  //
+  // BOUNDARIES COME FROM `scanTemplateRefs`, NOT A REGEX, and that is
+  // load-bearing rather than tidiness. A `${…}` body may legally contain `}`
+  // inside a string literal — `findRefEnd`'s own docblock uses
+  // `default(params.a, "b}c")` — so a `\$\{[^}]*\}` regex closes the span early,
+  // at the brace inside the literal, and splices the gloss INTO the operator's
+  // string. That corrupts the exact text this pass exists to preserve. Reusing
+  // the engine's scanner (the SSOT `substitute` and `validateRefs` share) makes
+  // that unrepresentable.
+  //
+  // Input is NOT `protectEscapes`d, unlike `substitute`'s, and the reason is
+  // specific: the round trip is LOSSY for a display caller. `restoreEscapes`
+  // maps the sentinel back to `${`, not to `$${` — correct for SUBSTITUTION,
+  // where an escape is meant to resolve to a literal delimiter, and wrong here,
+  // where the operator's text must come back byte-for-byte. `ESC` is not
+  // exported either, so protecting cannot be undone by hand. (Indices would have
+  // been fine — `scanTemplateRefs` documents that a splicing caller slices the
+  // PROTECTED string — so the offsets are not what rules this out.)
+  //
+  // The escape is handled positionally instead: a `${` preceded by a `$` is a
+  // LITERAL the operator escaped, not a reference, so it is skipped below.
+  //
+  // That skip is load-bearing, not belt-and-braces, and the reasoning it replaces
+  // was wrong. "A stray opener can only cost a spurious parenthetical, never a
+  // rewrite, because the gloss is appended after the closing `}`" assumes the `}`
+  // the scanner returns is the REAL one. A spurious opener can desync quote
+  // parity and make it not be: in `$${x " and ${default(nodes.x.output.v,
+  // "b}c")}`, the scan opens at the second `$`, the lone `"` consumes the
+  // literal's OPENING quote, and the `}` inside `"b}c"` reads as unquoted — so
+  // the gloss lands inside the operator's string. Skipping the escaped opener
+  // closes that, and no other route to it exists: `scanTemplateRefs` only becomes
+  // quote-aware INSIDE a body, so a stray quote before a span cannot desync it,
+  // and an unbalanced quote within one makes `findRefEnd` return -1, which drops
+  // the gloss rather than misplacing it.
+  //
+  // Skipping is also what the escape MEANS. `$${nodes.x.output.y}` is text the
+  // operator asked to be shown literally; it references nothing, so there is
+  // nothing to name.
+  //
+  // The residual cost, stated because the skip does not remove it: an escaped
+  // opener still CONSUMES the scan, so a real reference sharing a message with
+  // one — `$${a ${nodes.x.output.y}` — loses its gloss. That is the append-only
+  // failure this pass is designed to fail into (a missing name, never a wrong or
+  // misplaced one), and it takes a message mixing an escape with a live
+  // reference, which no validator emits today.
+  // `unterminatedAt` is deliberately not read. `scanTemplateRefs` CAUTIONS a
+  // caller against splicing `matches` without it, because a splicing caller would
+  // silently truncate its output at the unterminated opener. That does not bind an
+  // APPEND-ONLY caller: every span before the opener is still glossed, and the
+  // malformed tail is emitted verbatim rather than dropped.
+  const spans = scanTemplateRefs(quoted).matches;
+  let glossed = quoted;
+  // RIGHT-TO-LEFT so an earlier span's indices survive a later span's splice.
+  for (let i = spans.length - 1; i >= 0; i -= 1) {
+    const span = spans[i];
+    if (span === undefined) continue;
+    if (quoted[span.start - 1] === '$') continue; // an escaped `$${` — see above
+    const names: string[] = [];
+    // `${nodes.…}` is a node and never a container (`refRoot` maps the `nodes`
+    // namespace to `nodeOutput`/`nodeStatus` alone), so this resolves through
+    // `nodeLabels` rather than the container-inclusive `label`. Scanning the body
+    // rather than anchoring at it also covers a COMPOSED reference —
+    // `${default(nodes.x.output.v, "fb")}` — which `params.ts:3707` emits from
+    // the author's own `expr.source`.
+    //
+    // TEXTUAL, not parsed, and the costs of that are bounded and stated. A node
+    // id MENTIONED inside a string literal (`default(a, "nodes.n_d…")`) glosses
+    // as though it were a reference, and a bracketed root (`${nodes["n_d"]…}`)
+    // never matches `nodes.` at all, so it is missed. Parsing instead would need
+    // `parseExpr` in a try/catch, because the bodies a validator quotes are
+    // exactly the malformed ones — a worse trade for a display gloss.
+    //
+    // The char class excludes `[`/`]` so an INDEXED root (`${nodes.n_d[0]}`)
+    // still yields `n_d` rather than `n_d[0]`, and the leading `(?:^|[^\w.])`
+    // keeps `nodes.` from matching mid-path, so `${params.nodes.x}` is not read
+    // as a node reference.
+    for (const m of span.body.matchAll(/(?:^|[^\w.])nodes\.([^.}[\]\s,)]+)/g)) {
+      const l = nodeLabels.get(m[1] as string);
+      if (l !== undefined && !names.includes(l)) names.push(l);
+    }
+    if (names.length === 0) continue;
+    const after = span.end + 1;
+    glossed = `${glossed.slice(0, after)} (${names.join(', ')})${glossed.slice(after)}`;
+  }
+  return glossed;
 }
 
 /**

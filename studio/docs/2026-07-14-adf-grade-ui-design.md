@@ -1269,13 +1269,21 @@ Decisions worth not re-deriving:
   because an emptied stage validates clean; there is a `loop` variant now for exactly that reason.
 - **Validator ids are rewritten for a human before they are shown.** `newLocalId` mints
   `n_7c44a16f-…`, and surfacing one verbatim reproduces the exact defect `connectRules.endpointLabel`
-  exists for. Only the IDENTIFIERS change — the sentence stays the validator's, so this cannot become
-  a second, drifting set of messages. An edge has no name, so it is named by its ENDS. Containers
+  exists for. The sentence always stays the validator's, so this cannot become a second, drifting set
+  of messages. An edge has no name, so it is named by its ENDS. Containers
   carry a within-kind ordinal (`stage 2`) because a PICKER, unlike transient gesture feedback, cannot
-  accept two indistinguishable options. Two passes, not one: `validateExitWhen`/`validateForeachItems`
-  write their location as `container.<id>.exitWhen` with the id UNQUOTED, and those two fields are the
-  only container config this form authors — so the first error a beginner meets was the one arriving
+  accept two indistinguishable options. FIVE passes, not one: the validator writes an id in four
+  shapes and only one of them is quoted — `validateExitWhen`/`validateForeachItems` write their
+  location as `container.<id>.exitWhen` with the id UNQUOTED, and those two fields are the
+  only container config this form authors, so the first error a beginner meets was the one arriving
   as a bare uuid.
+- **The fifth pass GLOSSES rather than rewrites (#887).** The other four change identifiers; this one
+  changes nothing and appends. A minted id also sits inside the operator's own `${…}` expression — put
+  there by U8a's picker, so they never typed it — and rewriting it would yield
+  `${nodes.HTTP Request 2.output.body}`, a string in nobody's config and not valid syntax. So the span
+  is left byte-identical and the drawn name follows it in parentheses, which is what lets one message
+  name BOTH ends. "Only the identifiers change" was the rule until #887; adding a parenthetical is the
+  one category beyond it, and anything further belongs to R3's structured diagnostics.
 - **The membership control renders IN the `execute_pipeline` stub too, not only in the editor.**
   That early return is the only panel a structural-call node ever gets, and a container is exactly
   the construct an imported doc puts one in — membership is orthogonal to `node.config`, so the stub
