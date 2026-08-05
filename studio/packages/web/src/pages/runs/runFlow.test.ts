@@ -208,7 +208,12 @@ describe('runFlowNodes', () => {
   it('gives every edge a source port that EXISTS on its source', () => {
     const doc: RunDoc = {
       nodes: [
-        { id: 'sw', type: 'switch', config: { on: '${x}', cases: ['red'] }, position: { x: 0, y: 0 } },
+        {
+          id: 'sw',
+          type: 'switch',
+          config: { on: '${x}', cases: ['red'] },
+          position: { x: 0, y: 0 },
+        },
         { id: 'b', type: 'http_request', config: {}, position: { x: 300, y: 0 } },
       ],
       edges: [

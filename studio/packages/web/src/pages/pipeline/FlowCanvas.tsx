@@ -1041,8 +1041,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * #748/U16 traps this feature guards against are the ones with NO way back;
    * this is not one of them.
    */
-  const backOffer: { from: string; to: string; condition: EdgeCondition } | null =
-    useMemo(() => {
+  const backOffer: { from: string; to: string; condition: EdgeCondition } | null = useMemo(() => {
     if (attempted === null || refusal === null) return null;
     const candidate = {
       ...drawnCandidate(attempted.from, attempted.to, attempted.condition),
@@ -1080,8 +1079,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     // still names the outcome port.
     const condition = conditionFromConnection(conn);
     if (condition === null) return;
-    if (conn.source && conn.target)
-      store.getState().connect(conn.source, conn.target, condition);
+    if (conn.source && conn.target) store.getState().connect(conn.source, conn.target, condition);
   }
 
   /**

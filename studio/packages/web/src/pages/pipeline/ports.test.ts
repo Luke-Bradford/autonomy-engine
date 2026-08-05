@@ -144,7 +144,9 @@ describe('declaredConditionsOf', () => {
   });
 
   it("adds a `switch`'s configured cases plus `default`", () => {
-    const offered = declaredConditionsOf(node('a', 'switch', { on: '${x}', cases: ['red', 'blue'] }));
+    const offered = declaredConditionsOf(
+      node('a', 'switch', { on: '${x}', cases: ['red', 'blue'] }),
+    );
     expect(offered.filter((c) => c.on === 'branch').map((c) => conditionLabel(c))).toEqual([
       'red',
       'blue',
@@ -163,11 +165,7 @@ describe('declaredConditionsOf', () => {
 describe('sourcePortsOf', () => {
   it('gives a port to every condition the source declares', () => {
     const ports = sourcePortsOf(node('a', 'if'), []);
-    expect(ports.map((p) => p.label)).toEqual([
-      ...OPERATIONAL_CONDITIONS,
-      'true',
-      'false',
-    ]);
+    expect(ports.map((p) => p.label)).toEqual([...OPERATIONAL_CONDITIONS, 'true', 'false']);
     expect(ports.every((p) => !p.orphaned)).toBe(true);
   });
 

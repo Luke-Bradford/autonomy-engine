@@ -133,7 +133,19 @@ function portCentreOf(
   page: Page,
   ref: NodeRef,
   side: 'source' | 'target',
+  outcome: string = DEFAULT_OUTCOME,
 ): Promise<{ x: number; y: number }> {
+  /* U19 — a source port is addressed by its HANDLE ID, not by which side of the
+     node it sits on. Every outcome's port is on the right, so the old
+     `.react-flow__handle-right` selector would now resolve to whichever one the
+     DOM happens to list first and silently drag from `success` in every spec.
+     `data-handleid` is React Flow's own attribute, and the ids are
+     percent-encoded to a `[A-Za-z0-9-_.~%]` alphabet, so they need no escaping
+     inside the quoted selector. */
+  const selector =
+    side === 'source'
+      ? `.react-flow__handle[data-handleid="${outcome}"]`
+      : '.react-flow__handle-left';
   return page.evaluate(
     ({ ref: r, cls }) => {
       const node =
@@ -144,8 +156,22 @@ function portCentreOf(
       if (!box) throw new Error(`node ${JSON.stringify(r)} has no ${cls} port laid out`);
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     },
-    { ref, cls: side === 'source' ? '.react-flow__handle-right' : '.react-flow__handle-left' },
+    { ref, cls: selector },
   );
+}
+
+/**
+ * The port every gesture below drags from unless a spec names another.
+ *
+ * `success` is what a connection MEANT before U19 gave each outcome its own
+ * port, so keeping it the default is what makes the pre-U19 specs still describe
+ * the graph they were written to build.
+ */
+const DEFAULT_OUTCOME = 'op:success';
+
+/** The handle id of an operational outcome's port — U19's `encodeCondition`. */
+export function outcomePort(on: 'success' | 'failure' | 'completion' | 'skipped'): string {
+  return `op:${on}`;
 }
 
 /**
@@ -162,8 +188,9 @@ async function connectRefs(
   from: NodeRef,
   to: NodeRef,
   inspect?: () => Promise<void>,
+  outcome?: string,
 ): Promise<void> {
-  const source = await portCentreOf(page, from, 'source');
+  const source = await portCentreOf(page, from, 'source', outcome);
   const target = await portCentreOf(page, to, 'target');
   await page.mouse.move(source.x, source.y);
   await page.mouse.down();
@@ -177,8 +204,9 @@ export function connectNodes(
   from: number,
   to: number,
   inspect?: () => Promise<void>,
+  outcome?: string,
 ): Promise<void> {
-  return connectRefs(page, { index: from }, { index: to }, inspect);
+  return connectRefs(page, { index: from }, { index: to }, inspect, outcome);
 }
 
 /** `connectNodes`, for a seeded doc where the endpoints are named by id. */
@@ -187,8 +215,9 @@ export function connectById(
   from: string,
   to: string,
   inspect?: () => Promise<void>,
+  outcome?: string,
 ): Promise<void> {
-  return connectRefs(page, { id: from }, { id: to }, inspect);
+  return connectRefs(page, { id: from }, { id: to }, inspect, outcome);
 }
 
 /**

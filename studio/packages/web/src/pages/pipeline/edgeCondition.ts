@@ -1,10 +1,5 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
-import {
-  conditionLabel,
-  declaredConditionsOf,
-  encodeCondition,
-  TARGET_PORT_ID,
-} from './ports';
+import { conditionLabel, declaredConditionsOf, encodeCondition, TARGET_PORT_ID } from './ports';
 import {
   declaredBranchesOf,
   EdgeOnSchema,
@@ -36,7 +31,6 @@ export {
  * business one: the two fields are one decision, made once.
  */
 export type EdgeCondition = { on: EdgeOn } | { on: 'branch'; branch: string };
-
 
 /** The condition carried by an existing edge. */
 export function conditionOf(e: Edge): EdgeCondition {
