@@ -6,6 +6,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import {
+  HISTORY_LIMIT,
   assignContainerChild,
   buildContainer,
   createCanvasStore,
@@ -1744,5 +1745,230 @@ describe('canvasStore — back-edges (U6e)', () => {
     );
     const persisted = body.edges.find((e) => e.from === 'n_b');
     expect(persisted).toMatchObject({ back: true, maxBounces: DEFAULT_MAX_BOUNCES });
+  });
+});
+
+describe('canvasStore — undo/redo (U17)', () => {
+  /** A store opened on `version()`: two nodes, one edge, clean. */
+  function opened() {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    return s;
+  }
+
+  it('undo reverses an add, redo re-applies it', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    expect(s.getState().nodes).toHaveLength(3);
+
+    s.getState().undo();
+    expect(s.getState().nodes).toHaveLength(2);
+
+    s.getState().redo();
+    expect(s.getState().nodes).toHaveLength(3);
+  });
+
+  it('undo reverses a delete, restoring the node AND its cascaded edges', () => {
+    const s = opened();
+    s.getState().deleteNode('n_a');
+    expect(s.getState().nodes).toHaveLength(1);
+    expect(s.getState().edges).toHaveLength(0);
+
+    s.getState().undo();
+    expect(s.getState().nodes.map((n) => n.id)).toEqual(['n_a', 'n_b']);
+    expect(s.getState().edges.map((e) => e.id)).toEqual(['e_1']);
+  });
+
+  it('undo reverses a move — the position the node had before the drag', () => {
+    const s = opened();
+    s.getState().moveNode('n_a', { x: 500, y: 600 });
+    s.getState().undo();
+    expect(s.getState().nodes.find((n) => n.id === 'n_a')?.position).toEqual({ x: 10, y: 20 });
+  });
+
+  it('undo reverses a container edit, and its membership write', () => {
+    const s = opened();
+    const built = buildContainer('stage', 'n_a', {});
+    s.getState().createContainer(built.container!);
+    expect(s.getState().containers).toHaveLength(1);
+
+    s.getState().setNodeContainer('n_b', built.container!.id);
+    expect(s.getState().containers[0]!.children).toEqual(['n_a', 'n_b']);
+
+    s.getState().undo();
+    expect(s.getState().containers[0]!.children).toEqual(['n_a']);
+
+    s.getState().undo();
+    expect(s.getState().containers).toEqual([]);
+  });
+
+  it('undo reverses params and outputs', () => {
+    const s = opened();
+    s.getState().addParam();
+    s.getState().addOutput();
+    expect(s.getState().params).toHaveLength(1);
+    expect(s.getState().outputs).toHaveLength(1);
+
+    s.getState().undo();
+    expect(s.getState().outputs).toEqual([]);
+    expect(s.getState().params).toHaveLength(1);
+
+    s.getState().undo();
+    expect(s.getState().params).toEqual([]);
+  });
+
+  it('an undo that reaches the load point reports the canvas CLEAN again', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    expect(s.getState().dirty).toBe(true);
+
+    s.getState().undo();
+    expect(s.getState().dirty).toBe(false);
+
+    s.getState().redo();
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  it('a REFUSED action records no history — undo reaches past it to the last real edit', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    const afterAdd = s.getState().nodes.length;
+
+    // Refused: a self-loop is not a connectable candidate.
+    s.getState().connect('n_a', 'n_a', { on: 'success' });
+    // Refused: an index no param row holds.
+    s.getState().removeParam(7);
+    expect(s.getState().nodes).toHaveLength(afterAdd);
+
+    // One undo, not three — the two refusals consumed no slot.
+    s.getState().undo();
+    expect(s.getState().nodes).toHaveLength(2);
+    expect(s.getState().past).toHaveLength(0);
+  });
+
+  it('a move that lands back on its own origin consumes no undo slot', () => {
+    const s = opened();
+    s.getState().moveNode('n_a', { x: 10, y: 20 });
+    expect(s.getState().past).toHaveLength(0);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('a burst of edits to ONE param row coalesces into a single undo', () => {
+    const s = opened();
+    s.getState().addParam();
+    const row = s.getState().params[0]!;
+    // What typing a name into the param row actually does — one write per key.
+    for (const name of ['c', 'cu', 'cus', 'cust']) {
+      s.getState().updateParam(0, { ...row, name });
+    }
+    expect(s.getState().params[0]!.name).toBe('cust');
+
+    s.getState().undo();
+    // Back to the blank row the add minted, NOT to 'cus'.
+    expect(s.getState().params[0]!.name).toBe(row.name);
+  });
+
+  it('coalescing is per ROW — editing a second param starts a new undo entry', () => {
+    const s = opened();
+    s.getState().addParam();
+    s.getState().addParam();
+    const first = s.getState().params[0]!;
+    const second = s.getState().params[1]!;
+    s.getState().updateParam(0, { ...first, name: 'aa' });
+    s.getState().updateParam(1, { ...second, name: 'bb' });
+
+    s.getState().undo();
+    expect(s.getState().params[1]!.name).not.toBe('bb');
+    expect(s.getState().params[0]!.name).toBe('aa');
+  });
+
+  it('a new edit clears the redo stack', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    s.getState().undo();
+    expect(s.getState().future).toHaveLength(1);
+
+    s.getState().addNode('llm_call');
+    expect(s.getState().future).toHaveLength(0);
+    s.getState().redo();
+    expect(s.getState().nodes).toHaveLength(3);
+  });
+
+  it('undo and redo on an empty stack are no-ops', () => {
+    const s = opened();
+    const before = s.getState().nodes;
+    s.getState().undo();
+    s.getState().redo();
+    expect(s.getState().nodes).toBe(before);
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('loadVersion clears both stacks — a different document is not undoable', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    s.getState().undo();
+    expect(s.getState().past).toHaveLength(0);
+    expect(s.getState().future).toHaveLength(1);
+
+    s.getState().loadVersion(version({ id: 'plv_2', version: 2 }));
+    expect(s.getState().past).toEqual([]);
+    expect(s.getState().future).toEqual([]);
+  });
+
+  it('the history is bounded — the oldest entry is dropped, never the newest', () => {
+    const s = opened();
+    for (let i = 0; i < HISTORY_LIMIT + 10; i += 1) {
+      s.getState().moveNode('n_a', { x: i + 1, y: 0 });
+    }
+    expect(s.getState().past).toHaveLength(HISTORY_LIMIT);
+
+    s.getState().undo();
+    // The NEWEST entry survived: undo steps back exactly one move.
+    expect(s.getState().nodes.find((n) => n.id === 'n_a')?.position).toEqual({
+      x: HISTORY_LIMIT + 9,
+      y: 0,
+    });
+  });
+
+  it('an undo that removes the selected node clears the selection', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    const added = s.getState().nodes[2]!;
+    s.getState().select({ kind: 'node', id: added.id });
+
+    s.getState().undo();
+    expect(s.getState().selected).toBeNull();
+  });
+
+  it('an undo that leaves the selected node alone keeps the selection', () => {
+    const s = opened();
+    s.getState().select({ kind: 'node', id: 'n_b' });
+    s.getState().moveNode('n_a', { x: 500, y: 600 });
+
+    s.getState().undo();
+    expect(s.getState().selected).toEqual({ kind: 'node', id: 'n_b' });
+  });
+
+  it('an undo across a rebase reports DIRTY, because the basis moved under it', () => {
+    const s = opened();
+    s.getState().addNode('http_request');
+    // What a save does when the operator kept editing during the request.
+    s.getState().rebaseLoaded(version({ id: 'plv_2', version: 2 }));
+
+    s.getState().undo();
+    // The snapshot recorded `dirty: false` against plv_1 — but `loaded` is plv_2
+    // now, so the restored graph is NOT what the server holds.
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  it('a snapshot shares structure with the live state rather than cloning it', () => {
+    const s = opened();
+    const nodesBefore = s.getState().nodes;
+    s.getState().addParam();
+    // The params edit did not touch `nodes`, and the snapshot holds the SAME
+    // array — `docUnchanged`'s reference-equality save-race check depends on a
+    // store action being the only thing that mints a fresh array.
+    expect(s.getState().past[0]!.nodes).toBe(nodesBefore);
+    expect(s.getState().nodes).toBe(nodesBefore);
   });
 });

@@ -300,6 +300,107 @@ export function buildContainer(
   return { container: parsed.data };
 }
 
+/**
+ * U17 — how many undo steps the canvas keeps.
+ *
+ * A cap, not a budget: a snapshot is six references (see `snapshotOf`), so the
+ * cost of a deep stack is negligible and this number is about not growing
+ * without bound over a long authoring session. When the cap is reached the
+ * OLDEST entry is dropped, which means a session with more than this many edits
+ * can no longer undo all the way back to the state it opened on — the newest
+ * steps, which are the ones an operator reaches for, always survive.
+ */
+export const HISTORY_LIMIT = 50;
+
+/**
+ * U17 — one point in the canvas's edit history.
+ *
+ * DELIBERATELY NOT A COPY. It takes the five doc arrays by reference, because
+ * every store action is copy-on-write at both levels (`map`/`filter` mint a new
+ * array, `{ ...n }` a new element), so nothing reachable from a snapshot is ever
+ * mutated in place. The deep copies in `loadVersion` exist for a different
+ * reason entirely — to stop the store writing THROUGH into the server's
+ * `PipelineVersion`, which it does not own — and a snapshot never touches that
+ * object.
+ *
+ * Cloning here would be actively wrong, not merely wasteful: `docUnchanged`
+ * (`versionHistory.ts`) decides the save race by REFERENCE equality, on the
+ * documented rule that a fresh array means a store action minted one. A
+ * `structuredClone` per keystroke would mint fresh arrays for edits that changed
+ * nothing else, and break that check.
+ *
+ * `dirty` and `loadedId` ride along because undo has to restore the SAVED-ness
+ * of the doc, not just its shape — see `restoreFrom`.
+ */
+interface CanvasDocSnapshot {
+  nodes: Node[];
+  edges: Edge[];
+  containers: Container[];
+  params: Param[];
+  outputs: Output[];
+  dirty: boolean;
+  /** The id of the version this doc was last reconciled against, or `null`. */
+  loadedId: string | null;
+}
+
+function snapshotOf(s: CanvasState): CanvasDocSnapshot {
+  return {
+    nodes: s.nodes,
+    edges: s.edges,
+    containers: s.containers,
+    params: s.params,
+    outputs: s.outputs,
+    dirty: s.dirty,
+    loadedId: s.loaded?.id ?? null,
+  };
+}
+
+/** A row index an action can actually address — see the U17 note on no-op edits. */
+function inRange(index: number, length: number): boolean {
+  return Number.isInteger(index) && index >= 0 && index < length;
+}
+
+/**
+ * The patch that puts `snap` back on screen.
+ *
+ * Two things it does beyond replacing the five arrays:
+ *
+ * `dirty` is the snapshot's OR "the basis moved". Restoring the recorded flag
+ * alone would lie across a `rebaseLoaded`: save v1, keep editing, the save
+ * lands and re-points `loaded` at v2 — now a snapshot taken before the save
+ * records `dirty: false` against v1, and undoing to it would report a canvas
+ * that matches the server when it does not. `dirty` gates the restore-version
+ * discard warning and the unsaved-changes hint, so under-reporting it is the
+ * unsafe direction; comparing `loadedId` can only ever over-report.
+ *
+ * The selection is PRUNED, not restored. Undoing an add removes the node the
+ * operator may have selected, and a selection pointing at a node that is no
+ * longer in the doc is the stale-selection trap #737 documents. Restoring the
+ * selection the snapshot was taken under is the other option and is deliberately
+ * not taken — a selection is not an edit, so undo moving it would be a second,
+ * unasked-for effect.
+ */
+function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasState> {
+  const sel = s.selected;
+  const survives =
+    sel === null
+      ? false
+      : sel.kind === 'node'
+        ? snap.nodes.some((n) => n.id === sel.id)
+        : sel.kind === 'edge'
+          ? snap.edges.some((e) => e.id === sel.id)
+          : snap.containers.some((c) => c.id === sel.id);
+  return {
+    nodes: snap.nodes,
+    edges: snap.edges,
+    containers: snap.containers,
+    params: snap.params,
+    outputs: snap.outputs,
+    dirty: snap.dirty || snap.loadedId !== (s.loaded?.id ?? null),
+    selected: survives ? sel : null,
+  };
+}
+
 export interface CanvasState {
   /**
    * The immutable version the canvas was opened on (`null` = a brand-new
@@ -350,6 +451,17 @@ export interface CanvasState {
    * add for a reason the operator cannot see.
    */
   addCount: number;
+  /**
+   * U17 — the edit history, oldest first. `past[past.length - 1]` is the doc as
+   * it stood BEFORE the most recent edit, so one undo is one pop.
+   *
+   * Read `past.length > 0` / `future.length > 0` for the button states rather
+   * than storing a `canUndo` flag — two facts that can disagree are worse than
+   * one array anybody can count.
+   */
+  past: CanvasDocSnapshot[];
+  /** Undone snapshots, oldest first; cleared by any new edit. */
+  future: CanvasDocSnapshot[];
 
   loadVersion(v: PipelineVersion | null): void;
   /**
@@ -493,6 +605,20 @@ export interface CanvasState {
   updateOutput(index: number, next: Output): void;
   removeOutput(index: number): void;
   select(sel: Selection | null): void;
+  /**
+   * U17 — step back one edit. A no-op when there is nothing to undo.
+   *
+   * Snapshot-per-edit, NOT the spec row's literal "reversible-command store".
+   * An inverse command for `deleteNode` would have to re-derive the cascade it
+   * performed (incident edges, container membership, the selection) and
+   * `deleteContainer` its own different one — a third place the cascade rules
+   * are written, and the first place they could come to disagree with the two
+   * that already exist. A snapshot is six references and cannot disagree with
+   * anything.
+   */
+  undo(): void;
+  /** U17 — step forward one undone edit. A no-op when there is nothing to redo. */
+  redo(): void;
 }
 
 /**
@@ -507,470 +633,556 @@ export interface CanvasState {
  * endpoint that resolves to neither (#786).
  */
 export function createCanvasStore(): StoreApi<CanvasState> {
-  return createStore<CanvasState>((set, get) => ({
-    loaded: null,
-    nodes: [],
-    edges: [],
-    containers: [],
-    params: [],
-    outputs: [],
-    selected: null,
-    dirty: false,
-    addCount: 0,
-
-    loadVersion(v) {
-      // Built ONCE rather than per edge, and from `connectRules`' own helper so
-      // the set the load filter trusts is the SAME set `connect` refuses an
-      // unknown endpoint against — see `edgeEndpointIds` for why containers
-      // belong in it.
-      const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
-      set({
-        // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
-        // basis and the carry-forward source for the parts of the doc this slice
-        // has no UI for; only the WORKING graph below is lowered.
-        loaded: v,
-        // #526 (F13b follow-up) — LOWER on load, with the same composition the
-        // server applies on write. A version created BEFORE F13b persisted its
-        // known-type nodes with `config.outputs` ABSENT, and versions are
-        // immutable, so that row can never be repaired in place. Loading it raw
-        // showed the author an empty contract: `validateRefs` name-checked
-        // nothing and the badges/output pills disagreed with what the server
-        // WILL store the moment they save. Lowering here makes the canvas show
-        // the contract that save will mint. It deliberately does NOT set
-        // `dirty` — this is a display fix, not an author edit, and marking every
-        // legacy pipeline dirty on open would prompt a save nobody made.
-        //
-        // Deep-ish copy: fresh arrays with fresh node/edge objects so editing
-        // the working graph never mutates the loaded version in place. Still
-        // load-bearing after the lowering — `lowerPipelineNodes` is
-        // copy-on-write and hands back an unchanged node BY REFERENCE.
-        nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
-        // #786 — DROP an edge whose endpoint resolves to nothing, for the same
-        // reason as the lowering above: the row is immutable, so it can never be
-        // repaired in place, and loading it raw makes the canvas disagree with
-        // what Save mints. Sharper here than a display mismatch, though — the
-        // #786 write-gate rule now REFUSES such a doc, and React Flow silently
-        // drops an edge whose endpoint is missing from its lookup, so an author
-        // opening a version minted before that rule would meet a red badge and a
-        // dead Save over an edge they can neither see, select nor delete: exactly
-        // the one-way trap #748 closed, re-created by the rule that closes the
-        // hole. Not authorable from here (`connect` refuses an unknown endpoint
-        // and both delete paths cascade), and the API and git-import routes are
-        // now closed by that same rule — so the ONLY remaining source is a row
-        // minted BEFORE it. A closed set that shrinks to nothing over time.
-        //
-        // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
-        // its docblock: a general normalise would hide `child 'Y' is not a node
-        // in this pipeline`, a real defect report about a doc that arrived
-        // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
-        // child's error names a container the author can see and — since #748 —
-        // delete, so surfacing it leads somewhere. A dangling edge is invisible
-        // and unselectable, so surfacing it leads nowhere and only blocks Save.
-        // Repair silently where the operator has no move; report where they do.
-        //
-        // The resolvable set is nodes UNION containers: a container id is a legal
-        // edge endpoint. Node ids alone would strip every container edge on load,
-        // and `toVersionBody` reads `edges` from the WORKING graph, so the next
-        // Save would mint that loss. Like the lowering, this deliberately does
-        // NOT set `dirty` — a reconciliation, not an author edit — and `loaded`
-        // keeps the server's doc verbatim as the record of what was stored.
-        edges: v
-          ? v.edges
-              .filter((e) => endpointIds.has(e.from) && endpointIds.has(e.to))
-              .map((e) => ({ ...e }))
-          : [],
-        // #746 — containers are seeded as WORKING state, and the copy goes one
-        // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
-        // into the SERVER's version object, which this store does not own and
-        // must never write through. (`children` is the only array or object
-        // field on `ContainerSchema`, so one level is the whole copy.) The prune
-        // below is copy-on-write, so the alias would be harmless today and a
-        // live hazard the moment anything edits membership IN PLACE — U6d does
-        // not (`assignContainerChild` is copy-on-write), so this stays a standing
-        // invariant rather than a bug waiting on U23 — latent sharing
-        // that is free to rule out here.
-        containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
-        // U16 — seeded as working state, and the copy is DEEPER than the
-        // containers copy above rather than a spread. `children` is a flat array
-        // of strings, so one level covers it; a param's `default` is
-        // `z.unknown()` and a `json` param's can nest arbitrarily, so `{ ...p }`
-        // would alias a live sub-object into the SERVER's version object, which
-        // this store does not own and must never write through.
-        //
-        // `structuredClone` is safe here specifically because the value arrived
-        // as parsed JSON over the wire — there is no function or class instance
-        // it could choke on.
-        params: v ? v.params.map((p) => structuredClone(p)) : [],
-        outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
-        selected: null,
-        dirty: false,
-        addCount: 0,
-      });
-    },
-
-    rebaseLoaded(v) {
-      set({ loaded: v });
-    },
-
-    addNode(type, position) {
-      if (!getActivity(type)) return; // unknown catalog type — ignore rather than author garbage
-      // A structural-call activity (`execute_pipeline`) stores its settings in
-      // `node.call`, not `node.config`, so this generic config-form path would
-      // author a call-less, un-saveable node. Refuse it (the toolbox also hides
-      // its entry, and the drop path refuses the payload); call-node authoring is
-      // #425. Both guards run for a DROPPED node too — a position argument is
-      // placement, never a bypass.
-      if (isStructuralCallActivity(type)) return;
-      const n = get().addCount;
-      const created: Node = {
-        id: newLocalId('n'),
-        type,
-        config: {},
-        // COPIED, never aliased: the store owns its graph, and holding a
-        // caller's object would let that caller mutate a node's position from
-        // outside the actions — the single mutation point this store's doc
-        // claims. Otherwise, stagger so repeated adds don't stack exactly.
-        position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
-      };
-      // #526 — seed the declared output contract through the SAME composition the
-      // server and the load path use, rather than reaching into the catalog entry
-      // here. Hand-seeding worked, but it was a third place that had to agree
-      // about what a node's contract is; one function is what makes them unable
-      // to disagree. (The run-time SSOT remains the node's own `config.outputs`.)
-      const node = lowerPipelineNodes([created])[0]!;
-      set((s) => ({
-        nodes: [...s.nodes, node],
-        // Only a stagger consumes a slot — see the `addCount` doc.
-        addCount: position ? s.addCount : s.addCount + 1,
-        dirty: true,
-      }));
-    },
-
-    moveNode(id, position) {
-      if (!get().nodes.some((n) => n.id === id)) return;
-      set((s) => ({
-        nodes: s.nodes.map((n) => (n.id === id ? { ...n, position } : n)),
-        dirty: true,
-      }));
-    },
-
-    deleteNode(id) {
-      if (!get().nodes.some((n) => n.id === id)) return;
-      set((s) => {
-        const removedEdgeIds = new Set(
-          s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
-        );
-        const selected =
-          sameSelection(s.selected, { kind: 'node', id }) ||
-          (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id))
-            ? null
-            : s.selected;
-        return {
-          nodes: s.nodes.filter((n) => n.id !== id),
-          edges: s.edges.filter((e) => e.from !== id && e.to !== id),
-          // #746 — container membership cascades exactly like the incident
-          // edges above. A container listing a node that no longer exists is a
-          // doc `validatePipelineDoc` refuses, so leaving the id behind made the
-          // canvas unsavable with nothing on screen able to repair it.
-          //
-          // A container that loses its LAST child is KEPT, not deleted with it.
-          // Deleting one is a structure write that also owns its incident edges
-          // and its exitWhen/items/maxRounds/timeout config, none of it
-          // re-authorable on the canvas until U23/#839 — so a cascade destroys
-          // authored structure the operator cannot get back.
-          //
-          // That reasoning is SYMMETRIC, which is why keeping the container was
-          // only half an answer: an emptied container was ALSO unrecoverable,
-          // just quieter — an empty `stage` validates clean and saved itself into
-          // an immutable version forever, and an empty `loop`/`foreach` blocked
-          // every save with no way out but a reload.
-          //
-          // #748 closed that: `deleteContainer` is the affordance, so keeping the
-          // container here is now a genuine choice (the operator decides whether
-          // the box goes) rather than the only thing the canvas could do. The
-          // fix was the affordance, not a better default here — this default is
-          // unchanged.
-          containers: pruneContainerChild(s.containers, id),
-          selected,
-          dirty: true,
-        };
-      });
-    },
+  return createStore<CanvasState>((set, get) => {
+    /**
+     * U17 — the key of the burst currently being coalesced, or `null`.
+     *
+     * A closure variable rather than store state because nothing renders it and
+     * it is not part of the doc. Reset by `loadVersion`, `undo` and `redo`, so a
+     * burst can never span one of those.
+     */
+    let coalescing: string | null = null;
 
     /**
-     * #748 — remove a container.
+     * The ONE place the working doc changes, and therefore the one place history
+     * is recorded. Every mutating action ends here; every refusal returns before
+     * it, which is what keeps a refused action from consuming an undo slot (a
+     * dead undo press is the commonest way an undo feature loses trust).
      *
-     * Deliberately NOT symmetric with `deleteNode`'s membership prune, in the one
-     * way that matters: the CHILDREN survive. A container's children are real
-     * authored activities that merely sit inside it, so removing the box
-     * un-groups them (they run at the top level, which the reducer already
-     * handles — nothing assumes universal container membership). Cascading them
-     * would make this action a worse trap than the one it exists to end, since an
-     * activity's config is no more re-authorable than a container's.
+     * `coalesceKey` folds a BURST of writes into one undo step. It is not an
+     * optimisation — without it undo is unusable. A param name field writes
+     * straight through to the store on every keystroke (`PipelineCanvas`, the
+     * `default` field is the only control that does not), so typing one
+     * identifier would push a dozen entries and two of them would evict every
+     * structural edit from a 50-deep stack. While the key is unchanged the push
+     * is SKIPPED rather than replaced: the entry already on top of `past` is the
+     * doc as it stood before the burst began, which is exactly where one undo
+     * should land.
      *
-     * What IS cascaded is the incident edges, matched exactly as `deleteNode`
-     * matches them: a container id is a legal `from`/`to` (one string field
-     * shared with nodes), so an edge left naming a deleted container is a
-     * dangling ref — the same unsavable doc, with nothing on screen able to
-     * repair it, that #746 was filed about.
-     *
-     * The container's own `exitWhen`/`items`/`maxRounds`/`timeout` IS lost, and
-     * there is no undo. That is why the canvas confirms before calling this, and
-     * why the confirmation names what goes and what stays.
+     * The key is per ROW (`param:0`), so moving to another field starts a new
+     * step. Nothing coalesces across an edit of a different kind.
      */
-    deleteContainer(id) {
-      if (!get().containers.some((c) => c.id === id)) return;
-      set((s) => {
-        const next = cascadeDeleteContainer(s, id);
-        const kept = new Set(next.edges.map((e) => e.id));
-        const removedEdgeIds = new Set(s.edges.filter((e) => !kept.has(e.id)).map((e) => e.id));
-        return {
-          containers: next.containers,
-          edges: next.edges,
-          // Two ways to strand a selection here: an EDGE the cascade removed,
-          // and — since U23 — the deleted CONTAINER itself. RF drives neither
-          // clear (it never sees a container at all, and the edge is gone
-          // before it could emit a deselect), so both are this action's job.
-          selected:
-            (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id)) ||
-            (s.selected?.kind === 'container' && s.selected.id === id)
+    const edit = (
+      updater: (s: CanvasState) => Partial<CanvasState>,
+      coalesceKey?: string,
+    ): void => {
+      const key = coalesceKey ?? null;
+      const continues = key !== null && key === coalescing;
+      coalescing = key;
+      set((s) => ({
+        ...updater(s),
+        dirty: true,
+        // Drop the OLDEST when the cap is reached — see `HISTORY_LIMIT`.
+        past: continues ? s.past : [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+        // Any new edit forks the history: what was undone is no longer reachable.
+        future: [],
+      }));
+    };
+
+    return {
+      loaded: null,
+      nodes: [],
+      edges: [],
+      containers: [],
+      params: [],
+      outputs: [],
+      selected: null,
+      dirty: false,
+      addCount: 0,
+      past: [],
+      future: [],
+
+      loadVersion(v) {
+        // U17 — opening a document is not an edit of the one that was open, so
+        // the history does not survive it. (`rebaseLoaded` deliberately does keep
+        // it: that re-points the basis WITHOUT touching the working graph, so
+        // every recorded step is still a step of the doc on screen.)
+        coalescing = null;
+        // Built ONCE rather than per edge, and from `connectRules`' own helper so
+        // the set the load filter trusts is the SAME set `connect` refuses an
+        // unknown endpoint against — see `edgeEndpointIds` for why containers
+        // belong in it.
+        const endpointIds = v ? edgeEndpointIds(v.nodes, v.containers) : new Set<string>();
+        set({
+          // #526 — `loaded` keeps the SERVER's doc, un-lowered. It is the rebase
+          // basis and the carry-forward source for the parts of the doc this slice
+          // has no UI for; only the WORKING graph below is lowered.
+          loaded: v,
+          // #526 (F13b follow-up) — LOWER on load, with the same composition the
+          // server applies on write. A version created BEFORE F13b persisted its
+          // known-type nodes with `config.outputs` ABSENT, and versions are
+          // immutable, so that row can never be repaired in place. Loading it raw
+          // showed the author an empty contract: `validateRefs` name-checked
+          // nothing and the badges/output pills disagreed with what the server
+          // WILL store the moment they save. Lowering here makes the canvas show
+          // the contract that save will mint. It deliberately does NOT set
+          // `dirty` — this is a display fix, not an author edit, and marking every
+          // legacy pipeline dirty on open would prompt a save nobody made.
+          //
+          // Deep-ish copy: fresh arrays with fresh node/edge objects so editing
+          // the working graph never mutates the loaded version in place. Still
+          // load-bearing after the lowering — `lowerPipelineNodes` is
+          // copy-on-write and hands back an unchanged node BY REFERENCE.
+          nodes: v ? lowerPipelineNodes(v.nodes).map((n) => ({ ...n })) : [],
+          // #786 — DROP an edge whose endpoint resolves to nothing, for the same
+          // reason as the lowering above: the row is immutable, so it can never be
+          // repaired in place, and loading it raw makes the canvas disagree with
+          // what Save mints. Sharper here than a display mismatch, though — the
+          // #786 write-gate rule now REFUSES such a doc, and React Flow silently
+          // drops an edge whose endpoint is missing from its lookup, so an author
+          // opening a version minted before that rule would meet a red badge and a
+          // dead Save over an edge they can neither see, select nor delete: exactly
+          // the one-way trap #748 closed, re-created by the rule that closes the
+          // hole. Not authorable from here (`connect` refuses an unknown endpoint
+          // and both delete paths cascade), and the API and git-import routes are
+          // now closed by that same rule — so the ONLY remaining source is a row
+          // minted BEFORE it. A closed set that shrinks to nothing over time.
+          //
+          // This is deliberately the OPPOSITE call to `pruneContainerChild`'s (see
+          // its docblock: a general normalise would hide `child 'Y' is not a node
+          // in this pipeline`, a real defect report about a doc that arrived
+          // broken). The asymmetry is the AFFORDANCE, not the principle: a dangling
+          // child's error names a container the author can see and — since #748 —
+          // delete, so surfacing it leads somewhere. A dangling edge is invisible
+          // and unselectable, so surfacing it leads nowhere and only blocks Save.
+          // Repair silently where the operator has no move; report where they do.
+          //
+          // The resolvable set is nodes UNION containers: a container id is a legal
+          // edge endpoint. Node ids alone would strip every container edge on load,
+          // and `toVersionBody` reads `edges` from the WORKING graph, so the next
+          // Save would mint that loss. Like the lowering, this deliberately does
+          // NOT set `dirty` — a reconciliation, not an author edit — and `loaded`
+          // keeps the server's doc verbatim as the record of what was stored.
+          edges: v
+            ? v.edges
+                .filter((e) => endpointIds.has(e.from) && endpointIds.has(e.to))
+                .map((e) => ({ ...e }))
+            : [],
+          // #746 — containers are seeded as WORKING state, and the copy goes one
+          // level deeper than the spread: `{...c}` alone would ALIAS `c.children`
+          // into the SERVER's version object, which this store does not own and
+          // must never write through. (`children` is the only array or object
+          // field on `ContainerSchema`, so one level is the whole copy.) The prune
+          // below is copy-on-write, so the alias would be harmless today and a
+          // live hazard the moment anything edits membership IN PLACE — U6d does
+          // not (`assignContainerChild` is copy-on-write), so this stays a standing
+          // invariant rather than a bug waiting on U23 — latent sharing
+          // that is free to rule out here.
+          containers: v ? v.containers.map((c) => ({ ...c, children: [...c.children] })) : [],
+          // U16 — seeded as working state, and the copy is DEEPER than the
+          // containers copy above rather than a spread. `children` is a flat array
+          // of strings, so one level covers it; a param's `default` is
+          // `z.unknown()` and a `json` param's can nest arbitrarily, so `{ ...p }`
+          // would alias a live sub-object into the SERVER's version object, which
+          // this store does not own and must never write through.
+          //
+          // `structuredClone` is safe here specifically because the value arrived
+          // as parsed JSON over the wire — there is no function or class instance
+          // it could choke on.
+          params: v ? v.params.map((p) => structuredClone(p)) : [],
+          outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
+          selected: null,
+          dirty: false,
+          addCount: 0,
+          past: [],
+          future: [],
+        });
+      },
+
+      rebaseLoaded(v) {
+        set({ loaded: v });
+      },
+
+      addNode(type, position) {
+        if (!getActivity(type)) return; // unknown catalog type — ignore rather than author garbage
+        // A structural-call activity (`execute_pipeline`) stores its settings in
+        // `node.call`, not `node.config`, so this generic config-form path would
+        // author a call-less, un-saveable node. Refuse it (the toolbox also hides
+        // its entry, and the drop path refuses the payload); call-node authoring is
+        // #425. Both guards run for a DROPPED node too — a position argument is
+        // placement, never a bypass.
+        if (isStructuralCallActivity(type)) return;
+        const n = get().addCount;
+        const created: Node = {
+          id: newLocalId('n'),
+          type,
+          config: {},
+          // COPIED, never aliased: the store owns its graph, and holding a
+          // caller's object would let that caller mutate a node's position from
+          // outside the actions — the single mutation point this store's doc
+          // claims. Otherwise, stagger so repeated adds don't stack exactly.
+          position: position ? { ...position } : { x: 80 + (n % 5) * 40, y: 80 + (n % 5) * 40 },
+        };
+        // #526 — seed the declared output contract through the SAME composition the
+        // server and the load path use, rather than reaching into the catalog entry
+        // here. Hand-seeding worked, but it was a third place that had to agree
+        // about what a node's contract is; one function is what makes them unable
+        // to disagree. (The run-time SSOT remains the node's own `config.outputs`.)
+        const node = lowerPipelineNodes([created])[0]!;
+        edit((s) => ({
+          nodes: [...s.nodes, node],
+          // Only a stagger consumes a slot — see the `addCount` doc.
+          addCount: position ? s.addCount : s.addCount + 1,
+        }));
+      },
+
+      moveNode(id, position) {
+        const current = get().nodes.find((n) => n.id === id);
+        if (current === undefined) return;
+        // A drag that lands back where it started is not an edit — `setNodeContainer`'s
+        // rule, for its reason, plus one U17 adds: a no-op that records history is a
+        // dead undo press, and a drag returning to its own origin is the easiest one
+        // to perform by accident.
+        if (current.position.x === position.x && current.position.y === position.y) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => (n.id === id ? { ...n, position } : n)),
+        }));
+      },
+
+      deleteNode(id) {
+        if (!get().nodes.some((n) => n.id === id)) return;
+        edit((s) => {
+          const removedEdgeIds = new Set(
+            s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
+          );
+          const selected =
+            sameSelection(s.selected, { kind: 'node', id }) ||
+            (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id))
               ? null
-              : s.selected,
-          dirty: true,
+              : s.selected;
+          return {
+            nodes: s.nodes.filter((n) => n.id !== id),
+            edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+            // #746 — container membership cascades exactly like the incident
+            // edges above. A container listing a node that no longer exists is a
+            // doc `validatePipelineDoc` refuses, so leaving the id behind made the
+            // canvas unsavable with nothing on screen able to repair it.
+            //
+            // A container that loses its LAST child is KEPT, not deleted with it.
+            // Deleting one is a structure write that also owns its incident edges
+            // and its exitWhen/items/maxRounds/timeout config, none of it
+            // re-authorable on the canvas until U23/#839 — so a cascade destroys
+            // authored structure the operator cannot get back.
+            //
+            // That reasoning is SYMMETRIC, which is why keeping the container was
+            // only half an answer: an emptied container was ALSO unrecoverable,
+            // just quieter — an empty `stage` validates clean and saved itself into
+            // an immutable version forever, and an empty `loop`/`foreach` blocked
+            // every save with no way out but a reload.
+            //
+            // #748 closed that: `deleteContainer` is the affordance, so keeping the
+            // container here is now a genuine choice (the operator decides whether
+            // the box goes) rather than the only thing the canvas could do. The
+            // fix was the affordance, not a better default here — this default is
+            // unchanged.
+            containers: pruneContainerChild(s.containers, id),
+            selected,
+          };
+        });
+      },
+
+      /**
+       * #748 — remove a container.
+       *
+       * Deliberately NOT symmetric with `deleteNode`'s membership prune, in the one
+       * way that matters: the CHILDREN survive. A container's children are real
+       * authored activities that merely sit inside it, so removing the box
+       * un-groups them (they run at the top level, which the reducer already
+       * handles — nothing assumes universal container membership). Cascading them
+       * would make this action a worse trap than the one it exists to end, since an
+       * activity's config is no more re-authorable than a container's.
+       *
+       * What IS cascaded is the incident edges, matched exactly as `deleteNode`
+       * matches them: a container id is a legal `from`/`to` (one string field
+       * shared with nodes), so an edge left naming a deleted container is a
+       * dangling ref — the same unsavable doc, with nothing on screen able to
+       * repair it, that #746 was filed about.
+       *
+       * The container's own `exitWhen`/`items`/`maxRounds`/`timeout` IS lost, and
+       * there is no undo. That is why the canvas confirms before calling this, and
+       * why the confirmation names what goes and what stays.
+       */
+      deleteContainer(id) {
+        if (!get().containers.some((c) => c.id === id)) return;
+        edit((s) => {
+          const next = cascadeDeleteContainer(s, id);
+          const kept = new Set(next.edges.map((e) => e.id));
+          const removedEdgeIds = new Set(s.edges.filter((e) => !kept.has(e.id)).map((e) => e.id));
+          return {
+            containers: next.containers,
+            edges: next.edges,
+            // Two ways to strand a selection here: an EDGE the cascade removed,
+            // and — since U23 — the deleted CONTAINER itself. RF drives neither
+            // clear (it never sees a container at all, and the edge is gone
+            // before it could emit a deselect), so both are this action's job.
+            selected:
+              (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id)) ||
+              (s.selected?.kind === 'container' && s.selected.id === id)
+                ? null
+                : s.selected,
+          };
+        });
+      },
+
+      createContainer(container) {
+        const parsed = ContainerSchema.safeParse(container);
+        if (!parsed.success) return;
+        const c = parsed.data;
+        const s = get();
+        // One namespace for node and container ids (`validateDoc` says so), so a
+        // collision check has to look at both.
+        if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
+        // Never born empty: an empty `loop`/`foreach` is a doc `validateDoc`
+        // refuses, and an empty `stage` validates clean and mints itself into an
+        // immutable version forever — the two halves of #748's trap.
+        if (c.children.length === 0) return;
+        // A container whose children are not current nodes is the phantom-child
+        // doc #746 was filed about, authored fresh instead of left behind.
+        if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;
+        edit((st) => ({ containers: containersWithNew(st.containers, c) }));
+      },
+
+      setNodeContainer(nodeId, containerId) {
+        const s = get();
+        if (!s.nodes.some((n) => n.id === nodeId)) return;
+        if (containerId !== null && !s.containers.some((c) => c.id === containerId)) return;
+        const next = assignContainerChild(s.containers, nodeId, containerId);
+        // Re-picking the container a node is already in must not mark the canvas
+        // dirty — an unchanged graph that reports itself as edited is how a "you
+        // have unsaved changes" prompt loses the operator's trust.
+        if (next === s.containers) return;
+        edit(() => ({ containers: next }));
+      },
+
+      updateContainer(id, next) {
+        const s = get();
+        const current = s.containers.find((c) => c.id === id);
+        if (current === undefined) return;
+        // `id`, `kind` and `children` are structural, not config — see the note.
+        if (next.id !== id) return;
+        if (next.kind !== current.kind) return;
+        // Vacuous for `ContainerPanel`, and deliberately kept anyway: its
+        // `assembleConfig` shallow-copies, so `next.children` IS `current.children`
+        // and this can never fire from there. It guards the seam, not that caller.
+        // (The sharing is harmless — every writer here is copy-on-write and nothing
+        // mutates a children array in place — but it is the shape `loadVersion`'s
+        // deep copy exists to keep away from `loaded`, so: no in-place membership
+        // edits, ever.)
+        if (
+          next.children.length !== current.children.length ||
+          next.children.some((ch, i) => ch !== current.children[i])
+        ) {
+          return;
+        }
+        if (!ContainerSchema.safeParse(next).success) return;
+        // Pressing Apply without typing must not mark the canvas dirty.
+        if (sameContainerConfig(current, next)) return;
+        edit((st) => ({ containers: containersWithUpdated(st.containers, next) }));
+      },
+
+      /**
+       * Append an edge, or refuse it.
+       *
+       * The refusal rules are NOT written here any more: they are
+       * `connectRejection`, the same predicate the canvas measures a connection
+       * DRAG against (U6b), so the gesture React Flow refuses and the call this
+       * store refuses cannot come to disagree. This end stays the backstop for a
+       * caller that is not the canvas, and it is deliberately silent — the canvas
+       * is where a refusal is explained, because it is where the operator is.
+       *
+       * The forward-DAG rule is new here. It was previously left entirely to the
+       * save gate, so a cycle-closing edge could be drawn, seen, and only then
+       * refused by a validation badge.
+       *
+       * One other semantic widened with the move: an endpoint is now a node id OR a
+       * CONTAINER id, where this used to accept node ids only. Containers are legal
+       * edge endpoints in the doc model, so refusing them was the narrower rule; no
+       * current caller passes one (React Flow's ports are on nodes).
+       */
+      connect(from, to, condition, options) {
+        const back = options?.back === true;
+        const graph = {
+          nodes: get().nodes,
+          edges: get().edges,
+          containers: get().containers,
         };
-      });
-    },
-
-    createContainer(container) {
-      const parsed = ContainerSchema.safeParse(container);
-      if (!parsed.success) return;
-      const c = parsed.data;
-      const s = get();
-      // One namespace for node and container ids (`validateDoc` says so), so a
-      // collision check has to look at both.
-      if (s.nodes.some((n) => n.id === c.id) || s.containers.some((x) => x.id === c.id)) return;
-      // Never born empty: an empty `loop`/`foreach` is a doc `validateDoc`
-      // refuses, and an empty `stage` validates clean and mints itself into an
-      // immutable version forever — the two halves of #748's trap.
-      if (c.children.length === 0) return;
-      // A container whose children are not current nodes is the phantom-child
-      // doc #746 was filed about, authored fresh instead of left behind.
-      if (!c.children.every((ch) => s.nodes.some((n) => n.id === ch))) return;
-      set((st) => ({ containers: containersWithNew(st.containers, c), dirty: true }));
-    },
-
-    setNodeContainer(nodeId, containerId) {
-      const s = get();
-      if (!s.nodes.some((n) => n.id === nodeId)) return;
-      if (containerId !== null && !s.containers.some((c) => c.id === containerId)) return;
-      const next = assignContainerChild(s.containers, nodeId, containerId);
-      // Re-picking the container a node is already in must not mark the canvas
-      // dirty — an unchanged graph that reports itself as edited is how a "you
-      // have unsaved changes" prompt loses the operator's trust.
-      if (next === s.containers) return;
-      set({ containers: next, dirty: true });
-    },
-
-    updateContainer(id, next) {
-      const s = get();
-      const current = s.containers.find((c) => c.id === id);
-      if (current === undefined) return;
-      // `id`, `kind` and `children` are structural, not config — see the note.
-      if (next.id !== id) return;
-      if (next.kind !== current.kind) return;
-      // Vacuous for `ContainerPanel`, and deliberately kept anyway: its
-      // `assembleConfig` shallow-copies, so `next.children` IS `current.children`
-      // and this can never fire from there. It guards the seam, not that caller.
-      // (The sharing is harmless — every writer here is copy-on-write and nothing
-      // mutates a children array in place — but it is the shape `loadVersion`'s
-      // deep copy exists to keep away from `loaded`, so: no in-place membership
-      // edits, ever.)
-      if (
-        next.children.length !== current.children.length ||
-        next.children.some((ch, i) => ch !== current.children[i])
-      ) {
-        return;
-      }
-      if (!ContainerSchema.safeParse(next).success) return;
-      // Pressing Apply without typing must not mark the canvas dirty.
-      if (sameContainerConfig(current, next)) return;
-      set((st) => ({ containers: containersWithUpdated(st.containers, next), dirty: true }));
-    },
-
-    /**
-     * Append an edge, or refuse it.
-     *
-     * The refusal rules are NOT written here any more: they are
-     * `connectRejection`, the same predicate the canvas measures a connection
-     * DRAG against (U6b), so the gesture React Flow refuses and the call this
-     * store refuses cannot come to disagree. This end stays the backstop for a
-     * caller that is not the canvas, and it is deliberately silent — the canvas
-     * is where a refusal is explained, because it is where the operator is.
-     *
-     * The forward-DAG rule is new here. It was previously left entirely to the
-     * save gate, so a cycle-closing edge could be drawn, seen, and only then
-     * refused by a validation badge.
-     *
-     * One other semantic widened with the move: an endpoint is now a node id OR a
-     * CONTAINER id, where this used to accept node ids only. Containers are legal
-     * edge endpoints in the doc model, so refusing them was the narrower rule; no
-     * current caller passes one (React Flow's ports are on nodes).
-     */
-    connect(from, to, condition, options) {
-      const back = options?.back === true;
-      const graph = {
-        nodes: get().nodes,
-        edges: get().edges,
-        containers: get().containers,
-      };
-      /* The candidate is judged WITH its back-ness, so the rules that decide the
+        /* The candidate is judged WITH its back-ness, so the rules that decide the
          answer are the ones that apply to the edge actually being authored — a
          back-edge is exempt from the boundary and DAG rules and subject to its
          own three (`backEdgeDefect`). Judging the forward shape and authoring
          the back one is the mismatch `DRAWN_EDGE_CONDITION`'s docblock warns
          about, in its other axis. */
-      if (connectRejection(precomputeConnect(graph), { from, to, condition, back }) !== null) {
-        return;
-      }
-      /* `maxBounces` is authored HERE rather than left for the panel: the save
+        if (connectRejection(precomputeConnect(graph), { from, to, condition, back }) !== null) {
+          return;
+        }
+        /* `maxBounces` is authored HERE rather than left for the panel: the save
          gate refuses a back-edge without one, so a capless edge would be
          unsavable from the instant it appeared, with the operator's only clue a
          validation badge about an edge they just drew. The panel EDITS the cap;
          it does not have to supply it. */
-      const edge = {
-        id: newLocalId('e'),
-        from,
-        to,
-        ...condition,
-        ...(back ? { back: true, maxBounces: DEFAULT_MAX_BOUNCES } : {}),
-      } as Edge;
-      set((s) => ({ edges: [...s.edges, edge], dirty: true }));
-    },
+        const edge = {
+          id: newLocalId('e'),
+          from,
+          to,
+          ...condition,
+          ...(back ? { back: true, maxBounces: DEFAULT_MAX_BOUNCES } : {}),
+        } as Edge;
+        edit((s) => ({ edges: [...s.edges, edge] }));
+      },
 
-    updateEdgeBounces(id, maxBounces) {
-      if (!isMaxBounces(maxBounces)) return;
-      const current = get().edges.find((e) => e.id === id);
-      if (current === undefined || current.back !== true) return;
-      // Re-committing the cap it already holds must not mark the canvas dirty —
-      // `setNodeContainer`'s rule, for its reason: an unchanged graph that
-      // reports itself as edited is how a "you have unsaved changes" prompt
-      // loses the operator's trust. The panel's own guard is a STRING compare
-      // (`text === stored`), so `10.0`, ` 10` and `+10` over a stored `10` all
-      // reach here as a numerically identical write.
-      if (current.maxBounces === maxBounces) return;
-      set((s) => ({
-        edges: s.edges.map((e) => (e.id === id ? { ...e, maxBounces } : e)),
-        dirty: true,
-      }));
-    },
+      updateEdgeBounces(id, maxBounces) {
+        if (!isMaxBounces(maxBounces)) return;
+        const current = get().edges.find((e) => e.id === id);
+        if (current === undefined || current.back !== true) return;
+        // Re-committing the cap it already holds must not mark the canvas dirty —
+        // `setNodeContainer`'s rule, for its reason: an unchanged graph that
+        // reports itself as edited is how a "you have unsaved changes" prompt
+        // loses the operator's trust. The panel's own guard is a STRING compare
+        // (`text === stored`), so `10.0`, ` 10` and `+10` over a stored `10` all
+        // reach here as a numerically identical write.
+        if (current.maxBounces === maxBounces) return;
+        edit((s) => ({
+          edges: s.edges.map((e) => (e.id === id ? { ...e, maxBounces } : e)),
+        }));
+      },
 
-    deleteEdge(id) {
-      if (!get().edges.some((e) => e.id === id)) return;
-      set((s) => ({
-        edges: s.edges.filter((e) => e.id !== id),
-        selected: sameSelection(s.selected, { kind: 'edge', id }) ? null : s.selected,
-        dirty: true,
-      }));
-    },
+      deleteEdge(id) {
+        if (!get().edges.some((e) => e.id === id)) return;
+        edit((s) => ({
+          edges: s.edges.filter((e) => e.id !== id),
+          selected: sameSelection(s.selected, { kind: 'edge', id }) ? null : s.selected,
+        }));
+      },
 
-    /**
-     * Retype an edge, refusing a retype that would DUPLICATE another edge.
-     *
-     * `connect`'s dedupe is not enough on its own: retyping walks straight
-     * around it (connect A→B `success`, retype it to `skipped`, connect A→B
-     * `success` again, retype THAT to `skipped` → two byte-identical edges).
-     * Nothing downstream catches it — `validatePipelineDoc` has no duplicate-
-     * EDGE rule, its id-uniqueness check covers nodes and containers only — and
-     * the consequences are real: the two share one edge identity, so as
-     * back-edges they halve `maxBounces` and resolve each other's reset body,
-     * and on the canvas they stack as overlapping SVG paths neither of which
-     * can be clicked apart. U6a multiplies the reachable surface by every
-     * branch label a source declares, so the guard belongs here, not only in
-     * `connect`.
-     *
-     * A REFUSAL is right rather than a silent merge: the operator still has the
-     * edge they selected, and deleting one of two identical edges is a thing
-     * they can see and do. It is also not the operator's first warning —
-     * `EdgePanel` disables a condition another edge already holds, using the
-     * SAME `retypeCollides` predicate, so a refusal here is the backstop for a
-     * caller that is not the picker, not the UX.
-     */
-    updateEdgeCondition(id, condition) {
-      const current = get().edges.find((e) => e.id === id);
-      if (current === undefined) return;
-      const retyped = retypeEdge(current, condition);
-      if (retypeCollides(get().edges, current, retyped)) return;
-      set((s) => ({
-        edges: s.edges.map((e) => (e.id === id ? retyped : e)),
-        dirty: true,
-      }));
-    },
+      /**
+       * Retype an edge, refusing a retype that would DUPLICATE another edge.
+       *
+       * `connect`'s dedupe is not enough on its own: retyping walks straight
+       * around it (connect A→B `success`, retype it to `skipped`, connect A→B
+       * `success` again, retype THAT to `skipped` → two byte-identical edges).
+       * Nothing downstream catches it — `validatePipelineDoc` has no duplicate-
+       * EDGE rule, its id-uniqueness check covers nodes and containers only — and
+       * the consequences are real: the two share one edge identity, so as
+       * back-edges they halve `maxBounces` and resolve each other's reset body,
+       * and on the canvas they stack as overlapping SVG paths neither of which
+       * can be clicked apart. U6a multiplies the reachable surface by every
+       * branch label a source declares, so the guard belongs here, not only in
+       * `connect`.
+       *
+       * A REFUSAL is right rather than a silent merge: the operator still has the
+       * edge they selected, and deleting one of two identical edges is a thing
+       * they can see and do. It is also not the operator's first warning —
+       * `EdgePanel` disables a condition another edge already holds, using the
+       * SAME `retypeCollides` predicate, so a refusal here is the backstop for a
+       * caller that is not the picker, not the UX.
+       */
+      updateEdgeCondition(id, condition) {
+        const current = get().edges.find((e) => e.id === id);
+        if (current === undefined) return;
+        const retyped = retypeEdge(current, condition);
+        if (retypeCollides(get().edges, current, retyped)) return;
+        edit((s) => ({
+          edges: s.edges.map((e) => (e.id === id ? retyped : e)),
+        }));
+      },
 
-    updateNodeConfig(id, config) {
-      if (!get().nodes.some((n) => n.id === id)) return;
-      set((s) => ({
-        nodes: s.nodes.map((n) => (n.id === id ? { ...n, config } : n)),
-        dirty: true,
-      }));
-    },
+      updateNodeConfig(id, config) {
+        if (!get().nodes.some((n) => n.id === id)) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => (n.id === id ? { ...n, config } : n)),
+        }));
+      },
 
-    setNodeConnection(id, connectionId) {
-      if (!get().nodes.some((n) => n.id === id)) return;
-      set((s) => ({
-        nodes: s.nodes.map((n) => {
-          if (n.id !== id) return n;
-          const next = { ...n };
-          if (connectionId) next.connectionId = connectionId;
-          else delete next.connectionId;
-          return next;
-        }),
-        dirty: true,
-      }));
-    },
+      setNodeConnection(id, connectionId) {
+        if (!get().nodes.some((n) => n.id === id)) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => {
+            if (n.id !== id) return n;
+            const next = { ...n };
+            if (connectionId) next.connectionId = connectionId;
+            else delete next.connectionId;
+            return next;
+          }),
+        }));
+      },
 
-    /**
-     * IDEMPOTENT — re-selecting what is already selected is a no-op.
-     *
-     * #737: the canvas now mirrors React Flow's selection back into the store,
-     * while the store drives RF's edge `selected` prop. Writing an equal-but-new
-     * `Selection` object on every RF report would re-render the canvas, rebuild
-     * the derived edge array and hand RF a fresh selection state, which reports
-     * again — a loop that the value guard, not a `useEffect` dependency, is what
-     * actually stops.
-     */
-    addParam() {
-      set((s) => ({ params: [...s.params, blankParam(s.params)], dirty: true }));
-    },
+      addParam() {
+        edit((s) => ({ params: [...s.params, blankParam(s.params)] }));
+      },
 
-    updateParam(index, next) {
-      set((s) => ({
-        params: s.params.map((p, i) => (i === index ? next : p)),
-        dirty: true,
-      }));
-    },
+      updateParam(index, next) {
+        if (!inRange(index, get().params.length)) return;
+        edit(
+          (s) => ({ params: s.params.map((p, i) => (i === index ? next : p)) }),
+          `param:${index}`,
+        );
+      },
 
-    removeParam(index) {
-      set((s) => ({ params: s.params.filter((_, i) => i !== index), dirty: true }));
-    },
+      removeParam(index) {
+        if (!inRange(index, get().params.length)) return;
+        edit((s) => ({ params: s.params.filter((_, i) => i !== index) }));
+      },
 
-    addOutput() {
-      set((s) => ({ outputs: [...s.outputs, blankOutput(s.outputs)], dirty: true }));
-    },
+      addOutput() {
+        edit((s) => ({ outputs: [...s.outputs, blankOutput(s.outputs)] }));
+      },
 
-    updateOutput(index, next) {
-      set((s) => ({
-        outputs: s.outputs.map((o, i) => (i === index ? next : o)),
-        dirty: true,
-      }));
-    },
+      updateOutput(index, next) {
+        if (!inRange(index, get().outputs.length)) return;
+        edit(
+          (s) => ({ outputs: s.outputs.map((o, i) => (i === index ? next : o)) }),
+          `output:${index}`,
+        );
+      },
 
-    removeOutput(index) {
-      set((s) => ({ outputs: s.outputs.filter((_, i) => i !== index), dirty: true }));
-    },
+      removeOutput(index) {
+        if (!inRange(index, get().outputs.length)) return;
+        edit((s) => ({ outputs: s.outputs.filter((_, i) => i !== index) }));
+      },
 
-    select(sel) {
-      if (sameSelection(get().selected, sel)) return;
-      set({ selected: sel });
-    },
-  }));
+      /**
+       * IDEMPOTENT — re-selecting what is already selected is a no-op.
+       *
+       * #737: the canvas now mirrors React Flow's selection back into the store,
+       * while the store drives RF's edge `selected` prop. Writing an equal-but-new
+       * `Selection` object on every RF report would re-render the canvas, rebuild
+       * the derived edge array and hand RF a fresh selection state, which reports
+       * again — a loop that the value guard, not a `useEffect` dependency, is what
+       * actually stops.
+       *
+       * NOT an edit: a selection is not part of the doc, so it records no undo
+       * entry and undo never restores one (it only CLEARS a selection its restored
+       * doc no longer contains).
+       */
+      select(sel) {
+        if (sameSelection(get().selected, sel)) return;
+        set({ selected: sel });
+      },
+
+      undo() {
+        const s = get();
+        const previous = s.past[s.past.length - 1];
+        if (previous === undefined) return;
+        coalescing = null;
+        set({
+          ...restoreFrom(previous, s),
+          past: s.past.slice(0, -1),
+          // Bounded by `past`, which is capped, so this needs no cap of its own.
+          future: [...s.future, snapshotOf(s)],
+        });
+      },
+
+      redo() {
+        const s = get();
+        const next = s.future[s.future.length - 1];
+        if (next === undefined) return;
+        coalescing = null;
+        set({
+          ...restoreFrom(next, s),
+          past: [...s.past, snapshotOf(s)].slice(-HISTORY_LIMIT),
+          future: s.future.slice(0, -1),
+        });
+      },
+    };
+  });
 }
