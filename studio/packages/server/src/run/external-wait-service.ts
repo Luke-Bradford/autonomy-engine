@@ -53,9 +53,11 @@ export type ExternalWaitOutcome = 'completed' | 'not_completable' | 'invalid_pay
  *
  * Client-safe: `reason` is `checkInboundOutputs`' contract text (e.g. `missing
  * declared output 'decision'`), which names the caller's OWN field. Note the
- * completer withholds `reason` when the defect is the node's `config.outputs`
- * rather than the payload (it logs that server-side instead), so `message` can be
- * empty — a UI must not promise a reason is always there.
+ * completer withholds `reason` when the defect is the node's OWN `config.outputs`
+ * rather than the payload (it logs that server-side instead of leaking config text).
+ * The route supplies a generic sentence for that case, so `message` is never empty
+ * in practice — but it is then a statement that the body did not match, NOT a
+ * pointer at a field, and a UI must not word it as though it always names one.
  */
 export class ExternalWaitPayloadError extends Error {
   constructor(reason: string) {

@@ -27,8 +27,9 @@ vi.mock('../../api/runs', async (importActual) => ({
      default also means every existing test in this file keeps describing a run
      that owes no callback, which is what they all are. */
   listExternalWaits: vi.fn().mockResolvedValue([]),
-  /* Mocked for the #897 reason above: an un-mocked write would reach `fetch`.
-     Rejected-by-default would poison every OTHER test in this file, so it resolves. */
+  /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the #897 reason
+     above, which is specific to a member called from a MOUNT EFFECT: this one is
+     only reachable from a click, so no other test in this file can trigger it. */
   completeExternalWait: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./useRunStream', async (importActual) => ({

@@ -293,6 +293,16 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
 
       // Re-derived, never read from the row (which stores only a HASH) and never
       // served — the same derivation the GET performs, from the same master key.
+      //
+      // Which is also this door's one honest limitation, stated because it is
+      // invisible from the outside: the derivation is keyed on the MASTER KEY, so a
+      // key rotation orphans every in-flight wait. The re-derived token no longer
+      // hashes to the stored hash, the completer finds no row, and a genuinely
+      // pending wait answers "no longer completable". The anonymous seam fares
+      // worse (an already-issued URL simply stops working, with no owner-visible
+      // explanation at all), so this is not a regression — but rotation is not a
+      // supported operation today, and if it becomes one, in-flight external waits
+      // need a re-key or drain step.
       const token = deriveExternalWaitToken(fastify.masterKey, {
         runId: run.id,
         nodeId,

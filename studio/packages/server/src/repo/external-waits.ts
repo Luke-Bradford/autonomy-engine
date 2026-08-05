@@ -76,8 +76,12 @@ export function getExternalWaitByTokenHash(db: Db, tokenHash: string): ExternalW
 }
 
 /**
- * The row for exactly one parked attempt, whatever its STATUS — the addressing
- * the settle paths already used internally, exported for #901.
+ * The row for exactly one parked attempt, whatever its STATUS — exported for #901.
+ *
+ * Its one pre-existing caller is `recordExternalWait` above (the CREATE path, for
+ * idempotency); the settle paths take the same triple as a parameter and never
+ * came through here. So this is a widening of an existing private lookup, not a
+ * new query shape.
  *
  * Keyed on the full `(runId, nodeId, attemptId)` triple rather than on the pending
  * row for a node, and that is the point: a webhook that expires and re-parks mints

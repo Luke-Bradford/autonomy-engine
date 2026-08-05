@@ -41,6 +41,13 @@ import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
  * lifted fact rather than two that could disagree about which wait is being
  * edited. `submitting`/`error` stay local on purpose: when the wait set changes
  * underneath, a stale error is exactly what the remount should clear.
+ *
+ * TWO DEFERRALS, named rather than dropped (#914). The body is a RAW JSON textarea,
+ * not a per-field form derived from `config.outputs` — the contract is already
+ * rendered as a sentence by `describeCallbackBody`, so the data for a form exists;
+ * it is polish, and the textarea is the path. And the expiry is an absolute time
+ * that does not tick, so a wait about to expire looks like one with an hour left —
+ * the same missing-clock problem as #890, which the two should solve together.
  */
 export function PendingCallbacks({
   runId,

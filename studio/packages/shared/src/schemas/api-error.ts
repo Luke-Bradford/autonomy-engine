@@ -58,12 +58,21 @@ export const ApiErrorCodeSchema = z.enum([
   // contract does not have to change later to allow it.
   'external_wait_payload',
   // #901 — the wait is no longer completable: already completed, expired, or the
-  // run/node moved past it (409, or 410 for a row settled `expired`). ONE code
-  // for all of them, because the client's action is identical in every case —
-  // report it and re-read the run. Splitting it further would be a distinction
-  // the UI has nothing to do with. Note this is the OWNER's route: the anonymous
-  // callback seam still collapses every one of these to an indistinguishable
-  // `404`, because a token holder is a prober and must never be told which.
+  // run/node moved past it (409, or 410 for a row settled `expired`). ONE code for
+  // all of them, because the client's action is identical in every case — report it
+  // and re-read the run.
+  //
+  // Honest about the bar: `stale_write` earns its own code because the CLIENT acts
+  // on it, and by that test this one does NOT — "report and re-read" is exactly what
+  // `conflict` already means for `RerunNotEligibleError` and `DocUnresolvableError`.
+  // It is separate for the STATUS, not the action: this is the only refusal in the
+  // API that answers 410, and collapsing an expired wait into `conflict` would make
+  // a 410 arrive under a code whose every other instance is a 409. An API client
+  // automating approvals is the reader that difference is for.
+  //
+  // Note this is the OWNER's route: the anonymous callback seam still collapses
+  // every one of these to an indistinguishable `404`, because a token holder is a
+  // prober and must never be told which.
   'external_wait_settled',
 ]);
 export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
