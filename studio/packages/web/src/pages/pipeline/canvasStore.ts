@@ -355,6 +355,33 @@ function snapshotOf(s: CanvasState): CanvasDocSnapshot {
   };
 }
 
+/**
+ * U17 — the coalescing key for a row edit, or `undefined` for one that must not
+ * coalesce.
+ *
+ * Per FIELD, not per row. A row's Name, Type, Required and Description all reach
+ * the store through ONE action, so a key of `param:0` folded a checkbox flip
+ * into the typing burst that preceded it — two deliberate acts, one undo. The
+ * key names the single field that changed (`param:0:name`), so a burst breaks
+ * the moment the operator moves to another control.
+ *
+ * Several fields changing at once yields `undefined`, which coalesces with
+ * nothing: a multi-field write is not a keystroke burst, and the conservative
+ * answer (its own undo step) is the one that can only cost an extra press.
+ * `default` is `z.unknown()` and may hold an object, so an equal-but-new value
+ * reads as changed — again, an extra step rather than a swallowed one.
+ */
+function rowCoalesceKey(
+  kind: 'param' | 'output',
+  index: number,
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): string | undefined {
+  const fields = new Set([...Object.keys(current), ...Object.keys(next)]);
+  const changed = [...fields].filter((k) => current[k] !== next[k]);
+  return changed.length === 1 ? `${kind}:${index}:${changed[0]!}` : undefined;
+}
+
 /** A row index an action can actually address — see the U17 note on no-op edits. */
 function inRange(index: number, length: number): boolean {
   return Number.isInteger(index) && index >= 0 && index < length;
@@ -659,8 +686,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
      * doc as it stood before the burst began, which is exactly where one undo
      * should land.
      *
-     * The key is per ROW (`param:0`), so moving to another field starts a new
-     * step. Nothing coalesces across an edit of a different kind.
+     * The key is per FIELD (`param:0:name` — see `rowCoalesceKey`), so moving to
+     * another control on the same row starts a new step, as does moving to
+     * another row. Nothing coalesces across an edit of a different kind.
      */
     const edit = (
       updater: (s: CanvasState) => Partial<CanvasState>,
@@ -1115,9 +1143,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       updateParam(index, next) {
         if (!inRange(index, get().params.length)) return;
+        const current = get().params[index]!;
         edit(
           (s) => ({ params: s.params.map((p, i) => (i === index ? next : p)) }),
-          `param:${index}`,
+          rowCoalesceKey('param', index, current, next),
         );
       },
 
@@ -1132,9 +1161,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       updateOutput(index, next) {
         if (!inRange(index, get().outputs.length)) return;
+        const current = get().outputs[index]!;
         edit(
           (s) => ({ outputs: s.outputs.map((o, i) => (i === index ? next : o)) }),
-          `output:${index}`,
+          rowCoalesceKey('output', index, current, next),
         );
       },
 

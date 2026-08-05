@@ -1882,6 +1882,20 @@ describe('canvasStore — undo/redo (U17)', () => {
     expect(s.getState().params[0]!.name).toBe('aa');
   });
 
+  it('coalescing is per FIELD — a second control on the same row is its own step', () => {
+    const s = opened();
+    s.getState().addParam();
+    const row = s.getState().params[0]!;
+    s.getState().updateParam(0, { ...row, name: 'customer' });
+    // A different control on the SAME row. Folding this into the typing burst
+    // would make one undo revert two deliberate acts.
+    s.getState().updateParam(0, { ...s.getState().params[0]!, required: true });
+
+    s.getState().undo();
+    expect(s.getState().params[0]!.required).not.toBe(true);
+    expect(s.getState().params[0]!.name).toBe('customer');
+  });
+
   it('a new edit clears the redo stack', () => {
     const s = opened();
     s.getState().addNode('http_request');

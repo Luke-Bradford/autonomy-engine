@@ -13,6 +13,19 @@ export interface HistoryControlContext {
   available: boolean;
   /** The version number being previewed from the history list, or `null`. */
   previewing: number | null;
+  /**
+   * Is a save or a restore in flight (`previewLocked`)?
+   *
+   * The FOURTH route into the working graph that has to respect that lock, and
+   * the one this ticket added. A save snapshots the graph BEFORE its POST and
+   * compares it against the live graph afterwards to decide whether the operator
+   * kept editing. An undo landing inside that window makes the comparison say
+   * "kept editing" and take the `rebaseLoaded` branch, which re-points the CAS
+   * basis at the new version WITHOUT touching `dirty` — leaving a canvas that
+   * shows the PRE-edit graph, reports itself clean, and holds a basis containing
+   * the edit. The next save then reverts it, with no conflict and no warning.
+   */
+  busy: boolean;
 }
 
 /**
@@ -31,7 +44,9 @@ export interface HistoryControlContext {
 export function undoDisabledReason({
   available,
   previewing,
+  busy,
 }: HistoryControlContext): string | null {
+  if (busy) return 'Wait for the save or restore to finish.';
   if (previewing !== null) return 'Leave the preview to undo your working graph.';
   if (!available) return 'Nothing to undo.';
   return null;
@@ -41,7 +56,9 @@ export function undoDisabledReason({
 export function redoDisabledReason({
   available,
   previewing,
+  busy,
 }: HistoryControlContext): string | null {
+  if (busy) return 'Wait for the save or restore to finish.';
   if (previewing !== null) return 'Leave the preview to redo your working graph.';
   if (!available) return 'Nothing to redo.';
   return null;

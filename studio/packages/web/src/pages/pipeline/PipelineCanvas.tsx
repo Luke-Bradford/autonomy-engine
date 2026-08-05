@@ -150,8 +150,8 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
    */
   const canUndo = useStore(store, (s) => s.past.length > 0);
   const canRedo = useStore(store, (s) => s.future.length > 0);
-  const undoReason = undoDisabledReason({ available: canUndo, previewing });
-  const redoReason = redoDisabledReason({ available: canRedo, previewing });
+  const undoReason = undoDisabledReason({ available: canUndo, previewing, busy: previewLocked });
+  const redoReason = redoDisabledReason({ available: canRedo, previewing, busy: previewLocked });
 
   /**
    * ⌘Z / ⇧⌘Z on the document, gated by the same two reasons the buttons are.
