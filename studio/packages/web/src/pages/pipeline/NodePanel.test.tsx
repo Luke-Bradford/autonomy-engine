@@ -390,3 +390,28 @@ describe('NodePanel (U7 per-activity config form)', () => {
     expect(panel.storedConfig()).toMatchObject({ cases: ['red', 'green'] });
   });
 });
+
+describe('NodePanel — duplicate (U21)', () => {
+  it('duplicates the node as it is STORED, config and all', () => {
+    const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate node' }));
+
+    const nodes = panel.store.getState().nodes;
+    expect(nodes).toHaveLength(2);
+    expect(nodes[1]!.id).not.toBe('n_http');
+    expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
+  });
+
+  it('copies what Apply last wrote, not what the form is holding unapplied', () => {
+    const panel = mountOver(httpNode({ url: 'https://example.test/a' }));
+    fireEvent.change(screen.getByLabelText('url'), {
+      target: { value: 'https://example.test/edited' },
+    });
+    // No apply — the edit is still only in the form's draft state.
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate node' }));
+
+    const nodes = panel.store.getState().nodes;
+    expect(nodes[1]!.config).toEqual({ url: 'https://example.test/a' });
+  });
+});
