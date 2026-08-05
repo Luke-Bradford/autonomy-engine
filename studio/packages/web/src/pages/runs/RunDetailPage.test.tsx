@@ -926,6 +926,105 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
   });
 });
 
+describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918 / RS6)', () => {
+  /**
+   * The reducer writes a copied node `{status:'success', attempts:0}` — byte
+   * for byte an executed success — so before this the monitor presented R1's
+   * result as R2's work, with no Outputs section to read it in. RS6 asks the
+   * MONITOR to distinguish the two, which is why the table cell is asserted
+   * here and not only the panel: a distinction you have to click to find does
+   * not meet it.
+   *
+   * The fixture doc's `greet` is the frontier node; `never` is downstream and
+   * un-run, so it also pins the negative — a node the reseed did NOT copy must
+   * make no claim about a source run.
+   */
+  /* `rerunOf` on `run.started` is LOAD-BEARING, not decoration. It is what
+     makes the reducer DEFER dispatch, leaving the un-progressed run the reseed
+     needs; without it the walk marks `greet` `ready` on the first settle, the
+     `progressed` impossible-log guard then refuses the reseed outright, and
+     `reconcileNodeActivity` overrides the folded `success` with `ready`. That
+     is a fixture the pure fold cannot detect (it has no reducer), and it fails
+     here — which is the reason this pair of tests runs through the real page. */
+  const reseeded = () =>
+    stream({
+      events: [
+        envelope({
+          type: 'run.started',
+          runId: 'run_1',
+          pipelineVersionId: 'pv_1',
+          params: {},
+          rerunOf: 'run_source',
+        }),
+        envelope({
+          type: 'run.reseeded',
+          runId: 'run_1',
+          sourceRunId: 'run_source',
+          frontier: ['greet'],
+          copiedOutputs: { greet: { status: 200 } },
+          copiedContainers: {},
+        }),
+      ],
+    });
+
+  it('says “reused from run …” in the node table, without a click', async () => {
+    useRunStreamMock.mockReturnValue(reseeded());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    /* Anchored on the drill-in button rather than on the raw id: the id also
+       appears in the event feed, and a `findByText` can settle on an element
+       from an intermediate render that the next pass replaces. */
+    await screen.findByRole('button', { name: 'HTTP Request 1' });
+    const copiedRow = screen.getByRole('button', { name: 'HTTP Request 1' }).closest('tr')!;
+    expect(within(copiedRow).getByText('success')).toBeInTheDocument();
+    expect(within(copiedRow).getByText('reused from run run_source')).toBeInTheDocument();
+  });
+
+  it('shows the copied outputs in the drill-in, attributed to the run that computed them', async () => {
+    useRunStreamMock.mockReturnValue(reseeded());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'HTTP Request 1' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 1/ });
+
+    // The defect itself: before #918 there was no Outputs section at all here,
+    // over a value `${nodes.greet.output.status}` resolves against downstream.
+    expect(within(panel).getByText('Outputs')).toBeInTheDocument();
+    expect(within(panel).getByText('{"status":200}')).toBeInTheDocument();
+    expect(within(panel).getByText(/reused its result from run/)).toBeInTheDocument();
+    expect(within(panel).getByText('run_source')).toBeInTheDocument();
+
+    /* The duration sentence has to bend for this row too. A copied node has no
+       span and 0 attempts, so it lands on the "has not started" arm — a
+       sentence that contradicts the `success` badge and the outputs directly
+       above it. */
+    expect(
+      within(panel).getByText(/not executed in this run, so there is no span to measure/),
+    ).toBeInTheDocument();
+    expect(within(panel).queryByText(/has not started/)).not.toBeInTheDocument();
+  });
+
+  it('claims nothing about a source run for a node the reseed did not copy', async () => {
+    useRunStreamMock.mockReturnValue(reseeded());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    /* `never` has no event of its own — it is a row `reconcileNodeActivity`
+       SEEDS from the projection. Asserted as what the operator sees rather than
+       as `copiedFromRunId === undefined`, which would pass whether or not the
+       field existed on a seeded row at all (an absent key and an `undefined`
+       one compare equal), i.e. it could not fail. */
+    const seededRow = (await screen.findByText('never')).closest('tr')!;
+    expect(within(seededRow).queryByText(/reused from run/)).not.toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.click(within(seededRow).getByRole('button', { name: 'HTTP Request 2' }));
+    const panel = screen.getByRole('complementary', { name: /Node HTTP Request 2/ });
+    expect(within(panel).queryByText(/reused its result from run/)).not.toBeInTheDocument();
+    expect(within(panel).getByText(/has not started/)).toBeInTheDocument();
+  });
+});
+
 describe('RunDetailPage — U24 the states a single well-formed failure does not cover', () => {
   it('a failed CALL node gets a Failure section, though it has no message of its own', async () => {
     // Gating the section on `error` hid it entirely for a call node: the child

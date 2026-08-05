@@ -1204,6 +1204,12 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
         runId: 'r2',
         pipelineVersionId: 'pv',
         params: {},
+        /* This fold ignores `rerunOf`, but the fixture carries it because the
+           producer must: it is what DEFERS dispatch, and a reseed appended
+           after an ordinary `run.started` is refused outright by the reducer's
+           `progressed` guard. A fixture that could not exist would pin this
+           fold against a log the engine never writes. */
+        rerunOf: 'r1',
       }),
       envelope({
         type: 'run.reseeded',
