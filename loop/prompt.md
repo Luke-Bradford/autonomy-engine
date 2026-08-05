@@ -33,9 +33,16 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-**Go straight to the UI epic (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
-This is the highest-priority available work — ahead of the defect sweep, which as amended in the
-STANDING RULE section below counts `[studio]` tickets only.
+**NEXT ITEM = `#917`** — the monitoring section for connected AI/LLM activity, tokens and account
+quota (operator, 2026-08-05: *"take some of the nice visual monitoring and give it its own section
+in the monitoring pages so that you could see any active use of connected AI's and/or LLMs, the
+sorts of things you can't directly monitor"*). It is UI work, so it satisfies this epic AND it is
+the cutover prerequisite: it is the last thing the operator still uses the old prototype dashboard
+FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket — build it first.
+
+**Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+Both are ahead of the defect sweep, which as amended in the STANDING RULE section below counts
+`[studio]` tickets only.
 
 **WHY THIS IS THE PRIORITY (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs
 and **exactly one** of them altered anything a human can see in the app. The rest was `loop/`
@@ -75,9 +82,16 @@ and the loop exists to build it — not to build the loop.
   because the request path no longer touches the provider — which is the state in which studio
   actually deserves to be primary.
 
-  **Sequence:** `#919` (studio mislabels a 429 as `provider_error`, which inverts the C3 evidence
-  rubric — fix first or the evidence is unreadable) → the sampler → `#917` (the monitoring section;
-  it is the last thing the operator still uses the old dashboard FOR) → then C3.
+  **Studio's reader is HONEST — do not go bug-hunting in it.** Measured over 21 minutes with the
+  bucket free, it reported `rate_limited` correctly and stably. Two `provider_error` readings were
+  artefacts and are void: one from a stale build (`#832` — always check `studio server:` first), one
+  taken a minute after a service restart. `#919` was filed on those two and has been corrected down
+  to a narrow start-up transient (a cause can be served stale for a few minutes after a restart while
+  the backoff suppresses re-polling). It is NOT a blocker and NOT a mislabel.
+
+  **Sequence:** the sampler FIRST (it is the only thing standing between studio and a servable
+  reading) → `#917` (the monitoring section; the last thing the operator still uses the old dashboard
+  FOR) → then C3. `#919` is a nice-to-have that can ride along whenever the reader is open.
 - If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
   preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
   plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
