@@ -100,7 +100,7 @@ same walk as a normal run.
 | RS3 | Container/loop reseed rules (completed=copy, mid-flight=re-run) — **SHIPPED 2026-07-24** (rule delivered by RS1+RS2; RS3 = the end-to-end copy-vs-re-run SOUNDNESS proof across container kinds + a `driveRun` reseed seam; built-block below) |
 | RS4 | `call_pipeline`: `childLinks` provenance for copied; fresh child for non-frontier |
 | RS5 | `secureOutput` non-copiable rule → forced re-execution of secure frontier + downstream |
-| RS6 | Monitor copied-vs-executed render + rerun-history grouping (T13) |
+| RS6 | Monitor copied-vs-executed render + rerun-history grouping (T13) — **copied-vs-executed SHIPPED 2026-08-05** (#918: `deriveNodeActivity` folds `run.reseeded`, so a copied node carries its copied outputs and a `copiedFromRunId`; the node table's Detail cell reads `reused from run <id>` and the drill-in names the source run and drops the "has not started" sentence). The run GRAPH is deliberately exempt — the reducer writes a copied node `{status:'success', attempts:0}`, identical to an executed success, so `RunState` carries no marker for it to read. **Rerun-history grouping + the Run-type column are still open.** |
 
 ## Open questions (for Codex)
 
