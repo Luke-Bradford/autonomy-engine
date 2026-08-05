@@ -43,6 +43,55 @@ import {
 export type ExternalWaitOutcome = 'completed' | 'not_completable' | 'invalid_payload';
 
 /**
+ * #901 — the body an OWNER sent to complete a parked wait failed the node's
+ * declared `config.outputs` contract (422 `external_wait_payload`).
+ *
+ * Thrown only by the owner-scoped route: the anonymous callback seam answers its
+ * own 422 directly and does not raise this. The node stays PARKED — nothing was
+ * appended — so this is the one refusal the caller can act on where they stand,
+ * which is why it carries a `message` and gets its own code.
+ *
+ * Client-safe: `reason` is `checkInboundOutputs`' contract text (e.g. `missing
+ * declared output 'decision'`), which names the caller's OWN field. Note the
+ * completer withholds `reason` when the defect is the node's OWN `config.outputs`
+ * rather than the payload (it logs that server-side instead of leaking config text).
+ * The route supplies a generic sentence for that case, so `message` is never empty
+ * in practice — but it is then a statement that the body did not match, NOT a
+ * pointer at a field, and a UI must not word it as though it always names one.
+ */
+export class ExternalWaitPayloadError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'ExternalWaitPayloadError';
+  }
+}
+
+/**
+ * #901 — the wait an owner addressed is no longer completable
+ * (`external_wait_settled`): already completed, expired, or the run/node has moved
+ * past that attempt.
+ *
+ * `status` is 409 by default and 410 for a row settled `expired` — a wait that
+ * timed out is genuinely GONE rather than merely conflicting, and an API client
+ * automating this deserves to tell the two apart. Both carry the same error CODE,
+ * because a UI does the same thing with either: report it and re-read the run.
+ *
+ * Disclosure is safe HERE and nowhere else: this is reachable only after
+ * `requireOwned` proved the caller owns the run, so naming the state tells them
+ * about their own resource. The anonymous seam that answers the same underlying
+ * conditions must keep collapsing them to an identical 404 — there, the caller is
+ * an unauthenticated token holder and the state would be an oracle.
+ */
+export class ExternalWaitSettledError extends Error {
+  readonly status: 409 | 410;
+  constructor(message: string, status: 409 | 410 = 409) {
+    super(message);
+    this.name = 'ExternalWaitSettledError';
+    this.status = status;
+  }
+}
+
+/**
  * The completer's result. `reason` is set ONLY for `'invalid_payload'` — the
  * human contract-mismatch text from `checkInboundOutputs` (e.g. `missing declared
  * output 'decision'`), which the route surfaces in the 422 body so a legitimate
@@ -53,6 +102,26 @@ export type ExternalWaitOutcome = 'completed' | 'not_completable' | 'invalid_pay
 export interface ExternalWaitCompletion {
   outcome: ExternalWaitOutcome;
   reason?: string;
+  /**
+   * #901 — the resumed run's BACKGROUND drive, present iff `outcome` is
+   * `'completed'`. Returned rather than awaited so each caller decides whether
+   * completing the wait and finishing the run are the same act:
+   *
+   *   - the anonymous A13 callback seam (`routes/external-wait.ts`) AWAITS it,
+   *     preserving exactly the behaviour it has always had;
+   *   - the owner-scoped completer (`routes/runs.ts`) does NOT — it answers `204`
+   *     the moment the wait is durably settled, because the resumed run may bill
+   *     LLM calls for minutes and the server sets no `requestTimeout`, so awaiting
+   *     would hang a browser button on the whole downstream run. That is the
+   *     rerun route's settled convention (`reseed.ts` returns `{ runId, drive }`
+   *     for the same reason), and the operator watches the resumption in the live
+   *     run view where it belongs.
+   *
+   * NEVER REJECTS — `driveRun` owns its own faults (`terminalizeInterrupted`), the
+   * same guarantee `reseed`'s `drive` carries, which is what makes `void drive` a
+   * safe discard rather than an unhandled rejection.
+   */
+  drive?: Promise<void>;
 }
 
 export interface ExternalWaitCompleter {
@@ -204,8 +273,12 @@ export function createExternalWaitCompleter(deps: DriveDeps): ExternalWaitComple
       // see above), then drive. Spawning work (the downstream drive, which may bill
       // real LLM calls) is forbidden inside the transaction.
       deps.bus?.publish(result.record);
-      await driveRun(deps, runId);
-      return { outcome: 'completed' };
+      // STARTED here, awaited by the caller or not (see `ExternalWaitCompletion.drive`).
+      // Started rather than handed over as a thunk so the resumption begins the moment
+      // the settle commits, whichever caller this is — a wait is completed as soon as
+      // this returns, and no caller's choice about awaiting can delay the run.
+      const drive = driveRun(deps, runId);
+      return { outcome: 'completed', drive };
     },
   };
 }

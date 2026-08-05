@@ -75,7 +75,26 @@ export function getExternalWaitByTokenHash(db: Db, tokenHash: string): ExternalW
   );
 }
 
-function getExternalWaitByAttempt(
+/**
+ * The row for exactly one parked attempt, whatever its STATUS — exported for #901.
+ *
+ * Its one pre-existing caller is `recordExternalWait` above (the CREATE path, for
+ * idempotency); the settle paths take the same triple as a parameter and never
+ * came through here. So this is a widening of an existing private lookup, not a
+ * new query shape.
+ *
+ * Keyed on the full `(runId, nodeId, attemptId)` triple rather than on the pending
+ * row for a node, and that is the point: a webhook that expires and re-parks mints
+ * a new attempt, so "the pending wait of node X" names a moving target. An owner
+ * completing a wait from the app addresses the attempt they were SHOWN, and a row
+ * that has since settled answers `completed`/`expired` here instead of silently
+ * redirecting the completion onto its successor.
+ *
+ * Returns the row rather than a projection because its caller needs the `status`
+ * the wire projection deliberately omits — that is what lets an owner-scoped route
+ * say WHICH terminal state it hit. The token hash it also carries stays server-side.
+ */
+export function getExternalWaitByAttempt(
   db: Db,
   runId: string,
   nodeId: string,

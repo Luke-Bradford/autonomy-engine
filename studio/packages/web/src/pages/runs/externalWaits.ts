@@ -20,6 +20,11 @@ import type {
  * and stores NOTHING from it (`checkInboundOutputs` — undeclared keys are dropped
  * on purpose, so an external body can never reach the raw-served event log). An
  * operator handed only a URL would discover both by trial and error.
+ *
+ * #901 made that description load-bearing rather than advisory: the operator can
+ * now complete the wait from the app, so this text is what they compose a body
+ * against — and getting it wrong is a 422 they read beside the editor, not a
+ * `curl` they retry blind. The derivation is unchanged; only its audience is.
  */
 
 /**

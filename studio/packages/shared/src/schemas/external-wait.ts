@@ -62,3 +62,54 @@ export type PendingExternalWait = z.infer<typeof PendingExternalWaitSchema>;
 
 /** The `GET /api/runs/:id/external-waits` response — pending waits, possibly none. */
 export const PendingExternalWaitListSchema = z.array(PendingExternalWaitSchema);
+
+/**
+ * #901 — the `POST /api/runs/:id/external-waits/complete` request: the OWNER
+ * completing one of their own run's parked waits from inside the app.
+ *
+ * The sibling of the projection above, and the reason the pair exists. #900 gave
+ * the operator the callback URL and nothing to do with it but leave the app; this
+ * is the act. It is a SECOND door onto the same settle path, not a second settle
+ * path — the route re-derives the capability token internally and drives it
+ * through the very completer the anonymous `POST /api/external-wait/:token` seam
+ * uses, so the two can never diverge on what completing a wait MEANS.
+ *
+ * Shared FE/BE for the reason `PendingExternalWaitSchema` is: the route pins its
+ * body to this schema and the client builds its request from the same type, so
+ * the contract is a contract rather than two hopeful shapes. (`api/runs.ts`
+ * records the sibling rerun route as still owing this — #899.)
+ *
+ * `attemptId` is REQUIRED and is the CAS BASIS, not decoration. A webhook node
+ * that expires and re-parks mints a NEW attempt, and `nodeId` alone would then
+ * address whichever row happens to be pending NOW — so a body composed for the
+ * attempt the operator was LOOKING at could complete a different one. The same
+ * shape #904 settled for a version write: name the thing you acted on, and be
+ * refused if it moved. `PendingExternalWaitSchema` already carries `attemptId`
+ * to the client, so this costs the caller nothing it does not already hold.
+ *
+ * `nodeId` rides in the BODY rather than the path deliberately. A parked id may
+ * be a `foreach` instance key (`w@1`), and node ids are unconstrained
+ * (`z.string().min(1)`), so a path segment would put an unbounded charset through
+ * URL encoding for no gain — the run id in the path is already the only
+ * authorization-bearing identifier.
+ *
+ * `payload` is REQUIRED with NO `.default()`. The client always sends an object
+ * (an empty editor is `{}`), so an ABSENT payload is a malformed request rather
+ * than an empty one, and manufacturing `{}` for it would be exactly the fail-open
+ * default #473/#904 outlawed — silently completing a wait with no outputs when
+ * the caller meant to send some. What the payload must CONTAIN is not this
+ * schema's business: the declared-output contract is checked at the boundary by
+ * `checkInboundOutputs` against the node's own `config.outputs`, and a webhook
+ * declaring no outputs still accepts (and stores nothing from) any object.
+ */
+export const CompleteExternalWaitBodySchema = z.object({
+  /* BOUNDED, unlike `Node.id` itself. Both are opaque correlation ids the route
+     looks a row up by, and a miss is the one branch that handles unresolved caller
+     text — so an unbounded field here is a `bodyLimit`-sized string travelling
+     through validation and logging for no reason. Generous enough that no real id
+     (a `n_<uuid>`, a `w@1` instance key, an imported doc's own naming) comes near. */
+  nodeId: z.string().min(1).max(512),
+  attemptId: z.string().min(1).max(512),
+  payload: z.record(z.string(), z.unknown()),
+});
+export type CompleteExternalWaitBody = z.infer<typeof CompleteExternalWaitBodySchema>;

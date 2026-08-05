@@ -31,6 +31,25 @@ import type { FastifyPluginAsync } from 'fastify';
  * caller can retry before the expiry alarm bounds the wait. A webhook that declares
  * no outputs still accepts any/empty body and completes with `{}` (A13 behaviour).
  *
+ * #901 — this is no longer the ONLY door onto the settle. `POST /api/runs/:id/
+ * external-waits/complete` (`routes/runs.ts`) lets the run's OWNER complete a parked
+ * wait from inside the app, re-deriving the token server-side so it never reaches
+ * the browser. It shares this route's completer — one settle path, two doors — and
+ * differs only in DISCLOSURE, which is a property of the caller, not of completing:
+ * an owner is not a prober, so that route distinguishes "already completed" (409)
+ * from "expired" (410) where this one must not. The no-oracle collapse below is
+ * therefore untouched, and its default-deny shape (`completed`/`invalid_payload`
+ * named, EVERYTHING else 404) is what keeps a future outcome from leaking by
+ * omission.
+ *
+ * DEFERRED, deliberately and not forgotten: the `422`/`404` bodies here are sent
+ * directly rather than through the central error handler, so they do not match
+ * `ApiErrorBodySchema` and `messageFromBody` reduces them to `request failed (4xx)`,
+ * discarding `detail`. That cost bought nothing once #901 gave the app an
+ * owner-scoped door with conforming errors — this seam's clients are external
+ * callers, not `apiFetch`. Reshaping it is a contract change to a published
+ * external surface and belongs in its own ticket.
+ *
  * Its own plugin (like `routes/webhooks.ts`) so its `*` content-type parser — which
  * buffers any/empty body without a JSON-parse error on a callback that sends none —
  * is scoped here and never changes how other routes parse `application/json`. The
@@ -55,11 +74,17 @@ export const externalWaitRoutes: FastifyPluginAsync = async (fastify) => {
     '/api/external-wait/:token',
     async (request, reply) => {
       const body = request.body instanceof Buffer ? request.body : undefined;
-      const { outcome, reason } = await fastify.externalWaitCompleter.complete(
+      const { outcome, reason, drive } = await fastify.externalWaitCompleter.complete(
         request.params.token,
         body,
       );
       if (outcome === 'completed') {
+        // AWAITED, unlike the owner-scoped sibling (#901), which answers the moment
+        // the settle commits. Kept because this route has always answered only once
+        // the resumed run came to rest, and an external caller's retry/alerting
+        // behaviour may be built on that; the split exists to let the SPA not hang,
+        // not to change what this seam does. `drive` never rejects.
+        await drive;
         return reply.status(204).send();
       }
       if (outcome === 'invalid_payload') {

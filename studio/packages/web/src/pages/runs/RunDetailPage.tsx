@@ -311,6 +311,19 @@ export function RunDetailPage({ runId }: { runId: string }) {
     [stream.events],
   );
 
+  /* #901 — the callback bodies the operator is part-way through typing, keyed by
+     `waitKey`. Lives HERE rather than in `PendingCallbacks` because that component
+     is deliberately remounted on every `waitEpoch` change, and a remount must not
+     take unsaved input with it: with two parallel waits open, an external caller
+     settling one would otherwise wipe what was typed into the other. Presence of a
+     key also means "that editor is open" — see `PendingCallbacks`' docblock.
+
+     Not pruned when a wait settles. A draft for a key nothing renders costs one
+     string and is unreachable; pruning it would mean reconciling this map against
+     every list refresh, which is precisely the hand-rolled freshness protocol the
+     epoch key exists to avoid. */
+  const [waitDrafts, setWaitDrafts] = useState<Record<string, string>>({});
+
   // The raw feed is capped to the most recent rows so a chatty run (thousands of
   // `node.output` frames) can't grow the DOM without bound; node activity above
   // is still folded from the FULL log, so nothing is lost from the summary.
@@ -415,7 +428,21 @@ export function RunDetailPage({ runId }: { runId: string }) {
           so any change to the pending set remounts it (see `waitEpoch` above —
           that key is the component's entire freshness model). */}
       {parkedOnCallback && (
-        <PendingCallbacks key={waitEpoch} runId={runId} doc={doc} nameOf={nameOf} />
+        <PendingCallbacks
+          key={waitEpoch}
+          runId={runId}
+          doc={doc}
+          nameOf={nameOf}
+          drafts={waitDrafts}
+          onDraftChange={(key, value) => setWaitDrafts((d) => ({ ...d, [key]: value }))}
+          onDraftClear={(key) =>
+            setWaitDrafts((d) => {
+              const rest = { ...d };
+              delete rest[key];
+              return rest;
+            })
+          }
+        />
       )}
 
       <h3>Graph</h3>

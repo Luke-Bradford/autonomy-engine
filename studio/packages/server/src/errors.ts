@@ -12,6 +12,7 @@ import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { DocUnresolvableError } from './run/driver.js';
 import { RerunNotEligibleError } from './run/reseed.js';
+import { ExternalWaitPayloadError, ExternalWaitSettledError } from './run/external-wait-service.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
@@ -252,6 +253,36 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     if (error instanceof RerunNotEligibleError) {
       request.log.warn({ err: error }, 'conflict: run not rerun-from-failed eligible');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #901 — an owner's external-wait completion body failed the node's declared
+    // output contract (422). `message` carries the field to correct, which is the
+    // whole reason the owner-scoped route exists rather than the app reusing the
+    // anonymous seam (whose 422 body bypasses this handler and loses its detail).
+    //
+    // Ordering here is NOT load-bearing, stated because it looks as though it
+    // should be: the generic `hasNumericStatusCode` fallback below would flatten a
+    // 4xx to a bare "Malformed request", but it reads `err.statusCode`, and neither
+    // class has one (`ExternalWaitSettledError` names its field `status`
+    // deliberately). Grouped here for readability. If either ever grows a
+    // `statusCode`, this placement becomes load-bearing — do not move it then.
+    if (error instanceof ExternalWaitPayloadError) {
+      request.log.warn({ err: error }, 'external wait: callback payload rejected');
+      reply
+        .status(422)
+        .send({ error: 'external_wait_payload', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
+    // #901 — the addressed wait is gone (409, or 410 when it EXPIRED). Same code for
+    // both: the status distinguishes them for an API client, the code is what the UI
+    // switches on and its action is identical either way.
+    if (error instanceof ExternalWaitSettledError) {
+      request.log.warn({ err: error }, 'external wait: no longer completable');
+      reply
+        .status(error.status)
+        .send({ error: 'external_wait_settled', message: error.message } satisfies ApiErrorBody);
       return;
     }
 

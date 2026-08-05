@@ -108,6 +108,100 @@ test('#900 — a parked run says where its callback goes, and the URL it reveals
   await expectQuiet(page, problems);
 });
 
+/**
+ * #901 — the same resume, driven ENTIRELY from the app.
+ *
+ * ADDED beside the test above rather than replacing its `page.request.post`: that
+ * POST is the only end-to-end proof the anonymous A13 seam still resumes a run,
+ * and #901 does not change that seam. The two doors need two tests.
+ *
+ * What only this level can show: the browser completes the wait without ever
+ * holding the capability token. The unit tests can assert the client does not SEND
+ * one, but only here is the token genuinely derived by the real server, from a
+ * request that carried nothing but `(nodeId, attemptId, payload)`.
+ *
+ * The `decision` output is declared, so the run also proves the body ARRIVED: a
+ * completion that dropped the payload would still resume the run, and would still
+ * look green from the header alone.
+ */
+test('#901 — an operator completes the wait from the app, sending no token', async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, '#901 approval', APPROVAL_DOC);
+  const runId = await fireManualTrigger(page, pipelineVersionId, '#901 park');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  await expect(page.locator(headerStatus)).toHaveText('waiting (callback)', { timeout: 20_000 });
+
+  const list = page.getByRole('list', { name: 'Pending callbacks' });
+  await expect(list).toBeVisible();
+
+  /* NEVER REVEALED. The whole request below is composed without clicking "Show
+     callback URL", so the token is not on the page, not in the DOM, and not in
+     this browser context — which is the property #901 exists for. */
+  const trigger = list.getByRole('button', { name: /^Complete wait for / });
+  await trigger.click();
+  await expect(list).not.toContainText('/api/external-wait/');
+
+  /* CANCEL RETURNS FOCUS — asserted in a real browser because focus is exactly
+     what jsdom models least like one. The trigger unmounts when the editor opens,
+     so a naive synchronous restore silently focuses nothing and a keyboard user
+     is left on <body> with no way back to the control they just used. */
+  await list.getByRole('button', { name: 'Cancel' }).click();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+
+  const body = list.getByRole('textbox', { name: /Callback body/ });
+
+  /* THE REFUSAL FIRST, because it is the half a happy path cannot show: a body
+     failing the declared contract must come back NAMING the field, and must leave
+     the node parked and the editor usable. Before #901 this reached the operator
+     as "request failed (422)" with the reason discarded — the route's error body
+     bypassed the shared contract — so this assertion is the fix, not decoration. */
+  await body.fill('{"note": "no decision here"}');
+  await list.getByRole('button', { name: 'Complete this wait' }).click();
+  await expect(list.getByRole('alert')).toContainText('decision');
+  await expect(page.locator(headerStatus)).toHaveText('waiting (callback)');
+  // Still open, still holding what was typed — a 422 is fixable in place.
+  await expect(body).toHaveValue('{"note": "no decision here"}');
+
+  await body.fill('{"decision": "approved in-app"}');
+  await list.getByRole('button', { name: 'Complete this wait' }).click();
+
+  /* Resumed through the live tail, with no reload and no `curl`. */
+  await expect(page.locator(headerStatus)).toHaveText('success', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'Waiting on a callback' })).toHaveCount(0);
+
+  /* The BODY got through, not just the completion — a completion that dropped the
+     payload resumes the run and still reads as success from the header, so the
+     value has to be asserted somewhere it is actually recorded.
+
+     Read off the durable LOG rather than the page, because the page does not show
+     it: `externalWait.completed` IS the node's success event (there is no
+     following `node.succeeded`), and the drill-in's Outputs section folds only
+     from `node.succeeded` — so a webhook's declared outputs render nowhere, which
+     is true of a `curl` completion too and predates this ticket. Filed as #911.
+     When that lands, this assertion should move onto the panel, which is where an
+     operator would look. */
+  const events = await (await page.request.get(`/api/runs/${runId}/events`)).json();
+  const completion = (events as Array<{ type: string; payload: { outputs?: unknown } }>).find(
+    (row) => row.type === 'externalWait.completed',
+  );
+  expect(completion?.payload.outputs).toEqual({ decision: 'approved in-app' });
+
+  /* The one allowed console line is the browser's own network entry for the 422
+     this spec PROVOKES — the contract refusal above is the behaviour under test,
+     and Chrome logs every non-2xx response whether or not the app handles it (it
+     does: the reason is rendered into the alert). Anchored on the browser-level
+     wording rather than a bare `/422/`, which would also swallow an unhandled
+     `request failed (422)` from the app itself. `expectQuiet` fails an allow
+     pattern that matches nothing, so this cannot rot into a blanket mute. */
+  await expectQuiet(page, problems, [
+    /Failed to load resource: the server responded with a status of 422/,
+  ]);
+});
+
 test('#900 — a run parked on a TIMER is offered no callback surface', async ({ page }) => {
   const problems = collectPageProblems(page);
 
