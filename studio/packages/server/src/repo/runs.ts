@@ -327,6 +327,11 @@ const ACTIVE_RUN_STATUSES = ['pending', 'running'] as const satisfies readonly R
  *   never passes through the launcher's admission queue), and is listed for
  *   completeness of the partition rather than because it is expected.
  *
+ * `pending` is defensive in the same way and for a different reason: the reseed
+ * producer syncs R2's row to its folded status INSIDE the creating transaction,
+ * precisely so a durable `pending` row with a log cannot exist. Both are listed
+ * because this set's contract is "has not finished", not "is expected here".
+ *
  * Written out rather than derived from `TERMINAL_RUN_STATUS`, because that
  * derivation is subtly wrong: `TERMINAL_RUN_STATUS` is a set of
  * `RunLifecycleStatus`, which contains neither `queued` nor `skipped`, so
@@ -353,8 +358,12 @@ export const LIVE_RUN_STATUSES = [
  *
  * Returns the id AND status so the refusal can say which run and what it is
  * doing — with no cancel control in the UI, that is the operator's only handle on
- * it. Backed by `runs_rerun_of_idx`; ordered by `startedAt` so the answer (and
- * any test asserting it) is stable when a pre-guard database holds several.
+ * it. Backed by `runs_rerun_of_idx`; ordered oldest-first so the answer (and any
+ * test asserting it) is stable when a pre-guard database holds several. The
+ * tie-break is `rowid`, not `id`, for the reason the neighbouring readers give:
+ * `startedAt` is a millisecond stamp that several rows can share, and `id` is a
+ * random nanoid, so an id tie-break is stable but ARBITRARY — it would pick a
+ * different one of two same-millisecond reruns on a different insert order.
  */
 export function findLiveRerunOf(
   db: Db,
@@ -364,7 +373,7 @@ export function findLiveRerunOf(
     .select({ id: runs.id, status: runs.status })
     .from(runs)
     .where(and(eq(runs.rerunOf, sourceRunId), inArray(runs.status, [...LIVE_RUN_STATUSES])))
-    .orderBy(asc(runs.startedAt), asc(runs.id))
+    .orderBy(asc(runs.startedAt), asc(sql`rowid`))
     .get();
   return row ?? null;
 }

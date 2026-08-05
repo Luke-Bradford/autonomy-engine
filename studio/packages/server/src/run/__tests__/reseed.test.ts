@@ -372,6 +372,32 @@ describe('RS2 producer — the double-rerun guard (#896)', () => {
   });
 
   /**
+   * The guard sits BEFORE the transaction, on the argument that nothing in
+   * `rerunFromFailed` awaits between the check and `createRun` — so two calls
+   * cannot interleave and an early check is as atomic as an in-tx one. That is an
+   * argument about the code's shape, and this is the test that makes it falsifiable
+   * rather than a comment: fire two reruns of the same source with no scheduling
+   * gap between them and require that exactly ONE is created. If a suspension point
+   * is ever introduced into that path, both calls will pass the check and this goes
+   * red — which is precisely when someone needs to be told.
+   */
+  it('admits exactly one of two rerun calls issued with no gap between them', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), node('b')], [edge('a', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+
+    const svc = createReseedService(deps(db, {}));
+    const settled = await Promise.allSettled([svc.rerunFromFailed(r1), svc.rerunFromFailed(r1)]);
+
+    const won = settled.filter((s) => s.status === 'fulfilled');
+    const lost = settled.filter((s) => s.status === 'rejected');
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((lost[0] as PromiseRejectedResult).reason).toBeInstanceOf(RerunNotEligibleError);
+    await (won[0] as PromiseFulfilledResult<{ runId: string; drive: Promise<void> }>).value.drive;
+  });
+
+  /**
    * Ordering matters: the duplicate is the ACTIONABLE message ("your rerun is
    * already running"), so it must win over a resolve failure of the pinned version,
    * which tells the operator nothing they can act on while a rerun is in flight.

@@ -413,7 +413,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * The producer's eligibility + version-resolution verdicts surface through the
    * global error handler: `RerunNotEligibleError` (no log / not terminated / it
-   * succeeded) → 409, `DocUnresolvableError` (the pinned version is gone) → 409.
+   * succeeded / #896 — a rerun of it is already in flight) → 409,
+   * `DocUnresolvableError` (the pinned version is gone) → 409.
    * R2 reuses R1's params + version EXACTLY (no override body — param override is a
    * simple-rerun concern, not rerun-from-failed).
    */

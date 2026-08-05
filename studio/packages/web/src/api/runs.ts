@@ -8,6 +8,7 @@ import {
   RunEventSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
+  type RerunAccepted,
   type Run,
   type RunSummary,
   type RunDetail,
@@ -199,7 +200,7 @@ export function completeExternalWait(
  * against (a mid-flight remount re-arming the button) is refused server-side,
  * where a second tab and a bare `curl` are covered too.
  */
-export function rerunFromFailed(id: string, signal?: AbortSignal): Promise<{ runId: string }> {
+export function rerunFromFailed(id: string, signal?: AbortSignal): Promise<RerunAccepted> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/rerun-from-failed`, {
     method: 'POST',
     schema: RerunAcceptedSchema,
