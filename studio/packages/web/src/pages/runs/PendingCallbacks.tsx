@@ -88,6 +88,22 @@ export function PendingCallbacks({
      it on open via `autoFocus`; on close it comes back here, to the control that
      opened it — otherwise a keyboard or screen-reader user is dropped to <body>. */
   const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
+  /* The restore CANNOT happen inside `closeEditor`. The trigger renders only while
+     that wait's editor is closed, so opening the editor unmounted it and fired its
+     ref callback with `null` — by the time Cancel (or a successful send) runs, the
+     ref holds nothing and `.focus()` is a guaranteed no-op. So `closeEditor` only
+     names the wait, and the focus lands in an effect, which React runs after the
+     trigger has remounted and its ref callback has run again. */
+  const [restoreFocusTo, setRestoreFocusTo] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (restoreFocusTo === null) return;
+    /* Absent when the wait itself is gone — the completion frame remounted this
+       list without it. Nothing to return to, and nothing to fix: that path already
+       moved the operator on. */
+    triggers.current[restoreFocusTo]?.focus();
+    setRestoreFocusTo(null);
+  }, [restoreFocusTo]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -130,7 +146,7 @@ export function PendingCallbacks({
        refusal from a body that no longer exists would sit above an empty editor
        claiming the wait was not completed. */
     clearError(key);
-    triggers.current[key]?.focus();
+    setRestoreFocusTo(key);
   }
 
   function clearError(key: string) {

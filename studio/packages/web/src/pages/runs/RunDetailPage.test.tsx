@@ -1835,6 +1835,21 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     expect(screen.getByRole('textbox', { name: /Callback body/ })).toHaveValue('{"note": "wrong"}');
   });
 
+  it('#901 — Cancel puts focus back on the control that opened the editor', async () => {
+    /* The trigger only EXISTS while the editor is closed, so at the moment Cancel
+       runs its ref has already been nulled by its own unmount — restoring focus
+       synchronously there is a guaranteed no-op, and the keyboard user lands on
+       <body>. The restore has to wait until the trigger has mounted again. */
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked();
+
+    await openEditor();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    const trigger = await screen.findByRole('button', { name: /^Complete wait for / });
+    await vi.waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it('#901 — an unrelated wait settling does NOT discard what is being typed', async () => {
     /* The direct collision between #901's editor and #900's freshness model:
        `PendingCallbacks` is keyed on the wait epoch, so ANY externalWait frame
