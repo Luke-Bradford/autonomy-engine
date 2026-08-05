@@ -1,3 +1,7 @@
+/* The module's own SOURCE. Vite's `?raw` rather than `fs` — the web package's
+   vitest environment is jsdom, where `import.meta.url` is an http URL and
+   `readFile` cannot resolve it. */
+import source from './ports.ts?raw';
 import { describe, expect, it } from 'vitest';
 import { EdgeOnSchema, type Node } from '@autonomy-studio/shared';
 import {
@@ -298,5 +302,35 @@ describe('conditionFromConnection', () => {
     expect(conditionFromConnection({ sourceHandle: null })).toBeNull();
     expect(conditionFromConnection({ sourceHandle: undefined })).toBeNull();
     expect(conditionFromConnection({ sourceHandle: 'out' })).toBeNull();
+  });
+});
+
+/**
+ * The one-way dependency `edgeCondition → ports` that both modules' docblocks
+ * claim, asserted against the SOURCE rather than left as a comment.
+ *
+ * U19 moved the condition⇄port codec here and `edgeCondition.ts` re-exports it,
+ * so any value this module imports back from that one closes a genuine runtime
+ * cycle. It closed once already: `usedConditionsBySource` called `conditionOf`,
+ * which then still lived in `edgeCondition.ts`, and BOTH files carried a comment
+ * saying no such import existed. It did not break, because each side is only
+ * reached inside a function body rather than at module-evaluation time — which
+ * is a property of today's call sites, not a guarantee.
+ *
+ * The repo has no `import/no-cycle` rule (that needs `eslint-plugin-import`,
+ * which is not a dependency here), so this reads the file. A type-only import is
+ * fine and expected: TypeScript erases it, so it is absent from the module graph
+ * the browser actually evaluates.
+ */
+describe('module-graph direction', () => {
+  it('imports NOTHING but types from edgeCondition — the other way is the re-export', () => {
+    /* One statement per match: an import contains no `;` of its own, so
+       `[^;]*` cannot run past the end of one — while it still spans the
+       newlines of a multi-line brace list. */
+    const statements = source.match(/^import[^;]*;$/gm) ?? [];
+    const back = statements.filter((s) => s.includes("from './edgeCondition'"));
+    // Present, or the assertion below would pass vacuously on a renamed path.
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatch(/^import type /);
   });
 });

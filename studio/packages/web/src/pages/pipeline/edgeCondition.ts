@@ -1,5 +1,11 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
-import { conditionLabel, declaredConditionsOf, encodeCondition, TARGET_PORT_ID } from './ports';
+import {
+  conditionLabel,
+  conditionOf,
+  declaredConditionsOf,
+  encodeCondition,
+  TARGET_PORT_ID,
+} from './ports';
 import {
   declaredBranchesOf,
   EdgeOnSchema,
@@ -14,11 +20,22 @@ import {
  * The condition⇄port codec moved to `ports.ts` in U19: a port id and a
  * `<select>` option value are now ONE encoding, and it belongs beside the ports
  * that are its first consumer. Re-exported here so the callers that only ever
- * cared about conditions keep their import path, and so the dependency stays
- * one-way — a value import from `ports.ts` back to this module would be a cycle.
+ * cared about conditions keep their import path.
+ *
+ * The dependency runs ONE WAY, `edgeCondition → ports`, and `conditionOf` is in
+ * that list because of it. It read more naturally here — it is a fact about an
+ * `Edge`, not about a port — but `usedConditionsBySource` calls it, so leaving
+ * it here made `ports.ts → edgeCondition.ts` a VALUE import and closed a real
+ * runtime cycle, while both files' docblocks asserted there wasn't one. (It
+ * happened not to break, because both sides are used inside function bodies
+ * rather than at module top level — which is luck, not design, and nothing in
+ * `eslint.config.js` would have caught it changing.) What crosses back now is
+ * the `EdgeCondition` TYPE alone, which TypeScript erases, so the one-way claim
+ * is true of the emitted modules and not just of the intent.
  */
 export {
   conditionLabel,
+  conditionOf,
   decodeConditionValue,
   encodeCondition,
   OPERATIONAL_CONDITIONS,
@@ -31,11 +48,6 @@ export {
  * business one: the two fields are one decision, made once.
  */
 export type EdgeCondition = { on: EdgeOn } | { on: 'branch'; branch: string };
-
-/** The condition carried by an existing edge. */
-export function conditionOf(e: Edge): EdgeCondition {
-  return e.on === 'branch' ? { on: 'branch', branch: e.branch } : { on: e.on };
-}
 
 /**
  * The visible edge label — the routing key, whatever kind of key it is.

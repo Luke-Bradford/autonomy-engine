@@ -5,7 +5,10 @@ import {
   type EdgeOn,
   type Node,
 } from '@autonomy-studio/shared';
-import { conditionOf, type EdgeCondition } from './edgeCondition';
+/* TYPE-ONLY, and it has to stay that way: `edgeCondition.ts` imports values from
+   THIS module (the codec below), so anything but an erased type import here
+   would close a runtime cycle between the two. */
+import type { EdgeCondition } from './edgeCondition';
 
 /**
  * U6b/U19 — the canvas's PORTS: the identified points an edge attaches to, and
@@ -32,10 +35,27 @@ import { conditionOf, type EdgeCondition } from './edgeCondition';
  * re-exports it for its existing callers; the dependency runs one way,
  * `edgeCondition → ports`, because a value import back the other way would be a
  * cycle.
+ *
+ * `conditionOf` is here for exactly that reason and not for any other — see its
+ * own note. Nothing in this module may import a VALUE from `edgeCondition.ts`.
  */
 
 /** The single incoming port. One per node, in the engine's single-in model. */
 export const TARGET_PORT_ID = 'in';
+
+/**
+ * The condition carried by an existing edge.
+ *
+ * A fact about an `Edge`, so it reads as an `edgeCondition.ts` helper and lived
+ * there until U19 — where `usedConditionsBySource` (below) became its caller and
+ * turned that file into a value dependency of this one, closing a runtime cycle
+ * with the codec's re-export going the other way. It is re-exported from
+ * `edgeCondition.ts`, so every existing caller's import path is unchanged; only
+ * the module the definition sits in moved.
+ */
+export function conditionOf(e: Edge): EdgeCondition {
+  return e.on === 'branch' ? { on: 'branch', branch: e.branch } : { on: e.on };
+}
 
 /**
  * The four OPERATIONAL outcomes, all of them authorable as of U6a.
