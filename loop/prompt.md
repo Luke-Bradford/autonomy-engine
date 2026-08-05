@@ -24,7 +24,7 @@ Run: `git log --oneline -15 origin/main` · `gh pr list --state open` (for each:
 0. **Not every open PR is YOURS to land.** The supervisor (a human-facing session) opens its OWN engine/tooling PRs on `main` — titled `fix(ci):`/`fix(review):`/`docs:`, on the **reserved `supervisor/**` prefix** (#823; it previously used `fix/<slug>-…`, which collided with your own `loop/` branches), touching `.github/`, `lib/`, `bin/`, `tests/`, `start`. **Your branches always carry the issue number** — `feat/studio-<n>-…`, `fix/studio-<n>-…`, `fix/loop-<n>-…` — and `drive.sh`'s `is_loop_ref` keys its progress signals on exactly that, so a branch of yours WITHOUT a number is invisible to the stall detector and the gate wait (it under-counts progress and can trip a false stall, which stops the run; that is the safe polarity, but avoid it). Do NOT ADOPT, merge, or build on those — the supervisor lands them. (This changes NOTHING about review: the required `review` check + the API review bot still run on every PR including those; they are simply the supervisor's to resolve, not yours.) They are not "an open studio PR" for rule 1 and never block you. Your scope is `studio/**` (the work order + its found-defect tickets); filter `gh pr list` to studio feature branches before applying the rules below. Your OWN studio PRs get the full treatment: every review finding resolved (FIXED/DEFERRED/REBUTTED), merge only on `review`=APPROVE — unchanged.
 1. **An open STUDIO PR exists** (a `feat/studio-…`/`fix/studio-…` branch) → finish it, don't start new work / don't duplicate. Green + `review`=APPROVE on the LATEST commit → squash-merge, delete branch. Red / unresolved findings → fix on that branch, push, wait for the gate.
 2. **No open studio PR, a studio feature branch ahead of main** → continue it to a PR.
-3. **Clean** (no open studio PR/branch) → start the NEXT item in the WORK ORDER.
+3. **Clean** (no open studio PR/branch) → start the next item in **THE QUEUE** under CURRENT PRIORITY. That list is the ordering; the `## WORK ORDER` section further down is the dependency BACKGROUND it draws from, not a second queue to read instead.
 Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → reconcile before building. (A supervisor engine PR open ALONGSIDE your studio PR is fine and expected — it is not a race, not yours.)
 
 ## THE PLAN LIVES IN THE SPECS (read them — do not reinvent)
@@ -33,15 +33,23 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-**NEXT ITEM = `#917`** — the monitoring section for connected AI/LLM activity, tokens and account
+**Why `#917` heads THE QUEUE below** — the monitoring section for connected AI/LLM activity, tokens and account
 quota (operator, 2026-08-05: *"take some of the nice visual monitoring and give it its own section
 in the monitoring pages so that you could see any active use of connected AI's and/or LLMs, the
 sorts of things you can't directly monitor"*). It is UI work, so it satisfies this epic AND it is
 the cutover prerequisite: it is the last thing the operator still uses the old prototype dashboard
-FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket — build it first.
+FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket.
 
-**Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
-Both are ahead of the defect sweep, which as amended in the STANDING RULE section below counts
+**THE QUEUE — THIS LIST IS THE ONLY ORDERING. No other section restates it; they point here.**
+
+1. **`#917`** — the monitoring section (above). Visible product AND the cutover prerequisite.
+2. **studio's quota sampler, flag OFF** — see the CUTOVER block for WHY and for the one-poller
+   constraint that makes the flag load-bearing. Do not skip it to get back to the UI epic: C3
+   cannot happen without it, and the operator is pushing for the cutover.
+3. **C3 `#410`** — retire the dashboard and enable that flag in the SAME step.
+4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+
+All four are ahead of the defect sweep, which as amended in the STANDING RULE section below counts
 `[studio]` tickets only.
 
 **WHY THIS IS THE PRIORITY (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs
@@ -97,10 +105,9 @@ and the loop exists to build it — not to build the loop.
   because the request path no longer touches the provider — the state in which it deserves to be
   primary.
 
-  **Sequence: `#917` → sampler (flag off) → C3 (retire dashboard + enable flag together).** `#917`
-  and the sampler are INDEPENDENT of each other; `#917` goes first on OPERATOR PRIORITY, being the
-  visible product work this epic exists for, against a standing steer that infrastructure-over-
-  visible-product is the mistake to avoid (*"The app doesn't appear to have anything new to show"*).
+  **ORDERING LIVES IN "THE QUEUE" UNDER CURRENT PRIORITY — deliberately not restated here.** Six
+  review rounds on this file were all the same defect: the order written in two places, drifting
+  apart. One list, one owner. This block owns WHY and the constraints; the queue owns WHEN.
 
   **When you do C3:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
   it and the ticket says so). `loop/` is NOT part of the old engine — it is the control plane and it
