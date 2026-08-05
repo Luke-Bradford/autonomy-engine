@@ -164,6 +164,17 @@ export function ContainerPanel({
    */
   const [inputs, setInputs] = useState(() => seedFieldInputs(fields, stored));
   const [error, setError] = useState<string | null>(null);
+  /* U17 — re-seed when the STORED container changes underneath the draft. The
+     remount the note above relies on covers switching to a DIFFERENT container;
+     an undo replaces the config of the SAME one, which remounts nothing, so the
+     form would keep showing the config that was just undone. Render-phase
+     derived state, `NodePanel`'s precedent. */
+  const [syncedStored, setSyncedStored] = useState(stored);
+  if (syncedStored !== stored) {
+    setSyncedStored(stored);
+    setInputs(seedFieldInputs(fields, stored));
+    setError(null);
+  }
 
   function apply() {
     const assembled = assembleConfig(stored, fields, inputs);

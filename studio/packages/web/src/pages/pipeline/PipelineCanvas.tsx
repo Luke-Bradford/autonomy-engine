@@ -1283,6 +1283,18 @@ function BounceCapField({
   const stored = edge.maxBounces === undefined ? '' : String(edge.maxBounces);
   const [draft, setDraft] = useState(stored);
   const [error, setError] = useState<string | null>(null);
+  /* U17 — re-seed when the STORED cap changes underneath the draft. The panel is
+     keyed by `edge.id`, so switching edges remounts; an undo changes the cap of
+     the SAME edge, which remounts nothing, and without this the field would go
+     on showing the value the operator had just undone. Render-phase derived
+     state, not an effect — `NodePanel`'s precedent, which this repo's React 19
+     lint permits where `useEffect` + setState would not be. */
+  const [syncedCap, setSyncedCap] = useState(stored);
+  if (syncedCap !== stored) {
+    setSyncedCap(stored);
+    setDraft(stored);
+    setError(null);
+  }
 
   function commit(text: string) {
     // A blur that changed nothing must not write — tabbing THROUGH the field
