@@ -21,7 +21,11 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { implicitRouting, type ContainerKind } from '@autonomy-studio/shared';
+import {
+  implicitRouting,
+  type ContainerKind,
+  type Position as DomainPosition,
+} from '@autonomy-studio/shared';
 import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
@@ -362,10 +366,47 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const paneWidth = useReactFlowStore((s) => s.width);
   const paneHeight = useReactFlowStore((s) => s.height);
 
+  /**
+   * U17 — the DOMAIN position each node held at the last reconcile.
+   *
+   * The escape hatch the carry-forward below owed to U17/U9/U22: it is how this
+   * effect tells "the view is ahead of the domain" (a drag — keep the view) from
+   * "the domain moved on its own" (an undo, an auto-layout, a version restore —
+   * the view is stale and must follow).
+   *
+   * A remembered position rather than a store epoch/generation counter, because
+   * it cannot mis-fire: it is derived from the very positions being reconciled,
+   * so it needs no dependency wiring to stay in step, and it covers every
+   * programmatic writer at once instead of each one remembering to signal.
+   *
+   * It cannot fire mid-drag either — `onNodesChange` commits `moveNode` only
+   * once a drag settles (`c.dragging !== true`), so the domain position is
+   * unchanged for the whole gesture, and at drag-end the domain position IS the
+   * view position, making the hatch a no-op exactly when the carry-forward
+   * matters.
+   */
+  const lastDomainPositions = useRef(new Map<string, DomainPosition>());
+
   // Reconcile store → view: rebuild the view array from the domain nodes,
   // carrying forward each surviving node's live position and measured size so
   // React Flow never re-initialises (and never flickers) an existing node.
   useEffect(() => {
+    // Both computed OUTSIDE the updater below, which must stay pure: StrictMode
+    // double-invokes it in development, and a ref written from inside would then
+    // record a reconcile that had not happened. (The second invocation is a
+    // no-op either way — by then the view array already carries the domain
+    // positions, so re-deciding "domain wins" changes nothing.)
+    const seen = lastDomainPositions.current;
+    const domainMoved = new Set(
+      nodes
+        .filter((n) => {
+          const was = seen.get(n.id);
+          return was === undefined || was.x !== n.position.x || was.y !== n.position.y;
+        })
+        .map((n) => n.id),
+    );
+    lastDomainPositions.current = new Map(nodes.map((n) => [n.id, n.position]));
+
     setFlowNodes((prev) => {
       const byId = new Map(prev.map((n) => [n.id, n]));
       return nodes.map((n) => {
@@ -375,8 +416,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           id: n.id,
           type: 'activity',
           // Keep React Flow's live position during/after a drag; fall back to
-          // the domain position for a freshly-added node.
-          position: existing?.position ?? n.position,
+          // the domain position for a freshly-added node — or take it when the
+          // DOMAIN is what moved (U17, above).
+          position: domainMoved.has(n.id) ? n.position : (existing?.position ?? n.position),
           data: {
             // #878 — the box carries the IDENTIFYING name ("HTTP Request 2"),
             // not the kind. Every message that points at one activity now names
