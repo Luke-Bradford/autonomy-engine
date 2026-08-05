@@ -11,6 +11,8 @@ import {
   type RunSummary,
   type RunDetail,
   type RunEvent,
+  type RunSince,
+  type RunStatus,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
@@ -41,6 +43,24 @@ const RunEventListSchema = z.array(RunEventSchema);
  */
 
 /**
+ * U26 — the filter axes `GET /api/runs` accepts from the Monitor. Every one is
+ * OPTIONAL and every one only NARROWS: the owner scope is applied server-side
+ * from the principal and is not expressible here, so no combination of these can
+ * widen the list past the caller's own runs.
+ *
+ * `since` is a RELATIVE window (`24h`), not an epoch, and the server resolves it
+ * against its own clock — the same clock that stamped `started_at`. Resolving it
+ * here would offset the window by whatever this browser's clock skew is, and
+ * would bake a moment into any shared link.
+ */
+export interface ListRunsQuery {
+  status?: RunStatus;
+  pipelineId?: string;
+  triggerId?: string;
+  since?: RunSince;
+}
+
+/**
  * Owner-scoped list of runs, newest-first — an order the server now genuinely
  * imposes (`started_at DESC, rowid DESC`). It did not before: `listRuns` issued
  * no `ORDER BY` at all, so this docblock's previous "newest-first as the server
@@ -52,8 +72,19 @@ const RunEventListSchema = z.array(RunEventSchema);
  * version number and trigger name the list renders. Strictly additive over
  * `Run`, so this is a widening, not a breaking change.
  */
-export function listRuns(signal?: AbortSignal): Promise<RunSummary[]> {
-  return apiFetch('/api/runs', { schema: RunListSchema, signal });
+export function listRuns(
+  filters: ListRunsQuery = {},
+  signal?: AbortSignal,
+): Promise<RunSummary[]> {
+  const query = new URLSearchParams();
+  // Only SET axes reach the wire. An empty-string param is not "no filter" to
+  // the server — `pipelineId`/`triggerId` are `min(1)`, so `?pipelineId=` is a
+  // 400, and `since`/`status` are closed enums that refuse it too.
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== '') query.set(key, value);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : '';
+  return apiFetch(`/api/runs${suffix}`, { schema: RunListSchema, signal });
 }
 
 /** One run by id (`GET /api/runs/:id`); 404 → `ApiError(404)`. */
