@@ -66,13 +66,27 @@ async function mintedId(page: Page, index: number): Promise<string> {
  * inside a `${…}` and must not be rewritten there.
  *
  * The `[^}]*` here is the very scanner pass 5 refuses to use — a `${…}` body may
- * carry a `}` inside a string literal, so this blanks such a span short. It stays
- * because the failure modes are not comparable: pass 5 SPLICES, where a wrong
- * boundary corrupts the operator's expression, while this only BLANKS before a
- * `not.toContain('n_')` check, where blanking too little can only make the guard
- * stricter. No message reaching this spec has a braced literal.
+ * carry a `}` inside a string literal, so this would blank such a span short. It
+ * stays for two reasons. The failure modes are not comparable: pass 5 SPLICES,
+ * where a wrong boundary corrupts the operator's expression, while this only
+ * BLANKS before a `not.toContain('n_')` check, so a short blank leaves MORE text
+ * under the guard and can only make it stricter — a false RED, never a false
+ * green. And the alternative is importing `scanTemplateRefs`, which would be the
+ * first `@autonomy-studio/shared` import in any e2e file; these specs drive the
+ * app through its HTTP surface as an operator does (`support/seedDoc.ts`).
+ *
+ * The assumption is ENFORCED rather than asserted in prose. A braced literal
+ * needs a quote inside the span, so a quote there trips the guard below and this
+ * spec fails naming the reason, instead of silently mis-blanking. It is
+ * deliberately over-strict — a harmless `${default(a, "b")}` trips it too —
+ * because the remedy (reach for a real scanner) is the same either way, and a
+ * loud stop beats a comment nobody re-reads.
  */
 function outsideExpressions(message: string): string {
+  expect(
+    message,
+    'a quote inside a ${…} means this naive blanking may close the span early — use a quote-aware scan',
+  ).not.toMatch(/\$\{[^}]*["']/);
   return message.replace(/\$\{[^}]*\}/g, '${…}');
 }
 
