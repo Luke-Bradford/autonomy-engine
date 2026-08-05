@@ -8,6 +8,7 @@ import {
   declaredConditionsOf,
   DRAWN_EDGE_CONDITION,
   encodeCondition,
+  HANDLE_SIZE,
   nodeBoxHeight,
   OPERATIONAL_CONDITIONS,
   orientDrawnEnds,
@@ -100,7 +101,8 @@ describe('the condition⇄port codec', () => {
    * A `switch` case label is arbitrary and `validateSwitchConfig` reserves only
    * `default`, so a label containing a quote would inject a `SyntaxError` into
    * that selector and break connecting CANVAS-WIDE, not just on that node. It is
-   * percent-encoded for exactly that reason; the human string survives on
+   * escaped to a selector-safe alphabet for exactly that reason; the human string
+   * survives on
    * `SourcePort.label`.
    */
   it('encodes a branch label so it cannot break the selector React Flow builds', () => {
@@ -109,6 +111,22 @@ describe('the condition⇄port codec', () => {
       expect(id).not.toMatch(/["'\\\s\]]/);
       expect(decodeConditionValue(id)).toEqual({ on: 'branch', branch });
     }
+  });
+
+  /**
+   * A lone surrogate is a legally SAVABLE case label — `configSchema` is
+   * `z.array(z.string())` and `validateSwitchConfig` refuses only `''` and the
+   * reserved `default` — and `encodeURIComponent` throws a `URIError` on one.
+   * The encoder is not allowed to throw: it runs inside a `useMemo` over EVERY
+   * node on the canvas and again over every node on the run monitor, so one
+   * malformed string in one imported doc would blank both views rather than
+   * spoil one port.
+   */
+  it('never throws on a label a URI encoder would reject, and still round-trips it', () => {
+    const lone = 'a\uD800b';
+    const id = encodeCondition({ on: 'branch', branch: lone });
+    expect(id).not.toMatch(/["'\\\s\]]/);
+    expect(decodeConditionValue(id)).toEqual({ on: 'branch', branch: lone });
   });
 
   it('refuses a value that is not a condition rather than casting it', () => {
@@ -227,14 +245,25 @@ describe('port geometry', () => {
     expect(CONNECTION_RADIUS).toBeLessThan(SOURCE_PORT_PITCH / 2);
   });
 
-  it('grows the node box so N ports never overlap', () => {
-    // Every port must fit inside the box at the pitch above, or the geometry
-    // test one line up is decorative.
+  /**
+   * Asserted against the GEOMETRY, not against `nodeBoxHeight`'s own arithmetic.
+   * Restating the formula would pass for any formula, including the off-by-one
+   * that shipped in the first draft of this file; what has to be true is that
+   * the outermost dot fits inside the box `containerHandles` states and the CSS
+   * draws.
+   */
+  it('grows the node box until every port FITS inside it', () => {
     for (const count of [1, 4, 8, 20]) {
-      expect(nodeBoxHeight(count)).toBeGreaterThanOrEqual(count * SOURCE_PORT_PITCH);
+      const outermost = Math.abs(sourcePortOffset(0, count));
+      expect(outermost * 2 + HANDLE_SIZE).toBeLessThanOrEqual(nodeBoxHeight(count));
     }
     // Monotonic: a source that declares more outcomes is never drawn smaller.
     expect(nodeBoxHeight(8)).toBeGreaterThan(nodeBoxHeight(4));
+    /* An ordinary activity — the four operational outcomes and nothing else —
+       keeps the box it had before U19. Node placement staggers a new node only
+       40px diagonally, so growing every node is what pushes each one into the
+       previous one's port column. */
+    expect(nodeBoxHeight(OPERATIONAL_CONDITIONS.length)).toBe(nodeBoxHeight(0));
   });
 });
 

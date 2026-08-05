@@ -140,7 +140,7 @@ function portCentreOf(
      `.react-flow__handle-right` selector would now resolve to whichever one the
      DOM happens to list first and silently drag from `success` in every spec.
      `data-handleid` is React Flow's own attribute, and the ids are
-     percent-encoded to a `[A-Za-z0-9-_.~%]` alphabet, so they need no escaping
+     escaped to a `[A-Za-z0-9-_.%]` alphabet, so they need no escaping
      inside the quoted selector. */
   const selector =
     side === 'source'

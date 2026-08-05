@@ -1,6 +1,12 @@
 import { Position, type NodeHandle } from '@xyflow/react';
 import { containerMembership, type Container } from '@autonomy-studio/shared';
-import { nodeBoxHeight, sourcePortOffset, TARGET_PORT_ID, type SourcePort } from './ports';
+import {
+  HANDLE_SIZE,
+  nodeBoxHeight,
+  sourcePortOffset,
+  TARGET_PORT_ID,
+  type SourcePort,
+} from './ports';
 
 /**
  * U6c — where a container is DRAWN.
@@ -358,12 +364,6 @@ export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
 export function unmeasuredNodeSize(portCount: number): { width: number; height: number } {
   return { width: UNMEASURED_NODE_SIZE.width, height: nodeBoxHeight(portCount) };
 }
-
-/**
- * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
- * centred on the node's border (`left: -4px` and friends).
- */
-const HANDLE_SIZE = 6;
 
 /**
  * The port bounds of a derived container box, stated rather than measured.

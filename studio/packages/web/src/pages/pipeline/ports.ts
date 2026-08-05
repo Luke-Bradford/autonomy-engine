@@ -78,37 +78,78 @@ const BRANCH_TAG = 'branch:';
 
 /**
  * The encoded condition — a port id, and the property panel's `<option value>`.
- * Injective across both arms.
+ * Injective across both arms, and TOTAL: it never throws.
  *
- * The branch label is PERCENT-ENCODED, and that is a safety property rather than
+ * The branch label is escaped, and that is a safety property rather than
  * tidiness. React Flow builds a CSS selector out of the port id on every pointer
  * move of every connection drag —
  * `doc.querySelector('.react-flow__handle[data-id="${flowId}-${nodeId}-${id}-${type}"]')`
- * (`@xyflow/system` 0.0.79, index.js:2566). A case label is arbitrary, so a
- * label containing a quote would throw a `SyntaxError` out of that loop and
- * break connecting CANVAS-WIDE, not just on the node that carries it. The human
- * string is kept on `SourcePort.label`, which is what the operator reads.
+ * (`@xyflow/system` 0.0.79, index.js:2566). A `switch` case label is arbitrary
+ * (`validateSwitchConfig` reserves only `default`), so a label containing a
+ * quote would throw a `SyntaxError` out of that loop and break connecting
+ * CANVAS-WIDE, not just on the node that carries it. The human string is kept on
+ * `SourcePort.label`, which is what the operator reads.
  */
 export function encodeCondition(c: EdgeCondition): string {
-  return c.on === 'branch' ? `${BRANCH_TAG}${percentEncode(c.branch)}` : `${OP_TAG}${c.on}`;
+  return c.on === 'branch' ? `${BRANCH_TAG}${escapeLabel(c.branch)}` : `${OP_TAG}${c.on}`;
+}
+
+/** The characters a port id may carry literally — a selector-safe alphabet. */
+const PORT_ID_SAFE = /[A-Za-z0-9\-_.]/;
+
+/** How many hex digits one escaped UTF-16 code unit takes. */
+const ESCAPE_WIDTH = 4;
+
+/**
+ * Escape a branch label to `[A-Za-z0-9-_.%]`, one UTF-16 CODE UNIT at a time.
+ *
+ * `encodeURIComponent` was the obvious tool and is the wrong one: it THROWS a
+ * `URIError` on a lone surrogate, and a lone surrogate is a legally savable case
+ * label — `configSchema` is `z.array(z.string())` and `validateSwitchConfig`
+ * refuses only `''` and the reserved `default`, so nothing between the API and
+ * here rejects one. An encoder that throws does not fail on that node, it fails
+ * the whole render: `portsBySource` is a `useMemo` over every node,
+ * `runFlowNodes` builds the monitor the same way, and `EdgePanel` builds its
+ * option list from it. One malformed string in one imported doc would blank the
+ * canvas.
+ *
+ * Escaping code units instead is total in both directions and loses nothing: a
+ * surrogate, paired or not, round-trips through `String.fromCharCode`. It also
+ * leaves the labels that actually occur — `true`, `false`, `default`, ordinary
+ * case names — completely literal, so a port id stays readable in the DOM.
+ */
+function escapeLabel(value: string): string {
+  let out = '';
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i]!;
+    out += PORT_ID_SAFE.test(ch)
+      ? ch
+      : `%${value.charCodeAt(i).toString(16).toUpperCase().padStart(ESCAPE_WIDTH, '0')}`;
+  }
+  return out;
 }
 
 /**
- * `encodeURIComponent`, plus the six punctuation marks it deliberately leaves
- * alone (`!'()*~` are unreserved in RFC 3986 and legal in a URI).
+ * Reverse `escapeLabel`; `null` if the input is not something it produced.
  *
- * `'` is the one that matters: React Flow quotes the selector with `"`, so a
- * single quote is harmless THERE — but the id is also a selector in the e2e
- * helper and in any future stylesheet, and "safe as long as everyone keeps
- * quoting it the same way" is a property that decays. Encoding to a strict
- * `[A-Za-z0-9-_.~%]` alphabet makes it safe under either quoting;
- * `decodeURIComponent` reverses all of it unchanged.
+ * Refusing a malformed escape rather than passing it through is the same rule
+ * the operational arm follows: the value arrives from a DOM attribute, and a
+ * port id that decoded to a DIFFERENT label than the one that produced it would
+ * attach an edge to the wrong outcome, which is worse than not attaching it.
  */
-function percentEncode(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*~]/g,
-    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
+function unescapeLabel(value: string): string | null {
+  let out = '';
+  for (let i = 0; i < value.length; i += 1) {
+    if (value[i] !== '%') {
+      out += value[i];
+      continue;
+    }
+    const hex = value.slice(i + 1, i + 1 + ESCAPE_WIDTH);
+    if (!/^[0-9A-F]{4}$/.test(hex)) return null;
+    out += String.fromCharCode(parseInt(hex, 16));
+    i += ESCAPE_WIDTH;
+  }
+  return out;
 }
 
 /**
@@ -117,21 +158,16 @@ function percentEncode(value: string): string {
  * Only the FIRST delimiter splits, so a case label containing `:` round-trips.
  * An unrecognised operational value is refused rather than cast — the value
  * comes from the DOM, and a cast would put an off-enum string straight into the
- * doc. `decodeURIComponent` THROWS on a malformed escape (`%zz`), which a
- * git-imported doc can reach, so it degrades to `null` rather than taking the
- * canvas down.
+ * doc. A malformed escape (`%zz`) is refused for the same reason rather than
+ * decoded loosely: a port id that came back as a DIFFERENT label than the one
+ * that produced it would attach an edge to the wrong outcome.
  */
 export function decodeConditionValue(value: string): EdgeCondition | null {
   if (value.startsWith(BRANCH_TAG)) {
     const raw = value.slice(BRANCH_TAG.length);
     if (raw.length === 0) return null;
-    let branch: string;
-    try {
-      branch = decodeURIComponent(raw);
-    } catch {
-      return null;
-    }
-    return branch.length > 0 ? { on: 'branch', branch } : null;
+    const branch = unescapeLabel(raw);
+    return branch !== null && branch.length > 0 ? { on: 'branch', branch } : null;
   }
   if (value.startsWith(OP_TAG)) {
     const parsed = EdgeOnSchema.safeParse(value.slice(OP_TAG.length));
@@ -248,7 +284,8 @@ export function sourcePortsOf(
  * once per event (`runFlow.ts` records the mechanism). A `SourcePort[]` in that
  * data would be a fresh array on every event and would defeat it for every node.
  * So the run canvas carries the ids as one string and rebuilds the ports from
- * it; a space is safe because `encodeCondition` percent-encodes whitespace.
+ * it; a space is safe because `encodeCondition` escapes every character outside
+ * `[A-Za-z0-9-_.]`, whitespace included.
  */
 const PORT_ID_SEPARATOR = ' ';
 
@@ -303,6 +340,16 @@ export const CONNECTION_RADIUS = 6;
 const BASE_NODE_HEIGHT = 52;
 
 /**
+ * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
+ * centred on the node's border.
+ *
+ * Exported because two things must agree about it: `containerHandles` states a
+ * derived box's port bounds in these units, and `nodeBoxHeight` has to leave
+ * room for the OUTERMOST dot rather than for its centre.
+ */
+export const HANDLE_SIZE = 6;
+
+/**
  * A source port's offset from the node's vertical CENTRE, in flow units.
  *
  * Centred fixed-pitch rather than spread-across-the-height, so ONE formula
@@ -333,7 +380,13 @@ export function sourcePortOffset(index: number, count: number): number {
  * not silently make it worse.
  */
 export function nodeBoxHeight(portCount: number): number {
-  return Math.max(BASE_NODE_HEIGHT, portCount * SOURCE_PORT_PITCH);
+  /* The SPAN of n ports is (n-1) pitches between their centres, plus half a dot
+     at each end — not n pitches. Writing it the other way overshot by one pitch
+     per node, which is invisible (it is never too SMALL) but made the claim
+     above false: four ports would have forced 56px onto a box that fits them
+     at 52. */
+  const span = portCount === 0 ? 0 : (portCount - 1) * SOURCE_PORT_PITCH + HANDLE_SIZE;
+  return Math.max(BASE_NODE_HEIGHT, span);
 }
 
 /**
