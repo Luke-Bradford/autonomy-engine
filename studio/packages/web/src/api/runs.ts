@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   PendingExternalWaitListSchema,
+  RerunAcceptedSchema,
   RunDetailSchema,
   RunSchema,
   RunSummarySchema,
@@ -173,28 +174,6 @@ export function completeExternalWait(
 }
 
 /**
- * The accepted-rerun body. Declared HERE rather than in `@autonomy-studio/shared`,
- * which is the exception to this module's shared-schema rule and is called out
- * rather than glossed: the route replies with an inline object literal
- * (`reply.status(202).send({ runId })` — `server/src/routes/runs.ts`), so there
- * is no shared response schema to borrow, and one introduced for the client
- * alone would look like a contract check while checking nothing on the server
- * side. This stays a local shape assertion: it proves the field arrived and is a
- * non-empty string, and nothing more.
- *
- * The honest caveat is that the SIBLING `202 { runId }` route did better. `POST
- * /api/triggers/:id/fire` has `FireResultSchema` in shared, and the server's
- * `FireResult` type is derived from it (`server/src/run/launcher.ts`) — which is
- * exactly the cure for the objection above. Matching that is ~2 lines in shared
- * plus a `satisfies` on the route, and it is deferred here only to keep this
- * change client-only, because the argument for building it at all rests on
- * touching no server code. Worth doing the next time that route is opened —
- * tracked as **#899**, and already done for the external-waits route above
- * (`PendingExternalWaitSchema`), which is what that fix looks like.
- */
-const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
-
-/**
  * RS2 — start a rerun-from-failed of a terminal FAILED run.
  *
  * The server computes the reusable frontier from the source run's log, appends
@@ -210,9 +189,15 @@ const RerunAcceptedSchema = z.object({ runId: z.string().min(1) });
  *
  * Eligibility is the SERVER's to decide, from the event log. Both refusals
  * arrive as `ApiError(409)` carrying a human-readable reason:
- *  - `RerunNotEligibleError` — no log, not terminated, or it succeeded;
+ *  - `RerunNotEligibleError` — no log, not terminated, it succeeded, or (#896) a
+ *    rerun of the same source run is already in flight;
  *  - `DocUnresolvableError` — the pinned immutable version no longer resolves.
  * Surface that message verbatim; do not second-guess it (see `rerunAction.ts`).
+ *
+ * The in-flight refusal is why this caller needs no in-flight bookkeeping of its
+ * own beyond the button's disabled state: the double-spend it would be guarding
+ * against (a mid-flight remount re-arming the button) is refused server-side,
+ * where a second tab and a bare `curl` are covered too.
  */
 export function rerunFromFailed(id: string, signal?: AbortSignal): Promise<{ runId: string }> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/rerun-from-failed`, {

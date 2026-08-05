@@ -8,6 +8,7 @@ import {
   RunStatusSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
+  type RerunAccepted,
   type RunDetail,
 } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
@@ -431,7 +432,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       // faults; a crash before it runs recovers via the boot reconciler).
       const { runId, drive } = await fastify.reseedService.rerunFromFailed(run.id);
       void drive;
-      return reply.status(202).send({ runId });
+      // #899 — typed by the SHARED schema the web client parses with, so the two
+      // ends of this contract drift into a typecheck failure rather than a runtime
+      // Zod error in the browser (the `FireResultSchema` arrangement on the sibling
+      // fire route).
+      return reply.status(202).send({ runId } satisfies RerunAccepted);
     },
   );
 };

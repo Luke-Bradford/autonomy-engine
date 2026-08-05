@@ -194,10 +194,21 @@ that carries the reseed pair.
   lineage is the `run.started.rerunOf` link — the `runs.rerunOf` COLUMN is RS6).
 - **Route:** `POST /api/runs/:id/rerun-from-failed` → `202 {runId}` (`routes/runs.ts`), owner-scoped
   via `requireOwned` BEFORE the producer (authz at the boundary; a missing OR not-owned run is the
-  same 404 — no oracle).
+  same 404 — no oracle). The `202` shape is `RerunAcceptedSchema` in shared, which the server's reply
+  is typed by and the web client parses with (#899) — the `FireResultSchema` arrangement.
 - **CONSCIOUS NON-GOAL (RS2):** a rerun drives immediately and does NOT pass through the launcher's
   concurrency admission — an explicit operator rerun is not gated by the trigger/pipeline caps that
   bound AUTOMATED fires. Routing reruns through admission is a later refinement, not a defect.
+- **AMENDED (#896):** the non-goal above stands for the trigger/pipeline CAPS, but a rerun is now
+  subject to one gate of its own: **at most one live rerun per source run.** `rerunFromFailed` refuses
+  (`RerunNotEligibleError` → 409) when `findLiveRerunOf` finds an unfinished rerun of the same source,
+  naming its id and status. This is a duplicate-work guard, not an admission cap — it bounds a source
+  run to one in-flight resume rather than bounding total concurrency, and it lapses the moment that
+  rerun terminates. It exists because the client cannot hold the fact: the in-flight flag is component
+  state on a page keyed by run id, so a mid-flight navigate-away-and-back re-arms the button and bills
+  the resumed work twice. **Known residual:** the reconciler's `corrupt` bucket leaves an unreadable
+  run `running` indefinitely and there is no cancel/delete route, so a corrupt R2 blocks further reruns
+  of R1 until the row is repaired — the same operator-repair dependency that bucket already carries.
 - **`secureOutput` (RS5) is a NO-OP today:** the field ships with F4 and does not exist yet, so no
   frontier node can carry a redacted output — there is nothing to exclude or leak.
 

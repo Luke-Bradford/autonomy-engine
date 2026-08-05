@@ -314,6 +314,62 @@ export function updateRun(db: Db, id: string, patch: RunLifecyclePatch): Run | n
 const ACTIVE_RUN_STATUSES = ['pending', 'running'] as const satisfies readonly RunStatus[];
 
 /**
+ * #896 — every run status that has NOT finished. Deliberately WIDER than
+ * `ACTIVE_RUN_STATUSES` above, and the difference is the whole point of it
+ * existing separately rather than reusing the neighbour:
+ *
+ * - `waiting` — a PARKED run does not occupy a trigger's concurrency slot (that
+ *   is exactly why `ACTIVE_RUN_STATUSES` excludes it), but it has not finished
+ *   and its remaining nodes have not been billed yet. For a duplicate-work guard
+ *   it is unambiguously live.
+ * - `queued` — pre-admission, so it likewise must not count against a trigger's
+ *   slot. It is unreachable for a rerun today (a rerun drives immediately and
+ *   never passes through the launcher's admission queue), and is listed for
+ *   completeness of the partition rather than because it is expected.
+ *
+ * Written out rather than derived from `TERMINAL_RUN_STATUS`, because that
+ * derivation is subtly wrong: `TERMINAL_RUN_STATUS` is a set of
+ * `RunLifecycleStatus`, which contains neither `queued` nor `skipped`, so
+ * `!TERMINAL_RUN_STATUS.has(s)` answers `false` for the terminal `skipped` and
+ * would quietly admit it here. The partition test in `__tests__/runs.test.ts`
+ * is what actually catches a newly-added `RunStatus`.
+ */
+export const LIVE_RUN_STATUSES = [
+  'pending',
+  'queued',
+  'running',
+  'waiting',
+] as const satisfies readonly RunStatus[];
+
+/**
+ * #896 — the rerun of `sourceRunId` that has not finished, if there is one.
+ *
+ * The double-spend guard behind `POST /api/runs/:id/rerun-from-failed`. A rerun
+ * re-executes every node from the failure onward, so a second one of the same
+ * source run is a second bill for work already in progress. The client's own
+ * in-flight flag cannot carry this: it is component state on a page keyed by run
+ * id, so a navigate-away-and-back mid-flight resets it (and a second tab, or a
+ * bare `curl`, never had it at all).
+ *
+ * Returns the id AND status so the refusal can say which run and what it is
+ * doing — with no cancel control in the UI, that is the operator's only handle on
+ * it. Backed by `runs_rerun_of_idx`; ordered by `startedAt` so the answer (and
+ * any test asserting it) is stable when a pre-guard database holds several.
+ */
+export function findLiveRerunOf(
+  db: Db,
+  sourceRunId: string,
+): { id: string; status: RunStatus } | null {
+  const row = db
+    .select({ id: runs.id, status: runs.status })
+    .from(runs)
+    .where(and(eq(runs.rerunOf, sourceRunId), inArray(runs.status, [...LIVE_RUN_STATUSES])))
+    .orderBy(asc(runs.startedAt), asc(runs.id))
+    .get();
+  return row ?? null;
+}
+
+/**
  * Count a trigger's currently-active (non-terminal) runs — the P4 concurrency
  * gate's authoritative, restart-safe source of truth. A run row is durable
  * from creation and survives a process restart (to be resumed by the boot
