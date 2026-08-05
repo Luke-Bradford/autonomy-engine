@@ -69,11 +69,20 @@ and the loop exists to build it — not to build the loop.
 
   What the dashboard actually has is not priority, it is a **warm cache**: a background sampler plus
   a grace window, holding a value obtained during a rare moment the endpoint answered. Studio has no
-  sampler (`#770` rejected one in favour of geometric backoff) and was deliberately denied a grace
-  window, so every studio read is a request-path poll — which is exactly the call that 429s. Proof
+  sampler and was deliberately denied a grace window, so every studio read is a request-path poll —
+  which is exactly the call that 429s. Proof
   it is the cache and not contention: reloading the dashboard did **not** restore the guard, because
   its cache died with the process; the guard stayed UNREADABLE until the sampler happened to get one
   reading through, ~12 minutes later.
+
+  **`#770` DID reject a sampler, and that rejection is RECONCILED, not ignored — read this before
+  you think you have found a contradiction.** `#770`'s reason was specific: *"exactly one process may
+  poll `/api/oauth/usage` directly … adding a second sampler would reproduce"* the contention, and at
+  the time the prototype dashboard's 60s sampler WAS that one process. So `#770` rejected a **second,
+  concurrent** sampler — correctly. C3 removes the first one. Studio's sampler is therefore the
+  SUCCESSOR to the dashboard's, not an addition to it, and the one-poller invariant `#770` was
+  protecting is preserved with studio as that poller. Build it as part of the cutover, not before:
+  while the dashboard still samples, `#770` still applies.
 
   **So build `#765`'s original step 1: an `unref`'d background sampler in studio's reader** — keeping
   the 60s TTL and the **no-grace / no-last-good** property, because a stale-but-low reading permits a
