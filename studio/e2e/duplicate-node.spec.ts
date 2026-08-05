@@ -63,9 +63,7 @@ test.describe('duplicate a node (U21)', () => {
     // shows up.
     await expect(page.getByText(/^Saved v2\.$/)).toBeVisible();
 
-    const res = await page.request.get(
-      `/api/pipelines/${encodeURIComponent(pipelineId)}/versions`,
-    );
+    const res = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/versions`);
     expect(res.status()).toBe(200);
     const versions = (await res.json()) as {
       version: number;
