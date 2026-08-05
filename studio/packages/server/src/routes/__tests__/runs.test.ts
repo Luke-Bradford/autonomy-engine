@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import {
   CATALOG_VERSION,
+  RerunAcceptedSchema,
   RunDetailSchema,
   RunSchema,
   RunSummarySchema,
@@ -317,9 +318,52 @@ describe('runs routes (read-only)', () => {
       url: `/api/runs/${run.id}/rerun-from-failed`,
     });
     expect(res.statusCode).toBe(202);
-    const { runId } = res.json();
-    expect(typeof runId).toBe('string');
+    // #899 — the 202 body is validated through the SHARED schema the client parses
+    // with, so a divergence between the two ends fails HERE rather than at runtime
+    // in the browser.
+    const { runId } = RerunAcceptedSchema.parse(res.json());
     expect(runId).not.toBe(run.id);
+  });
+
+  it('POST /api/runs/:id/rerun-from-failed → 409 when a rerun is already in flight (#896)', async () => {
+    const run = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.started',
+      payload: { type: 'run.started', runId: run.id, pipelineVersionId, params: {} },
+    });
+    appendRunEvent(app.db, {
+      runId: run.id,
+      type: 'run.finished',
+      payload: { type: 'run.finished', runId: run.id, outcome: 'failure', reason: 'boom' },
+    });
+    // An existing rerun, seeded `running` rather than produced by a first call —
+    // a real R2 drives in the background and would settle on its own schedule.
+    const inFlight = createRun(app.db, {
+      ownerId: 'local',
+      pipelineVersionId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+      rerunOf: run.id,
+      status: 'running',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/runs/${run.id}/rerun-from-failed`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('conflict');
+    // The message names the live rerun: with no cancel control in the UI, the id is
+    // the only thing that lets an operator go and look at it.
+    expect(res.json().message).toContain(inFlight.id);
   });
 
   it('POST /api/runs/:id/rerun-from-failed → 409 for a SUCCESSFUL run (not eligible)', async () => {

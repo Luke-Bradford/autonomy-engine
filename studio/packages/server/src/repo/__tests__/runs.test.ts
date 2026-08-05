@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG_VERSION,
+  RunStatusSchema,
   type NewPipelineVersion,
   type NewRun,
   type RunStatus,
@@ -15,7 +16,9 @@ import {
   countQueuedRunsForTrigger,
   createRun,
   deleteRun,
+  findLiveRerunOf,
   getRun,
+  LIVE_RUN_STATUSES,
   listParsedRuns,
   listRuns,
   listRunSummaries,
@@ -836,5 +839,80 @@ describe('listRunSummaries — U26 filter axes', () => {
         startedAfter: 1_000,
       }).map((s) => s.id),
     ).toEqual([wanted.id]);
+  });
+});
+
+/**
+ * #896 — the primitive behind the double-rerun refusal. `findLiveRerunOf` answers
+ * "does this source run ALREADY have a rerun that has not finished?", which is the
+ * only thing standing between a remount-and-click-again and a second LLM bill.
+ */
+describe('runs repo — findLiveRerunOf (#896)', () => {
+  /** Seed a rerun of `sourceId` sitting at `status`. */
+  function seedRerun(
+    db: ReturnType<typeof freshDb>['db'],
+    pipelineVersionId: string,
+    sourceId: string,
+    status: RunStatus,
+  ) {
+    return createRun(db, buildRunInput(pipelineVersionId, { rerunOf: sourceId, status }));
+  }
+
+  it('finds nothing when the source run has no rerun at all', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const source = createRun(db, buildRunInput(version.id));
+    expect(findLiveRerunOf(db, source.id)).toBeNull();
+  });
+
+  it.each(LIVE_RUN_STATUSES)('finds a rerun sitting at the LIVE status %s', (status) => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const source = createRun(db, buildRunInput(version.id));
+    const rerun = seedRerun(db, version.id, source.id, status);
+    expect(findLiveRerunOf(db, source.id)).toEqual({ id: rerun.id, status });
+  });
+
+  it.each(['success', 'failure', 'skipped', 'interrupted'] as const)(
+    'ignores a rerun that has TERMINATED in %s — the guard bounds concurrency, not lifetime',
+    (status) => {
+      const { db } = freshDb();
+      const version = setupPipelineVersion(db);
+      const source = createRun(db, buildRunInput(version.id));
+      seedRerun(db, version.id, source.id, status);
+      expect(findLiveRerunOf(db, source.id)).toBeNull();
+    },
+  );
+
+  it('does not confuse a live rerun of a DIFFERENT source run', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const mine = createRun(db, buildRunInput(version.id));
+    const theirs = createRun(db, buildRunInput(version.id));
+    seedRerun(db, version.id, theirs.id, 'running');
+    expect(findLiveRerunOf(db, mine.id)).toBeNull();
+  });
+
+  it('picks the OLDEST live rerun deterministically when a pre-guard db holds several', () => {
+    const { db } = freshDb();
+    const version = setupPipelineVersion(db);
+    const source = createRun(db, buildRunInput(version.id));
+    const first = seedRerun(db, version.id, source.id, 'running');
+    seedRerun(db, version.id, source.id, 'waiting');
+    seedRerun(db, version.id, source.id, 'running');
+    expect(findLiveRerunOf(db, source.id)?.id).toBe(first.id);
+  });
+
+  /**
+   * The list is written out rather than derived, because the obvious derivation is
+   * WRONG: `TERMINAL_RUN_STATUS` is a set of `RunLifecycleStatus`, which has neither
+   * `queued` nor `skipped` in it, so `!TERMINAL_RUN_STATUS.has(s)` answers `false`
+   * for `skipped` and would quietly admit a terminal status into the live set. This
+   * is the check that actually catches a newly-added `RunStatus`: a new option lands
+   * in neither list and the union stops covering `RunStatusSchema`.
+   */
+  it('LIVE_RUN_STATUSES and the terminal statuses partition RunStatusSchema exactly', () => {
+    const terminal: RunStatus[] = ['success', 'failure', 'skipped', 'interrupted'];
+    expect([...LIVE_RUN_STATUSES, ...terminal].sort()).toEqual([...RunStatusSchema.options].sort());
   });
 });
