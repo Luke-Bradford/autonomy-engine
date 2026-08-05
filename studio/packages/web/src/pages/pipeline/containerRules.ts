@@ -428,18 +428,39 @@ export function readableIssue(
   // the engine's scanner (the SSOT `substitute` and `validateRefs` share) makes
   // that unrepresentable.
   //
-  // Input is NOT `protectEscapes`d, unlike `substitute`'s. A literal `$${` in a
-  // diagnostic would therefore be scanned as an opener at its second `$`. The
-  // consequence is bounded to a spurious parenthetical on text the operator meant
-  // literally — never a rewrite, because the gloss is only ever appended after
-  // the closing `}` — and the sentinel is not length-preserving, so protecting
-  // would invalidate the very indices the splice needs.
+  // Input is NOT `protectEscapes`d, unlike `substitute`'s: that sentinel is not
+  // length-preserving, so protecting would invalidate the very indices the splice
+  // needs. The escape is handled positionally instead — a `${` preceded by a `$`
+  // is a LITERAL the operator escaped, not a reference, so it is skipped below.
+  //
+  // That skip is load-bearing, not belt-and-braces, and the reasoning it replaces
+  // was wrong. "A stray opener can only cost a spurious parenthetical, never a
+  // rewrite, because the gloss is appended after the closing `}`" assumes the `}`
+  // the scanner returns is the REAL one. A spurious opener can desync quote
+  // parity and make it not be: in `$${x " and ${default(nodes.x.output.v,
+  // "b}c")}`, the scan opens at the second `$`, the lone `"` consumes the
+  // literal's OPENING quote, and the `}` inside `"b}c"` reads as unquoted — so
+  // the gloss lands inside the operator's string. Skipping the escaped opener
+  // closes that, and no other route to it exists: `scanTemplateRefs` only becomes
+  // quote-aware INSIDE a body, so a stray quote before a span cannot desync it,
+  // and an unbalanced quote within one makes `findRefEnd` return -1, which drops
+  // the gloss rather than misplacing it.
+  //
+  // Skipping is also what the escape MEANS. `$${nodes.x.output.y}` is text the
+  // operator asked to be shown literally; it references nothing, so there is
+  // nothing to name.
+  // `unterminatedAt` is deliberately not read. `scanTemplateRefs` CAUTIONS a
+  // caller against splicing `matches` without it, because a splicing caller would
+  // silently truncate its output at the unterminated opener. That does not bind an
+  // APPEND-ONLY caller: every span before the opener is still glossed, and the
+  // malformed tail is emitted verbatim rather than dropped.
   const spans = scanTemplateRefs(quoted).matches;
   let glossed = quoted;
   // RIGHT-TO-LEFT so an earlier span's indices survive a later span's splice.
   for (let i = spans.length - 1; i >= 0; i -= 1) {
     const span = spans[i];
     if (span === undefined) continue;
+    if (quoted[span.start - 1] === '$') continue; // an escaped `$${` — see above
     const names: string[] = [];
     // `${nodes.…}` is a node and never a container (`refRoot` maps the `nodes`
     // namespace to `nodeOutput`/`nodeStatus` alone), so this resolves through
@@ -447,7 +468,16 @@ export function readableIssue(
     // rather than anchoring at it also covers a COMPOSED reference —
     // `${default(nodes.x.output.v, "fb")}` — which `params.ts:3707` emits from
     // the author's own `expr.source`.
-    for (const m of span.body.matchAll(/\bnodes\.([^.}\s,)]+)/g)) {
+    //
+    // TEXTUAL, not parsed, and the two costs of that are bounded and stated. A
+    // node id MENTIONED inside a string literal (`default(a, "nodes.n_d…")`)
+    // glosses as though it were a reference, and an id excluded from the char
+    // class (`nodes.n_d[0]`) is missed. Parsing instead would need `parseExpr` in
+    // a try/catch, because the bodies a validator quotes are exactly the
+    // malformed ones — a worse trade for a display gloss. The leading
+    // `(?:^|[^\w.])` keeps `nodes.` from matching mid-path, so `${params.nodes.x}`
+    // is not read as a node reference.
+    for (const m of span.body.matchAll(/(?:^|[^\w.])nodes\.([^.}[\]\s,)]+)/g)) {
       const l = nodeLabels.get(m[1] as string);
       if (l !== undefined && !names.includes(l)) names.push(l);
     }

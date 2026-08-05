@@ -486,6 +486,48 @@ describe('readableIssue', () => {
         "settled here — 'HTTP Request 2' may still be running",
     );
   });
+
+  /**
+   * `$${` is the operator ESCAPING the delimiter — the text is literal and
+   * references nothing, so there is nothing to name.
+   *
+   * Skipping it is also the one thing standing between this pass and the
+   * corruption it was written to avoid, which is why the ugly case below is
+   * pinned rather than merely reasoned about. `scanTemplateRefs` is only
+   * quote-aware INSIDE a body, so an escaped opener starts a scan one character
+   * early; a lone `"` after it then consumes the REAL span's opening quote, and
+   * the `}` inside that string literal reads as the closing brace. Without the
+   * skip the gloss splices into the operator's literal.
+   */
+  it('adds nothing to an ESCAPED $${…}, which references nothing', () => {
+    const msg = 'nodes.n_a.config.url: $${nodes.n_d.output.body} is literal text';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
+      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+    );
+  });
+
+  it('never splices into a string literal when an escaped opener desyncs quote parity', () => {
+    const msg = '$${x " and ${default(nodes.n_d.output.v, "b}c")} tail';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(msg);
+  });
+
+  /** `\bnodes\.` alone matches after a dot, so a field NAMED `nodes` read as one. */
+  it('does not read a mid-path .nodes. as a node reference', () => {
+    const msg = 'nodes.n_a.config.url: ${params.nodes.n_d} is malformed';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
+      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+    );
+  });
+
+  it('glosses an indexed reference, whose id ends at the bracket', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${nodes.n_d[0]} is malformed',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toContain('${nodes.n_d[0]} (HTTP Request 2)');
+  });
 });
 
 describe('consequenceMessage', () => {
