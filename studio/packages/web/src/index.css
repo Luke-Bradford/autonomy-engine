@@ -1214,6 +1214,77 @@ td button + button {
   border-color: var(--accent);
 }
 
+/* ── U19 outcome ports ───────────────────────────────────────────────────────
+ *
+ * One source port per outcome the node can route, drawn as a labelled column
+ * down its right edge. The COLUMN's geometry is in JS (`sourcePortOffset` sets
+ * each port's inline `top`, `nodeBoxHeight` the box's `min-height`), because a
+ * derived container has to STATE the same offsets it can never measure — one
+ * formula, two consumers. Only the skin is here.
+ *
+ * The padding is what the labels sit in. Without it the words would run under
+ * the node's own title on a narrow box; reserving the strip means a node with
+ * eleven ports (a `switch` with seven cases) still reads as a node.
+ */
+.flow-node.has-ports {
+  padding-right: 4.6rem;
+}
+
+/* The dot keeps React Flow's own 6px size and border. Only the FILL says which
+   outcome it routes, in the same hue the edge leaving it will be drawn in — so
+   the port and its line are one convention, not two. */
+.flow-port.react-flow__handle {
+  background: var(--port-color, var(--muted));
+  border-color: var(--port-color, var(--muted));
+}
+
+.flow-port--success {
+  --port-color: var(--success);
+}
+
+.flow-port--failure {
+  --port-color: var(--error);
+}
+
+.flow-port--completion {
+  --port-color: var(--accent);
+}
+
+.flow-port--skipped {
+  --port-color: var(--muted);
+}
+
+.flow-port--branch {
+  --port-color: var(--branch);
+}
+
+/* An ORPHANED port — an edge routes on it, the source no longer offers it. Drawn
+   muted rather than in its condition's hue, because it is not a thing to draw a
+   NEW edge from; the node panel says the same in words and the validation badge
+   is already refusing the save. */
+.flow-port--orphaned {
+  --port-color: var(--muted);
+}
+
+/* Inert, and a SIBLING of the handle rather than a child: React Flow reads a
+   handle's attach point from its own bounding rect, so text inside the dot would
+   widen it to the width of the word and move every edge's endpoint off the port
+   it is drawn at. */
+.flow-port-label {
+  position: absolute;
+  right: 0.5rem;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 0.62rem;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  max-width: 4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ── U6c container groups ────────────────────────────────────────────────────
  *
  * The box a container's children sit in. It fills its React Flow node, whose
@@ -1426,9 +1497,9 @@ td button + button {
  * winner decided by stylesheet import order. Going through the variables also
  * NOT true of arrowheads, despite the obvious guess: `MarkerDefinitions` renders
  * ONCE as a sibling at the top of `.react-flow__edges`, not inside each edge
- * `<g>`, so a variable set here can never reach it — and the canvas configures
- * no `markerEnd`/`markerStart` anyway, so there are no arrowheads to colour.
- * Whoever adds them (U6b/U19) needs one marker id per condition.
+ * `<g>`, so a variable set here can never reach it. U6b settled that by giving
+ * the canvas ONE `<marker>` def per condition (`EdgeMarkers`), each keyed to the
+ * same hue as the stroke it caps and pinned equal by `palette.test.ts`.
  *
  * The colours are the MVP palette's existing outcome hues, the SAME ones the
  * run monitor's status pills use (`.run-status-*`/`.node-status-*` below):
