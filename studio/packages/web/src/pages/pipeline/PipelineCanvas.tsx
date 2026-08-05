@@ -2013,6 +2013,17 @@ export function NodePanel({
         <button type="button" onClick={jsonMode || fields === null ? applyJson : applyForm}>
           Apply config
         </button>
+        {/* U21 — duplicate. Between Apply and Delete because that is the order
+            of consequence, and because it acts on the node as SAVED into the
+            store, not on the unapplied form state: the copy carries the config
+            `Apply config` last wrote, which is why it sits after it. Ungated for
+            the same reason `Delete node` is — what #907 gated is the SAVE of an
+            archived pipeline, which the server REFUSES (the button itself stays
+            live); editing was left alone, and a copy that cannot yet be saved is
+            still an edit the operator can undo. */}
+        <button type="button" onClick={() => store.getState().duplicateNode(nodeId)}>
+          Duplicate node
+        </button>
         <button type="button" onClick={() => store.getState().deleteNode(nodeId)}>
           Delete node
         </button>
