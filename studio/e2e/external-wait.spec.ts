@@ -108,6 +108,70 @@ test('#900 — a parked run says where its callback goes, and the URL it reveals
   await expectQuiet(page, problems);
 });
 
+/**
+ * #901 — the same resume, driven ENTIRELY from the app.
+ *
+ * ADDED beside the test above rather than replacing its `page.request.post`: that
+ * POST is the only end-to-end proof the anonymous A13 seam still resumes a run,
+ * and #901 does not change that seam. The two doors need two tests.
+ *
+ * What only this level can show: the browser completes the wait without ever
+ * holding the capability token. The unit tests can assert the client does not SEND
+ * one, but only here is the token genuinely derived by the real server, from a
+ * request that carried nothing but `(nodeId, attemptId, payload)`.
+ *
+ * The `decision` output is declared, so the run also proves the body ARRIVED: a
+ * completion that dropped the payload would still resume the run, and would still
+ * look green from the header alone.
+ */
+test('#901 — an operator completes the wait from the app, sending no token', async ({ page }) => {
+  const problems = collectPageProblems(page);
+
+  const { pipelineVersionId } = await seedVersion(page, '#901 approval', APPROVAL_DOC);
+  const runId = await fireManualTrigger(page, pipelineVersionId, '#901 park');
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+  await expect(page.locator(headerStatus)).toHaveText('waiting (callback)', { timeout: 20_000 });
+
+  const list = page.getByRole('list', { name: 'Pending callbacks' });
+  await expect(list).toBeVisible();
+
+  /* NEVER REVEALED. The whole request below is composed without clicking "Show
+     callback URL", so the token is not on the page, not in the DOM, and not in
+     this browser context — which is the property #901 exists for. */
+  await list.getByRole('button', { name: 'Complete wait' }).click();
+  await expect(list).not.toContainText('/api/external-wait/');
+
+  const body = list.getByRole('textbox', { name: /Callback body/ });
+
+  /* THE REFUSAL FIRST, because it is the half a happy path cannot show: a body
+     failing the declared contract must come back NAMING the field, and must leave
+     the node parked and the editor usable. Before #901 this reached the operator
+     as "request failed (422)" with the reason discarded — the route's error body
+     bypassed the shared contract — so this assertion is the fix, not decoration. */
+  await body.fill('{"note": "no decision here"}');
+  await list.getByRole('button', { name: 'Complete this wait' }).click();
+  await expect(list.getByRole('alert')).toContainText('decision');
+  await expect(page.locator(headerStatus)).toHaveText('waiting (callback)');
+  // Still open, still holding what was typed — a 422 is fixable in place.
+  await expect(body).toHaveValue('{"note": "no decision here"}');
+
+  await body.fill('{"decision": "approved in-app"}');
+  await list.getByRole('button', { name: 'Complete this wait' }).click();
+
+  /* Resumed through the live tail, with no reload and no `curl`. */
+  await expect(page.locator(headerStatus)).toHaveText('success', { timeout: 20_000 });
+  await expect(page.getByRole('heading', { name: 'Waiting on a callback' })).toHaveCount(0);
+
+  /* The BODY got through, not just the completion. `${nodes.approve.output.
+     decision}` is what a downstream node would read, so a completion that dropped
+     the payload is a silent data loss the header would still call success. */
+  await expect(page.getByText('approved in-app')).toBeVisible();
+
+  await expectQuiet(page, problems);
+});
+
 test('#900 — a run parked on a TIMER is offered no callback surface', async ({ page }) => {
   const problems = collectPageProblems(page);
 
