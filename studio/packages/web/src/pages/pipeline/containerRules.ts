@@ -1,5 +1,6 @@
 import {
   implicitRouting,
+  scanTemplateRefs,
   type Container,
   type Edge,
   type ImplicitRouting,
@@ -273,6 +274,13 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * in its container form. Only the IDENTIFIERS change; the sentence stays the
  * validator's, so this cannot quietly become a second, drifting set of messages.
  *
+ * #887 widened that contract by exactly one category, and it is named here
+ * because it is a real widening: pass 5 ADDS a parenthetical gloss. It still
+ * writes none of the validator's prose and edits none of its text — every word
+ * and every expression byte survives — but "only the identifiers change" is no
+ * longer the whole rule. Anything beyond naming an id belongs in R3's structured
+ * diagnostics, not here.
+ *
  * An edge has no name of its own, so it is named by its ENDS, which is how the
  * operator sees it. A quoted token that resolves to nothing (a kind, a word the
  * validator happened to quote) is left exactly as it was.
@@ -285,11 +293,16 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * unchanged would have left the two commonest canvas errors still printing a raw
  * uuid, while looking from the outside like the defect had been fixed.
  *
+ * Those four shapes are the id shapes the validator RENDERS, and they take
+ * passes 1-4. Pass 5 is not a fifth shape: it is the same id in a place none of
+ * those passes may touch — inside the operator's own expression — which is why
+ * it glosses instead.
+ *
  * DISPLAY ONLY, and it must stay at the render site. TWO callers read these
  * strings STRUCTURALLY: `ContainerPanel` filters them by matching
  * `container '<id>'` as a raw substring (`ContainerPanel.tsx:143`), and the
  * expression-insert probe takes a set difference against a baseline
- * (`PipelineCanvas.tsx:1144`, `!baseline.includes(issue)`) — in the very file that
+ * (`PipelineCanvas.tsx:1572`, `!baseline.includes(issue)`) — in the very file that
  * now calls this function. Both call `validateCanvas` DIRECTLY rather than reading
  * the mapped list, which is what keeps them correct; moving this rewrite inside
  * `validateCanvas` would silently break both.
@@ -374,13 +387,75 @@ export function readableIssue(
   // cannot be anchored. The cost is that a quoted token that happens to EQUAL an
   // id is rewritten wherever it sits, including inside an expression body. Not
   // reachable on canvas-minted ids for the same reason as pass 3.
-  return listed.replace(/'([^']+)'/g, (whole, id: string) => {
+  const quoted = listed.replace(/'([^']+)'/g, (whole, id: string) => {
     const direct = label(id);
     if (direct !== undefined) return `'${direct}'`;
     const edge = edgeById.get(id);
     if (edge === undefined) return whole;
     return `'${label(edge.from) ?? edge.from} → ${label(edge.to) ?? edge.to}'`;
   });
+  // Pass 5 — #887, and the ONLY pass that does not rewrite. It ADDS a
+  // parenthetical after a `${…}` span, leaving the span byte-identical.
+  //
+  // The other four passes exist because a location is the validator's own
+  // rendering of an id. An expression body is NOT: it is the string the operator
+  // has to go and edit, so pass 2 is anchored precisely to keep out of it, and
+  // `${nodes.HTTP Request 2.output.body}` would name something that appears
+  // nowhere in their config and is not valid syntax. The cost was that the
+  // commonest reference error named one end the way the canvas draws it and the
+  // other as a raw uuid — and the uuid is usually MACHINE-inserted, spliced in by
+  // U8a's expression picker, so the operator never typed it and cannot recognise
+  // it. Glossing is the way to name both ends without touching the text:
+  //
+  //   node 'HTTP Request 1' config.url: ${nodes.n_7c4….output.body} (HTTP
+  //   Request 2) does not name an upstream node (…)
+  //
+  // The gloss is deliberately UNCONDITIONAL where it resolves, including on the
+  // two message shapes that also quote the id (`:3823` "declares no output",
+  // `:3869` "is not settled here"), where pass 4 has already turned the quoted
+  // copy into the name. That reads redundantly — `${nodes.n_7c….status} (Deploy)
+  // is not settled here — 'Deploy' may still be running` — and the redundancy is
+  // the POINT: binding the uuid to the name is exactly what the reader cannot do
+  // for themselves, and suppressing it would leave the one message where the
+  // binding is spelled out looking like the one message that forgot to gloss.
+  //
+  // BOUNDARIES COME FROM `scanTemplateRefs`, NOT A REGEX, and that is
+  // load-bearing rather than tidiness. A `${…}` body may legally contain `}`
+  // inside a string literal — `findRefEnd`'s own docblock uses
+  // `default(params.a, "b}c")` — so a `\$\{[^}]*\}` regex closes the span early,
+  // at the brace inside the literal, and splices the gloss INTO the operator's
+  // string. That corrupts the exact text this pass exists to preserve. Reusing
+  // the engine's scanner (the SSOT `substitute` and `validateRefs` share) makes
+  // that unrepresentable.
+  //
+  // Input is NOT `protectEscapes`d, unlike `substitute`'s. A literal `$${` in a
+  // diagnostic would therefore be scanned as an opener at its second `$`. The
+  // consequence is bounded to a spurious parenthetical on text the operator meant
+  // literally — never a rewrite, because the gloss is only ever appended after
+  // the closing `}` — and the sentinel is not length-preserving, so protecting
+  // would invalidate the very indices the splice needs.
+  const spans = scanTemplateRefs(quoted).matches;
+  let glossed = quoted;
+  // RIGHT-TO-LEFT so an earlier span's indices survive a later span's splice.
+  for (let i = spans.length - 1; i >= 0; i -= 1) {
+    const span = spans[i];
+    if (span === undefined) continue;
+    const names: string[] = [];
+    // `${nodes.…}` is a node and never a container (`refRoot` maps the `nodes`
+    // namespace to `nodeOutput`/`nodeStatus` alone), so this resolves through
+    // `nodeLabels` rather than the container-inclusive `label`. Scanning the body
+    // rather than anchoring at it also covers a COMPOSED reference —
+    // `${default(nodes.x.output.v, "fb")}` — which `params.ts:3707` emits from
+    // the author's own `expr.source`.
+    for (const m of span.body.matchAll(/\bnodes\.([^.}\s,)]+)/g)) {
+      const l = nodeLabels.get(m[1] as string);
+      if (l !== undefined && !names.includes(l)) names.push(l);
+    }
+    if (names.length === 0) continue;
+    const after = span.end + 1;
+    glossed = `${glossed.slice(0, after)} (${names.join(', ')})${glossed.slice(after)}`;
+  }
+  return glossed;
 }
 
 /**
