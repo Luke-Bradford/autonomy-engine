@@ -44,6 +44,22 @@ export const ApiErrorCodeSchema = z.enum([
   // there for any `SQLITE_CONSTRAINT` — offering a "save anyway" on one of
   // those would re-POST straight into the same violation.
   'stale_write',
+  // #901 — the body an owner sent to complete a parked external wait failed the
+  // node's declared `config.outputs` contract (422). Its OWN code, on the same
+  // test `stale_write` passed: the client ACTS on it, and differently from every
+  // other failure on that route. This is the one the operator can fix from where
+  // they are standing — edit the JSON and send it again, with the node still
+  // parked — so the UI keeps the editor open and shows the reason, where any
+  // other refusal means the wait is gone and the editor should close.
+  'external_wait_payload',
+  // #901 — the wait is no longer completable: already completed, expired, or the
+  // run/node moved past it (409, or 410 for a row settled `expired`). ONE code
+  // for all of them, because the client's action is identical in every case —
+  // report it and re-read the run. Splitting it further would be a distinction
+  // the UI has nothing to do with. Note this is the OWNER's route: the anonymous
+  // callback seam still collapses every one of these to an indistinguishable
+  // `404`, because a token holder is a prober and must never be told which.
+  'external_wait_settled',
 ]);
 export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
 

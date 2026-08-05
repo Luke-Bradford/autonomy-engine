@@ -1,10 +1,24 @@
 import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { computeRunCost, type PendingExternalWait, type RunDetail } from '@autonomy-studio/shared';
+import {
+  computeRunCost,
+  CompleteExternalWaitBodySchema,
+  type CompleteExternalWaitBody,
+  type PendingExternalWait,
+  type RunDetail,
+} from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
-import { listPendingExternalWaitsByRun } from '../repo/external-waits.js';
+import {
+  getExternalWaitByAttempt,
+  listPendingExternalWaitsByRun,
+} from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeDocResolver } from '../run/driver.js';
+import { NotFoundError } from '../errors.js';
+import {
+  ExternalWaitPayloadError,
+  ExternalWaitSettledError,
+} from '../run/external-wait-service.js';
 import { requireOwned } from './util.js';
 
 /**
@@ -23,9 +37,12 @@ const ListRunsQuerystringSchema = z.object({
 
 /**
  * Runs are created by the engine/scheduler (P2-P4), so there is deliberately no
- * `POST /api/runs` create route. The one state-mutating action here is RS2's
- * `POST /api/runs/:id/rerun-from-failed` (start a new run resuming a FAILED one);
- * every other route is read-only.
+ * `POST /api/runs` create route. TWO state-mutating actions live here, both of
+ * them resuming an existing run rather than starting one: RS2's
+ * `POST /api/runs/:id/rerun-from-failed` (a new run resuming a FAILED one) and
+ * #901's `POST /api/runs/:id/external-waits/complete` (settle a parked wait on
+ * THIS run). Every other route is read-only. Both mutators are owner-scoped
+ * through the run and answer before their downstream drive finishes.
  */
 export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
@@ -200,6 +217,122 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
         }) satisfies PendingExternalWait,
     );
   });
+
+  /**
+   * #901 — the OWNER completes one of their own run's parked external waits, from
+   * inside the app: `POST /api/runs/:id/external-waits/complete`.
+   *
+   * The act the GET above only pointed at. #900 revealed the callback URL and left
+   * the operator to leave the app and POST it by hand; this closes that path. It is
+   * a SECOND DOOR onto the anonymous seam's settle, never a second settle: the
+   * token is re-derived here (`HMAC(masterKey, …)`, exactly as the GET does) and
+   * handed to the SAME `externalWaitCompleter`, so what completing a wait MEANS
+   * cannot drift between the two.
+   *
+   * SECURITY — the two doors differ in disclosure, not in power, and each is right
+   * for its caller:
+   *   - AUTHZ: owner-scoped THROUGH the run (`requireOwned`), checked at the
+   *     boundary before any lookup or producer work. Authentication is not
+   *     authorization — `request.principal` proves who asks, `requireOwned` proves
+   *     they own this run. A missing run and a run owned by someone else are the
+   *     same 404.
+   *   - THE TOKEN NEVER REACHES THE BROWSER. That is this route's reason to exist
+   *     over the SPA calling `/api/external-wait/:token`: the capability stays
+   *     server-side, so completing a wait from the app no longer requires shipping
+   *     a live bearer credential through the client (and into any log, extension or
+   *     screen-share that sees it). Neither the request nor the response carries a
+   *     token or a `callbackPath`, and a test pins that.
+   *   - DISCLOSURE: an owner is not a prober, so this route names the state —
+   *     `already completed` (409), `expired` (410), a payload defect (422). The
+   *     anonymous seam must keep collapsing every one of those to an identical 404;
+   *     that no-oracle property protects an UNAUTHENTICATED token holder and is
+   *     untouched here (`routes/external-wait.ts` states the same split).
+   *
+   * CAS ON `attemptId`, which is why the body carries it: a webhook that expires
+   * re-parks under a NEW attempt, so addressing "the pending wait of node X" could
+   * complete a different attempt than the one the operator composed a body for. The
+   * lookup is the exact `(runId, nodeId, attemptId)` triple; a settled or unknown
+   * row is refused rather than redirected onto its successor. Same shape #904
+   * settled for a stale version write.
+   *
+   * `204`, NOT after the run finishes. The resumed run drives in the BACKGROUND
+   * (`void drive`, the rerun route's convention two handlers down): the wait is
+   * durably settled the moment the completer returns, while the run it unblocks may
+   * bill LLM calls for minutes, and this server sets no `requestTimeout`. The
+   * operator watches the resumption in the live run view.
+   */
+  fastify.post<{ Params: { id: string }; Body: CompleteExternalWaitBody }>(
+    '/api/runs/:id/external-waits/complete',
+    async (request, reply) => {
+      const run = requireOwned(
+        getRun(db, request.params.id),
+        request.principal,
+        'run',
+        request.params.id,
+      );
+      const { nodeId, attemptId, payload } = CompleteExternalWaitBodySchema.parse(request.body);
+
+      const row = getExternalWaitByAttempt(db, run.id, nodeId, attemptId);
+      // An unknown triple is a 404 like any other missing resource — it names no
+      // OTHER attempt's existence, so it is not the oracle the anonymous seam guards
+      // against; the caller already owns the run.
+      if (row === null) {
+        throw new NotFoundError('external wait', `${nodeId}@${attemptId}`);
+      }
+      if (row.status === 'completed') {
+        throw new ExternalWaitSettledError(
+          `this wait was already completed (node '${nodeId}')`,
+          409,
+        );
+      }
+      if (row.status === 'expired') {
+        throw new ExternalWaitSettledError(`this wait expired (node '${nodeId}')`, 410);
+      }
+
+      // Re-derived, never read from the row (which stores only a HASH) and never
+      // served — the same derivation the GET performs, from the same master key.
+      const token = deriveExternalWaitToken(fastify.masterKey, {
+        runId: run.id,
+        nodeId,
+        attemptId,
+      });
+      // `Buffer.from(JSON.stringify(...))` rather than a second completer entry
+      // point: the completer's `parseCallbackBody` is the ONE place a callback body
+      // is normalised (a non-object collapses to `{}`), and routing through it keeps
+      // both doors on that single policy. Round-tripping an already-parsed JSON
+      // value through stringify/parse is identity.
+      const { outcome, reason, drive } = await fastify.externalWaitCompleter.complete(
+        token,
+        Buffer.from(JSON.stringify(payload)),
+      );
+
+      if (outcome === 'invalid_payload') {
+        // The node is still PARKED — nothing was appended — so the operator can fix
+        // the body and send it again. `reason` is absent when the defect is the
+        // node's own `config.outputs` rather than the payload (the completer logs
+        // that server-side instead of leaking config text), hence the fallback.
+        throw new ExternalWaitPayloadError(
+          reason ?? 'the callback body does not match this node’s declared outputs',
+        );
+      }
+      if (outcome === 'not_completable') {
+        // STATE-NEUTRAL wording on purpose. The row was `pending` a moment ago, so
+        // this is NOT simply "a race": the completer also returns it when the node
+        // is no longer parked at that attempt (a back-edge reset or a new attempt),
+        // when the run has already recorded a terminal fact, and when the pinned
+        // pipeline version no longer resolves. Naming any one of those would be a
+        // confident claim about which — the honest sentence covers the set.
+        throw new ExternalWaitSettledError(
+          `this wait is no longer completable — the run or the node has moved on (node '${nodeId}')`,
+          409,
+        );
+      }
+      // Fire-and-forget, like the rerun below: `driveRun` owns its own faults, so
+      // `drive` never rejects and discarding it cannot orphan an error.
+      void drive;
+      return reply.status(204).send();
+    },
+  );
 
   /**
    * RS2 — start a RERUN-FROM-FAILED of a terminal FAILED run: a new run R2 that
