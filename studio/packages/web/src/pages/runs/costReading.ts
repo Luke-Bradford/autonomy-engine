@@ -150,7 +150,7 @@ export function tokenSummary(reading: CostReading, cost: NodeCost): string {
  * prevent. Both collapse to one true statement: the priced part tells us nothing,
  * and there is more we could not price.
  */
-export function statesAnAmount(reading: CostReading): boolean {
+function statesAnAmount(reading: CostReading): boolean {
   return reading.amount >= 0.000001;
 }
 
@@ -162,7 +162,7 @@ export function statesAnAmount(reading: CostReading): boolean {
  * `lower-bound` too small to state. Anything hanging a caveat off "the figure"
  * has to ask this first, or it qualifies a number that is not on screen.
  */
-export function showsAnAmount(reading: CostReading): boolean {
+function showsAnAmount(reading: CostReading): boolean {
   return reading.kind === 'exact' || (reading.kind === 'lower-bound' && statesAnAmount(reading));
 }
 

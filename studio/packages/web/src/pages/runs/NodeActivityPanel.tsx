@@ -51,7 +51,7 @@ import type { NodeActivity, NodeToolCall } from './runSummary';
  * `activity.toolCalled` already carried `toolName`/`round`/`callId`/`isError` in
  * the clear (only args/result are reduced to chars+hash). What they needed was
  * the honesty work, because a per-node money figure misleads in ways a per-run
- * one does not: `nodeCost.ts` classifies WHICH reading is true of a node before
+ * one does not: `costReading.ts` classifies WHICH reading is true of a node before
  * a dollar sign is drawn, so a run of unpriceable exchanges never renders as
  * `$0.00`, a subscription call's known zero never renders as a measurement gap,
  * and an `agent_cli` node's token sums never render as `0` when nobody counted.
