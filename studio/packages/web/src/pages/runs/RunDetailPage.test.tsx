@@ -2086,3 +2086,164 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     expect(await screen.findByRole('textbox', { name: /Callback body/ })).toHaveValue('half-typed');
   });
 });
+
+/**
+ * U27 slice 1 (#930) — the run says what IT spent, not just each node.
+ *
+ * Asserted through the page rather than against `RunCostSummary` directly,
+ * because three of the four things this surface refuses to do are decided by what
+ * the PAGE hands it: whether the replay finished, whether the run has settled,
+ * and what it reused. A component test would let each of those be whatever the
+ * fixture said.
+ */
+describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
+  const metered = (fields: Record<string, unknown> = {}): EngineEvent =>
+    ({
+      type: 'activity.metered',
+      runId: 'run_1',
+      nodeId: 'greet',
+      attemptId: 'greet#0',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      ...fields,
+    }) as EngineEvent;
+
+  /** The run-level section, found by its own heading rather than by position. */
+  const costSection = () => screen.getByRole('region', { name: 'Cost & usage' });
+
+  async function renderRun(over: Partial<RunStreamState>, runOver: Partial<Run> = {}) {
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'success', finishedAt: 1_700_000_001_000, ...runOver }),
+      pipelineVersion: version(),
+    });
+    useRunStreamMock.mockReturnValue(stream(over));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+    await screen.findByRole('region', { name: 'Cost & usage' });
+  }
+
+  it('totals the whole run, naming its models and tokens', async () => {
+    await renderRun({
+      events: [
+        envelope(metered({ inputTokens: 1200, outputTokens: 340, costEstimate: 0.0055 })),
+        envelope(metered({ inputTokens: 800, outputTokens: 60, costEstimate: 0.0045 })),
+      ],
+    });
+    const section = costSection();
+    expect(within(section).getByText('$0.01')).toBeInTheDocument();
+    expect(within(section).getByText('2,000 in · 400 out')).toBeInTheDocument();
+    expect(within(section).getByText('claude-opus-4-8')).toBeInTheDocument();
+  });
+
+  it('never presents a run nobody could price as $0.00', async () => {
+    await renderRun({ events: [envelope(metered({ inputTokens: 10, outputTokens: 5 }))] });
+    const section = costSection();
+    expect(within(section).getByText('Cost unknown')).toBeInTheDocument();
+    expect(within(section).queryByText('$0.00')).not.toBeInTheDocument();
+  });
+
+  it('describes a MIXED run truthfully — priced AND subscription exchanges', async () => {
+    /* Unreachable per node (one connection per node for the whole immutable run)
+       and ordinary per RUN. #866's wording called every such exchange priced. */
+    await renderRun({
+      events: [
+        envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 })),
+        envelope(
+          metered({
+            nodeId: 'never',
+            attemptId: 'never#0',
+            provider: 'agent_cli',
+            model: 'claude-cli',
+            meteringStatus: 'unpriced',
+          }),
+        ),
+      ],
+    });
+    const section = costSection();
+    expect(within(section).getByText('$0.02')).toBeInTheDocument();
+    expect(within(section).getByText(/1 priced, and 1 a subscription or CLI call/)).toBeVisible();
+    expect(within(section).queryByText(/all priced/)).not.toBeInTheDocument();
+  });
+
+  it('says the run is still spending while it is still going', async () => {
+    await renderRun(
+      { events: [envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }))] },
+      { status: 'running', finishedAt: null },
+    );
+    expect(within(costSection()).getByText(/This run has not settled/)).toBeVisible();
+  });
+
+  it('renders the section even for a run that billed nothing', async () => {
+    /* A run page that silently omits its cost section is indistinguishable from
+       an app with no cost surface at all — unlike the drill-in, which is a thing
+       you opened deliberately. */
+    await renderRun({ events: [] });
+    expect(within(costSection()).getByText('No billed exchange')).toBeInTheDocument();
+  });
+
+  it('withholds the figure until the durable log has been fully replayed', async () => {
+    /* A total folded from half a log is a manufactured authority: it would carry
+       the confidence of a settled figure while being a floor of unknown depth. */
+    await renderRun({
+      phase: 'replaying',
+      replayComplete: false,
+      events: [envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }))],
+    });
+    const section = costSection();
+    expect(within(section).getByText('Reading the run log…')).toBeInTheDocument();
+    expect(within(section).queryByText('$0.02')).not.toBeInTheDocument();
+  });
+
+  it('says the log is INCOMPLETE when the stream closed mid-replay', async () => {
+    /* `useRunStream` can reach `closed` mid-replay with no error shown, which is
+       the case that would otherwise print a silently-truncated total. */
+    await renderRun({
+      phase: 'closed',
+      replayComplete: false,
+      events: [envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }))],
+    });
+    const section = costSection();
+    expect(within(section).getByText(/ended before the whole log was read/)).toBeVisible();
+    expect(within(section).queryByText('$0.02')).not.toBeInTheDocument();
+  });
+
+  it('says a RERUN’s total is incremental, naming what it reused', async () => {
+    await renderRun(
+      {
+        events: [
+          envelope({
+            type: 'run.started',
+            runId: 'run_1',
+            pipelineVersionId: 'pv_1',
+            params: {},
+            rerunOf: 'run_source',
+          }),
+          envelope({
+            type: 'run.reseeded',
+            runId: 'run_1',
+            sourceRunId: 'run_source',
+            frontier: ['greet'],
+            copiedOutputs: { greet: { status: 200 } },
+            copiedContainers: {},
+          }),
+        ],
+      },
+      { rerunOf: 'run_source' },
+    );
+    const section = costSection();
+    /* The all-copied rerun: nothing was billed, so a "did it spend anything"
+       gate would have hidden the caveat in exactly the case it exists for. */
+    expect(within(section).getByText('No billed exchange')).toBeInTheDocument();
+    expect(within(section).getByText(/1 node was REUSED from run/)).toBeVisible();
+    expect(
+      within(section).getByText(/what the rerun spent, not what the result cost/),
+    ).toBeVisible();
+  });
+
+  it('says nothing about reuse on an ordinary run', async () => {
+    await renderRun({
+      events: [envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }))],
+    });
+    expect(within(costSection()).queryByText(/REUSED/)).not.toBeInTheDocument();
+  });
+});

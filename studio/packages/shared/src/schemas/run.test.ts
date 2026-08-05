@@ -6,6 +6,7 @@ import {
   RunLifecyclePatchSchema,
   RunSchema,
   RunStatusSchema,
+  TERMINAL_RUN_ROW_STATUS,
 } from './run.js';
 
 describe('RunStatusSchema', () => {
@@ -214,5 +215,32 @@ describe('NewRunEventSchema', () => {
     const parsed = NewRunEventSchema.parse(insert);
     expect(parsed).not.toHaveProperty('seq');
     expect(parsed).not.toHaveProperty('ts');
+  });
+});
+
+/**
+ * #930 — the ROW-status terminal set.
+ *
+ * A PARTITION test rather than a membership one: the bug this guards is a status
+ * that nobody classified, and asserting "success is terminal" would not catch it.
+ * `queued` and `skipped` are the two `RunStatus` carries that the engine's
+ * `RunLifecycleStatus` does not, and they fall on OPPOSITE sides — which is
+ * exactly why casting a row status into `TERMINAL_RUN_STATUS` cannot answer this.
+ */
+describe('TERMINAL_RUN_ROW_STATUS (#930)', () => {
+  it('partitions every RunStatus, so a new one cannot go unclassified', () => {
+    const terminal = RunStatusSchema.options.filter((s) => TERMINAL_RUN_ROW_STATUS.has(s));
+    const advancing = RunStatusSchema.options.filter((s) => !TERMINAL_RUN_ROW_STATUS.has(s));
+    expect([...terminal].sort()).toEqual(['failure', 'interrupted', 'skipped', 'success']);
+    expect([...advancing].sort()).toEqual(['pending', 'queued', 'running', 'waiting']);
+    expect(terminal.length + advancing.length).toBe(RunStatusSchema.options.length);
+  });
+
+  it('puts the two statuses the lifecycle enum lacks on OPPOSITE sides', () => {
+    /* `skipped` has stopped advancing — it never ran and never will. `queued` has
+       not started. A cast into the lifecycle set would silently call both
+       terminal, since neither is one of its three non-terminal names. */
+    expect(TERMINAL_RUN_ROW_STATUS.has('skipped')).toBe(true);
+    expect(TERMINAL_RUN_ROW_STATUS.has('queued')).toBe(false);
   });
 });

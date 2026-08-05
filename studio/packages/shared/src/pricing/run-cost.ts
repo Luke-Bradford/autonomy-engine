@@ -305,14 +305,32 @@ export function runCostFromTotals(totals: MeteredTotals): RunCost {
 }
 
 /**
- * A ONE-NODE cost slice: every {@link RunCost} field, plus the facts a per-node
- * reading needs and a whole-run reading cannot use.
+ * A cost slice for ONE SCOPE — a node, or (since #930) a whole run: every
+ * {@link RunCost} field, plus the facts a rendered reading needs and the
+ * SQL-aggregate path cannot supply.
  *
- * `providers`/`models` are the answer to "which model did this node actually run",
+ * `providers`/`models` are the answer to "which model did this actually run",
  * which is answerable nowhere else in the UI — and `providers` is also what lets a
- * reader tell an `agent_cli` node apart, whose `responseCount` means something
+ * reader tell an `agent_cli` exchange apart, whose `responseCount` means something
  * DIFFERENT (see {@link RunCost.responseCount}: per invocation, a floor rather than
  * a census, because the CLI reports none of the model calls it drives internally).
+ *
+ * AMENDED (#930). This shape was introduced by #866 as per-NODE only, and said so:
+ * "the facts a per-node reading needs and a whole-run reading CANNOT use". That was
+ * wrong, and U27's run-level surface is the counter-example:
+ *
+ *  - the per-side reported counts are what stop `inputTokens: 0` rendering as a
+ *    measurement nobody took. That failure is identical at run level — a run of
+ *    `agent_cli` nodes reports no token counts at all — so a run-level reading
+ *    built on plain {@link RunCost} would print the exact manufactured zero this
+ *    field exists to prevent;
+ *  - `providers` still decides the floor-not-census caveat: ONE `agent_cli`
+ *    exchange anywhere in the run makes the run's `responseCount` a floor too.
+ *
+ * What IS node-only is the *weight* of the caveats, not their truth. So the shape
+ * is shared and {@link computeRunUsage} is the run-level producer; only the
+ * bounded-SQL aggregate path ({@link PipelineCostAggregates}) stays on the
+ * narrower {@link RunCost}, because it genuinely cannot count these in SQL today.
  */
 export interface NodeCost extends RunCost {
   inputReportedResponseCount: number;
@@ -332,9 +350,17 @@ export function nodeCostFromTotals(totals: MeteredTotals): NodeCost {
   };
 }
 
-/** Fold one run's events into a `RunCost`. Pure, deterministic, order-independent,
- * never throws. */
-export function computeRunCost(events: readonly { payload: unknown }[]): RunCost {
+/**
+ * The shared fold: every `activity.metered` payload in a log, accumulated once.
+ *
+ * Extracted (#930) so the run-level projection and the richer run-level USAGE
+ * projection walk the log through the SAME code rather than two copies that can
+ * drift on which rows they skip. Not exported: callers want one of the two
+ * projections below, and handing out the mutable accumulator would invite a third
+ * categorisation site — the thing {@link accumulateMetered}'s docblock exists to
+ * prevent.
+ */
+function meteredTotalsOf(events: readonly { payload: unknown }[]): MeteredTotals {
   const totals = emptyMeteredTotals();
   for (const row of events) {
     const parsed = EngineEventSchema.safeParse(row.payload);
@@ -343,7 +369,30 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
     if (e.type !== 'activity.metered') continue;
     accumulateMetered(totals, e);
   }
-  return runCostFromTotals(totals);
+  return totals;
+}
+
+/** Fold one run's events into a `RunCost`. Pure, deterministic, order-independent,
+ * never throws. */
+export function computeRunCost(events: readonly { payload: unknown }[]): RunCost {
+  return runCostFromTotals(meteredTotalsOf(events));
+}
+
+/**
+ * #930 — fold one run's events into the RICHER {@link NodeCost} slice: everything
+ * {@link computeRunCost} projects, plus the per-side reported counts and the
+ * provider/model sets.
+ *
+ * A rendered run-level figure needs those extras for the same reason the per-node
+ * panel does (see {@link NodeCost}) — without them a run that measured no tokens
+ * is indistinguishable from one that used none. `computeRunCost` keeps its narrower
+ * shape because it is the twin of the bounded-SQL aggregate that serves
+ * `GET /api/runs/:id/cost`, and widening THAT would mean counting these in SQL.
+ *
+ * The two agree by construction on every shared field: one fold, two projections.
+ */
+export function computeRunUsage(events: readonly { payload: unknown }[]): NodeCost {
+  return nodeCostFromTotals(meteredTotalsOf(events));
 }
 
 /** Roll up an ARRAY of per-run costs into a per-pipeline total — the pure

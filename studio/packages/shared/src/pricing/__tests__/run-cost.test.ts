@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   accumulateMetered,
   computeRunCost,
+  computeRunUsage,
   emptyMeteredTotals,
   nodeCostFromTotals,
   rollupFromAggregates,
@@ -439,5 +440,80 @@ describe('the metered accumulator (#866)', () => {
     accumulateMetered(a, meteredEvent({ costEstimate: 1 }));
     expect(b.responseCount).toBe(0);
     expect(b.providers.size).toBe(0);
+  });
+});
+
+/**
+ * #930 — the run-level USAGE projection: the same fold, projected wider.
+ *
+ * The point of these is that `computeRunUsage` must be the SAME walk as
+ * `computeRunCost` (so the run-level surface and `GET /api/runs/:id/cost` can
+ * never disagree about what a run spent) while carrying the two facts a rendered
+ * figure cannot be honest without — the per-side reported counts and `providers`.
+ */
+describe('computeRunUsage (#930 — the run-level usage projection)', () => {
+  it('agrees with computeRunCost on every shared field, so the two cannot drift', () => {
+    const rows = [
+      metered({ inputTokens: 100, outputTokens: 200, costEstimate: 0.0055 }),
+      metered({ meteringStatus: 'unpriced', provider: 'agent_cli' }),
+      metered({ inputTokens: 10, meteringStatus: 'unknown' }),
+      { payload: { type: 'not.an.event', nonsense: true } },
+    ];
+    const usage = computeRunUsage(rows);
+    const cost = computeRunCost(rows);
+    /* Projected onto RunCost's OWN key set rather than compared with
+       `toMatchObject`, so a field added to RunCost later is compared too — the
+       drift this test exists to catch is a new field one path forgets. */
+    const narrowed = Object.fromEntries(
+      Object.keys(cost).map((k) => [k, (usage as unknown as Record<string, unknown>)[k]]),
+    );
+    expect(narrowed).toEqual({ ...cost });
+  });
+
+  it('carries the per-side reported counts, so an unmeasured side is not a zero', () => {
+    /* An `agent_cli` spend fact reports NO token counts; the second response
+       reports only the INPUT side (the documented OpenAI-compatible-gateway
+       case). A run-level reading built on RunCost alone would print `4,000 in ·
+       0 out` — a measurement nobody took. */
+    const usage = computeRunUsage([
+      metered({ meteringStatus: 'unpriced', provider: 'agent_cli' }),
+      metered({ inputTokens: 4000, meteringStatus: 'unknown' }),
+    ]);
+    expect(usage.responseCount).toBe(2);
+    expect(usage.inputReportedResponseCount).toBe(1);
+    expect(usage.outputReportedResponseCount).toBe(0);
+    expect(usage.inputTokens).toBe(4000);
+    expect(usage.outputTokens).toBe(0);
+  });
+
+  it('carries providers/models across the whole run, so one CLI exchange is visible', () => {
+    const usage = computeRunUsage([
+      metered({ provider: 'anthropic_api', model: 'claude-opus-4-8', costEstimate: 0.01 }),
+      metered({ provider: 'agent_cli', model: 'claude-cli', meteringStatus: 'unpriced' }),
+    ]);
+    expect(usage.providers).toEqual(['anthropic_api', 'agent_cli']);
+    expect(usage.models).toEqual(['claude-opus-4-8', 'claude-cli']);
+  });
+
+  it('is a complete $0 over an empty log', () => {
+    const usage = computeRunUsage([]);
+    expect(usage.responseCount).toBe(0);
+    expect(usage.complete).toBe(true);
+    expect(usage.providers).toEqual([]);
+  });
+
+  it('sees a MIXED run: priced and subscription exchanges together', () => {
+    /* Unreachable per NODE — a node binds one connection for the whole immutable
+       run — but ordinary per RUN, and it is the case the reading has to get
+       right (see `costReading.ts`). */
+    const usage = computeRunUsage([
+      metered({ inputTokens: 10, outputTokens: 20, costEstimate: 0.5 }),
+      metered({ provider: 'agent_cli', meteringStatus: 'unpriced' }),
+    ]);
+    expect(usage.pricedResponseCount).toBe(1);
+    expect(usage.unpricedResponseCount).toBe(1);
+    expect(usage.costUnknownResponseCount).toBe(0);
+    expect(usage.complete).toBe(true);
+    expect(usage.totalCostEstimate).toBe(0.5);
   });
 });
