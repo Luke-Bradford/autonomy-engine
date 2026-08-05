@@ -31,6 +31,11 @@ import { createExternalWaitCompleter } from './run/external-wait-service.js';
 import { createReseedService } from './run/reseed.js';
 import { deriveExternalWaitToken } from './webhooks/external-wait-token.js';
 import type { DocResolver, RetryAlarms } from './run/driver.js';
+import {
+  LOGGED_URL_REDACT_PATHS,
+  censorLoggedUrl,
+  redactingLogMethod,
+} from './util/log-redaction.js';
 import { registerAuthHook } from './auth/principal.js';
 import { registerErrorHandler } from './errors.js';
 import { connectionsRoutes } from './routes/connections.js';
@@ -232,10 +237,37 @@ export interface BuildAppOptions {
    * app supplies a stub by default.
    */
   claudeAccountQuotaReader?: ClaudeAccountQuotaReader;
+  /**
+   * #913 — test seam: a destination for the request/application log, so a test can
+   * assert on what the logger actually WRITES (that a capability token carried in a
+   * URL never reaches it). Left unset, the logger keeps writing to stdout at level
+   * `info` exactly as `logger: true` did — this option changes no production
+   * posture, it only makes the output observable.
+   *
+   * Typed STRUCTURALLY rather than as `pino.DestinationStream` on purpose: this
+   * package declares `fastify`, not `pino`, so naming a pino type here would be a
+   * phantom dependency on a transitive package. `write(msg)` is the entire surface
+   * pino uses.
+   */
+  loggerStream?: { write(msg: string): void };
 }
 
 export async function buildApp(opts?: BuildAppOptions) {
-  const fastify = Fastify({ logger: true, bodyLimit: REQUEST_BODY_LIMIT_BYTES });
+  const fastify = Fastify({
+    // #913 — the logger is configured, not merely enabled, because a URL can carry
+    // a secret: `POST /api/external-wait/:token` puts a live capability token in its
+    // path. `redact` closes the `incoming request` line (URL as a `req.url` FIELD)
+    // and `hooks.logMethod` closes Fastify's unmatched-route line (URL formatted
+    // INTO a `msg` string, which no redact path can reach). Both delegate to the one
+    // rule in `util/log-redaction.ts`. Everything else about this logger — stdout,
+    // level `info` — is what `logger: true` gave.
+    logger: {
+      redact: { paths: LOGGED_URL_REDACT_PATHS, censor: censorLoggedUrl },
+      hooks: { logMethod: redactingLogMethod },
+      ...(opts?.loggerStream ? { stream: opts.loggerStream } : {}),
+    },
+    bodyLimit: REQUEST_BODY_LIMIT_BYTES,
+  });
   const dbPath = opts?.dbPath ?? process.env.DB_PATH ?? 'data/app.sqlite';
 
   // Resolve the secret-encryption master key ONCE per process, at boot,
