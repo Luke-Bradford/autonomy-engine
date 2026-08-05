@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PendingExternalWait, PipelineVersion } from '@autonomy-studio/shared';
 import { completeExternalWait, listExternalWaits } from '../../api/runs';
 import { messageOf } from '../../api/client';
@@ -70,8 +70,17 @@ export function PendingCallbacks({
   /* #901 — the wait currently being sent, and the per-wait refusal to show beside
      its editor. Keyed by `waitKey` rather than booleans so two open editors cannot
      share one spinner or one error. */
-  const [sending, setSending] = useState<string | null>(null);
+  const [sending, setSending] = useState<Record<string, true>>({});
   const [sendError, setSendError] = useState<Record<string, string>>({});
+  /* #901 — the wait we completed but are still watching the list settle for. Only
+     reachable when the completion frame does NOT arrive (a dead socket); normally
+     the epoch remount clears this whole component first. Without it a successful
+     send on a dead socket is indistinguishable from a click that did nothing. */
+  const [sent, setSent] = useState<Record<string, true>>({});
+  /* Focus has to go somewhere when an editor opens and closes. The textarea takes
+     it on open via `autoFocus`; on close it comes back here, to the control that
+     opened it — otherwise a keyboard or screen-reader user is dropped to <body>. */
+  const triggers = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     const ac = new AbortController();
@@ -113,6 +122,11 @@ export function PendingCallbacks({
        epoch remount or by the next send, and Cancel-then-reopen is neither — so a
        refusal from a body that no longer exists would sit above an empty editor
        claiming the wait was not completed. */
+    clearError(key);
+    triggers.current[key]?.focus();
+  }
+
+  function clearError(key: string) {
     setSendError((e) => {
       const rest = { ...e };
       delete rest[key];
@@ -130,16 +144,12 @@ export function PendingCallbacks({
       }
       payload = parsed as Record<string, unknown>;
     } catch (err: unknown) {
-      setSendError((e) => ({ ...e, [key]: err instanceof Error ? err.message : String(err) }));
+      setSendError((e) => ({ ...e, [key]: messageOf(err) }));
       return;
     }
 
-    setSending(key);
-    setSendError((e) => {
-      const rest = { ...e };
-      delete rest[key];
-      return rest;
-    });
+    setSending((x) => ({ ...x, [key]: true }));
+    clearError(key);
     try {
       await completeExternalWait(runId, {
         nodeId: wait.nodeId,
@@ -150,13 +160,18 @@ export function PendingCallbacks({
          component, which is what actually refreshes the list — so this only drops
          the draft, and does so for the case where that frame never arrives (a dead
          socket). No second refetch: the epoch owns freshness here. */
+      setSent((x) => ({ ...x, [key]: true }));
       closeEditor(key);
     } catch (err: unknown) {
       /* Shown against THIS wait. A 422 means the node is still parked and the body
          is fixable, so the editor deliberately stays open with the text intact. */
       setSendError((e) => ({ ...e, [key]: messageOf(err) }));
     } finally {
-      setSending(null);
+      setSending((x) => {
+        const rest = { ...x };
+        delete rest[key];
+        return rest;
+      });
     }
   }
 
@@ -183,7 +198,7 @@ export function PendingCallbacks({
 
       {waits !== null && waits.length > 0 && (
         <ul className="external-waits" aria-label="Pending callbacks">
-          {waits.map((wait) => {
+          {waits.map((wait, i) => {
             const key = waitKey(wait);
             /* The parked id is an INSTANCE key inside a parallel foreach (`w@1`),
                so it is resolved to its doc node before being named — `nameOf` is
@@ -200,12 +215,23 @@ export function PendingCallbacks({
             /* `undefined` ⇒ the editor is closed; `''` is an OPEN editor the
                operator has emptied, which means `{}` and is not the same thing. */
             const draft = drafts[key];
-            /* `waitKey` is `JSON.stringify([nodeId, attemptId])` — quotes, commas
-               and brackets, and a node id is unconstrained author text that may
-               contain whitespace. That is fine as a React/state key and illegal in
-               an HTML id, where it breaks `label[for]` resolution. Slugified for
-               the DOM only; the JSON key stays the state key. */
-            const domId = `wait-body-${key.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
+            /* DOM ids off the list INDEX, not off `waitKey`. `waitKey` is
+               `JSON.stringify([nodeId, attemptId])` — quotes, commas, brackets, and
+               a node id is unconstrained author text — which is fine as a React key
+               and illegal in an HTML id. Slugifying it was worse than it looked: the
+               obvious `[^a-zA-Z0-9_-]+ -> '-'` is NOT injective (a space and a
+               literal hyphen collapse to the same character), so two waits could
+               claim one id and `label[for]` would resolve both to the first — the
+               exact bug the slug was meant to prevent. The index is unique by
+               construction over the list actually being rendered. */
+            const fieldId = `wait-body-${i}`;
+            const hintId = `wait-hint-${i}`;
+            const errorId = `wait-error-${i}`;
+            /* The name the operator sees for THIS wait, reused in the controls'
+               accessible names. With two parked waits the page would otherwise have
+               two buttons called "Complete wait" and two identically-labelled
+               textareas, which is unusable by ear even though it looks fine. */
+            const label = name ?? wait.nodeId;
             return (
               <li key={key}>
                 <p>
@@ -219,7 +245,11 @@ export function PendingCallbacks({
                   {' · expires '}
                   {formatWhen(wait.expiresAt)}
                 </p>
-                {bodyHint !== null && <p className="page-hint">{bodyHint}</p>}
+                {bodyHint !== null && (
+                  <p className="page-hint" id={hintId}>
+                    {bodyHint}
+                  </p>
+                )}
                 {revealed === key ? (
                   /* Reveal-on-demand, matching the webhook-secret block on the
                      triggers page — for the same reason and not merely for
@@ -256,42 +286,82 @@ export function PendingCallbacks({
                     the case the seam served badly — the operator deciding it
                     themselves, who had to leave the app to POST their own callback. */}
                 {draft === undefined ? (
-                  <button type="button" onClick={() => onDraftChange(key, '')}>
+                  <button
+                    type="button"
+                    ref={(el) => {
+                      triggers.current[key] = el;
+                    }}
+                    /* `aria-label` rather than a visually-hidden span: the name
+                       computation trims each text node before joining them, so
+                       "Complete wait" + " for X" comes out as one word run without
+                       the space. Measured, not assumed — the split version made the
+                       button unfindable by its own accessible name. */
+                    aria-label={`Complete wait for ${label}`}
+                    onClick={() => onDraftChange(key, '')}
+                  >
                     Complete wait
                   </button>
                 ) : (
                   <div className="external-wait-complete">
-                    <label htmlFor={domId}>
-                      Callback body (JSON) — empty means <code>{'{}'}</code>
+                    <label htmlFor={fieldId}>
+                      Callback body (JSON) for {label} — empty means <code>{'{}'}</code>
                     </label>
                     <textarea
-                      id={domId}
+                      id={fieldId}
                       rows={4}
                       spellCheck={false}
+                      /* Focus follows the click that opened the editor. Without it
+                         the operator has to hunt for the field they just asked for,
+                         and a keyboard user is left on a button that no longer
+                         exists. Safe from stealing focus on a background remount:
+                         this element only MOUNTS when the draft opens. */
+                      autoFocus
                       value={draft}
                       placeholder={'{\n  "decision": "approve"\n}'}
+                      /* The contract sentence and the refusal both DESCRIBE this
+                         field — unlinked, a screen-reader user tabbing here hears
+                         the label and nothing about what the body must contain or
+                         why the last attempt was rejected. */
+                      aria-describedby={
+                        [
+                          bodyHint !== null ? hintId : null,
+                          sendError[key] !== undefined ? errorId : null,
+                        ]
+                          .filter((x) => x !== null)
+                          .join(' ') || undefined
+                      }
+                      aria-invalid={sendError[key] !== undefined ? true : undefined}
                       onChange={(e) => onDraftChange(key, e.target.value)}
                     />
                     {sendError[key] !== undefined && (
-                      <p role="alert" className="error">
+                      <p role="alert" className="error" id={errorId}>
                         The wait was not completed: {sendError[key]}
                       </p>
                     )}
-                    <button
-                      type="button"
-                      disabled={sending !== null}
-                      onClick={() => void send(wait, key)}
-                    >
-                      {sending === key ? 'Completing…' : 'Complete this wait'}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={sending === key}
-                      onClick={() => closeEditor(key)}
-                    >
-                      Cancel
-                    </button>
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        disabled={sending[key] === true}
+                        onClick={() => void send(wait, key)}
+                      >
+                        {sending[key] === true ? 'Completing…' : 'Complete this wait'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={sending[key] === true}
+                        onClick={() => closeEditor(key)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
+                )}
+                {sent[key] === true && draft === undefined && (
+                  /* Only ever seen when the completion frame did NOT arrive to
+                     remount this component — normally the wait is gone before this
+                     could render. Says the send SUCCEEDED, which is otherwise
+                     indistinguishable from a click that did nothing. */
+                  <p role="status">Completed — waiting for the run to catch up.</p>
                 )}
               </li>
             );

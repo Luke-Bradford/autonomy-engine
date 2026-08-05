@@ -336,7 +336,13 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       // unhandled rejection is a process exit under Node's default, which is far
       // too sharp an edge for a discarded promise, so the discard is explicit and
       // logged rather than resting on the guarantee.
-      void drive.catch((err: unknown) => {
+      // `drive?` because the type is `drive?: Promise<void>` — the completer sets it
+      // only on `'completed'`, and both other outcomes have already thrown above, so
+      // this is unreachable-by-construction rather than a real absence. Optional
+      // chaining instead of a `!`: if that ever stops being true, a wait that was
+      // durably settled without being driven is a run that silently stops, and the
+      // honest shape for that is "no drive to discard", not a crash here.
+      void drive?.catch((err: unknown) => {
         request.log.error({ err, runId: run.id }, 'external wait: resumed drive faulted');
       });
       return reply.status(204).send();

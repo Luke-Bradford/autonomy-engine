@@ -1767,7 +1767,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
    * epoch remount an unrelated wait can trigger at any moment.
    */
   async function openEditor() {
-    await userEvent.click(await screen.findByRole('button', { name: 'Complete wait' }));
+    await userEvent.click(await screen.findByRole('button', { name: /^Complete wait for / }));
     return screen.getByRole('textbox', { name: /Callback body/ });
   }
 
@@ -1852,7 +1852,7 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
     await pendingList();
 
-    const editors = screen.getAllByRole('button', { name: 'Complete wait' });
+    const editors = screen.getAllByRole('button', { name: /^Complete wait for / });
     await userEvent.click(editors[1]!);
     await userEvent.type(screen.getByRole('textbox', { name: /Callback body/ }), 'half-typed');
 

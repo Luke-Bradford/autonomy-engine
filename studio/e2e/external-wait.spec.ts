@@ -140,7 +140,7 @@ test('#901 — an operator completes the wait from the app, sending no token', a
   /* NEVER REVEALED. The whole request below is composed without clicking "Show
      callback URL", so the token is not on the page, not in the DOM, and not in
      this browser context — which is the property #901 exists for. */
-  await list.getByRole('button', { name: 'Complete wait' }).click();
+  await list.getByRole('button', { name: /^Complete wait for / }).click();
   await expect(list).not.toContainText('/api/external-wait/');
 
   const body = list.getByRole('textbox', { name: /Callback body/ });

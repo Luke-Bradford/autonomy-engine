@@ -852,7 +852,8 @@ td button + button {
 .connection-form textarea,
 .trigger-form input,
 .trigger-form select,
-.trigger-form textarea {
+.trigger-form textarea,
+.external-wait-complete textarea {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -866,7 +867,8 @@ td button + button {
 }
 
 .connection-form textarea,
-.trigger-form textarea {
+.trigger-form textarea,
+.external-wait-complete textarea {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   resize: vertical;
 }
@@ -1709,8 +1711,13 @@ td button + button {
   color: var(--muted);
 }
 
-/* One-time reveal of a freshly-minted webhook secret. */
-.secret-reveal {
+/* One-time reveal of a freshly-minted webhook secret, and (#901) the in-place
+   editor for completing a wait. Both expand ONE list item into a thing to act on,
+   and both can be open at once, so they share the card rather than each having a
+   near-identical one — the earlier cut of `.external-wait-complete` was a verbatim
+   copy of this block but for its `margin-top`. */
+.secret-reveal,
+.external-wait-complete {
   margin-top: 1rem;
   padding: 0.75rem 1rem;
   background: var(--panel);
@@ -1739,39 +1746,16 @@ td button + button {
   border-top: 1px solid var(--border);
 }
 
-/* #901 — the in-place editor for completing a wait from the app. Deliberately the
-   same card treatment as `.secret-reveal` beside it: both are an expansion of one
-   list item into a thing to act on, and they can be open at once, so a different
-   surface for each would read as two unrelated widgets in one block. */
-.external-wait-complete {
-  margin-top: 0.75rem;
-  padding: 0.75rem 1rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  max-width: 640px;
-}
-
+/* #901 — the editor's own layout. Everything else about it (the card, the input
+   chrome, the monospace textarea, the button row) is borrowed from the rules
+   above, which is why this block is four lines rather than thirty. */
 .external-wait-complete label {
   display: block;
   margin-bottom: 0.35rem;
 }
 
-/* Monospace because the content is JSON the operator is composing against a
-   declared contract, and `resize: vertical` because a body with several declared
-   outputs outgrows four rows — horizontal resize would break the card. */
 .external-wait-complete textarea {
   width: 100%;
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  resize: vertical;
-}
-
-.external-wait-complete button {
-  margin-top: 0.5rem;
-}
-
-.external-wait-complete button + button {
-  margin-left: 0.5rem;
 }
 
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
