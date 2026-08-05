@@ -72,10 +72,7 @@ export interface ListRunsQuery {
  * version number and trigger name the list renders. Strictly additive over
  * `Run`, so this is a widening, not a breaking change.
  */
-export function listRuns(
-  filters: ListRunsQuery = {},
-  signal?: AbortSignal,
-): Promise<RunSummary[]> {
+export function listRuns(filters: ListRunsQuery = {}, signal?: AbortSignal): Promise<RunSummary[]> {
   const query = new URLSearchParams();
   // Only SET axes reach the wire. An empty-string param is not "no filter" to
   // the server — `pipelineId`/`triggerId` are `min(1)`, so `?pipelineId=` is a

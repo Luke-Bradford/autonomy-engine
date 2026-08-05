@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tab, TabList } from '@fluentui/react-components';
 import { RunStatusSchema, type RunSummary, type TriggerPublic } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
@@ -136,17 +136,32 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   const loadedAt = loaded?.key === filterKey ? loaded.at : 0;
   const error = failed?.key === filterKey ? failed.message : null;
 
+  /**
+   * Monotonic id of the most recently STARTED load — `pipelinesStore`'s
+   * `latestLoad` guard, for the same reason it has one. `filterKey` settles which
+   * QUESTION an answer belongs to, but two loads can share a key (a Refresh, or
+   * a double-Refresh) and abort does not fully cover them: a request whose
+   * response has already arrived can still resolve its `.then` after the
+   * controller aborts, so the older answer would win on completion order.
+   * A superseded load drops its result, success AND failure alike — a late
+   * rejection from an abandoned request must not bury the fresher answer that
+   * replaced it under an error banner.
+   */
+  const latestLoad = useRef(0);
+
   // Deps are PRIMITIVES, never the `filters` object: a fresh object literal every
   // render would make this effect re-run forever.
   useEffect(() => {
     const controller = new AbortController();
+    const load = (latestLoad.current += 1);
     listRuns({ status: statusFilter, pipelineId, triggerId, since }, controller.signal)
       .then((rows) => {
+        if (load !== latestLoad.current) return;
         setLoaded({ key: filterKey, rows, at: Date.now() });
         setFailed(null);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (load !== latestLoad.current || controller.signal.aborted) return;
         setFailed({ key: filterKey, message: err instanceof Error ? err.message : String(err) });
       });
     return () => controller.abort();

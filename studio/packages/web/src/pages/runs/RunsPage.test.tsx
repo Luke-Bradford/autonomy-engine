@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
@@ -394,7 +394,7 @@ describe('RunsPage — U26 filter pane', () => {
    * controls right above it — briefly, but long enough to be read as the answer,
    * which for a status filter means reading a success as a failure.
    */
-  it('never shows the previous filter\'s rows under the new filter', async () => {
+  it("never shows the previous filter's rows under the new filter", async () => {
     listMock.mockResolvedValue([run({ id: 'run_old' })]);
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     expect(await screen.findByText('run_old')).toBeInTheDocument();
@@ -421,6 +421,40 @@ describe('RunsPage — U26 filter pane', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
     expect(screen.getByText('run_here')).toBeInTheDocument();
+  });
+
+  /**
+   * `filterKey` settles which QUESTION an answer belongs to, but two loads can
+   * share a key — a double-Refresh — and abort does not fully cover them: a
+   * request whose response has already arrived can still resolve after the
+   * controller aborts. Without a sequence guard the OLDER answer wins on
+   * completion order, so the list silently reverts to a stale snapshot.
+   */
+  it('drops a superseded load that resolves LATE under the same filter', async () => {
+    let resolveFirst: (rows: RunSummary[]) => void = () => {};
+    listMock.mockReturnValueOnce(
+      new Promise<RunSummary[]>((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    await screen.findByText(/Loading runs/i);
+
+    // A second load of the SAME filter, which answers first.
+    listMock.mockResolvedValue([run({ id: 'run_fresh' })]);
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText('run_fresh')).toBeInTheDocument();
+
+    // Now the abandoned first load finally answers. It must be dropped.
+    // `act` is what makes this test able to FAIL: without flushing React's
+    // update queue the assertion runs before any re-render, so a stale row that
+    // WAS applied would still not be in the DOM yet and the test would pass
+    // against a missing guard.
+    await act(async () => {
+      resolveFirst([run({ id: 'run_stale' })]);
+    });
+    expect(screen.queryByText('run_stale')).not.toBeInTheDocument();
+    expect(screen.getByText('run_fresh')).toBeInTheDocument();
   });
 
   it('does not offer Clear when nothing is filtered', async () => {

@@ -729,7 +729,13 @@ describe('listRunSummaries — U26 filter axes', () => {
         edges: [],
         catalogVersion: CATALOG_VERSION,
       });
-    return { db, reports, backups, reportsV: versionOf(reports.id), backupsV: versionOf(backups.id) };
+    return {
+      db,
+      reports,
+      backups,
+      reportsV: versionOf(reports.id),
+      backupsV: versionOf(backups.id),
+    };
   }
 
   function at(db: ReturnType<typeof freshDb>['db'], id: string, startedAt: number) {
@@ -815,7 +821,10 @@ describe('listRunSummaries — U26 filter axes', () => {
     for (const id of [wanted.id, wrongPipeline.id, noTrigger.id, otherOwner.id]) {
       db.update(runs).set({ status: 'failure', startedAt: 5_000 }).where(eq(runs.id, id)).run();
     }
-    db.update(runs).set({ status: 'success', startedAt: 5_000 }).where(eq(runs.id, wrongStatus.id)).run();
+    db.update(runs)
+      .set({ status: 'success', startedAt: 5_000 })
+      .where(eq(runs.id, wrongStatus.id))
+      .run();
     db.update(runs).set({ status: 'failure', startedAt: 10 }).where(eq(runs.id, tooOld.id)).run();
 
     expect(
