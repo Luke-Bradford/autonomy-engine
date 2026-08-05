@@ -152,7 +152,10 @@ test('#918 — a rerun says which of its nodes it REUSED, and shows what they pr
 
   await page.getByRole('button', { name: 'Filter 1' }).click();
   const panel = page.getByRole('complementary', { name: 'Node Filter 1' });
-  await expect(panel.getByText('Outputs')).toBeVisible();
+  /* The HEADING role, not the bare text: the provenance hint above it says
+     "the outputs below were computed there", so a text match resolves to two
+     elements. */
+  await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();
   // The REAL copied value, computed in R1 by the real engine: [1,4,2,5] filtered
   // by `greater(item, 2)`. Asserting the value rather than the section's mere
   // presence is what makes this more than a "something rendered" check.
