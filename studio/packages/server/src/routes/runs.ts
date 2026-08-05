@@ -3,6 +3,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import {
   computeRunCost,
   CompleteExternalWaitBodySchema,
+  RUN_SINCE_MS,
+  RunSinceSchema,
+  RunStatusSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
   type RunDetail,
@@ -30,6 +33,29 @@ const ListRunsQuerystringSchema = z.object({
   parentRunId: z.string().min(1).optional(),
   // RS6 — the rerun-history grouping filter: `?rerunOf=R1` lists R1's reruns.
   rerunOf: z.string().min(1).optional(),
+  // U26 — the Monitor filter pane. `status` and `since` are FIELDED, so they
+  // parse through their own shared vocabularies and a junk value is a 400 rather
+  // than a filter that silently matches nothing. `pipelineId` is an opaque id
+  // like the four above it, shape-checked only.
+  status: RunStatusSchema.optional(),
+  pipelineId: z.string().min(1).optional(),
+  /**
+   * A RELATIVE window (`1h`/`24h`/`7d`/`30d`), resolved to an epoch lower bound
+   * HERE rather than by the caller. Two reasons, both correctness:
+   *
+   *  - the bound is compared against `runs.started_at`, which THIS process
+   *    stamps (`createRun`), so resolving it here measures the window against
+   *    the same clock that wrote the column — a browser resolving it would widen
+   *    or narrow the window by its own skew, silently.
+   *  - a relative window keeps a shared/bookmarked URL honest: `?since=24h`
+   *    still means "the last day" tomorrow, where a baked-in epoch would quietly
+   *    become "the day before yesterday".
+   *
+   * A closed enum also means there is no numeric query param to coerce, which is
+   * how the empty string (`?startedAfter=`, which `z.coerce.number()` accepts as
+   * `0`) would otherwise have become an always-empty upper bound with no error.
+   */
+  since: RunSinceSchema.optional(),
 });
 
 /**
@@ -61,16 +87,31 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * Rows come back newest-first with a total, deterministic tie-break; the
    * previous route promised an order the query never actually imposed.
+   *
+   * SECURITY — U26's filter axes are ADDITIVE. `ownerId` is not one of them: it
+   * comes from `request.principal` and is ANDed in unconditionally by
+   * `listRunsConditions`, so every axis a caller supplies can only ever NARROW
+   * their own runs. There is no shape of query string that widens past it.
+   *
+   * `pipelineId`/`triggerId` are deliberately NOT ownership-validated here, and
+   * that is the safer choice rather than a gap: running them through
+   * `requireOwned` would 404 a pipeline belonging to someone else while an id
+   * that exists nowhere returned an empty 200 — an existence oracle for other
+   * owners' ids. ANDing them with the owner scope instead never looks the
+   * pipeline up at all, so a foreign id and a nonexistent one are
+   * indistinguishable: both match none of the caller's runs.
    */
   fastify.get('/api/runs', async (request) => {
-    const { pipelineVersionId, triggerId, parentRunId, rerunOf } = ListRunsQuerystringSchema.parse(
-      request.query,
-    );
+    const { pipelineVersionId, triggerId, parentRunId, rerunOf, status, pipelineId, since } =
+      ListRunsQuerystringSchema.parse(request.query);
     return listRunSummaries(db, {
       pipelineVersionId,
       triggerId,
       parentRunId,
       rerunOf,
+      status,
+      pipelineId,
+      startedAfter: since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since],
       ownerId: request.principal.ownerId,
     });
   });

@@ -705,3 +705,127 @@ describe('listRunSummaries (R2)', () => {
     expect(summaries.map((s) => s.id)).toEqual([mine.id]);
   });
 });
+
+/**
+ * U26 — the Monitor filter pane's server-side axes.
+ *
+ * `status` and `triggerId` already existed on `ListRunsFilter`; these tests pin
+ * the two NEW ones and, more importantly, pin that every axis is ANDed rather
+ * than replacing the owner scope. A filter that widens past `ownerId` is the
+ * only way this feature could ever leak, so it is tested directly rather than
+ * argued for in a docblock.
+ */
+describe('listRunSummaries — U26 filter axes', () => {
+  function setup() {
+    const { db } = freshDb();
+    const reports = createPipeline(db, { ownerId: 'local', name: 'Reports' });
+    const backups = createPipeline(db, { ownerId: 'local', name: 'Backups' });
+    const versionOf = (pipelineId: string) =>
+      createPipelineVersion(db, {
+        pipelineId,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+    return { db, reports, backups, reportsV: versionOf(reports.id), backupsV: versionOf(backups.id) };
+  }
+
+  function at(db: ReturnType<typeof freshDb>['db'], id: string, startedAt: number) {
+    db.update(runs).set({ startedAt }).where(eq(runs.id, id)).run();
+  }
+
+  it('filters by PIPELINE across every version of it, not by version id', () => {
+    const { db, reports, reportsV, backupsV } = setup();
+    const second = createPipelineVersion(db, {
+      pipelineId: reports.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const v1Run = createRun(db, buildRunInput(reportsV.id));
+    const v2Run = createRun(db, buildRunInput(second.id));
+    createRun(db, buildRunInput(backupsV.id));
+
+    // Both versions of Reports, and nothing from Backups. Filtering by
+    // `pipelineVersionId` could never express this — that is the whole point of
+    // the axis.
+    expect(
+      listRunSummaries(db, { pipelineId: reports.id })
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([v1Run.id, v2Run.id].sort());
+  });
+
+  it('an unknown pipelineId matches nothing rather than everything', () => {
+    const { db, reportsV } = setup();
+    createRun(db, buildRunInput(reportsV.id));
+    expect(listRunSummaries(db, { pipelineId: 'pl_does_not_exist' })).toEqual([]);
+  });
+
+  it('filters by startedAt lower bound, INCLUSIVE of the bound itself', () => {
+    const { db, reportsV } = setup();
+    const old = createRun(db, buildRunInput(reportsV.id));
+    const onBound = createRun(db, buildRunInput(reportsV.id));
+    const recent = createRun(db, buildRunInput(reportsV.id));
+    at(db, old.id, 999);
+    at(db, onBound.id, 1_000);
+    at(db, recent.id, 5_000);
+
+    // Inclusive: a window computed as `now - 1h` must include a run stamped
+    // exactly an hour ago, or the boundary run flickers out of "the last hour"
+    // on a millisecond.
+    expect(
+      listRunSummaries(db, { startedAfter: 1_000 })
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual([onBound.id, recent.id].sort());
+  });
+
+  it('ANDs every axis together, and none of them widens past the owner scope', () => {
+    const { db, reports, reportsV, backupsV } = setup();
+    const trigger = createTrigger(db, {
+      ownerId: 'local',
+      name: 'Nightly',
+      pipelineVersionId: reportsV.id,
+      params: {},
+      mode: 'manual',
+      schedule: null,
+      webhook: null,
+      concurrency: { policy: 'skip_if_running' },
+      runWindows: null,
+      enabled: false,
+    });
+    const wanted = createRun(db, buildRunInput(reportsV.id, { triggerId: trigger.id }));
+    // One near-miss per axis, so a dropped condition shows up as a specific
+    // extra row rather than as a vague count change.
+    const wrongStatus = createRun(db, buildRunInput(reportsV.id, { triggerId: trigger.id }));
+    const wrongPipeline = createRun(db, buildRunInput(backupsV.id, { triggerId: trigger.id }));
+    const noTrigger = createRun(db, buildRunInput(reportsV.id, { triggerId: null }));
+    const tooOld = createRun(db, buildRunInput(reportsV.id, { triggerId: trigger.id }));
+    // The one that matters: another owner's run that satisfies EVERY other axis.
+    const otherOwner = createRun(
+      db,
+      buildRunInput(reportsV.id, { triggerId: trigger.id, ownerId: 'someone_else' }),
+    );
+
+    for (const id of [wanted.id, wrongPipeline.id, noTrigger.id, otherOwner.id]) {
+      db.update(runs).set({ status: 'failure', startedAt: 5_000 }).where(eq(runs.id, id)).run();
+    }
+    db.update(runs).set({ status: 'success', startedAt: 5_000 }).where(eq(runs.id, wrongStatus.id)).run();
+    db.update(runs).set({ status: 'failure', startedAt: 10 }).where(eq(runs.id, tooOld.id)).run();
+
+    expect(
+      listRunSummaries(db, {
+        ownerId: 'local',
+        status: 'failure',
+        pipelineId: reports.id,
+        triggerId: trigger.id,
+        startedAfter: 1_000,
+      }).map((s) => s.id),
+    ).toEqual([wanted.id]);
+  });
+});

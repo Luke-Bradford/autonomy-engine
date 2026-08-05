@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import {
   NewRunSchema,
@@ -47,6 +47,42 @@ export interface ListRunsFilter {
   /** The boot reconciler's "find all `running` rows" scan (backed by
    * `runs_status_idx`) — filtered in SQL, never loaded-then-filtered. */
   status?: RunStatus;
+  /**
+   * U26 — the Monitor filter pane's time axis, as an INCLUSIVE epoch-ms lower
+   * bound on `started_at` (backed by `runs_started_at_idx`). Inclusive so a
+   * window computed as `now - 1h` still contains a run stamped exactly an hour
+   * ago, rather than dropping the boundary run on a millisecond.
+   *
+   * The epoch is the primitive; the WINDOW (`?since=24h`) is the wire/UI
+   * vocabulary that resolves to one, and it resolves server-side
+   * (`RUN_SINCE_MS`). There is deliberately no upper bound to pair with it —
+   * nothing consumes one (the presets are all "the last N"), and a filter field
+   * no caller sets is a field nobody maintains.
+   *
+   * STATED, not discovered later: `admitQueuedRun` RE-STAMPS `started_at` when a
+   * durably-queued fire is admitted, so a `queued` run enters this window when
+   * it is admitted rather than when it was enqueued. That is the same fact
+   * `formatRunDuration` already refuses to measure a queued row against;
+   * `queued_at` is the column that records the enqueue, and it is not this axis.
+   */
+  startedAfter?: number;
+}
+
+/**
+ * `listRunSummaries` only. The PIPELINE axis needs the `runs ⋈ pipeline_versions`
+ * hop that the summary read-model already makes — a run row carries only its
+ * immutable `pipelineVersionId`, and pipeline identity lives on the version row.
+ *
+ * It is a SEPARATE interface rather than a field on `ListRunsFilter` for a
+ * fail-closed reason: `listRuns` and `listParsedRuns` share `listRunsConditions`
+ * and have no join, so a `pipelineId` there would be a narrowing they ACCEPT and
+ * silently do not apply. A filter that ignores a constraint is the same shape as
+ * a gate that fails open. The type system refuses it instead.
+ */
+export interface ListRunSummariesFilter extends ListRunsFilter {
+  /** Every run of every version of this pipeline (`countActiveRunsForPipeline`'s
+   * join, reused). */
+  pipelineId?: string;
 }
 
 function listRunsConditions(filter: ListRunsFilter) {
@@ -68,6 +104,9 @@ function listRunsConditions(filter: ListRunsFilter) {
   }
   if (filter.status !== undefined) {
     conditions.push(eq(runs.status, filter.status));
+  }
+  if (filter.startedAfter !== undefined) {
+    conditions.push(gte(runs.startedAt, filter.startedAfter));
   }
   return conditions;
 }
@@ -125,7 +164,13 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * UNFILTERED list, and even then the tie-break needs a temp b-tree for the
  * last term. That cost is accepted at U10's "client-side small-data v1" scale —
  * this is a correctness claim about the ORDER, not a performance claim about the
- * index. `listRuns` issues no `ORDER BY` at all, yet the page consuming it
+ * index. RE-MEASURED when U26 added the `status`/`pipelineId`/`startedAfter`
+ * axes, rather than left to silently cover a query it was never taken against:
+ * the plan is UNCHANGED for owner-only, owner+status, owner+startedAfter,
+ * owner+pipeline and all four together — SQLite still drives on
+ * `runs_owner_id_idx` with a `USE TEMP B-TREE FOR ORDER BY` (the pipeline filter
+ * only re-orders the join so `pipelines` leads). `listRuns` issues no
+ * `ORDER BY` at all, yet the page consuming it
  * claimed rows arrived "newest-first as the server returns them" — SQLite's row
  * order is an implementation detail, so that was never a promise anything kept.
  * The `id` tie-break makes two runs stamped in the same millisecond stably
@@ -141,8 +186,14 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * (owner scoping rides the pipeline FK), and filtering there could only ever
  * DROP one of the caller's own runs from their list.
  */
-export function listRunSummaries(db: Db, filter: ListRunsFilter = {}): RunSummary[] {
+export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): RunSummary[] {
   const conditions = listRunsConditions(filter);
+  // U26 — the one axis that cannot live in `listRunsConditions`: it reads a
+  // JOINED column. Expressed over the join this query already makes, exactly as
+  // `countActiveRunsForPipeline` does, rather than as a subquery.
+  if (filter.pipelineId !== undefined) {
+    conditions.push(eq(pipelineVersions.pipelineId, filter.pipelineId));
+  }
   const query = db
     .select({
       run: runs,

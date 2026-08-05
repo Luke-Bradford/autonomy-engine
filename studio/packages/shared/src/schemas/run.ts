@@ -257,3 +257,40 @@ export const RunDiagnosticSchema = z.object({
   ts: z.number().int(),
 });
 export type RunDiagnostic = z.infer<typeof RunDiagnosticSchema>;
+
+/**
+ * U26 — the Monitor filter pane's time axis, as a closed vocabulary of RELATIVE
+ * windows rather than a pair of absolute epochs.
+ *
+ * Relative because the filter is URL-addressable: `?since=24h` still means "the
+ * last day" when the link is opened tomorrow, where a baked-in `startedAfter`
+ * epoch would quietly become "the day before yesterday". The epochs stay the
+ * REPO layer's primitive (`ListRunsFilter.startedAfter`) — this is the wire and
+ * UI vocabulary that resolves to one, and it resolves SERVER-side, so the window
+ * is measured against the same clock that stamped `runs.started_at`. A client
+ * computing its own lower bound would silently widen or narrow the window by
+ * whatever its clock skew happens to be.
+ *
+ * Shared rather than declared twice: the route parses `?since=` through this
+ * enum and the picker renders its options from the same array, so a member can
+ * never exist on one side only.
+ */
+export const RUN_SINCE_WINDOWS = ['1h', '24h', '7d', '30d'] as const;
+export const RunSinceSchema = z.enum(RUN_SINCE_WINDOWS);
+export type RunSince = z.infer<typeof RunSinceSchema>;
+
+/**
+ * How far back each window reaches, in ms. Exhaustive by construction — a new
+ * member of `RUN_SINCE_WINDOWS` fails typecheck here rather than resolving to
+ * `undefined` and producing `NaN` as a lower bound (which SQLite would compare
+ * as NULL and drop every row from, silently).
+ *
+ * `30d` is a fixed 30×24h, not a calendar month: the axis is "how far back",
+ * and a window whose length depends on which month you ask in is not that.
+ */
+export const RUN_SINCE_MS: Record<RunSince, number> = {
+  '1h': 60 * 60 * 1000,
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
