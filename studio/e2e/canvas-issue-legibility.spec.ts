@@ -58,6 +58,12 @@ async function mintedId(page: Page, index: number): Promise<string> {
  * against correct code — so the guard is scoped to where the claim actually
  * holds, and the second test below pins the carve-out so it cannot silently
  * widen.
+ *
+ * Since #887 the id inside the span is no longer left UNEXPLAINED — pass 5
+ * appends the drawn name after the closing `}`. That gloss lands OUTSIDE the
+ * span, so it survives this blanking and is asserted on directly below; this
+ * helper's job is unchanged, because the id itself still legitimately sits
+ * inside a `${…}` and must not be rewritten there.
  */
 function outsideExpressions(message: string): string {
   return message.replace(/\$\{[^}]*\}/g, '${…}');
@@ -108,21 +114,28 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
   });
 
   /**
-   * The carve-out, pinned.
+   * The carve-out, pinned — and #887, which CLOSED the cost this docblock used to
+   * record as outstanding.
    *
    * A reference to a REAL but non-upstream node is the commonest form of this
    * error, and the id in it is usually MACHINE-INSERTED: U8a's expression picker
    * splices `${nodes.<minted id>.output.<name>}` into the field, so the operator
-   * never typed the uuid. The sentence therefore names one end the way the canvas
-   * does and leaves the other as a raw id, which is only half readable — a real
-   * remaining cost, ticketed as #887 rather than papered over here.
+   * never typed the uuid and cannot recognise it. The sentence used to name one
+   * end the way the canvas draws it and leave the other as a raw id — only half
+   * readable.
    *
-   * This test exists so that cost cannot be lost: it fails if the prose stops
-   * naming the activity, and it also fails if someone "fixes" the raw id by
-   * rewriting the expression body, which would corrupt the string the operator
-   * has to edit.
+   * `readableIssue`'s pass 5 now GLOSSES the reference: the `${…}` span stays
+   * byte-identical and the drawn name follows it in parentheses, so both ends are
+   * named without editing the string the operator has to go and fix.
+   *
+   * All three properties are pinned together here, because each one is how the
+   * other two could be broken while still looking fixed: the prose names the
+   * activity; the expression survives verbatim (a "fix" that rewrote the body
+   * would corrupt it into `${nodes.HTTP Request 2.output.body}`, which is in
+   * nobody's config and is not valid syntax); and the gloss names the PRODUCER,
+   * not merely some name.
    */
-  test('a reference to a real node keeps its expression verbatim, prose still named', async ({
+  test('a reference to a real node is glossed with its name, expression verbatim', async ({
     page,
   }) => {
     const problems = collectPageProblems(page);
@@ -147,6 +160,12 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     // than fixture-shaped: the minted id IS in the message, and still absent from
     // its prose.
     expect(outsideExpressions(all)).not.toContain('n_');
+    // #887 — the far end is named too, immediately after the span it explains.
+    // Asserted as one contiguous string so it cannot pass on a gloss that landed
+    // somewhere else in the sentence, and it names the SECOND HTTP Request
+    // specifically: 'HTTP Request 1' is the node being edited, so a gloss that
+    // echoed the wrong end would still contain 'HTTP Request'.
+    expect(all).toContain(`\${nodes.${second}.output.body} (HTTP Request 2)`);
 
     await expectQuiet(page, problems);
   });
