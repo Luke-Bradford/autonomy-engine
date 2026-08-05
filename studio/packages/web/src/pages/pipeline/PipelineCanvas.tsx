@@ -528,6 +528,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
               also blur the field they are typing in. */}
           <button
             type="button"
+            aria-label="Undo"
             onClick={() => store.getState().undo()}
             disabled={undoReason !== null}
             title={undoReason ?? 'Undo the last edit (⌘Z)'}
@@ -537,6 +538,7 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           </button>
           <button
             type="button"
+            aria-label="Redo"
             onClick={() => store.getState().redo()}
             disabled={redoReason !== null}
             title={redoReason ?? 'Redo the last undone edit (⇧⌘Z)'}

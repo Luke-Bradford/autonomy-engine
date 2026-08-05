@@ -21,8 +21,8 @@ test.describe('undo/redo (U17)', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e undo add');
 
-    const undo = page.getByRole('button', { name: 'Undo' });
-    const redo = page.getByRole('button', { name: 'Redo' });
+    const undo = page.getByRole('button', { name: 'Undo', exact: true });
+    const redo = page.getByRole('button', { name: 'Redo', exact: true });
 
     // Nothing edited yet: both controls are dead, and each SAYS why.
     await expect(undo).toBeDisabled();
@@ -42,7 +42,7 @@ test.describe('undo/redo (U17)', () => {
     await redo.click();
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('a deleted activity comes back — the destructive edit is reversible', async ({ page }) => {
@@ -60,10 +60,10 @@ test.describe('undo/redo (U17)', () => {
     await page.keyboard.press('Backspace');
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    await page.getByRole('button', { name: 'Undo' }).click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(canvasNodes(page)).toHaveCount(2);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('the keyboard shortcut drives the same two actions', async ({ page }) => {
@@ -80,7 +80,7 @@ test.describe('undo/redo (U17)', () => {
     await page.keyboard.press('ControlOrMeta+Shift+z');
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('⌘Z inside a text field is the FIELD’s undo, not the canvas’s', async ({ page }) => {
@@ -90,9 +90,8 @@ test.describe('undo/redo (U17)', () => {
     await addActivity(page, 'HTTP Request');
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    // The pipeline property panel's param editor — reached by clicking the
-    // canvas background, which is how "nothing selected" is expressed.
-    await page.locator('.react-flow__pane').click();
+    // The pipeline property panel's param editor. It is the nothing-selected
+    // slot, so a canvas with no selection already shows it (`params-authoring`).
     await page.getByRole('button', { name: 'Add param' }).click();
     const name = page.getByRole('textbox', { name: 'Name' }).last();
     await name.fill('customer');
@@ -105,6 +104,6 @@ test.describe('undo/redo (U17)', () => {
     // edit while their caret sat in a name field.
     await expect(canvasNodes(page)).toHaveCount(1);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 });
