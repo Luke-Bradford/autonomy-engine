@@ -493,7 +493,20 @@ except Exception:
 quota_log_window() {
   qlw_epoch="$(printf '%s' "${1:-}" | quota_parse_reset)"
   [ -n "$qlw_epoch" ] || return 0
-  qlw_when="$(date -u -r "$qlw_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+  # NOT `date -u -r "$epoch"`. That is BSD/macOS syntax; under GNU coreutils `-r`
+  # means "reference FILE", so on linux it fails, this function returns early and
+  # the window line silently never prints. The engine targets the operator's Mac,
+  # but THIS SUITE RUNS IN UBUNTU CI -- which is exactly how the first cut of this
+  # was caught (#910: 1b-i/1b-ii red on ubuntu, green on darwin, every other
+  # assertion passing because the guard below degraded in the safe direction).
+  # `date -d @epoch` is the GNU spelling and fails on BSD, so neither is portable
+  # alone. python3 is already a hard dependency of this file (both parsers above
+  # are python), so formatting there costs no new dependency and behaves
+  # identically on both platforms.
+  qlw_when="$(python3 -c "
+import datetime, sys
+print(datetime.datetime.fromtimestamp(int(sys.argv[1]), datetime.timezone.utc)
+      .strftime('%Y-%m-%dT%H:%M:%SZ'))" "$qlw_epoch" 2>/dev/null)"
   [ -n "$qlw_when" ] || return 0
   qlw_left=$(( qlw_epoch - $(date +%s) ))
   if [ "$qlw_left" -gt 0 ]; then
