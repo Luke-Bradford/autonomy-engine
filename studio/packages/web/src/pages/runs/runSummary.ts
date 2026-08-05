@@ -582,39 +582,41 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         openSpan(n, e.nodeId, row.ts);
         break;
       }
-      case 'timer.due':
-      case 'externalWait.completed': {
-        // The park resolved successfully. These ARE the node's success event —
+      // SPLIT rather than sharing one two-label case, following the same
+      // precedent as `timer.waitScheduled`/`externalWait.created` above: the two
+      // events resolve their parks identically but record DIFFERENT results, and
+      // `e.outputs` does not typecheck on the `timer.due` member of the union
+      // anyway. Sharing the label would put a discriminating ternary inside an
+      // arm whose whole point is that the discriminant already chose.
+      case 'timer.due': {
+        // The park resolved successfully. This IS the node's success event —
         // there is no following `node.succeeded` for a parked node (reduce.ts
-        // `onWaitDue` / `onExternalWaitCompleted` flip it to `success` directly).
+        // `onWaitDue` flips it to `success` directly).
         const n = ensure(e.nodeId);
         clearResult(n);
         n.status = 'success';
-        // #911 — and so THIS is where a parked node's declared outputs are
-        // recorded; before, the two arms cleared the field and never re-set it,
-        // so a webhook's typed callback payload appeared on no surface at all.
-        // The assignment must follow `clearResult`, which blanks it.
-        //
-        // The arms DIVERGE on the source, and the split is forced by the union
-        // rather than chosen for style — `e.outputs` does not typecheck on the
-        // `timer.due` member, which carries no such field (a wait has no result
-        // to report; `registry.ts` declares `outputs: []` for it). Do not "tidy"
-        // them back together.
-        //
-        // `timer.due` → `{}`: the honest reading of a wait that succeeded and
-        // declared nothing, and the same thing the panel says for any other
-        // contract-less success. Worth stating the counter-argument, because it
-        // is the one real asymmetry here: `onWaitDue` is a bare status flip that
-        // writes NO `state.outputs` entry, so this is the one `{}` on this field
-        // with no stored record behind it. That is consistent, not sloppy — the
-        // field records what the event reported, not that the node is refable
-        // (see the type's doc), and "reported nothing" is a measurement.
-        //
-        // `externalWait.completed` → `e.outputs ?? {}`: the field is `.optional()`
-        // for back-compat and `onExternalWaitCompleted` folds a pre-A16 event
-        // without it to `{}`. Agreeing with the reducer beats inventing a third
-        // answer for the same event.
-        n.outputValues = e.type === 'externalWait.completed' ? (e.outputs ?? {}) : {};
+        // #911 — `{}`, not left blank: a `wait` declares no outputs (`registry.ts`
+        // gives it `outputs: []`), and that is a result rather than the absence of
+        // one. Must follow `clearResult`, which blanks the field.
+        n.outputValues = {};
+        n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
+        break;
+      }
+      case 'externalWait.completed': {
+        // The callback arrived, and THIS is the node's success event (reduce.ts
+        // `onExternalWaitCompleted` flips it to `success` directly).
+        const n = ensure(e.nodeId);
+        clearResult(n);
+        n.status = 'success';
+        // #911 — and so this is the ONLY place a webhook's declared outputs can be
+        // recorded from; before, the arm cleared the field and never re-set it, so
+        // the operator's typed callback body appeared on no surface at all. `??
+        // {}` because the field is `.optional()` for back-compat and
+        // `onExternalWaitCompleted` folds a pre-A16 event without it to `{}` —
+        // agreeing with the reducer beats inventing a third answer for one event.
+        // Must follow `clearResult`, which blanks the field.
+        n.outputValues = e.outputs ?? {};
         n.instanceId = instanceOf(e.nodeId);
         closeSpan(n, e.nodeId, row.ts);
         break;

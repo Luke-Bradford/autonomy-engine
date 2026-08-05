@@ -98,6 +98,28 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   });
 }
 
+/**
+ * A doc whose only node is a `webhook`, optionally with a declared output
+ * contract. Module-scope because two describes park a run on a callback — #900's
+ * pending-callbacks list and #911's drill-in outputs — and a second copy of this
+ * would be a fixture that can drift from the first.
+ */
+const approvalDoc = (outputs?: unknown) =>
+  version({
+    nodes: [
+      {
+        id: 'approve',
+        type: 'webhook',
+        position: { x: 0, y: 0 },
+        config:
+          outputs === undefined
+            ? { timeoutSeconds: '${600}' }
+            : { timeoutSeconds: '${600}', outputs },
+      },
+    ],
+    edges: [],
+  });
+
 function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
   // `replayComplete` defaults TRUE so a spec that does not care reads as a
   // normally-replayed stream; the specs that DO care set it explicitly.
@@ -826,49 +848,38 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
  * `node.succeeded`.
  *
  * Pinned HERE as well as in `runSummary.test.ts` because the fold and the gate
- * are two halves of one behaviour and each is green without the other: the fold
- * tests would all still pass if `NodeActivityPanel` re-gated the section, and
- * the panel has had no test of that section at all. This is the half that says
- * the value reaches a SURFACE.
+ * are two halves of one behaviour and each is green without the other — the fold
+ * tests would all still pass if `NodeActivityPanel` re-gated the section. The
+ * existing panel test above covers the SUCCEEDED case; these cover the three
+ * arms the section's gate can take (a value, an empty result, no result), on the
+ * lifecycle that has none of them.
  */
 describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)', () => {
-  const webhookDoc = () =>
-    version({
-      nodes: [
-        {
-          id: 'approve',
-          type: 'webhook',
-          position: { x: 0, y: 0 },
-          config: {
-            timeoutSeconds: '${600}',
-            outputs: [{ name: 'decision', type: 'string' }],
-          },
-        },
-      ],
-      edges: [],
-    });
+  const park = () => [
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+    envelope({
+      type: 'externalWait.created',
+      runId: 'run_1',
+      nodeId: 'approve',
+      attemptId: 'approve#0',
+      dueAt: 9_999_999_999_999,
+    }),
+  ];
 
-  function parkedThenCompleted(outputs: Record<string, unknown> | undefined) {
-    return stream({
+  /** The park, then its callback. `outputs` omitted entirely = the pre-A16 shape. */
+  const completed = (outputs?: Record<string, unknown>) =>
+    stream({
       events: [
-        envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
-        envelope({
-          type: 'externalWait.created',
-          runId: 'run_1',
-          nodeId: 'approve',
-          attemptId: 'approve#0',
-          dueAt: 9_999_999_999_999,
-        }),
+        ...park(),
         envelope({
           type: 'externalWait.completed',
           runId: 'run_1',
           nodeId: 'approve',
           previousAttemptId: 'approve#0',
-          ...(outputs === undefined ? {} : { outputs }),
-        } as EngineEvent),
+          outputs,
+        }),
       ],
     });
-  }
 
   async function openPanel() {
     const user = userEvent.setup();
@@ -876,9 +887,15 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
     return screen.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
   }
 
+  beforeEach(() => {
+    getRunDetailMock.mockResolvedValue({
+      run: run(),
+      pipelineVersion: approvalDoc([{ name: 'decision', type: 'string' }]),
+    });
+  });
+
   it('shows the callback payload the completion carried', async () => {
-    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
-    useRunStreamMock.mockReturnValue(parkedThenCompleted({ decision: 'approved in-app' }));
+    useRunStreamMock.mockReturnValue(completed({ decision: 'approved in-app' }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const panel = await openPanel();
@@ -889,8 +906,7 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
   it('says a completion carrying nothing declared NOTHING, rather than omitting the section', async () => {
     // The pre-A16 shape. "No outputs" is an answer; a missing section is the
     // absence of one, and is indistinguishable from a node that never finished.
-    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
-    useRunStreamMock.mockReturnValue(parkedThenCompleted(undefined));
+    useRunStreamMock.mockReturnValue(completed());
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const panel = await openPanel();
@@ -899,21 +915,7 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
   });
 
   it('omits the section entirely while the node is still PARKED — no result is on record yet', async () => {
-    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
-    useRunStreamMock.mockReturnValue(
-      stream({
-        events: [
-          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
-          envelope({
-            type: 'externalWait.created',
-            runId: 'run_1',
-            nodeId: 'approve',
-            attemptId: 'approve#0',
-            dueAt: 9_999_999_999_999,
-          }),
-        ],
-      }),
-    );
+    useRunStreamMock.mockReturnValue(stream({ events: park() }));
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const panel = await openPanel();
@@ -1588,23 +1590,6 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     expiresAt: 1_700_000_900_000,
     callbackPath: '/api/external-wait/tok_abc',
   };
-
-  /** A doc whose parked node is a `webhook` with a declared output contract. */
-  const approvalDoc = (outputs?: unknown) =>
-    version({
-      nodes: [
-        {
-          id: 'approve',
-          type: 'webhook',
-          position: { x: 0, y: 0 },
-          config:
-            outputs === undefined
-              ? { timeoutSeconds: '${600}' }
-              : { timeoutSeconds: '${600}', outputs },
-        },
-      ],
-      edges: [],
-    });
 
   /* Scoped to the new list. The node table and the drill-in name the same node
      with the same string (which is #882 working), so an unscoped query for it
