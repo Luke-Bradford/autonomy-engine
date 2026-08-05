@@ -398,10 +398,19 @@ export function RunDetailPage({ runId }: { runId: string }) {
               log. A row reading "—" on every ordinary run would be noise; the
               absence of this row is what "not a rerun" looks like.
 
-              This is the LINK half only. The copied-vs-executed render — a
-              copied frontier node saying "reused from run R1" rather than a
-              plain "success" — is the rest of RS6 and is NOT built here; see
-              #438. */}
+              This is the LINK half. The copied-vs-executed render — a copied
+              frontier node saying "reused from run R1" rather than a plain
+              "success" — landed with #918, in the node table's Detail cell and
+              in the drill-in panel, both sourced from the `run.reseeded` fold
+              rather than from this row (the fold renders when this REST read
+              does not).
+
+              The run GRAPH is still exempt, and deliberately: the reducer writes
+              a copied node `{status:'success', attempts:0}`, byte-identical to
+              an executed success, so `RunState` carries no marker for
+              `runFlow`/`RunGraph` to read and colouring one would need a second
+              source threaded into the graph. The two surfaces that CAN say it
+              now do. */}
           {rerunOf !== null && (
             <>
               <dt>Rerun of</dt>
@@ -537,13 +546,24 @@ export function RunDetailPage({ runId }: { runId: string }) {
                   <td className="node-duration">{formatNodeDuration(n)}</td>
                   <td>{n.outputs}</td>
                   <td>
-                    {n.error !== undefined
-                      ? cls === ''
-                        ? n.error
-                        : `${n.error} (${cls})`
-                      : n.lastOutputName
-                        ? `output: ${n.lastOutputName}`
-                        : ''}
+                    {/* #918 / RS6 — the copied-frontier reading goes FIRST, and
+                        in this cell rather than only in the drill-in, because
+                        RS6's requirement is that the monitor distinguish a
+                        copied node from an executed one; a distinction you have
+                        to click to find does not meet it. The cell is otherwise
+                        empty for a copied row (no error, no streamed output), so
+                        this costs no layout and displaces nothing: a copied node
+                        cannot carry an `error`, and it emitted no `node.output`
+                        in THIS run because it did not run in it. */}
+                    {n.copiedFromRunId !== undefined
+                      ? `reused from run ${n.copiedFromRunId}`
+                      : n.error !== undefined
+                        ? cls === ''
+                          ? n.error
+                          : `${n.error} (${cls})`
+                        : n.lastOutputName
+                          ? `output: ${n.lastOutputName}`
+                          : ''}
                   </td>
                 </tr>
               );

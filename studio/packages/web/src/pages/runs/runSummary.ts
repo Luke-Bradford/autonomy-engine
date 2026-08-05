@@ -148,19 +148,15 @@ export interface NodeActivity {
    *
    * `node.succeeded` is only the commonest of those events, not the only one
    * (#911): a parked node resolves on `externalWait.completed` / `timer.due`, an
-   * engine-evaluated control node on `condition`/`switch.evaluated`, and a call
-   * node on `call.returned` — none of which is followed by a `node.succeeded`.
-   * Each of those FIVE sets this field, because the alternative is a successful
+   * engine-evaluated control node on `condition`/`switch.evaluated`, a call node
+   * on `call.returned`, and a rerun's COPIED frontier on the run-level
+   * `run.reseeded` (#918) — none of which is followed by a `node.succeeded`.
+   * Each of those SIX sets this field, because the alternative is a successful
    * node whose result reads as unrecorded.
    *
-   * NOT an exhaustive list of terminal-success events: `run.reseeded` folds a
-   * rerun's COPIED frontier straight to `success` carrying `copiedOutputs`, and
-   * this reader makes no row for it at all (`reconcileNodeActivity` seeds one
-   * with `outputValues: undefined`), so a copied node still shows no Outputs
-   * section — the same defect as #911 in the one case where the engine really
-   * does hold the result. Left out deliberately: folding it means producing rows
-   * from a run-level event, which is a bigger change than an assignment. See
-   * **#918**.
+   * That list is the whole of the union today, and the `never` assertion at the
+   * foot of the switch is what keeps it so: a seventh event cannot be added
+   * without its author choosing a side.
    *
    * `undefined` vs `{}` are DIFFERENT claims and this reader keeps them apart:
    * `undefined` means no terminal result is on record (never reported, still
@@ -182,6 +178,29 @@ export interface NodeActivity {
    * from it would blank exactly the rows this field lights up).
    */
   outputValues: Record<string, unknown> | undefined;
+  /**
+   * #918 / RS6 — the SOURCE run this node's result was COPIED from, when the
+   * node did not execute in this run at all. `undefined` for every ordinary
+   * node, so the claim is made exactly where it is true.
+   *
+   * A rerun-from-failed reseeds its successful prefix rather than re-running it:
+   * `run.reseeded` marks each frontier node terminal-`success` carrying R1's
+   * stored outputs, and `reduce.ts` writes it `{status:'success', attempts:0}` —
+   * byte-identical to an executed success. Without this field the monitor would
+   * present another run's result as this run's work, which the RS spec calls a
+   * correctness lie rather than a cosmetic one, and the `0 attempts` beside it
+   * would read as a rendering bug instead of as the fact it is.
+   *
+   * WHY THE ID AND NOT A BOOLEAN, given `RunDetailPage` already renders "Rerun
+   * of <sourceRunId>" from the run row: that row comes from a REST read of the
+   * run, and this fold's whole reason for existing is the path where that read
+   * is absent or the pipeline version will not resolve while the event log still
+   * renders (see `useRunProjection`). A boolean would make the panel's sentence
+   * depend on a second source that can be missing exactly when this one is not.
+   * The two cannot disagree when both are present — `reseed.ts` writes the
+   * `rerunOf` column and appends this event in ONE transaction.
+   */
+  copiedFromRunId: string | undefined;
   /**
    * The RAW node id the result on show came from, when it differed from the
    * canvas node id this row folds onto (`w@1` → `w`) — set by EVERY terminal
@@ -324,7 +343,9 @@ type FoldingNode = Omit<NodeActivity, 'cost' | 'costSpansInstances' | 'toolCalls
  * Fold the node-bearing events into per-node activity, in first-seen order
  * (insertion order of the map = dispatch order, stable for rendering). A node
  * is first seen on its dispatch (or a `call.returned` for a call node whose
- * dispatch is not itself an event).
+ * dispatch is not itself an event, or — since #918 — the run-level
+ * `run.reseeded` that copies a rerun's frontier, which is the only event here
+ * that seeds SEVERAL rows at once and lands them before any dispatch).
  */
 export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   const byNode = new Map<string, FoldingNode>();
@@ -384,6 +405,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         failureKind: undefined,
         failureCode: undefined,
         outputValues: undefined,
+        copiedFromRunId: undefined,
         instanceId: undefined,
         startedAtMs: undefined,
         endedAtMs: undefined,
@@ -395,10 +417,18 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
 
   /**
    * Drop the node's last TERMINAL result, because the node has re-opened. One
-   * helper rather than five assignments at each of the three re-open sites: the
-   * message, its class, the outputs and the instance they came from are one
-   * fact, and splitting them is how a stale kind outlives the message it
-   * classifies.
+   * helper rather than six assignments at each of the three re-open sites: the
+   * message, its class, the outputs, the run they were copied from and the
+   * instance they came from are one fact, and splitting them is how a stale kind
+   * outlives the message it classifies.
+   *
+   * `copiedFromRunId` is cleared here for that one-fact reason and NOT because
+   * a copied node can currently re-open — it cannot. `reseedFrontier`
+   * conservatively excludes every top-level node in a back-edge loop body, and a
+   * copied node carries no `currentAttemptId` for `resume` to pick up, so no
+   * producer today re-dispatches one. The field moves with the result so that a
+   * later producer which does cannot leave a copy claim standing over a result
+   * this run actually computed.
    *
    * Called at the three RE-OPEN sites (dispatch, the retry re-open, the park)
    * and at the head of EVERY terminal branch. The terminal calls are what keep a
@@ -413,6 +443,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
     n.failureKind = undefined;
     n.failureCode = undefined;
     n.outputValues = undefined;
+    n.copiedFromRunId = undefined;
     n.instanceId = undefined;
   };
 
@@ -694,6 +725,61 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         countIfUnstarted(n); // a call node's only event
         break;
       }
+      case 'run.reseeded': {
+        /* #918 / RS1 — the ONE run-level event that carries per-node results,
+           and the only arm here that seeds several rows from a single event.
+           A rerun-from-failed does not re-run its successful prefix: this
+           manifest marks each frontier node terminal-`success` carrying R1's
+           stored outputs, and `reduce.ts` `onReseeded` writes exactly the same
+           pair into `state.outputs`. Ignoring it left a copied node reading
+           "success · 0 attempts" with NO Outputs section, while
+           `${nodes.x.output.y}` resolved for it perfectly well downstream —
+           #911's defect in the case where the engine most definitely holds the
+           result.
+
+           NO IMPOSSIBLE-LOG GUARD, and the file's general "no staleness guard"
+           note above does NOT cover this one — that note rests on an APPEND-time
+           guarantee held by the three alarm handlers and the webhook route, and
+           this event is in none of them. Its guarantee is a different one:
+           `reseed.ts` is the sole producer and appends the pair into a
+           brand-new run's empty log inside a single transaction, so the
+           reducer's own `progressed` refusal is unreachable from any real log.
+           A half-mirror of that refusal here would be a second, drifting
+           authority on it. The residual, stated rather than hidden: on a FORGED
+           log this fold would let a copy overwrite a genuinely executed result,
+           and — being doc-free and state-free — it cannot skip an unknown
+           frontier id the way the reducer's diagnostic does.
+
+           `copiedContainers` is deliberately NOT folded: this is a per-NODE
+           table and it has no container rows at all, for the reason the inert
+           group below states (container events carry no `nodeId`, and surfacing
+           container state needs a version doc this page does not fetch). A
+           copied container's own children are not on the frontier either —
+           RS3 copies a completed container as one unit. */
+        for (const nodeId of e.frontier) {
+          const n = ensure(nodeId);
+          clearResult(n);
+          n.status = 'success';
+          /* `?? {}` mirrors the reducer's own fallback for a frontier node the
+             manifest gave no outputs. `{}` and `undefined` are different claims
+             here (see `outputValues`) and a copied node always HAS a recorded
+             result — it is on the event. */
+          n.outputValues = e.copiedOutputs[nodeId] ?? {};
+          n.copiedFromRunId = e.sourceRunId;
+          /* Dead for every frontier RS2 can produce (its contract is top-level
+             ids only) and kept for symmetry with every other terminal branch —
+             a doc may legitimately carry a literal `x@2` id, which `ensure`
+             folds onto `x` here as it does everywhere else. */
+          n.instanceId = instanceOf(nodeId);
+          /* NO span, and NO `countIfUnstarted`. Both would be fabrications: the
+             node did not run in THIS run, so there is no duration to state and
+             no attempt to count. `attempts: 0` is the engine's own answer for a
+             copied node, not a placeholder standing in for one — which is why
+             the panel has to SAY the node was copied, or that zero reads as a
+             bug sitting under a green badge. */
+        }
+        break;
+      }
 
       // ── Deliberately NOT node activity ────────────────────────────────────
       // Listed as explicit empty cases rather than swept into a `default:`, and
@@ -712,9 +798,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       // records):
       //   - `run.*` — RUN-level, no node row. `run.started`/`run.resumed`/
       //     `run.waiting` and the terminal pair are folded by
-      //     `deriveRunLifecycle` below. `run.triggerContext` and `run.reseeded`
-      //     are folded by NOTHING today — they are provenance that only the raw
-      //     event feed renders.
+      //     `deriveRunLifecycle` below. `run.triggerContext` is folded by
+      //     NOTHING today — it is provenance that only the raw event feed
+      //     renders. `run.reseeded` was in that group until #918 and is now the
+      //     one run-level event with its own arm above, because it is the only
+      //     one carrying per-NODE results.
       //   - `container.*` — CONTAINER-level: they carry a `containerId` and NO
       //     `nodeId`, so in a per-node table there is no row for them to land in.
       //     Surfacing container state needs the version doc this page does not
@@ -733,7 +821,6 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
       case 'run.interrupted':
       case 'run.waiting':
       case 'run.triggerContext':
-      case 'run.reseeded':
       case 'container.timeoutScheduled':
       case 'container.timedOut':
       case 'activity.captured':
@@ -908,6 +995,12 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       failureKind: undefined,
       failureCode: undefined,
       outputValues: undefined,
+      /* A row reached here because NO event named this node, and a copied
+         frontier node is named by `run.reseeded` — so this branch is by
+         construction never a copied one, and claiming a source run here would
+         be inventing provenance. Since #918 a rerun's copied nodes arrive from
+         the fold instead, which is what fixed them showing no Outputs. */
+      copiedFromRunId: undefined,
       instanceId: undefined,
       /* No event, so no stamp — the row exists BECAUSE the fold never saw one.
          Same rule as the fields above: an absent fact is rendered as absent,
