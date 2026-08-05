@@ -27,6 +27,9 @@ vi.mock('../../api/runs', async (importActual) => ({
      default also means every existing test in this file keeps describing a run
      that owes no callback, which is what they all are. */
   listExternalWaits: vi.fn().mockResolvedValue([]),
+  /* Mocked for the #897 reason above: an un-mocked write would reach `fetch`.
+     Rejected-by-default would poison every OTHER test in this file, so it resolves. */
+  completeExternalWait: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./useRunStream')>()),
@@ -36,6 +39,7 @@ vi.mock('./useRunStream', async (importActual) => ({
 const getRunDetailMock = vi.mocked(runsApi.getRunDetail);
 const rerunFromFailedMock = vi.mocked(runsApi.rerunFromFailed);
 const listExternalWaitsMock = vi.mocked(runsApi.listExternalWaits);
+const completeExternalWaitMock = vi.mocked(runsApi.completeExternalWait);
 const useRunStreamMock = vi.mocked(hook.useRunStream);
 
 let seq = 0;
@@ -1751,5 +1755,131 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     await vi.waitFor(async () =>
       expect(within(await pendingList()).getAllByRole('listitem')).toHaveLength(1),
     );
+  });
+
+  /**
+   * #901 — completing the wait from the app, the half #900 deliberately left out.
+   *
+   * The behaviours worth pinning are the ones a screenshot cannot show: that no
+   * capability token is sent, that a typo is caught before it becomes a useless
+   * framework 400, that a refusal leaves the editor usable, and — the one that
+   * required the draft to live on `RunDetailPage` — that unsaved input survives the
+   * epoch remount an unrelated wait can trigger at any moment.
+   */
+  async function openEditor() {
+    await userEvent.click(await screen.findByRole('button', { name: 'Complete wait' }));
+    return screen.getByRole('textbox', { name: /Callback body/ });
+  }
+
+  it('#901 — completing a wait posts the attempt and payload, and never a token', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    completeExternalWaitMock.mockResolvedValue(undefined);
+    await mountParked();
+
+    await userEvent.type(await openEditor(), '{{"decision": "approve"}');
+    await userEvent.click(screen.getByRole('button', { name: 'Complete this wait' }));
+
+    await vi.waitFor(() => expect(completeExternalWaitMock).toHaveBeenCalledTimes(1));
+    expect(completeExternalWaitMock).toHaveBeenCalledWith('run_1', {
+      nodeId: 'approve',
+      attemptId: 'approve#0',
+      payload: { decision: 'approve' },
+    });
+    // The point of the owner-scoped route: the token the GET revealed is not what
+    // authorizes this, and it must not be along for the ride.
+    const sent = JSON.stringify(completeExternalWaitMock.mock.calls[0]);
+    expect(sent).not.toContain('tok_abc');
+    expect(sent).not.toContain('external-wait/');
+  });
+
+  it('#901 — an EMPTY editor completes with {}, not with nothing', async () => {
+    // `payload` is required server-side with no default, so "I typed nothing" has
+    // to become an explicit empty object here rather than an absent field the
+    // route would have to invent a meaning for.
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    completeExternalWaitMock.mockResolvedValue(undefined);
+    await mountParked();
+
+    await openEditor();
+    await userEvent.click(screen.getByRole('button', { name: 'Complete this wait' }));
+
+    await vi.waitFor(() => expect(completeExternalWaitMock).toHaveBeenCalledTimes(1));
+    expect(completeExternalWaitMock.mock.calls[0]![1].payload).toEqual({});
+  });
+
+  it('#901 — invalid JSON is refused HERE, without a pointless round trip', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    await mountParked();
+
+    await userEvent.type(await openEditor(), 'not json');
+    await userEvent.click(screen.getByRole('button', { name: 'Complete this wait' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/was not completed/i);
+    // The server would answer a framework 400 that the shared contract flattens to
+    // "Malformed request" — so catching it here is what makes the message useful.
+    expect(completeExternalWaitMock).not.toHaveBeenCalled();
+  });
+
+  it('#901 — a rejected body keeps the editor open, with what was typed intact', async () => {
+    listExternalWaitsMock.mockResolvedValue([WAIT]);
+    completeExternalWaitMock.mockRejectedValue(new Error("missing declared output 'decision'"));
+    await mountParked();
+
+    await userEvent.type(await openEditor(), '{{"note": "wrong"}');
+    await userEvent.click(screen.getByRole('button', { name: 'Complete this wait' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/missing declared output/);
+    // A 422 means the node is STILL PARKED and the body is fixable — so the worst
+    // possible response is to close the editor and make them type it again.
+    expect(screen.getByRole('textbox', { name: /Callback body/ })).toHaveValue('{"note": "wrong"}');
+  });
+
+  it('#901 — an unrelated wait settling does NOT discard what is being typed', async () => {
+    /* The direct collision between #901's editor and #900's freshness model:
+       `PendingCallbacks` is keyed on the wait epoch, so ANY externalWait frame
+       remounts it. Two parallel waits are all it takes — an external caller
+       completes the first while the operator is mid-sentence on the second. The
+       draft lives on the page, above the key, precisely so this remount cannot
+       take it. */
+    const OTHER = { ...WAIT, nodeId: 'approve2', attemptId: 'approve2#0' };
+    listExternalWaitsMock.mockResolvedValue([WAIT, OTHER]);
+    const first = parkedOn('waiting_external');
+    getRunDetailMock.mockResolvedValue({
+      run: run({ status: 'waiting' }),
+      pipelineVersion: approvalDoc(),
+    });
+    useRunStreamMock.mockReturnValue(stream({ events: first }));
+    const { rerender } = renderWithRouter(<RunDetailPage runId="run_1" />);
+    await pendingList();
+
+    const editors = screen.getAllByRole('button', { name: 'Complete wait' });
+    await userEvent.click(editors[1]!);
+    await userEvent.type(screen.getByRole('textbox', { name: /Callback body/ }), 'half-typed');
+
+    // The OTHER wait settles — a frame this operator did not cause.
+    listExternalWaitsMock.mockResolvedValue([OTHER]);
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          ...first,
+          envelope({
+            type: 'externalWait.completed',
+            runId: 'run_1',
+            nodeId: 'approve',
+            previousAttemptId: 'approve#0',
+            outputs: {},
+          }),
+        ],
+      }),
+    );
+    rerender(
+      <MemoryRouter>
+        <RunDetailPage runId="run_1" />
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() => expect(listExternalWaitsMock).toHaveBeenCalledTimes(2));
+    // Survived the remount: still open, still holding the operator's own words.
+    expect(await screen.findByRole('textbox', { name: /Callback body/ })).toHaveValue('half-typed');
   });
 });
