@@ -71,9 +71,16 @@ export const RunSchema = z.object({
    * is not rewritable. DISTINCT from `parentRunId` (call_pipeline child→parent);
    * this is source-run→rerun. Backs the rerun-history grouping query
    * (`ListRunsFilter.rerunOf`) so "reruns of R1" is answered by an indexed
-   * column, not by folding every run's log. The Monitor's copied-vs-executed
-   * RENDER and the Original/Rerun/Rerun-from-failed run-type label are a later
-   * (UI) slice that consumes this column; only the projection lands here.
+   * column, not by folding every run's log. The Original/Rerun/
+   * Rerun-from-failed run-type label is a later (UI) slice that consumes this
+   * column; only the projection lands here.
+   *
+   * The Monitor's copied-vs-executed RENDER shipped with #918 and does NOT read
+   * this column, deliberately: it is folded from the `run.reseeded` event, which
+   * names its own `sourceRunId` and is present whenever the log renders — while
+   * this column arrives on a separate REST read that can be absent exactly when
+   * the doc-free fold is the only thing left standing. The two are written in
+   * one transaction, so they cannot disagree where both are present.
    *
    * NOTE the deliberate optional→nullable translation: the EVENT field is
    * `.optional()` (absent = a normal run), this PROJECTION is `.nullable()`
