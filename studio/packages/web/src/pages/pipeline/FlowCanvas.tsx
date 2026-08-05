@@ -30,8 +30,9 @@ import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
-import { toFlowEdge } from './edgeCondition';
+import { conditionOf, toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
+import { SourcePorts } from './SourcePorts';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
 import {
   appearedIds,
@@ -45,7 +46,16 @@ import {
   UNMEASURED_NODE_SIZE,
   type ContainerBox,
 } from './containerLayout';
-import { DRAWN_EDGE_CONDITION, orientDrawnEnds, SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
+import {
+  conditionFromConnection,
+  CONNECTION_RADIUS,
+  DRAWN_EDGE_CONDITION,
+  nodeBoxHeight,
+  orientDrawnEnds,
+  sourcePortsOf,
+  TARGET_PORT_ID,
+  type SourcePort,
+} from './ports';
 import {
   cascadeDeleteContainer,
   nextSelection,
@@ -56,28 +66,23 @@ import {
 interface ActivityData extends Record<string, unknown> {
   title: string;
   hasConnection: boolean;
+  /** U19 — one outgoing port per outcome this source can route. */
+  ports: readonly SourcePort[];
 }
 
-/**
- * The custom activity node. Memoised — React Flow re-renders the node layer on
- * every viewport change, so a memo keeps a stable node cheap.
- *
- * One target port (incoming edges) and one source port (outgoing) match the
- * engine's single in/out node model; which outcome an edge routes is chosen
- * afterwards, in the property panel. Both handles are now IDENTIFIED (U6b) —
- * `ports.ts` says why, and why U19 is where the source side becomes one port per
- * outcome.
- */
 const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
   const d = data as ActivityData;
   return (
-    <div className={`flow-node${selected ? ' selected' : ''}`}>
+    <div
+      className={`flow-node has-ports${selected ? ' selected' : ''}`}
+      style={{ minHeight: nodeBoxHeight(d.ports.length) }}
+    >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <strong>{d.title}</strong>
       <span className="flow-node-sub">
         {d.hasConnection ? 'connection bound' : 'no connection'}
       </span>
-      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
+      <SourcePorts ports={d.ports} />
     </div>
   );
 });
@@ -92,6 +97,8 @@ interface ContainerData extends Record<string, unknown> {
   onDelete: (id: string, kind: ContainerKind) => void;
   /** Make this container the property panel's subject — U23's config form. */
   onConfigure: (id: string) => void;
+  /** U19 — the box is a legal edge SOURCE, so it carries the same port column. */
+  ports: readonly SourcePort[];
 }
 
 /**
@@ -173,7 +180,7 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
       >
         ⚙
       </button>
-      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
+      <SourcePorts ports={d.ports} />
     </div>
   );
 });
@@ -305,6 +312,44 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const containerLabelsById = useMemo(() => containerLabels(containers), [containers]);
 
   /**
+   * U19 — every source's outgoing PORTS, for nodes and containers alike.
+   *
+   * Derived from `edges` as well as from the sources, and that dependency is
+   * load-bearing rather than incidental: a port set is "what this source
+   * declares, plus anything its existing edges already route on"
+   * (`sourcePortsOf`). Leave `edges` out and an orphaned condition never grows a
+   * port, React Flow resolves that edge's `sourceHandle` to nothing, and the
+   * line vanishes with no error — the exact failure the orphan arm exists to
+   * prevent.
+   *
+   * Memoised as ONE map so the identity of each port array is stable between
+   * renders that changed neither the graph nor its edges. The run monitor's
+   * `mergeRunNodes` documents what an unstable `data` member costs there; here
+   * it would defeat `ActivityNode`'s memo and re-render the whole node layer on
+   * every viewport change.
+   */
+  const portsBySource = useMemo(() => {
+    const used = new Map<string, EdgeCondition[]>();
+    for (const e of edges) {
+      const list = used.get(e.from);
+      if (list === undefined) used.set(e.from, [conditionOf(e)]);
+      else list.push(conditionOf(e));
+    }
+    const byId = new Map<string, SourcePort[]>();
+    for (const n of nodes) byId.set(n.id, sourcePortsOf(n, used.get(n.id) ?? []));
+    // A container is a legal edge SOURCE but is not a `Node`, so it declares the
+    // operational outcomes and nothing else — `declaredConditionsOf(undefined)`.
+    for (const c of containers) byId.set(c.id, sourcePortsOf(undefined, used.get(c.id) ?? []));
+    return byId;
+  }, [nodes, containers, edges]);
+
+  /** Unreachable fallback: the map above is built from these very arrays. */
+  const portsOf = useCallback(
+    (id: string): readonly SourcePort[] => portsBySource.get(id) ?? [],
+    [portsBySource],
+  );
+
+  /**
    * How the #788 advisory names one thing it points at — an activity by its
    * `activityLabels` ordinal, a container by its `containerLabels` one.
    *
@@ -340,7 +385,19 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * disappears by itself when the obstacle is removed (delete the conflicting
    * edge and the duplicate refusal is simply no longer true).
    */
-  const [attempted, setAttempted] = useState<{ from: string; to: string } | null>(null);
+  const [attempted, setAttempted] = useState<{
+    from: string;
+    to: string;
+    /**
+     * U19 — the outcome the refused gesture was DRAWN from, so the reason (and
+     * the back-edge offer below) is computed for the edge the operator actually
+     * attempted. Absent when the port could not be read, which downgrades the
+     * message to the `success` candidate rather than losing it: a refusal
+     * explained for a near-miss condition is still a refusal explained, and a
+     * silent one is the defect this panel exists to remove.
+     */
+    condition: EdgeCondition | null;
+  } | null>(null);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
   // `setViewport` is the reveal below; it is the only imperative viewport write
@@ -427,6 +484,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             // is built from this very array.
             title: nodeLabels.get(n.id) ?? activityLabel(n),
             hasConnection: n.connectionId != null,
+            ports: portsOf(n.id),
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
           // the spread above. The store is the single authority on what is
@@ -454,7 +512,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         };
       });
     });
-  }, [nodes, nodeLabels, selected, setFlowNodes]);
+  }, [nodes, nodeLabels, portsOf, selected, setFlowNodes]);
 
   /**
    * U6c — the container boxes, DERIVED from the activity nodes rather than held
@@ -651,9 +709,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            question the other does not, and both are exactly as trustworthy as
            `rect`, which is this node's only source of truth anyway. */
         measured: { width: rect.width, height: rect.height },
-        handles: containerHandles(rect.width, rect.height),
+        handles: containerHandles(rect.width, rect.height, portsOf(c.id)),
         data: {
           kind: c.kind,
+          ports: portsOf(c.id),
           label: labels.get(c.id) ?? c.kind,
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
@@ -709,6 +768,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     containers,
     containerBoxes,
     containerLabelsById,
+    portsOf,
     selected,
     confirmDeleteContainer,
     selectContainer,
@@ -902,9 +962,21 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     [nodes, edges, containers],
   );
 
-  /** The candidate a DRAWN connection proposes — one definition, two callers. */
+  /**
+   * The candidate a DRAWN connection proposes — one definition, three callers
+   * (validity, refusal reason, back-edge offer).
+   *
+   * Since U19 the condition comes from the PORT the drag started on rather than
+   * from a constant, and it must stay one expression: if the validity check
+   * judged `success` while the store authored `failure`, a refused duplicate
+   * would become an authored one.
+   */
   const drawnCandidate = useCallback(
-    (from: string, to: string) => ({ from, to, condition: DRAWN_EDGE_CONDITION }),
+    (from: string, to: string, condition: EdgeCondition | null) => ({
+      from,
+      to,
+      condition: condition ?? DRAWN_EDGE_CONDITION,
+    }),
     [],
   );
 
@@ -922,7 +994,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     if (!connectPre.endpoints.has(attempted.from) || !connectPre.endpoints.has(attempted.to)) {
       return null;
     }
-    return connectRejection(connectPre, drawnCandidate(attempted.from, attempted.to));
+    return connectRejection(
+      connectPre,
+      drawnCandidate(attempted.from, attempted.to, attempted.condition),
+    );
   }, [attempted, connectPre, drawnCandidate]);
 
   /**
@@ -966,11 +1041,15 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * #748/U16 traps this feature guards against are the ones with NO way back;
    * this is not one of them.
    */
-  const backOffer: { from: string; to: string } | null = useMemo(() => {
+  const backOffer: { from: string; to: string; condition: EdgeCondition } | null =
+    useMemo(() => {
     if (attempted === null || refusal === null) return null;
-    const candidate = { ...drawnCandidate(attempted.from, attempted.to), back: true };
+    const candidate = {
+      ...drawnCandidate(attempted.from, attempted.to, attempted.condition),
+      back: true,
+    };
     if (connectRejection(connectPre, candidate) !== null) return null;
-    return { from: attempted.from, to: attempted.to };
+    return { from: attempted.from, to: attempted.to, condition: candidate.condition };
   }, [attempted, refusal, connectPre, drawnCandidate]);
 
   /**
@@ -981,18 +1060,28 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * has always refused these, but silently and only after the fact.
    */
   const isValidConnection = useCallback(
-    (c: Connection | FlowEdge) =>
-      connectRejection(connectPre, drawnCandidate(c.source, c.target)) === null,
+    (c: Connection | FlowEdge) => {
+      /* U19 — judged for the condition the PORT names. A port that says nothing
+         decodable is refused outright rather than judged as `success`: the
+         alternative authors an outcome the operator did not draw, and would let
+         the check and the store disagree about which edge was in question. */
+      const condition = conditionFromConnection(c);
+      if (condition === null) return false;
+      return connectRejection(connectPre, drawnCandidate(c.source, c.target, condition)) === null;
+    },
     [connectPre, drawnCandidate],
   );
 
   function onConnect(conn: Connection) {
     setAttempted(null);
-    // A freshly-drawn edge carries `DRAWN_EDGE_CONDITION` — the SAME condition
-    // `isValidConnection` judged, so what was allowed is what gets authored. The
-    // operator re-picks the condition by selecting the edge in the property panel.
+    // The SAME condition `isValidConnection` judged, read from the same port, so
+    // what was allowed is what gets authored. React Flow normalises `Connection`
+    // to (source, target) whichever end the drag began on, so a backwards drag
+    // still names the outcome port.
+    const condition = conditionFromConnection(conn);
+    if (condition === null) return;
     if (conn.source && conn.target)
-      store.getState().connect(conn.source, conn.target, DRAWN_EDGE_CONDITION);
+      store.getState().connect(conn.source, conn.target, condition);
   }
 
   /**
@@ -1022,7 +1111,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     const origin = state.fromNode?.id;
     const release = state.toNode?.id;
     if (origin === undefined || release === undefined) return;
-    setAttempted(orientDrawnEnds(origin, release, state.fromHandle?.type));
+    /* The SOURCE-side handle, whichever end the drag started on — the same
+       normalisation `orientDrawnEnds` does for the endpoints, applied to the
+       port. RF hands this callback the raw gesture, so on a backwards drag the
+       outcome port is the one it ENDED on. */
+    const sourceHandle =
+      state.fromHandle?.type === 'target' ? state.toHandle?.id : state.fromHandle?.id;
+    setAttempted({
+      ...orientDrawnEnds(origin, release, state.fromHandle?.type),
+      condition: conditionFromConnection({ sourceHandle }),
+    });
   }
 
   /**
@@ -1078,6 +1176,13 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        /* U19 — reduced from React Flow's default 20. `getClosestHandle` snaps a
+           drag to any handle inside this radius and skips only the exact one it
+           started on, so a radius wider than half the port pitch would make
+           grabbing `success` snap to `failure`. The number and the pitch it is
+           constrained by live together in `ports.ts`, with a test pinning the
+           relationship. */
+        connectionRadius={CONNECTION_RADIUS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
            `select:false` change for the element that was selected, which
@@ -1200,7 +1305,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
                 onClick={() => {
                   store
                     .getState()
-                    .connect(backOffer.from, backOffer.to, DRAWN_EDGE_CONDITION, { back: true });
+                    .connect(backOffer.from, backOffer.to, backOffer.condition, { back: true });
                   // Clear the attempt, or the assertive live region keeps
                   // announcing a refusal for an edge that now EXISTS —
                   // `refusal` is recomputed from the forward candidate, which

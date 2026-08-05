@@ -55,6 +55,7 @@ import {
   withRequired,
 } from './paramRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import { declaredConditionsOf } from './ports';
 import {
   branchOptionsFor,
   conditionOf,
@@ -1254,10 +1255,14 @@ export function EdgePanel({
   const currentValue = encodeCondition(current);
   const branches = branchOptionsFor(nodes.find((n) => n.id === edge.from));
 
-  const offered = [
-    ...OPERATIONAL_CONDITIONS.map((on) => encodeCondition({ on })),
-    ...(branches ?? []).map((branch) => encodeCondition({ on: 'branch', branch })),
-  ];
+  /* U19 — the SAME predicate the source ports are drawn from
+     (`declaredConditionsOf`), not a second list assembled the same way. The
+     `orphaned` disabled option below and the canvas's orphan PORT are one fact
+     asked from two sides; built separately they would eventually disagree about
+     which conditions a node offers. */
+  const offered = declaredConditionsOf(nodes.find((n) => n.id === edge.from)).map((c) =>
+    encodeCondition(c),
+  );
 
   /**
    * Conditions ALREADY taken by another edge between the same two nodes.

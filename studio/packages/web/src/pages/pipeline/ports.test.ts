@@ -213,8 +213,7 @@ describe('port geometry', () => {
     expect(sourcePortOffset(0, 2)).toBe(-SOURCE_PORT_PITCH / 2);
     expect(sourcePortOffset(1, 2)).toBe(SOURCE_PORT_PITCH / 2);
     const four = [0, 1, 2, 3].map((i) => sourcePortOffset(i, 4));
-    expect(four[0]).toBe(-four[3]);
-    expect(four[1]).toBe(-four[2]);
+    expect(four).toEqual([-1.5, -0.5, 0.5, 1.5].map((m) => m * SOURCE_PORT_PITCH));
   });
 
   /**

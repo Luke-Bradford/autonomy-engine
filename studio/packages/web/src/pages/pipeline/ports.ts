@@ -240,6 +240,45 @@ export function sourcePortsOf(
 }
 
 /**
+ * The separator joining a node's port ids into ONE primitive.
+ *
+ * The run monitor's `mergeRunNodes` compares node `data` with a shallow
+ * `Object.is` over its keys, and returns the PREVIOUS object when nothing
+ * rendered has changed — which is what stops every edge on a live run blinking
+ * once per event (`runFlow.ts` records the mechanism). A `SourcePort[]` in that
+ * data would be a fresh array on every event and would defeat it for every node.
+ * So the run canvas carries the ids as one string and rebuilds the ports from
+ * it; a space is safe because `encodeCondition` percent-encodes whitespace.
+ */
+const PORT_ID_SEPARATOR = ' ';
+
+/** A node's ports as ONE primitive — see `PORT_ID_SEPARATOR`. */
+export function portIdsOf(ports: readonly SourcePort[]): string {
+  return ports.map((p) => p.id).join(PORT_ID_SEPARATOR);
+}
+
+/**
+ * Rebuild the ports a `portIdsOf` string describes.
+ *
+ * `orphaned` comes back `false` for every port, and that is a deliberate loss
+ * rather than an oversight: the flag says "you have authored an edge on an
+ * outcome this source no longer offers", which is an AUTHORING fact. The run
+ * monitor is read-only and shows an immutable version — there is nothing there
+ * to re-offer, and the doc it draws cannot be edited into or out of that state.
+ * An id that does not decode is DROPPED rather than drawn as a port routing
+ * nothing.
+ */
+export function portsFromIds(ids: string): SourcePort[] {
+  const ports: SourcePort[] = [];
+  for (const id of ids.split(PORT_ID_SEPARATOR)) {
+    const condition = decodeConditionValue(id);
+    if (condition === null) continue;
+    ports.push({ id, condition, label: conditionLabel(condition), orphaned: false });
+  }
+  return ports;
+}
+
+/**
  * The vertical pitch between two sibling source ports, in flow units.
  *
  * It is a floor, not a taste: React Flow's `getClosestHandle` snaps a drag to
