@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { PendingExternalWait, PipelineVersion } from '@autonomy-studio/shared';
-import { listExternalWaits } from '../../api/runs';
+import { completeExternalWait, listExternalWaits } from '../../api/runs';
 import { messageOf } from '../../api/client';
 import { formatWhen } from './format';
 import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
@@ -29,17 +29,36 @@ import { describeCallbackBody, parkedDocNode, waitKey } from './externalWaits';
  * a callback (`owesCallback`), and a timer park must not reach this component,
  * which would otherwise ask the server a question it already knows the answer to
  * and then render an empty section under a heading claiming a callback is owed.
+ *
+ * **#901 — the operator can now COMPLETE a wait here, and that is why `drafts` is
+ * lifted to the caller.** Everything else in this component SHOULD die on the
+ * epoch remount; a half-typed callback body must not. The two collide directly: a
+ * run with two parallel `foreach` webhook waits remounts when an external caller
+ * settles wait A, which under the rule above would silently discard what the
+ * operator had typed into wait B. Unsaved input is the one thing here that is not
+ * derived from the server, so it is the one thing that lives above the key.
+ * A key's PRESENCE in `drafts` is also what "this editor is open" means — one
+ * lifted fact rather than two that could disagree about which wait is being
+ * edited. `submitting`/`error` stay local on purpose: when the wait set changes
+ * underneath, a stale error is exactly what the remount should clear.
  */
 export function PendingCallbacks({
   runId,
   doc,
   nameOf,
+  drafts,
+  onDraftChange,
+  onDraftClear,
 }: {
   runId: string;
   /** The bound version, or null when it would not resolve (U11 — the page survives it). */
   doc: PipelineVersion | null;
   /** The ONE name this view gives a node (#878), keyed on DOC ids. */
   nameOf: (nodeId: string) => string | null;
+  /** #901 — in-progress callback bodies by `waitKey`; present ⇒ that editor is open. */
+  drafts: Record<string, string>;
+  onDraftChange: (key: string, value: string) => void;
+  onDraftClear: (key: string) => void;
 }) {
   /* `null` is NOT-YET-LOADED and `[]` is loaded-and-empty, and they read
      differently below: a genuinely empty list while parked means the wait settled
@@ -48,6 +67,11 @@ export function PendingCallbacks({
   const [waits, setWaits] = useState<PendingExternalWait[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<string | null>(null);
+  /* #901 — the wait currently being sent, and the per-wait refusal to show beside
+     its editor. Keyed by `waitKey` rather than booleans so two open editors cannot
+     share one spinner or one error. */
+  const [sending, setSending] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<Record<string, string>>({});
 
   useEffect(() => {
     const ac = new AbortController();
@@ -66,6 +90,61 @@ export function PendingCallbacks({
     );
     return () => ac.abort();
   }, [runId]);
+
+  /**
+   * #901 — send one wait's body, having first proved it is JSON.
+   *
+   * The parse happens HERE, not at the server, and that is deliberate: `apiFetch`
+   * would `JSON.stringify` the raw textarea STRING and send a JSON string where the
+   * route wants an object, and a genuinely malformed body would come back as
+   * Fastify's framework 400, which the shared error contract flattens to "Malformed
+   * request" — useless to someone staring at their own typo. `JSON.parse`'s own
+   * message names the position.
+   *
+   * An empty editor means `{}` — the webhook that declares no outputs accepts it,
+   * and one that declares some will be refused by name. What it must NOT do is let
+   * an absent body reach the route, which requires `payload` precisely so that
+   * "sent nothing" cannot be silently read as "completed with no outputs".
+   */
+  async function send(wait: PendingExternalWait, key: string) {
+    const raw = (drafts[key] ?? '').trim();
+    let payload: Record<string, unknown>;
+    try {
+      const parsed: unknown = raw === '' ? {} : JSON.parse(raw);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new Error('the callback body must be a JSON object, e.g. {"decision": "approve"}');
+      }
+      payload = parsed as Record<string, unknown>;
+    } catch (err: unknown) {
+      setSendError((e) => ({ ...e, [key]: err instanceof Error ? err.message : String(err) }));
+      return;
+    }
+
+    setSending(key);
+    setSendError((e) => {
+      const rest = { ...e };
+      delete rest[key];
+      return rest;
+    });
+    try {
+      await completeExternalWait(runId, {
+        nodeId: wait.nodeId,
+        attemptId: wait.attemptId,
+        payload,
+      });
+      /* The completion frame bumps the caller's wait epoch and remounts this
+         component, which is what actually refreshes the list — so this only drops
+         the draft, and does so for the case where that frame never arrives (a dead
+         socket). No second refetch: the epoch owns freshness here. */
+      onDraftClear(key);
+    } catch (err: unknown) {
+      /* Shown against THIS wait. A 422 means the node is still parked and the body
+         is fixable, so the editor deliberately stays open with the text intact. */
+      setSendError((e) => ({ ...e, [key]: messageOf(err) }));
+    } finally {
+      setSending(null);
+    }
+  }
 
   return (
     <>
@@ -104,6 +183,9 @@ export function PendingCallbacks({
                removed from the validator's messages. */
             const instance = docNode !== null && docNode.id !== wait.nodeId ? wait.nodeId : null;
             const bodyHint = describeCallbackBody(docNode);
+            /* `undefined` ⇒ the editor is closed; `''` is an OPEN editor the
+               operator has emptied, which means `{}` and is not the same thing. */
+            const draft = drafts[key];
             return (
               <li key={key}>
                 <p>
@@ -146,6 +228,50 @@ export function PendingCallbacks({
                   <button type="button" onClick={() => setRevealed(key)}>
                     Show callback URL
                   </button>
+                )}
+
+                {/* #901 — the act, beside the URL that used to be the only option.
+                    The URL stays: an operator handing the wait to an EXTERNAL system
+                    still needs it, and that is what A13's seam is for. This is for
+                    the case the seam served badly — the operator deciding it
+                    themselves, who had to leave the app to POST their own callback. */}
+                {draft === undefined ? (
+                  <button type="button" onClick={() => onDraftChange(key, '')}>
+                    Complete wait
+                  </button>
+                ) : (
+                  <div className="external-wait-complete">
+                    <label htmlFor={`wait-body-${key}`}>
+                      Callback body (JSON) — empty means <code>{'{}'}</code>
+                    </label>
+                    <textarea
+                      id={`wait-body-${key}`}
+                      rows={4}
+                      spellCheck={false}
+                      value={draft}
+                      placeholder={'{\n  "decision": "approve"\n}'}
+                      onChange={(e) => onDraftChange(key, e.target.value)}
+                    />
+                    {sendError[key] !== undefined && (
+                      <p role="alert" className="error">
+                        The wait was not completed: {sendError[key]}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      disabled={sending !== null}
+                      onClick={() => void send(wait, key)}
+                    >
+                      {sending === key ? 'Completing…' : 'Complete this wait'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={sending === key}
+                      onClick={() => onDraftClear(key)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 )}
               </li>
             );

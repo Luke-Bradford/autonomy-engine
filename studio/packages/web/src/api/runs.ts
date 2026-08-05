@@ -5,6 +5,7 @@ import {
   RunSchema,
   RunSummarySchema,
   RunEventSchema,
+  type CompleteExternalWaitBody,
   type PendingExternalWait,
   type Run,
   type RunSummary,
@@ -18,7 +19,7 @@ const RunEventListSchema = z.array(RunEventSchema);
 
 /**
  * The run model the P6 live monitor sits on: a list, one run, its append-only
- * event log — and ONE write.
+ * event log — and two writes.
  *
  * This client was read-only until the rerun action landed, and its docblock said
  * so. That is no longer true, so it does not say so: `rerunFromFailed` below
@@ -26,7 +27,12 @@ const RunEventListSchema = z.array(RunEventSchema);
  * that matters — there is no `POST /api/runs`, so a run is never created from
  * WHOLE CLOTH here. Every run still originates in the engine/scheduler; a rerun
  * asks the server to resume an existing failed one, which is a different act
- * from authoring a run and is the only write this module performs.
+ * from authoring a run.
+ *
+ * #901 added the SECOND write, `completeExternalWait`, and it is the same kind of
+ * act: it settles a wait the run is already parked on. So the invariant above is
+ * the durable one — both writes RESUME an existing run, neither authors one — and
+ * a future third write should be held to it rather than to a count.
  *
  * The live tail (`useRunStream`) rides the WebSocket beside these; the REST
  * replay here is what a page loads first, before (or without) tailing. Every
@@ -100,6 +106,40 @@ export function listExternalWaits(
 ): Promise<PendingExternalWait[]> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/external-waits`, {
     schema: PendingExternalWaitListSchema,
+    signal,
+  });
+}
+
+/**
+ * #901 — complete one of this run's parked external waits, as its OWNER.
+ *
+ * The sibling of the read above, and what makes that read actionable: #900 could
+ * only reveal the callback path and send the operator out of the app to POST it.
+ *
+ * NO TOKEN is sent. The capability is re-derived server-side from `(runId, nodeId,
+ * attemptId)`, so the client never has to hold a live credential to resume its own
+ * run — which is the entire reason this exists rather than the SPA POSTing the
+ * revealed `callbackPath` itself.
+ *
+ * `attemptId` is the CAS basis, not decoration: a webhook that expires re-parks
+ * under a new attempt, and the server refuses a body composed for an attempt that
+ * has moved rather than settling its successor (#904's shape).
+ *
+ * Resolves on `204`. It does NOT mean the run has finished — the server answers as
+ * soon as the wait is durably settled and drives the resumed run in the background,
+ * so the run view's live stream is where the rest shows up. Rejects with the shared
+ * error contract on `external_wait_payload` (422 — the body failed the node's
+ * declared outputs, the node is still parked, fix it and send again) and
+ * `external_wait_settled` (409/410 — the wait is gone).
+ */
+export function completeExternalWait(
+  runId: string,
+  body: CompleteExternalWaitBody,
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}/external-waits/complete`, {
+    method: 'POST',
+    body,
     signal,
   });
 }

@@ -351,7 +351,7 @@ describe('external-wait routes', () => {
     return waits[0]!;
   }
 
-  function completeAsOwner(runId: string, body: unknown) {
+  function completeAsOwner(runId: string, body: Record<string, unknown>) {
     return app.inject({
       method: 'POST',
       url: `/api/runs/${runId}/external-waits/complete`,
@@ -447,8 +447,9 @@ describe('external-wait routes', () => {
     await new Promise((r) => setTimeout(r, 30));
     const state = projectState(runId, resolveDoc);
     expect(state.nodes.w!.status).toBe('external_wait_pending');
-    expect(loadEngineEvents(app.db, runId).filter((e) => e.type === 'externalWait.completed'))
-      .toHaveLength(0);
+    expect(
+      loadEngineEvents(app.db, runId).filter((e) => e.type === 'externalWait.completed'),
+    ).toHaveLength(0);
   });
 
   it('#901 — an unknown nodeId on an owned run is a 404', async () => {

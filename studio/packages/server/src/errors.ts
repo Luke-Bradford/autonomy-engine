@@ -12,10 +12,7 @@ import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { DocUnresolvableError } from './run/driver.js';
 import { RerunNotEligibleError } from './run/reseed.js';
-import {
-  ExternalWaitPayloadError,
-  ExternalWaitSettledError,
-} from './run/external-wait-service.js';
+import { ExternalWaitPayloadError, ExternalWaitSettledError } from './run/external-wait-service.js';
 import { ISSUE_LIST_CAP } from './limits.js';
 
 /**
