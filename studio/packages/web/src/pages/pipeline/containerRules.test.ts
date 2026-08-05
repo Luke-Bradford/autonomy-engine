@@ -304,8 +304,12 @@ describe('readableIssue', () => {
       [],
       containers,
     );
+    // The span itself, unedited — the property the anchor exists for. #887's
+    // gloss is APPENDED after it and changes no byte of it.
+    expect(out).toContain('${nodes.n_a.output.done}');
     expect(out).toBe(
-      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} does not name an upstream node",
+      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} (HTTP Request 1) " +
+        'does not name an upstream node',
     );
   });
 
@@ -316,7 +320,8 @@ describe('readableIssue', () => {
    */
   it('rewrites nothing node-shaped in a message that has no location prefix', () => {
     const msg = 'the graph is unsound near ${nodes.n_a.output.done}';
-    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(msg);
+    // Every byte of the original survives; #887's gloss only ever adds after it.
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(`${msg} (HTTP Request 1)`);
   });
 
   /**
@@ -360,10 +365,125 @@ describe('readableIssue', () => {
     );
   });
 
-  it('leaves a ${…} expression alone even though it is brace-wrapped', () => {
+  /**
+   * #887 — the commonest reference error named ONE end by the drawn name and the
+   * other by a raw uuid. Pass 5 names both without editing either: the `${…}`
+   * span is byte-identical and the name arrives as a parenthetical after it.
+   *
+   * Glossing rather than rewriting is the whole point — `${nodes.HTTP Request
+   * 2.output.body}` would name a string that is in nobody's config and is not
+   * valid syntax.
+   */
+  it('glosses a node reference INSIDE an expression, leaving the expression byte-identical', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${nodes.n_d.output.body} does not name an upstream node ' +
+        '(a self, downstream, or unrelated node has no output here)',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} (HTTP Request 2) " +
+        'does not name an upstream node (a self, downstream, or unrelated node has no output here)',
+    );
+  });
+
+  /**
+   * A `${…}` body may legally contain `}` inside a string literal — `findRefEnd`
+   * closes the span at the first UNQUOTED brace, its own docblock citing
+   * `default(params.a, "b}c")`.
+   *
+   * This is the case that makes `scanTemplateRefs` load-bearing rather than
+   * tidy. A `\$\{[^}]*\}` regex closes the span early, at the brace inside the
+   * literal, and splices the gloss INTO the operator's string — corrupting the
+   * exact text pass 5 exists to preserve. The gloss must land after the REAL
+   * closing brace.
+   */
+  it('finds the true span end when a string literal inside it contains a brace', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${default(nodes.n_d.output.body, "{}")} is not guaranteed here',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      'node \'HTTP Request 1\' config.url: ${default(nodes.n_d.output.body, "{}")} ' +
+        '(HTTP Request 2) is not guaranteed here',
+    );
+  });
+
+  /** A composed reference is still a reference — `params.ts:3707` emits the author's own source. */
+  it('glosses a composed reference, and no longer leaves the expression wholly alone', () => {
     const msg = 'nodes.n_a.config.url: ${default(nodes.n_d.output.body, "x")} is malformed';
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
+      msg
+        .replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url")
+        .replace('"x")}', '"x")} (HTTP Request 2)'),
+    );
+  });
+
+  /**
+   * The carve-out that keeps this honest, and that
+   * `e2e/canvas-issue-legibility.spec.ts` depends on: an id naming nothing on the
+   * canvas has no name to gloss, so the message is returned untouched rather than
+   * annotated with a guess.
+   */
+  it('adds no gloss when the referenced id resolves to nothing', () => {
+    const msg = 'nodes.n_a.config.url: ${nodes.ghost.output.body} does not name an upstream node';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
       msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+    );
+  });
+
+  it('leaves a non-node expression root alone', () => {
+    const msg = 'nodes.n_a.config.url: ${params.endpoint} is malformed';
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
+      msg.replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url"),
+    );
+  });
+
+  it('glosses every span in a message, not just the first', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${nodes.n_b.output.v} and ${nodes.n_d.output.v} are both unreachable',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "node 'HTTP Request 1' config.url: ${nodes.n_b.output.v} (LLM Call 1) and " +
+        '${nodes.n_d.output.v} (HTTP Request 2) are both unreachable',
+    );
+  });
+
+  it('names every distinct node a single span references', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${default(nodes.n_b.output.v, nodes.n_d.output.v)} is malformed',
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toContain('(LLM Call 1, HTTP Request 2)');
+  });
+
+  /**
+   * The redundancy, pinned DELIBERATELY.
+   *
+   * The `.status` message quotes the id a second time, and pass 4 has already
+   * turned that copy into the name — so the gloss repeats it. That is kept
+   * because binding the uuid to the name is precisely what the reader cannot do
+   * unaided; suppressing it here would make the one message that spells the
+   * binding out look like the one message that forgot to gloss.
+   */
+  it('glosses the .status shape too, redundantly with the quoted pass and on purpose', () => {
+    const out = readableIssue(
+      "nodes.n_a.config.url: ${nodes.n_d.status} is not settled here — 'n_d' may still be running",
+      [A, B, C, D],
+      [],
+      containers,
+    );
+    expect(out).toBe(
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.status} (HTTP Request 2) is not " +
+        "settled here — 'HTTP Request 2' may still be running",
     );
   });
 });
