@@ -172,7 +172,7 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      it: `externalWait.completed` IS the node's success event (there is no
      following `node.succeeded`), and the drill-in's Outputs section folds only
      from `node.succeeded` — so a webhook's declared outputs render nowhere, which
-     is true of a `curl` completion too and predates this ticket. Filed as #910.
+     is true of a `curl` completion too and predates this ticket. Filed as #911.
      When that lands, this assertion should move onto the panel, which is where an
      operator would look. */
   const events = await (await page.request.get(`/api/runs/${runId}/events`)).json();
