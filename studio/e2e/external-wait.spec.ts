@@ -140,8 +140,17 @@ test('#901 — an operator completes the wait from the app, sending no token', a
   /* NEVER REVEALED. The whole request below is composed without clicking "Show
      callback URL", so the token is not on the page, not in the DOM, and not in
      this browser context — which is the property #901 exists for. */
-  await list.getByRole('button', { name: /^Complete wait for / }).click();
+  const trigger = list.getByRole('button', { name: /^Complete wait for / });
+  await trigger.click();
   await expect(list).not.toContainText('/api/external-wait/');
+
+  /* CANCEL RETURNS FOCUS — asserted in a real browser because focus is exactly
+     what jsdom models least like one. The trigger unmounts when the editor opens,
+     so a naive synchronous restore silently focuses nothing and a keyboard user
+     is left on <body> with no way back to the control they just used. */
+  await list.getByRole('button', { name: 'Cancel' }).click();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
 
   const body = list.getByRole('textbox', { name: /Callback body/ });
 
