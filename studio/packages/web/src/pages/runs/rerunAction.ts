@@ -8,9 +8,11 @@ import type { RunStatus } from '@autonomy-studio/shared';
  *
  * The server owns eligibility, and it decides from the EVENT LOG, not from the
  * run row: `createReseedService.rerunFromFailed` (`server/src/run/reseed.ts`)
- * refuses a run with no log, one that has not terminated, and one that
- * terminated in `success` — each as a `RerunNotEligibleError` carrying a
- * human-readable reason, which the route maps to `409`.
+ * refuses a run with no log, one that has not terminated, one that terminated in
+ * `success`, and (#896) one that already has a rerun in flight — each as a
+ * `RerunNotEligibleError` carrying a human-readable reason, which the route maps
+ * to `409`. Note the last is TRANSIENT and depends on another run's state, which
+ * is exactly the kind of rule this module must not try to mirror.
  *
  * This module deliberately does NOT re-implement that algorithm. A client-side
  * copy of a server rule is a second reader of a contract that has one owner,

@@ -88,10 +88,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
    * `rerunning` guards a double-click WITHIN one mount: without it a second
    * click before the request resolves would start a SECOND rerun, and unlike a
    * re-read that is not idempotent — it would spend money twice and leave an
-   * orphan run. It does NOT survive a remount, which is a real residual and is
-   * filed rather than implied: `RunDetailRoute` keys this page by `runId`, so
-   * leaving the page and coming back mid-flight yields a fresh mount with the
-   * flag back to `false` and the button live again (#896).
+   * orphan run. It does NOT survive a remount — `RunDetailRoute` keys this page
+   * by `runId`, so leaving mid-flight and coming back yields a fresh mount with
+   * the flag back to `false` and the button live again — and that is no longer
+   * the last line of defence: since #896 the SERVER refuses a rerun of a source
+   * run that already has a live one, so the second click gets a `409` naming the
+   * rerun already in progress rather than a second bill. This flag now does what
+   * it can honestly do (keep the button from firing twice in one mount, and show
+   * the pending state); the money is guarded where a second tab and a bare
+   * `curl` are covered too.
    *
    * `live` is why the settle handlers check before touching anything. The
    * component has three other ways to unmount while a request is open — the

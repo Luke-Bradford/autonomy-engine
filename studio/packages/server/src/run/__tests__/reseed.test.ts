@@ -16,6 +16,7 @@ import {
   type NewPipelineVersion,
   type Node,
   type Param,
+  type RunStatus,
   type TriggerContext,
 } from '@autonomy-studio/shared';
 import { createPipeline } from '../../repo/pipelines.js';
@@ -292,5 +293,125 @@ describe('RS2 producer — eligibility guards', () => {
     };
     const svc = createReseedService(brokenDeps);
     await expect(svc.rerunFromFailed(r1)).rejects.toBeInstanceOf(DocUnresolvableError);
+  });
+});
+
+/**
+ * #896 — one live rerun per source run. The client's in-flight flag is component
+ * state on a page keyed by run id, so a navigate-away-and-back mid-flight brings
+ * the button back live and a second click bills a second rerun. The refusal lives
+ * HERE, where a remount, a second tab and a bare `curl` all have to pass it.
+ *
+ * The existing rerun is SEEDED as a row rather than produced by calling the
+ * service twice: R2 drives in the background and settles on its own schedule, so
+ * racing it would make the assertion depend on scheduler timing. Seeding pins the
+ * one fact under test — the status of a rerun that already exists.
+ */
+describe('RS2 producer — the double-rerun guard (#896)', () => {
+  /** A failed R1 plus a rerun of it parked at `status`. */
+  async function failedRunWithRerunAt(db: Db, status: RunStatus) {
+    const pvId = seedVersion(db, [node('a'), node('b')], [edge('a', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+    const r2 = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: null,
+      params: {},
+      rerunOf: r1,
+      status,
+    });
+    return { pvId, r1, r2 };
+  }
+
+  it('refuses a second rerun while the first is still RUNNING, and names it', async () => {
+    const { db } = freshDb();
+    const { r1, r2 } = await failedRunWithRerunAt(db, 'running');
+
+    const svc = createReseedService(deps(db, {}));
+    await expect(svc.rerunFromFailed(r1)).rejects.toBeInstanceOf(RerunNotEligibleError);
+    await expect(svc.rerunFromFailed(r1)).rejects.toThrow(
+      new RegExp(`already in progress \\('${r2.id}', running\\)`),
+    );
+  });
+
+  /**
+   * The case that discriminates this guard's status set from `ACTIVE_RUN_STATUSES`
+   * (`repo/runs.ts`), which deliberately excludes `waiting` because a PARKED run
+   * does not occupy a trigger's concurrency slot. It is still unfinished, and its
+   * remaining nodes are still unbilled — so reusing that set here would let exactly
+   * the double-spend this guard exists to stop through.
+   */
+  it('refuses while the first rerun is parked WAITING on an external event', async () => {
+    const { db } = freshDb();
+    const { r1 } = await failedRunWithRerunAt(db, 'waiting');
+
+    const svc = createReseedService(deps(db, {}));
+    await expect(svc.rerunFromFailed(r1)).rejects.toThrow(/already in progress/);
+  });
+
+  it('ALLOWS a second rerun once the first has terminated — this bounds concurrency, not lifetime', async () => {
+    const { db } = freshDb();
+    const { r1 } = await failedRunWithRerunAt(db, 'failure');
+
+    const svc = createReseedService(deps(db, {}));
+    const { runId, drive } = await svc.rerunFromFailed(r1);
+    await drive;
+    expect(getRun(db, runId)!.rerunOf).toBe(r1);
+  });
+
+  it('is scoped to ONE source run — a live rerun of a different run does not block', async () => {
+    const { db } = freshDb();
+    const { pvId } = await failedRunWithRerunAt(db, 'running');
+    const mine = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+
+    const svc = createReseedService(deps(db, {}));
+    const { runId, drive } = await svc.rerunFromFailed(mine);
+    await drive;
+    expect(getRun(db, runId)!.rerunOf).toBe(mine);
+  });
+
+  /**
+   * The guard sits BEFORE the transaction, on the argument that nothing in
+   * `rerunFromFailed` awaits between the check and `createRun` — so two calls
+   * cannot interleave and an early check is as atomic as an in-tx one. That is an
+   * argument about the code's shape, and this is the test that makes it falsifiable
+   * rather than a comment: fire two reruns of the same source with no scheduling
+   * gap between them and require that exactly ONE is created. If a suspension point
+   * is ever introduced into that path, both calls will pass the check and this goes
+   * red — which is precisely when someone needs to be told.
+   */
+  it('admits exactly one of two rerun calls issued with no gap between them', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a'), node('b')], [edge('a', 'b')]);
+    const r1 = await seedRun(db, pvId, { nodes: { b: { outcome: 'failure' } } });
+
+    const svc = createReseedService(deps(db, {}));
+    const settled = await Promise.allSettled([svc.rerunFromFailed(r1), svc.rerunFromFailed(r1)]);
+
+    const won = settled.filter((s) => s.status === 'fulfilled');
+    const lost = settled.filter((s) => s.status === 'rejected');
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect((lost[0] as PromiseRejectedResult).reason).toBeInstanceOf(RerunNotEligibleError);
+    await (won[0] as PromiseFulfilledResult<{ runId: string; drive: Promise<void> }>).value.drive;
+  });
+
+  /**
+   * Ordering matters: the duplicate is the ACTIONABLE message ("your rerun is
+   * already running"), so it must win over a resolve failure of the pinned version,
+   * which tells the operator nothing they can act on while a rerun is in flight.
+   */
+  it('reports the duplicate BEFORE a version-resolution failure', async () => {
+    const { db } = freshDb();
+    const { r1 } = await failedRunWithRerunAt(db, 'running');
+    const brokenDeps: DriveDeps = {
+      ...deps(db, {}),
+      resolveDoc: () => {
+        throw new DocUnresolvableError('pipeline version not found');
+      },
+    };
+    const svc = createReseedService(brokenDeps);
+    await expect(svc.rerunFromFailed(r1)).rejects.toBeInstanceOf(RerunNotEligibleError);
   });
 });

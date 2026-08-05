@@ -8,6 +8,7 @@ import {
   RunStatusSchema,
   type CompleteExternalWaitBody,
   type PendingExternalWait,
+  type RerunAccepted,
   type RunDetail,
 } from '@autonomy-studio/shared';
 import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
@@ -412,7 +413,8 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    *
    * The producer's eligibility + version-resolution verdicts surface through the
    * global error handler: `RerunNotEligibleError` (no log / not terminated / it
-   * succeeded) → 409, `DocUnresolvableError` (the pinned version is gone) → 409.
+   * succeeded / #896 — a rerun of it is already in flight) → 409,
+   * `DocUnresolvableError` (the pinned version is gone) → 409.
    * R2 reuses R1's params + version EXACTLY (no override body — param override is a
    * simple-rerun concern, not rerun-from-failed).
    */
@@ -431,7 +433,11 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       // faults; a crash before it runs recovers via the boot reconciler).
       const { runId, drive } = await fastify.reseedService.rerunFromFailed(run.id);
       void drive;
-      return reply.status(202).send({ runId });
+      // #899 — typed by the SHARED schema the web client parses with, so the two
+      // ends of this contract drift into a typecheck failure rather than a runtime
+      // Zod error in the browser (the `FireResultSchema` arrangement on the sibling
+      // fire route).
+      return reply.status(202).send({ runId } satisfies RerunAccepted);
     },
   );
 };

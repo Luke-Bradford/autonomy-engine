@@ -4,7 +4,7 @@ import {
   type RunEvent,
   type RunState,
 } from '@autonomy-studio/shared';
-import { createRun, getRun } from '../repo/runs.js';
+import { createRun, findLiveRerunOf, getRun } from '../repo/runs.js';
 import { appendAndFold, loadEngineEvents, terminalFactFromLog } from './events.js';
 import { buildEngine, driveRun, syncRunLifecycle, type DriveDeps } from './driver.js';
 
@@ -63,7 +63,10 @@ export interface ReseedService {
    * with its reseed log, the RS1 crash-safety invariant).
    * @throws {RerunNotEligibleError} if the source run is missing, has no log, or
    *   did not terminate in a FAILURE (`failure`/`interrupted`) — only a failed run
-   *   is rerun-from-failed eligible; a successful run has nothing to resume from.
+   *   is rerun-from-failed eligible; a successful run has nothing to resume from —
+   *   or (#896) if a rerun of it is still live, which is the transient one: at most
+   *   one rerun of a given source run may be in flight at a time, so a remount or a
+   *   second tab cannot bill the same resumed work twice.
    * @throws {DocUnresolvableError} if the source run's immutable pipeline version
    *   no longer resolves (deleted/unparseable) — a rerun cannot re-pin it.
    */
@@ -71,9 +74,18 @@ export interface ReseedService {
 }
 
 /**
- * The source run cannot be rerun-from-failed: it is missing, has no event log, or
- * did not terminate in a failure. Client-safe — carries the id + a short reason,
- * never run contents. The route maps it to `409` (a conflict with the request).
+ * The source run cannot be rerun-from-failed RIGHT NOW: it is missing, has no
+ * event log, did not terminate in a failure, or (#896) already has a rerun in
+ * flight. Client-safe — carries the id + a short reason, never run contents. The
+ * route maps it to `409` (a conflict with the request).
+ *
+ * Note the last reason is TRANSIENT, unlike the others: the source run is
+ * perfectly eligible and becomes rerunnable again the moment the live rerun
+ * terminates. The reason string says so; the class does not distinguish them,
+ * because nothing consumes the difference yet — the web client surfaces the
+ * message verbatim. A UI that wanted to offer "go to the run already in flight"
+ * would need a distinct error code (the `stale_write` precedent in `errors.ts`),
+ * and should add one then rather than string-match this.
  */
 export class RerunNotEligibleError extends Error {
   constructor(
@@ -109,6 +121,31 @@ export function createReseedService(deps: DriveDeps): ReseedService {
       if (source === null) {
         // Raced a deletion between the log read and here.
         throw new RerunNotEligibleError(sourceRunId, 'the run no longer exists');
+      }
+
+      // 1b. #896 — at most ONE live rerun per source run. A rerun re-executes every
+      // node from the failure onward, so a second one of the same source is a second
+      // bill for work already under way. The client cannot own this guard: its
+      // in-flight flag is component state on a page keyed by run id, so navigating
+      // away mid-flight and back re-arms the button — and a second tab or a `curl`
+      // never had the flag at all. Nor would an idempotency KEY fix it, since the
+      // remount that loses the flag loses a client-minted key with it; a key that
+      // survived would have to be derived from the source run id, which is this.
+      //
+      // Checked HERE, before the expensive part, deliberately. Nothing in this
+      // method awaits between the check and `createRun` below — every step is
+      // synchronous (better-sqlite3, one connection, one process; the method is
+      // `async` only to satisfy the interface) — so two calls cannot interleave and
+      // an early check is exactly as atomic as one inside the transaction, while
+      // sparing a duplicate click a full log replay + frontier projection. It also
+      // has to precede `resolveDoc`: "your rerun is already running" is actionable,
+      // and must not be masked by an unresolvable-version message that is not.
+      const liveRerun = findLiveRerunOf(db, sourceRunId);
+      if (liveRerun !== null) {
+        throw new RerunNotEligibleError(
+          sourceRunId,
+          `a rerun of it is already in progress ('${liveRerun.id}', ${liveRerun.status})`,
+        );
       }
 
       // 2. Resolve the SAME immutable version R1 pinned; build the engine + project
