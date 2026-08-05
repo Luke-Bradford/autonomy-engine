@@ -388,6 +388,41 @@ describe('RunsPage — U26 filter pane', () => {
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
+  /**
+   * The rows on screen were fetched under the PREVIOUS filter. Leaving them up
+   * while the new request is in flight shows a list that contradicts the
+   * controls right above it — briefly, but long enough to be read as the answer,
+   * which for a status filter means reading a success as a failure.
+   */
+  it('never shows the previous filter\'s rows under the new filter', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_old' })]);
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    expect(await screen.findByText('run_old')).toBeInTheDocument();
+
+    // A request that never settles: the page is now mid-flight on the new
+    // filter, which is exactly the window this guards.
+    listMock.mockReturnValue(new Promise(() => {}));
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
+
+    expect(screen.queryByText('run_old')).not.toBeInTheDocument();
+    expect(screen.getByText(/Loading runs/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The other half of the same rule: a Refresh asks the SAME question again, so
+   * blanking the list to re-answer it identically would be a flash for nothing.
+   */
+  it('keeps the current rows on screen while a Refresh of the same filter is in flight', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_here' })]);
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=failure');
+    expect(await screen.findByText('run_here')).toBeInTheDocument();
+
+    listMock.mockReturnValue(new Promise(() => {}));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(screen.getByText('run_here')).toBeInTheDocument();
+  });
+
   it('does not offer Clear when nothing is filtered', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />);
     await screen.findByText(/No runs yet/i);
