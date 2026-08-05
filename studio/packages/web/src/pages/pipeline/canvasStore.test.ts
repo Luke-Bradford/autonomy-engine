@@ -2100,6 +2100,21 @@ describe('canvasStore — duplicateNode (U21)', () => {
     expect(issues.filter((m) => m.includes('upstream'))).toEqual([]);
   });
 
+  it('the inherited edge is what makes the copy saveable — without one the ref is refused', () => {
+    // The premise the in-edge rule exists for, stated as a fact rather than as a
+    // rationale: the SAME doc, with the copy's incoming edge removed, is one the
+    // save gate refuses. `validateRefs` scopes `${nodes.a.output.body}` to the
+    // copy's upstream set, and an unconnected copy has none.
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+
+    const stranded = st.edges.filter((e) => e.to !== copyId);
+    const issues = validateCanvas(st.nodes, stranded, st.containers, st.params);
+    expect(issues.some((m) => m.includes('upstream'))).toBe(true);
+  });
+
   it('does NOT copy the OUT-edges — a duplicate never re-wires what is downstream', () => {
     const s = loaded({
       edges: [
