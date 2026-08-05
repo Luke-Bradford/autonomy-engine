@@ -2030,3 +2030,183 @@ describe('canvasStore — undo/redo (U17)', () => {
     expect(s.getState().nodes).toBe(nodesBefore);
   });
 });
+
+describe('canvasStore — duplicateNode (U21)', () => {
+  /** `n_b` (the llm_call) reads `n_a`'s output, and `n_a → n_b` carries it. */
+  function loaded(overrides: Partial<PipelineVersion> = {}) {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
+          {
+            id: 'n_b',
+            type: 'llm_call',
+            config: { prompt: 'summarise ${nodes.n_a.output.body}', outputs: [] },
+            connectionId: 'cn_1',
+            position: { x: 100, y: 20 },
+          },
+        ],
+        ...overrides,
+      }),
+    );
+    return s;
+  }
+
+  it('appends a copy carrying the source type, config and bound connection', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    expect(st.nodes).toHaveLength(3);
+    const copy = st.nodes[2]!;
+    expect(copy.id).not.toBe('n_b');
+    expect(copy.type).toBe('llm_call');
+    expect(copy.config).toEqual({ prompt: 'summarise ${nodes.n_a.output.body}', outputs: [] });
+    expect(copy.connectionId).toBe('cn_1');
+    expect(st.dirty).toBe(true);
+  });
+
+  it('shares no substructure with the source — editing one config cannot edit the other', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const source = st.nodes.find((n) => n.id === 'n_b')!;
+    const copy = st.nodes[2]!;
+    expect(copy.config).not.toBe(source.config);
+    // `config.outputs` is the array `assembleConfig` preserves BY REFERENCE, so
+    // it is the substructure a shallow copy would have shared.
+    expect(copy.config['outputs']).not.toBe(source.config['outputs']);
+  });
+
+  it('copies the IN-edges, so the copy keeps the upstream its ${} refs name', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    const into = st.edges.filter((e) => e.to === copyId);
+    expect(into).toHaveLength(1);
+    expect(into[0]!.from).toBe('n_a');
+    expect(into[0]!.on).toBe('success');
+    // A fresh edge id — reusing the source edge's would collide.
+    expect(into[0]!.id).not.toBe('e_1');
+    // And the doc the copy lands in is one the SAVE GATE accepts: `validateRefs`
+    // scopes `${nodes.n_a.output.body}` to the copy's upstream set, which the
+    // copied in-edge is what puts `n_a` in. Without it the copy is a root, and
+    // its inherited ref is refused for naming no upstream node.
+    const issues = validateCanvas(st.nodes, st.edges, st.containers, st.params);
+    expect(issues.filter((m) => m.includes('upstream'))).toEqual([]);
+  });
+
+  it('does NOT copy the OUT-edges — a duplicate never re-wires what is downstream', () => {
+    const s = loaded({
+      edges: [
+        { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+        { id: 'e_2', from: 'n_b', to: 'n_a', on: 'failure' },
+      ],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    expect(st.edges.filter((e) => e.from === copyId)).toHaveLength(0);
+  });
+
+  it('drops an in-edge the canvas would refuse to draw — a back-edge', () => {
+    const s = loaded({
+      edges: [
+        { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+        { id: 'e_2', from: 'n_b', to: 'n_a', on: 'success', back: true, maxBounces: 3 },
+      ],
+    });
+    // `n_a` has one in-edge and it is a back-edge: the copy cannot forward-reach
+    // `n_b`, so the ancestry rule refuses it and it is left behind.
+    s.getState().duplicateNode('n_a');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    expect(st.edges.filter((e) => e.to === copyId)).toHaveLength(0);
+  });
+
+  it('joins the container the source is in', () => {
+    const s = loaded({
+      containers: [{ id: 'c_1', kind: 'stage', children: ['n_b'] }],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const copyId = st.nodes[2]!.id;
+    expect(st.containers[0]!.children).toEqual(['n_b', copyId]);
+  });
+
+  it('joins no container when the source is in none', () => {
+    const s = loaded({
+      containers: [{ id: 'c_1', kind: 'stage', children: ['n_a'] }],
+    });
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    expect(st.containers[0]!.children).toEqual(['n_a']);
+  });
+
+  it('offsets the copy, and staggers a second copy off the first', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+    s.getState().duplicateNode('n_b');
+
+    // Two originals plus two copies, and no two of them share a spot.
+    const positions = s.getState().nodes.map((n) => `${n.position.x},${n.position.y}`);
+    expect(s.getState().nodes).toHaveLength(4);
+    expect(new Set(positions).size).toBe(4);
+  });
+
+  it('selects the copy, and one undo puts the doc and the selection back', () => {
+    const s = loaded();
+    s.getState().select({ kind: 'node', id: 'n_b' });
+    s.getState().duplicateNode('n_b');
+
+    const copyId = s.getState().nodes[2]!.id;
+    expect(s.getState().selected).toEqual({ kind: 'node', id: copyId });
+
+    s.getState().undo();
+    const st = s.getState();
+    expect(st.nodes).toHaveLength(2);
+    expect(st.edges).toHaveLength(1);
+    // The restored doc no longer holds the copy, so the selection cannot survive.
+    expect(st.selected).toBeNull();
+  });
+
+  it('records exactly one history step, and clears the redo future', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+    s.getState().undo();
+    expect(s.getState().future).toHaveLength(1);
+
+    s.getState().duplicateNode('n_a');
+    expect(s.getState().future).toHaveLength(0);
+    expect(s.getState().past).toHaveLength(1);
+  });
+
+  it('refuses an unknown id without consuming an undo slot', () => {
+    const s = loaded();
+    const before = s.getState();
+    s.getState().duplicateNode('n_missing');
+
+    const st = s.getState();
+    expect(st.nodes).toBe(before.nodes);
+    expect(st.past).toHaveLength(0);
+    expect(st.dirty).toBe(false);
+  });
+
+  it('the copy survives serialization — a saved version carries both nodes', () => {
+    const s = loaded();
+    s.getState().duplicateNode('n_b');
+
+    const st = s.getState();
+    const body = toVersionBody(st.nodes, st.edges, st.containers, st.params, st.outputs, null);
+    expect(body.nodes).toHaveLength(3);
+    expect(body.nodes.filter((n) => n.type === 'llm_call')).toHaveLength(2);
+  });
+});

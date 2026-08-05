@@ -15,6 +15,7 @@ import {
 } from '@autonomy-studio/shared';
 import { newLocalId } from '../../lib/ids';
 import {
+  conditionOf,
   DEFAULT_MAX_BOUNCES,
   isMaxBounces,
   retypeCollides,
@@ -509,6 +510,39 @@ export interface CanvasState {
    * staggered default, as a clicked add does.
    */
   addNode(type: string, position?: Position): void;
+  /**
+   * U21 — append a copy of the node `id`: same type, same config, offset beside
+   * it, and selected so the copy is what the panel edits next.
+   *
+   * The copy carries the source's INCOMING edges and not its outgoing ones, and
+   * that asymmetry is the whole design:
+   *
+   * - Copying the OUT-edges would give every downstream node a second producer,
+   *   which changes what the existing graph computes. A duplicate must not edit
+   *   the pipeline it was duplicated from.
+   * - Copying NO edges leaves the copy a root (`reduce.ts`: no incoming edge ⇒
+   *   ready), so it would fire unconditionally at run start — and worse, its
+   *   config's `${nodes.<id>.output.…}` refs would be REFUSED, because
+   *   `validateRefs` scopes a ref to the node's upstream set and an unconnected
+   *   node has none. Duplicating a node that reads its predecessor — the
+   *   commonest case there is — would mint a doc that cannot be saved until it
+   *   is wired.
+   *
+   * So the in-edges come along, each judged by `connectRejection`: the copy
+   * keeps exactly the edges the canvas would have let the operator draw. That
+   * reuse is what makes a back-edge drop out on its own (its ancestry rule needs
+   * the target to forward-reach the source, and a fresh copy reaches nothing)
+   * rather than being special-cased here and drifting from the rules later.
+   *
+   * A doc with NO edges at all is untouched by any of that: `effectiveEdges`
+   * synthesizes a success chain over node order there, so the copy extends the
+   * implicit chain exactly as `addNode` does. Same rule, no new one.
+   *
+   * Silent no-op for an id that names no current node — the store's standing
+   * refusal shape, returning before `edit` so a refused press consumes no undo
+   * slot.
+   */
+  duplicateNode(id: string): void;
   moveNode(id: string, position: Position): void;
   deleteNode(id: string): void;
   /**
@@ -858,6 +892,72 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // Only a stagger consumes a slot — see the `addCount` doc.
           addCount: position ? s.addCount : s.addCount + 1,
         }));
+      },
+
+      duplicateNode(id) {
+        if (!get().nodes.some((n) => n.id === id)) return;
+        edit((s) => {
+          const source = s.nodes.find((n) => n.id === id)!;
+          const copyId = newLocalId('n');
+          /* `structuredClone`, not a spread: `config` is a `z.record(unknown)`
+             that nests arbitrarily, and `NodePanel.assembleConfig` preserves the
+             keys no field owns BY REFERENCE — so a shallow copy would leave the
+             source and the copy sharing one `config.outputs` array, where
+             editing either edits both. The value arrived as parsed JSON (or was
+             authored by a form over one), so there is nothing `structuredClone`
+             can choke on. It is also what carries `connectionParams`, `call` and
+             `policy` without this action having to name every field, which is
+             what stops it going stale the next time `NodeSchema` grows one.
+
+             Deliberately NOT re-run through `lowerPipelineNodes`: the source has
+             already been lowered (by `addNode` or by `loadVersion`), so it would
+             be a no-op — and the server lowers again on save regardless. */
+          const copy: Node = {
+            ...structuredClone(source),
+            id: copyId,
+            // Offset so the copy is visibly its own node, staggered on the same
+            // counter `addNode` uses so duplicating twice does not stack two
+            // copies on one spot. It wraps every 5, as an add does.
+            position: {
+              x: source.position.x + 40 + (s.addCount % 5) * 40,
+              y: source.position.y + 40 + (s.addCount % 5) * 40,
+            },
+          };
+          // The copy joins the container the source is in. A container BOX is
+          // derived from `children`, so a copy that lands 40px from a member and
+          // is not one would draw a box around a node it does not contain.
+          // `assignContainerChild` rather than an append here, because
+          // disjointness is that function's property to keep, not this caller's.
+          const owner = s.containers.find((c) => c.children.includes(id))?.id ?? null;
+          const containers = assignContainerChild(s.containers, copyId, owner);
+
+          /* Each candidate is judged against the graph INCLUDING the edges
+             accepted before it, for the same reason `connect` judges against the
+             live graph: an accepted edge changes the answer for the next one. */
+          const edges = [...s.edges];
+          for (const e of s.edges) {
+            if (e.to !== id) continue;
+            const candidate = {
+              from: e.from,
+              to: copyId,
+              condition: conditionOf(e),
+              back: e.back === true,
+            };
+            const graph = { nodes: [...s.nodes, copy], edges, containers };
+            if (connectRejection(precomputeConnect(graph), candidate) !== null) continue;
+            edges.push({ ...e, id: newLocalId('e'), to: copyId });
+          }
+
+          return {
+            nodes: [...s.nodes, copy],
+            containers,
+            edges,
+            // The copy, not the source, is what the operator is about to edit —
+            // duplicating is how you say "another one of these, but different".
+            selected: { kind: 'node', id: copyId },
+            addCount: s.addCount + 1,
+          };
+        });
       },
 
       moveNode(id, position) {
