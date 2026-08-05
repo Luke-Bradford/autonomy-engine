@@ -43,19 +43,41 @@ infrastructure and backend quota semantics. The operator's words: *"The app does
 anything new to show."* The engineering was sound; the direction was not. The product is the point,
 and the loop exists to build it — not to build the loop.
 
-### CUTOVER C1-C3 — settled. Do NOT spend fires on it.
+### CUTOVER C1-C3 — UNBLOCKED 2026-08-05. It is buildable work, not an operator gate.
 - **C1 `#440`** native control room + machine-readable quota endpoint — **DONE** (issue CLOSED).
 - **C2** — **DONE** (2026-07-29). Studio is the **THIRD** source in `loop/drive.sh` `quota_pct()`,
   behind the dashboard and behind the loop's own usage reader; `DASH_URL` was deliberately **not**
   repointed, because studio's `/api/quota` returned `account.claude: null` on every probe and
   promoting it would have disarmed the spend guard outright. See `#765`.
-- **C3 `#410` (park the old engine) — BLOCKED ON AN OPERATOR DECISION. DO NOT WAIT ON IT**
-  (operator, 2026-07-31). `#765` is answered: studio's reader is **not** broken — it is losing the
-  shared account rate-limit budget to the prototype dashboard's continuous 60s sampler, i.e. C3's
-  evidence gate is throttled by the very component C3 retires. The remaining lever is that sampler's
-  cadence, which touches the loop's PRIMARY spend-guard source and is therefore the operator's call,
-  not yours. **Do not build anything further for C3, do not collect further shadow-probe evidence,
-  and do not treat its absence as a reason to idle.**
+- **C3 `#410` (park the old engine) — NO LONGER AN OPERATOR GATE (measured 2026-08-05).** Operator:
+  *"I'm not using the old system, so do what you want with it. I'm waiting to see how it all fits in
+  with the new."* So the cutover is wanted, and the remaining work is yours to build.
+
+  **The previous entry here was WRONG and is corrected by measurement, not opinion.** It said studio
+  was merely losing the shared rate-limit budget to the prototype dashboard's 60s sampler, making the
+  sampler's cadence an operator decision. The experiment: the dashboard was **unloaded entirely** for
+  ~12 minutes, freeing the whole bucket. Result — the loop reader and studio **both stayed
+  UNREADABLE** the whole time, and direct probes with the same credential returned `429` throughout.
+  Freeing the bucket changed nothing.
+
+  What the dashboard actually has is not priority, it is a **warm cache**: a background sampler plus
+  a grace window, holding a value obtained during a rare moment the endpoint answered. Studio has no
+  sampler (`#770` rejected one in favour of geometric backoff) and was deliberately denied a grace
+  window, so every studio read is a request-path poll — which is exactly the call that 429s. Proof
+  it is the cache and not contention: reloading the dashboard did **not** restore the guard, because
+  its cache died with the process; the guard stayed UNREADABLE until the sampler happened to get one
+  reading through, ~12 minutes later.
+
+  **So build `#765`'s original step 1: an `unref`'d background sampler in studio's reader** — keeping
+  the 60s TTL and the **no-grace / no-last-good** property, because a stale-but-low reading permits a
+  fire and fail-open is the one polarity forbidden here (`drive.sh`'s own cache holds the fail-SAFE
+  staleness logic and may only ever REFUSE). A sampler-backed studio can then be polled freely,
+  because the request path no longer touches the provider — which is the state in which studio
+  actually deserves to be primary.
+
+  **Sequence:** `#919` (studio mislabels a 429 as `provider_error`, which inverts the C3 evidence
+  rubric — fix first or the evidence is unreadable) → the sampler → `#917` (the monitoring section;
+  it is the last thing the operator still uses the old dashboard FOR) → then C3.
 - If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
   preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
   plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
