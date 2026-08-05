@@ -164,12 +164,33 @@ test('#901 — an operator completes the wait from the app, sending no token', a
   await expect(page.locator(headerStatus)).toHaveText('success', { timeout: 20_000 });
   await expect(page.getByRole('heading', { name: 'Waiting on a callback' })).toHaveCount(0);
 
-  /* The BODY got through, not just the completion. `${nodes.approve.output.
-     decision}` is what a downstream node would read, so a completion that dropped
-     the payload is a silent data loss the header would still call success. */
-  await expect(page.getByText('approved in-app')).toBeVisible();
+  /* The BODY got through, not just the completion — a completion that dropped the
+     payload resumes the run and still reads as success from the header, so the
+     value has to be asserted somewhere it is actually recorded.
 
-  await expectQuiet(page, problems);
+     Read off the durable LOG rather than the page, because the page does not show
+     it: `externalWait.completed` IS the node's success event (there is no
+     following `node.succeeded`), and the drill-in's Outputs section folds only
+     from `node.succeeded` — so a webhook's declared outputs render nowhere, which
+     is true of a `curl` completion too and predates this ticket. Filed as #910.
+     When that lands, this assertion should move onto the panel, which is where an
+     operator would look. */
+  const events = await (await page.request.get(`/api/runs/${runId}/events`)).json();
+  const completion = (events as Array<{ type: string; payload: { outputs?: unknown } }>).find(
+    (row) => row.type === 'externalWait.completed',
+  );
+  expect(completion?.payload.outputs).toEqual({ decision: 'approved in-app' });
+
+  /* The one allowed console line is the browser's own network entry for the 422
+     this spec PROVOKES — the contract refusal above is the behaviour under test,
+     and Chrome logs every non-2xx response whether or not the app handles it (it
+     does: the reason is rendered into the alert). Anchored on the browser-level
+     wording rather than a bare `/422/`, which would also swallow an unhandled
+     `request failed (422)` from the app itself. `expectQuiet` fails an allow
+     pattern that matches nothing, so this cannot rot into a blanket mute. */
+  await expectQuiet(page, problems, [
+    /Failed to load resource: the server responded with a status of 422/,
+  ]);
 });
 
 test('#900 — a run parked on a TIMER is offered no callback surface', async ({ page }) => {
