@@ -352,7 +352,7 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
          back, and this message names it. */
       if (pipeline.archived) {
         throw new PublishRefusedError(
-          `pipeline "${pipeline.id}" is archived and cannot be edited — restore it first`,
+          `pipeline "${pipeline.id}" is archived and cannot be edited — unarchive it first`,
         );
       }
       // #904 — CAS on the head, in the same transaction as the mint.

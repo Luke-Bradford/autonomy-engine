@@ -412,7 +412,7 @@ describe('pipelines routes', () => {
       // The message must name the remedy, not just the refusal — this string is
       // what the canvas renders verbatim on a failed Save.
       expect(res.json().message).toMatch(/archived/);
-      expect(res.json().message).toMatch(/restore/i);
+      expect(res.json().message).toMatch(/unarchive/i);
       // Nothing was minted: the head is still absent.
       const versions = await app.inject({
         method: 'GET',

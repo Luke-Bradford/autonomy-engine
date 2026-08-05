@@ -111,6 +111,26 @@ export function deletePipeline(id: string): Promise<void> {
 }
 
 /**
+ * #907 — bring an ARCHIVED pipeline back to an editable state (`POST
+ * /api/pipelines/:id/restore`, 200). Idempotent: restoring a live pipeline
+ * answers 200 with the same shape.
+ *
+ * The API verb is `restore` (it drives `restorePipeline`, which predates this
+ * route) but every user-facing string says **unarchive**, deliberately: in the
+ * canvas "restore" already means restoring an old VERSION into the working
+ * graph (#903), and one screen cannot use one word for two acts.
+ *
+ * Does NOT re-enable the triggers the archive disabled — the pipeline comes
+ * back editable, not running. See the server route's docblock.
+ */
+export function restorePipeline(id: string): Promise<Pipeline> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}/restore`, {
+    method: 'POST',
+    schema: PipelineSchema,
+  });
+}
+
+/**
  * Save the canvas as a NEW immutable version (`POST /api/pipelines/:id/versions`).
  * A pipeline version is never updated in place — every save is a new row, whose
  * `version` the server auto-increments and whose `catalogVersion` it defaults to
