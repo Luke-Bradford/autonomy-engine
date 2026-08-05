@@ -50,14 +50,3 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
     </>
   );
 }
-
-/**
- * The custom activity node. Memoised — React Flow re-renders the node layer on
- * every viewport change, so a memo keeps a stable node cheap.
- *
- * One target port (incoming edges) and one source port (outgoing) match the
- * engine's single in/out node model; which outcome an edge routes is chosen
- * afterwards, in the property panel. Both handles are now IDENTIFIED (U6b) —
- * `ports.ts` says why, and why U19 is where the source side becomes one port per
- * outcome.
- */

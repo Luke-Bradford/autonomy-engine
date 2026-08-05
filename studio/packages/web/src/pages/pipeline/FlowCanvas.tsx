@@ -30,7 +30,7 @@ import type { StoreApi } from 'zustand';
 import { activityLabel, activityLabels } from './activityLabel';
 import { containerLabels, routingChangeBetween, routingSentence } from './containerRules';
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
-import { conditionOf, toFlowEdge, type EdgeCondition } from './edgeCondition';
+import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { SourcePorts } from './SourcePorts';
 import { connectRejection, precomputeConnect, type ConnectRejection } from './connectRules';
@@ -43,7 +43,7 @@ import {
   liveNodeRects,
   revealTransform,
   usableExtent,
-  UNMEASURED_NODE_SIZE,
+  unmeasuredNodeSize,
   type ContainerBox,
 } from './containerLayout';
 import {
@@ -54,6 +54,7 @@ import {
   orientDrawnEnds,
   sourcePortsOf,
   TARGET_PORT_ID,
+  usedConditionsBySource,
   type SourcePort,
 } from './ports';
 import {
@@ -70,6 +71,15 @@ interface ActivityData extends Record<string, unknown> {
   ports: readonly SourcePort[];
 }
 
+/**
+ * The custom activity node. Memoised — React Flow re-renders the node layer on
+ * every viewport change, so a memo keeps a stable node cheap.
+ *
+ * One target port in, and — since U19 — one source port per OUTCOME out. Which
+ * outcome an edge routes is now the port it was drawn from rather than a
+ * dropdown chosen afterwards; `ports.ts` owns the set and `SourcePorts` draws
+ * it, for the author canvas and the run monitor alike.
+ */
 const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
   const d = data as ActivityData;
   return (
@@ -329,12 +339,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * every viewport change.
    */
   const portsBySource = useMemo(() => {
-    const used = new Map<string, EdgeCondition[]>();
-    for (const e of edges) {
-      const list = used.get(e.from);
-      if (list === undefined) used.set(e.from, [conditionOf(e)]);
-      else list.push(conditionOf(e));
-    }
+    const used = usedConditionsBySource(edges);
     const byId = new Map<string, SourcePort[]>();
     for (const n of nodes) byId.set(n.id, sourcePortsOf(n, used.get(n.id) ?? []));
     // A container is a legal edge SOURCE but is not a `Node`, so it declares the
@@ -653,8 +658,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
             {
               x: n.position.x,
               y: n.position.y,
-              width: n.measured?.width ?? UNMEASURED_NODE_SIZE.width,
-              height: n.measured?.height ?? UNMEASURED_NODE_SIZE.height,
+              /* The nominal size is asked for the port count this node will
+                 render, not taken flat: a node that declares more than the four
+                 operational outcomes is TALLER, and a container box derived from
+                 the flat figure would under-cover it for the frame before React
+                 Flow measures. One frame here rather than permanently (the run
+                 monitor never measures at all), but it is the same defect. */
+              width: n.measured?.width ?? unmeasuredNodeSize(portsOf(n.id).length).width,
+              height: n.measured?.height ?? unmeasuredNodeSize(portsOf(n.id).length).height,
             },
           ]),
         ),
@@ -662,7 +673,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       ),
     );
     return rects;
-  }, [containers, nodes, flowNodes]);
+  }, [containers, nodes, flowNodes, portsOf]);
 
   const containerNodes: FlowNode[] = useMemo(() => {
     // The SAME within-kind ordinals the membership `<select>` offers and

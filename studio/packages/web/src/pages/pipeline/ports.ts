@@ -1,5 +1,11 @@
-import { declaredBranchesOf, EdgeOnSchema, type EdgeOn, type Node } from '@autonomy-studio/shared';
-import type { EdgeCondition } from './edgeCondition';
+import {
+  declaredBranchesOf,
+  EdgeOnSchema,
+  type Edge,
+  type EdgeOn,
+  type Node,
+} from '@autonomy-studio/shared';
+import { conditionOf, type EdgeCondition } from './edgeCondition';
 
 /**
  * U6b/U19 — the canvas's PORTS: the identified points an edge attaches to, and
@@ -313,6 +319,28 @@ export function portsFromIds(ids: string): SourcePort[] {
     ports.push({ id, condition, label: conditionLabel(condition), orphaned: false });
   }
   return ports;
+}
+
+/**
+ * Which conditions each source's OUTGOING edges already route on.
+ *
+ * The input to `sourcePortsOf`'s orphan arm, and one helper rather than two
+ * because both canvases need exactly this and would otherwise accumulate it
+ * identically — the author canvas over the store's working edges, the run
+ * monitor over the bound version's. Two copies of a derivation this module
+ * exists to keep single is the drift the rest of the file argues against.
+ */
+export function usedConditionsBySource(
+  edges: readonly Edge[],
+): ReadonlyMap<string, EdgeCondition[]> {
+  const used = new Map<string, EdgeCondition[]>();
+  for (const e of edges) {
+    const condition = conditionOf(e);
+    const list = used.get(e.from);
+    if (list === undefined) used.set(e.from, [condition]);
+    else list.push(condition);
+  }
+  return used;
 }
 
 /**

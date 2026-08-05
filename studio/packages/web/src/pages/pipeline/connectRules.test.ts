@@ -480,10 +480,10 @@ describe('connectRejection — container boundaries', () => {
  * with no back-edge rule of its own. That was harmless while nothing could
  * author one; it stops being harmless the moment the canvas offers to.
  *
- * The only caller is the offer's enabled-ness check in `FlowCanvas` — a DRAG
- * always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these reasons
- * look unreachable from a gesture and are not. Deleting them as dead would put
- * back the ability to author an unsavable version.
+ * The only caller is the offer's enabled-ness check in `FlowCanvas` — an
+ * ordinary DRAG leaves `back` unset, whatever outcome its port carries — so
+ * these reasons look unreachable from a gesture and are not. Deleting them as
+ * dead would put back the ability to author an unsavable version.
  */
 describe('connectRejection — back-edge candidates (U6e)', () => {
   /** The rejection for a candidate the operator has asked to make a back-edge. */

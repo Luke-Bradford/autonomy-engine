@@ -8,8 +8,8 @@ import {
   unmeasuredNodeSize,
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
-import { conditionOf, toFlowEdge, type EdgeCondition } from '../pipeline/edgeCondition';
-import { portIdsOf, sourcePortsOf } from '../pipeline/ports';
+import { toFlowEdge } from '../pipeline/edgeCondition';
+import { portIdsOf, sourcePortsOf, usedConditionsBySource } from '../pipeline/ports';
 import {
   containerStatusLabel,
   containerStatusTone,
@@ -146,12 +146,7 @@ export function runFlowNodes(
      canvas (`toFlowEdge`), which now names the port of the edge's own outcome:
      without the matching ports here every edge on this view would resolve to
      nothing and simply not be drawn. */
-  const used = new Map<string, EdgeCondition[]>();
-  for (const e of doc.edges) {
-    const list = used.get(e.from);
-    if (list === undefined) used.set(e.from, [conditionOf(e)]);
-    else list.push(conditionOf(e));
-  }
+  const used = usedConditionsBySource(doc.edges);
   const portsOf = (id: string, source: Node | undefined) =>
     sourcePortsOf(source, used.get(id) ?? []);
   const portCounts = new Map(doc.nodes.map((n) => [n.id, portsOf(n.id, n).length]));

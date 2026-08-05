@@ -316,10 +316,11 @@ export function connectRejection(
      shape the cycle and boundary rules use: `validateDoc`'s back-edge block and
      this one read the same helpers, so they cannot grow separate opinions.
 
-     Reachable ONLY from the offer's enabled-ness check in `FlowCanvas` — a DRAG
-     always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these will read
-     as dead code to anyone who greps for a caller that passes `back`. They are
-     not: they are what decides whether the offer is shown at all. */
+     Reachable ONLY from the offer's enabled-ness check in `FlowCanvas` — an
+     ordinary DRAG leaves `back` unset, whatever outcome its port carries (U19
+     made the condition the operator's, but not the back-ness) — so these will
+     read as dead code to anyone who greps for a caller that passes `back`. They
+     are not: they are what decides whether the offer is shown at all. */
   if (candidate.back === true) {
     const defect = backEdgeDefect(pre.graph, pre.graph.containers, from, to);
     if (defect === 'parallel-body') {

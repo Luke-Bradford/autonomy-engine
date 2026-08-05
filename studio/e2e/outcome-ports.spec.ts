@@ -3,6 +3,7 @@ import { connectById, firesOn, outcomePort, selectEdge } from './support/canvasG
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { resolvedPaletteColor } from './support/theme';
+import { CONNECTION_RADIUS } from '../packages/web/src/pages/pipeline/ports';
 
 /**
  * U19 — outcome-by-source-handle, in a real browser.
@@ -103,9 +104,10 @@ test.describe('U19 outcome ports', () => {
     );
     expect(centres.length).toBeGreaterThan(1);
     const gaps = centres.slice(1).map((y, i) => y - centres[i]!);
-    // > 12 is `2 × CONNECTION_RADIUS` at zoom 1: two adjacent ports must not
-    // both fall inside one snap radius.
-    for (const gap of gaps) expect(gap).toBeGreaterThan(12);
+    /* Against the CONSTANT, not a copy of its value: two adjacent ports must
+       not both fall inside one snap radius, and a spec that hardcodes 12 stops
+       tracking `CONNECTION_RADIUS` the moment anyone changes it. */
+    for (const gap of gaps) expect(gap).toBeGreaterThan(2 * CONNECTION_RADIUS);
   });
 
   /**
