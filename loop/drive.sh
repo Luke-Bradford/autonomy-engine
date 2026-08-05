@@ -562,7 +562,17 @@ quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   # property is `quota_body_pct`'s, and it is untouched here.
   qru_body="$(quota_fetch_url "$1")"
   qru_pct="$(printf '%s' "$qru_body" | quota_body_pct)"
-  quota_log_window "$qru_body"
+  # GATED ON THE PERCENT, not merely on a parseable reset (#910 review WARNING).
+  # `quota_pct` may call this function TWICE in one guard evaluation -- dashboard
+  # first, studio on fallthrough -- so a reset that logged whenever it happened to
+  # parse would let a dashboard body with a readable `resets_at` but an UNREADABLE
+  # `utilization` print one window line, and studio's fallthrough print a second,
+  # differently-timed one for the same decision. That is precisely the cross-sample
+  # mismatch the single-fetch design above exists to prevent, reintroduced one line
+  # later. Gating on `qru_pct` means only the source that actually produced the
+  # guard's reading describes that reading's window: at most one line per
+  # evaluation, always from the sample the percent came from.
+  [ -n "$qru_pct" ] && quota_log_window "$qru_body"
   printf '%s\n' "$qru_pct"
 }
 

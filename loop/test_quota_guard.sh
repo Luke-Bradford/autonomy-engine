@@ -157,7 +157,11 @@ case "$*" in
     # on the marker's EXISTENCE and must keep their exact meaning.
     echo 1 >>"${STUDIO_POLL_COUNT:-/dev/null}"
     if [ -n "${STUDIO_UTIL:-}" ]; then
-      echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
+      if [ -n "${STUDIO_RESETS_AT:-}" ]; then
+        echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"',"resets_at":'"$STUDIO_RESETS_AT"'}}}}'
+      else
+        echo '{"account":{"claude":{"seven_day":{"utilization":'"$STUDIO_UTIL"'}}}}'
+      fi
     else
       echo '{"account":{"claude":null}}'
     fi
@@ -206,6 +210,13 @@ fi
 # identically (case 1b-v). Interpolated RAW on purpose: case 1b-vii feeds it a
 # hostile string to prove the parser drops what it cannot validate, rather than
 # the stub sanitising it first and testing nothing.
+# CURL_RESET_NO_UTIL=<epoch>: a readable `resets_at` with NO `utilization`. The
+# shape behind #910's WARNING -- the guard cannot read a percent from it, so it
+# falls through to the next source, and a window line logged off this body would
+# describe a sample that lost.
+if [ -n "\${CURL_RESET_NO_UTIL:-}" ]; then
+  echo '{"account":{"claude":{"seven_day":{"resets_at":'"\$CURL_RESET_NO_UTIL"'}}}}'; exit 0
+fi
 if [ -n "\${CURL_RESETS_AT:-}" ]; then
   echo '{"account":{"claude":{"seven_day":{"utilization":$rc_util,"resets_at":'"\$CURL_RESETS_AT"'}}}}'; exit 0
 fi
@@ -561,6 +572,37 @@ check "1b-viii hostile reset does not disturb the refusal" "0" \
 r="$(run_case 0.97 QUOTA_STOP_PCT=80 CURL_RESETS_AT=99)"
 check "1b-ix   out-of-range epoch dropped (range check)" "0" \
   "$(grep -q 'quota window:' "$(logof "$r")" && echo 1 || echo 0)"
+
+# --- 1b-x/xi: ONE window line per guard evaluation, from the WINNING sample.
+# #910 review WARNING. `quota_pct` may call `quota_read_url` TWICE in one
+# evaluation (dashboard, then studio on fallthrough). Logging whenever a reset
+# merely PARSED let a dashboard body with a readable `resets_at` but unreadable
+# `utilization` print one window line, and studio's fallthrough print a second,
+# differently-timed one for the SAME decision -- the cross-sample mismatch the
+# single-fetch design exists to prevent, reintroduced one line later.
+#
+# The two epochs are deliberately far apart so a regression is unmistakable
+# rather than a count that happens to match: the dashboard offers 2100-01-01 on a
+# body the guard CANNOT read a percent from, studio offers the real 2026-08-12
+# alongside a readable one. Exactly one line, and it must be studio's.
+# NOT `run_case EMPTY`: that takes the stub's bare `echo ""` branch, which never
+# emits a dashboard body at all, so `CURL_RESET_NO_UTIL` would be silently ignored
+# and the case would pass for the wrong reason -- mutation-checked, it did. The
+# first argument must be a real utilization so the stub builds its full dashboard
+# arm; the CURL_RESET_NO_UTIL branch inside then returns the no-utilization body
+# before that value is ever used.
+r="$(run_case 0.50 QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 \
+     CURL_RESET_NO_UTIL=4102444800 STUDIO_UTIL=0.97 STUDIO_RESETS_AT=1786499999)"
+check "1b-x    exactly ONE window line per evaluation" "1" \
+  "$(grep -c 'quota window:' "$(logof "$r")" | tr -d ' ')"
+check "1b-xi   the WINNING sample's window IS logged" "0" \
+  "$(grep -q 'quota window: resets 2026-08-12' "$(logof "$r")" && echo 0 || echo 1)"
+# Asserted as an ABSENCE deliberately. "the winner is present" stays true when a
+# duplicate appears alongside it, so on its own it does not discriminate -- under
+# the mutation above it passed while 1b-x failed. The losing sample's window being
+# absent is the half that actually fails when the gate is removed.
+check "1b-xii  the LOSING sample's window is NOT logged" "0" \
+  "$(grep -q 'quota window: resets 2100' "$(logof "$r")" && echo 1 || echo 0)"
 
 # --- 2. under the threshold: fires, but bounded by MAX_FIRES ------------------
 r="$(run_case 0.10 QUOTA_STOP_PCT=80 MAX_FIRES=3)"
