@@ -898,9 +898,12 @@ export function createCanvasStore(): StoreApi<CanvasState> {
        * dangling ref — the same unsavable doc, with nothing on screen able to
        * repair it, that #746 was filed about.
        *
-       * The container's own `exitWhen`/`items`/`maxRounds`/`timeout` IS lost, and
-       * there is no undo. That is why the canvas confirms before calling this, and
-       * why the confirmation names what goes and what stays.
+       * The container's own `exitWhen`/`items`/`maxRounds`/`timeout` IS lost from
+       * the doc — recoverably, since U17: this action records history like every
+       * other, so one undo brings the box, its config and its cascaded edges
+       * back. The canvas still confirms, because a cascade the operator did not
+       * intend is worth stopping before it happens rather than after, and the
+       * confirmation still names what goes and what stays.
        */
       deleteContainer(id) {
         if (!get().containers.some((c) => c.id === id)) return;

@@ -3,8 +3,11 @@
  *
  * Every canvas Save mints a NEW immutable version, and until this ticket the
  * canvas only ever opened the newest one (`latestVersion`). With no undo (U17
- * is unbuilt) a bad save had no route back, even though the good version was
- * sitting in the DB intact. This module owns the decisions that ride on that:
+ * was unbuilt when this landed) a bad save had no route back, even though the
+ * good version was sitting in the DB intact. U17 has since landed, and the two
+ * do NOT overlap: undo reaches back through this session's edits, a restore
+ * reaches back through SAVED versions — including from a later session, a
+ * reload, or past the 50-step history cap. This module owns the decisions that ride on that:
  * how the list is ordered and marked, what a RESTORE actually sends, when a
  * restore must be refused, and — since #904 — how a write refused against a
  * stale basis is recognised and worded.

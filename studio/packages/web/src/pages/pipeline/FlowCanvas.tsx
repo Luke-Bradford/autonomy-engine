@@ -251,13 +251,13 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * which jsdom can produce, and neither of which survives a settled drag. Both
  * halves of the carry-forward were mutation-checked against that spec.
  *
- * KNOWN LIMIT, for U17/U9/U22: `position` here is carried forward
- * UNCONDITIONALLY, so once a node is in the view array a DOMAIN position write
- * never reaches the screen. That is exactly right mid-drag and wrong for
- * undo-of-a-move (U17), auto-layout (U9) and restore-version (U22), which are
- * all domain position writes. Whoever builds those needs a "domain wins"
- * escape hatch (a move generation/epoch, or clearing the view entry on a
- * programmatic move) — not a relaxation of this line, which the spec above
+ * The limit this used to state — that the carry-forward was UNCONDITIONAL, so a
+ * DOMAIN position write never reached the screen once a node was in the view
+ * array — was CLOSED by U17, which owed the fix. The "domain wins" escape hatch
+ * is `lastDomainPositions` below: the carry-forward now yields for a node whose
+ * DOMAIN position changed since the last reconcile, which is what an undo, an
+ * auto-layout (U9) and a restore-version (U22) all are. It is not a relaxation
+ * of this line, which the spec above
  * pins.
  */
 export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
@@ -478,8 +478,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * — `PipelinesPage`, `ConnectionsPage`, `TriggersPage`), and unlike "Delete
    * node"/"Delete edge" it is confirmed AT ALL, because the two are not the same
    * risk: a container owns `exitWhen`/`items`/`maxRounds`/`timeout` that no
-   * surface can re-author yet (U23, #839) and there is no undo, so a mis-click is
-   * unrecoverable rather than merely annoying.
+   * surface can re-author yet (U23, #839), so a mis-click costs more than a
+   * mis-deleted node. U17 made it recoverable rather than unrecoverable — the
+   * dialog now names the undo instead of claiming permanence — which is why it
+   * is still a confirm and no longer a warning about something final.
    *
    * The message states BOTH halves — what goes and what stays. "Are you sure?"
    * would leave the operator guessing whether their activities are about to go
