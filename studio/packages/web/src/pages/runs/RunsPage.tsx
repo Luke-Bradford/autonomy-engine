@@ -47,16 +47,28 @@ import {
  * the tab counts describe the server-filtered set.
  */
 export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   /**
-   * The clock the Duration column measures an UNFINISHED run against, captured
-   * once when a load resolves rather than read per render. The page is a
-   * snapshot refreshed on demand (there is no ticking here by design), so every
-   * row's "so far" is as-of the same instant — and rendering stays pure, which
-   * a bare `Date.now()` in the row map would not be.
+   * The last answer, STAMPED with the filter it answers. `loadedAt` rides along
+   * for the same reason it always did: the clock the Duration column measures an
+   * UNFINISHED run against, captured once when the load resolves rather than
+   * read per render, so every row's "so far" is as-of the same instant and
+   * rendering stays pure.
+   *
+   * Stamped rather than cleared, and that is U26's doing. The rows on screen
+   * were fetched under the PREVIOUS filter, so a filter change must not leave
+   * them sitting under the new controls — briefly, but long enough to be read as
+   * the answer. Clearing them in the load effect would be a synchronous
+   * `setState` inside an effect (a cascading render, and the lint rule that
+   * names it is right); DERIVING staleness costs no render at all. A `Refresh`
+   * of the SAME filter deliberately does not go through this — the key is
+   * unchanged, so the current rows stay up until their replacements land.
    */
-  const [loadedAt, setLoadedAt] = useState(0);
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    rows: RunSummary[];
+    at: number;
+  } | null>(null);
+  const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
   // Bumped by "Refresh" to re-run the load effect (re-fetch on demand). The
   // effect owns the fetch so its AbortController cleanly cancels an in-flight
   // request on unmount or a re-refresh.
@@ -111,29 +123,34 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   }
 
   /**
-   * Deps are the four PRIMITIVES, never the `filters` object: a fresh object
-   * literal every render would make this effect re-run forever.
+   * The identity of the QUESTION currently being asked. An answer stamped with a
+   * different key belongs to a filter that is no longer on screen, so it reads
+   * as "still loading" rather than as this filter's result.
    *
-   * `setRuns(null)` on the way in is deliberate. The rows on screen were fetched
-   * under the PREVIOUS filter, so leaving them up while the new request is in
-   * flight shows a list that contradicts the controls above it — briefly, but
-   * long enough to be read as the answer.
+   * `reloadKey` is deliberately NOT part of it — a Refresh asks the same
+   * question again, and blanking the list to re-answer it identically would be a
+   * flash for nothing.
    */
+  const filterKey = `${statusFilter ?? ''}|${pipelineId ?? ''}|${triggerId ?? ''}|${since ?? ''}`;
+  const runs = loaded?.key === filterKey ? loaded.rows : null;
+  const loadedAt = loaded?.key === filterKey ? loaded.at : 0;
+  const error = failed?.key === filterKey ? failed.message : null;
+
+  // Deps are PRIMITIVES, never the `filters` object: a fresh object literal every
+  // render would make this effect re-run forever.
   useEffect(() => {
     const controller = new AbortController();
-    setRuns(null);
     listRuns({ status: statusFilter, pipelineId, triggerId, since }, controller.signal)
       .then((rows) => {
-        setRuns(rows);
-        setLoadedAt(Date.now());
-        setError(null);
+        setLoaded({ key: filterKey, rows, at: Date.now() });
+        setFailed(null);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setFailed({ key: filterKey, message: err instanceof Error ? err.message : String(err) });
       });
     return () => controller.abort();
-  }, [reloadKey, statusFilter, pipelineId, triggerId, since]);
+  }, [reloadKey, filterKey, statusFilter, pipelineId, triggerId, since]);
 
   /**
    * The pipeline picker's options come from the shared `pipelinesStore`, not a
