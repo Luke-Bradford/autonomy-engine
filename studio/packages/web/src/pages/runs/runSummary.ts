@@ -141,9 +141,45 @@ export interface NodeActivity {
   /** The optional machine detail beside `failureKind` (`FAILURE_CODES`, open). */
   failureCode: string | undefined;
   /**
-   * The DECLARED outputs of the most recent `node.succeeded` — the node's typed
-   * result contract, distinct from `outputs`/`lastOutputName` above, which count
-   * the streamed `node.output` observability frames.
+   * The DECLARED outputs recorded by the node's most recent TERMINAL-SUCCESS
+   * event — the node's typed result contract, distinct from
+   * `outputs`/`lastOutputName` above, which count the streamed `node.output`
+   * observability frames.
+   *
+   * `node.succeeded` is only the commonest of those events, not the only one
+   * (#911): a parked node resolves on `externalWait.completed` / `timer.due`, an
+   * engine-evaluated control node on `condition`/`switch.evaluated`, and a call
+   * node on `call.returned` — none of which is followed by a `node.succeeded`.
+   * Each of those FIVE sets this field, because the alternative is a successful
+   * node whose result reads as unrecorded.
+   *
+   * NOT an exhaustive list of terminal-success events: `run.reseeded` folds a
+   * rerun's COPIED frontier straight to `success` carrying `copiedOutputs`, and
+   * this reader makes no row for it at all (`reconcileNodeActivity` seeds one
+   * with `outputValues: undefined`), so a copied node still shows no Outputs
+   * section — the same defect as #911 in the one case where the engine really
+   * does hold the result. Left out deliberately: folding it means producing rows
+   * from a run-level event, which is a bigger change than an assignment. See
+   * **#918**.
+   *
+   * `undefined` vs `{}` are DIFFERENT claims and this reader keeps them apart:
+   * `undefined` means no terminal result is on record (never reported, still
+   * running, parked, failed, or reset by a re-attempt), `{}` means one IS on
+   * record and it is empty. The panel renders them differently for that reason —
+   * absent section vs "No output values were recorded." — so collapsing them
+   * would report an absent fact as a benign default. Note the empty case says
+   * nothing about the node's CONTRACT: a pre-A16 `externalWait.completed` folds
+   * to `{}` on a webhook that declares outputs.
+   *
+   * It holds what the EVENT recorded, which is not always the same set the
+   * engine made refable: `onExternalWaitCompleted` re-filters an inbound
+   * callback body against the immutable version's declared contract and stores
+   * `{}` when that contract is absent or invalid, so a hand-crafted event could
+   * show a key here that `${nodes.x.output.k}` will not resolve. `deriveNodeActivity`
+   * takes an event log and nothing else — it has no doc and no version to filter
+   * against — and the projected overlay is not a substitute (it is withheld until
+   * replay completes and is absent for foreach body nodes by design, so sourcing
+   * from it would blank exactly the rows this field lights up).
    */
   outputValues: Record<string, unknown> | undefined;
   /**
@@ -326,7 +362,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   // log at all. That is an EXTERNAL guarantee this file depends on: if an append
   // guard were ever relaxed, a late `externalWait.expired` would flip a green row
   // red here while the reducer treats it as a no-op, and the two views would
-  // disagree with nothing failing.
+  // disagree with nothing failing. #911 adds a second consequence and a quieter
+  // one: since `externalWait.completed` now RECORDS its payload, a redelivered
+  // completion for a superseded attempt would present that attempt's body as the
+  // current result — a wrong answer where the same log previously produced no
+  // answer. Verified unreachable today at all three layers (the service
+  // re-projects inside the tx and refuses unless the node is parked at exactly
+  // that attempt, `markExternalWaitCompleted` is a `WHERE status='pending'` CAS,
+  // and `useRunStream` dedupes by `seq`).
   const ensure = (rawNodeId: string): FoldingNode => {
     const nodeId = docNodeIdOf(rawNodeId);
     let n = byNode.get(nodeId);
@@ -557,14 +600,41 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         openSpan(n, e.nodeId, row.ts);
         break;
       }
-      case 'timer.due':
-      case 'externalWait.completed': {
-        // The park resolved successfully. These ARE the node's success event —
+      // SPLIT rather than sharing one two-label case, following the same
+      // precedent as `timer.waitScheduled`/`externalWait.created` above: the two
+      // events resolve their parks identically but record DIFFERENT results, and
+      // `e.outputs` does not typecheck on the `timer.due` member of the union
+      // anyway. Sharing the label would put a discriminating ternary inside an
+      // arm whose whole point is that the discriminant already chose.
+      case 'timer.due': {
+        // The park resolved successfully. This IS the node's success event —
         // there is no following `node.succeeded` for a parked node (reduce.ts
-        // `onWaitDue` / `onExternalWaitCompleted` flip it to `success` directly).
+        // `onWaitDue` flips it to `success` directly).
         const n = ensure(e.nodeId);
         clearResult(n);
         n.status = 'success';
+        // #911 — `{}`, not left blank: a `wait` declares no outputs (`registry.ts`
+        // gives it `outputs: []`), and that is a result rather than the absence of
+        // one. Must follow `clearResult`, which blanks the field.
+        n.outputValues = {};
+        n.instanceId = instanceOf(e.nodeId);
+        closeSpan(n, e.nodeId, row.ts);
+        break;
+      }
+      case 'externalWait.completed': {
+        // The callback arrived, and THIS is the node's success event (reduce.ts
+        // `onExternalWaitCompleted` flips it to `success` directly).
+        const n = ensure(e.nodeId);
+        clearResult(n);
+        n.status = 'success';
+        // #911 — and so this is the ONLY place a webhook's declared outputs can be
+        // recorded from; before, the arm cleared the field and never re-set it, so
+        // the operator's typed callback body appeared on no surface at all. `??
+        // {}` because the field is `.optional()` for back-compat and
+        // `onExternalWaitCompleted` folds a pre-A16 event without it to `{}` —
+        // agreeing with the reducer beats inventing a third answer for one event.
+        // Must follow `clearResult`, which blanks the field.
+        n.outputValues = e.outputs ?? {};
         n.instanceId = instanceOf(e.nodeId);
         closeSpan(n, e.nodeId, row.ts);
         break;
@@ -592,6 +662,13 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         clearResult(n);
         n.status = 'success';
         n.attempts += 1;
+        // #911 — same defect as the parked arms above, same reason: a control
+        // node is a SUCCESS whose result was never recorded here, so its panel
+        // omitted the Outputs section entirely rather than saying it declared
+        // none. `{}` is exact — `registry.ts` declares `outputs: []` for both
+        // `if` and `switch`, so there is never anything else to show, and the
+        // branch taken is already reported by the graph and the event log.
+        n.outputValues = {};
         n.instanceId = instanceOf(e.nodeId);
         break;
       }

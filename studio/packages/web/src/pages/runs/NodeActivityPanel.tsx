@@ -201,7 +201,17 @@ export function NodeActivityPanel({
         <section className="contract-section">
           <h4>Outputs</h4>
           {outputNames.length === 0 ? (
-            <p className="page-hint">This node declared no outputs.</p>
+            /* #911 — a statement about the RECORDING, not about the contract.
+               It used to read "This node declared no outputs.", which was safe
+               only while `node.succeeded`/`call.returned` were the sole
+               producers of an empty set: for a DECLARED contract `storeOutputs`
+               always emits the declared keys, so empty really did imply no
+               declaration. A pre-A16 `externalWait.completed` breaks that — its
+               `outputs` field is `.optional()`, folds to `{}`, and would print
+               "declared no outputs" for a webhook that declares `decision`.
+               The empty set is evidence about what was recorded and nothing
+               more, so it may only say that much. */
+            <p className="page-hint">No output values were recorded.</p>
           ) : (
             /* `JSON.stringify` emits no spaces, so a long value is one
                unbreakable token; an agent node's `text` output is realistically

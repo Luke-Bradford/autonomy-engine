@@ -201,8 +201,8 @@ describe('deriveNodeActivity', () => {
         lastOutputName: undefined,
         error: undefined,
         // `{}`, not `undefined`: this event's `outputs` is a REQUIRED record, so
-        // the child genuinely declared none — which the panel renders as "this
-        // node declared no outputs" rather than hiding the section as it does
+        // the child genuinely reported none — which the panel renders as "no
+        // output values were recorded" rather than hiding the section as it does
         // for a node that has not reported yet.
         outputValues: {},
       },
@@ -565,6 +565,123 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
       }),
     ]);
     expect(done!.status).toBe('success');
+  });
+
+  /**
+   * #911 — the DECLARED outputs of a node whose success event is NOT
+   * `node.succeeded`.
+   *
+   * FOUR event types terminate a node successfully without one:
+   * `externalWait.completed` (a webhook's callback arrived), `timer.due` (a
+   * wait's alarm) and `condition.evaluated` / `switch.evaluated` (an
+   * engine-evaluated control node). All four used to leave `outputValues` at the
+   * `undefined` `clearResult` writes, and the drill-in gates its whole Outputs
+   * section on `outputValues !== undefined` — so a webhook's typed callback
+   * payload, the one value an operator most wants after completing a wait,
+   * rendered NOWHERE, and the other three read as "no result recorded" when the
+   * result was recorded and was empty.
+   *
+   * `undefined` and `{}` are different claims on this field: `undefined` means
+   * no terminal result is on record (what a never-reported row carries), `{}`
+   * means one is and it is empty. Conflating them is the same fail-open shape
+   * as manufacturing a default for an absent fact.
+   */
+  const parkedWebhook = (attemptId: string) =>
+    envelope({
+      type: 'externalWait.created',
+      runId: 'r',
+      nodeId: 'h',
+      attemptId,
+      dueAt: 1,
+    });
+
+  it('a completed webhook carries its callback payload as the node’s outputs', () => {
+    const [done] = deriveNodeActivity([
+      parkedWebhook('h#0'),
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+        outputs: { decision: 'ship it' },
+      }),
+    ]);
+    expect(done!.outputValues).toEqual({ decision: 'ship it' });
+  });
+
+  it('a PRE-A16 completion with no `outputs` field folds to `{}`, not `undefined`', () => {
+    // The field is `.optional()` for back-compat and the reducer defaults it to
+    // `{}` (`onExternalWaitCompleted`) rather than to "no outputs recorded".
+    // This reader agrees with the reducer instead of inventing a third answer.
+    const [done] = deriveNodeActivity([
+      parkedWebhook('h#0'),
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+      }),
+    ]);
+    expect(done!.outputValues).toEqual({});
+  });
+
+  it('a due timer records an EMPTY result, not no result', () => {
+    const [wait] = deriveNodeActivity([
+      envelope({
+        type: 'timer.waitScheduled',
+        runId: 'r',
+        nodeId: 'w',
+        attemptId: 'w#0',
+        dueAt: 1,
+      }),
+      envelope({ type: 'timer.due', runId: 'r', nodeId: 'w', previousAttemptId: 'w#0' }),
+    ]);
+    expect(wait!.outputValues).toEqual({});
+  });
+
+  it('an evaluated `if` records an EMPTY result, not no result', () => {
+    const [cond] = deriveNodeActivity([
+      envelope({
+        type: 'condition.evaluated',
+        runId: 'r',
+        nodeId: 'c',
+        attemptId: 'c#0',
+        branch: 'true',
+      }),
+    ]);
+    expect(cond!.outputValues).toEqual({});
+  });
+
+  it('an evaluated `switch` records an EMPTY result, not no result', () => {
+    const [sw] = deriveNodeActivity([
+      envelope({
+        type: 'switch.evaluated',
+        runId: 'r',
+        nodeId: 's',
+        attemptId: 's#0',
+        branch: 'case_b',
+      }),
+    ]);
+    expect(sw!.outputValues).toEqual({});
+  });
+
+  it('a webhook RE-PARKED after completing shows no stale payload from the last attempt', () => {
+    // A back-edge reset re-arms the wait; `externalWait.created` clears the row.
+    // Leaving the previous callback's body on a node that is parked AGAIN would
+    // present a superseded value as the current one.
+    const [reparked] = deriveNodeActivity([
+      parkedWebhook('h#0'),
+      envelope({
+        type: 'externalWait.completed',
+        runId: 'r',
+        nodeId: 'h',
+        previousAttemptId: 'h#0',
+        outputs: { decision: 'ship it' },
+      }),
+      parkedWebhook('h#1'),
+    ]);
+    expect(reparked!.status).toBe('external_wait_pending');
+    expect(reparked!.outputValues).toBeUndefined();
   });
 
   it('an EXPIRED webhook fails, with a reason (the event carries no error text)', () => {

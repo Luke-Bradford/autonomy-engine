@@ -98,6 +98,28 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   });
 }
 
+/**
+ * A doc whose only node is a `webhook`, optionally with a declared output
+ * contract. Module-scope because two describes park a run on a callback — #900's
+ * pending-callbacks list and #911's drill-in outputs — and a second copy of this
+ * would be a fixture that can drift from the first.
+ */
+const approvalDoc = (outputs?: unknown) =>
+  version({
+    nodes: [
+      {
+        id: 'approve',
+        type: 'webhook',
+        position: { x: 0, y: 0 },
+        config:
+          outputs === undefined
+            ? { timeoutSeconds: '${600}' }
+            : { timeoutSeconds: '${600}', outputs },
+      },
+    ],
+    edges: [],
+  });
+
 function stream(overrides: Partial<RunStreamState> = {}): RunStreamState {
   // `replayComplete` defaults TRUE so a spec that does not care reads as a
   // normally-replayed stream; the specs that DO care set it explicitly.
@@ -821,6 +843,89 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
   });
 });
 
+/**
+ * #911 — the drill-in's Outputs section, on a node whose success event is NOT
+ * `node.succeeded`.
+ *
+ * Pinned HERE as well as in `runSummary.test.ts` because the fold and the gate
+ * are two halves of one behaviour and each is green without the other — the fold
+ * tests would all still pass if `NodeActivityPanel` re-gated the section. The
+ * existing panel test above covers the SUCCEEDED case; these cover the three
+ * arms the section's gate can take (a value, an empty result, no result), on the
+ * lifecycle that has none of them.
+ */
+describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)', () => {
+  const park = () => [
+    envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+    envelope({
+      type: 'externalWait.created',
+      runId: 'run_1',
+      nodeId: 'approve',
+      attemptId: 'approve#0',
+      dueAt: 9_999_999_999_999,
+    }),
+  ];
+
+  /** The park, then its callback. `outputs` omitted entirely = the pre-A16 shape. */
+  const completed = (outputs?: Record<string, unknown>) =>
+    stream({
+      events: [
+        ...park(),
+        envelope({
+          type: 'externalWait.completed',
+          runId: 'run_1',
+          nodeId: 'approve',
+          previousAttemptId: 'approve#0',
+          outputs,
+        }),
+      ],
+    });
+
+  async function openPanel() {
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Webhook (external wait) 1' }));
+    return screen.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
+  }
+
+  beforeEach(() => {
+    getRunDetailMock.mockResolvedValue({
+      run: run(),
+      pipelineVersion: approvalDoc([{ name: 'decision', type: 'string' }]),
+    });
+  });
+
+  it('shows the callback payload the completion carried', async () => {
+    useRunStreamMock.mockReturnValue(completed({ decision: 'approved in-app' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
+    expect(within(panel).getByText('{"decision":"approved in-app"}')).toBeInTheDocument();
+  });
+
+  it('says a completion carrying nothing RECORDED nothing — without claiming the node declared nothing', async () => {
+    // The pre-A16 shape, and the reason the empty-set copy may not talk about
+    // the contract: this doc DOES declare `decision`. "Nothing was recorded" is
+    // an answer; a missing section is the absence of one, indistinguishable from
+    // a node that never finished.
+    useRunStreamMock.mockReturnValue(completed());
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
+    expect(within(panel).getByText('No output values were recorded.')).toBeInTheDocument();
+    expect(within(panel).queryByText(/declared no outputs/)).not.toBeInTheDocument();
+  });
+
+  it('omits the section entirely while the node is still PARKED — no result is on record yet', async () => {
+    useRunStreamMock.mockReturnValue(stream({ events: park() }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).queryByRole('heading', { name: 'Outputs' })).not.toBeInTheDocument();
+  });
+});
+
 describe('RunDetailPage — U24 the states a single well-formed failure does not cover', () => {
   it('a failed CALL node gets a Failure section, though it has no message of its own', async () => {
     // Gating the section on `error` hid it entirely for a call node: the child
@@ -1488,23 +1593,6 @@ describe('RunDetailPage — #900 waiting on a callback', () => {
     expiresAt: 1_700_000_900_000,
     callbackPath: '/api/external-wait/tok_abc',
   };
-
-  /** A doc whose parked node is a `webhook` with a declared output contract. */
-  const approvalDoc = (outputs?: unknown) =>
-    version({
-      nodes: [
-        {
-          id: 'approve',
-          type: 'webhook',
-          position: { x: 0, y: 0 },
-          config:
-            outputs === undefined
-              ? { timeoutSeconds: '${600}' }
-              : { timeoutSeconds: '${600}', outputs },
-        },
-      ],
-      edges: [],
-    });
 
   /* Scoped to the new list. The node table and the drill-in name the same node
      with the same string (which is #882 working), so an unscoped query for it
