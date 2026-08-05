@@ -150,15 +150,26 @@ export interface NodeActivity {
    * (#911): a parked node resolves on `externalWait.completed` / `timer.due`, an
    * engine-evaluated control node on `condition`/`switch.evaluated`, and a call
    * node on `call.returned` — none of which is followed by a `node.succeeded`.
-   * Every one of them sets this field, because the alternative is a successful
+   * Each of those FIVE sets this field, because the alternative is a successful
    * node whose result reads as unrecorded.
+   *
+   * NOT an exhaustive list of terminal-success events: `run.reseeded` folds a
+   * rerun's COPIED frontier straight to `success` carrying `copiedOutputs`, and
+   * this reader makes no row for it at all (`reconcileNodeActivity` seeds one
+   * with `outputValues: undefined`), so a copied node still shows no Outputs
+   * section — the same defect as #911 in the one case where the engine really
+   * does hold the result. Left out deliberately: folding it means producing rows
+   * from a run-level event, which is a bigger change than an assignment. See
+   * **#918**.
    *
    * `undefined` vs `{}` are DIFFERENT claims and this reader keeps them apart:
    * `undefined` means no terminal result is on record (never reported, still
    * running, parked, failed, or reset by a re-attempt), `{}` means one IS on
    * record and it is empty. The panel renders them differently for that reason —
-   * absent section vs "This node declared no outputs." — so collapsing them
-   * would report an absent fact as a benign default.
+   * absent section vs "No output values were recorded." — so collapsing them
+   * would report an absent fact as a benign default. Note the empty case says
+   * nothing about the node's CONTRACT: a pre-A16 `externalWait.completed` folds
+   * to `{}` on a webhook that declares outputs.
    *
    * It holds what the EVENT recorded, which is not always the same set the
    * engine made refable: `onExternalWaitCompleted` re-filters an inbound
@@ -351,7 +362,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   // log at all. That is an EXTERNAL guarantee this file depends on: if an append
   // guard were ever relaxed, a late `externalWait.expired` would flip a green row
   // red here while the reducer treats it as a no-op, and the two views would
-  // disagree with nothing failing.
+  // disagree with nothing failing. #911 adds a second consequence and a quieter
+  // one: since `externalWait.completed` now RECORDS its payload, a redelivered
+  // completion for a superseded attempt would present that attempt's body as the
+  // current result — a wrong answer where the same log previously produced no
+  // answer. Verified unreachable today at all three layers (the service
+  // re-projects inside the tx and refuses unless the node is parked at exactly
+  // that attempt, `markExternalWaitCompleted` is a `WHERE status='pending'` CAS,
+  // and `useRunStream` dedupes by `seq`).
   const ensure = (rawNodeId: string): FoldingNode => {
     const nodeId = docNodeIdOf(rawNodeId);
     let n = byNode.get(nodeId);

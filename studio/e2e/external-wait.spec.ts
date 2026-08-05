@@ -185,8 +185,12 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      outputs rendered on no surface — true of a `curl` completion too, and older
      than #901. Reading the log proved the value was STORED; only this proves it
      is legible. */
+  /* Scoped to the ROW, then selected by accessible name rather than by
+     `.node-drill-in`: a class is styling, and a rename would break this spec
+     without changing a thing an operator can do. The scope is what makes the
+     name usable — unscoped it also matches the graph and, once open, the panel. */
   const approveRow = page.locator('tr', { has: page.locator('td code', { hasText: /^approve$/ }) });
-  await approveRow.locator('button.node-drill-in').click();
+  await approveRow.getByRole('button', { name: 'Webhook (external wait) 1' }).click();
   const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
   await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();
   await expect(panel).toContainText('{"decision":"approved in-app"}');

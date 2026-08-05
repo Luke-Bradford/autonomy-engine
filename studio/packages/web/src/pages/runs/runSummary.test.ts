@@ -201,8 +201,8 @@ describe('deriveNodeActivity', () => {
         lastOutputName: undefined,
         error: undefined,
         // `{}`, not `undefined`: this event's `outputs` is a REQUIRED record, so
-        // the child genuinely declared none — which the panel renders as "this
-        // node declared no outputs" rather than hiding the section as it does
+        // the child genuinely reported none — which the panel renders as "no
+        // output values were recorded" rather than hiding the section as it does
         // for a node that has not reported yet.
         outputValues: {},
       },

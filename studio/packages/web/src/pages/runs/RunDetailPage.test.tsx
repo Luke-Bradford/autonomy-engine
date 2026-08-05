@@ -903,15 +903,18 @@ describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)'
     expect(within(panel).getByText('{"decision":"approved in-app"}')).toBeInTheDocument();
   });
 
-  it('says a completion carrying nothing declared NOTHING, rather than omitting the section', async () => {
-    // The pre-A16 shape. "No outputs" is an answer; a missing section is the
-    // absence of one, and is indistinguishable from a node that never finished.
+  it('says a completion carrying nothing RECORDED nothing — without claiming the node declared nothing', async () => {
+    // The pre-A16 shape, and the reason the empty-set copy may not talk about
+    // the contract: this doc DOES declare `decision`. "Nothing was recorded" is
+    // an answer; a missing section is the absence of one, indistinguishable from
+    // a node that never finished.
     useRunStreamMock.mockReturnValue(completed());
     renderWithRouter(<RunDetailPage runId="run_1" />);
 
     const panel = await openPanel();
     expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
-    expect(within(panel).getByText('This node declared no outputs.')).toBeInTheDocument();
+    expect(within(panel).getByText('No output values were recorded.')).toBeInTheDocument();
+    expect(within(panel).queryByText(/declared no outputs/)).not.toBeInTheDocument();
   });
 
   it('omits the section entirely while the node is still PARKED — no result is on record yet', async () => {
