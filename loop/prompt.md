@@ -58,57 +58,54 @@ and the loop exists to build it — not to build the loop.
   promoting it would have disarmed the spend guard outright. See `#765`.
 - **C3 `#410` (park the old engine) — NO LONGER AN OPERATOR GATE (measured 2026-08-05).** Operator:
   *"I'm not using the old system, so do what you want with it. I'm waiting to see how it all fits in
-  with the new."* So the cutover is wanted, and the remaining work is yours to build.
+  with the new."* The cutover is wanted and the remaining work is yours to build.
 
-  **The previous entry here was WRONG and is corrected by measurement, not opinion.** It said studio
-  was merely losing the shared rate-limit budget to the prototype dashboard's 60s sampler, making the
-  sampler's cadence an operator decision. The experiment: the dashboard was **unloaded entirely** for
-  ~12 minutes, freeing the whole bucket. Result — the loop reader and studio **both stayed
-  UNREADABLE** the whole time, and direct probes with the same credential returned `429` throughout.
-  Freeing the bucket changed nothing.
+  **The old entry here was wrong, and measurement not opinion corrects it.** It claimed studio was
+  merely losing the shared rate-limit budget to the dashboard's 60s sampler, making that cadence an
+  operator decision. Experiment: the dashboard was **unloaded entirely** for ~12 minutes, freeing the
+  whole bucket. The loop reader and studio **both stayed UNREADABLE** throughout and direct probes on
+  the same credential returned `429`. Freeing the bucket changed nothing.
 
-  What the dashboard actually has is not priority, it is a **warm cache**: a background sampler plus
-  a grace window, holding a value obtained during a rare moment the endpoint answered. Studio has no
-  sampler and was deliberately denied a grace window, so every studio read is a request-path poll —
-  which is exactly the call that 429s. Proof
-  it is the cache and not contention: reloading the dashboard did **not** restore the guard, because
-  its cache died with the process; the guard stayed UNREADABLE until the sampler happened to get one
-  reading through, ~12 minutes later.
+  What the dashboard has is not priority but a **warm cache** — a sampler plus a grace window holding
+  a value from a rare moment the endpoint answered. The clincher: reloading it did NOT restore the
+  guard, because the cache died with the process; the guard stayed UNREADABLE until its sampler got
+  one reading through ~12 minutes later. **So never stop the dashboard casually — you destroy the
+  only live quota reading and fires go blind** (bounded by `QUOTA_UNKNOWN_FIRES`, then the run stops).
 
-  **`#770` DID reject a sampler, and that rejection is RECONCILED, not ignored — read this before
-  you think you have found a contradiction.** `#770`'s reason was specific: *"exactly one process may
-  poll `/api/oauth/usage` directly … adding a second sampler would reproduce"* the contention, and at
-  the time the prototype dashboard's 60s sampler WAS that one process. So `#770` rejected a **second,
-  concurrent** sampler — correctly. C3 removes the first one. Studio's sampler is therefore the
-  SUCCESSOR to the dashboard's, not an addition to it, and the one-poller invariant `#770` was
-  protecting is preserved with studio as that poller. Build it as part of the cutover, not before:
-  while the dashboard still samples, `#770` still applies.
+  **Studio's reader is HONEST — do not go bug-hunting in it.** Over those 21 minutes it reported
+  `rate_limited` correctly and stably. Two `provider_error` readings were artefacts and are void: one
+  from a stale build (`#832` — always read the `studio server:` line first), one taken a minute after
+  a service restart. `#919` was filed on those two and has been corrected down to a narrow start-up
+  transient. It is NOT a blocker and NOT a mislabel.
 
-  **So build `#765`'s original step 1: an `unref`'d background sampler in studio's reader** — keeping
-  the 60s TTL and the **no-grace / no-last-good** property, because a stale-but-low reading permits a
-  fire and fail-open is the one polarity forbidden here (`drive.sh`'s own cache holds the fail-SAFE
+  **What studio lacks is a SAMPLER**, so every read is a request-path poll — exactly the call that
+  429s. `#770` rejected a sampler and was RIGHT to: its reason was *"exactly one process may poll
+  `/api/oauth/usage` directly … adding a second sampler would reproduce"* the contention, and the
+  dashboard's sampler was that one process. It rejected a **second, concurrent** sampler. C3 removes
+  the first. Studio's is the SUCCESSOR, not an addition, and `#770`'s one-poller invariant survives
+  with studio as that poller.
+
+  **That invariant sets the build shape, and it is why this is not a plain ordering.** Per `#765`'s
+  escape hatch the sampler is **gated on an env flag**, so:
+  - the sampler CODE may land any time, **flag OFF** — dormant, no second poller, `#770` satisfied;
+  - **C3 retires the dashboard and flips the flag in the SAME step**, so there is never a moment with
+    two samplers and never a moment with zero readers.
+
+  Keep the 60s TTL and the **no-grace / no-last-good** property: a stale-but-low reading PERMITS a
+  fire, and fail-open is the one polarity forbidden here (`drive.sh`'s cache holds the fail-SAFE
   staleness logic and may only ever REFUSE). A sampler-backed studio can then be polled freely,
-  because the request path no longer touches the provider — which is the state in which studio
-  actually deserves to be primary.
+  because the request path no longer touches the provider — the state in which it deserves to be
+  primary.
 
-  **Studio's reader is HONEST — do not go bug-hunting in it.** Measured over 21 minutes with the
-  bucket free, it reported `rate_limited` correctly and stably. Two `provider_error` readings were
-  artefacts and are void: one from a stale build (`#832` — always check `studio server:` first), one
-  taken a minute after a service restart. `#919` was filed on those two and has been corrected down
-  to a narrow start-up transient (a cause can be served stale for a few minutes after a restart while
-  the backoff suppresses re-polling). It is NOT a blocker and NOT a mislabel.
+  **Sequence: `#917` → sampler (flag off) → C3 (retire dashboard + enable flag together).** `#917`
+  and the sampler are INDEPENDENT of each other; `#917` goes first on OPERATOR PRIORITY, being the
+  visible product work this epic exists for, against a standing steer that infrastructure-over-
+  visible-product is the mistake to avoid (*"The app doesn't appear to have anything new to show"*).
 
-  **Sequence: `#917` → the sampler → C3.** These two are INDEPENDENT prerequisites of C3, not a
-  dependency chain — neither needs the other, and both must land before the cutover. `#917` goes
-  first on OPERATOR PRIORITY, not on technical grounds: it is the visible product work this epic
-  exists for, and the standing steer is explicit that infrastructure over visible product is the
-  mistake to avoid (*"The app doesn't appear to have anything new to show"*). The sampler is the
-  only thing between studio and a servable reading, so it is the second and last thing C3 waits on.
-  `#919` is a nice-to-have that can ride along whenever the reader is open.
-- If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
-  preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
-  plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
-  SEPARATE `loop` job: retiring the engine retires the former and keeps the latter.
+  **When you do C3:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
+  it and the ticket says so). `loop/` is NOT part of the old engine — it is the control plane and it
+  **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a SEPARATE
+  `loop` job: retiring the engine retires the former and keeps the latter.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
@@ -185,7 +182,7 @@ You file good tickets for defects you find mid-ticket, and then they were never 
 - **Judge severity by the FAILURE, not the fix size.** "A one-line default masks destroyed user data" is SEVERE. "A missing tie-breaker makes ordering non-deterministic" is not.
 - If severity is genuinely ambiguous, DON'T open an `[operator-decision]` for it — file it as normal, and say in the ticket why you nearly escalated. Escalation is for irreducible DESIGN forks, not for prioritisation you can reason about.
 
-Board mirror (close each on phase completion via `gh issue close`, never a PR-body keyword): epic #431 · #432 F#1 · #433 E#6 · #434 S#5 · #435 L#2 · #436 A#4 · #437 G#3 · #438 RS · #439 UI. #410 cutover is OPERATOR-GATED — never touch.
+Board mirror (close each on phase completion via `gh issue close`, never a PR-body keyword): epic #431 · #432 F#1 · #433 E#6 · #434 S#5 · #435 L#2 · #436 A#4 · #437 G#3 · #438 RS · #439 UI. #410 cutover is NO LONGER operator-gated (2026-08-05) — see the CUTOVER block above for the sequence and the one-poller constraint; do not start it from this line alone.
 
 ## Per-phase discipline (every phase, no exceptions)
 1. Branch `feat/studio-<phase>-<slug>` (or continue). Never commit to `main`.
