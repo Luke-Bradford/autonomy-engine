@@ -74,7 +74,7 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
   const d = data as ActivityData;
   return (
     <div
-      className={`flow-node has-ports${selected ? ' selected' : ''}`}
+      className={`flow-node${selected ? ' selected' : ''}`}
       style={{ minHeight: nodeBoxHeight(d.ports.length) }}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />

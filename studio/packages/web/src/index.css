@@ -1222,13 +1222,16 @@ td button + button {
  * derived container has to STATE the same offsets it can never measure — one
  * formula, two consumers. Only the skin is here.
  *
- * The padding is what the labels sit in. Without it the words would run under
- * the node's own title on a narrow box; reserving the strip means a node with
- * eleven ports (a `switch` with seven cases) still reads as a node.
+ * The labels sit OUTSIDE the box and cost it no width, which is a measured
+ * constraint rather than a preference. Reserving a gutter for them widened every
+ * node by ~30%, and `addNode` staggers a new node only 40px diagonally — so each
+ * freshly-added activity landed on top of the previous one's ports, and thirteen
+ * e2e specs began failing on intercepted pointer events. They are revealed on
+ * hover or keyboard focus rather than drawn permanently, for the same reason:
+ * four to eleven words stacked beside every node, on top of the edges leaving
+ * it, is not legible at canvas zoom. The colour and the accessible name are
+ * always there; the words are what needs asking for.
  */
-.flow-node.has-ports {
-  padding-right: 4.6rem;
-}
 
 /* The dot keeps React Flow's own 6px size and border. Only the FILL says which
    outcome it routes, in the same hue the edge leaving it will be drawn in — so
@@ -1272,8 +1275,10 @@ td button + button {
    it is drawn at. */
 .flow-port-label {
   position: absolute;
-  right: 0.5rem;
+  left: calc(100% + 0.6rem);
   transform: translateY(-50%);
+  opacity: 0;
+  transition: opacity 80ms ease-in;
   color: var(--muted);
   font-size: 0.62rem;
   line-height: 1;
@@ -1283,6 +1288,13 @@ td button + button {
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.flow-node:hover .flow-port-label,
+.flow-node:focus-within .flow-port-label,
+.react-flow__node:focus-visible .flow-port-label,
+.flow-container:hover .flow-port-label {
+  opacity: 1;
 }
 
 /* ── U6c container groups ────────────────────────────────────────────────────

@@ -79,7 +79,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   const ports = useMemo(() => portsFromIds(d.portIds), [d.portIds]);
   return (
     <div
-      className={`flow-node run-node has-ports${toneClass('run-node', d.tone)}`}
+      className={`flow-node run-node${toneClass('run-node', d.tone)}`}
       style={{ minHeight: nodeBoxHeight(ports.length) }}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />

@@ -290,7 +290,7 @@ export function portsFromIds(ids: string): SourcePort[] {
  * author whichever outcome happened to be nearest. Hence the pitch, the reduced
  * radius below, and the test that pins one under half the other.
  */
-export const SOURCE_PORT_PITCH = 16;
+export const SOURCE_PORT_PITCH = 14;
 
 /**
  * React Flow's snap radius, reduced from its default 20 for the reason above.
@@ -298,9 +298,6 @@ export const SOURCE_PORT_PITCH = 16;
  * `<ReactFlow>` element where the constraint would be invisible.
  */
 export const CONNECTION_RADIUS = 6;
-
-/** Room for the node's own text once the ports have taken their column. */
-const NODE_VERTICAL_PADDING = 16;
 
 /** The height of a node with no ports at all — the pre-U19 box. */
 const BASE_NODE_HEIGHT = 52;
@@ -319,9 +316,24 @@ export function sourcePortOffset(index: number, count: number): number {
   return (index - (count - 1) / 2) * SOURCE_PORT_PITCH;
 }
 
-/** The height a node needs for `portCount` ports at the pitch above. */
+/**
+ * The height a node needs for `portCount` ports at the pitch above.
+ *
+ * A floor, not a target: four ports at 14px span 42px and already fit the
+ * pre-U19 52px box, so an ordinary activity is drawn exactly the size it always
+ * was. Only a node that declares MORE than the four operational outcomes — an
+ * `if`, a `switch` with cases — grows, and it grows by what its own
+ * configuration asked for.
+ *
+ * Keeping the ordinary node its old size is not cosmetic. `addNode` staggers a
+ * freshly-added node by 40px diagonally, so growing every box pushed each new
+ * node into the previous one's port column, and thirteen e2e specs that draw a
+ * connection between two toolbox-added activities started failing on
+ * intercepted pointer events. Node placement is U21/U23's to revisit; U19 must
+ * not silently make it worse.
+ */
 export function nodeBoxHeight(portCount: number): number {
-  return Math.max(BASE_NODE_HEIGHT, portCount * SOURCE_PORT_PITCH + NODE_VERTICAL_PADDING);
+  return Math.max(BASE_NODE_HEIGHT, portCount * SOURCE_PORT_PITCH);
 }
 
 /**

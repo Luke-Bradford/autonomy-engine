@@ -109,6 +109,29 @@ test.describe('U19 outcome ports', () => {
   });
 
   /**
+   * The labels are asked for, not drawn permanently — and they cost the node no
+   * width.
+   *
+   * Both halves are load-bearing. A permanent label gutter widened every node by
+   * ~30%, and `addNode` staggers a new node only 40px diagonally, so each added
+   * activity landed on the previous one's ports; the mid-gesture handle state in
+   * `connect-validation.spec.ts` is what caught it. So the words appear on hover
+   * and the accessible name carries them the rest of the time.
+   */
+  test('a port names itself on hover, and always to a screen reader', async ({ page }) => {
+    await openSeededCanvas(page, 'u19 labels', TWO_NODES);
+
+    const label = page
+      .locator('.react-flow__node[data-id="a"] .flow-port-label')
+      .filter({ hasText: 'failure' });
+    await expect(label).toHaveCSS('opacity', '0');
+    await expect(port(page, 'a', outcomePort('failure'))).toHaveAttribute('aria-label', 'failure');
+
+    await page.locator('.react-flow__node[data-id="a"] .flow-node').hover();
+    await expect(label).toHaveCSS('opacity', '1');
+  });
+
+  /**
    * A `switch` routes by CASE, and every case it declares is drawable.
    *
    * The branch ports are the half of U19 the dropdown could express but the
@@ -185,9 +208,17 @@ test.describe('U19 outcome ports', () => {
        directly is impossible on purpose: the write gate refuses a branch edge
        whose case is not declared, which is why the ONLY route here is an edit. */
     await nodeById(page, 'sw').click();
-    const cases = page.getByLabel('cases', { exact: false });
+    /* By ROLE, not by label: U8a's expression toggle sits beside each field and
+       carries the field's name in its accessible name, so `getByLabel('cases')`
+       matches the textarea AND the button (`node-config-form.spec.ts` records
+       the same constraint). */
+    const cases = page
+      .getByRole('complementary', { name: 'Properties' })
+      .getByRole('textbox', { name: /^cases/ });
     await cases.fill('red');
-    await cases.blur();
+    // The form is APPLY-gated — typing alone edits nothing, which is what keeps
+    // a half-typed identifier out of the doc.
+    await page.getByRole('button', { name: 'Apply config' }).click();
 
     await expect(port(page, 'sw', 'branch:blue')).toHaveClass(/\bflow-port--orphaned\b/);
     await expect(port(page, 'sw', 'branch:blue')).toHaveAttribute(
