@@ -44,6 +44,11 @@ describe('#913 request-log redaction wiring', () => {
     app = built.app;
     await app.inject({ method: 'POST', url: `/api/external-wait/${TOKEN}` });
     await app.inject({ method: 'GET', url: `/api/external-wait/${TOKEN}` });
+    // Neither log site normalizes the path (both print the verbatim request target,
+    // before routing), so a mis-cased or encoded variant carries a LIVE token into
+    // the log too. End-to-end here, not only in the rule's own unit tests.
+    await app.inject({ method: 'GET', url: `/API/external-wait/${TOKEN}` });
+    await app.inject({ method: 'POST', url: `/api/external-wait%2F${TOKEN}` });
     // An EXISTING route, on purpose: a 404 here would emit an extra unmatched-route
     // line and blur which site the assertions below are reading.
     await app.inject({ method: 'GET', url: '/health' });

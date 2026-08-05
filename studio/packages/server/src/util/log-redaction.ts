@@ -33,7 +33,7 @@
  */
 
 /**
- * Path prefixes after which the remainder of a URL is a secret.
+ * Route bases after which EVERYTHING is treated as a secret.
  *
  * ONE entry today, and that is the honest count rather than an oversight. To re-run
  * the enumeration: list every registered route path and check where the credential
@@ -41,13 +41,22 @@
  * `x-webhook-timestamp`/`x-webhook-signature` HEADERS and `triggerId` is a
  * non-secret id; `/api/workspace/git/token` takes its token in the POST BODY;
  * `/api/triggers/:id/webhook-secret` and `GET /api/runs/:id/external-waits` reveal
- * secrets in a RESPONSE BODY. Headers and bodies are not logged by Fastify's
- * serializers, so the URL path is the only leaking channel — and this is the only
- * path that carries a secret through it.
+ * secrets in a RESPONSE BODY (a channel of its own — #925). Headers and bodies are
+ * not logged by Fastify's serializers, so the URL path is the only leaking channel
+ * here — and this is the only path that carries a secret through it.
+ *
+ * Written WITHOUT the trailing slash on purpose; see `SECRET_URL_PATTERNS`.
  */
-const SECRET_URL_PREFIXES = ['/api/external-wait/'];
+const SECRET_URL_ROUTE_BASES = ['/api/external-wait'];
 
-/** Matches the connectors' redaction sentinel (`connectors/redact.ts`). */
+/**
+ * The same `***` the connectors' error-message redaction uses
+ * (`connectors/redact.ts`), by CONVENTION and not by import — deliberately.
+ * `connectors/redact.ts` exports no constant for it, and the two are not one fact:
+ * that one hides secret VALUES inside a connector's error text, this one hides a
+ * capability inside a URL. Importing across would assert they must change together,
+ * which is not true; a reader who changes one should have to decide about the other.
+ */
 const SENTINEL = '***';
 
 function escapeRegExp(literal: string): string {
@@ -55,22 +64,53 @@ function escapeRegExp(literal: string): string {
 }
 
 /**
- * `prefix` + every following non-whitespace character. Non-whitespace rather than
- * end-of-string because the URL is sometimes EMBEDDED in a sentence: Fastify's
- * unmatched-route line is `Route GET:<url> not found`, and the trailing words are
- * not secret — dropping them would leave a line that no longer says what happened.
- * A query string has no whitespace, so it is taken along with the token, which is
- * the safe direction (anything after a capability segment is as suspect as it is).
+ * The route base, then EVERY following non-whitespace character — case-insensitively.
+ *
+ * Three deliberate choices, each of which was a leak before it was made:
+ *
+ *  1. **Non-whitespace rather than end-of-string**, because the URL is sometimes
+ *     EMBEDDED in a sentence: Fastify's unmatched-route line is
+ *     `Route GET:<url> not found`, and the trailing words are not secret — dropping
+ *     them would leave a line that no longer says what happened. A query string has
+ *     no whitespace, so it is taken along with the token, which is the safe
+ *     direction (anything after a capability segment is as suspect as it is).
+ *
+ *  2. **Case-INSENSITIVE**, because the logged URL is never normalized. Both sites
+ *     log `request.raw.url` — Node's verbatim request target — and both log it
+ *     BEFORE the router has seen the path, so a request to `/API/external-wait/<tok>`
+ *     404s with the live token intact in the message. Reachable without any
+ *     adversary: a URL rewriter, a WAF path normalizer, or a person retyping the
+ *     callback URL.
+ *
+ *  3. **Any non-whitespace tail, rather than an explicit separator**, so the rule is
+ *     agnostic to how the separator is ENCODED — `/`, `%2F`, `%252F` and anything
+ *     else all fall inside the tail. Enumerating encodings is a game this cannot win;
+ *     matching everything after the base cannot lose it. The cost is that a future
+ *     sibling route sharing this prefix (say `/api/external-wait-status`) would be
+ *     redacted too. That is the fail-safe direction, and it is why the base is
+ *     stored without its trailing slash: `/api/external-wait` with NOTHING after it
+ *     carries no capability and is left alone, which is what keeps the redaction
+ *     from claiming a token was present when none was.
+ *
+ * The base is CAPTURED and re-emitted rather than substituted from the table, so the
+ * casing that was actually on the wire survives into the log — an oddly-cased probe
+ * stays visible as one.
+ *
+ * RESIDUAL LIMIT, stated rather than papered over: a URL that reaches the log with
+ * the BASE ITSELF encoded (`/%2Fapi%2Fexternal-wait%2F<tok>`) does not match and
+ * would still leak. No ordinary client produces that — a browser handed a callback
+ * URL does not encode the path it is fetching — and the honest fix for the whole
+ * class is not a better regex but option (2) below: taking the token out of the URL.
  */
-const SECRET_URL_PATTERNS = SECRET_URL_PREFIXES.map(
-  (prefix) => [new RegExp(`${escapeRegExp(prefix)}\\S*`, 'g'), `${prefix}${SENTINEL}`] as const,
+const SECRET_URL_PATTERNS = SECRET_URL_ROUTE_BASES.map(
+  (base) => new RegExp(`(${escapeRegExp(base)})\\S+`, 'gi'),
 );
 
-/** Replace every URL-borne capability in `text` with its path prefix + `***`. */
+/** Replace every URL-borne capability in `text` with its route base + `/***`. */
 export function redactUrlSecrets(text: string): string {
   let out = text;
-  for (const [pattern, replacement] of SECRET_URL_PATTERNS) {
-    out = out.replace(pattern, replacement);
+  for (const pattern of SECRET_URL_PATTERNS) {
+    out = out.replace(pattern, `$1/${SENTINEL}`);
   }
   return out;
 }
@@ -96,10 +136,16 @@ export function censorLoggedUrl(value: unknown): string {
 /**
  * The log method the hook wraps. Typed STRUCTURALLY rather than as pino's `LogFn`,
  * for the same reason `BuildAppOptions.loggerStream` is: this package declares
- * `fastify`, not `pino`, so pino's types are not resolvable here — deriving the hook
- * signature from `PinoLoggerOptions['hooks']` silently yields `any` (the import
- * inside fastify's own `.d.ts` fails and `skipLibCheck` swallows it), which is worse
- * than saying the shape out loud.
+ * `fastify`, not `pino`, so pino's types cannot be named here without a phantom
+ * dependency on a transitive package.
+ *
+ * Deriving the signature from `PinoLoggerOptions['hooks']` was tried first and does
+ * not work: `fastify.d.ts` imports that type internally but never re-exports it, so
+ * naming it is a hard `TS2305 no exported member`, which then cascades into
+ * implicit-`any` parameters. The same applies to Fastify's own
+ * `FastifyLoggerStreamDestination` — structurally identical to `loggerStream` above,
+ * and equally unexported. Saying both shapes out loud beats deep-importing
+ * `fastify/types/logger.js`.
  */
 type LogFnLike = (this: unknown, ...args: unknown[]) => void;
 

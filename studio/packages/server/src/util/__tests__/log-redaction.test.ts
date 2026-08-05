@@ -31,6 +31,34 @@ describe('redactUrlSecrets', () => {
     );
   });
 
+  it('redacts a MIS-CASED path, and keeps the casing that was on the wire', () => {
+    // Both log sites print `request.raw.url` — the verbatim request target — and do
+    // so BEFORE the router sees the path, so a mis-cased request 404s with a LIVE
+    // token in the message. The base is re-emitted from the match, not the table, so
+    // an oddly-cased probe stays visible as one.
+    expect(redactUrlSecrets(`/API/External-Wait/${TOKEN}`)).toBe('/API/External-Wait/***');
+  });
+
+  it('redacts however the separator is ENCODED', () => {
+    // The rule takes every non-whitespace character after the base, so it never has
+    // to enumerate encodings — which is a game it could not win.
+    expect(redactUrlSecrets(`/api/external-wait%2F${TOKEN}`)).toBe('/api/external-wait/***');
+    expect(redactUrlSecrets(`/api/external-wait%2f${TOKEN}`)).toBe('/api/external-wait/***');
+    expect(redactUrlSecrets(`/api/external-wait%252F${TOKEN}`)).toBe('/api/external-wait/***');
+  });
+
+  it('redacts a tail with no separator at all — fail-safe over precise', () => {
+    // No such route exists, so nothing legible is lost; a future sibling path
+    // sharing this prefix would be redacted too, which is the safe direction.
+    expect(redactUrlSecrets(`/api/external-wait${TOKEN}`)).toBe('/api/external-wait/***');
+  });
+
+  it('redacts a token behind a mount or proxy path prefix', () => {
+    expect(redactUrlSecrets(`/proxy/api/external-wait/${TOKEN}`)).toBe(
+      '/proxy/api/external-wait/***',
+    );
+  });
+
   it('leaves an unrelated URL completely intact', () => {
     expect(redactUrlSecrets('/api/runs/abc123/external-waits')).toBe(
       '/api/runs/abc123/external-waits',
