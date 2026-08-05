@@ -87,22 +87,29 @@ test.describe('undo/redo (U17)', () => {
     const problems = collectPageProblems(page);
     await openCanvas(page, 'e2e undo text');
 
-    await addActivity(page, 'HTTP Request');
-    await expect(canvasNodes(page)).toHaveCount(1);
-
     // The pipeline property panel's param editor. It is the nothing-selected
     // slot, so a canvas with no selection already shows it (`params-authoring`).
     await page.getByRole('button', { name: 'Add param' }).click();
     const name = page.getByRole('textbox', { name: 'Name' }).last();
     await name.fill('customer');
-    await expect(name).toHaveValue('customer');
+
+    // The canvas edit goes LAST, so it is the top of the undo stack. This is
+    // what makes the spec discriminate: two earlier versions did not. Asserting
+    // the node count with the param edit on top passed even with the text-field
+    // exemption deleted (a leaked undo reverts the param, not the node), and
+    // asserting the FIELD passed too — the browser's own undo reverts a
+    // programmatic fill to exactly the value the store's undo would.
+    await addActivity(page, 'HTTP Request');
+    await expect(canvasNodes(page)).toHaveCount(1);
 
     await name.press('ControlOrMeta+z');
 
-    // The canvas is untouched: the node the operator added is still there. If
-    // the shortcut had reached the store, this undo would have reverted a graph
-    // edit while their caret sat in a name field.
+    // A leaked shortcut would have undone the ADD, whatever the browser did to
+    // the text. The graph is not the operator's to lose while their caret sits
+    // in a name field.
     await expect(canvasNodes(page)).toHaveCount(1);
+    // And the control is still live — the keystroke was declined, not consumed.
+    await expect(page.getByRole('button', { name: 'Undo', exact: true })).toBeEnabled();
 
     await expectQuiet(page, problems);
   });
