@@ -89,9 +89,13 @@ and the loop exists to build it — not to build the loop.
   to a narrow start-up transient (a cause can be served stale for a few minutes after a restart while
   the backoff suppresses re-polling). It is NOT a blocker and NOT a mislabel.
 
-  **Sequence:** the sampler FIRST (it is the only thing standing between studio and a servable
-  reading) → `#917` (the monitoring section; the last thing the operator still uses the old dashboard
-  FOR) → then C3. `#919` is a nice-to-have that can ride along whenever the reader is open.
+  **Sequence: `#917` → the sampler → C3.** These two are INDEPENDENT prerequisites of C3, not a
+  dependency chain — neither needs the other, and both must land before the cutover. `#917` goes
+  first on OPERATOR PRIORITY, not on technical grounds: it is the visible product work this epic
+  exists for, and the standing steer is explicit that infrastructure over visible product is the
+  mistake to avoid (*"The app doesn't appear to have anything new to show"*). The sampler is the
+  only thing between studio and a servable reading, so it is the second and last thing C3 waits on.
+  `#919` is a nice-to-have that can ride along whenever the reader is open.
 - If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
   preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
   plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
