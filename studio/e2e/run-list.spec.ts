@@ -93,3 +93,90 @@ test('R2/U10 — the runs list names the pipeline, times the run, and filters by
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * U26 — the Monitor's server-side filter pane.
+ *
+ * What only an e2e can prove here is that the filter is a REAL round trip to
+ * `GET /api/runs` and that the resulting view is URL-addressable — a unit test
+ * with a mocked client proves the page asks for the right thing, not that the
+ * server answers it, and it cannot reload a page.
+ *
+ * Two runs of DIFFERENT pipelines, one failing and one succeeding, so every
+ * assertion can be scoped to a specific run id. The shared e2e database means a
+ * global claim ("the failure filter shows one row") is true only until another
+ * spec runs; "OUR success is absent from the failure filter" stays true whatever
+ * else has run.
+ */
+test('U26 — the runs list filters by status, pipeline and window, and the filter is a linkable URL', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const stamp = Date.now();
+  const failingName = `Filter pane failing ${stamp}`;
+  const passingName = `Filter pane passing ${stamp}`;
+  const { pipelineVersionId: failingVersion } = await seedVersion(page, failingName, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
+  });
+  const { pipelineVersionId: passingVersion } = await seedVersion(page, passingName, {
+    // A zero-second `wait`: egress-free like `fail`, but it SUCCEEDS — the
+    // status axis needs one of each to be worth asserting. Same fixture
+    // `rerun-from-failed.spec.ts` uses for a run that settles immediately.
+    nodes: [{ id: 'n1', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+  });
+  const failedRun = await fireAndSettle(page, failingVersion, `e2e filter fail ${stamp}`);
+  const passedRun = await fireAndSettle(page, passingVersion, `e2e filter pass ${stamp}`);
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+
+  const rowFor = (runId: string) => page.getByRole('row').filter({ hasText: runId });
+  await expect(rowFor(failedRun)).toHaveCount(1);
+  await expect(rowFor(passedRun)).toHaveCount(1);
+
+  // STATUS — the failed run stays, the successful one is filtered out by the
+  // SERVER (it is not merely hidden: the row is not in the response at all).
+  await page.getByLabel('Status').selectOption('failure');
+  await expect(rowFor(failedRun)).toHaveCount(1);
+  await expect(rowFor(passedRun)).toHaveCount(0);
+  expect(page.url()).toContain('status=failure');
+
+  // URL-addressable: the half a unit test cannot reach. A real reload must land
+  // on the same filtered view, with the control still showing what is applied.
+  await page.reload();
+  await fluentRootReady(page);
+  await expect(page.getByLabel('Status')).toHaveValue('failure');
+  await expect(rowFor(failedRun)).toHaveCount(1);
+  await expect(rowFor(passedRun)).toHaveCount(0);
+
+  // PIPELINE — narrowing to the OTHER pipeline empties this view entirely, and
+  // the pane survives that emptiness with a message that names the cause and a
+  // control that undoes it. A pane rendered only when rows exist would strand
+  // the operator here.
+  await page.getByLabel('Pipeline').selectOption({ label: passingName });
+  await expect(rowFor(failedRun)).toHaveCount(0);
+  await expect(page.getByText(/No runs match these filters/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(rowFor(failedRun)).toHaveCount(1);
+  await expect(rowFor(passedRun)).toHaveCount(1);
+  // Cleared means the params are GONE, not set to an empty value.
+  expect(page.url()).not.toContain('status=');
+  expect(page.url()).not.toContain('pipeline=');
+
+  // WINDOW — the runs were fired seconds ago, so the tightest window keeps them
+  // both; this pins that the relative preset resolves to a real bound server-side
+  // rather than being dropped.
+  await page.getByLabel('Started').selectOption('1h');
+  expect(page.url()).toContain('since=1h');
+  await expect(rowFor(failedRun)).toHaveCount(1);
+
+  // A stale/hand-edited link degrades to the unfiltered view rather than to an
+  // error page — the server would 400 this query, so the page must never send it.
+  await page.goto('/#/monitor/runs?status=not-a-status&since=forever');
+  await fluentRootReady(page);
+  await expect(page.getByLabel('Status')).toHaveValue('');
+  await expect(rowFor(failedRun)).toHaveCount(1);
+
+  await expectQuiet(page, problems);
+});

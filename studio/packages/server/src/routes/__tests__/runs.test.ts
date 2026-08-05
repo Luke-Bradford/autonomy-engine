@@ -13,6 +13,8 @@ import {
   createPipelineVersion,
   createRun,
 } from '../../repo/index.js';
+import { eq } from 'drizzle-orm';
+import { pipelineVersions, runs } from '../../db/schema.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 describe('runs routes (read-only)', () => {
@@ -104,6 +106,112 @@ describe('runs routes (read-only)', () => {
     const res = await app.inject({ method: 'GET', url: `/api/runs?rerunOf=${source.id}` });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual([]); // principal is `local`, not `someone-else`
+  });
+
+  /**
+   * U26 — the filter pane's query surface. The repo tests own WHICH rows each
+   * axis selects; these own the ROUTE's contract: what it accepts, what it
+   * refuses, and that no axis escapes the owner scope.
+   */
+  describe('U26 — the Monitor filter axes', () => {
+    it('filters by status, pipeline and window, all ANDed with the owner scope', async () => {
+      const other = createPipeline(app.db, { ownerId: 'local', name: 'Another pipeline' });
+      const otherVersion = createPipelineVersion(app.db, {
+        pipelineId: other.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const pipelineId = app.db
+        .select({ id: pipelineVersions.pipelineId })
+        .from(pipelineVersions)
+        .where(eq(pipelineVersions.id, pipelineVersionId))
+        .get()!.id;
+
+      const seed = (versionId: string, ownerId: string) =>
+        createRun(app.db, {
+          ownerId,
+          pipelineVersionId: versionId,
+          triggerId: null,
+          parentRunId: null,
+          params: {},
+        });
+      const wanted = seed(pipelineVersionId, 'local');
+      const wrongPipeline = seed(otherVersion.id, 'local');
+      const foreign = seed(pipelineVersionId, 'someone-else');
+      for (const id of [wanted.id, wrongPipeline.id, foreign.id]) {
+        app.db.update(runs).set({ status: 'failure' }).where(eq(runs.id, id)).run();
+      }
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs?status=failure&pipelineId=${pipelineId}&since=24h`,
+      });
+      expect(res.statusCode).toBe(200);
+      const ids = res.json().map((r: { id: string }) => r.id);
+      expect(ids).toContain(wanted.id);
+      // One exclusion per axis: the wrong pipeline, and — the one that matters —
+      // another owner's run that satisfies every axis the caller supplied.
+      expect(ids).not.toContain(wrongPipeline.id);
+      expect(ids).not.toContain(foreign.id);
+    });
+
+    it('a `since` window EXCLUDES a run older than it', async () => {
+      const stale = createRun(app.db, {
+        ownerId: 'local',
+        pipelineVersionId,
+        triggerId: null,
+        parentRunId: null,
+        params: {},
+      });
+      // Two hours ago — outside `1h`, inside `24h`. Asserting BOTH is what makes
+      // this a window test rather than an "is the param wired" test.
+      app.db
+        .update(runs)
+        .set({ startedAt: Date.now() - 2 * 60 * 60 * 1000 })
+        .where(eq(runs.id, stale.id))
+        .run();
+
+      const within = await app.inject({ method: 'GET', url: '/api/runs?since=24h' });
+      expect(within.json().map((r: { id: string }) => r.id)).toContain(stale.id);
+      const outside = await app.inject({ method: 'GET', url: '/api/runs?since=1h' });
+      expect(outside.json().map((r: { id: string }) => r.id)).not.toContain(stale.id);
+    });
+
+    /**
+     * A fielded axis REFUSES a value outside its vocabulary rather than quietly
+     * matching nothing — a silently-empty list is indistinguishable from "you
+     * have no failures", which is the wrong answer to a typo.
+     */
+    it.each([
+      ['status', 'status=not-a-status'],
+      ['since', 'since=garbage'],
+      ['since (empty string)', 'since='],
+      ['pipelineId (empty string)', 'pipelineId='],
+    ])('refuses an out-of-vocabulary %s with a 400', async (_label, query) => {
+      const res = await app.inject({ method: 'GET', url: `/api/runs?${query}` });
+      expect(res.statusCode).toBe(400);
+    });
+
+    /**
+     * The oracle guard. A pipeline id belonging to someone else must be
+     * INDISTINGUISHABLE from one that exists nowhere — both an empty 200, never
+     * a 404 that would confirm the id is real.
+     */
+    it('answers a foreign and a nonexistent pipelineId identically (no existence oracle)', async () => {
+      const theirs = createPipeline(app.db, { ownerId: 'someone-else', name: 'Not yours' });
+      const foreign = await app.inject({
+        method: 'GET',
+        url: `/api/runs?pipelineId=${theirs.id}`,
+      });
+      const unknown = await app.inject({ method: 'GET', url: '/api/runs?pipelineId=pl_nope' });
+      expect(foreign.statusCode).toBe(200);
+      expect(foreign.json()).toEqual([]);
+      expect(unknown.statusCode).toBe(foreign.statusCode);
+      expect(unknown.json()).toEqual(foreign.json());
+    });
   });
 
   it('GET /api/runs/:id/events returns the append-only event log in order', async () => {

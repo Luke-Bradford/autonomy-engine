@@ -2185,6 +2185,27 @@ td button + button {
   color: var(--warning);
 }
 
+/* U26 — the Monitor's filter pane. A wrapping row rather than a fixed grid: it
+   sits above the tab strip on every width, and its controls are plain selects,
+   so the only thing it genuinely needs is not to stack into a column on a wide
+   screen. Richer controls (a Fluent combobox, saved views) are deferred polish —
+   this makes the axis reachable, which is the part that was missing. */
+.run-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.run-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 /* U10 — the runs list's origin tabs are Fluent's own `TabList`, so only the
    count badge inside each tab needs a rule of its own. */
 .run-tab-count {

@@ -352,12 +352,20 @@ test.describe('U4 Factory Resources pane', () => {
        how it is provoked rather than what is being tested: remounting the page
        calls `ensureFresh`, which loads from `ready` and gets the 502. The store
        keeps the last good list through a failed REFRESH, so the row stays
-       clickable underneath the banner — which is what the final step needs. */
+       clickable underneath the banner — which is what the final step needs.
+
+       The waypoint is CONNECTIONS, and it has to be a route that consumes no
+       pipeline list of its own. It was `#/monitor/runs` until U26 gave that page
+       a pipeline FILTER off this same shared store: the Runs page then ate the
+       staged 502 on the way out, so the store was already in `error` when the
+       pane remounted, its navigation retry recovered it one step early, and the
+       final click had nothing left to provoke. Connections is the one hub route
+       that touches neither `pipelinesStore` nor `listPipelines`. */
     failNextList = true;
     await page.evaluate(() => {
-      window.location.hash = '#/monitor/runs';
+      window.location.hash = '#/manage/connections';
     });
-    await page.getByRole('heading', { name: 'Runs' }).waitFor();
+    await page.getByRole('heading', { name: 'Connections' }).waitFor();
     await page.evaluate(() => {
       window.location.hash = '#/author/pipelines';
     });

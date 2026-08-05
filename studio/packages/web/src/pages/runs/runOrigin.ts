@@ -72,7 +72,12 @@ export const RUN_TAB_LABEL: Record<RunTab, string> = {
  * trigger at all, which today means reruns. And "Child" is empty until P3b.
  */
 export const RUN_TAB_HINT: Record<RunTab, string> = {
-  all: 'Every run',
+  // Scoped to the ORIGIN axis on purpose. "Every run" stopped being true the
+  // moment U26 added server-side status/pipeline/trigger/time filters above this
+  // strip — under any of them `all` is every run of every origin WITHIN the
+  // filter. Naming the axis keeps the hint true in both cases instead of making
+  // it a claim about the whole list that the filters quietly falsify.
+  all: 'Every run, whatever started it',
   triggered: 'Started by a trigger, including a manual fire of one',
   manual: 'Runs with no trigger — today, reruns',
   child: 'Runs spawned by a parent pipeline (not yet produced — see #796)',

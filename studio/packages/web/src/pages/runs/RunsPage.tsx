@@ -1,11 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tab, TabList } from '@fluentui/react-components';
-import type { RunSummary } from '@autonomy-studio/shared';
+import { RunStatusSchema, type RunSummary, type TriggerPublic } from '@autonomy-studio/shared';
+import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
 import { listRuns } from '../../api/runs';
+import { listTriggers } from '../../api/triggers';
+import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath } from './runPath';
 import { runStatusLabel } from './runStatus';
+import {
+  hasActiveRunFilters,
+  readRunFilters,
+  RUN_FILTER_PARAMS,
+  RUN_SINCE_LABEL,
+  RUN_SINCE_OPTIONS,
+} from './runFilters';
 import {
   filterRunsByTab,
   isRunTab,
@@ -28,18 +38,37 @@ import {
  * and the trigger reads its name. The tab strip filters by where a run came
  * from (`runOrigin.ts`), client-side over the single fetched list, which is
  * exactly the "client-side small-data v1" U10 specifies.
+ *
+ * U26 — and above that strip, the SERVER-side filter pane: status, pipeline,
+ * trigger and a relative time window, each an optional query param on
+ * `GET /api/runs`. Two filters with two authorities is forced rather than
+ * chosen, and `runFilters.ts` records why (the origin axis needs an `isNull`
+ * predicate the repo layer has no arm for) along with what follows from it —
+ * the tab counts describe the server-filtered set.
  */
-export function RunsPage() {
-  const [runs, setRuns] = useState<RunSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
   /**
-   * The clock the Duration column measures an UNFINISHED run against, captured
-   * once when a load resolves rather than read per render. The page is a
-   * snapshot refreshed on demand (there is no ticking here by design), so every
-   * row's "so far" is as-of the same instant — and rendering stays pure, which
-   * a bare `Date.now()` in the row map would not be.
+   * The last answer, STAMPED with the filter it answers. `loadedAt` rides along
+   * for the same reason it always did: the clock the Duration column measures an
+   * UNFINISHED run against, captured once when the load resolves rather than
+   * read per render, so every row's "so far" is as-of the same instant and
+   * rendering stays pure.
+   *
+   * Stamped rather than cleared, and that is U26's doing. The rows on screen
+   * were fetched under the PREVIOUS filter, so a filter change must not leave
+   * them sitting under the new controls — briefly, but long enough to be read as
+   * the answer. Clearing them in the load effect would be a synchronous
+   * `setState` inside an effect (a cascading render, and the lint rule that
+   * names it is right); DERIVING staleness costs no render at all. A `Refresh`
+   * of the SAME filter deliberately does not go through this — the key is
+   * unchanged, so the current rows stay up until their replacements land.
    */
-  const [loadedAt, setLoadedAt] = useState(0);
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    rows: RunSummary[];
+    at: number;
+  } | null>(null);
+  const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
   // Bumped by "Refresh" to re-run the load effect (re-fetch on demand). The
   // effect owns the fetch so its AbortController cleanly cancels an in-flight
   // request on unmount or a re-refresh.
@@ -71,20 +100,97 @@ export function RunsPage() {
     setSearchParams(params);
   }
 
+  /**
+   * U26 — the server-side axes, read from the URL under the same rules `?tab=`
+   * follows: the URL is the only authority, a default is the param's ABSENCE,
+   * and anything unrecognised falls back to unfiltered rather than erroring.
+   */
+  const filters = useMemo(() => readRunFilters(searchParams), [searchParams]);
+  const { status: statusFilter, pipelineId, triggerId, since } = filters;
+  const filtered = hasActiveRunFilters(filters);
+
+  function setFilter(param: string, next: string) {
+    const params = new URLSearchParams(searchParams);
+    if (next === '') params.delete(param);
+    else params.set(param, next);
+    setSearchParams(params);
+  }
+
+  function clearFilters() {
+    const params = new URLSearchParams(searchParams);
+    for (const param of Object.values(RUN_FILTER_PARAMS)) params.delete(param);
+    setSearchParams(params);
+  }
+
+  /**
+   * The identity of the QUESTION currently being asked. An answer stamped with a
+   * different key belongs to a filter that is no longer on screen, so it reads
+   * as "still loading" rather than as this filter's result.
+   *
+   * `reloadKey` is deliberately NOT part of it — a Refresh asks the same
+   * question again, and blanking the list to re-answer it identically would be a
+   * flash for nothing.
+   */
+  const filterKey = `${statusFilter ?? ''}|${pipelineId ?? ''}|${triggerId ?? ''}|${since ?? ''}`;
+  const runs = loaded?.key === filterKey ? loaded.rows : null;
+  const loadedAt = loaded?.key === filterKey ? loaded.at : 0;
+  const error = failed?.key === filterKey ? failed.message : null;
+
+  /**
+   * Monotonic id of the most recently STARTED load — `pipelinesStore`'s
+   * `latestLoad` guard, for the same reason it has one. `filterKey` settles which
+   * QUESTION an answer belongs to, but two loads can share a key (a Refresh, or
+   * a double-Refresh) and abort does not fully cover them: a request whose
+   * response has already arrived can still resolve its `.then` after the
+   * controller aborts, so the older answer would win on completion order.
+   * A superseded load drops its result, success AND failure alike — a late
+   * rejection from an abandoned request must not bury the fresher answer that
+   * replaced it under an error banner.
+   */
+  const latestLoad = useRef(0);
+
+  // Deps are PRIMITIVES, never the `filters` object: a fresh object literal every
+  // render would make this effect re-run forever.
   useEffect(() => {
     const controller = new AbortController();
-    listRuns(controller.signal)
+    const load = (latestLoad.current += 1);
+    listRuns({ status: statusFilter, pipelineId, triggerId, since }, controller.signal)
       .then((rows) => {
-        setRuns(rows);
-        setLoadedAt(Date.now());
-        setError(null);
+        if (load !== latestLoad.current) return;
+        setLoaded({ key: filterKey, rows, at: Date.now() });
+        setFailed(null);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setError(err instanceof Error ? err.message : String(err));
+        if (load !== latestLoad.current || controller.signal.aborted) return;
+        setFailed({ key: filterKey, message: err instanceof Error ? err.message : String(err) });
       });
     return () => controller.abort();
-  }, [reloadKey]);
+  }, [reloadKey, filterKey, statusFilter, pipelineId, triggerId, since]);
+
+  /**
+   * The pipeline picker's options come from the shared `pipelinesStore`, not a
+   * local fetch: it keeps the last good list through a failed refresh, so a
+   * picker that cannot reload can never blank out and silently drop the filter
+   * the operator is currently looking at.
+   */
+  const pipelines = useStore(store, (s) => s.pipelines);
+  const ensureFresh = useStore(store, (s) => s.ensureFresh);
+  useEffect(() => {
+    ensureFresh();
+  }, [ensureFresh]);
+
+  // Triggers have no store (nothing else needs one yet), so this is the plain
+  // fetch — failing SILENTLY on purpose: the picker degrades to "All triggers"
+  // plus whatever the URL already selects, and a filter list that cannot load is
+  // not worth an error banner over the runs the operator came here to read.
+  const [triggers, setTriggers] = useState<TriggerPublic[]>([]);
+  useEffect(() => {
+    const controller = new AbortController();
+    listTriggers(controller.signal)
+      .then(setTriggers)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   // Both derived by the SAME predicate, so a tab can never advertise a number
   // of rows it then declines to show — but keyed separately, because the counts
@@ -118,13 +224,107 @@ export function RunsPage() {
         </p>
       )}
 
+      {/* U26 — OUTSIDE the "are there rows" guard below, and that placement is
+          the point: under a filter an empty result is the ordinary case, so a
+          pane that renders only when rows exist would vanish exactly when the
+          operator needs it to undo the filter that emptied the list. */}
+      <div className="run-filters" role="group" aria-label="Filter runs">
+        <label>
+          Status
+          <select
+            value={statusFilter ?? ''}
+            onChange={(e) => setFilter(RUN_FILTER_PARAMS.status, e.target.value)}
+          >
+            <option value="">All statuses</option>
+            {RunStatusSchema.options.map((s) => (
+              <option key={s} value={s}>
+                {runStatusLabel(s)}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Pipeline
+          <select
+            value={pipelineId ?? ''}
+            onChange={(e) => setFilter(RUN_FILTER_PARAMS.pipelineId, e.target.value)}
+          >
+            <option value="">All pipelines</option>
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+            {/* The orphan guard. A `<select>` whose value matches no option
+                renders the FIRST one — so a link to a deleted pipeline (or a
+                render before the list has loaded) would say "All pipelines"
+                while the list stayed filtered: the control lying about what is
+                applied. A disabled option makes the mismatch visible instead. */}
+            {pipelineId !== undefined && !pipelines.some((p) => p.id === pipelineId) && (
+              <option value={pipelineId} disabled>
+                {pipelineId} (unavailable)
+              </option>
+            )}
+          </select>
+        </label>
+
+        <label>
+          Trigger
+          <select
+            value={triggerId ?? ''}
+            onChange={(e) => setFilter(RUN_FILTER_PARAMS.triggerId, e.target.value)}
+          >
+            <option value="">All triggers</option>
+            {triggers.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+            {triggerId !== undefined && !triggers.some((t) => t.id === triggerId) && (
+              <option value={triggerId} disabled>
+                {triggerId} (unavailable)
+              </option>
+            )}
+          </select>
+        </label>
+
+        <label>
+          Started
+          <select
+            value={since ?? ''}
+            onChange={(e) => setFilter(RUN_FILTER_PARAMS.since, e.target.value)}
+          >
+            <option value="">Any time</option>
+            {RUN_SINCE_OPTIONS.map((w) => (
+              <option key={w} value={w}>
+                {RUN_SINCE_LABEL[w]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {filtered && (
+          <button type="button" onClick={clearFilters}>
+            Clear filters
+          </button>
+        )}
+      </div>
+
       {runs === null && !error && <p>Loading runs…</p>}
 
-      {runs !== null && runs.length === 0 && (
+      {/* Three distinct empty states, because they call for three different
+          things. "You have none" sends the operator to the Triggers page;
+          "none MATCH" sends them to the Clear control right above, and saying
+          the first when the second is true is simply false. */}
+      {runs !== null && runs.length === 0 && !filtered && (
         <p>No runs yet. Fire a trigger on the Triggers page to start one.</p>
       )}
+      {runs !== null && runs.length === 0 && filtered && (
+        <p>No runs match these filters. Widen them, or clear them, to see more.</p>
+      )}
 
-      {runs !== null && runs.length > 0 && (
+      {runs !== null && (runs.length > 0 || filtered) && (
         <>
           {/* Fluent's own TabList, not a hand-rolled strip: it brings the roving
               tabindex and arrow-key movement the `tab` role advertises, which a
@@ -147,7 +347,16 @@ export function RunsPage() {
 
           <div role="tabpanel" aria-labelledby={`run-tab-${tab}`}>
             {visible.length === 0 ? (
-              <p>No {RUN_TAB_LABEL[tab].toLowerCase()} runs.</p>
+              /* Only when the SERVER returned rows and this tab holds none of
+                 them — otherwise the "no runs match these filters" line above
+                 has already said it, and saying it twice in different words
+                 reads as two separate findings. */
+              runs.length > 0 && (
+                <p>
+                  No {RUN_TAB_LABEL[tab].toLowerCase()} runs
+                  {filtered ? ' match these filters' : ''}.
+                </p>
+              )
             ) : (
               <table>
                 <thead>
