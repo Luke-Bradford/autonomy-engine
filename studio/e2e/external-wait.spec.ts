@@ -177,18 +177,19 @@ test('#901 — an operator completes the wait from the app, sending no token', a
      payload resumes the run and still reads as success from the header, so the
      value has to be asserted somewhere it is actually recorded.
 
-     Read off the durable LOG rather than the page, because the page does not show
-     it: `externalWait.completed` IS the node's success event (there is no
-     following `node.succeeded`), and the drill-in's Outputs section folds only
-     from `node.succeeded` — so a webhook's declared outputs render nowhere, which
-     is true of a `curl` completion too and predates this ticket. Filed as #911.
-     When that lands, this assertion should move onto the panel, which is where an
-     operator would look. */
-  const events = await (await page.request.get(`/api/runs/${runId}/events`)).json();
-  const completion = (events as Array<{ type: string; payload: { outputs?: unknown } }>).find(
-    (row) => row.type === 'externalWait.completed',
-  );
-  expect(completion?.payload.outputs).toEqual({ decision: 'approved in-app' });
+     #911 — asserted ON THE PANEL, which is where an operator asks "did my body
+     take effect?". It used to be read off `GET /api/runs/:id/events` instead,
+     because the page could not show it at all: `externalWait.completed` IS the
+     node's success event (there is no following `node.succeeded`) and the
+     drill-in folded outputs only from `node.succeeded`, so a webhook's declared
+     outputs rendered on no surface — true of a `curl` completion too, and older
+     than #901. Reading the log proved the value was STORED; only this proves it
+     is legible. */
+  const approveRow = page.locator('tr', { has: page.locator('td code', { hasText: /^approve$/ }) });
+  await approveRow.locator('button.node-drill-in').click();
+  const panel = page.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
+  await expect(panel.getByRole('heading', { name: 'Outputs' })).toBeVisible();
+  await expect(panel).toContainText('{"decision":"approved in-app"}');
 
   /* The one allowed console line is the browser's own network entry for the 422
      this spec PROVOKES — the contract refusal above is the behaviour under test,

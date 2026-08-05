@@ -821,6 +821,106 @@ describe('RunDetailPage — U24 the failure class and the node drill-in', () => 
   });
 });
 
+/**
+ * #911 — the drill-in's Outputs section, on a node whose success event is NOT
+ * `node.succeeded`.
+ *
+ * Pinned HERE as well as in `runSummary.test.ts` because the fold and the gate
+ * are two halves of one behaviour and each is green without the other: the fold
+ * tests would all still pass if `NodeActivityPanel` re-gated the section, and
+ * the panel has had no test of that section at all. This is the half that says
+ * the value reaches a SURFACE.
+ */
+describe('RunDetailPage — a parked node’s outputs reach the drill-in (#911)', () => {
+  const webhookDoc = () =>
+    version({
+      nodes: [
+        {
+          id: 'approve',
+          type: 'webhook',
+          position: { x: 0, y: 0 },
+          config: {
+            timeoutSeconds: '${600}',
+            outputs: [{ name: 'decision', type: 'string' }],
+          },
+        },
+      ],
+      edges: [],
+    });
+
+  function parkedThenCompleted(outputs: Record<string, unknown> | undefined) {
+    return stream({
+      events: [
+        envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+        envelope({
+          type: 'externalWait.created',
+          runId: 'run_1',
+          nodeId: 'approve',
+          attemptId: 'approve#0',
+          dueAt: 9_999_999_999_999,
+        }),
+        envelope({
+          type: 'externalWait.completed',
+          runId: 'run_1',
+          nodeId: 'approve',
+          previousAttemptId: 'approve#0',
+          ...(outputs === undefined ? {} : { outputs }),
+        } as EngineEvent),
+      ],
+    });
+  }
+
+  async function openPanel() {
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Webhook (external wait) 1' }));
+    return screen.getByRole('complementary', { name: /Node Webhook \(external wait\) 1/ });
+  }
+
+  it('shows the callback payload the completion carried', async () => {
+    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
+    useRunStreamMock.mockReturnValue(parkedThenCompleted({ decision: 'approved in-app' }));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
+    expect(within(panel).getByText('{"decision":"approved in-app"}')).toBeInTheDocument();
+  });
+
+  it('says a completion carrying nothing declared NOTHING, rather than omitting the section', async () => {
+    // The pre-A16 shape. "No outputs" is an answer; a missing section is the
+    // absence of one, and is indistinguishable from a node that never finished.
+    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
+    useRunStreamMock.mockReturnValue(parkedThenCompleted(undefined));
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).getByRole('heading', { name: 'Outputs' })).toBeInTheDocument();
+    expect(within(panel).getByText('This node declared no outputs.')).toBeInTheDocument();
+  });
+
+  it('omits the section entirely while the node is still PARKED — no result is on record yet', async () => {
+    getRunDetailMock.mockResolvedValue({ run: run(), pipelineVersion: webhookDoc() });
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope({
+            type: 'externalWait.created',
+            runId: 'run_1',
+            nodeId: 'approve',
+            attemptId: 'approve#0',
+            dueAt: 9_999_999_999_999,
+          }),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const panel = await openPanel();
+    expect(within(panel).queryByRole('heading', { name: 'Outputs' })).not.toBeInTheDocument();
+  });
+});
+
 describe('RunDetailPage — U24 the states a single well-formed failure does not cover', () => {
   it('a failed CALL node gets a Failure section, though it has no message of its own', async () => {
     // Gating the section on `error` hid it entirely for a call node: the child
