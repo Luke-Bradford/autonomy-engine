@@ -551,7 +551,13 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       const name = containerLabels(state.containers).get(id) ?? kind;
       const confirmed = window.confirm(
         `Delete this ${name} container?\n\n` +
-          'Its settings and the edges connected to it are removed, and this cannot be undone. ' +
+          // U17 — this used to end "and this cannot be undone", which was true
+          // when it was written and is not any more. The destruction is
+          // unchanged and still worth confirming (the container's config and
+          // its incident edges both go); what changed is that the operator now
+          // has a way back, and a dialog that hides it would make them decline
+          // a reversible action.
+          'Its settings and the edges connected to it are removed — Undo (⌘Z) brings them back. ' +
           'The activities inside are kept — they move out to the top level.' +
           (kind === 'foreach'
             ? ' Any ${item} they reference will no longer resolve, and must be edited' +

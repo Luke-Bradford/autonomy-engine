@@ -420,7 +420,11 @@ describe('FlowCanvas container delete (#748)', () => {
     // rather than close it, and with two loops the dialog would not say which.
     expect(message).toContain('Delete this loop 1 container?');
     expect(message).toMatch(/activities.*kept|kept.*activities/i);
-    expect(message).toMatch(/cannot be undone/i);
+    // U17 — the dialog names the way back, and must never again claim there is
+    // none: an operator who believes a reversible delete is permanent declines
+    // it, which is the same lost work by a different route.
+    expect(message).toMatch(/Undo/);
+    expect(message).not.toMatch(/cannot be undone/i);
   });
 
   /**
@@ -468,7 +472,7 @@ describe('FlowCanvas container delete (#748)', () => {
     expect(message).toContain('one sequence');
     // The destruction half is still its own sentence — the two are composed, not
     // merged into one vaguer warning.
-    expect(message).toMatch(/cannot be undone/i);
+    expect(message).toMatch(/settings and the edges connected to it are removed/);
   });
 
   /**

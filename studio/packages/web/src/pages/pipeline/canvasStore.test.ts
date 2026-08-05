@@ -1788,11 +1788,11 @@ describe('canvasStore — undo/redo (U17)', () => {
 
   it('undo reverses a container edit, and its membership write', () => {
     const s = opened();
-    const built = buildContainer('stage', 'n_a', {});
-    s.getState().createContainer(built.container!);
+    const box: Container = { id: 'stage_1', kind: 'stage', children: ['n_a'] };
+    s.getState().createContainer(box);
     expect(s.getState().containers).toHaveLength(1);
 
-    s.getState().setNodeContainer('n_b', built.container!.id);
+    s.getState().setNodeContainer('n_b', box.id);
     expect(s.getState().containers[0]!.children).toEqual(['n_a', 'n_b']);
 
     s.getState().undo();
