@@ -115,13 +115,39 @@ export const PipelinePublishedEventSchema = z.object({
 export type PipelinePublishedEvent = z.infer<typeof PipelinePublishedEventSchema>;
 
 /**
+ * #907 — a pipeline was RESTORED from archive via the manual route (`POST
+ * /api/pipelines/:id/restore`), the inverse of `pipeline.archived`. Emitted
+ * only on a real state change; restoring a live pipeline is an idempotent
+ * no-op and writes nothing, the same rule its sibling archive follows.
+ *
+ * Deliberately does NOT carry a `disabledTriggerIds` counterpart to the
+ * archive event, and the asymmetry is the semantics rather than an omission: a
+ * restore re-enables NOTHING (`repo/pipelines.ts#restorePipeline` — re-enabling
+ * a trigger is authoring intent, gated by the G7/G8 readiness reconcile). An
+ * `enabledTriggerIds: []` field would be a standing lie about what the act
+ * does. A reader wanting the disabled set reads the preceding `pipeline.archived`.
+ *
+ * A restore driven by an IMPORT (a branch-absent pipeline reappearing) is not
+ * emitted here — it is captured in `import.applied` — so an import never
+ * double-counts, matching the archive event's own exclusion.
+ */
+export const PipelineRestoredEventSchema = z.object({
+  type: z.literal('pipeline.restored'),
+  resourceId: z.string().min(1),
+  name: z.string().min(1),
+  by: BySchema,
+});
+export type PipelineRestoredEvent = z.infer<typeof PipelineRestoredEventSchema>;
+
+/**
  * The closed workspace-audit event union, discriminated on `type`. G6c-1 adds
  * `pipeline.published`; the `active`-pointer projection folds over exactly this
- * log.
+ * log. #907 adds `pipeline.restored`.
  */
 export const WorkspaceEventSchema = z.discriminatedUnion('type', [
   RepoConnectedEventSchema,
   PipelineArchivedEventSchema,
+  PipelineRestoredEventSchema,
   ImportAppliedEventSchema,
   PipelinePublishedEventSchema,
 ]);

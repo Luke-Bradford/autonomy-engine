@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { CATALOG_VERSION } from '@autonomy-studio/shared';
 import {
   appendRunEvent,
+  archivePipeline,
   createPipeline,
   createPipelineVersion,
   createRun,
@@ -359,6 +360,166 @@ describe('pipelines routes', () => {
       expect(notMine.statusCode).toBe(404);
       // Untouched — authz refused before any write (still un-archived).
       expect(getPipeline(app.db, other.id)!.archived).toBe(false);
+    });
+  });
+
+  /**
+   * #907 — archive is a "stop editing this", not merely a "stop running this".
+   *
+   * The two halves are tested together deliberately, because shipping the
+   * refusal without the way back would be a ONE-WAY TRAP: `restorePipeline`
+   * existed (#3 G5c) with no HTTP route, reachable only from the git-import
+   * apply, so an operator who archived over the API could never author that
+   * pipeline again from the app.
+   */
+  describe('#907 — an archived pipeline refuses a save, and restore is the way back', () => {
+    /* Scoped to ONE pipeline's `resourceId`, because the audit log is shared by
+       every test in this file (one app, one db) — a bare count of
+       `pipeline.restored` would also see the restores the sibling cases above
+       performed, and would pass for the wrong reason. */
+    const restoreEventsFor = async (resourceId: string): Promise<unknown[]> => {
+      const res = await app.inject({ method: 'GET', url: '/api/workspace/audit' });
+      return res
+        .json()
+        .items.map((e: { payload: { type: string; resourceId?: string } }) => e.payload)
+        .filter(
+          (p: { type: string; resourceId?: string }) =>
+            p.type === 'pipeline.restored' && p.resourceId === resourceId,
+        );
+    };
+
+    const saveOn = async (pipelineId: string, basedOnVersionId: string | null) =>
+      app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipelineId}/versions`,
+        payload: {
+          basedOnVersionId,
+          params: [],
+          outputs: [],
+          nodes: [],
+          edges: [],
+          catalogVersion: CATALOG_VERSION,
+        },
+      });
+
+    it('refuses a version write on an archived pipeline (409), minting nothing', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'ArchivedNoSave' });
+      await app.inject({ method: 'POST', url: `/api/pipelines/${pipeline.id}/archive` });
+
+      const res = await saveOn(pipeline.id, null);
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe('conflict');
+      // The message must name the remedy, not just the refusal — this string is
+      // what the canvas renders verbatim on a failed Save.
+      expect(res.json().message).toMatch(/archived/);
+      expect(res.json().message).toMatch(/restore/i);
+      // Nothing was minted: the head is still absent.
+      const versions = await app.inject({
+        method: 'GET',
+        url: `/api/pipelines/${pipeline.id}/versions`,
+      });
+      expect(versions.json()).toEqual([]);
+    });
+
+    it('accepts the same save once the pipeline is restored', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'RestoreThenSave' });
+      await app.inject({ method: 'POST', url: `/api/pipelines/${pipeline.id}/archive` });
+      expect((await saveOn(pipeline.id, null)).statusCode).toBe(409);
+
+      const restored = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/restore`,
+      });
+      expect(restored.statusCode).toBe(200);
+      expect(restored.json().archived).toBe(false);
+
+      expect((await saveOn(pipeline.id, null)).statusCode).toBe(201);
+      // Back on the default list, which archive had dropped it from.
+      const listRes = await app.inject({ method: 'GET', url: '/api/pipelines' });
+      expect(listRes.json().items.map((p: { id: string }) => p.id)).toContain(pipeline.id);
+    });
+
+    /**
+     * The one semantic a restore must NOT quietly reverse. `restorePipeline`'s
+     * docblock settles it: re-enabling a trigger is authoring intent, gated by
+     * the G7/G8 readiness reconcile — never a side effect of un-archiving. A
+     * restore that re-armed a nightly schedule would fire a pipeline the
+     * operator had told the system they were done with.
+     */
+    it('leaves the triggers archive disabled DISABLED', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'RestoreKeepsOff' });
+      const version = createPipelineVersion(app.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      const trigger = createTrigger(app.db, {
+        ownerId: 'local',
+        name: 'Nightly',
+        pipelineVersionId: version.id,
+        params: {},
+        mode: 'schedule',
+        schedule: '0 2 * * *',
+        webhook: null,
+        concurrency: { policy: 'skip_if_running' },
+        runWindows: null,
+        enabled: true,
+      });
+
+      await app.inject({ method: 'POST', url: `/api/pipelines/${pipeline.id}/archive` });
+      expect(getTrigger(app.db, trigger.id)!.enabled).toBe(false);
+      await app.inject({ method: 'POST', url: `/api/pipelines/${pipeline.id}/restore` });
+      expect(getTrigger(app.db, trigger.id)!.enabled).toBe(false);
+    });
+
+    it('emits `pipeline.restored` on a REAL state change only, and is idempotent', async () => {
+      const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'RestoreTwice' });
+      await app.inject({ method: 'POST', url: `/api/pipelines/${pipeline.id}/archive` });
+
+      const first = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/restore`,
+      });
+      expect(first.statusCode).toBe(200);
+      expect(await restoreEventsFor(pipeline.resourceId)).toEqual([
+        {
+          type: 'pipeline.restored',
+          resourceId: pipeline.resourceId,
+          name: 'RestoreTwice',
+          by: 'local',
+        },
+      ]);
+
+      // Restoring a LIVE pipeline is an idempotent no-op: 200, same shape, and
+      // NO second event — the audit records effect, not attempts.
+      const second = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${pipeline.id}/restore`,
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json().archived).toBe(false);
+      expect(await restoreEventsFor(pipeline.resourceId)).toHaveLength(1);
+    });
+
+    it('404s for a missing pipeline and for one owned by someone else (authz)', async () => {
+      const missing = await app.inject({
+        method: 'POST',
+        url: '/api/pipelines/pipe_missing/restore',
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const other = createPipeline(app.db, { ownerId: 'someone-else', name: 'NotMineRestore' });
+      archivePipeline(app.db, other.id);
+      const notMine = await app.inject({
+        method: 'POST',
+        url: `/api/pipelines/${other.id}/restore`,
+      });
+      expect(notMine.statusCode).toBe(404);
+      // Untouched — authz refused before any write (still archived).
+      expect(getPipeline(app.db, other.id)!.archived).toBe(true);
     });
   });
 

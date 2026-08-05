@@ -159,8 +159,12 @@ export function updatePipeline(
  * row write only; the caller-facing `archivePipeline` service
  * (`repo/archive.ts`) wraps this together with disabling dependent triggers in
  * ONE transaction. Idempotent at the row level (archiving an archived pipeline
- * re-writes `archived=true`). Returns `null` for "no such pipeline". Archive is
- * the ONLY mutation of `archived` — no un-archive path ships in G5a.
+ * re-writes `archived=true`). Returns `null` for "no such pipeline".
+ *
+ * No longer the only mutation of `archived`, though it was in G5a: G5c added
+ * `restorePipeline` below (for the import apply), and #907 gave that an HTTP
+ * route of its own — the way back out of an archive, without which the same
+ * ticket's refusal of saves on an archived pipeline would be one-way.
  */
 export function archivePipelineRow(db: Db, id: string): Pipeline | null {
   const existing = getPipeline(db, id);
