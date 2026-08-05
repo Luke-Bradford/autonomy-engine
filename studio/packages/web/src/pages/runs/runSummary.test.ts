@@ -1183,6 +1183,140 @@ describe('deriveNodeActivity — a row that folds TWO instances (U24)', () => {
   });
 });
 
+describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
+  /**
+   * The defect: `run.reseeded` is a SIXTH terminal-success event and the fold
+   * treated it as inert, so a rerun-from-failed's copied nodes got no row from
+   * the fold at all. `reconcileNodeActivity` then seeded one with
+   * `outputValues: undefined` — "success · 0 attempts" and NO Outputs section,
+   * over a result the engine demonstrably holds and every downstream
+   * `${nodes.x.output.y}` resolves against.
+   *
+   * The event shape here is the producer's: `reseed.ts` appends
+   * `run.started{rerunOf}` and this manifest in ONE transaction into a
+   * brand-new run's empty log, so a reseed is always the second event and the
+   * frontier ids are always top-level (RS2's contract).
+   */
+  function reseededLog(over: Partial<Extract<EngineEvent, { type: 'run.reseeded' }>> = {}) {
+    return [
+      envelope({
+        type: 'run.started',
+        runId: 'r2',
+        pipelineVersionId: 'pv',
+        params: {},
+      }),
+      envelope({
+        type: 'run.reseeded',
+        runId: 'r2',
+        sourceRunId: 'r1',
+        frontier: ['a'],
+        copiedOutputs: { a: { status: 200 } },
+        copiedContainers: {},
+        ...over,
+      }),
+    ];
+  }
+
+  it('makes a row per frontier node carrying the copied outputs and the source run', () => {
+    const rows = deriveNodeActivity(
+      reseededLog({
+        frontier: ['a', 'b'],
+        copiedOutputs: { a: { status: 200 }, b: { body: 'ok' } },
+      }),
+    );
+
+    expect(rows).toEqual([
+      {
+        ...NO_LLM_ACTIVITY,
+        nodeId: 'a',
+        status: 'success',
+        // ZERO, and it is the engine's own answer (`onReseeded` writes
+        // `attempts: 0`): the node did not start in THIS run. `countIfUnstarted`
+        // must not fire here — that helper is for a node whose ONE event is its
+        // terminal, which did run.
+        attempts: 0,
+        outputs: 0,
+        lastOutputName: undefined,
+        error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: { status: 200 },
+        copiedFromRunId: 'r1',
+        instanceId: undefined,
+        // No span, and no fabricated one: a copied node has no duration in this
+        // run, so the panel must say so rather than print a `0ms` nobody
+        // observed.
+        startedAtMs: undefined,
+        endedAtMs: undefined,
+      },
+      {
+        ...NO_LLM_ACTIVITY,
+        nodeId: 'b',
+        status: 'success',
+        attempts: 0,
+        outputs: 0,
+        lastOutputName: undefined,
+        error: undefined,
+        failureKind: undefined,
+        failureCode: undefined,
+        outputValues: { body: 'ok' },
+        copiedFromRunId: 'r1',
+        instanceId: undefined,
+        startedAtMs: undefined,
+        endedAtMs: undefined,
+      },
+    ]);
+  });
+
+  it('records an empty copied result as `{}` — the reducer\'s own fallback, not "no result"', () => {
+    /* Not a live producer case: `reseedFrontier` writes `copiedOutputs[id]` for
+       EVERY frontier id (`{...(outputs[id] ?? {})}`), so a missing key cannot
+       arrive from the engine. It is pinned because the fold's `?? {}` must
+       agree with the reducer's rather than invent a third answer, and because
+       `{}` and `undefined` are DIFFERENT claims on this field — "recorded, and
+       empty" versus "no terminal result on record", which the panel renders
+       differently. */
+    const [a] = deriveNodeActivity(reseededLog({ copiedOutputs: {} }));
+
+    expect(a?.outputValues).toEqual({});
+    expect(a?.outputValues).not.toBeUndefined();
+  });
+
+  it('makes no row for a copied CONTAINER — this table has no container rows', () => {
+    const rows = deriveNodeActivity(
+      reseededLog({
+        frontier: ['a'],
+        copiedContainers: { loop1: { status: 'success', round: 2, outputs: {} } },
+      }),
+    );
+
+    expect(rows.map((n) => n.nodeId)).toEqual(['a']);
+  });
+
+  it('drops the copy claim when the node is re-dispatched, so it cannot outlive the result it describes', () => {
+    /* Unreachable from today's producers — `reseedFrontier` excludes every
+       top-level node in a back-edge loop body, and a copied node has no
+       `currentAttemptId` for `resume` to pick up. Pinned anyway because the
+       field is part of the node's RESULT: were a later producer to re-execute a
+       copied node, a stale "reused from run r1" standing over a value this run
+       computed is a wrong answer, not a cosmetic one. */
+    const rows = deriveNodeActivity([
+      ...reseededLog(),
+      envelope({
+        type: 'node.dispatched',
+        runId: 'r2',
+        nodeId: 'a',
+        attemptId: 'att_1',
+        idempotent: true,
+      }),
+    ]);
+
+    expect(rows[0]?.copiedFromRunId).toBeUndefined();
+    expect(rows[0]?.outputValues).toBeUndefined();
+    expect(rows[0]?.status).toBe('dispatched');
+  });
+});
+
 describe('reconcileNodeActivity', () => {
   /**
    * `a` fans out to `b` on success and `c` on failure, so a run in which `a`
@@ -1244,6 +1378,7 @@ describe('reconcileNodeActivity', () => {
       failureKind: undefined,
       failureCode: undefined,
       outputValues: undefined,
+      copiedFromRunId: undefined,
       instanceId: undefined,
       startedAtMs: undefined,
       endedAtMs: undefined,
