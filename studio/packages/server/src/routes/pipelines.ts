@@ -24,6 +24,7 @@ import {
   getWorkspaceGit,
   listPipelineVersions,
   listPipelinesPage,
+  restorePipeline,
   updatePipeline,
 } from '../repo/index.js';
 import { NotFoundError, PublishRefusedError, StaleWriteError } from '../errors.js';
@@ -149,6 +150,71 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * #907 — RESTORE an archived pipeline (the inverse of archive), and the
+   * reason it ships in the same change as the versions route's archived
+   * refusal rather than later.
+   *
+   * `restorePipeline` has existed since #3 G5c, but its only caller was the
+   * git-import apply — there was no HTTP route. Refusing to save on an
+   * archived pipeline without this would therefore be a ONE-WAY TRAP: an
+   * operator who archived over the API could never author that pipeline from
+   * the app again, only by round-tripping through a git import. A refusal is
+   * safe exactly when the way back is reachable by the same person.
+   *
+   * WHAT A RESTORE DOES NOT DO: re-enable the triggers the archive disabled.
+   * That is `restorePipeline`'s settled contract (re-enabling is authoring
+   * intent, gated by the G7/G8 binding+secret readiness reconcile) and it is
+   * the safe direction — a restore that silently re-armed a nightly schedule
+   * would fire a pipeline the operator had told the system they were done
+   * with. So restore returns the pipeline to an EDITABLE state, not a running
+   * one.
+   *
+   * Idempotent: restoring a live pipeline returns 200 with the same shape and
+   * emits no event. `requireOwned` enforces authorization (authentication ≠
+   * authorization); the post-commit `scheduler.sync()` mirrors the archive
+   * route's contract — it reconciles nothing today, since no trigger state
+   * changed, but it keeps this route honest if the G7/G8 re-enable path ever
+   * lands here, and matches the import apply's unconditional sync.
+   */
+  fastify.post<{ Params: { id: string } }>('/api/pipelines/:id/restore', async (request) => {
+    const existing = requireOwned(
+      getPipeline(db, request.params.id),
+      request.principal,
+      'pipeline',
+      request.params.id,
+    );
+    // Whether the pipeline was archived BEFORE this call — the idempotency
+    // signal for the audit event, exactly as the archive route captures it:
+    // `restorePipeline` is a no-op in effect when re-restoring, so it cannot
+    // tell us on its own.
+    const wasArchived = existing.archived;
+    // Restore + the audit event land in ONE transaction, so the
+    // `pipeline.restored` fact commits or rolls back ATOMICALLY with the
+    // restore — never a committed restore with a lost audit fact.
+    const restored = db.transaction(() => {
+      const p = restorePipeline(db, existing.id);
+      if (p === null) return null;
+      // Emit only on a REAL state change — the audit records EFFECT, not
+      // attempts (the `import.applied` rule its sibling archive follows).
+      if (wasArchived) {
+        appendWorkspaceEvent(db, request.principal.ownerId, {
+          type: 'pipeline.restored',
+          resourceId: p.resourceId,
+          name: p.name,
+          by: request.principal.id,
+        });
+      }
+      return p;
+    });
+    // `existing` was owner-checked above, so a null here means it vanished
+    // between the read and the restore (a concurrent delete) — surface as 404,
+    // never a manufactured success.
+    if (!restored) throw new NotFoundError('pipeline', existing.id);
+    fastify.scheduler.sync();
+    return restored;
+  });
+
+  /**
    * #3 G6c-1 — CAS Publish: promote an immutable version to the pipeline's
    * `active`/deployable pointer. The pointer is a PROJECTION of the
    * `pipeline.published` workspace-audit log (never a stored mutable row), so
@@ -262,6 +328,33 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
         request.params.id,
       );
       const { basedOnVersionId, ...doc } = CreatePipelineVersionBodySchema.parse(request.body);
+      /* #907 — an archived pipeline refuses new versions, as publish already
+         does on the same resource. Archive is a "stop editing this", not
+         merely a "stop running this": it drops the pipeline off the default
+         list, disables every dependent trigger, and the launcher bars
+         dispatch. Continuing to accept saves against something the product
+         presents as deleted lets an author work for twenty minutes on a
+         resource nothing will ever run, with nothing said.
+
+         Checked AFTER the body parse, matching publish's order, so a malformed
+         doc is still a 400 — the archive state does not change what a valid
+         request looks like.
+
+         ROUTE-SCOPED, and deliberately so. The git-import apply mints versions
+         through the repo function `createPipelineVersion` directly and handles
+         an archived pipeline by RESTORING it first
+         (`portability/workspace-apply.ts`), which is the right behaviour for a
+         branch that has the pipeline back — a rule about an INTERACTIVE save
+         belongs on the interactive surface, the same placement argument the
+         #904 CAS below makes.
+
+         Not a one-way trap: `POST /api/pipelines/:id/restore` above is the way
+         back, and this message names it. */
+      if (pipeline.archived) {
+        throw new PublishRefusedError(
+          `pipeline "${pipeline.id}" is archived and cannot be edited — unarchive it first`,
+        );
+      }
       // #904 — CAS on the head, in the same transaction as the mint.
       //
       // Without it, `createPipelineVersion` takes `max(version)+1`

@@ -22,7 +22,12 @@ import {
 } from '@autonomy-studio/shared';
 import { historyCommandFor, redoDisabledReason, undoDisabledReason } from './undoRedo';
 import { messageOf } from '../../api/client';
-import { createPipelineVersion, latestVersion, listPipelineVersions } from '../../api/pipelines';
+import {
+  createPipelineVersion,
+  latestVersion,
+  listPipelineVersions,
+  restorePipeline,
+} from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -79,6 +84,15 @@ import {
 interface PipelineCanvasProps {
   pipelineId: string;
   pipelineName: string;
+  /**
+   * #907 — is this pipeline ARCHIVED? An archived pipeline refuses every save
+   * (the server 409s), so the canvas says so BEFORE the operator types rather
+   * than only when their first Save bounces. The flag is the route's, because
+   * the route is what fetched the pipeline.
+   */
+  archived: boolean;
+  /** Called after a successful unarchive, so the route's copy stops saying archived. */
+  onUnarchived: () => void;
   onBack: () => void;
 }
 
@@ -87,13 +101,50 @@ interface PipelineCanvasProps {
  * into a working store, renders the React Flow editor with a palette and a
  * property panel, and saves the working graph as a NEW immutable version.
  */
-export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCanvasProps) {
+export function PipelineCanvas({
+  pipelineId,
+  pipelineName,
+  archived,
+  onUnarchived,
+  onBack,
+}: PipelineCanvasProps) {
   const store = useState(() => createCanvasStore())[0];
   const [connections, setConnections] = useState<ConnectionPublic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // #907 — the unarchive request's own in-flight + failure state. Kept apart
+  // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
+  // next save; this one is about whether the pipeline can be saved at all.
+  const [unarchiving, setUnarchiving] = useState(false);
+  const [unarchiveError, setUnarchiveError] = useState<string | null>(null);
+
+  /**
+   * #907 — bring the pipeline back to an editable state.
+   *
+   * "Unarchive", never "restore", even though the route is `POST
+   * /api/pipelines/:id/restore`: on THIS screen "restore" already means
+   * restoring an old VERSION into the working graph (#903, `onRestore` below),
+   * and one screen cannot use one word for two different acts.
+   *
+   * Leaves the working graph alone. Un-archiving is a fact about the PIPELINE,
+   * not about the doc being edited — reloading the canvas here would discard
+   * edits the operator made while archived, which is precisely the work this
+   * banner exists to stop them losing.
+   */
+  const onUnarchive = useCallback(async () => {
+    setUnarchiving(true);
+    setUnarchiveError(null);
+    try {
+      await restorePipeline(pipelineId);
+      onUnarchived();
+    } catch (err: unknown) {
+      setUnarchiveError(messageOf(err));
+    } finally {
+      setUnarchiving(false);
+    }
+  }, [pipelineId, onUnarchived]);
   // #903 — the versions the initial load already fetched. Before this ticket
   // they were reduced to `latestVersion` and thrown away; the history is that
   // same array, kept.
@@ -592,6 +643,30 @@ export function PipelineCanvas({ pipelineId, pipelineName, onBack }: PipelineCan
           </button>
         </div>
       </div>
+
+      {/* #907 — an archived pipeline refuses every save, so say it BEFORE the
+          work happens. Without this the first Save simply bounces with a 409,
+          after however long the operator spent editing.
+
+          `role="alert"` and the `.notice-conflict` shape (not the transient
+          `.notice` below) for the same reason the save-conflict banner uses
+          them: this is a standing FACT about the pipeline that must be acted
+          on, not a message about the last thing that happened — and it carries
+          the act that resolves it. */}
+      {archived && (
+        <div className="notice-conflict" role="alert">
+          <p>
+            This pipeline is archived, so saving is refused. Unarchive it to edit again — its
+            triggers stay disabled either way.
+          </p>
+          {unarchiveError !== null && <p>Unarchive failed: {unarchiveError}</p>}
+          <div className="form-actions">
+            <button type="button" onClick={() => void onUnarchive()} disabled={unarchiving}>
+              {unarchiving ? 'Unarchiving…' : 'Unarchive pipeline'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {saveMsg && <p className="notice">{saveMsg}</p>}
 

@@ -105,6 +105,12 @@ function CanvasFor({ pipelineId, store }: { pipelineId: string; store: Pipelines
     <PipelineCanvas
       pipelineId={pipeline.id}
       pipelineName={liveName ?? pipeline.name}
+      /* #907 — the canvas warns on an archived pipeline (every save is
+         refused). The fetched row is the authority: unlike the NAME, `archived`
+         has no live overlay, because `pipelinesStore` lists only un-archived
+         pipelines by default and so cannot answer "is this one archived". */
+      archived={pipeline.archived}
+      onUnarchived={() => setPipeline((p) => (p === null ? p : { ...p, archived: false }))}
       onBack={() => void navigate(PIPELINES_PATH)}
     />
   );

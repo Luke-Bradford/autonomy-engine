@@ -20,14 +20,26 @@ vi.mock('../pipeline/PipelineCanvas', () => ({
   PipelineCanvas: ({
     pipelineId,
     pipelineName,
+    archived,
+    onUnarchived,
     onBack,
   }: {
     pipelineId: string;
     pipelineName: string;
+    archived: boolean;
+    onUnarchived: () => void;
     onBack: () => void;
   }) => (
     <div>
       <span>{`canvas:${pipelineId}:${pipelineName}`}</span>
+      {/* #907 — the archived flag as the canvas actually receives it. The
+          banner itself is the real canvas's (and its e2e's); what this file
+          owns is that the ROUTE hands the fact down and updates its own copy
+          when the canvas reports the pipeline unarchived. */}
+      <span>{`archived:${String(archived)}`}</span>
+      <button type="button" onClick={onUnarchived}>
+        Report unarchived
+      </button>
       <button type="button" onClick={onBack}>
         Back
       </button>
@@ -77,6 +89,50 @@ describe('PipelineCanvasRoute', () => {
     renderRoute('/author/pipelines/pl_1');
     expect(await screen.findByText('canvas:pl_1:Nightly digest')).toBeInTheDocument();
     expect(getMock).toHaveBeenCalledWith('pl_1', expect.anything());
+  });
+
+  /**
+   * #907 — the canvas warns on an archived pipeline, and the warning has to
+   * clear once the operator acts on it. The fetch answers ONCE at mount, so a
+   * route that did not update its own copy would leave the banner standing
+   * over a pipeline that is no longer archived — telling the operator their
+   * saves are refused when they are not.
+   */
+  describe('#907 — the archived fact reaches the canvas, and clears when acted on', () => {
+    const archivedPipeline = {
+      id: 'pl_1',
+      resourceId: 'res_pl1',
+      ownerId: 'local',
+      name: 'Nightly digest',
+      concurrency: null,
+      archived: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    it('hands the archived flag down as fetched', async () => {
+      getMock.mockResolvedValue(archivedPipeline);
+      renderRoute('/author/pipelines/pl_1');
+      expect(await screen.findByText('archived:true')).toBeInTheDocument();
+    });
+
+    it('stops saying archived once the canvas reports it unarchived', async () => {
+      getMock.mockResolvedValue(archivedPipeline);
+      renderRoute('/author/pipelines/pl_1');
+      expect(await screen.findByText('archived:true')).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole('button', { name: 'Report unarchived' }));
+
+      expect(await screen.findByText('archived:false')).toBeInTheDocument();
+      // Settled from the route's OWN state — no second fetch is issued, and
+      // none would help: the canvas already knows the outcome it just caused.
+      expect(getMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not archived for an ordinary pipeline', async () => {
+      renderRoute('/author/pipelines/pl_1');
+      expect(await screen.findByText('archived:false')).toBeInTheDocument();
+    });
   });
 
   it('shows a loading hint rather than a placeholder name', async () => {
