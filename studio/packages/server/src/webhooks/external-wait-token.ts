@@ -26,6 +26,16 @@ import { sha256Hex } from '../util/hash.js';
  *      it is re-derived on demand from an owner-scoped endpoint. This mirrors the
  *      codebase's "encrypt/never-store secrets at rest" posture.
  *
+ *      That claim was WRONG about one artifact until #913, and the gap is worth
+ *      recording because nothing about the row or the event log had changed: the
+ *      token travels in the callback URL, and Fastify's request logger printed the
+ *      URL at level 30, so every inbound callback wrote the plaintext token into the
+ *      SERVER LOG — which is at rest, and is the artifact most likely to be pasted
+ *      into an issue or shipped to an aggregator. Closed by `util/log-redaction.ts`,
+ *      installed on the logger in `buildApp`. A URL-borne capability is not covered
+ *      by a store-side rule; any future secret carried in a path needs an entry in
+ *      that module's prefix table as well.
+ *
  * The master key is the same secret that encrypts connection secrets, so the
  * token is unforgeable without it AND the `(runId, nodeId, attemptId)` inputs
  * include the unguessable `attemptId` (`${nodeId}#${attempts}` — minted, but the
