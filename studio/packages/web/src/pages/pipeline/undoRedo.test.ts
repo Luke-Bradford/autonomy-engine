@@ -35,13 +35,21 @@ describe('undo/redo control state (U17)', () => {
   });
 
   it('an empty stack says so', () => {
-    expect(undoDisabledReason({ available: false, previewing: null, busy: false })).toBe('Nothing to undo.');
-    expect(redoDisabledReason({ available: false, previewing: null, busy: false })).toBe('Nothing to redo.');
+    expect(undoDisabledReason({ available: false, previewing: null, busy: false })).toBe(
+      'Nothing to undo.',
+    );
+    expect(redoDisabledReason({ available: false, previewing: null, busy: false })).toBe(
+      'Nothing to redo.',
+    );
   });
 
   it('a preview takes the controls away, and says which document it means', () => {
-    expect(undoDisabledReason({ available: true, previewing: 3, busy: false })).toMatch(/working graph/);
-    expect(redoDisabledReason({ available: true, previewing: 3, busy: false })).toMatch(/working graph/);
+    expect(undoDisabledReason({ available: true, previewing: 3, busy: false })).toMatch(
+      /working graph/,
+    );
+    expect(redoDisabledReason({ available: true, previewing: 3, busy: false })).toMatch(
+      /working graph/,
+    );
   });
 
   it('a save or restore in flight takes both controls away', () => {
@@ -61,7 +69,9 @@ describe('undo/redo control state (U17)', () => {
   });
 
   it('the preview reason WINS over the empty-stack one — it is the actionable half', () => {
-    expect(undoDisabledReason({ available: false, previewing: 3, busy: false })).toMatch(/Leave the preview/);
+    expect(undoDisabledReason({ available: false, previewing: 3, busy: false })).toMatch(
+      /Leave the preview/,
+    );
   });
 });
 

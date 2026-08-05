@@ -1896,6 +1896,50 @@ describe('canvasStore — undo/redo (U17)', () => {
     expect(s.getState().params[0]!.name).toBe('customer');
   });
 
+  it('undo of a container DELETE brings back its config and its cascaded edges', () => {
+    const s = opened();
+    s.getState().createContainer({
+      id: 'c_1',
+      kind: 'loop',
+      children: ['n_a'],
+      exitWhen: '${equals(1, 1)}',
+      maxRounds: 4,
+    });
+    s.getState().connect('c_1', 'n_b', { on: 'success' });
+    const edgesBefore = s.getState().edges.length;
+
+    s.getState().deleteContainer('c_1');
+    expect(s.getState().containers).toEqual([]);
+    expect(s.getState().edges.length).toBeLessThan(edgesBefore);
+
+    // The docs claim "one undo brings the box, its config and its cascaded
+    // edges back" — all three, not just the box.
+    s.getState().undo();
+    expect(s.getState().containers[0]).toMatchObject({
+      id: 'c_1',
+      kind: 'loop',
+      exitWhen: '${equals(1, 1)}',
+      maxRounds: 4,
+    });
+    expect(s.getState().edges).toHaveLength(edgesBefore);
+  });
+
+  it('selecting is not an edit — it records no history and does not break a burst', () => {
+    const s = opened();
+    s.getState().addParam();
+    const row = s.getState().params[0]!;
+    s.getState().updateParam(0, { ...row, name: 'aa' });
+    const depth = s.getState().past.length;
+
+    s.getState().select({ kind: 'node', id: 'n_a' });
+    expect(s.getState().past).toHaveLength(depth);
+    expect(s.getState().dirty).toBe(true); // unchanged by the selection
+
+    // And it did not fork the history: undo still reaches the pre-burst row.
+    s.getState().undo();
+    expect(s.getState().params[0]!.name).toBe(row.name);
+  });
+
   it('a new edit clears the redo stack', () => {
     const s = opened();
     s.getState().addNode('http_request');

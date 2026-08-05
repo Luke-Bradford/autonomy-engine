@@ -331,6 +331,12 @@ export const HISTORY_LIMIT = 50;
  *
  * `dirty` and `loadedId` ride along because undo has to restore the SAVED-ness
  * of the doc, not just its shape — see `restoreFrom`.
+ *
+ * `addCount` is deliberately NOT here, the one piece of canvas state besides the
+ * selection that a snapshot excludes. It is a monotonic placement counter for
+ * UNPOSITIONED adds, not part of the doc: rolling it back would land the next
+ * clicked add on the coordinates a previous one used, and carrying it forward
+ * costs nothing but a stagger slot. Neither answer can affect what is saved.
  */
 interface CanvasDocSnapshot {
   nodes: Node[];

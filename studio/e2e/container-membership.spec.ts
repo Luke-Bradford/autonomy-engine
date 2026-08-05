@@ -181,9 +181,11 @@ test.describe('#748 an emptied container is not a one-way trap', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    // The delete is confirmed (there is no undo, and the container's config does
-    // not survive it). Playwright DISMISSES dialogs by default, which would make
-    // this test pass for the wrong reason — nothing deleted, nothing to save.
+    // The delete is confirmed, because the cascade takes the container's config
+    // and its incident edges with it — worth stopping before it happens, even
+    // though U17 has since made it reversible. Playwright DISMISSES dialogs by
+    // default, which would make this test pass for the wrong reason — nothing
+    // deleted, nothing to save.
     page.on('dialog', (dialog) => void dialog.accept());
     const pipelineId = await openSeededCanvas(page, 'container-escape', wiredLoopDoc());
 

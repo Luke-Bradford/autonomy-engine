@@ -54,6 +54,23 @@ import { confirmContainerEdit, containerLabels } from './containerRules';
  * only by `validateDoc` — so offering the schema's fields unfiltered would let
  * the panel author a doc the save gate then rejects.
  */
+/**
+ * Would this form display the same thing for both seeds? (U17)
+ *
+ * A shallow value compare, which is total for `seedFieldInputs`' return type —
+ * every value is a `string` or a `boolean`, so there is no nested case to miss.
+ * A differing key SET counts as different, which is the conservative answer: it
+ * only happens when the kind's field list changed, and a re-seed is right then.
+ */
+function sameSeededInputs(
+  a: Record<string, string | boolean>,
+  b: Record<string, string | boolean>,
+): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => k in b && a[k] === b[k]);
+}
+
 export function ContainerPanel({
   container,
   nodes,
@@ -146,17 +163,38 @@ export function ContainerPanel({
   }, [unrenderable, illegal, nodes, edges, containers, params, container.id]);
 
   /**
-   * Seeded ONCE, per mount.
+   * Seeded on mount, and re-seeded when the stored CONFIG changes (U17).
+   *
+   * This note used to say "seeded ONCE, per mount", and record a re-seed as
+   * written-then-removed. That reasoning was right and is preserved below —
+   * what changed is which fact the re-seed keys on.
    *
    * `NodePanel` pairs its seed with a render-phase re-seed when its `config`
-   * prop changes, and this panel deliberately does NOT — it was written and
-   * then removed, because the two differ in what a prop change MEANS.
-   * `NodePanel`'s subject is `node.config`, which changes only when that config
-   * is replaced. This panel's subject is the whole `Container`, and the store's
-   * copy-on-write actions replace that object for edits the operator did not
-   * make here at all: `deleteNode` pruning a child out of it (#746) mints a new
-   * container, and a re-seed would silently discard an `exitWhen` they were
-   * half-way through typing.
+   * prop changes. Doing the same HERE on the prop was wrong, because the two
+   * differ in what a prop change MEANS: `NodePanel`'s subject is `node.config`,
+   * which changes only when that config is replaced, whereas this panel's
+   * subject is the whole `Container` — and the store's copy-on-write actions
+   * replace that object for edits the operator did not make here at all
+   * (`deleteNode` pruning a child out of it, #746). An identity-keyed re-seed
+   * would silently discard an `exitWhen` they were half-way through typing.
+   *
+   * U17 then made "never re-seed" wrong too: an undo replaces the config of the
+   * SAME container, which remounts nothing, so the form would go on showing the
+   * value that was just undone.
+   *
+   * Both are satisfied by keying on the SEEDED VALUES — what this form would
+   * display for the stored container — rather than on the container object.
+   * That is the question the re-seed is actually asking ("would the form show
+   * something different?"), and it answers it without a second opinion about
+   * which fields count: a membership-only rewrite mints a new container whose
+   * seeds are identical and re-seeds nothing, while an undo of a config edit
+   * changes a seed and re-seeds. `BounceCapField`'s value-keyed shape, not
+   * `NodePanel`'s identity-keyed one.
+   *
+   * The store's own `sameContainerConfig` is deliberately NOT reused here: it
+   * compares a container FIELD FOR FIELD, `children` included, so it answers
+   * "did this container change" — which is the question `updateContainer` needs
+   * and the opposite of the one this panel needs.
    *
    * Switching to a DIFFERENT container is handled by `PropertyPanel`'s `key`,
    * which remounts — the same mechanism `EdgePanel` and `NodePanel` rely on, and
@@ -164,15 +202,11 @@ export function ContainerPanel({
    */
   const [inputs, setInputs] = useState(() => seedFieldInputs(fields, stored));
   const [error, setError] = useState<string | null>(null);
-  /* U17 — re-seed when the STORED container changes underneath the draft. The
-     remount the note above relies on covers switching to a DIFFERENT container;
-     an undo replaces the config of the SAME one, which remounts nothing, so the
-     form would keep showing the config that was just undone. Render-phase
-     derived state, `NodePanel`'s precedent. */
-  const [syncedStored, setSyncedStored] = useState(stored);
-  if (syncedStored !== stored) {
-    setSyncedStored(stored);
-    setInputs(seedFieldInputs(fields, stored));
+  const seeded = seedFieldInputs(fields, stored);
+  const [syncedSeed, setSyncedSeed] = useState(seeded);
+  if (!sameSeededInputs(syncedSeed, seeded)) {
+    setSyncedSeed(seeded);
+    setInputs(seeded);
     setError(null);
   }
 

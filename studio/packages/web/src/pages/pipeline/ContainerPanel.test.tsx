@@ -242,3 +242,62 @@ describe('ContainerPanel — a value no control can represent', () => {
     expect(screen.getByRole('alert').textContent).toContain('exitWhen');
   });
 });
+
+/**
+ * U17 — which change re-seeds this form, and which must not.
+ *
+ * The panel's docblock records BOTH halves as decisions: a re-seed keyed on the
+ * container OBJECT was written and removed once already (#746 — a membership
+ * rewrite mints a new container and would discard a half-typed field), and U17
+ * then made "never re-seed" wrong too (an undo replaces the config of the same
+ * container and remounts nothing, so the form would show the value just undone).
+ * Keying on the CONFIG is what satisfies both, so both halves are pinned here.
+ */
+describe('ContainerPanel — following an undo without losing a draft (U17)', () => {
+  function rerenderable(container: Container) {
+    const onApply = vi.fn();
+    const view = render(
+      <ContainerPanel
+        container={container}
+        nodes={NODES}
+        edges={[]}
+        containers={[container]}
+        params={[]}
+        onApply={onApply}
+      />,
+    );
+    return (next: Container) =>
+      view.rerender(
+        <ContainerPanel
+          container={next}
+          nodes={NODES}
+          edges={[]}
+          containers={[next]}
+          params={[]}
+          onApply={onApply}
+        />,
+      );
+  }
+
+  it('a CONFIG change re-seeds the form — the shape an undo arrives in', () => {
+    const rerender = rerenderable(LOOP);
+    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${equals(1, 1)}');
+
+    // What an undo hands back: the SAME container id, a different config.
+    rerender({ ...LOOP, exitWhen: '${false}' });
+    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${false}');
+  });
+
+  it('a MEMBERSHIP rewrite does NOT clobber a half-typed field', () => {
+    const rerender = rerenderable(LOOP);
+    const field = screen.getByLabelText(/^exitWhen/);
+    fireEvent.change(field, { target: { value: '${half-typed' } });
+    expect(field).toHaveValue('${half-typed');
+
+    // #746's case: a NEW container object carrying an EQUAL config. An
+    // identity-keyed re-seed would discard the draft here — which is exactly
+    // why this panel keys on `sameContainerConfig` instead.
+    rerender({ ...LOOP, children: ['n_a', 'n_b'] });
+    expect(screen.getByLabelText(/^exitWhen/)).toHaveValue('${half-typed');
+  });
+});
