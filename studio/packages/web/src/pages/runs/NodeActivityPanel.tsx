@@ -1,13 +1,7 @@
-import { TERMINAL_NODE, type NodeCost } from '@autonomy-studio/shared';
+import { TERMINAL_NODE } from '@autonomy-studio/shared';
 import { nodeStatusLabel } from './nodeStatus';
 import { formatNodeDuration } from './format';
-import {
-  costFigure,
-  costSentence,
-  readCost,
-  tokenSummary,
-  unsettledSentence,
-} from './costReading';
+import { costFigure, costSentence, readCost, tokenSummary, unsettledSentence } from './costReading';
 import type { NodeActivity, NodeToolCall } from './runSummary';
 
 /**
@@ -271,7 +265,7 @@ export function NodeActivityPanel({
 /**
  * #866 slice 1 — what this node SPENT.
  *
- * The money figure is never rendered bare: `readNodeCost` decides which of five
+ * The money figure is never rendered bare: `readCost` decides which of five
  * readings is true first, and each gets its own sentence, because the same
  * `totalCostEstimate: 0` means four different things depending on the counters
  * beside it (nothing ran · a known covered zero · nothing could be priced · a

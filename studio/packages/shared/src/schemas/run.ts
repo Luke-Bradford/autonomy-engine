@@ -44,10 +44,7 @@ export type RunStatus = z.infer<typeof RunStatusSchema>;
 export const TERMINAL_RUN_ROW_STATUS: ReadonlySet<RunStatus> = new Set<RunStatus>(
   RunStatusSchema.options.filter(
     (status) =>
-      status !== 'pending' &&
-      status !== 'queued' &&
-      status !== 'running' &&
-      status !== 'waiting',
+      status !== 'pending' && status !== 'queued' && status !== 'running' && status !== 'waiting',
   ),
 );
 

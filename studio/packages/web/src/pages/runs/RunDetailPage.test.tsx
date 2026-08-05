@@ -2235,7 +2235,9 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
        gate would have hidden the caveat in exactly the case it exists for. */
     expect(within(section).getByText('No billed exchange')).toBeInTheDocument();
     expect(within(section).getByText(/1 node was REUSED from run/)).toBeVisible();
-    expect(within(section).getByText(/what the rerun spent, not what the result cost/)).toBeVisible();
+    expect(
+      within(section).getByText(/what the rerun spent, not what the result cost/),
+    ).toBeVisible();
   });
 
   it('says nothing about reuse on an ordinary run', async () => {

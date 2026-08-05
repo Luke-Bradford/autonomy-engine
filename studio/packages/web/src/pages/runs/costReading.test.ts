@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeCost } from '@autonomy-studio/shared';
-import {
-  costSentence,
-  readCost,
-  reusedSpend,
-  unsettledSentence,
-} from './costReading';
+import { costSentence, readCost, reusedSpend, unsettledSentence } from './costReading';
 
 /** A folded node cost, defaulted to "nothing billed" and overridden per case. */
 function cost(fields: Partial<NodeCost> = {}): NodeCost {
@@ -58,9 +53,7 @@ describe('readCost (#866)', () => {
     // The trap: `totalCostEstimate` is 0 because no cost was resolvable, not
     // because nothing was spent. Presenting that 0 as a floor states a figure
     // nobody measured.
-    const r = readCost(
-      cost({ responseCount: 2, costUnknownResponseCount: 2, complete: false }),
-    );
+    const r = readCost(cost({ responseCount: 2, costUnknownResponseCount: 2, complete: false }));
     expect(r.kind).toBe('unknown');
     expect(r.amount).toBe(0);
   });
