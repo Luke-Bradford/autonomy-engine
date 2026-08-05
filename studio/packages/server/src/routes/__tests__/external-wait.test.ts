@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import {
   buildDedupeKey,
+  ApiErrorBodySchema,
   CATALOG_VERSION,
   PendingExternalWaitListSchema,
   type NewPipelineVersion,
@@ -10,6 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { createPipeline, createPipelineVersion, getPipelineVersion } from '../../repo/index.js';
 import { createRun, getRun } from '../../repo/runs.js';
+import { markExternalWaitExpired } from '../../repo/external-waits.js';
 import { getWakeupByKey } from '../../repo/scheduled-wakeups.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 import { startRun, buildEngine, type DocResolver, type DriveDeps } from '../../run/driver.js';
@@ -326,6 +328,237 @@ describe('external-wait routes', () => {
       payload: { decision: 'approve' },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  /**
+   * #901 — the OWNER-scoped completion route, `POST /api/runs/:id/external-waits/
+   * complete`: the same settle, reached through the run the caller owns instead of
+   * through a capability token.
+   *
+   * These tests hold the two properties that justify a second door existing at all.
+   * (1) The TOKEN never leaves the server — every request below sends only
+   * `(nodeId, attemptId, payload)`. (2) The route DISCLOSES state an owner is
+   * entitled to (`already completed` / `expired` / which field failed) where the
+   * anonymous seam above must answer an identical 404 — those tests sit in the same
+   * file deliberately, so a change that relaxed the seam's no-oracle collapse would
+   * have to walk past them.
+   */
+  async function pendingWaitFor(runId: string) {
+    const res = await app.inject({ method: 'GET', url: `/api/runs/${runId}/external-waits` });
+    expect(res.statusCode).toBe(200);
+    const waits = PendingExternalWaitListSchema.parse(res.json());
+    expect(waits).toHaveLength(1);
+    return waits[0]!;
+  }
+
+  function completeAsOwner(runId: string, body: unknown) {
+    return app.inject({
+      method: 'POST',
+      url: `/api/runs/${runId}/external-waits/complete`,
+      payload: body,
+    });
+  }
+
+  it('#901 — an owner completes a parked wait from the app, sending NO token', async () => {
+    const { runId, resolveDoc } = await parkRun([{ name: 'decision', type: 'string' }]);
+    const wait = await pendingWaitFor(runId);
+
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: { decision: 'approve', ignored: 'dropped' },
+    });
+    expect(res.statusCode).toBe(204);
+
+    await new Promise((r) => setTimeout(r, 30));
+    const state = projectState(runId, resolveDoc);
+    expect(state.nodes.w!.status).toBe('success');
+    // Same boundary filtering as the anonymous seam — one settle path, two doors.
+    expect(state.outputs.w).toEqual({ decision: 'approve' });
+  });
+
+  it('#901 — the capability token crosses the wire in NEITHER direction', async () => {
+    // The whole reason this route exists rather than the SPA calling
+    // `/api/external-wait/:token`: completing a wait must not require shipping a
+    // live bearer credential into the browser. The request above carried no token
+    // (and succeeded), and the response must not hand one back either.
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    const token = deriveExternalWaitToken(app.masterKey, {
+      runId,
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+    });
+
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(204);
+    expect(res.body).not.toContain(token);
+    expect(res.body).not.toContain('external-wait/');
+  });
+
+  it('#901 — completion is authorization-scoped through the run (a FOREIGN run is 404)', async () => {
+    // Authentication is not authorization. The run exists and is genuinely parked;
+    // it simply is not the caller's, and a non-owner must not be able to resume
+    // someone else's run — nor learn from the status that it exists.
+    const { runId, resolveDoc } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    app.db.run(sql`UPDATE runs SET owner_id = 'somebody-else' WHERE id = ${runId}`);
+
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+
+    app.db.run(sql`UPDATE runs SET owner_id = 'local' WHERE id = ${runId}`);
+    await new Promise((r) => setTimeout(r, 30));
+    // Refused BEFORE the settle: the node is untouched, not merely unreported.
+    expect(projectState(runId, resolveDoc).nodes.w!.status).toBe('external_wait_pending');
+  });
+
+  it('#901 — a non-existent run is the same 404', async () => {
+    const res = await completeAsOwner('run_does_not_exist', {
+      nodeId: 'w',
+      attemptId: 'a_1',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('#901 — a STALE attemptId is refused, never redirected onto the live attempt', async () => {
+    // The CAS, and the reason `attemptId` is in the body at all (#904's shape). A
+    // webhook that expires re-parks under a NEW attempt, so a body composed for the
+    // attempt the operator was LOOKING at must not silently settle a later one.
+    const { runId, resolveDoc } = await parkRun([{ name: 'decision', type: 'string' }]);
+    const wait = await pendingWaitFor(runId);
+
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: `${wait.attemptId}-stale`,
+      payload: { decision: 'approve' },
+    });
+    expect(res.statusCode).toBe(404);
+
+    await new Promise((r) => setTimeout(r, 30));
+    const state = projectState(runId, resolveDoc);
+    expect(state.nodes.w!.status).toBe('external_wait_pending');
+    expect(loadEngineEvents(app.db, runId).filter((e) => e.type === 'externalWait.completed'))
+      .toHaveLength(0);
+  });
+
+  it('#901 — an unknown nodeId on an owned run is a 404', async () => {
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    const res = await completeAsOwner(runId, {
+      nodeId: 'no-such-node',
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('#901 — an ALREADY-COMPLETED wait says so (409), where the token seam says 404', async () => {
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    const first = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(first.statusCode).toBe(204);
+
+    const second = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(second.statusCode).toBe(409);
+    // Through the CENTRAL error handler, so the body is the shared contract and the
+    // client's `messageFromBody` can actually show the reason — the defect #901 was
+    // opened over (the seam's own 404/422 bodies bypass it and lose their detail).
+    const body = ApiErrorBodySchema.parse(second.json());
+    expect(body.error).toBe('external_wait_settled');
+    expect(body.message).toContain('already completed');
+  });
+
+  it('#901 — an EXPIRED wait is a 410, distinguished from a completed one', async () => {
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    // Settle the ROW as the expiry alarm does. The alarm also fails the node; this
+    // exercises the route's status mapping, which reads the row and answers before
+    // the completer is ever reached.
+    expect(
+      markExternalWaitExpired(
+        app.db,
+        { runId, nodeId: wait.nodeId, attemptId: wait.attemptId },
+        Date.now(),
+      ),
+    ).toBe(true);
+
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(410);
+    const body = ApiErrorBodySchema.parse(res.json());
+    expect(body.error).toBe('external_wait_settled');
+    expect(body.message).toContain('expired');
+  });
+
+  it('#901 — a body failing the declared contract is a 422 that NAMES the field, and retries', async () => {
+    const { runId, resolveDoc } = await parkRun([{ name: 'decision', type: 'string' }]);
+    const wait = await pendingWaitFor(runId);
+
+    const bad = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: { note: 'no decision' },
+    });
+    expect(bad.statusCode).toBe(422);
+    const body = ApiErrorBodySchema.parse(bad.json());
+    expect(body.error).toBe('external_wait_payload');
+    // A PAYLOAD defect, so the completer's reason survives to the operator. (A
+    // CONTRACT defect — the node's own corrupt `config.outputs` — is withheld and
+    // logged server-side instead, which is why the UI must not promise a reason.)
+    expect(body.message).toContain('decision');
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(projectState(runId, resolveDoc).nodes.w!.status).toBe('external_wait_pending');
+
+    // Still live: the operator corrects the JSON and sends it again.
+    const good = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+      payload: { decision: 'reject' },
+    });
+    expect(good.statusCode).toBe(204);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(projectState(runId, resolveDoc).outputs.w).toEqual({ decision: 'reject' });
+  });
+
+  it('#901 — a body missing `attemptId` is a 400, never an unpinned completion', async () => {
+    const { runId } = await parkRun();
+    const res = await completeAsOwner(runId, { nodeId: 'w', payload: {} });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('#901 — an ABSENT payload is refused, not manufactured as an empty one', async () => {
+    // `payload` is required with no `.default()`: an absent fact must never be
+    // invented as a benign one (#473/#904). Sending nothing is a malformed request,
+    // not a decision to complete the wait with no outputs.
+    const { runId } = await parkRun();
+    const wait = await pendingWaitFor(runId);
+    const res = await completeAsOwner(runId, {
+      nodeId: wait.nodeId,
+      attemptId: wait.attemptId,
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
 
