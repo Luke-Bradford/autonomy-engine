@@ -8,6 +8,8 @@ import { RunStatusSchema, type RunSummary } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
+import * as triggersApi from '../../api/triggers';
+import { createPipelinesStore } from '../../stores/pipelinesStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
 // convention of stubbing every network fn of the module, so no real call ever
@@ -19,7 +21,16 @@ vi.mock('../../api/runs', async (importActual) => ({
   getRunEvents: vi.fn(),
 }));
 
+// U26's pickers each reach the network. Triggers get the same whole-module stub
+// the runs API gets; pipelines come in through the store seam below instead, so
+// the page is exercised against the REAL store with an injected fetch.
+vi.mock('../../api/triggers', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/triggers')>()),
+  listTriggers: vi.fn(),
+}));
+
 const listMock = vi.mocked(runsApi.listRuns);
+const triggersMock = vi.mocked(triggersApi.listTriggers);
 
 function run(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
@@ -47,6 +58,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
 
 beforeEach(() => {
   listMock.mockResolvedValue([]);
+  triggersMock.mockResolvedValue([]);
   vi.mocked(runsApi.getRun).mockResolvedValue({} as never);
   vi.mocked(runsApi.getRunEvents).mockResolvedValue([]);
 });
@@ -62,7 +74,10 @@ describe('RunsPage', () => {
     listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText('run_abc')).toBeInTheDocument();
-    expect(screen.getByText('success')).toBeInTheDocument();
+    // Scoped to the TABLE, not the page: U26's status picker offers the same
+    // words as options, so a bare page-wide `getByText('success')` now matches
+    // the filter control too and would pass with the status CELL deleted.
+    expect(within(screen.getByRole('table')).getByText('success')).toBeInTheDocument();
   });
 
   /**
@@ -99,10 +114,13 @@ describe('RunsPage', () => {
     );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_0');
+    // Table-scoped for the same reason as above — the picker speaks the same
+    // vocabulary, and this test is about the CELLS.
+    const table = within(screen.getByRole('table'));
     for (const status of RunStatusSchema.options) {
-      expect(screen.getByText(runStatusLabel(status)), `no cell for ${status}`).toBeInTheDocument();
+      expect(table.getByText(runStatusLabel(status)), `no cell for ${status}`).toBeInTheDocument();
     }
-    expect(screen.getByText('queued (slot)')).toBeInTheDocument();
+    expect(table.getByText('queued (slot)')).toBeInTheDocument();
   });
 
   /**
@@ -115,7 +133,8 @@ describe('RunsPage', () => {
   it('shows a parked run as a bare `waiting` — the row carries no reason', async () => {
     listMock.mockResolvedValue([run({ id: 'run_parked', status: 'waiting' })]);
     renderWithRouter(<RunsPage />);
-    expect(await screen.findByText('waiting')).toBeInTheDocument();
+    await screen.findByText('run_parked');
+    expect(within(screen.getByRole('table')).getByText('waiting')).toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {
@@ -277,5 +296,129 @@ describe('RunsPage', () => {
     renderWithRouter(<RunsPage />);
     const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
     expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
+  });
+});
+
+/**
+ * U26 — the Monitor filter pane.
+ *
+ * The axes are SERVER-side, so what this file owns is the contract between the
+ * controls and the request: which query the page asks for, what it writes to the
+ * URL, and what it says when the answer is empty. WHICH rows each axis selects
+ * is the repo/route suite's, and is not re-asserted here through a mock.
+ */
+describe('RunsPage — U26 filter pane', () => {
+  function pipeline(id: string, name: string) {
+    return { id, ownerId: 'local', name, archivedAt: null, createdAt: 0, updatedAt: 0 };
+  }
+  function storeWith(...list: ReturnType<typeof pipeline>[]) {
+    return createPipelinesStore(() => Promise.resolve(list as never));
+  }
+
+  it('sends no filter params at all when nothing is selected', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />);
+    await screen.findByText(/No runs yet/i);
+    expect(listMock).toHaveBeenCalledWith({}, expect.anything());
+  });
+
+  it('reads every axis out of the URL and asks the SERVER for it', async () => {
+    renderWithRouter(
+      <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
+      '/monitor/runs?status=failure&pipeline=pl_1&trigger=trg_1&since=24h',
+    );
+    await screen.findByText(/No runs match these filters/i);
+    expect(listMock).toHaveBeenCalledWith(
+      { status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' },
+      expect.anything(),
+    );
+  });
+
+  it('writes a chosen status to the URL and refetches with it', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    await screen.findByText(/No runs yet/i);
+    listMock.mockClear();
+
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
+
+    expect(listMock).toHaveBeenCalledWith({ status: 'failure' }, expect.anything());
+    expect(await screen.findByText(/No runs match these filters/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The graceful-degradation rule. The SERVER refuses an out-of-vocabulary
+   * `?status=` with a 400, which is right for an API — but a stale link must not
+   * land the operator on an error page, so the page drops what it cannot
+   * recognise and shows the unfiltered view.
+   */
+  it('ignores an unrecognised status/window rather than sending or erroring on it', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=nope&since=forever');
+    await screen.findByText(/No runs yet/i);
+    expect(listMock).toHaveBeenCalledWith({}, expect.anything());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The orphan-select guard. A `<select>` whose value matches no option renders
+   * the FIRST one, so without this the control would read "All pipelines" while
+   * the list stayed filtered — the control lying about what is applied.
+   */
+  it('shows a filtered-but-unknown pipeline as a disabled option, not as "All pipelines"', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?pipeline=pl_gone');
+    await screen.findByText(/No runs match these filters/i);
+    const select = screen.getByLabelText<HTMLSelectElement>('Pipeline');
+    expect(select.value).toBe('pl_gone');
+    expect(screen.getByRole('option', { name: /pl_gone/ })).toBeDisabled();
+  });
+
+  /**
+   * The filter pane must survive its own emptiness — if it rendered only when
+   * rows exist, the control that clears the filter would vanish exactly when it
+   * is needed, leaving the URL as the only way out.
+   */
+  it('keeps the pane reachable when the filter matches nothing, and Clear restores the list', async () => {
+    listMock.mockResolvedValue([]);
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=failure');
+    await screen.findByText(/No runs match these filters/i);
+
+    listMock.mockResolvedValue([run({ id: 'run_back' })]);
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    expect(await screen.findByText('run_back')).toBeInTheDocument();
+    expect(listMock).toHaveBeenLastCalledWith({}, expect.anything());
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
+  it('does not offer Clear when nothing is filtered', async () => {
+    renderWithRouter(<RunsPage store={storeWith()} />);
+    await screen.findByText(/No runs yet/i);
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
+  /**
+   * "You have no runs" and "none match" call for different things — the Triggers
+   * page versus the Clear control — so saying the first when the second is true
+   * is not just imprecise, it points the operator at the wrong fix.
+   */
+  it('distinguishes "no runs at all" from "none match these filters"', async () => {
+    const { unmount } = renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+    expect(await screen.findByText(/No runs yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No runs match these filters/i)).not.toBeInTheDocument();
+    unmount();
+
+    renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?since=1h');
+    expect(await screen.findByText(/No runs match these filters/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No runs yet/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A picker that cannot load is not worth an error banner over the runs the
+   * operator came here to read — it degrades to "All triggers".
+   */
+  it('still lists runs when the trigger picker fails to load', async () => {
+    triggersMock.mockRejectedValue(new Error('offline'));
+    listMock.mockResolvedValue([run({ id: 'run_ok' })]);
+    renderWithRouter(<RunsPage store={storeWith()} />);
+    expect(await screen.findByText('run_ok')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

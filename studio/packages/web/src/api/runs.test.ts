@@ -71,6 +71,32 @@ describe('runs API', () => {
     expect(init?.method ?? 'GET').toBe('GET');
   });
 
+  /**
+   * U26 — the filter axes ride as query params. Only SET axes reach the wire:
+   * an empty string is NOT "no filter" to the server (`pipelineId` is `min(1)`,
+   * `status`/`since` are closed enums), so sending one would be a 400 where the
+   * caller meant "unfiltered".
+   */
+  it('sends only the filter axes that are set, and omits the query string entirely when none are', async () => {
+    const bare = stubFetch(200, []);
+    await listRuns({});
+    expect(bare.mock.calls[0]![0]).toBe('/api/runs');
+
+    const empties = stubFetch(200, []);
+    await listRuns({ pipelineId: '', triggerId: undefined });
+    expect(empties.mock.calls[0]![0]).toBe('/api/runs');
+
+    const filtered = stubFetch(200, []);
+    await listRuns({ status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' });
+    const url = new URL(filtered.mock.calls[0]![0] as string, 'http://x');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      status: 'failure',
+      pipelineId: 'pl_1',
+      triggerId: 'trg_1',
+      since: '24h',
+    });
+  });
+
   it('applies the shared run schema — a malformed row rejects', async () => {
     const bad: Record<string, unknown> = { ...sampleRunSummary };
     delete bad.status;
