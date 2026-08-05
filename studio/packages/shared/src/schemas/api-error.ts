@@ -46,11 +46,16 @@ export const ApiErrorCodeSchema = z.enum([
   'stale_write',
   // #901 — the body an owner sent to complete a parked external wait failed the
   // node's declared `config.outputs` contract (422). Its OWN code, on the same
-  // test `stale_write` passed: the client ACTS on it, and differently from every
-  // other failure on that route. This is the one the operator can fix from where
-  // they are standing — edit the JSON and send it again, with the node still
-  // parked — so the UI keeps the editor open and shows the reason, where any
-  // other refusal means the wait is gone and the editor should close.
+  // test `stale_write` passed: it is the one refusal on that route the operator
+  // can fix from where they are standing, because the node is still PARKED — edit
+  // the JSON and send it again — where every other refusal means the wait is gone.
+  //
+  // The web client does not yet branch on it: `PendingCallbacks` shows the reason
+  // and keeps the editor open for ANY failure. That is right for this code and
+  // merely harmless for the others, because a 409/410 arrives with the completion
+  // frame that remounts the section anyway. The code is what a client would need
+  // to close the editor honestly on a dead socket; it is carried now so the server
+  // contract does not have to change later to allow it.
   'external_wait_payload',
   // #901 — the wait is no longer completable: already completed, expired, or the
   // run/node moved past it (409, or 410 for a row settled `expired`). ONE code

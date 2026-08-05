@@ -359,6 +359,46 @@ describe('external-wait routes', () => {
     });
   }
 
+  it('the anonymous seam does not answer until the resumed drive has settled', async () => {
+    /* #901 split the drive out of the completer so the OWNER route could answer
+       204 immediately; this route deliberately kept awaiting it. That promise was
+       stated in a docblock and enforced by NOTHING — flipping its `await drive` to
+       `void drive` left every other test in this file green, because the in-process
+       stub executor settles a one-node run within microtasks, so a timing assertion
+       over a real run cannot tell the two apart.
+
+       So this pins the route's own seam instead: hand it a completer whose `drive`
+       is still pending, and assert the response has not been produced. That is the
+       exact property — "answers only once the run came to rest" — and it is the
+       only level at which it is observable without a deliberately slow executor
+       (which the app wiring does not currently allow injecting; #912). */
+    let releaseDrive!: () => void;
+    const drive = new Promise<void>((resolve) => {
+      releaseDrive = resolve;
+    });
+    const real = app.externalWaitCompleter;
+    app.externalWaitCompleter = { complete: async () => ({ outcome: 'completed', drive }) };
+    try {
+      let answered = false;
+      const inflight = app
+        .inject({ method: 'POST', url: '/api/external-wait/any-token' })
+        .then((res) => {
+          answered = true;
+          return res;
+        });
+
+      // Several macrotask turns: ample for the handler to have replied if it were
+      // discarding `drive` rather than awaiting it.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(answered, 'the route replied before the resumed drive settled').toBe(false);
+
+      releaseDrive();
+      expect((await inflight).statusCode).toBe(204);
+    } finally {
+      app.externalWaitCompleter = real;
+    }
+  });
+
   it('#901 — an owner completes a parked wait from the app, sending NO token', async () => {
     const { runId, resolveDoc } = await parkRun([{ name: 'decision', type: 'string' }]);
     const wait = await pendingWaitFor(runId);
@@ -396,8 +436,15 @@ describe('external-wait routes', () => {
       payload: {},
     });
     expect(res.statusCode).toBe(204);
-    expect(res.body).not.toContain(token);
-    expect(res.body).not.toContain('external-wait/');
+    /* Over the HEADERS as well as the body, because the body half alone is
+       vacuous: the line above already pinned a 204, and a 204 body is always the
+       empty string — so `expect(res.body).not.toContain(token)` could not fail for
+       ANY implementation. The headers are where a real leak would hide (a
+       `Location` pointing at the callback path, a debug header echoing the
+       derivation), and that is a mutation this assertion actually survives. */
+    const wire = `${JSON.stringify(res.headers)}${res.body}`;
+    expect(wire).not.toContain(token);
+    expect(wire).not.toContain('external-wait/');
   });
 
   it('#901 — completion is authorization-scoped through the run (a FOREIGN run is 404)', async () => {

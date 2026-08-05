@@ -106,6 +106,20 @@ export function PendingCallbacks({
    * an absent body reach the route, which requires `payload` precisely so that
    * "sent nothing" cannot be silently read as "completed with no outputs".
    */
+  /** Close one editor: the draft AND the refusal that was shown against it. */
+  function closeEditor(key: string) {
+    onDraftClear(key);
+    /* The error has to go with it. `sendError` is otherwise cleared only by the
+       epoch remount or by the next send, and Cancel-then-reopen is neither — so a
+       refusal from a body that no longer exists would sit above an empty editor
+       claiming the wait was not completed. */
+    setSendError((e) => {
+      const rest = { ...e };
+      delete rest[key];
+      return rest;
+    });
+  }
+
   async function send(wait: PendingExternalWait, key: string) {
     const raw = (drafts[key] ?? '').trim();
     let payload: Record<string, unknown>;
@@ -136,7 +150,7 @@ export function PendingCallbacks({
          component, which is what actually refreshes the list — so this only drops
          the draft, and does so for the case where that frame never arrives (a dead
          socket). No second refetch: the epoch owns freshness here. */
-      onDraftClear(key);
+      closeEditor(key);
     } catch (err: unknown) {
       /* Shown against THIS wait. A 422 means the node is still parked and the body
          is fixable, so the editor deliberately stays open with the text intact. */
@@ -186,6 +200,12 @@ export function PendingCallbacks({
             /* `undefined` ⇒ the editor is closed; `''` is an OPEN editor the
                operator has emptied, which means `{}` and is not the same thing. */
             const draft = drafts[key];
+            /* `waitKey` is `JSON.stringify([nodeId, attemptId])` — quotes, commas
+               and brackets, and a node id is unconstrained author text that may
+               contain whitespace. That is fine as a React/state key and illegal in
+               an HTML id, where it breaks `label[for]` resolution. Slugified for
+               the DOM only; the JSON key stays the state key. */
+            const domId = `wait-body-${key.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
             return (
               <li key={key}>
                 <p>
@@ -241,11 +261,11 @@ export function PendingCallbacks({
                   </button>
                 ) : (
                   <div className="external-wait-complete">
-                    <label htmlFor={`wait-body-${key}`}>
+                    <label htmlFor={domId}>
                       Callback body (JSON) — empty means <code>{'{}'}</code>
                     </label>
                     <textarea
-                      id={`wait-body-${key}`}
+                      id={domId}
                       rows={4}
                       spellCheck={false}
                       value={draft}
@@ -267,7 +287,7 @@ export function PendingCallbacks({
                     <button
                       type="button"
                       disabled={sending === key}
-                      onClick={() => onDraftClear(key)}
+                      onClick={() => closeEditor(key)}
                     >
                       Cancel
                     </button>

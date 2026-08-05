@@ -1739,6 +1739,41 @@ td button + button {
   border-top: 1px solid var(--border);
 }
 
+/* #901 — the in-place editor for completing a wait from the app. Deliberately the
+   same card treatment as `.secret-reveal` beside it: both are an expansion of one
+   list item into a thing to act on, and they can be open at once, so a different
+   surface for each would read as two unrelated widgets in one block. */
+.external-wait-complete {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 640px;
+}
+
+.external-wait-complete label {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+/* Monospace because the content is JSON the operator is composing against a
+   declared contract, and `resize: vertical` because a body with several declared
+   outputs outgrows four rows — horizontal resize would break the card. */
+.external-wait-complete textarea {
+  width: 100%;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  resize: vertical;
+}
+
+.external-wait-complete button {
+  margin-top: 0.5rem;
+}
+
+.external-wait-complete button + button {
+  margin-left: 0.5rem;
+}
+
 /* ── P6 live run monitor ─────────────────────────────────────────────────── */
 
 /* U24 — the node table's drill-in trigger. A real <button> (so it takes its

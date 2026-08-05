@@ -257,11 +257,16 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     }
 
     // #901 — an owner's external-wait completion body failed the node's declared
-    // output contract (422). Deliberately ABOVE the generic `hasNumericStatusCode`
-    // fallback below, which flattens every 4xx-bearing error to a bare "Malformed
-    // request" — routing this through that would destroy `message`, the one string
-    // naming the field to correct, which is the whole reason the owner-scoped route
-    // exists rather than the app reusing the anonymous seam.
+    // output contract (422). `message` carries the field to correct, which is the
+    // whole reason the owner-scoped route exists rather than the app reusing the
+    // anonymous seam (whose 422 body bypasses this handler and loses its detail).
+    //
+    // Ordering here is NOT load-bearing, stated because it looks as though it
+    // should be: the generic `hasNumericStatusCode` fallback below would flatten a
+    // 4xx to a bare "Malformed request", but it reads `err.statusCode`, and neither
+    // class has one (`ExternalWaitSettledError` names its field `status`
+    // deliberately). Grouped here for readability. If either ever grows a
+    // `statusCode`, this placement becomes load-bearing — do not move it then.
     if (error instanceof ExternalWaitPayloadError) {
       request.log.warn({ err: error }, 'external wait: callback payload rejected');
       reply

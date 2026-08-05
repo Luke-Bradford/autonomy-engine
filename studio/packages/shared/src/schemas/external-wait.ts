@@ -103,8 +103,13 @@ export const PendingExternalWaitListSchema = z.array(PendingExternalWaitSchema);
  * declaring no outputs still accepts (and stores nothing from) any object.
  */
 export const CompleteExternalWaitBodySchema = z.object({
-  nodeId: z.string().min(1),
-  attemptId: z.string().min(1),
+  /* BOUNDED, unlike `Node.id` itself. Both are opaque correlation ids the route
+     looks a row up by, and a miss is the one branch that handles unresolved caller
+     text — so an unbounded field here is a `bodyLimit`-sized string travelling
+     through validation and logging for no reason. Generous enough that no real id
+     (a `n_<uuid>`, a `w@1` instance key, an imported doc's own naming) comes near. */
+  nodeId: z.string().min(1).max(512),
+  attemptId: z.string().min(1).max(512),
   payload: z.record(z.string(), z.unknown()),
 });
 export type CompleteExternalWaitBody = z.infer<typeof CompleteExternalWaitBodySchema>;

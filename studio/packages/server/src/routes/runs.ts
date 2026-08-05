@@ -274,7 +274,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
       // OTHER attempt's existence, so it is not the oracle the anonymous seam guards
       // against; the caller already owns the run.
       if (row === null) {
-        throw new NotFoundError('external wait', `${nodeId}@${attemptId}`);
+        // Named by the RUN, which `requireOwned` has resolved and owner-checked —
+        // never by the caller's own `nodeId`/`attemptId`. `errors.ts` allows only
+        // `invalid_pipeline_doc` to echo request input, and this is exactly the
+        // branch where those two fields resolved to nothing, so echoing them would
+        // reflect up to a bodyLimit of unvalidated caller text back out.
+        throw new NotFoundError('external wait', run.id);
       }
       if (row.status === 'completed') {
         throw new ExternalWaitSettledError(
@@ -324,9 +329,16 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
           409,
         );
       }
-      // Fire-and-forget, like the rerun below: `driveRun` owns its own faults, so
-      // `drive` never rejects and discarding it cannot orphan an error.
-      void drive;
+      // Fire-and-forget, like the rerun below. `driveRun` owns its own faults
+      // (`terminalizeInterrupted`), so this practically never settles rejected —
+      // but "practically never" is not "never": that terminalization itself writes
+      // to the db outside any catch, so a DB-level fault there would escape. An
+      // unhandled rejection is a process exit under Node's default, which is far
+      // too sharp an edge for a discarded promise, so the discard is explicit and
+      // logged rather than resting on the guarantee.
+      void drive.catch((err: unknown) => {
+        request.log.error({ err, runId: run.id }, 'external wait: resumed drive faulted');
+      });
       return reply.status(204).send();
     },
   );
