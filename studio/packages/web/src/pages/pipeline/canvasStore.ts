@@ -17,8 +17,8 @@ import { newLocalId } from '../../lib/ids';
 import {
   conditionOf,
   DEFAULT_MAX_BOUNCES,
+  encodeCondition,
   isMaxBounces,
-  retypeCollides,
   type EdgeCondition,
 } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
@@ -647,10 +647,17 @@ export interface CanvasState {
    */
   updateEdgeBounces(id: string, maxBounces: number): void;
   /**
-   * Retype an edge to a new condition. Refuses (no-op) a retype that would make
-   * the edge a DUPLICATE of another — see `retypeCollides`.
+   * U19 slice 2 — move an existing edge to new endpoints and/or a new condition,
+   * preserving its id, its back-ness and its cap.
+   *
+   * Refuses (no-op) anything `connectRejection` refuses, judged against the
+   * graph WITHOUT this edge — see the implementation for why that exclusion is
+   * the load-bearing part.
    */
-  updateEdgeCondition(id: string, condition: EdgeCondition): void;
+  rewireEdge(
+    id: string,
+    target: { from: string; to: string; condition: EdgeCondition },
+  ): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   /**
@@ -1192,34 +1199,60 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       /**
-       * Retype an edge, refusing a retype that would DUPLICATE another edge.
+       * U19 slice 2 — move an existing edge: new endpoints, new condition, or
+       * both, in ONE act that preserves the edge's identity.
        *
-       * `connect`'s dedupe is not enough on its own: retyping walks straight
-       * around it (connect A→B `success`, retype it to `skipped`, connect A→B
-       * `success` again, retype THAT to `skipped` → two byte-identical edges).
-       * Nothing downstream catches it — `validatePipelineDoc` has no duplicate-
-       * EDGE rule, its id-uniqueness check covers nodes and containers only — and
-       * the consequences are real: the two share one edge identity, so as
-       * back-edges they halve `maxBounces` and resolve each other's reset body,
-       * and on the canvas they stack as overlapping SVG paths neither of which
-       * can be clicked apart. U6a multiplies the reachable surface by every
-       * branch label a source declares, so the guard belongs here, not only in
+       * This replaces `updateEdgeCondition`, whose only caller was the `Fires on`
+       * dropdown. A retype is now the special case where both endpoints happen to
+       * stay put, which is why the whole gesture is one action rather than a
+       * retype plus an endpoint move: an edge dragged from `a -success-> b` to
+       * `a -failure-> c` passes through `a -failure-> b` in neither the doc nor
+       * the operator's intent, and committing that intermediate would put a state
+       * on the undo stack nobody asked for and could fail a rule the endpoints
+       * they actually chose does not.
+       *
+       * THE EDGE IS JUDGED AGAINST THE GRAPH WITHOUT ITSELF. It cannot duplicate
+       * itself (dropping it back where it started would otherwise be refused for
+       * colliding with the edge in hand), and it cannot be the cycle it is being
+       * dragged out of. That exclusion is what lets every rule in
+       * `connectRejection` apply unchanged and correctly — including the
+       * duplicate rule that `retypeCollides` used to answer separately, which is
+       * why that predicate is gone rather than kept as a second reader of the
+       * same question (#847's defect class).
+       *
+       * `back` rides on the candidate, so a back-edge stays subject to its own
+       * three rules wherever it is dragged, and `retypeEdge`'s rest-spread
+       * carries `back`/`maxBounces` through to the rewired edge. The canvas
+       * explains a refusal; this stays silent, the same backstop posture as
        * `connect`.
-       *
-       * A REFUSAL is right rather than a silent merge: the operator still has the
-       * edge they selected, and deleting one of two identical edges is a thing
-       * they can see and do. It is also not the operator's first warning —
-       * `EdgePanel` disables a condition another edge already holds, using the
-       * SAME `retypeCollides` predicate, so a refusal here is the backstop for a
-       * caller that is not the picker, not the UX.
        */
-      updateEdgeCondition(id, condition) {
+      rewireEdge(id, target) {
         const current = get().edges.find((e) => e.id === id);
         if (current === undefined) return;
-        const retyped = retypeEdge(current, condition);
-        if (retypeCollides(get().edges, current, retyped)) return;
+        const { from, to, condition } = target;
+        /* Nothing moved. Returning before `edit` keeps a drop-back-where-it-
+           started off the undo stack and out of the dirty flag — `setNodeContainer`'s
+           rule, for its reason: a graph that reports an edit it did not make is
+           how an unsaved-changes prompt loses the operator's trust. */
+        if (
+          current.from === from &&
+          current.to === to &&
+          encodeCondition(conditionOf(current)) === encodeCondition(condition)
+        ) {
+          return;
+        }
+        const graph = {
+          nodes: get().nodes,
+          edges: get().edges.filter((e) => e.id !== id),
+          containers: get().containers,
+        };
+        const back = current.back === true;
+        if (connectRejection(precomputeConnect(graph), { from, to, condition, back }) !== null) {
+          return;
+        }
+        const rewired = retypeEdge({ ...current, from, to }, condition);
         edit((s) => ({
-          edges: s.edges.map((e) => (e.id === id ? retyped : e)),
+          edges: s.edges.map((e) => (e.id === id ? rewired : e)),
         }));
       },
 

@@ -196,8 +196,8 @@ export function authoringEdgeKey(e: Edge): string {
 
 /**
  * The encoded conditions ALREADY held by another edge between the same two
- * nodes — the ones `canvasStore.updateEdgeCondition` will refuse, because
- * retyping onto one would mint a duplicate edge.
+ * nodes — the ones `canvasStore.rewireEdge` will refuse, because retyping onto
+ * one would mint a duplicate edge.
  *
  * Surfacing them lets the picker disable those options instead of accepting a
  * click and silently reverting: a refusal the operator cannot see is a control
@@ -219,12 +219,6 @@ export function takenConditions(edges: readonly Edge[], edge: Edge): ReadonlySet
     if (otherKeys.has(authoringEdgeKey(probe))) taken.add(encodeCondition(condition));
   }
   return taken;
-}
-
-/** True when retyping `edge` to `condition` would duplicate another edge. */
-export function retypeCollides(edges: readonly Edge[], edge: Edge, retyped: Edge): boolean {
-  const key = authoringEdgeKey(retyped);
-  return edges.some((other) => other.id !== edge.id && authoringEdgeKey(other) === key);
 }
 
 /**

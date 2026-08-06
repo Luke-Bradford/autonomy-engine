@@ -17,6 +17,7 @@ import {
   nodeBoxHeight,
   OPERATIONAL_CONDITIONS,
   orientDrawnEnds,
+  RECONNECT_RADIUS,
   SOURCE_PORT_PITCH,
   sourcePortOffset,
   sourcePortsOf,
@@ -285,6 +286,26 @@ describe('port geometry', () => {
    */
   it('keeps the connection radius under half the port pitch', () => {
     expect(CONNECTION_RADIUS).toBeLessThan(SOURCE_PORT_PITCH / 2);
+  });
+
+  /**
+   * U19 slice 2 — the reconnect anchor is squeezed from BOTH sides, and only one
+   * of the two bounds is the obvious one.
+   *
+   * Upper: the anchor spans `±r` vertically about its port, so at half the pitch
+   * or beyond it reaches the next outcome's port and "grab this edge" and "draw a
+   * new edge from the outcome below" become one pixel.
+   *
+   * Lower: the anchor is TANGENT to the handle, not centred on it (`shiftX`,
+   * `@xyflow/react` 12.11.2 index.mjs:2834-2852), and nodes paint above edges —
+   * so all that is grabbable is the crescent poking out beyond the handle. At
+   * `r <= HANDLE_SIZE / 2` there is no crescent and the edge end cannot be picked
+   * up at all. That failure is invisible in a unit test and looks, in a browser,
+   * exactly like the feature having not been built.
+   */
+  it('keeps the reconnect radius clear of the handle AND of the sibling port', () => {
+    expect(RECONNECT_RADIUS).toBeGreaterThan(HANDLE_SIZE / 2);
+    expect(RECONNECT_RADIUS).toBeLessThan(SOURCE_PORT_PITCH / 2);
   });
 
   /**

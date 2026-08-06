@@ -15,7 +15,7 @@ import {
   sameSelection,
 } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
-import { DEFAULT_MAX_BOUNCES } from './edgeCondition';
+import { DEFAULT_MAX_BOUNCES, type EdgeCondition } from './edgeCondition';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
   return PipelineVersionSchema.parse({
@@ -35,6 +35,39 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
     createdAt: 1,
     ...overrides,
   });
+}
+
+/**
+ * `version()` with a source that DECLARES business branches.
+ *
+ * Needed since U19 slice 2: `rewireEdge` runs the full `connectRejection`, whose
+ * `undeclared-condition` rule refuses a `branch:true` edge out of an
+ * `http_request` — a tightening rather than a regression, because the property
+ * panel never offered a branch on a source that cannot branch either. These
+ * fixtures now say out loud what the authoring path always required.
+ */
+function branchingVersion(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
+  return version({
+    nodes: [
+      { id: 'n_a', type: 'if', config: {}, position: { x: 10, y: 20 } },
+      { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+    ],
+    ...overrides,
+  });
+}
+
+/**
+ * Retype an edge WITHOUT moving its endpoints — the case the retired
+ * `Fires on` dropdown used to own, expressed through the one seam that now
+ * writes an edge's shape.
+ */
+function retype(
+  s: ReturnType<typeof createCanvasStore>,
+  id: string,
+  condition: EdgeCondition,
+): void {
+  const e = s.getState().edges.find((x) => x.id === id)!;
+  s.getState().rewireEdge(id, { from: e.from, to: e.to, condition });
 }
 
 describe('canvasStore', () => {
@@ -288,10 +321,10 @@ describe('canvasStore', () => {
     expect(s.getState().selected).toBeNull();
   });
 
-  it('updateEdgeCondition changes the `on` outcome of the targeted edge', () => {
+  it('rewireEdge retypes and changes the `on` outcome of the targeted edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().updateEdgeCondition('e_1', { on: 'completion' });
+    retype(s, 'e_1', { on: 'completion' });
     expect(s.getState().edges[0]!.on).toBe('completion');
     expect(s.getState().dirty).toBe(true);
   });
@@ -301,22 +334,24 @@ describe('canvasStore', () => {
    * U6a: the `branch` key is REQUIRED on a business edge, so setting one must
    * add it rather than leave an `on:'branch'` edge that fails `EdgeSchema`.
    */
-  it('updateEdgeCondition sets the business `branch` key when retyping TO a branch', () => {
+  it('rewireEdge retypes and sets the business `branch` key when retyping TO a branch', () => {
     const s = createCanvasStore();
-    s.getState().loadVersion(version());
-    s.getState().updateEdgeCondition('e_1', { on: 'branch', branch: 'true' });
+    s.getState().loadVersion(branchingVersion());
+    retype(s, 'e_1', { on: 'branch', branch: 'true' });
 
     const edge = s.getState().edges[0]!;
     expect(edge).toMatchObject({ on: 'branch', branch: 'true' });
     expect(() => EdgeSchema.parse(edge)).not.toThrow();
   });
 
-  it('updateEdgeCondition rewrites the routing key when moving between branch arms', () => {
+  it('rewireEdge retypes and rewrites the routing key when moving between branch arms', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
-      version({ edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }] }),
+      branchingVersion({
+        edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }],
+      }),
     );
-    s.getState().updateEdgeCondition('e_1', { on: 'branch', branch: 'false' });
+    retype(s, 'e_1', { on: 'branch', branch: 'false' });
     expect(s.getState().edges[0]).toMatchObject({ on: 'branch', branch: 'false' });
   });
 
@@ -328,7 +363,7 @@ describe('canvasStore', () => {
    * they share one `stableEdgeKey` bounce counter as back-edges, and they stack
    * as overlapping unclickable paths on the canvas.
    */
-  it('updateEdgeCondition REFUSES a retype that would duplicate another edge', () => {
+  it('rewireEdge retypes and REFUSES a retype that would duplicate another edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
@@ -338,14 +373,14 @@ describe('canvasStore', () => {
         ],
       }),
     );
-    s.getState().updateEdgeCondition('e_2', { on: 'success' });
+    retype(s, 'e_2', { on: 'success' });
 
     expect(s.getState().edges.find((e) => e.id === 'e_2')!.on).toBe('failure'); // unchanged
     expect(s.getState().dirty).toBe(false);
   });
 
   /** The same guard on the business arm — two arms differ only by routing key. */
-  it('updateEdgeCondition REFUSES a retype onto an occupied branch arm', () => {
+  it('rewireEdge retypes and REFUSES a retype onto an occupied branch arm', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
@@ -355,16 +390,141 @@ describe('canvasStore', () => {
         ],
       }),
     );
-    s.getState().updateEdgeCondition('e_2', { on: 'branch', branch: 'true' });
+    retype(s, 'e_2', { on: 'branch', branch: 'true' });
     expect(s.getState().edges.find((e) => e.id === 'e_2')).toMatchObject({ branch: 'false' });
   });
 
   /** ...but a no-op retype to the edge's OWN condition must not self-collide. */
-  it('updateEdgeCondition allows a retype to the edge’s own current condition', () => {
+  it('rewireEdge retypes and allows a retype to the edge’s own current condition', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().updateEdgeCondition('e_1', { on: 'success' });
+    retype(s, 'e_1', { on: 'success' });
     expect(s.getState().edges[0]!.on).toBe('success');
+  });
+
+  /**
+   * THE self-exclusion, stated as its own case because it is the whole reason
+   * `rewireEdge` judges its candidate against the graph MINUS the edge in hand.
+   *
+   * Dropping an edge back exactly where it started produces a candidate that is
+   * byte-identical to an edge that exists — itself. Judged against the full
+   * graph the duplicate rule fires, and the operator's answer to "I changed my
+   * mind" is a refusal naming the edge they are holding. Delete the `.filter`
+   * in `rewireEdge` and this is the test that goes red.
+   */
+  it('rewireEdge does not refuse an edge for DUPLICATING ITSELF', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.setState({ dirty: false });
+    s.getState().rewireEdge('e_1', { from: 'n_a', to: 'n_b', condition: { on: 'success' } });
+    expect(s.getState().edges).toHaveLength(1);
+    expect(s.getState().edges[0]).toMatchObject({ from: 'n_a', to: 'n_b', on: 'success' });
+    // ...and, having changed nothing, it must not claim an edit either.
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  /**
+   * The same exclusion in its other axis: an edge cannot be the cycle it is
+   * being dragged OUT of. `a → b → c`, rewire `a → b`'s source onto `c`: the
+   * result `c → a` closes no cycle once `a → b` is gone, but does while it is
+   * still counted.
+   */
+  it('rewireEdge does not count the edge in hand when judging a cycle', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } },
+          { id: 'n_c', type: 'llm_call', config: {}, position: { x: 200, y: 0 } },
+        ],
+        edges: [
+          { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+          { id: 'e_2', from: 'n_b', to: 'n_c', on: 'success' },
+        ],
+      }),
+    );
+    s.getState().rewireEdge('e_1', { from: 'n_c', to: 'n_a', condition: { on: 'success' } });
+    expect(s.getState().edges.find((e) => e.id === 'e_1')).toMatchObject({
+      from: 'n_c',
+      to: 'n_a',
+    });
+  });
+
+  it('rewireEdge MOVES an endpoint, keeping the edge’s identity', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 0 } },
+          { id: 'n_c', type: 'llm_call', config: {}, position: { x: 200, y: 0 } },
+        ],
+      }),
+    );
+    s.getState().rewireEdge('e_1', { from: 'n_a', to: 'n_c', condition: { on: 'failure' } });
+    // The id is what selection, the run log and undo all address the edge by —
+    // which is the thing delete-and-redraw could not preserve.
+    expect(s.getState().edges).toEqual([
+      { id: 'e_1', from: 'n_a', to: 'n_c', on: 'failure' },
+    ]);
+  });
+
+  /**
+   * A back-edge stays judged by the three back-edge rules when it MOVES, not
+   * just when it is retyped: `back` rides on the candidate, so rewiring one into
+   * a position where it no longer runs backwards is refused rather than
+   * persisting an edge whose `back: true` is a lie the save gate then catches.
+   */
+  it('rewireEdge judges a back-edge as a BACK-edge, and refuses a forward destination', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
+    const id = s.getState().edges.find((e) => e.back === true)!.id;
+    s.getState().rewireEdge(id, { from: 'n_a', to: 'n_b', condition: { on: 'failure' } });
+    expect(s.getState().edges.find((e) => e.id === id)).toMatchObject({
+      from: 'n_b',
+      to: 'n_a',
+      back: true,
+    });
+  });
+
+  it('rewireEdge refuses to move an edge onto an endpoint that is not on the canvas', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.setState({ dirty: false });
+    s.getState().rewireEdge('e_1', { from: 'n_a', to: 'ghost', condition: { on: 'success' } });
+    expect(s.getState().edges[0]!.to).toBe('n_b');
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  /**
+   * The tightening `rewireEdge` inherits by running the FULL connect rules,
+   * which `updateEdgeCondition` never did: a source must declare the outcome an
+   * edge routes on. An `http_request` has no branches, so `branch:true` out of
+   * one was always unauthorable — the panel never offered it, and the reducer
+   * would never fire it — but the store used to accept it from any other caller
+   * and persist an edge that routes on a key nothing can produce.
+   */
+  it('rewireEdge refuses a condition the SOURCE does not declare', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version()); // n_a is an `http_request`
+    s.setState({ dirty: false });
+    s.getState().rewireEdge('e_1', {
+      from: 'n_a',
+      to: 'n_b',
+      condition: { on: 'branch', branch: 'true' },
+    });
+    expect(s.getState().edges[0]!.on).toBe('success');
+    expect(s.getState().dirty).toBe(false);
+  });
+
+  it('rewireEdge ignores an edge id it does not hold', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(version());
+    s.setState({ dirty: false });
+    s.getState().rewireEdge('nope', { from: 'n_a', to: 'n_b', condition: { on: 'failure' } });
+    expect(s.getState().dirty).toBe(false);
   });
 
   /**
@@ -374,17 +534,17 @@ describe('canvasStore', () => {
    * arm), and they share `(from, to, 'branch')` — so a key without the label
    * would refuse the second arm as a duplicate of the first.
    */
-  it('updateEdgeCondition ALLOWS a second branch arm between the same pair of nodes', () => {
+  it('rewireEdge retypes and ALLOWS a second branch arm between the same pair of nodes', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
-      version({
+      branchingVersion({
         edges: [
           { id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' },
           { id: 'e_2', from: 'n_a', to: 'n_b', on: 'success' },
         ],
       }),
     );
-    s.getState().updateEdgeCondition('e_2', { on: 'branch', branch: 'false' });
+    retype(s, 'e_2', { on: 'branch', branch: 'false' });
     expect(s.getState().edges.find((e) => e.id === 'e_2')).toMatchObject({
       on: 'branch',
       branch: 'false',
@@ -396,14 +556,14 @@ describe('canvasStore', () => {
   // longer routes by it — a doc that then fails `EdgeSchema` (the union has no
   // operational member carrying `branch`). Reachable via a git-imported doc:
   // the canvas can't author a branch edge, but it can load and retype one.
-  it('updateEdgeCondition drops the business `branch` key when retyping a branch edge', () => {
+  it('rewireEdge retypes and drops the business `branch` key when retyping a branch edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
         edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }],
       }),
     );
-    s.getState().updateEdgeCondition('e_1', { on: 'success' });
+    retype(s, 'e_1', { on: 'success' });
 
     const edge = s.getState().edges[0]!;
     expect(edge.on).toBe('success');
@@ -414,11 +574,16 @@ describe('canvasStore', () => {
 
   // The same retype must preserve the shared `edgeBase` fields — dropping
   // `branch` must not drop the back-edge cap along with it.
-  it('updateEdgeCondition preserves back/maxBounces when retyping a branch back-edge', () => {
+  it('rewireEdge retypes and preserves back/maxBounces when retyping a branch back-edge', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(
       version({
         edges: [
+          /* The forward edge the back-edge loops over. Since U19 slice 2 a rewire
+             re-judges the edge's TOPOLOGY, and the `back-ancestry` rule wants the
+             target to forward-reach the source — so a lone back-edge is a doc the
+             rules refuse, which is a property of the fixture, not of the retype. */
+          { id: 'e_0', from: 'n_a', to: 'n_b', on: 'success' },
           {
             id: 'e_1',
             from: 'n_b',
@@ -431,9 +596,9 @@ describe('canvasStore', () => {
         ],
       }),
     );
-    s.getState().updateEdgeCondition('e_1', { on: 'failure' });
+    retype(s, 'e_1', { on: 'failure' });
 
-    const edge = s.getState().edges[0]!;
+    const edge = s.getState().edges.find((e) => e.id === 'e_1')!;
     expect(edge).toMatchObject({ on: 'failure', back: true, maxBounces: 3 });
     expect(edge).not.toHaveProperty('branch');
   });
@@ -1663,7 +1828,7 @@ describe('canvasStore — back-edges (U6e)', () => {
     const s = loaded();
     s.getState().connect('n_b', 'n_a', { on: 'success' }, { back: true });
     const id = s.getState().edges.find((e) => e.back === true)!.id;
-    s.getState().updateEdgeCondition(id, { on: 'skipped' });
+    retype(s, id, { on: 'skipped' });
     const retyped = s.getState().edges.find((e) => e.id === id);
     expect(retyped).toMatchObject({ on: 'skipped', back: true, maxBounces: DEFAULT_MAX_BOUNCES });
   });

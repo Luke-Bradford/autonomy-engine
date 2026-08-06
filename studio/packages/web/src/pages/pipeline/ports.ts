@@ -423,6 +423,33 @@ const BASE_NODE_HEIGHT = 52;
 export const HANDLE_SIZE = 6;
 
 /**
+ * U19 slice 2 — the radius of the invisible circle that grabs an edge's END to
+ * rewire it (`<ReactFlow reconnectRadius>`, default 10).
+ *
+ * The geometry is not what it reads like, and getting it wrong in either
+ * direction breaks a gesture:
+ *
+ * The circle is NOT centred on the port. `EdgeUpdateAnchors` places it at
+ * `shiftX(centerX, radius, position)` (`@xyflow/react` 12.11.2,
+ * index.mjs:2834-2852), i.e. TANGENT to the handle and displaced outward by
+ * exactly this radius. So it spans `[edge, edge + 2r]` horizontally while the
+ * handle spans `[edge - HANDLE_SIZE/2, edge + HANDLE_SIZE/2]`. Nodes paint above
+ * edges, so the handle wins the overlap and what remains grabbable is the
+ * crescent beyond it — which is why the LOWER bound matters: at
+ * `r <= HANDLE_SIZE / 2` there is no crescent and the edge end cannot be picked
+ * up at all, which would look exactly like the feature not working.
+ *
+ * The UPPER bound is the sibling port. The circle also spans `±r` VERTICALLY
+ * about the port's centre, so a radius at or beyond half the pitch would let one
+ * edge's grab area reach the next outcome's port and make "start a new edge from
+ * `failure`" and "grab the `success` edge" the same pixel.
+ *
+ * `HANDLE_SIZE / 2 < RECONNECT_RADIUS < SOURCE_PORT_PITCH / 2` — pinned by a
+ * test, because both bounds are invisible at the call site.
+ */
+export const RECONNECT_RADIUS = 6;
+
+/**
  * A source port's offset from the node's vertical CENTRE, in flow units.
  *
  * Centred fixed-pitch rather than spread-across-the-height, so ONE formula
