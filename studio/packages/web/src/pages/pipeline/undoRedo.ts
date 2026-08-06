@@ -78,8 +78,16 @@ export function redoDisabledReason({
  * is not.
  */
 export function isTextEntryTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return true;
-  if (target.isContentEditable) return true;
+  /* `Element`, not `HTMLElement` — React Flow's edge wrapper is an SVG `<g>`
+     with a tabindex, so a keystroke aimed at a focused EDGE has an SVGElement
+     target. Under the old `HTMLElement` test that fell to the conservative
+     default and was read as text entry, which made the whole canvas keyboard
+     surface dead whenever an edge had focus (found by U21, when the canvas took
+     over the delete key from React Flow and edge deletion stopped working). The
+     conservative default still stands for a target that is not an element at
+     all — `window`, `document`, or a detached `EventTarget`. */
+  if (!(target instanceof Element)) return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
   const tag = target.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select';
 }

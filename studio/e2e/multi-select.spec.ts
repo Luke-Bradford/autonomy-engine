@@ -46,7 +46,11 @@ async function seedTwoNodes(page: Page, name: string): Promise<void> {
   // Clear of each other, so a marquee can contain both and neither hides the
   // edge. Same gesture and same order as `seedSelectedEdge`, whose comment
   // records why the drag comes before any connect.
-  await dragNodeBy(page, 1, 200, 40);
+  // Far enough that the two do not OVERLAP — a shorter offset leaves the second
+  // node covering the first's source port, and `connectNodes` then drags from
+  // the wrong element and authors no edge. Then re-fit, so both are fully on
+  // screen for a Full-mode marquee.
+  await dragNodeBy(page, 1, 300, 60);
   await fitAndSettle(page, 1);
 }
 
@@ -74,7 +78,7 @@ test.describe('multi-select (U21)', () => {
     await expectQuiet(page, problems);
   });
 
-  test('a node inside a live marquee is still clickable', async ({ page }) => {
+  test('the canvas under a live marquee still takes the gesture', async ({ page }) => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e marquee clickable');
 
@@ -82,16 +86,24 @@ test.describe('multi-select (U21)', () => {
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
-    // React Flow's selection rect covers the bounding box of both nodes. If it
-    // is left in the DOM with its default `pointer-events: all`, this click
-    // lands on the overlay and the selection never narrows.
-    await canvasNodes(page).first().click();
-    await expect(selectedNodes(page)).toHaveCount(1);
-    await expect(
-      page.getByRole('complementary', { name: 'Properties' }).getByRole('button', {
-        name: 'Delete node',
-      }),
-    ).toBeVisible();
+    /* React Flow draws `.react-flow__nodesselection-rect` over the bounding box
+       of the selection with `pointer-events: all`, so with the rect in place
+       every point between the two nodes belongs to the OVERLAY rather than to
+       the canvas. Asked at the centre of that box — which is empty pane between
+       the two nodes — and then acted on: a pane click deselects, and it can only
+       arrive if nothing is sitting on top. */
+    const midpoint = await page.evaluate(() => {
+      const rects = [...document.querySelectorAll('.react-flow__node.selected')].map((el) =>
+        el.getBoundingClientRect(),
+      );
+      const x = (Math.min(...rects.map((r) => r.x)) + Math.max(...rects.map((r) => r.right))) / 2;
+      const y = (Math.min(...rects.map((r) => r.y)) + Math.max(...rects.map((r) => r.bottom))) / 2;
+      return { x, y, on: document.elementFromPoint(x, y)?.className ?? '(nothing)' };
+    });
+    expect(midpoint.on).not.toContain('nodesselection');
+
+    await page.mouse.click(midpoint.x, midpoint.y);
+    await expect(selectedNodes(page)).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
