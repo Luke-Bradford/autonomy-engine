@@ -24,18 +24,33 @@ Run: `git log --oneline -15 origin/main` · `gh pr list --state open` (for each:
 0. **Not every open PR is YOURS to land.** The supervisor (a human-facing session) opens its OWN engine/tooling PRs on `main` — titled `fix(ci):`/`fix(review):`/`docs:`, on the **reserved `supervisor/**` prefix** (#823; it previously used `fix/<slug>-…`, which collided with your own `loop/` branches), touching `.github/`, `lib/`, `bin/`, `tests/`, `start`. **Your branches always carry the issue number** — `feat/studio-<n>-…`, `fix/studio-<n>-…`, `fix/loop-<n>-…` — and `drive.sh`'s `is_loop_ref` keys its progress signals on exactly that, so a branch of yours WITHOUT a number is invisible to the stall detector and the gate wait (it under-counts progress and can trip a false stall, which stops the run; that is the safe polarity, but avoid it). Do NOT ADOPT, merge, or build on those — the supervisor lands them. (This changes NOTHING about review: the required `review` check + the API review bot still run on every PR including those; they are simply the supervisor's to resolve, not yours.) They are not "an open studio PR" for rule 1 and never block you. Your scope is `studio/**` (the work order + its found-defect tickets); filter `gh pr list` to studio feature branches before applying the rules below. Your OWN studio PRs get the full treatment: every review finding resolved (FIXED/DEFERRED/REBUTTED), merge only on `review`=APPROVE — unchanged.
 1. **An open STUDIO PR exists** (a `feat/studio-…`/`fix/studio-…` branch) → finish it, don't start new work / don't duplicate. Green + `review`=APPROVE on the LATEST commit → squash-merge, delete branch. Red / unresolved findings → fix on that branch, push, wait for the gate.
 2. **No open studio PR, a studio feature branch ahead of main** → continue it to a PR.
-3. **Clean** (no open studio PR/branch) → start the NEXT item in the WORK ORDER.
+3. **Clean** (no open studio PR/branch) → start the next item in **THE QUEUE** under CURRENT PRIORITY. That list is the ordering; the `## WORK ORDER` section further down is the dependency BACKGROUND it draws from, not a second queue to read instead.
 Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → reconcile before building. (A supervisor engine PR open ALONGSIDE your studio PR is fine and expected — it is not a race, not yours.)
 
 ## THE PLAN LIVES IN THE SPECS (read them — do not reinvent)
-`studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list IS your queue. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
+`studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list is the dependency BACKGROUND THE QUEUE draws from, never a queue to read instead of it. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
 - `#1 foundation-domain-activity-framework.md` (F0-F15) · `#6 foundation-expression-language.md` (E1-E8) · `#5 foundation-scheduler-lifecycle.md` (S1-S12) · `#2 foundation-llm-activity-model.md` (L1-L14) · `#4 foundation-activity-library.md` (A0-A17) · `#3 foundation-git-publish.md` (G1-G10) · `RS foundation-rerun-from-failed.md` (RS1-RS6) · UI `adf-grade-ui-design.md` (U0-U29, R1-R3).
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-**Go straight to the UI epic (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
-This is the highest-priority available work — ahead of the defect sweep, which as amended in the
-STANDING RULE section below counts `[studio]` tickets only.
+**Why `#917` heads THE QUEUE below** — the monitoring section for connected AI/LLM activity, tokens and account
+quota (operator, 2026-08-05: *"take some of the nice visual monitoring and give it its own section
+in the monitoring pages so that you could see any active use of connected AI's and/or LLMs, the
+sorts of things you can't directly monitor"*). It is UI work, so it satisfies this epic AND it is
+the cutover prerequisite: it is the last thing the operator still uses the old prototype dashboard
+FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket.
+
+**THE QUEUE — THIS LIST IS THE ONLY ORDERING. No other section restates it; they point here.**
+
+1. **`#917`** — the monitoring section (above). Visible product AND the cutover prerequisite.
+2. **studio's quota sampler, flag OFF** — see the CUTOVER block for WHY and for the one-poller
+   constraint that makes the flag load-bearing. Do not skip it to get back to the UI epic: C3
+   cannot happen without it, and the operator is pushing for the cutover.
+3. **C3 `#410`** — retire the dashboard and enable that flag in the SAME step.
+4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+
+All four are ahead of the defect sweep, which as amended in the STANDING RULE section below counts
+`[studio]` tickets only.
 
 **WHY THIS IS THE PRIORITY (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs
 and **exactly one** of them altered anything a human can see in the app. The rest was `loop/`
@@ -43,23 +58,61 @@ infrastructure and backend quota semantics. The operator's words: *"The app does
 anything new to show."* The engineering was sound; the direction was not. The product is the point,
 and the loop exists to build it — not to build the loop.
 
-### CUTOVER C1-C3 — settled. Do NOT spend fires on it.
+### CUTOVER C1-C3 — UNBLOCKED 2026-08-05. It is buildable work, not an operator gate.
 - **C1 `#440`** native control room + machine-readable quota endpoint — **DONE** (issue CLOSED).
 - **C2** — **DONE** (2026-07-29). Studio is the **THIRD** source in `loop/drive.sh` `quota_pct()`,
   behind the dashboard and behind the loop's own usage reader; `DASH_URL` was deliberately **not**
   repointed, because studio's `/api/quota` returned `account.claude: null` on every probe and
   promoting it would have disarmed the spend guard outright. See `#765`.
-- **C3 `#410` (park the old engine) — BLOCKED ON AN OPERATOR DECISION. DO NOT WAIT ON IT**
-  (operator, 2026-07-31). `#765` is answered: studio's reader is **not** broken — it is losing the
-  shared account rate-limit budget to the prototype dashboard's continuous 60s sampler, i.e. C3's
-  evidence gate is throttled by the very component C3 retires. The remaining lever is that sampler's
-  cadence, which touches the loop's PRIMARY spend-guard source and is therefore the operator's call,
-  not yours. **Do not build anything further for C3, do not collect further shadow-probe evidence,
-  and do not treat its absence as a reason to idle.**
-- If C3 is ever unblocked: **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history
-  preserves it and the ticket says so). `loop/` is NOT part of the old engine — it is the control
-  plane and it **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a
-  SEPARATE `loop` job: retiring the engine retires the former and keeps the latter.
+- **C3 `#410` (park the old engine) — NO LONGER AN OPERATOR GATE (measured 2026-08-05).** Operator:
+  *"I'm not using the old system, so do what you want with it. I'm waiting to see how it all fits in
+  with the new."* The cutover is wanted and the remaining work is yours to build.
+
+  **The old entry here was wrong, and measurement not opinion corrects it.** It claimed studio was
+  merely losing the shared rate-limit budget to the dashboard's 60s sampler, making that cadence an
+  operator decision. Experiment: the dashboard was **unloaded entirely** for ~12 minutes, freeing the
+  whole bucket. The loop reader and studio **both stayed UNREADABLE** throughout and direct probes on
+  the same credential returned `429`. Freeing the bucket changed nothing.
+
+  What the dashboard has is not priority but a **warm cache** — a sampler plus a grace window holding
+  a value from a rare moment the endpoint answered. The clincher: reloading it did NOT restore the
+  guard, because the cache died with the process; the guard stayed UNREADABLE until its sampler got
+  one reading through ~12 minutes later. **So never stop the dashboard casually — you destroy the
+  only live quota reading and fires go blind** (bounded by `QUOTA_UNKNOWN_FIRES`, then the run stops).
+
+  **Studio's reader is HONEST — do not go bug-hunting in it.** Over those 21 minutes it reported
+  `rate_limited` correctly and stably. Two `provider_error` readings were artefacts and are void: one
+  from a stale build (`#832` — always read the `studio server:` line first), one taken a minute after
+  a service restart. `#919` was filed on those two and has been corrected down to a narrow start-up
+  transient. It is NOT a blocker and NOT a mislabel.
+
+  **What studio lacks is a SAMPLER**, so every read is a request-path poll — exactly the call that
+  429s. `#770` rejected a sampler and was RIGHT to: its reason was *"exactly one process may poll
+  `/api/oauth/usage` directly … adding a second sampler would reproduce"* the contention, and the
+  dashboard's sampler was that one process. It rejected a **second, concurrent** sampler. C3 removes
+  the first. Studio's is the SUCCESSOR, not an addition, and `#770`'s one-poller invariant survives
+  with studio as that poller.
+
+  **That invariant sets the build shape, and it is why this is not a plain ordering.** Per `#765`'s
+  escape hatch the sampler is **gated on an env flag**, so:
+  - the sampler CODE may land any time, **flag OFF** — dormant, no second poller, `#770` satisfied;
+  - **C3 retires the dashboard and flips the flag in the SAME step**, so there is never a moment with
+    two samplers and never a moment with zero readers.
+
+  Keep the 60s TTL and the **no-grace / no-last-good** property: a stale-but-low reading PERMITS a
+  fire, and fail-open is the one polarity forbidden here (`drive.sh`'s cache holds the fail-SAFE
+  staleness logic and may only ever REFUSE). A sampler-backed studio can then be polled freely,
+  because the request path no longer touches the provider — the state in which it deserves to be
+  primary.
+
+  **ORDERING LIVES IN "THE QUEUE" UNDER CURRENT PRIORITY — deliberately not restated here.** Six
+  review rounds on this file were all the same defect: the order written in two places, drifting
+  apart. One list, one owner. This block owns WHY and the constraints; the queue owns WHEN.
+
+  **When you do C3:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
+  it and the ticket says so). `loop/` is NOT part of the old engine — it is the control plane and it
+  **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a SEPARATE
+  `loop` job: retiring the engine retires the former and keeps the latter.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).
@@ -136,7 +189,7 @@ You file good tickets for defects you find mid-ticket, and then they were never 
 - **Judge severity by the FAILURE, not the fix size.** "A one-line default masks destroyed user data" is SEVERE. "A missing tie-breaker makes ordering non-deterministic" is not.
 - If severity is genuinely ambiguous, DON'T open an `[operator-decision]` for it — file it as normal, and say in the ticket why you nearly escalated. Escalation is for irreducible DESIGN forks, not for prioritisation you can reason about.
 
-Board mirror (close each on phase completion via `gh issue close`, never a PR-body keyword): epic #431 · #432 F#1 · #433 E#6 · #434 S#5 · #435 L#2 · #436 A#4 · #437 G#3 · #438 RS · #439 UI. #410 cutover is OPERATOR-GATED — never touch.
+Board mirror (close each on phase completion via `gh issue close`, never a PR-body keyword): epic #431 · #432 F#1 · #433 E#6 · #434 S#5 · #435 L#2 · #436 A#4 · #437 G#3 · #438 RS · #439 UI. #410 cutover is NO LONGER operator-gated (2026-08-05) — THE QUEUE says when, the CUTOVER block says why and gives the one-poller constraint; do not start it from this line alone.
 
 ## Per-phase discipline (every phase, no exceptions)
 1. Branch `feat/studio-<phase>-<slug>` (or continue). Never commit to `main`.
@@ -192,7 +245,7 @@ Your `gh` token is the operator's own (`repo` scope, owner identity), so it *cou
 Clean tree at end of every fire. Configure `store-dir` so no stray `.pnpm-store` lands in the repo root. Delete merged branches. No unexplained diff.
 
 ## PAUSE — operator-gated forks (you are headless; STOP + SIGNAL, don't guess)
-Open a `[operator-decision] <question>` issue (label `operator-decision`) with context + your recommendation, leave `main`/branch clean, END the fire, if the ONLY way forward needs: retiring the old bash/python engine at the repo root; renaming the repo/`studio/` dir/`@autonomy-studio/*` scopes; an irreducible design decision NOT settled in a spec (e.g. a genuinely ambiguous D4 hold-vs-reopen or #3 working-copy choice after reading the specs). The OLD-engine autonomy loops stay PAUSED — never start/resume/wire a bash/python supervisor loop. Do not touch the engine root except a TIDY that can't affect engine behavior.
+Open a `[operator-decision] <question>` issue (label `operator-decision`) with context + your recommendation, leave `main`/branch clean, END the fire, if the ONLY way forward needs: renaming the repo/`studio/` dir/`@autonomy-studio/*` scopes; an irreducible design decision NOT settled in a spec (e.g. a genuinely ambiguous D4 hold-vs-reopen or #3 working-copy choice after reading the specs). The OLD-engine autonomy loops stay PAUSED — never start/resume/wire a bash/python supervisor loop; that is unchanged and is NOT what C3 is. **Retiring the engine root is NO LONGER an `[operator-decision]`** (operator, 2026-08-05: *"I'm not using the old system, so do what you want with it"*) — it is C3: the CUTOVER block above owns how, THE QUEUE owns when. Outside that, do not touch the engine root except a TIDY that can't affect engine behavior.
 
 ## Reporting
 Your work IS the report: commits, PRs, merges on `main`. Blocker/fork → the `[operator-decision]`/`[loop-blocked]` issue. Do not fabricate progress — no mergeable progress this fire → say so in an issue and stop cleanly rather than thrash.
