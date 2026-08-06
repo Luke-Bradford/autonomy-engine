@@ -1,14 +1,20 @@
 import type { Node as FlowNode, Edge as FlowEdge } from '@xyflow/react';
-import type { PipelineVersion, RunState } from '@autonomy-studio/shared';
+import type { Node, PipelineVersion, RunState } from '@autonomy-studio/shared';
 import { activityLabel, activityLabels } from '../pipeline/activityLabel';
 import {
   containerAriaLabel,
   containerHandles,
   containerRects,
-  UNMEASURED_NODE_SIZE,
+  unmeasuredNodeSize,
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
 import { toFlowEdge } from '../pipeline/edgeCondition';
+import {
+  portIdsOf,
+  sourcePortsOf,
+  usedConditionsBySource,
+  type SourcePort,
+} from '../pipeline/ports';
 import {
   containerStatusLabel,
   containerStatusTone,
@@ -32,6 +38,16 @@ export type RunDoc = Pick<PipelineVersion, 'nodes' | 'edges' | 'containers'>;
 
 export interface RunNodeData extends Record<string, unknown> {
   title: string;
+  /**
+   * U19 — this source's outgoing ports, as ONE string (`portIdsOf`).
+   *
+   * A primitive rather than the `SourcePort[]` the author canvas passes,
+   * because `sameRenderedData` below compares `data` members with `Object.is`:
+   * a fresh array per event would report every node as changed and undo
+   * `mergeRunNodes`' whole reason for existing. `RunCanvas` rebuilds the ports
+   * from it.
+   */
+  portIds: string;
   /**
    * The node's status AS WORDED FOR AN OPERATOR (`nodeStatusLabel`), or `null`
    * when nothing is projected yet. The engine's identifier is deliberately not
@@ -74,6 +90,8 @@ export interface RunContainerData extends Record<string, unknown> {
   tone: StatusTone | null;
   /** A container's own progress; `null` until it has started. */
   round: number | null;
+  /** U19 — a container is a legal edge SOURCE too. Same encoding, same reason. */
+  portIds: string;
   /*
    * Deliberately NO `showStatus` twin of `RunNodeData`'s. The box has only ONE
    * absence to render: it already drops the whole ` · <status>` fragment when
@@ -128,6 +146,27 @@ export function runFlowNodes(
      also carry the fallback this branch has no need of: a row the doc does not
      name keeps its raw id. */
   const names = activityLabels(doc.nodes);
+  /* U19 — the ports each source draws, so an edge's `sourceHandle` resolves to
+     a handle that exists. The monitor renders the SAME edges as the author
+     canvas (`toFlowEdge`), which now names the port of the edge's own outcome:
+     without the matching ports here every edge on this view would resolve to
+     nothing and simply not be drawn. */
+  const used = usedConditionsBySource(doc.edges);
+  /* Memoized, because every id is asked TWICE and `sourcePortsOf` rebuilds the
+     whole list each call: a node's ports feed both the count the unmeasured-size
+     fallback needs and the id string its data carries, and a container's feed
+     both its stated handle bounds and its own id string. Keyed by id alone,
+     which is sound because nodes and containers share one globally-unique
+     namespace (the same assumption `edgeEndpointIds` is built on). */
+  const cache = new Map<string, SourcePort[]>();
+  const portsOf = (id: string, source: Node | undefined) => {
+    const hit = cache.get(id);
+    if (hit !== undefined) return hit;
+    const ports = sourcePortsOf(source, used.get(id) ?? []);
+    cache.set(id, ports);
+    return ports;
+  };
+  const portCounts = new Map(doc.nodes.map((n) => [n.id, portsOf(n.id, n).length]));
   const activities: FlowNode[] = doc.nodes.map((n) => {
     // Unreachable fallback: `names` is built from this very array.
     const name = names.get(n.id) ?? activityLabel(n);
@@ -147,6 +186,7 @@ export function runFlowNodes(
         status: label,
         tone: status === null ? null : nodeStatusTone(status),
         showStatus,
+        portIds: portIdsOf(portsOf(n.id, n)),
       } satisfies RunNodeData,
       ariaLabel: showStatus ? `${name}, ${label ?? NO_STATUS_LABEL}` : name,
     };
@@ -164,7 +204,19 @@ export function runFlowNodes(
   const rects = containerRects(
     containers,
     new Map(
-      doc.nodes.map((n) => [n.id, { x: n.position.x, y: n.position.y, ...UNMEASURED_NODE_SIZE }]),
+      /* U19 — a node's height is now a function of how many outcomes it
+         declares, and this view never measures anything, so the nominal size
+         has to be asked for the same count the node will render. Taking the
+         flat pre-U19 constant would leave every box under-covering its own
+         children the moment one grew a port column. */
+      doc.nodes.map((n) => [
+        n.id,
+        {
+          x: n.position.x,
+          y: n.position.y,
+          ...unmeasuredNodeSize(portCounts.get(n.id) ?? 0),
+        },
+      ]),
     ),
   );
 
@@ -204,7 +256,7 @@ export function runFlowNodes(
       height: rect.height,
       style: { width: rect.width, height: rect.height },
       measured: { width: rect.width, height: rect.height },
-      handles: containerHandles(rect.width, rect.height),
+      handles: containerHandles(rect.width, rect.height, portsOf(c.id, undefined)),
       draggable: false,
       selectable: false,
       connectable: false,
@@ -213,6 +265,7 @@ export function runFlowNodes(
         status: label,
         tone: status === null ? null : containerStatusTone(status),
         round: cs?.round ?? null,
+        portIds: portIdsOf(portsOf(c.id, undefined)),
       } satisfies RunContainerData,
       ariaRole: 'group',
       // The box below draws this same `name`, which is the whole contract

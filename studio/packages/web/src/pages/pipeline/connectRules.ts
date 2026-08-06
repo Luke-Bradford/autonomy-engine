@@ -10,6 +10,7 @@ import {
 import { activityLabels } from './activityLabel';
 import { containerLabels } from './containerRules';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
+import { conditionLabel, declaredConditionsOf, encodeCondition } from './ports';
 
 /**
  * U6b — the rules a connection DRAG is measured against, decided BEFORE the
@@ -34,6 +35,9 @@ export type ConnectRejectionReason =
   | 'duplicate'
   | 'container-boundary'
   | 'forward-cycle'
+  /* U19 — the drawn condition is the PORT's, and an orphaned port offers one
+     the source no longer declares. See the rule in `connectRejection`. */
+  | 'undeclared-condition'
   /* U6e — the three back-edge rules, reachable only for a `back: true`
      candidate. See the block at the foot of `connectRejection`. */
   | 'back-ancestry'
@@ -102,6 +106,17 @@ export interface ConnectPrecheck {
    * container's children each time.
    */
   childOwner: ReadonlyMap<string, string>;
+  /**
+   * The ENCODED conditions each endpoint declares (`declaredConditionsOf`, the
+   * same predicate the source ports are drawn from).
+   *
+   * Hoisted like the rest: the rule below runs on every pointer-move of a drag,
+   * and re-deriving a source's declarations per move would re-read its config
+   * each time. Encoded rather than compared structurally so an operational
+   * `success` and a `switch` case labelled `success` stay distinct — the same
+   * reason the codec is tagged at all.
+   */
+  declared: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -121,9 +136,20 @@ export function edgeEndpointIds(
 }
 
 export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
+  const endpoints = edgeEndpointIds(graph.nodes, graph.containers);
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   return {
     graph,
-    endpoints: edgeEndpointIds(graph.nodes, graph.containers),
+    endpoints,
+    /* A CONTAINER id resolves to `undefined` here, which `declaredConditionsOf`
+       reads as "no branches" — the four operational outcomes and nothing else,
+       which is exactly what a container can emit. */
+    declared: new Map(
+      [...endpoints].map((id) => [
+        id,
+        new Set(declaredConditionsOf(byId.get(id)).map((c) => encodeCondition(c))),
+      ]),
+    ),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     nodeLabels: activityLabels(graph.nodes),
     containerNames: containerLabels(graph.containers),
@@ -239,6 +265,37 @@ export function connectRejection(
     };
   }
 
+  /* U19 — the source must actually DECLARE the outcome the drag was drawn from.
+     Reachable through exactly one affordance: an ORPHANED port. `sourcePortsOf`
+     draws a port for any condition an EXISTING edge routes on, even one the
+     source no longer declares (rename a `switch` case, or import a doc), because
+     without it React Flow resolves that edge's `sourceHandle` to nothing and
+     draws no line at all — silently. Keeping the port visible is right; letting
+     it start a NEW edge is not, and until this rule nothing stopped it: the
+     drawn condition comes off the port, and no other rule here compares it to
+     what the source offers. The stylesheet already mutes an orphan on the stated
+     grounds that "it is not a thing to draw a NEW edge from" — this is that
+     sentence enforced rather than merely written.
+     Refused HERE rather than by an inert `isConnectableStart={false}` handle,
+     because a handle that quietly declines a drag is the silent no this whole
+     panel exists to replace: the operator gets a sentence naming the outcome and
+     what to do about it. It also covers the backwards gesture and the back-edge
+     offer for free, both of which run through this same predicate.
+     EXISTING edges are untouched — this judges a CANDIDATE. The doc keeps its
+     orphan, the port keeps being drawn, and the validation badge keeps saying
+     so. */
+  const declared = pre.declared.get(from);
+  if (declared !== undefined && !declared.has(encodeCondition(candidate.condition))) {
+    const key = conditionLabel(candidate.condition);
+    return {
+      reason: 'undeclared-condition',
+      message:
+        `'${fromName}' no longer offers '${key}' — that port is only there for an edge that ` +
+        `already routes on it. Re-declare '${key}' on '${fromName}', or draw from an outcome ` +
+        `it does offer`,
+    };
+  }
+
   /* U6c — encapsulation, checked BEFORE the cycle sweep.
      Ordered first because it is the narrower fact (a candidate can cross a
      boundary AND close a cycle, and the crossing is the one the operator can see
@@ -316,10 +373,11 @@ export function connectRejection(
      shape the cycle and boundary rules use: `validateDoc`'s back-edge block and
      this one read the same helpers, so they cannot grow separate opinions.
 
-     Reachable ONLY from the offer's enabled-ness check in `FlowCanvas` — a DRAG
-     always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these will read
-     as dead code to anyone who greps for a caller that passes `back`. They are
-     not: they are what decides whether the offer is shown at all. */
+     Reachable ONLY from the offer's enabled-ness check in `FlowCanvas` — an
+     ordinary DRAG leaves `back` unset, whatever outcome its port carries (U19
+     made the condition the operator's, but not the back-ness) — so these will
+     read as dead code to anyone who greps for a caller that passes `back`. They
+     are not: they are what decides whether the offer is shown at all. */
   if (candidate.back === true) {
     const defect = backEdgeDefect(pre.graph, pre.graph.containers, from, to);
     if (defect === 'parallel-body') {
@@ -352,4 +410,47 @@ export function connectRejection(
   }
 
   return null;
+}
+
+/** A refused gesture, as the canvas remembers it — see `FlowCanvas`'s `attempted`. */
+export interface DrawnAttempt {
+  from: string;
+  to: string;
+  /** The outcome the drag was drawn from; `null` when the port could not be read. */
+  condition: EdgeCondition | null;
+}
+
+/**
+ * U6e/U19 — the back-edge the canvas may OFFER in answer to a refusal, or `null`
+ * for no offer.
+ *
+ * Pure, and here rather than inline in `FlowCanvas`, for the reason
+ * `conditionFromConnection` states: the gesture that feeds it is not
+ * unit-testable (jsdom measures every element as zero and React Flow culls
+ * unmeasured nodes), so the DECISION has to be reachable without one.
+ *
+ * Two conditions, and the first is the point. **An undecodable port withholds
+ * the offer entirely.** The refusal MESSAGE may fall back to
+ * `DRAWN_EDGE_CONDITION` — explaining a near-miss gesture as `success` is still
+ * an explanation, and it writes nothing — but this offer is a button that
+ * AUTHORS an edge, and authoring `success` for a gesture whose outcome was never
+ * read is the same guess `isValidConnection` and `onConnect` refuse to make. It
+ * would also contradict `DRAWN_EDGE_CONDITION`'s own stated contract ("used for
+ * the refusal message only, never to author an edge"), which is how this was
+ * found. The operator loses nothing recoverable: redrawing from an actual
+ * outcome port brings the offer straight back.
+ *
+ * The second is the whole back-edge rule set for the edge that would ACTUALLY be
+ * authored, not the refusal's reason — cycle-closure implies the ancestry rule
+ * but not the progress rule, so an offer shown on reason alone would author a
+ * doc the save gate refuses on topology.
+ */
+export function backEdgeOffer(
+  pre: ConnectPrecheck,
+  attempt: DrawnAttempt,
+): { from: string; to: string; condition: EdgeCondition } | null {
+  const { from, to, condition } = attempt;
+  if (condition === null) return null;
+  if (connectRejection(pre, { from, to, condition, back: true }) !== null) return null;
+  return { from, to, condition };
 }

@@ -216,6 +216,28 @@ describe('U6a edge variant hues', () => {
    * edge ending in a red arrowhead is a rendered defect no unit test can see, and
    * `EDGE_VARIANTS` is what makes "every variant" checkable rather than assumed.
    */
+  /**
+   * U19 — a source PORT is drawn in the hue of the edge that will leave it.
+   *
+   * The port and the line are meant to read as one convention: you grab the red
+   * dot and a red line follows. Two lists of hues is how they would drift, and
+   * the drift is invisible to every other check — a port whose colour disagrees
+   * with its own edge is a rendered defect, not a failing assertion. Asserted
+   * against the SAME `EXPECTED` table the strokes and arrowheads are, so a fifth
+   * outcome fails here too rather than shipping an uncoloured port.
+   */
+  it('gives every source port the SAME hue as the edge drawn from it', () => {
+    for (const [condition, cssVar] of EXPECTED) {
+      const port = customProps(ruleBody(css, `.flow-port--${condition}`));
+      expect(port.get('--port-color'), `.flow-port--${condition} hue`).toBe(`var(${cssVar})`);
+    }
+    // The orphan port is deliberately NOT one of them: it is a condition the
+    // source no longer offers, so it must not look like one you can draw from.
+    expect(customProps(ruleBody(css, '.flow-port--orphaned')).get('--port-color')).toBe(
+      'var(--muted)',
+    );
+  });
+
   it('gives every edge variant an arrowhead marker in the SAME hue as its stroke', () => {
     expect([...EDGE_VARIANTS].sort()).toEqual(EXPECTED.map(([c]) => c).sort());
     for (const [condition, cssVar] of EXPECTED) {

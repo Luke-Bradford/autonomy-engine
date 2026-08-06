@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ContainerRunStatusSchema, type RunState } from '@autonomy-studio/shared';
+import { encodeCondition, OPERATIONAL_CONDITIONS } from '../pipeline/ports';
 import { containerStatusLabel, containerStatusTone } from './nodeStatus';
 import { projectRun } from './runProjection';
 import { mergeRunNodes, NO_STATUS_LABEL, runFlowEdges, runFlowNodes, type RunDoc } from './runFlow';
@@ -171,11 +172,72 @@ describe('runFlowNodes', () => {
     // the box (the defect `e2e/container-rendering.spec.ts` pins on the author
     // canvas).
     expect(nodes[0]!.measured).toEqual({ width: nodes[0]!.width, height: nodes[0]!.height });
-    expect(nodes[0]!.handles).toHaveLength(2);
+    /* U19 — one target port and one SOURCE port per outcome the box can route.
+       A container declares no business branches, so that is the four operational
+       outcomes. Stating the wrong SET is as fatal as stating none: React Flow
+       resolves an edge's `sourceHandle` against exactly these, so an edge
+       leaving this box on `failure` needs a `failure` handle here or it is drawn
+       as nothing at all — silently, which is why it is asserted rather than
+       eyeballed. */
+    expect(nodes[0]!.handles?.filter((h) => h.type === 'target')).toHaveLength(1);
+    expect(nodes[0]!.handles?.filter((h) => h.type === 'source').map((h) => h.id)).toEqual(
+      OPERATIONAL_CONDITIONS.map((on) => encodeCondition({ on })),
+    );
 
     // The box encloses both children.
     expect(nodes[0]!.position.x).toBeLessThan(0);
     expect(nodes[0]!.width!).toBeGreaterThan(240);
+  });
+
+  /**
+   * U19 — the composition test, and the only one that catches the silent
+   * failure directly.
+   *
+   * `toFlowEdge` names the port of the edge's OWN condition, and React Flow
+   * draws an edge whose `sourceHandle` matches no handle as NOTHING: no error,
+   * no warning, no console message (`ports.ts` records the mechanism). So the
+   * edges and the ports are two halves of one contract that no other assertion
+   * spans — each half is individually correct in every state where the picture
+   * is empty.
+   *
+   * The fixture is deliberately the hostile one: a `switch` whose configured
+   * cases NO LONGER include the branch an existing edge routes on, which is
+   * reachable by editing `config.cases` in the node panel and by importing a doc
+   * from git. That edge must still be drawable, from an orphan port.
+   */
+  it('gives every edge a source port that EXISTS on its source', () => {
+    const doc: RunDoc = {
+      nodes: [
+        {
+          id: 'sw',
+          type: 'switch',
+          config: { on: '${x}', cases: ['red'] },
+          position: { x: 0, y: 0 },
+        },
+        { id: 'b', type: 'http_request', config: {}, position: { x: 300, y: 0 } },
+      ],
+      edges: [
+        { id: 'e1', from: 'sw', to: 'b', on: 'branch', branch: 'red' },
+        { id: 'e2', from: 'sw', to: 'b', on: 'failure' },
+        // The orphan: `blue` is not in `cases` any more.
+        { id: 'e3', from: 'sw', to: 'b', on: 'branch', branch: 'blue' },
+      ],
+    } as unknown as RunDoc;
+
+    const ports = new Map(
+      runFlowNodes(doc, null).map((n) => [
+        n.id,
+        new Set(String((n.data as { portIds: string }).portIds).split(' ')),
+      ]),
+    );
+    const edges = runFlowEdges(doc);
+    expect(edges).toHaveLength(3);
+    for (const e of edges) {
+      expect(
+        ports.get(e.source)?.has(e.sourceHandle!),
+        `edge ${e.id} names port ${e.sourceHandle} — its source has none`,
+      ).toBe(true);
+    }
   });
 
   it('carries a container’s own status — WORDED — and its round', () => {

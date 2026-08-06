@@ -2300,8 +2300,17 @@ export function validateDoc(
  * It stays HERE, beside the rule that reads it, rather than moving to the
  * catalog as an `ActivityDefinition` field: a `switch`'s labels are derived from
  * `node.config.cases`, so a catalog entry would have to hold a function over a
- * `Node`, unlike every other field there. U19 (outcome-by-source-handle) is
- * where that move gets decided, once — not half-done here.
+ * `Node`, unlike every other field there.
+ *
+ * SETTLED by U19, which was where that move was to be decided: it does not move.
+ * U19 gave every node one source PORT per condition it can route, and its port
+ * set (`web/pages/pipeline/ports.ts`, `declaredConditionsOf`) is the third
+ * caller — so the catalog would now have to carry the function for the canvas
+ * as well as for the rule, rather than instead of it. The four OPERATIONAL
+ * outcomes are the part that could have been a catalog field, and deliberately
+ * are not one either: every activity declares all four, because the reducer
+ * decides an outcome at run time from what the activity did, and a per-
+ * definition `outcomes` list would claim knowledge the engine does not have.
  */
 export function declaredBranchesOf(node: Node): Set<string> | undefined {
   if (node.type === IF_ACTIVITY_TYPE) return new Set([IF_BRANCH_TRUE, IF_BRANCH_FALSE]);

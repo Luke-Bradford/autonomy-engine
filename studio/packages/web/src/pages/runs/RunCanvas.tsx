@@ -13,7 +13,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import type { RunState } from '@autonomy-studio/shared';
 import { EdgeMarkers } from '../pipeline/EdgeMarkers';
-import { SOURCE_PORT_ID, TARGET_PORT_ID } from '../pipeline/ports';
+import { nodeBoxHeight, portsFromIds, TARGET_PORT_ID } from '../pipeline/ports';
+import { SourcePorts } from '../pipeline/SourcePorts';
 import {
   mergeRunNodes,
   NO_STATUS_LABEL,
@@ -72,8 +73,15 @@ import {
  */
 const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
   const d = data as RunNodeData;
+  /* U19 — rebuilt from the ONE string `data` carries, not from an array: see
+     `RunNodeData.portIds`. Memoised on that string so the ports keep their
+     identity across the events that leave a node's rendering unchanged. */
+  const ports = useMemo(() => portsFromIds(d.portIds), [d.portIds]);
   return (
-    <div className={`flow-node run-node${toneClass('run-node', d.tone)}`}>
+    <div
+      className={`flow-node run-node${toneClass('run-node', d.tone)}`}
+      style={{ minHeight: nodeBoxHeight(ports.length) }}
+    >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <strong>{d.title}</strong>
       {/* #903 — no run behind this view means no status line at all, rather
@@ -83,7 +91,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
       {d.showStatus && (
         <span className="flow-node-sub run-node-status">{d.status ?? NO_STATUS_LABEL}</span>
       )}
-      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
+      <SourcePorts ports={ports} />
     </div>
   );
 });
@@ -94,6 +102,7 @@ const RunActivityNode = memo(function RunActivityNode({ data }: NodeProps) {
  */
 const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
   const d = data as RunContainerData;
+  const ports = useMemo(() => portsFromIds(d.portIds), [d.portIds]);
   return (
     <div className={`flow-container run-container${toneClass('run-container', d.tone)}`}>
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
@@ -102,7 +111,7 @@ const RunContainerNode = memo(function RunContainerNode({ data }: NodeProps) {
         {d.status !== null && ` · ${d.status}`}
         {d.round !== null && d.round > 0 && ` · round ${d.round}`}
       </span>
-      <Handle type="source" id={SOURCE_PORT_ID} position={Position.Right} />
+      <SourcePorts ports={ports} />
     </div>
   );
 });

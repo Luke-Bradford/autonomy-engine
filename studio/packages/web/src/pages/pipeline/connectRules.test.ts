@@ -9,7 +9,12 @@ import {
   type Edge,
   type Node,
 } from '@autonomy-studio/shared';
-import { connectRejection, precomputeConnect, type ConnectGraph } from './connectRules';
+import {
+  backEdgeOffer,
+  connectRejection,
+  precomputeConnect,
+  type ConnectGraph,
+} from './connectRules';
 
 /**
  * U6b — the connect-time rules, unit-tested.
@@ -21,8 +26,8 @@ import { connectRejection, precomputeConnect, type ConnectGraph } from './connec
  * nothing — U6a).
  */
 
-function node(id: string, type = 'agent_task'): Node {
-  return { id, type, config: {}, position: { x: 0, y: 0 } };
+function node(id: string, type = 'agent_task', config: Record<string, unknown> = {}): Node {
+  return { id, type, config, position: { x: 0, y: 0 } };
 }
 function edge(
   from: string,
@@ -480,10 +485,10 @@ describe('connectRejection — container boundaries', () => {
  * with no back-edge rule of its own. That was harmless while nothing could
  * author one; it stops being harmless the moment the canvas offers to.
  *
- * The only caller is the offer's enabled-ness check in `FlowCanvas` — a DRAG
- * always carries `DRAWN_EDGE_CONDITION` with `back` unset — so these reasons
- * look unreachable from a gesture and are not. Deleting them as dead would put
- * back the ability to author an unsavable version.
+ * The only caller is the offer's enabled-ness check in `FlowCanvas` — an
+ * ordinary DRAG leaves `back` unset, whatever outcome its port carries — so
+ * these reasons look unreachable from a gesture and are not. Deleting them as
+ * dead would put back the ability to author an unsavable version.
  */
 describe('connectRejection — back-edge candidates (U6e)', () => {
   /** The rejection for a candidate the operator has asked to make a back-edge. */
@@ -596,5 +601,134 @@ describe('connectRejection — back-edge candidates (U6e)', () => {
       const local = rejectBack(g, from, to);
       expect(local === null, `${from}->${to} shared=${String(shared)}`).toBe(shared === null);
     }
+  });
+});
+
+/**
+ * U19 — the offer is an AUTHORING act, so it may not inherit the refusal
+ * message's fallback.
+ *
+ * `FlowCanvas` keeps the ends of the last refused gesture and re-derives the
+ * reason from them. When the drag's outcome port could not be read, that reason
+ * is computed for the `success` candidate — a near-miss explained is still an
+ * explanation, and it writes nothing. The BUTTON beside it does write: it calls
+ * `store.connect(...)` with the condition, so the same fallback would author an
+ * outcome the operator never drew, which is exactly what `isValidConnection` and
+ * `onConnect` refuse to do for the ordinary drop.
+ */
+/**
+ * U19 — the source has to DECLARE the outcome the drag was drawn from.
+ *
+ * Reachable through exactly one affordance, and it is one this ticket added:
+ * `sourcePortsOf` draws an ORPHANED port for any condition an existing edge
+ * routes on, even one the source no longer declares (rename a `switch` case, or
+ * import a doc). The port has to exist — without it React Flow resolves that
+ * edge's `sourceHandle` to nothing and draws no line, silently — but the drawn
+ * condition comes off the port, so before this rule an orphan port was a live
+ * handle for authoring an outcome the source does not offer, on a doc the save
+ * gate then refuses. The stylesheet already said an orphan "is not a thing to
+ * draw a NEW edge from"; nothing enforced it.
+ */
+describe('connectRejection — undeclared conditions (U19)', () => {
+  /* `s` is a `switch` whose config no longer lists `red`, while an existing edge
+     still routes on it — exactly the state that draws an ORPHANED port. */
+  const ORPHANED = graph(
+    [node('s', 'switch', { on: '${x}', cases: ['blue'] }), node('t'), node('u')],
+    [edge('s', 't', 'branch', { branch: 'red' })],
+  );
+
+  it('refuses an outcome the source does not declare, and names it', () => {
+    const r = connectRejection(precomputeConnect(ORPHANED), {
+      from: 's',
+      to: 'u',
+      condition: { on: 'branch', branch: 'red' },
+    });
+    expect(r?.reason).toBe('undeclared-condition');
+    expect(r?.message).toContain('red');
+  });
+
+  it('accepts a case the source DOES declare', () => {
+    expect(
+      connectRejection(precomputeConnect(ORPHANED), {
+        from: 's',
+        to: 'u',
+        condition: { on: 'branch', branch: 'blue' },
+      }),
+    ).toBeNull();
+  });
+
+  it('accepts every OPERATIONAL outcome, which every source declares', () => {
+    const pre = precomputeConnect(graph([node('a'), node('b')]));
+    for (const on of ['success', 'failure', 'completion', 'skipped'] as const) {
+      expect(connectRejection(pre, { from: 'a', to: 'b', condition: { on } })).toBeNull();
+    }
+  });
+
+  it('lets a CONTAINER source emit the operational outcomes and nothing else', () => {
+    const pre = precomputeConnect(
+      graph([node('x'), node('t')], [], [{ id: 'C', kind: 'stage', children: ['x'] }]),
+    );
+    expect(connectRejection(pre, { from: 'C', to: 't', condition: { on: 'success' } })).toBeNull();
+    expect(
+      connectRejection(pre, { from: 'C', to: 't', condition: { on: 'branch', branch: 'red' } })
+        ?.reason,
+    ).toBe('undeclared-condition');
+  });
+
+  /**
+   * Both rules are true of the SAME candidate when the orphaned edge is redrawn
+   * onto its own target. "ORDER IS THE MESSAGE" — duplicate is the narrower and
+   * more actionable reason, so it wins.
+   */
+  it('yields to the duplicate rule, which is the more specific reason', () => {
+    expect(
+      connectRejection(precomputeConnect(ORPHANED), {
+        from: 's',
+        to: 't',
+        condition: { on: 'branch', branch: 'red' },
+      })?.reason,
+    ).toBe('duplicate');
+  });
+});
+
+describe('backEdgeOffer (U6e/U19)', () => {
+  it('offers the back-edge the forward rule refuses, carrying the DRAWN outcome', () => {
+    const pre = precomputeConnect(CHAIN);
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' } })).toEqual({
+      from: 'c',
+      to: 'a',
+      condition: { on: 'failure' },
+    });
+  });
+
+  it('carries a BRANCH outcome through unchanged', () => {
+    /* The source has to DECLARE the branch — an `if` offers `true`/`false` — or
+       the undeclared-condition rule refuses the candidate before the back-edge
+       rules are reached, which is itself the correct answer. */
+    const g = graph([node('a'), node('b'), node('c', 'if')], [edge('a', 'b'), edge('b', 'c')]);
+    const condition = { on: 'branch', branch: 'true' } as const;
+    expect(
+      backEdgeOffer(precomputeConnect(g), { from: 'c', to: 'a', condition })?.condition,
+    ).toEqual(condition);
+  });
+
+  it('WITHHOLDS the offer when the gesture could not name an outcome', () => {
+    const pre = precomputeConnect(CHAIN);
+    // Same ends, same graph, and legal as a back-edge — the ONLY difference is
+    // that the port did not decode. Nothing may be authored on a guess.
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: null })).toBeNull();
+  });
+
+  it('withholds the offer when the back-edge itself is refused', () => {
+    const g = graph(
+      [node('a'), node('b'), node('x')],
+      [edge('a', 'C'), edge('C', 'b')],
+      [{ id: 'C', kind: 'stage', children: ['x'] }],
+    );
+    // Refused for `back-no-progress`, not for the condition — an offer shown on
+    // the refusal's REASON alone would author a doc the save gate rejects.
+    expect(
+      backEdgeOffer(precomputeConnect(g), { from: 'b', to: 'a', condition: { on: 'success' } }),
+    ).toBeNull();
   });
 });

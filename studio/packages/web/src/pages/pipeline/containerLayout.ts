@@ -1,6 +1,12 @@
 import { Position, type NodeHandle } from '@xyflow/react';
 import { containerMembership, type Container } from '@autonomy-studio/shared';
-import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
+import {
+  HANDLE_SIZE,
+  nodeBoxHeight,
+  sourcePortOffset,
+  TARGET_PORT_ID,
+  type SourcePort,
+} from './ports';
 
 /**
  * U6c — where a container is DRAWN.
@@ -347,10 +353,17 @@ export function revealTransform(
 export const UNMEASURED_NODE_SIZE = { width: 150, height: 52 };
 
 /**
- * React Flow's own handle size, in flow units — its stylesheet draws a 6px dot
- * centred on the node's border (`left: -4px` and friends).
+ * The size assumed for a node with a known number of source ports.
+ *
+ * U19 made a node's HEIGHT a function of how many outcomes its source declares
+ * (`nodeBoxHeight`), which the constant above cannot express. The run canvas
+ * uses this permanently, so without it every container box there would be
+ * derived from the pre-U19 52px and would under-cover its own children the
+ * moment a node grew a port column.
  */
-const HANDLE_SIZE = 6;
+export function unmeasuredNodeSize(portCount: number): { width: number; height: number } {
+  return { width: UNMEASURED_NODE_SIZE.width, height: nodeBoxHeight(portCount) };
+}
 
 /**
  * The port bounds of a derived container box, stated rather than measured.
@@ -366,26 +379,37 @@ const HANDLE_SIZE = 6;
  * MEASURES for one lands within a pixel of this. The line therefore meets the
  * rendered dot on a container exactly as it does on an activity.
  */
-export function containerHandles(width: number, height: number): NodeHandle[] {
-  const y = (height - HANDLE_SIZE) / 2;
+export function containerHandles(
+  width: number,
+  height: number,
+  sourcePorts: readonly SourcePort[],
+): NodeHandle[] {
   const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
+  const centred = (offset: number) => height / 2 + offset - HANDLE_SIZE / 2;
   return [
     {
       id: TARGET_PORT_ID,
       type: 'target',
       position: Position.Left,
       x: -HANDLE_SIZE / 2,
-      y,
+      y: centred(0),
       ...size,
     },
-    {
-      id: SOURCE_PORT_ID,
-      type: 'source',
+    /* U19 — one STATED port per outcome, from the same `sourcePortOffset` the
+       rendered handle uses for its inline `top`. A derived node's handles are
+       taken verbatim by `parseHandles`, so if these two ever computed the
+       offset differently the line would meet empty space a few pixels off the
+       dot — and on a container, which React Flow can never measure, nothing
+       would ever correct it. One formula, two unit conversions, no second
+       opinion. */
+    ...sourcePorts.map((port, index) => ({
+      id: port.id,
+      type: 'source' as const,
       position: Position.Right,
       x: width - HANDLE_SIZE / 2,
-      y,
+      y: centred(sourcePortOffset(index, sourcePorts.length)),
       ...size,
-    },
+    })),
   ];
 }
 

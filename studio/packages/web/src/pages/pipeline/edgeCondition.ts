@@ -1,14 +1,37 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
-import { SOURCE_PORT_ID, TARGET_PORT_ID } from './ports';
+import { conditionLabel, conditionOf, encodeCondition, TARGET_PORT_ID } from './ports';
 import {
-  declaredBranchesOf,
   EdgeOnSchema,
   MaxBouncesSchema,
   stableEdgeKey,
   type Edge,
   type EdgeOn,
-  type Node,
 } from '@autonomy-studio/shared';
+
+/**
+ * The condition⇄port codec moved to `ports.ts` in U19: a port id and a
+ * `<select>` option value are now ONE encoding, and it belongs beside the ports
+ * that are its first consumer. Re-exported here so the callers that only ever
+ * cared about conditions keep their import path.
+ *
+ * The dependency runs ONE WAY, `edgeCondition → ports`, and `conditionOf` is in
+ * that list because of it. It read more naturally here — it is a fact about an
+ * `Edge`, not about a port — but `usedConditionsBySource` calls it, so leaving
+ * it here made `ports.ts → edgeCondition.ts` a VALUE import and closed a real
+ * runtime cycle, while both files' docblocks asserted there wasn't one. (It
+ * happened not to break, because both sides are used inside function bodies
+ * rather than at module top level — which is luck, not design, and nothing in
+ * `eslint.config.js` would have caught it changing.) What crosses back now is
+ * the `EdgeCondition` TYPE alone, which TypeScript erases, so the one-way claim
+ * is true of the emitted modules and not just of the intent.
+ */
+export {
+  conditionLabel,
+  conditionOf,
+  decodeConditionValue,
+  encodeCondition,
+  OPERATIONAL_CONDITIONS,
+} from './ports';
 
 /**
  * An edge's CONDITION — the discriminated pair `EdgeSchema` is built on, minus
@@ -19,24 +42,6 @@ import {
 export type EdgeCondition = { on: EdgeOn } | { on: 'branch'; branch: string };
 
 /**
- * The four OPERATIONAL outcomes, all of them authorable as of U6a.
- *
- * `skipped` was pinned out of the canvas by `AUTHORABLE_EDGE_ON` when #1 F1
- * added it to the engine: the reducer routes a skip (`edgeState` returns
- * `satisfied` for an `on:'skipped'` edge off a skipped source and `impossible`
- * for every other kind, so `completion` deliberately does NOT catch a skip),
- * `EdgeOnSchema` has always carried it and `validatePipelineDoc` has never
- * refused it — nothing could AUTHOR it. That pin was explicitly deferred to
- * this ticket, with a browser check.
- */
-export const OPERATIONAL_CONDITIONS: readonly EdgeOn[] = EdgeOnSchema.options;
-
-/** The condition carried by an existing edge. */
-export function conditionOf(e: Edge): EdgeCondition {
-  return e.on === 'branch' ? { on: 'branch', branch: e.branch } : { on: e.on };
-}
-
-/**
  * The visible edge label — the routing key, whatever kind of key it is.
  *
  * A branch edge is labelled by `branch`, NOT by `on`: `on` is the literal
@@ -45,7 +50,7 @@ export function conditionOf(e: Edge): EdgeCondition {
  * information (`true`/`false`/case) that says where each arm goes.
  */
 export function edgeLabel(e: Edge): string {
-  const base = e.on === 'branch' ? e.branch : e.on;
+  const base = conditionLabel(conditionOf(e));
   // U6e — a back-edge is the one edge whose DIRECTION is not what the arrowhead
   // says: it points at a step that already ran. Marking it in the label rather
   // than with a colour is what keeps it composable with U19's five hues (a
@@ -169,32 +174,6 @@ export function isMaxBounces(n: number): boolean {
 }
 
 /**
- * The business branch labels the edge's SOURCE declares, or `null` if it
- * declares none.
- *
- * `null` means "this source can never emit a branch" and must HIDE the branch
- * group — distinct from an empty list, which would read as "it branches but
- * offers nothing". `declaredBranchesOf` is the same SSOT `validatePipelineDoc`
- * reads, so every label this offers is one a save accepts, by construction.
- *
- * `source` may legitimately be `undefined`: an edge endpoint can be a CONTAINER
- * id (top-level↔container edges are valid), and a source node can be deleted
- * out from under a selected edge. Degrade to "no branches", never throw.
- */
-export function branchOptionsFor(source: Node | undefined): string[] | null {
-  if (source === undefined) return null;
-  const declared = declaredBranchesOf(source);
-  if (declared === undefined) return null;
-  // EMPTY labels are dropped. `declaredBranchesOf` filters `cases` on
-  // `typeof c === 'string'` only, while `validateSwitchConfig` additionally
-  // refuses `''` — so a git-imported `cases: ['']` would otherwise render an
-  // option with no visible text whose value (`branch:`) `decodeConditionValue`
-  // rejects: a click that silently does nothing, on a doc the save gate refuses
-  // anyway. Offering only what a save accepts is this module's whole claim.
-  return [...declared].filter((label) => label.length > 0);
-}
-
-/**
  * When two edges are THE SAME EDGE for authoring purposes.
  *
  * This is the engine's own `stableEdgeKey` — `(from, to, on, branch)` — plus
@@ -249,43 +228,6 @@ export function retypeCollides(edges: readonly Edge[], edge: Edge, retyped: Edge
 }
 
 /**
- * Tag separating the two arms in a `<select>` option value.
- *
- * A `switch` case label is an ARBITRARY string — `validateSwitchConfig`
- * reserves only `default` — so `cases: ['success']` is a legal, savable doc.
- * With raw values the select would emit two `<option value="success">`, one per
- * arm, and `e.target.value` could not tell them apart: choosing the business
- * branch would silently author the operational outcome instead.
- */
-const OP_TAG = 'op:';
-const BRANCH_TAG = 'branch:';
-
-/** The `<option value>` for a condition. Injective across both arms. */
-export function encodeCondition(c: EdgeCondition): string {
-  return c.on === 'branch' ? `${BRANCH_TAG}${c.branch}` : `${OP_TAG}${c.on}`;
-}
-
-/**
- * Parse an `<option value>` back to a condition; `null` if it is not one.
- *
- * Only the FIRST delimiter splits, so a case label containing `:` round-trips.
- * An unrecognised operational value is refused rather than cast — the select's
- * value comes from the DOM, and a cast would put an off-enum string straight
- * into the doc.
- */
-export function decodeConditionValue(value: string): EdgeCondition | null {
-  if (value.startsWith(BRANCH_TAG)) {
-    const branch = value.slice(BRANCH_TAG.length);
-    return branch.length > 0 ? { on: 'branch', branch } : null;
-  }
-  if (value.startsWith(OP_TAG)) {
-    const parsed = EdgeOnSchema.safeParse(value.slice(OP_TAG.length));
-    return parsed.success ? { on: parsed.data } : null;
-  }
-  return null;
-}
-
-/**
  * One doc `Edge` → the React Flow edge both canvases draw.
  *
  * The author canvas and the run monitor render the SAME edges and must never
@@ -304,10 +246,14 @@ export function toFlowEdge(e: Edge): FlowEdge {
     id: e.id,
     source: e.from,
     target: e.to,
-    // The ports are named explicitly rather than left to React Flow's
-    // "first handle of this type" fallback: the fallback is what silently
-    // mis-attaches every edge the moment a node has TWO source handles (U19).
-    sourceHandle: SOURCE_PORT_ID,
+    /* U19 — the edge names the port of its OWN outcome, which is now one of
+       several on the source. Naming it explicitly was always required: React
+       Flow's "first handle of this type" fallback is what silently mis-attaches
+       every edge the moment a node has two source handles, and this is that
+       moment. An edge whose condition has no matching port is drawn as NOTHING
+       (no error, no warning) — `sourcePortsOf` keeps an orphan port for exactly
+       that case, and `edgeCondition.test.ts` pins the two together. */
+    sourceHandle: encodeCondition(conditionOf(e)),
     targetHandle: TARGET_PORT_ID,
     label: edgeLabel(e),
     /* U6e — `edge-back` is ADDITIVE, and deliberately carries no style of its
