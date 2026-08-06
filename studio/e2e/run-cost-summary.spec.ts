@@ -102,3 +102,82 @@ test('#930 — the run monitor totals a run’s spend, and never invents a figur
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * U27 slice 2 (#931) — the run LIST states what each run cost, so comparing two
+ * runs no longer means opening both.
+ *
+ * Same egress-free seeding as the test above, and deliberately the same shape of
+ * spend: a CLI spend fact is `unpriced` with no token counts, so the cell has to
+ * render a KNOWN covered zero. That is the reading a naive column gets wrong in
+ * both directions at once — `$0.00` claims we priced it and it was free, "Cost
+ * unknown" claims a measurement gap — which is exactly why the cell routes
+ * through `costFigure` rather than formatting the number itself.
+ *
+ * What this proves that a unit test cannot: the figure survives the whole path —
+ * the bounded SQL aggregate, `GET /api/runs`' JSON, `RunSummarySchema`'s parse,
+ * and the render — rather than only the last step of it.
+ */
+test('#931 — the run list states what each run cost, and never invents a figure', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const created = await page.request.post('/api/connections', {
+    data: {
+      name: 'e2e echo cli run-list-cost',
+      kind: 'agent_cli',
+      config: { command: '/bin/echo' },
+    },
+  });
+  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
+  const { id: connectionId } = (await created.json()) as { id: string };
+
+  const doc: SeedDoc = {
+    nodes: [
+      {
+        id: 'only',
+        type: 'agent_task',
+        config: { task: 'e2e list ping' },
+        connectionId,
+        position: { x: 0, y: 0 },
+      },
+    ],
+    edges: [],
+  };
+  const { pipelineVersionId } = await seedVersion(page, '#931 list spend', doc);
+  const runId = await fireAndSettle(page, pipelineVersionId, '#931 list run');
+
+  /* The PREMISE, asserted through the LIST's own endpoint before the UI: the
+     cost reached the row, not just the event log. Without this the cell
+     assertions below could pass against a column rendering the empty case. */
+  const listRes = await page.request.get('/api/runs');
+  expect(listRes.status()).toBe(200);
+  const summaries = (await listRes.json()) as {
+    id: string;
+    cost: { responseCount: number; unpricedResponseCount: number; complete: boolean };
+  }[];
+  const summary = summaries.find((r) => r.id === runId);
+  expect(summary, `run ${runId} missing from GET /api/runs`).toBeDefined();
+  expect(summary?.cost).toEqual(
+    expect.objectContaining({ responseCount: 1, unpricedResponseCount: 1, complete: true }),
+  );
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+
+  await expect(page.getByRole('columnheader', { name: 'Cost' })).toBeVisible();
+  const row = page.getByRole('row').filter({ hasText: runId });
+  await expect(row).toHaveCount(1);
+  const cost = row.locator('td.run-cost');
+
+  // A KNOWN zero, said as one.
+  await expect(cost).toHaveText('No marginal cost');
+  // Not a priced zero, and not a measurement gap either.
+  await expect(cost).not.toContainText('$0.00');
+  await expect(cost).not.toContainText('Cost unknown');
+  // A SETTLED run's figure carries no spend-so-far qualifier.
+  await expect(cost.locator('.run-cost-unsettled')).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});

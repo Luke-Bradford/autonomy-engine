@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeRunCost, RunStatusSchema, type RunCost, type RunStatus } from '@autonomy-studio/shared';
+import {
+  computeRunCost,
+  RunStatusSchema,
+  type RunCost,
+  type RunStatus,
+} from '@autonomy-studio/shared';
 import { costCell, type CostCellRun } from './costColumn';
 
 /**

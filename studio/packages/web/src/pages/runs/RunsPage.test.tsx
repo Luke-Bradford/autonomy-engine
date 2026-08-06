@@ -141,7 +141,10 @@ describe('RunsPage', () => {
       run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
     ]);
     renderWithRouter(<RunsPage />);
-    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    const cost = cellUnder(
+      (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
+      'Cost',
+    );
     expect(cost).toHaveTextContent('$0.03');
     expect(cost).not.toHaveTextContent(/so far/);
   });
@@ -149,17 +152,23 @@ describe('RunsPage', () => {
   it('a run that billed nothing says so, rather than showing $0.00', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
     renderWithRouter(<RunsPage />);
-    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    const cost = cellUnder(
+      (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
+      'Cost',
+    );
     expect(cost).toHaveTextContent('No billed exchange');
     expect(cost).not.toHaveTextContent('$0.00');
   });
 
-  it('marks a LIVE run\'s figure as spend-so-far, visibly rather than on hover', async () => {
+  it("marks a LIVE run's figure as spend-so-far, visibly rather than on hover", async () => {
     listMock.mockResolvedValue([
       run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
     ]);
     renderWithRouter(<RunsPage />);
-    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    const cost = cellUnder(
+      (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
+      'Cost',
+    );
     expect(cost).toHaveTextContent('$0.03 so far');
     /* VISIBLE, not demoted to the title — the title carries the sentence, the
        cell carries the qualifier. */

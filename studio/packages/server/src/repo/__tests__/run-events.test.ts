@@ -180,7 +180,6 @@ describe('run-events repo', () => {
   });
 
   describe('aggregatePipelineCost (#599 — bounded SQL rollup, fail-closed)', () => {
-
     it('aggregates cost across ALL versions, fail-closed, owner-scoped, metered-only', () => {
       const { db } = freshDb();
       const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
@@ -456,7 +455,7 @@ describe('run-events repo', () => {
  * GROUPING, and therefore that a zero-metered run has no row to be.
  */
 describe('aggregateRunCosts (#931 — bounded per-run SQL aggregate)', () => {
-  it('groups per run — one run\'s spend never leaks into another\'s', () => {
+  it("groups per run — one run's spend never leaks into another's", () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
     const v = mkVersion(db, pipeline.id);
@@ -567,7 +566,7 @@ describe('aggregateRunCosts (#931 — bounded per-run SQL aggregate)', () => {
     expect(costOf(aggregateRunCosts(db, [run.id], 'local'), run.id).responseCount).toBe(1);
   });
 
-  it('is OWNER-SCOPED: another owner\'s run id yields nothing, even when named explicitly', () => {
+  it("is OWNER-SCOPED: another owner's run id yields nothing, even when named explicitly", () => {
     /* Defense in depth. The ids normally arrive already owner-filtered, so this
        is the second lock — and the one a caller that forgot the first would hit. */
     const { db } = freshDb();
