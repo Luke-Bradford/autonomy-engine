@@ -4,15 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { seedVersion } from './support/seedDoc';
+import { mintVersion, seedVersion } from './support/seedDoc';
 
 /**
- * #3 G10 / U18 slice 1 — Manage → Git (#956).
+ * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
  *
  * This is the first end-to-end exercise of the workspace-git subsystem: until
- * this slice the server owned all thirteen routes and no client called any of
+ * slice 1 the server owned all thirteen routes and no client called any of
  * them, so the whole connect → inspect → commit path had never been walked
- * against a real repository.
+ * against a real repository. Slice 2 walks the other direction — divergence,
+ * preview, import — and closes the round trip inside one spec.
  *
  * The repo is a REAL `git init --bare` in a scratch directory, connected by
  * absolute path (which `WorkspaceGitRepoUrlSchema` accepts precisely so a local
@@ -82,7 +83,9 @@ test.afterAll(async ({ request }) => {
   if (repoDir) rmSync(repoDir, { recursive: true, force: true });
 });
 
-test('a workspace connects to a repo, commits itself, and disconnects', async ({ page }) => {
+test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
 
   /**
@@ -94,7 +97,7 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
    * exactly what the first draft of this spec hit.
    */
   const pipelineName = `git-e2e-${Date.now()}`;
-  await seedVersion(page, pipelineName, {
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, pipelineName, {
     nodes: [{ id: 'n1', position: { x: 0, y: 0 } }],
   });
 
@@ -158,6 +161,73 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   // ── drift is clean afterwards ──────────────────────────────────────────────
   await page.getByRole('button', { name: 'Check for changes' }).click();
   await expect(page.getByText('No uncommitted changes.')).toBeVisible();
+
+  /**
+   * ── the incoming half (#962) ───────────────────────────────────────────────
+   *
+   * Two setup moves make the import a REAL one rather than a no-op:
+   *
+   * 1. `update-ref` points the collaboration branch at the commit the workspace
+   *    just pushed to its working branch. That is what a merged pull request
+   *    does, expressed as the one command a bare repo needs.
+   * 2. A THIRD version is minted straight into the database, so the workspace
+   *    now differs from the branch. Without it every disposition comes back
+   *    `unchanged`, no version is minted, and the spec would never exercise the
+   *    provenance stamp — which is the entire reason this slice exists, since
+   *    `POST /api/pipelines/:id/publish` refuses a version whose `sourceCommit`
+   *    is null and the import is the only writer of that field.
+   *
+   * The import therefore rolls the pipeline back to its one-node branch form,
+   * minting a version that carries the branch's commit as its provenance.
+   */
+  execFileSync('git', ['update-ref', 'refs/heads/main', 'refs/heads/studio/local/work'], {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
+  await mintVersion(
+    page,
+    pipelineId,
+    // A CONFIG change, not a position one: node positions are canvas furniture
+    // and the canonical content form may exclude them, in which case the
+    // disposition would come back `unchanged` and the spec would prove nothing.
+    {
+      nodes: [{ id: 'n1', position: { x: 0, y: 0 }, config: { url: 'https://example.invalid/' } }],
+    },
+    pipelineVersionId,
+  );
+
+  // Scoped: the commit above left its own `role="status"` on the page, so an
+  // unscoped read of either role would be a strict-mode violation from here on.
+  const incoming = page.getByRole('region', { name: 'Incoming', exact: true });
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+
+  const previewRows = incoming.getByRole('table').getByRole('row');
+  await expect(previewRows.filter({ hasText: pipelineName })).toContainText('content differs');
+
+  /**
+   * A GATE, not a comment. One SQLite database is shared by every spec file, so
+   * a preview proposing archives would mean this import is about to archive
+   * OTHER specs' pipelines and disable their triggers — and `withConfirm` below
+   * accepts blindly, so nothing else would stop it. The set is empty by
+   * construction (the branch was written from this very database, and drift was
+   * asserted clean two steps ago); this is what makes that safe by check rather
+   * than safe by argument.
+   */
+  await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
+
+  await withConfirm(page, () => incoming.getByRole('button', { name: 'Import' }).click());
+
+  const outcome = incoming.getByRole('status');
+  await expect(outcome).toContainText('1 resource changed');
+  // `versionMinted` — the provenance stamp this whole slice exists to produce.
+  await expect(incoming.getByText(/pipelines\/.*\.json/)).toContainText('new version');
+
+  // The import base moved: a real sha, where an em-dash stood before the import.
+  await expect(fact(page, 'Imported from')).toHaveText(/^[0-9a-f]{7}$/);
+
+  // ── and the workspace now matches the branch ───────────────────────────────
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+  await expect(incoming).toContainText('Up to date with main.');
 
   // ── disconnect ─────────────────────────────────────────────────────────────
   const message = await withConfirm(page, () =>

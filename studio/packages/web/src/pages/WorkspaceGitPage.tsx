@@ -712,7 +712,8 @@ function ImportSection({
    * read one head and the preview read another, so the pair does not describe
    * one moment and neither half can be trusted to explain the other.
    */
-  const checkWasTorn = readings !== null && readings.divergence.collabHead !== readings.preview.head;
+  const checkWasTorn =
+    readings !== null && readings.divergence.collabHead !== readings.preview.head;
 
   const blocked = describeImportBlock({ preview, previewIsStale, checkWasTorn });
 
@@ -783,7 +784,9 @@ function ImportSection({
         </p>
       )}
 
-      {outcome !== null && <ImportOutcomeReport outcome={outcome} collabBranch={status.collabBranch} />}
+      {outcome !== null && (
+        <ImportOutcomeReport outcome={outcome} collabBranch={status.collabBranch} />
+      )}
 
       {readings !== null && (
         <div className="form-actions">
