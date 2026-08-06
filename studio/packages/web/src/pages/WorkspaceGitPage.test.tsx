@@ -771,6 +771,32 @@ describe('WorkspaceGitPage', () => {
       expect(importMock).not.toHaveBeenCalled();
     });
 
+    /**
+     * The confirmation counts the way the OUTCOME counts. Stating the whole
+     * branch's resource count would overstate the blast radius at exactly the
+     * moment the operator is deciding, and would then be contradicted by the
+     * "N resources changed" line that follows.
+     */
+    it('counts only the differing resources in the confirmation, not the whole branch', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ path: 'a.json', disposition: 'update' }),
+            previewResource({ path: 'b.json', disposition: 'unchanged' }),
+            previewResource({ path: 'c.json', disposition: 'unchanged' }),
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differ/);
+    });
+
     /** `refused: true` arrives as a 200. A 200 is not an import. */
     it('reports a refusal as a refusal, not as a successful import', async () => {
       await renderConnected();
@@ -792,6 +818,42 @@ describe('WorkspaceGitPage', () => {
       expect(await screen.findByRole('alert')).toHaveTextContent(/Import refused/);
       expect(screen.getByText(/unexpected token/)).toBeInTheDocument();
       expect(screen.queryByRole('status')).toBeNull();
+      // A refusal wrote nothing, so the reading it was taken against is still
+      // an accurate account of the branch. Discarding it would cost the
+      // operator a second check to see the very same thing.
+      expect(screen.queryByLabelText('Incoming changes')).not.toBeNull();
+    });
+
+    /**
+     * `deferred` has no producer today. The day one appears, a client that
+     * ignores it reports a clean import over resources that were never applied
+     * — the silent-omission shape this page refuses everywhere else.
+     */
+    it('surfaces resources the server neither applied nor explained', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          deferred: [
+            {
+              path: 'datasets/orders.json',
+              kind: 'connection',
+              resourceId: null,
+              disposition: 'create',
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /1 resource it did not apply and did not explain/,
+      );
+      expect(screen.getByText('datasets/orders.json')).toBeInTheDocument();
     });
 
     it('reports what changed, and does not count an unchanged resource as a change', async () => {
@@ -929,7 +991,7 @@ describe('WorkspaceGitPage', () => {
       await renderConnected();
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
-      importMock.mockRejectedValue(new Error('git fetch failed'));
+      importMock.mockRejectedValue(new ApiError(502, 'git fetch failed'));
       vi.spyOn(window, 'confirm').mockReturnValue(true);
 
       await checkForIncoming();
@@ -937,6 +999,29 @@ describe('WorkspaceGitPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
       await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(before));
+    });
+
+    /**
+     * The counterpart to the reassurance above, and the reason it is
+     * conditional. A transport failure carries NO response, so the request may
+     * well have been applied and acknowledged into a socket nobody was left
+     * holding. Claiming "nothing changed" there would be a guess in the voice
+     * of a guarantee, and would send the operator to retry an import that has
+     * already landed.
+     */
+    it('refuses to promise anything when the failure carried no response', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockRejectedValue(new TypeError('Failed to fetch'));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/not known whether the import was applied/);
+      expect(alert).not.toHaveTextContent(/No resources were changed/);
     });
 
     /**
@@ -957,6 +1042,54 @@ describe('WorkspaceGitPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
 
       await waitFor(() => expect(screen.queryByLabelText('Incoming changes')).toBeNull());
+    });
+
+    /**
+     * The companion to the test above, and the one that makes it mean
+     * something: `committed: false` means the branch already matched, so the
+     * working copy did NOT change and the reading is still good. Without this,
+     * hoisting the invalidation out of the `if (commit.committed)` guard would
+     * leave every test green.
+     */
+    it('keeps an incoming reading when a commit turns out to be a no-op', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+
+      await checkForIncoming();
+
+      commitMock.mockResolvedValue(commitResult({ committed: false }));
+      await userEvent.type(screen.getByLabelText('Message'), 'nothing to say');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('status')).toHaveTextContent(/Nothing to commit/),
+      );
+      expect(screen.queryByLabelText('Incoming changes')).not.toBeNull();
+    });
+
+    /**
+     * The staleness check compares the preview's head against the status
+     * panel's — so if OUR OWN status re-read failed, the panel still holds the
+     * pre-check head and the comparison would report "the branch moved" on the
+     * strength of nothing but our own failure. A check almost always advances
+     * the head, so this would fire on virtually every workspace whose refresh
+     * blipped, blocking Import behind a fact nobody observed.
+     */
+    it('does not claim the branch moved when its own status re-read failed', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ collabHead: 'deadbeef00000000' }));
+      previewMock.mockResolvedValue(
+        preview({ head: 'deadbeef00000000', resources: [previewResource()] }),
+      );
+      // The status GET that follows the check fails, so the panel keeps the OLD
+      // head — which is exactly the disagreement that must NOT be read as drift.
+      getMock.mockRejectedValueOnce(new Error('service unavailable'));
+
+      await checkForIncoming();
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled());
+      expect(screen.queryByText(/has moved since this preview was taken/)).toBeNull();
     });
 
     it('takes part in the page-wide lock rather than running beside another act', async () => {

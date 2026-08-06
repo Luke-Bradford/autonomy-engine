@@ -278,13 +278,19 @@ function GitStatusPanel({
    * It swallows its own failure ON PURPOSE — the act that just succeeded did
    * not fail because a follow-up read did. The corollary binds every caller: a
    * resolved `syncStatus()` is NOT evidence that the act it follows landed.
+   *
+   * It DOES report whether it refreshed, because a caller that goes on to
+   * compare the panel's fields against its own reading needs to know it is
+   * comparing against a current observation rather than a pre-act one.
    */
-  const syncStatus = useCallback(async () => {
+  const syncStatus = useCallback(async (): Promise<boolean> => {
     try {
       const git = await getWorkspaceGit();
       if (git !== null) onStatus(git);
+      return true;
     } catch {
       /* the act itself succeeded; a stale header is not worth an alarm */
+      return false;
     }
   }, [onStatus]);
 
@@ -485,7 +491,8 @@ function CommitSection({
   runExclusive,
 }: {
   status: WorkspaceGitStatus;
-  syncStatus: () => Promise<void>;
+  /** Resolves to whether the panel above was actually re-read; ignored here. */
+  syncStatus: () => Promise<boolean>;
   /** A commit rewrote the working copy — anything derived from it is now stale. */
   onWorkspaceChanged: () => void;
   busy: boolean;
@@ -619,6 +626,18 @@ function CommitSection({
 interface GitReadings {
   divergence: WorkspaceGitDivergence;
   preview: WorkspaceGitImportPreview;
+  /**
+   * Whether the status panel was successfully re-read after this check.
+   *
+   * Load-bearing for the staleness comparison below, which is `preview.head`
+   * against the panel's `observedCollabHead`. If that re-read FAILED, the panel
+   * still holds the head from BEFORE the check — and a check almost always
+   * advances the head, so the comparison would report "the branch moved" for
+   * every workspace whose status refresh happened to fail. That is a
+   * manufactured fact (#473) with our own failed read as its only evidence,
+   * which is precisely the inversion this page refuses everywhere else.
+   */
+  statusObserved: boolean;
 }
 
 /** An import outcome, beside the head the operator was actually shown. */
@@ -654,7 +673,7 @@ function ImportSection({
   status: WorkspaceGitStatus;
   readings: GitReadings | null;
   onReadings: (readings: GitReadings | null) => void;
-  syncStatus: () => Promise<void>;
+  syncStatus: () => Promise<boolean>;
   busy: boolean;
   runExclusive: (act: () => Promise<void>) => Promise<void>;
 }) {
@@ -666,6 +685,12 @@ function ImportSection({
       runExclusive(async () => {
         setError(null);
         setOutcome(null);
+        /**
+         * Held rather than published inside the `try`, because the readings are
+         * only complete once the status re-read below has reported whether it
+         * succeeded — see `GitReadings.statusObserved`.
+         */
+        let read: Omit<GitReadings, 'statusObserved'> | null = null;
         try {
           /**
            * SEQUENTIAL, not `Promise.all`. Both calls re-observe the remote and
@@ -675,23 +700,22 @@ function ImportSection({
            * half-truth this section exists to avoid.
            */
           const divergence = await readWorkspaceGitDivergence();
-          const preview = await previewWorkspaceGitImport();
-          onReadings({ divergence, preview });
+          read = { divergence, preview: await previewWorkspaceGitImport() };
         } catch (err) {
           setError(messageOf(err));
-          /**
-           * The previous reading goes with the failure. A pruned import base
-           * comes back as a 502 from `/divergence`, and leaving the last
-           * successful "Up to date" on screen beside that error would render a
-           * failed check as a clean one — an absent fact manufactured as a
-           * benign default (#473), in the one place where the default invites
-           * the operator to skip an import they need.
-           */
-          onReadings(null);
         } finally {
           // In the FINALLY, for the reason `CommitSection.onCheck` gives: the
           // remote was re-observed before the work either way.
-          await syncStatus();
+          const statusObserved = await syncStatus();
+          /**
+           * A failed check discards the previous reading along with itself. A
+           * pruned import base comes back as a 502 from `/divergence`, and
+           * leaving the last successful "Up to date" on screen beside that
+           * error would render a failed check as a clean one — an absent fact
+           * manufactured as a benign default (#473), in the one place where the
+           * default invites the operator to skip an import they need.
+           */
+          onReadings(read === null ? null : { ...read, statusObserved });
         }
       }),
     [onReadings, syncStatus, runExclusive],
@@ -704,8 +728,14 @@ function ImportSection({
    * `preview.head` IS the collab head at preview time, and the status panel
    * carries the latest observation of it, so any later act that re-observes the
    * remote (a refresh, a drift check, a commit) surfaces the drift for free.
+   *
+   * Gated on `statusObserved`: without it, our OWN failed status read would be
+   * the sole evidence for a claim about the remote.
    */
-  const previewIsStale = preview !== null && preview.head !== status.observedCollabHead;
+  const previewIsStale =
+    readings !== null &&
+    readings.statusObserved &&
+    readings.preview.head !== status.observedCollabHead;
 
   /**
    * The branch moved BETWEEN the two calls of a single check — the divergence
@@ -727,10 +757,13 @@ function ImportSection({
       setError(null);
       setOutcome(null);
       try {
-        setOutcome({ result: await importWorkspaceGit(), previewedHead });
-        // The preview described the pre-import state; the outcome below is now
-        // the only true account of what is here.
-        onReadings(null);
+        const result = await importWorkspaceGit();
+        setOutcome({ result, previewedHead });
+        // Only an import that APPLIED invalidates the preview. A refusal wrote
+        // nothing, so the reading on screen is still an accurate account of the
+        // branch — discarding it would make the operator re-run a check to see
+        // the same thing again.
+        if (!result.refused) onReadings(null);
       } catch (err) {
         setError(describeImportFailure(err));
       } finally {
@@ -1011,6 +1044,30 @@ function ImportOutcomeReport({
           </ul>
         </>
       )}
+
+      {/* `deferred` has no producer today — the schema keeps it for a resource
+          kind added ahead of its apply slice. Rendered anyway, and as an alert:
+          the alternative is that the day something does populate it, those
+          resources are neither applied nor archived nor diagnosed, and the page
+          reports a clean import over a silent omission. Cheap now, invisible
+          until it matters, and impossible to add retrospectively once a wrong
+          answer has already been believed. */}
+      {result.deferred.length > 0 && (
+        <>
+          <h4>Not applied</h4>
+          <p role="alert" className="error">
+            The server returned {countResources(result.deferred.length)} it did not apply and did
+            not explain. This workspace does not match {collabBranch}.
+          </p>
+          <ul>
+            {result.deferred.map((deferred) => (
+              <li key={deferred.path}>
+                <code>{deferred.path}</code> — {deferred.kind}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -1051,10 +1108,19 @@ function buildImportConfirmation(
   divergence: WorkspaceGitDivergence,
   status: WorkspaceGitStatus,
 ): string {
+  /**
+   * Counted the way the OUTCOME counts, which is to say excluding the
+   * unchanged. A workspace with one real change among twenty matching
+   * resources would otherwise be confirmed as "20 resources" and then reported
+   * as "1 resource changed" — the same quantity stated two ways, and the
+   * overstatement landing at exactly the moment the operator is deciding.
+   */
+  const differing = preview.resources.filter((resource) => resource.disposition !== 'unchanged');
+
   const lines = [
     `Import ${shortSha(preview.head)} from ${status.collabBranch} into this workspace?`,
     '',
-    `${countResources(preview.resources.length)} on the branch will be applied. The branch is re-read now, so what lands may differ from the preview.`,
+    `${countResources(differing.length)} on the branch differ from this workspace and will be applied. The branch is re-read now, so what lands may differ from the preview.`,
   ];
 
   if (preview.archive.length > 0) {
@@ -1147,13 +1213,24 @@ function describeCommitFailure(err: unknown): string {
  * `call_pipeline`) lands exactly there, and the generic prose leaves the
  * operator with the one question that matters unanswered: did it half-apply?
  *
- * It did not, and that is assertable rather than hoped: the whole apply AND the
- * `importedFromCommit` stamp run inside ONE `db.transaction` server-side, so a
- * throw is a rollback. Every earlier failure (no repo, no git binary, a fetch
- * error) throws before any write at all.
+ * It did not, and for an `ApiError` that is assertable rather than hoped: the
+ * whole apply AND the `importedFromCommit` stamp run inside ONE `db.transaction`
+ * server-side, so a response-bearing failure is a rollback. Every earlier
+ * failure (no repo, no git binary, a fetch error) throws before any write.
+ *
+ * The reassurance is therefore withheld for anything that is NOT an `ApiError`.
+ * A transport failure — a dropped connection, a proxy timeout, a backgrounded
+ * tab — carries no response, so the request may well have been applied and
+ * acknowledged into a socket nobody was left holding. Saying "nothing changed"
+ * there would be a guess wearing the voice of a guarantee, and it would send
+ * the operator to retry an import that has already landed.
  */
 function describeImportFailure(err: unknown): string {
-  return `${messageOf(err)} No resources were changed and the import base did not move.`;
+  const message = messageOf(err);
+  if (err instanceof ApiError) {
+    return `${message} No resources were changed and the import base did not move.`;
+  }
+  return `${message} It is not known whether the import was applied — check for incoming changes again before retrying.`;
 }
 
 /** The human line for the derived sync state, carrying the error when there is one. */
@@ -1173,12 +1250,12 @@ function shortSha(sha: string | null): string {
   return sha === null ? '—' : sha.slice(0, 7);
 }
 
-function countFiles(files: string[]): string {
-  return `${files.length} ${files.length === 1 ? 'file' : 'files'}`;
-}
-
 function pluralize(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function countFiles(files: string[]): string {
+  return pluralize(files.length, 'file', 'files');
 }
 
 function countResources(count: number): string {
