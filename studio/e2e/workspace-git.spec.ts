@@ -107,7 +107,11 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   await page.getByRole('textbox', { name: 'Repository', exact: true }).fill(repoDir);
   await page.getByRole('button', { name: 'Connect' }).click();
 
-  await expect(page.getByRole('heading', { name: 'Connected' })).toBeVisible();
+  // `exact`, because Playwright matches an accessible name by SUBSTRING: the
+  // not-connected form's own heading is "No repository connected", which a
+  // loose 'Connected' matches — so the teardown assertion below would never be
+  // able to fail.
+  await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toBeVisible();
   await expect(fact(page, 'Repository')).toHaveText(repoDir);
   await expect(fact(page, 'Working branch')).toHaveText('studio/local/work');
 
@@ -162,7 +166,7 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   expect(message).toContain(repoDir);
 
   await expect(page.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Connected' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toHaveCount(0);
 
   expectQuiet(problems);
 });
