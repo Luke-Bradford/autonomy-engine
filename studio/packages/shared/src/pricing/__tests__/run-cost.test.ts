@@ -7,6 +7,8 @@ import {
   nodeCostFromTotals,
   rollupFromAggregates,
   rollupPipelineCost,
+  RunCostSchema,
+  runCostFromAggregates,
   runCostFromTotals,
 } from '../run-cost.js';
 import { BUILTIN_PRICE_TABLE_VERSION } from '../price-table.js';
@@ -515,5 +517,104 @@ describe('computeRunUsage (#930 — the run-level usage projection)', () => {
     expect(usage.costUnknownResponseCount).toBe(0);
     expect(usage.complete).toBe(true);
     expect(usage.totalCostEstimate).toBe(0.5);
+  });
+});
+
+/**
+ * #931 — the run-level half of the aggregate path, split out of
+ * `rollupFromAggregates` when the run LIST needed the same bounded SQL
+ * aggregation grouped per run.
+ */
+describe('runCostFromAggregates (#931 — the run-level aggregate derivation)', () => {
+  const aggregates = {
+    responseCount: 10,
+    pricedResponseCount: 6,
+    unpricedResponseCount: 1,
+    totalCostEstimate: 1.25,
+    inputTokens: 500,
+    outputTokens: 900,
+  };
+
+  it('DERIVES the cost gap as responseCount - priced - unpriced, never as a summed 0', () => {
+    const cost = runCostFromAggregates(aggregates);
+    expect(cost.costUnknownResponseCount).toBe(3);
+    expect(cost.complete).toBe(false);
+    expect(cost.totalCostEstimate).toBeCloseTo(1.25, 10);
+    expect(cost.currency).toBe('USD');
+  });
+
+  it('an `unpriced` subscription response is NOT a gap — it cannot flip complete', () => {
+    const cost = runCostFromAggregates({
+      responseCount: 4,
+      pricedResponseCount: 0,
+      unpricedResponseCount: 4,
+      totalCostEstimate: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(cost.costUnknownResponseCount).toBe(0);
+    expect(cost.complete).toBe(true);
+  });
+
+  it('carries NO run-level counts — a single run has no runCount/incompleteRunCount', () => {
+    /* The reason the shape was split at all: `incompleteRunCount` has no per-run
+       analogue, because a run's incompleteness IS `complete === false`. */
+    const cost = runCostFromAggregates(aggregates);
+    expect(Object.keys(cost).sort()).toEqual([
+      'complete',
+      'costUnknownResponseCount',
+      'currency',
+      'inputTokens',
+      'outputTokens',
+      'pricedResponseCount',
+      'responseCount',
+      'totalCostEstimate',
+      'unpricedResponseCount',
+    ]);
+  });
+
+  it('rollupFromAggregates DELEGATES to it — identical on every shared field', () => {
+    /* The pin on the split: the pipeline rollup must be exactly the run-level
+       derivation plus two pass-through counts, or the two SQL paths can drift on
+       the fail-closed rule the whole module exists to state once. */
+    const rollup = rollupFromAggregates({ ...aggregates, runCount: 4, incompleteRunCount: 2 });
+    expect(rollup).toEqual({
+      ...runCostFromAggregates(aggregates),
+      runCount: 4,
+      incompleteRunCount: 2,
+    });
+  });
+});
+
+/**
+ * #931 — `RunCostSchema` is the wire shape `RunSummary.cost` is parsed through,
+ * so it has to stay EXACTLY the `RunCost` interface. `satisfies z.ZodType<RunCost>`
+ * pins one direction at compile time; this pins the other (an extra key), plus the
+ * value constraints, at runtime.
+ */
+describe('RunCostSchema (#931 — the Zod twin of RunCost)', () => {
+  const cost = runCostFromAggregates({
+    responseCount: 3,
+    pricedResponseCount: 2,
+    unpricedResponseCount: 0,
+    totalCostEstimate: 0.75,
+    inputTokens: 120,
+    outputTokens: 340,
+  });
+
+  it('has EXACTLY the keys RunCost declares — no more, no fewer', () => {
+    expect(Object.keys(RunCostSchema.shape).sort()).toEqual(Object.keys(cost).sort());
+  });
+
+  it('round-trips a real derived cost unchanged', () => {
+    expect(RunCostSchema.parse(cost)).toEqual(cost);
+  });
+
+  it('REFUSES a negative amount and a fractional count', () => {
+    /* Neither is producible by the fold or the SQL, which is the point: a shape
+       that admits them lets a corrupt row through looking valid. */
+    expect(RunCostSchema.safeParse({ ...cost, totalCostEstimate: -0.01 }).success).toBe(false);
+    expect(RunCostSchema.safeParse({ ...cost, responseCount: 1.5 }).success).toBe(false);
+    expect(RunCostSchema.safeParse({ ...cost, currency: 'GBP' }).success).toBe(false);
   });
 });

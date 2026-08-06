@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { EngineEventSchema, type EngineEvent } from '../engine/types.js';
 
 /**
@@ -101,6 +102,39 @@ export interface RunCost {
   complete: boolean;
 }
 
+/**
+ * #931 — the Zod twin of {@link RunCost}, because the run LIST now carries a
+ * cost per row (`RunSummarySchema.cost`) and a wire shape needs a parser.
+ *
+ * It lives HERE, beside the money model, rather than in `schemas/run.ts` beside
+ * its one consumer — the same argument `pricing/price-table.ts` already settles
+ * for `ModelUnitPriceSchema`/`ConnectionPriceTableSchema`, and the same one
+ * `pricing/display.ts` makes for `formatUsd`: the rule about the money belongs
+ * with the money, or the second consumer re-decides it differently.
+ *
+ * `satisfies z.ZodType<RunCost>` pins the schema to the interface in one
+ * direction (a missing or mistyped field is a compile error). The other direction
+ * — an EXTRA field the interface does not declare — is not expressible that way
+ * (an intersection is still assignable), so it is pinned by an exact key-set
+ * assertion in the tests.
+ *
+ * Every count is a non-negative integer and `totalCostEstimate` a non-negative
+ * number, matching `activity.metered.costEstimate`'s own `z.number().nonnegative()`
+ * — a negative cost is not a thing the fold or the SQL can produce, so admitting
+ * one here would only let a corrupt row through wearing a valid shape.
+ */
+export const RunCostSchema = z.object({
+  currency: z.literal('USD'),
+  totalCostEstimate: z.number().nonnegative(),
+  responseCount: z.number().int().nonnegative(),
+  pricedResponseCount: z.number().int().nonnegative(),
+  unpricedResponseCount: z.number().int().nonnegative(),
+  costUnknownResponseCount: z.number().int().nonnegative(),
+  inputTokens: z.number().int().nonnegative(),
+  outputTokens: z.number().int().nonnegative(),
+  complete: z.boolean(),
+}) satisfies z.ZodType<RunCost>;
+
 /** A per-pipeline rollup: the same money/count fields summed across the
  * pipeline's runs, plus run-level counts. */
 export interface PipelineCostRollup extends RunCost {
@@ -112,18 +146,20 @@ export interface PipelineCostRollup extends RunCost {
 }
 
 /**
- * #599 — the scalar aggregates a per-pipeline rollup is built from, the shape a
- * BOUNDED SQL aggregation produces (`aggregatePipelineCost`) as well as what the
- * in-memory array fold sums to. Deliberately carries neither
- * `costUnknownResponseCount` NOR `complete`: both are DERIVED by
- * {@link rollupFromAggregates} (the single fail-closed derivation site), so no
- * caller can hand in an inconsistent priced/unknown/complete triple.
+ * #599 — the scalar aggregates for ONE SCOPE's metered responses: the shape a
+ * BOUNDED SQL aggregation produces as well as what the in-memory array fold sums
+ * to. Deliberately carries neither `costUnknownResponseCount` NOR `complete`:
+ * both are DERIVED by {@link runCostFromAggregates} (the single fail-closed
+ * derivation site), so no caller can hand in an inconsistent
+ * priced/unknown/complete triple.
+ *
+ * SPLIT OUT of `PipelineCostAggregates` by #931, when the run LIST needed the
+ * same bounded aggregation grouped per run. `runCount`/`incompleteRunCount` have
+ * no per-run analogue — a single run's incompleteness is just `complete === false`
+ * — so the run-level shape is exactly this run-count-free half, and both SQL
+ * paths derive through one function rather than two.
  */
-export interface PipelineCostAggregates {
-  /** All runs of the pipeline, INCLUDING zero-metered ones (each a complete $0). */
-  runCount: number;
-  /** Runs with at least one cost-unknown metered response. */
-  incompleteRunCount: number;
+export interface MeteredAggregates {
   /**
    * Total `activity.metered` events folded — BILLED EXCHANGES, not completions.
    * The SQL twin of `RunCost.responseCount`; see its doc for why #725 makes a
@@ -146,10 +182,23 @@ export interface PipelineCostAggregates {
 }
 
 /**
- * The SINGLE fail-closed derivation of a {@link PipelineCostRollup} from scalar
- * aggregates. BOTH the in-memory array fold ({@link rollupPipelineCost}) and the
- * bounded SQL rollup (#599, `aggregatePipelineCost`) funnel through here, so the
- * fail-closed rule lives in ONE place and the two paths cannot drift:
+ * #599 — {@link MeteredAggregates} PLUS the two run-level counts a per-pipeline
+ * rollup adds. The shape `aggregatePipelineCost` produces.
+ */
+export interface PipelineCostAggregates extends MeteredAggregates {
+  /** All runs of the pipeline, INCLUDING zero-metered ones (each a complete $0). */
+  runCount: number;
+  /** Runs with at least one cost-unknown metered response. */
+  incompleteRunCount: number;
+}
+
+/**
+ * The SINGLE fail-closed derivation of a {@link RunCost} from scalar aggregates.
+ * EVERY aggregate-shaped path funnels through here — the in-memory array fold
+ * ({@link rollupPipelineCost}), the bounded per-PIPELINE SQL rollup (#599,
+ * `aggregatePipelineCost`) via {@link rollupFromAggregates}, and the bounded
+ * per-RUN SQL aggregation the run list uses (#931, `aggregateRunCosts`) — so the
+ * fail-closed rule lives in ONE place and no path can drift from another:
  *
  *   - `costUnknownResponseCount` is DERIVED as
  *     `responseCount - pricedResponseCount - unpricedResponseCount`, NEVER summed
@@ -160,13 +209,18 @@ export interface PipelineCostAggregates {
  *     the gap so it does not flip `complete`.
  *   - `complete` is `costUnknownResponseCount === 0`, matching `computeRunCost`.
  *
- * `runCount`/`incompleteRunCount` are passed through as measured. The caller is
- * responsible for computing all counts over the SAME row set (same join, filter,
- * owner scope) so the documented invariant `complete === (incompleteRunCount === 0)`
- * holds — a run counts as incomplete IFF it has a genuine cost-unknown response
- * (NOT merely an `unpriced` one).
+ * The caller is responsible for computing every count over the SAME row set
+ * (same join, filter, owner scope); the derivation is only as honest as that.
+ *
+ * NOT to be confused with {@link runCostFromTotals}, which projects the SAME
+ * shape from the in-memory accumulator: that one CARRIES `costUnknownResponseCount`
+ * (the fold categorised each response as it went), this one DERIVES it (SQL can
+ * count what is present, so the gap is what is left over). Two inputs, one
+ * fail-closed rule, and it is written once — here for the aggregate path and in
+ * {@link accumulateMetered} for the fold path, which is exactly the pairing
+ * `run-events.test.ts`'s SQL-vs-fold equivalence test pins.
  */
-export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostRollup {
+export function runCostFromAggregates(agg: MeteredAggregates): RunCost {
   const costUnknownResponseCount =
     agg.responseCount - agg.pricedResponseCount - agg.unpricedResponseCount;
   return {
@@ -179,6 +233,21 @@ export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostR
     inputTokens: agg.inputTokens,
     outputTokens: agg.outputTokens,
     complete: costUnknownResponseCount === 0,
+  };
+}
+
+/**
+ * The per-PIPELINE rollup: {@link runCostFromAggregates} plus the two run-level
+ * counts, passed through as measured.
+ *
+ * The caller is responsible for computing all counts over the SAME row set (same
+ * join, filter, owner scope) so the documented invariant
+ * `complete === (incompleteRunCount === 0)` holds — a run counts as incomplete IFF
+ * it has a genuine cost-unknown response (NOT merely an `unpriced` one).
+ */
+export function rollupFromAggregates(agg: PipelineCostAggregates): PipelineCostRollup {
+  return {
+    ...runCostFromAggregates(agg),
     runCount: agg.runCount,
     incompleteRunCount: agg.incompleteRunCount,
   };
@@ -386,8 +455,15 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
  * A rendered run-level figure needs those extras for the same reason the per-node
  * panel does (see {@link NodeCost}) — without them a run that measured no tokens
  * is indistinguishable from one that used none. `computeRunCost` keeps its narrower
- * shape because it is the twin of the bounded-SQL aggregate that serves
- * `GET /api/runs/:id/cost`, and widening THAT would mean counting these in SQL.
+ * shape because it is the twin of the bounded-SQL aggregate path
+ * ({@link runCostFromAggregates}), and widening THAT would mean counting these in
+ * SQL. #931 made that twinning real for the run LIST — `aggregateRunCosts` produces
+ * exactly this shape per run — while `GET /api/runs/:id/cost` still folds
+ * `listRunEvents` in memory (`routes/runs.ts`), which the earlier wording named as
+ * though the aggregate already backed it. That route COULD be moved onto the
+ * bounded aggregate and retire the last unbounded cost loader; it is deliberately
+ * left alone here, because a single-run route is not the scaling hazard a list is
+ * and swapping it would change what happens to a row the fold would skip.
  *
  * The two agree by construction on every shared field: one fold, two projections.
  */
