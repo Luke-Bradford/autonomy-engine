@@ -238,6 +238,29 @@ describe('U6a edge variant hues', () => {
     );
   });
 
+  /**
+   * U19 slice 2 — the THIRD surface, added when the `Fires on` dropdown became a
+   * radio group over the same outcomes.
+   *
+   * The panel swatch, the source port and the edge stroke are one mapping shown
+   * in three places, and only the first two were guarded here. Nothing else can
+   * catch a drift: a swatch painted `--error` for `success` renders perfectly,
+   * reads as a deliberate choice, and would only ever be found by someone
+   * comparing the panel to the canvas side by side. Asserted against the SAME
+   * `EXPECTED` table, so a sixth outcome cannot be added to two surfaces and
+   * forgotten on the third.
+   */
+  it('gives every panel outcome swatch the SAME hue as its port and edge', () => {
+    for (const [condition, cssVar] of EXPECTED) {
+      const swatch = customProps(ruleBody(css, `.edge-outcome--${condition}`));
+      expect(swatch.get('--outcome-color'), `.edge-outcome--${condition} hue`).toBe(
+        `var(${cssVar})`,
+      );
+      const port = customProps(ruleBody(css, `.flow-port--${condition}`));
+      expect(swatch.get('--outcome-color')).toBe(port.get('--port-color'));
+    }
+  });
+
   it('gives every edge variant an arrowhead marker in the SAME hue as its stroke', () => {
     expect([...EDGE_VARIANTS].sort()).toEqual(EXPECTED.map(([c]) => c).sort());
     for (const [condition, cssVar] of EXPECTED) {

@@ -12,11 +12,54 @@ const node = (id: string, type: string, config: Record<string, unknown> = {}): N
 });
 
 /** Mounts the panel over an edge the store does NOT hold — enough for every
- *  question about which options are OFFERED. */
+ *  question about which outcomes are OFFERED. */
 function mount(edge: Edge, nodes: Node[], edges: Edge[] = [edge]) {
   const store = createCanvasStore();
   render(<EdgePanel store={store} edge={edge} nodes={nodes} edges={edges} />);
-  return { store, select: screen.getByLabelText(/Fires on/) as HTMLSelectElement };
+  return { store, group: outcomeGroup() };
+}
+
+/** The `Fires on` radio group (U19 slice 2 — no longer a `<select>`). */
+function outcomeGroup(): HTMLFieldSetElement {
+  return screen.getByRole('group', { name: /Fires on/ }) as HTMLFieldSetElement;
+}
+
+/** Every outcome radio, in render order, with the text an operator reads. */
+function radios(): { value: string; label: string; disabled: boolean; checked: boolean }[] {
+  return [...outcomeGroup().querySelectorAll('input[type="radio"]')].map((input) => {
+    const el = input as HTMLInputElement;
+    return {
+      value: el.value,
+      label: (el.closest('label')?.textContent ?? '').trim(),
+      disabled: el.disabled,
+      checked: el.checked,
+    };
+  });
+}
+
+/** The radio carrying `value`, or undefined. */
+function radio(value: string): HTMLInputElement | undefined {
+  return [...outcomeGroup().querySelectorAll('input[type="radio"]')].find(
+    (i) => (i as HTMLInputElement).value === value,
+  ) as HTMLInputElement | undefined;
+}
+
+/** The value currently CHECKED — the panel's statement of what the edge holds. */
+function checkedValue(): string | null {
+  return radios().find((r) => r.checked)?.value ?? null;
+}
+
+/** Labels of the offered OPERATIONAL outcomes (`op:` prefix), in order. */
+function operationalLabels(): string[] {
+  return radios()
+    .filter((r) => r.value.startsWith('op:'))
+    .map((r) => r.label);
+}
+
+/** Labels of the offered BRANCH arms, or null when none are offered at all. */
+function branchLabels(): string[] | null {
+  const arms = radios().filter((r) => r.value.startsWith('branch:'));
+  return arms.length === 0 ? null : arms.map((r) => r.label);
 }
 
 /** Mounts the panel over an edge the store really holds, so a pick can be
@@ -39,13 +82,7 @@ function mountAgainstStore(edge: Edge, nodes: Node[]) {
     }),
   );
   render(<EdgePanel store={store} edge={edge} nodes={nodes} edges={[edge]} />);
-  return { store, select: screen.getByLabelText(/Fires on/) as HTMLSelectElement };
-}
-
-/** The option TEXT of a named `<optgroup>`, or null if the group is absent. */
-function group(label: string): string[] | null {
-  const g = document.querySelector(`optgroup[label="${label}"]`);
-  return g === null ? null : [...g.querySelectorAll('option')].map((o) => o.textContent ?? '');
+  return { store };
 }
 
 describe('EdgePanel — operational outcomes', () => {
@@ -57,24 +94,24 @@ describe('EdgePanel — operational outcomes', () => {
    */
   it('offers all FOUR operational outcomes, `skipped` included', () => {
     mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'success' }, [node('n_a', 'http_request')]);
-    expect(group('Outcome')).toEqual(['success', 'failure', 'completion', 'skipped']);
+    expect(operationalLabels()).toEqual(['success', 'failure', 'completion', 'skipped']);
   });
 
   it('authors the picked outcome through the store', () => {
-    const { store, select } = mountAgainstStore(
-      { id: 'e1', from: 'n_a', to: 'n_b', on: 'success' },
-      [node('n_a', 'http_request'), node('n_b', 'http_request')],
-    );
-    fireEvent.change(select, { target: { value: 'op:skipped' } });
+    const { store } = mountAgainstStore({ id: 'e1', from: 'n_a', to: 'n_b', on: 'success' }, [
+      node('n_a', 'http_request'),
+      node('n_b', 'http_request'),
+    ]);
+    fireEvent.click(radio('op:skipped')!);
     expect(store.getState().edges[0]).toMatchObject({ id: 'e1', on: 'skipped' });
   });
 
   it('authors a BUSINESS branch through the same picker', () => {
-    const { store, select } = mountAgainstStore(
-      { id: 'e1', from: 'n_if', to: 'n_b', on: 'success' },
-      [node('n_if', 'if'), node('n_b', 'http_request')],
-    );
-    fireEvent.change(select, { target: { value: 'branch:false' } });
+    const { store } = mountAgainstStore({ id: 'e1', from: 'n_if', to: 'n_b', on: 'success' }, [
+      node('n_if', 'if'),
+      node('n_b', 'http_request'),
+    ]);
+    fireEvent.click(radio('branch:false')!);
     expect(store.getState().edges[0]).toMatchObject({ on: 'branch', branch: 'false' });
   });
 });
@@ -82,19 +119,19 @@ describe('EdgePanel — operational outcomes', () => {
 describe('EdgePanel — branch picker', () => {
   it('offers no Branch group when the source cannot emit a branch', () => {
     mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'success' }, [node('n_a', 'http_request')]);
-    expect(group('Branch')).toBeNull();
+    expect(branchLabels()).toBeNull();
   });
 
   it('offers an `if`s two arms', () => {
     mount({ id: 'e1', from: 'n_if', to: 'n_b', on: 'success' }, [node('n_if', 'if')]);
-    expect(group('Branch')).toEqual(['true', 'false']);
+    expect(branchLabels()).toEqual(['true', 'false']);
   });
 
   it('offers a `switch`s configured cases plus the implicit default', () => {
     mount({ id: 'e1', from: 'n_sw', to: 'n_b', on: 'success' }, [
       node('n_sw', 'switch', { cases: ['approve', 'reject'] }),
     ]);
-    expect(group('Branch')).toEqual(['approve', 'reject', 'default']);
+    expect(branchLabels()).toEqual(['approve', 'reject', 'default']);
   });
 
   /**
@@ -104,20 +141,20 @@ describe('EdgePanel — branch picker', () => {
    * would silently author the OPERATIONAL outcome.
    */
   it('keeps a case label colliding with an operational outcome distinguishable', () => {
-    const { select } = mount({ id: 'e1', from: 'n_sw', to: 'n_b', on: 'success' }, [
+    mount({ id: 'e1', from: 'n_sw', to: 'n_b', on: 'success' }, [
       node('n_sw', 'switch', { cases: ['success'] }),
     ]);
-    const values = [...select.querySelectorAll('option')].map((o) => o.value);
-    expect(new Set(values).size).toBe(values.length); // no two options share a value
+    const values = radios().map((r) => r.value);
+    expect(new Set(values).size).toBe(values.length); // no two radios share a value
     expect(values).toContain('op:success');
     expect(values).toContain('branch:success');
   });
 
   it('renders a branch edge selected on its own arm, not on the first option', () => {
-    const { select } = mount({ id: 'e1', from: 'n_if', to: 'n_b', on: 'branch', branch: 'false' }, [
+    mount({ id: 'e1', from: 'n_if', to: 'n_b', on: 'branch', branch: 'false' }, [
       node('n_if', 'if'),
     ]);
-    expect(select.value).toBe('branch:false');
+    expect(checkedValue()).toBe('branch:false');
   });
 });
 
@@ -129,39 +166,65 @@ describe('EdgePanel — branch picker', () => {
  * un-declare a branch an existing edge still uses.
  */
 describe('EdgePanel — a persisted value the source does not offer', () => {
-  it('shows the orphaned value as a DISABLED option rather than lying', () => {
-    const { select } = mount(
+  it('STATES the orphaned value rather than lying, and offers no radio for it', () => {
+    mount(
       { id: 'e1', from: 'n_sw', to: 'n_b', on: 'branch', branch: 'gone' },
       [node('n_sw', 'switch', { cases: ['approve'] })], // 'gone' was removed
     );
-    expect(select.value).toBe('branch:gone');
-    const orphan = screen.getByRole('option', { name: /^gone — not offered/ }) as HTMLOptionElement;
-    expect(orphan.disabled).toBe(true);
+    // Not a CHOICE — no radio carries it, so it cannot be re-picked...
+    expect(radio('branch:gone')).toBeUndefined();
+    expect(checkedValue()).toBeNull();
+    // ...but the panel still STATES what the doc holds, rather than silently
+    // reading as one of the outcomes that IS offered.
+    expect(within(outcomeGroup()).getByText(/^gone — not offered/)).toBeTruthy();
   });
 
   it('shows a branch edge off a NON-branching source the same way', () => {
-    const { select } = mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }, [
+    mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'branch', branch: 'true' }, [
       node('n_a', 'http_request'),
     ]);
-    expect(select.value).toBe('branch:true');
-    expect(group('Branch')).toBeNull();
-    expect(within(select).getByRole('option', { name: /^true — not offered/ })).toBeTruthy();
+    expect(branchLabels()).toBeNull();
+    expect(checkedValue()).toBeNull();
+    expect(within(outcomeGroup()).getByText(/^true — not offered/)).toBeTruthy();
+  });
+
+  /**
+   * The orphan note has to reach a SCREEN READER, not just the page.
+   *
+   * With no radio checked, someone tabbing into the group lands on an unchecked
+   * `success` — so a loose sibling paragraph is read only in browse mode and the
+   * edge's actual value goes unannounced in focus mode. The old `<select>` got
+   * this for free by BEING the value. `aria-describedby` puts it back.
+   */
+  it('ties the orphan note to the group, so focusing it announces the truth', () => {
+    mount({ id: 'e1', from: 'n_sw', to: 'n_b', on: 'branch', branch: 'gone' }, [
+      node('n_sw', 'switch', { cases: ['approve'] }),
+    ]);
+    const described = outcomeGroup().getAttribute('aria-describedby');
+    expect(described).not.toBeNull();
+    expect(document.getElementById(described!)?.textContent).toMatch(/^gone — not offered/);
+  });
+
+  /** ...and no dangling reference when there is nothing to describe. */
+  it('leaves the group undescribed when the condition IS offered', () => {
+    mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'success' }, [node('n_a', 'http_request')]);
+    expect(outcomeGroup().getAttribute('aria-describedby')).toBeNull();
   });
 
   /** An edge endpoint may be a CONTAINER id, or a deleted node. Degrade. */
   it('degrades to the operational outcomes when the source node is absent', () => {
-    const { select } = mount({ id: 'e1', from: 'c_loop', to: 'n_b', on: 'success' }, []);
-    expect(group('Outcome')).toEqual(['success', 'failure', 'completion', 'skipped']);
-    expect(group('Branch')).toBeNull();
-    expect(select.value).toBe('op:success');
+    mount({ id: 'e1', from: 'c_loop', to: 'n_b', on: 'success' }, []);
+    expect(operationalLabels()).toEqual(['success', 'failure', 'completion', 'skipped']);
+    expect(branchLabels()).toBeNull();
+    expect(checkedValue()).toBe('op:success');
   });
 });
 
 /**
- * `updateEdgeCondition` REFUSES a retype that would duplicate another edge. A
- * refusal the operator cannot see is a control that silently does nothing:
- * they pick `failure`, React re-renders from the unchanged store, and the
- * select snaps back with no explanation. The option is disabled instead.
+ * `rewireEdge` REFUSES a retype that would duplicate another edge. A refusal the
+ * operator cannot see is a control that silently does nothing: they pick
+ * `failure`, React re-renders from the unchanged store, and the radio snaps back
+ * with no explanation. The choice is disabled instead.
  */
 describe('EdgePanel — a condition another edge already holds', () => {
   const subject: Edge = { id: 'e1', from: 'n_a', to: 'n_b', on: 'success' };
@@ -169,38 +232,35 @@ describe('EdgePanel — a condition another edge already holds', () => {
 
   it('disables the taken option and says why', () => {
     mount(subject, [node('n_a', 'http_request')], [subject, sibling]);
-    const taken = screen.getByRole('option', {
-      name: /^failure — already used/,
-    }) as HTMLOptionElement;
+    const taken = radios().find((r) => r.value === 'op:failure')!;
     expect(taken.disabled).toBe(true);
+    expect(taken.label).toMatch(/^failure — already used/);
   });
 
   it('leaves every other option, and the edge’s OWN condition, selectable', () => {
     mount(subject, [node('n_a', 'http_request')], [subject, sibling]);
-    for (const name of ['success', 'completion', 'skipped']) {
-      expect((screen.getByRole('option', { name }) as HTMLOptionElement).disabled).toBe(false);
+    for (const on of ['success', 'completion', 'skipped']) {
+      expect(radio(`op:${on}`)!.disabled).toBe(false);
     }
+    // ...and the edge's own condition stays CHECKED, not merely selectable.
+    expect(checkedValue()).toBe('op:success');
   });
 
   /** Only edges between the SAME pair collide — the key includes both ends. */
   it('ignores an edge with the same condition between a different pair', () => {
     const elsewhere: Edge = { id: 'e2', from: 'n_a', to: 'n_c', on: 'failure' };
     mount(subject, [node('n_a', 'http_request')], [subject, elsewhere]);
-    expect((screen.getByRole('option', { name: 'failure' }) as HTMLOptionElement).disabled).toBe(
-      false,
-    );
+    expect(radio('op:failure')!.disabled).toBe(false);
   });
 
   it('disables a taken BRANCH arm, not just an operational outcome', () => {
     const s: Edge = { id: 'e1', from: 'n_if', to: 'n_b', on: 'success' };
     const other: Edge = { id: 'e2', from: 'n_if', to: 'n_b', on: 'branch', branch: 'true' };
     mount(s, [node('n_if', 'if')], [s, other]);
-    expect(
-      (screen.getByRole('option', { name: /^true — already used/ }) as HTMLOptionElement).disabled,
-    ).toBe(true);
-    expect((screen.getByRole('option', { name: 'false' }) as HTMLOptionElement).disabled).toBe(
-      false,
-    );
+    const takenArm = radios().find((r) => r.value === 'branch:true')!;
+    expect(takenArm.disabled).toBe(true);
+    expect(takenArm.label).toMatch(/^true — already used/);
+    expect(radio('branch:false')!.disabled).toBe(false);
   });
 });
 

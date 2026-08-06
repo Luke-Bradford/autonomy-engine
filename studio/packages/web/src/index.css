@@ -1269,6 +1269,95 @@ td button + button {
   --port-color: var(--muted);
 }
 
+/* ── U19 slice 2 — the property panel's outcome picker ───────────────────────
+ *
+ * The retired `Fires on` dropdown's replacement. It is deliberately the same
+ * SET, in the same HUES, as the source ports on the canvas: the panel mirrors
+ * the ports rather than offering a second vocabulary for the same fact, and the
+ * swatch below reads the identical `--success`/`--error`/`--accent`/`--muted`/
+ * `--branch` palette entries `.flow-port--*` and `.react-flow__edge.edge-variant-*`
+ * do. Three surfaces, one mapping.
+ *
+ * The control is a radio group because the canvas gesture has no keyboard
+ * equivalent — React Flow's handles carry no `tabIndex` — so this is the whole
+ * keyboard path to retyping an edge, and a group of radios is one tab stop with
+ * arrow-key movement inside it.
+ */
+.edge-outcomes {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem 0.6rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.edge-outcomes legend {
+  padding: 0 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.edge-outcome {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+/* A taken outcome is shown, not hidden: the operator needs to know the choice
+   exists and why it is unavailable, which is the whole reason the label carries
+   "already used by another edge". */
+.edge-outcome:has(input:disabled) {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.edge-outcome-swatch {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--outcome-color, var(--muted));
+}
+
+.edge-outcome--success {
+  --outcome-color: var(--success);
+}
+
+.edge-outcome--failure {
+  --outcome-color: var(--error);
+}
+
+.edge-outcome--completion {
+  --outcome-color: var(--accent);
+}
+
+.edge-outcome--skipped {
+  --outcome-color: var(--muted);
+}
+
+.edge-outcome--branch {
+  --outcome-color: var(--branch);
+}
+
+/* The persisted condition is one this source no longer declares. Stated in the
+   panel because the group below cannot express it — a radio for an outcome that
+   is not offered would be a choice, and this is a fact. */
+.edge-outcome-orphan {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  color: var(--warning, var(--muted));
+}
+
+.edge-rewire-hint {
+  margin: 0.1rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 /* Inert, and a SIBLING of the handle rather than a child: React Flow reads a
    handle's attach point from its own bounding rect, so text inside the dot would
    widen it to the width of the word and move every edge's endpoint off the port

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { connectById, firesOn, outcomePort, selectEdge } from './support/canvasGraph';
+import { connectById, outcomePort, outcomeRadio, selectEdge } from './support/canvasGraph';
 import { nodeById, openSeededCanvas } from './support/seedDoc';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { resolvedPaletteColor } from './support/theme';
@@ -68,7 +68,7 @@ test.describe('U19 outcome ports', () => {
     // pass cannot come from a correct edge painted wrong or the reverse.
     await expect(edge).toHaveClass(/\bedge-variant-failure\b/);
     await selectEdge(page);
-    await expect(firesOn(page)).toHaveValue(outcomePort('failure'));
+    await expect(outcomeRadio(page, outcomePort('failure'))).toBeChecked();
 
     const stroke = await page.evaluate(
       () => getComputedStyle(document.querySelector('.react-flow__edge-path')!).stroke,
@@ -209,7 +209,7 @@ test.describe('U19 outcome ports', () => {
 
     await connectById(page, 'sw', 'b', undefined, 'branch:blue');
     await selectEdge(page);
-    await expect(firesOn(page)).toHaveValue('branch:blue');
+    await expect(outcomeRadio(page, 'branch:blue')).toBeChecked();
 
     await expectQuiet(page, problems);
   });

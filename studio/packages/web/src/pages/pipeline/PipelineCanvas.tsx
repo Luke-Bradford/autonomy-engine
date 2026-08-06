@@ -58,7 +58,6 @@ import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
   conditionOf,
-  decodeConditionValue,
   edgeLabel,
   encodeCondition,
   isMaxBounces,
@@ -1272,62 +1271,92 @@ export function EdgePanel({
   /**
    * Conditions ALREADY taken by another edge between the same two nodes.
    *
-   * `updateEdgeCondition` refuses such a retype (it would mint a duplicate),
-   * and a refusal the operator cannot see is a control that silently does
-   * nothing: they pick `failure`, React re-renders from the unchanged store,
-   * and the select snaps back with no explanation. Showing the option DISABLED
-   * says the same "no" before the click, and says why.
+   * `rewireEdge` refuses such a retype (it would mint a duplicate), and a
+   * refusal the operator cannot see is a control that silently does nothing:
+   * they pick `failure`, React re-renders from the unchanged store, and the
+   * control snaps back with no explanation. Showing the choice DISABLED says the
+   * same "no" before the click, and says why.
    */
   const taken = takenConditions(edges, edge);
 
   /**
-   * A `<select>` whose `value` matches no `<option>` renders the FIRST option
-   * instead — a silent lie about what is persisted. Reachable without leaving
-   * the canvas: `declaredBranchesOf` reads a `switch`'s `config.cases` LIVE, so
-   * editing that config in the node panel can un-declare a branch an existing
-   * edge still uses. (Also reachable via an API/git-imported doc.) The value is
-   * shown as a DISABLED option so the panel states the truth and refuses to
-   * re-select it; `validateCanvas` is already badging the doc as unsavable.
+   * The persisted condition is one this source no longer declares.
+   *
+   * Reachable without leaving the canvas: `declaredBranchesOf` reads a
+   * `switch`'s `config.cases` LIVE, so editing that config in the node panel can
+   * un-declare a branch an existing edge still uses. (Also via an API- or
+   * git-imported doc.)
+   *
+   * As a `<select>` this was a DISABLED option, because a select whose `value`
+   * matches no option silently renders the first one — a lie about what is
+   * persisted. A radio group has no such fallback: nothing is checked, which is
+   * already truthful. So the orphan is now STATED instead, as a sentence naming
+   * the value, and no radio is offered for it — it is a fact about the doc, not
+   * a choice. `validateCanvas` is already badging the doc as unsavable.
    */
   const orphaned = !offered.includes(currentValue);
+  /* Per EDGE, like the radio group's own `name`: two panels on one page must
+     not point their groups at the same note. */
+  const orphanNoteId = `edge-outcome-orphan-${edge.id}`;
 
   return (
     <aside className="property-panel" aria-label="Properties">
       <h3>{edge.back === true ? 'Back-edge' : 'Edge'}</h3>
       {edge.back === true && <BounceCapField store={store} edge={edge} />}
-      <label>
-        Fires on
-        <select
-          value={currentValue}
-          onChange={(e) => {
-            const next = decodeConditionValue(e.target.value);
-            if (next) store.getState().updateEdgeCondition(edge.id, next);
-          }}
-        >
-          {orphaned && (
-            <option value={currentValue} disabled>
-              {edgeLabel(edge)} — not offered by this source
-            </option>
-          )}
-          <optgroup label="Outcome">
-            {OPERATIONAL_CONDITIONS.map((on) => (
-              <ConditionOption key={on} condition={{ on }} label={on} taken={taken} />
-            ))}
-          </optgroup>
-          {branches !== null && (
-            <optgroup label="Branch">
-              {branches.map((branch) => (
-                <ConditionOption
-                  key={branch}
-                  condition={{ on: 'branch', branch }}
-                  label={branch}
-                  taken={taken}
-                />
-              ))}
-            </optgroup>
-          )}
-        </select>
-      </label>
+      {/**
+       * U19 slice 2 — the outcome picker, retired as a `<select>`.
+       *
+       * The row's shape change is that an outcome is a PORT: you draw from the
+       * one you mean, and you retype by dragging that end onto another. This is
+       * the same set, in the same hues, rather than a generic dropdown over
+       * condition strings — it mirrors the ports rather than competing with them,
+       * and both come off `declaredConditionsOf`.
+       *
+       * It is not kept purely for symmetry. React Flow's handles are
+       * `pointer-events`-driven with no `tabIndex`, so the canvas gesture has no
+       * keyboard equivalent; deleting this control outright would leave NO way to
+       * retype an edge without a pointer. A radio group is the keyboard-native
+       * shape for "one of these" — arrow keys move within it, and the group is
+       * one tab stop.
+       */}
+      {/* The orphan note is tied to the GROUP, not left as a loose sibling: with
+          no radio checked, a screen-reader user tabbing in lands on an unchecked
+          `success` and would otherwise get no hint that the edge holds a value
+          this source no longer offers. The old `<select>` announced it for free,
+          because it WAS the control's current value. */}
+      <fieldset className="edge-outcomes" aria-describedby={orphaned ? orphanNoteId : undefined}>
+        <legend>Fires on</legend>
+        {orphaned && (
+          <p className="edge-outcome-orphan" id={orphanNoteId}>
+            {edgeLabel(edge)} — not offered by this source
+          </p>
+        )}
+        {OPERATIONAL_CONDITIONS.map((on) => (
+          <ConditionChoice
+            key={on}
+            store={store}
+            edge={edge}
+            condition={{ on }}
+            label={on}
+            taken={taken}
+            checked={encodeCondition({ on }) === currentValue}
+          />
+        ))}
+        {branches?.map((branch) => (
+          <ConditionChoice
+            key={`branch:${branch}`}
+            store={store}
+            edge={edge}
+            condition={{ on: 'branch', branch }}
+            label={branch}
+            taken={taken}
+            checked={encodeCondition({ on: 'branch', branch }) === currentValue}
+          />
+        ))}
+      </fieldset>
+      <p className="edge-rewire-hint">
+        Drag either end of this edge on the canvas to move it to another activity.
+      </p>
       <button type="button" onClick={() => store.getState().deleteEdge(edge.id)}>
         Delete edge
       </button>
@@ -1435,21 +1464,47 @@ function BounceCapField({
 }
 
 /** One condition option, disabled (with the reason) when another edge holds it. */
-function ConditionOption({
+function ConditionChoice({
+  store,
+  edge,
   condition,
   label,
   taken,
+  checked,
 }: {
+  store: ReturnType<typeof createCanvasStore>;
+  edge: Edge;
   condition: EdgeCondition;
   label: string;
   taken: ReadonlySet<string>;
+  checked: boolean;
 }) {
   const value = encodeCondition(condition);
   const isTaken = taken.has(value);
   return (
-    <option value={value} disabled={isTaken}>
+    <label /* The class suffix IS the outcome — the same `${on}` shape
+         `edgeVariantClass` and `SourcePorts` use, and `palette.test.ts`
+         now pins all three to one hue table. */
+      className={`edge-outcome edge-outcome--${condition.on}`}
+    >
+      <input
+        type="radio"
+        /* One group per EDGE, not per panel: the name has to be unique on the
+           page or a second panel's radios would join this group. */
+        name={`edge-outcome-${edge.id}`}
+        value={value}
+        checked={checked}
+        disabled={isTaken}
+        onChange={() => {
+          /* The endpoints do not move — this is the retype half of a rewire.
+             Reading them off the edge (rather than passing them in) keeps the one
+             seam that writes an edge's shape as the only writer. */
+          store.getState().rewireEdge(edge.id, { from: edge.from, to: edge.to, condition });
+        }}
+      />
+      <span className="edge-outcome-swatch" aria-hidden="true" />
       {isTaken ? `${label} — already used by another edge` : label}
-    </option>
+    </label>
   );
 }
 

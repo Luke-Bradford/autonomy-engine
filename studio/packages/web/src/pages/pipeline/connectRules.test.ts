@@ -127,6 +127,18 @@ describe('connectRejection', () => {
   });
 
   /**
+   * U19 slice 2 — the message has to name an affordance that EXISTS. It used to
+   * say "select it to change its condition", which described the `Fires on`
+   * dropdown; that control is gone, and a refusal pointing at it would be the
+   * stated-but-unbacked claim this file keeps getting caught on.
+   */
+  it('answers a duplicate with the gesture that actually retypes an edge', () => {
+    const message = reject(CHAIN, 'a', 'b')?.message ?? '';
+    expect(message).not.toContain('change its condition');
+    expect(message).toMatch(/drag|rewire/i);
+  });
+
+  /**
    * The same pair with a DIFFERENT condition is not a duplicate — the doc
    * allows `a -success-> b` and `a -failure-> b` side by side. The canvas
    * cannot DRAW the second one today (a drawn edge is always `success` until
@@ -694,7 +706,9 @@ describe('connectRejection — undeclared conditions (U19)', () => {
 describe('backEdgeOffer (U6e/U19)', () => {
   it('offers the back-edge the forward rule refuses, carrying the DRAWN outcome', () => {
     const pre = precomputeConnect(CHAIN);
-    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' } })).toEqual({
+    expect(
+      backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' }, rewiring: null }),
+    ).toEqual({
       from: 'c',
       to: 'a',
       condition: { on: 'failure' },
@@ -708,7 +722,8 @@ describe('backEdgeOffer (U6e/U19)', () => {
     const g = graph([node('a'), node('b'), node('c', 'if')], [edge('a', 'b'), edge('b', 'c')]);
     const condition = { on: 'branch', branch: 'true' } as const;
     expect(
-      backEdgeOffer(precomputeConnect(g), { from: 'c', to: 'a', condition })?.condition,
+      backEdgeOffer(precomputeConnect(g), { from: 'c', to: 'a', condition, rewiring: null })
+        ?.condition,
     ).toEqual(condition);
   });
 
@@ -716,7 +731,17 @@ describe('backEdgeOffer (U6e/U19)', () => {
     const pre = precomputeConnect(CHAIN);
     // Same ends, same graph, and legal as a back-edge — the ONLY difference is
     // that the port did not decode. Nothing may be authored on a guess.
-    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: null })).toBeNull();
+    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: null, rewiring: null })).toBeNull();
+  });
+
+  it('WITHHOLDS the offer while an existing edge is being REWIRED (U19 slice 2)', () => {
+    const pre = precomputeConnect(CHAIN);
+    const attempt = { from: 'c', to: 'a', condition: { on: 'failure' } as const };
+    // Identical in every other respect to the first case above, which IS offered.
+    expect(backEdgeOffer(pre, { ...attempt, rewiring: null })).not.toBeNull();
+    // The button authors a NEW edge. During a rewire the operator has an edge in
+    // hand, so taking the offer would leave them holding two.
+    expect(backEdgeOffer(pre, { ...attempt, rewiring: 'e1' })).toBeNull();
   });
 
   it('withholds the offer when the back-edge itself is refused', () => {
@@ -728,7 +753,12 @@ describe('backEdgeOffer (U6e/U19)', () => {
     // Refused for `back-no-progress`, not for the condition — an offer shown on
     // the refusal's REASON alone would author a doc the save gate rejects.
     expect(
-      backEdgeOffer(precomputeConnect(g), { from: 'b', to: 'a', condition: { on: 'success' } }),
+      backEdgeOffer(precomputeConnect(g), {
+        from: 'b',
+        to: 'a',
+        condition: { on: 'success' },
+        rewiring: null,
+      }),
     ).toBeNull();
   });
 });
