@@ -11,6 +11,7 @@ import {
   isStructuralCallActivity,
   paramDefaultDefect,
   type RefSuggestion,
+  type CallConfig,
   type Container,
   type ConnectionPublic,
   type ContainerKind,
@@ -46,6 +47,7 @@ import {
   type Selection,
 } from './canvasStore';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
+import { CallPanel } from './CallPanel';
 import { ContainerPanel } from './ContainerPanel';
 import { activityLabels } from './activityLabel';
 import { insertModeFor } from './expressionInsert';
@@ -896,6 +898,7 @@ function PropertyPanel({
       nodeType={node.type}
       config={node.config}
       connectionId={node.connectionId}
+      call={node.call}
     />
   );
 }
@@ -1890,6 +1893,7 @@ export function NodePanel({
   nodeType,
   config,
   connectionId,
+  call,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
@@ -1897,6 +1901,8 @@ export function NodePanel({
   nodeType: string;
   config: Record<string, unknown>;
   connectionId: string | undefined;
+  /** #425 — the structural call blob, passed through to `CallPanel` for a call node. */
+  call: CallConfig | undefined;
 }) {
   const entry = getActivity(nodeType);
   // Edit config WITHOUT the internal `outputs` contract.
@@ -2051,20 +2057,17 @@ export function NodePanel({
   // `node.call`, not `node.config`, so this generic `node.config` editor cannot
   // author it — validating the edited blob against `entry.configSchema`
   // (`CallConfigSchema`) would always fail (`pipelineVersionId` lives in
-  // `node.call`, unseen here). Such a node cannot be created via the canvas (the
-  // palette hides it, `addNode` refuses it), but one authored via the API can be
-  // LOADED, so show a read-only stub rather than an un-appliable form. Dedicated
-  // call-node authoring is #425. (The hooks above run unconditionally — this
-  // early return only skips the editor JSX.)
+  // `node.call`, unseen here). #425 replaced the read-only stub that used to
+  // stand here with `CallPanel`, the dedicated editor for that blob. (The hooks
+  // above run unconditionally — this early return only skips the editor JSX.)
   if (isStructuralCallActivity(nodeType)) {
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>
-        <p className="page-hint">This activity is configured via the call-node editor (#425).</p>
-        {/* Rendered in the STUB too, not just in the editor below. Membership is
-            orthogonal to `node.config`, so this early return must not swallow it:
-            a container is exactly the construct an IMPORTED doc puts a call node
-            in, and this is the only panel such a node ever gets. */}
+        <CallPanel store={store} nodeId={nodeId} call={call} />
+        {/* Membership is orthogonal to the call blob, so this early return must
+            not swallow it: a container is exactly the construct that puts a call
+            node in one, and this is the only panel such a node ever gets. */}
         <ContainerSection store={store} nodeId={nodeId} />
       </aside>
     );

@@ -32,6 +32,7 @@ function mount(nodes: Node[], edges: Edge[], params: Param[], selected: string) 
         nodeType={node.type}
         config={node.config}
         connectionId={node.connectionId}
+        call={undefined}
       />
     );
   }
