@@ -337,25 +337,12 @@ test.describe('U23 — container config editing', () => {
    * bypasses the write gate, which is a deliberate decision this ticket does not
    * take: **#939**.
    */
-  test('refuses a field that is dead on this kind, at the write gate', async ({ page }) => {
-    const created = await page.request.post('/api/pipelines', { data: { name: 'u23 dead field' } });
-    expect(created.status(), await created.text()).toBe(201);
-    const { id } = (await created.json()) as { id: string };
-
-    const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
-      data: {
-        params: [],
-        outputs: [],
-        nodes: [{ id: 'n_a', type: 'http_request', config: {}, position: AT }],
-        edges: [],
-        containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], maxRounds: 3 }],
-        basedOnVersionId: null,
-      },
-    });
-
-    expect(minted.status()).toBe(400);
-    expect(await minted.text()).toContain(
-      "container 'stage_1': maxRounds is only meaningful on a loop, not a stage",
-    );
-  });
+  // No test here any more, deliberately, and this note is the reason rather than
+  // a placeholder. There is nothing to walk in a browser: `seedDoc.ts` mints
+  // through the real write gate on purpose, and after #859 that gate accepts no
+  // illegal container field at all — so the seed 400s at setup. The refusal is a
+  // WIRE contract now (`routes/__tests__/pipelines.test.ts`, the #444 block) and
+  // a rule (`validate-doc.test.ts`); the panel's repair path, which still serves
+  // versions minted BEFORE the refusal, is covered by `ContainerPanel.test.tsx`.
+  // Getting it back into a browser needs a gate-bypassing seed — that is #939.
 });

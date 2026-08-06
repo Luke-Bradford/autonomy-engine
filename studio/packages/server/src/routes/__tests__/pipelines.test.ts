@@ -692,6 +692,34 @@ describe('pipelines routes', () => {
       expect(list.json()).toEqual([]);
     });
 
+    /**
+     * #859 — a container config field that is DEAD on its kind is refused here.
+     *
+     * `maxRounds` is a loop's round cap. It had a `foreach`-only refusal, so a
+     * `stage` carrying one validated clean and could be minted into an immutable
+     * version; it is now one `kind !== 'loop'` rule covering both.
+     *
+     * This lives at the WIRE contract rather than only in `validate-doc.test.ts`
+     * because the mint being refused is the whole reachability story: it is what
+     * makes an illegal container field unminttable through EVERY supported path
+     * (canvas save, API, portable import, git apply all funnel through
+     * `createPipelineVersion`). An e2e used to seed exactly this doc to reach
+     * `ContainerPanel`'s repair path, and closing #859 removed that spec's
+     * subject rather than breaking it — see #939.
+     */
+    it('400 invalid_pipeline_doc for a maxRounds on a stage (#859)', async () => {
+      const { res } = await postDoc({
+        ...emptyVersionBody,
+        nodes: [{ id: 'a', type: 'agent_task', config: {}, position: { x: 0, y: 0 } }],
+        containers: [{ id: 'st', kind: 'stage', children: ['a'], maxRounds: 3 }],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_pipeline_doc');
+      expect(res.json().issues).toContainEqual({
+        message: "container 'st': maxRounds is only meaningful on a loop, not a stage",
+      });
+    });
+
     it('carries a `message` AND object-shaped `issues` — the shape the client renders', async () => {
       const { res } = await postDoc({
         ...emptyVersionBody,
