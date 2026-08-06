@@ -242,6 +242,19 @@ const IMPLICIT_CHAIN_PREVIEW = 6;
 const CANVAS_CHROME_SELECTOR = '.react-flow__panel';
 
 /**
+ * The modifiers that add an element to the selection instead of replacing it.
+ *
+ * MODULE-level, not an inline literal, and that is load-bearing rather than
+ * tidiness: React Flow feeds this straight to `useKeyPress`, whose listener
+ * effect and key-parsing memo are both keyed on the value's IDENTITY. A fresh
+ * `['Meta', 'Control']` on every render would tear down and re-add a window
+ * keydown listener on every render — and a modifier held ACROSS one of those
+ * renders would lose its `keydown`, which is exactly the state this feature
+ * reads. See the `multiSelectionKeyCode` prop for why both keys, not one.
+ */
+const MULTI_SELECT_KEYS = ['Meta', 'Control'];
+
+/**
  * Is this drag event over the canvas surface (as opposed to its chrome)?
  *
  * `event.target` — not `currentTarget` (always the wrapper) and not
@@ -1538,6 +1551,26 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            `deleteSelection()` instead, which is one entry for the whole
            gesture. */
         deleteKeyCode={null}
+        /* #947 — BOTH modifiers, on every platform, instead of React Flow's
+           default `isMacOs() ? 'Meta' : 'Control'`.
+
+           That default is a USER-AGENT test, not a platform one, and the two
+           can disagree: an embedded webview, a spoofed UA, or Playwright's
+           `devices['Desktop Chrome']` (which reports Windows while running on
+           a Mac) each pick the modifier the HOST does not use. On a Mac the
+           consequence of picking Control is not a degraded gesture but no
+           gesture at all: Control-click there IS the secondary-button
+           gesture, so Chromium dispatches `contextmenu` INSTEAD of `click`
+           (measured — the button stays 0; it is the click that goes missing).
+           Node selection by pointer runs in React's `onClick`, because React
+           Flow's default `nodeDragThreshold` of 1 defers `handleNodeClick`
+           off the drag-start path, so the whole selection handler simply
+           never runs.
+
+           Accepting the array costs nothing — `useKeyPress` matches any entry
+           — and removes the guess: ⌘-click and Ctrl-click both add to the
+           selection wherever the operator actually is. */
+        multiSelectionKeyCode={MULTI_SELECT_KEYS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
            `select:false` change for the element that was selected, which
