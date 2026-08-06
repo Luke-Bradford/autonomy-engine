@@ -86,7 +86,7 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
       .poll(() => renderedEdges(page))
       .toEqual([{ id: 'e_1', variant: 'failure' }]);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -110,7 +110,7 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
     const drawn = await renderedEdges(page);
     expect(drawn.filter((e) => e.variant === 'success')).toHaveLength(2);
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('dragging the TARGET end onto another activity moves the edge there', async ({ page }) => {
@@ -120,17 +120,20 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
     await selectEdge(page);
     await reconnectEdgeEnd(page, 'target', { id: 'n_b' }, { id: 'n_c' });
 
+    /* The aria-label names both ENDS by node id (`edgeAriaLabel`), which is the
+       only place the DOM states an edge's endpoints — the `<g>` carries its own
+       id and its variant class, and nothing else. */
     await expect
       .poll(() =>
-        page.evaluate(() => {
-          const g = document.querySelector('.react-flow__edge');
-          return g?.getAttribute('data-testid') ?? g?.getAttribute('aria-label') ?? '';
-        }),
+        page.evaluate(
+          () => document.querySelector('.react-flow__edge')?.getAttribute('aria-label') ?? '',
+        ),
       )
-      .toContain('HTTP Request 3');
+      .toBe('Edge from n_a to n_c, on success');
 
+    // Moved, not replaced: still ONE edge, still `e_1`.
     expect(await renderedEdges(page)).toEqual([{ id: 'e_1', variant: 'success' }]);
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   /**
@@ -159,7 +162,7 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
     await reconnectEdgeEnd(page, 'target', { id: 'n_c' }, { id: 'n_a' });
 
     const refusal = page.locator('.canvas-refusal');
-    await expect(refusal).toContainText('forward cycle');
+    await expect(refusal).toContainText('would close a loop');
     await expect(refusal.getByRole('button', { name: 'Make it a back-edge' })).toHaveCount(0);
 
     // ...and the edge is untouched: still two, still where they were.
@@ -189,7 +192,7 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
 
     await expect(page.locator('.canvas-refusal')).toHaveCount(0);
     expect(await renderedEdges(page)).toEqual([{ id: 'e_1', variant: 'success' }]);
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   /**
