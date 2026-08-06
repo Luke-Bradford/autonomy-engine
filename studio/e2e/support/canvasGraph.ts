@@ -223,6 +223,35 @@ export function connectNodes(
   return connectRefs(page, { index: from }, { index: to }, inspect, outcome);
 }
 
+/**
+ * CLICK-to-connect: the OTHER gesture React Flow authors an edge with (#941).
+ *
+ * Click a source port, then a target — no button held in between. RF runs this
+ * through `onClickConnectStart`/`onClickConnectEnd`, callbacks entirely separate
+ * from the drag path's, which is why it needs its own helper and why its absence
+ * from this file is how the missing refusal explanation stayed invisible.
+ *
+ * `mouse.click` moves then presses at a single point, so the drag threshold
+ * (`@xyflow/system` index.js:2461-2467) is never crossed and the pure click path
+ * runs. There is deliberately no `inspect` hook: unlike a drag there is no
+ * moment with a button down, so RF's mid-gesture `connectingto` state — the
+ * thing `connectRefs`' hook exists to read — never exists here.
+ *
+ * Takes `NodeRef`s rather than plain indices because `portCentreOf` is private
+ * to this module by design; a spec cannot address a port on its own.
+ */
+export async function clickConnect(
+  page: Page,
+  from: NodeRef,
+  to: NodeRef,
+  outcome?: string,
+): Promise<void> {
+  const source = await portCentreOf(page, from, 'source', outcome);
+  const target = await portCentreOf(page, to, 'target');
+  await page.mouse.click(source.x, source.y);
+  await page.mouse.click(target.x, target.y);
+}
+
 /** `connectNodes`, for a seeded doc where the endpoints are named by id. */
 export function connectById(
   page: Page,
