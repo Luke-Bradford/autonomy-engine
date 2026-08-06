@@ -9,7 +9,12 @@ import {
 } from '../pipeline/containerLayout';
 import { containerLabels } from '../pipeline/containerRules';
 import { toFlowEdge } from '../pipeline/edgeCondition';
-import { portIdsOf, sourcePortsOf, usedConditionsBySource } from '../pipeline/ports';
+import {
+  portIdsOf,
+  sourcePortsOf,
+  usedConditionsBySource,
+  type SourcePort,
+} from '../pipeline/ports';
 import {
   containerStatusLabel,
   containerStatusTone,
@@ -147,8 +152,20 @@ export function runFlowNodes(
      without the matching ports here every edge on this view would resolve to
      nothing and simply not be drawn. */
   const used = usedConditionsBySource(doc.edges);
-  const portsOf = (id: string, source: Node | undefined) =>
-    sourcePortsOf(source, used.get(id) ?? []);
+  /* Memoized, because every id is asked TWICE and `sourcePortsOf` rebuilds the
+     whole list each call: a node's ports feed both the count the unmeasured-size
+     fallback needs and the id string its data carries, and a container's feed
+     both its stated handle bounds and its own id string. Keyed by id alone,
+     which is sound because nodes and containers share one globally-unique
+     namespace (the same assumption `edgeEndpointIds` is built on). */
+  const cache = new Map<string, SourcePort[]>();
+  const portsOf = (id: string, source: Node | undefined) => {
+    const hit = cache.get(id);
+    if (hit !== undefined) return hit;
+    const ports = sourcePortsOf(source, used.get(id) ?? []);
+    cache.set(id, ports);
+    return ports;
+  };
   const portCounts = new Map(doc.nodes.map((n) => [n.id, portsOf(n.id, n).length]));
   const activities: FlowNode[] = doc.nodes.map((n) => {
     // Unreachable fallback: `names` is built from this very array.

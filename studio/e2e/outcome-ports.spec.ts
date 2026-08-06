@@ -134,6 +134,45 @@ test.describe('U19 outcome ports', () => {
   });
 
   /**
+   * The same reveal, for a keyboard.
+   *
+   * A CONTAINER is a legal edge source and draws the same outcome ports, but its
+   * reveal shipped with `:hover` alone while an activity node had `:focus-within`
+   * too — so a keyboard user who tabbed into a container never got the words a
+   * mouse user got. Both arms are asserted because the defect was precisely the
+   * ASYMMETRY: a hover-only spec passed throughout.
+   *
+   * The two gestures are aimed at what is actually hit-testable. `.flow-container`
+   * is `pointer-events: none` (the box must not eat pane clicks aimed between its
+   * children), with the handles and the two chrome buttons opting back in — so
+   * the hover arm hovers a PORT and relies on `:hover` matching the ancestor box,
+   * and the focus arm tabs to the Configure button, which is a real control a
+   * real keyboard reaches. Neither is simulated.
+   */
+  test('a container port names itself on hover AND on keyboard focus', async ({ page }) => {
+    await openSeededCanvas(page, 'u19 container labels', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      containers: [{ id: 'stage_1', kind: 'stage', children: ['a'] }],
+    });
+
+    const box = page.locator('.react-flow__node[data-id="stage_1"] .flow-container');
+    const label = box.locator('.flow-port-label').filter({ hasText: 'failure' });
+    await expect(label).toHaveCSS('opacity', '0');
+
+    /* A DIFFERENT port than the label asserted on, so what is proved is the
+       box-level reveal rather than a port revealing its own name. */
+    await port(page, 'stage_1', outcomePort('success')).hover();
+    await expect(label).toHaveCSS('opacity', '1');
+
+    // Away from the box entirely, or the hover arm would mask the focus one.
+    await page.mouse.move(0, 0);
+    await expect(label).toHaveCSS('opacity', '0');
+
+    await box.getByRole('button', { name: 'Configure stage 1' }).focus();
+    await expect(label).toHaveCSS('opacity', '1');
+  });
+
+  /**
    * A `switch` routes by CASE, and every case it declares is drawable.
    *
    * The branch ports are the half of U19 the dropdown could express but the
