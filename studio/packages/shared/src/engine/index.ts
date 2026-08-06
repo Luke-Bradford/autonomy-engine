@@ -4,6 +4,12 @@ export * from './types.js';
 // #6 E1 — the expression grammar (parser + AST) the evaluator and the static
 // checker both read. One grammar SSOT; E2-E8 build on this AST.
 export * from './expr.js';
+// U21 — the `${nodes.<id>}` REWRITER used when nodes are copied (paste,
+// duplicate-selection). A separate module from `expr.ts` because it is the only
+// scanner here that WRITES: it shares the boundary scan and the quoting rule and
+// is held to the grammar by a property test, but nothing in the engine's own
+// read path depends on it.
+export * from './nodeRefs.js';
 // #6 E4 — the closed function catalog. A NAMED re-export, deliberately not
 // `export *`: the catalog itself (`FUNCTIONS`), the calling convention
 // (`FnSpec`/`EvalIn`) and the arg-checking helpers are the evaluator's private

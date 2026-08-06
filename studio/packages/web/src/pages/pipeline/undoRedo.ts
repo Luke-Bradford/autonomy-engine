@@ -126,6 +126,44 @@ export function historyCommandFor(e: {
   return null;
 }
 
+/** U21 — a canvas clipboard gesture, as read off the keyboard. */
+export type ClipboardCommand = 'copy' | 'paste' | 'duplicate';
+
+/**
+ * U21 — which clipboard gesture (if any) this keydown asks for.
+ *
+ * Same shape and same guards as `historyCommandFor`, deliberately: `metaKey` and
+ * `ctrlKey` interchangeably (never a sniffed platform), no Alt, and never a
+ * keystroke aimed at a text-entry control — ⌘C in a prompt field is the FIELD's
+ * copy, and taking it would break the most ordinary thing an author does.
+ *
+ * ⌘X is NOT here. Cut is delete-plus-copy, and delete already has an owner
+ * (`isDeleteKeystroke` → `deleteSelection`); adding a second path to it earns a
+ * second way for the two to disagree about what a container in the selection
+ * means. It is a later slice, with the rest of the clipboard.
+ *
+ * The CALLER, not this function, decides whether to `preventDefault`: with
+ * nothing selected there is no canvas copy to make, and swallowing ⌘C would take
+ * the browser's own text copy away from an operator selecting text on the page.
+ */
+export function clipboardCommandFor(e: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+  target: EventTarget | null;
+}): ClipboardCommand | null {
+  if (!(e.metaKey || e.ctrlKey)) return null;
+  if (e.altKey || e.shiftKey) return null;
+  if (isTextEntryTarget(e.target)) return null;
+  const key = e.key.toLowerCase();
+  if (key === 'c') return 'copy';
+  if (key === 'v') return 'paste';
+  if (key === 'd') return 'duplicate';
+  return null;
+}
+
 /**
  * U21 — does this keydown ask to delete the canvas selection?
  *

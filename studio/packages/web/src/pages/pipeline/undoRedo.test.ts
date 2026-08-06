@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  clipboardCommandFor,
   historyCommandFor,
   isDeleteKeystroke,
   isTextEntryTarget,
@@ -142,6 +143,46 @@ describe('historyCommandFor (U17)', () => {
 
   it('an unrelated key with the same modifiers is not ours', () => {
     expect(historyCommandFor(key('s', { metaKey: true }))).toBeNull();
+  });
+});
+
+describe('clipboardCommandFor (U21)', () => {
+  it('⌘C/⌘V/⌘D and their Ctrl forms read as copy, paste and duplicate', () => {
+    for (const mod of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(clipboardCommandFor(key('c', mod))).toBe('copy');
+      expect(clipboardCommandFor(key('v', mod))).toBe('paste');
+      expect(clipboardCommandFor(key('d', mod))).toBe('duplicate');
+    }
+  });
+
+  it('an upper-case key still reads', () => {
+    expect(clipboardCommandFor(key('C', { metaKey: true }))).toBe('copy');
+  });
+
+  it('a bare C is not ours', () => {
+    expect(clipboardCommandFor(key('c'))).toBeNull();
+  });
+
+  it('a keystroke inside a text field is the FIELD’s copy, never the canvas’s', () => {
+    expect(
+      clipboardCommandFor(key('c', { metaKey: true, target: document.createElement('input') })),
+    ).toBeNull();
+    expect(
+      clipboardCommandFor(key('v', { metaKey: true, target: document.createElement('textarea') })),
+    ).toBeNull();
+  });
+
+  it('Alt or Shift with the same key belongs to something else', () => {
+    expect(clipboardCommandFor(key('c', { metaKey: true, altKey: true }))).toBeNull();
+    expect(clipboardCommandFor(key('d', { metaKey: true, shiftKey: true }))).toBeNull();
+  });
+
+  it('⌘X is deliberately NOT read — cut is a later slice', () => {
+    expect(clipboardCommandFor(key('x', { metaKey: true }))).toBeNull();
+  });
+
+  it('an unrelated key with the same modifiers is not ours', () => {
+    expect(clipboardCommandFor(key('s', { metaKey: true }))).toBeNull();
   });
 });
 

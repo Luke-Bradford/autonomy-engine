@@ -69,11 +69,11 @@ export function restoreEscapes(s: string): string {
  * `openIdx` must index a quote char. Returns the closing quote's index, or -1
  * if the span never closes.
  */
-function quotedSpanEnd(s: string, openIdx: number): number {
+export function quotedSpanEnd(s: string, openIdx: number): number {
   return s.indexOf(s[openIdx] as string, openIdx + 1);
 }
 
-function isQuote(ch: string | undefined): boolean {
+export function isQuote(ch: string | undefined): boolean {
   return ch === "'" || ch === '"';
 }
 
