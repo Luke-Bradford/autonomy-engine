@@ -10,6 +10,7 @@ import {
 import { activityLabels } from './activityLabel';
 import { containerLabels } from './containerRules';
 import { authoringEdgeKey, edgeLabel, type EdgeCondition } from './edgeCondition';
+import { conditionLabel, declaredConditionsOf, encodeCondition } from './ports';
 
 /**
  * U6b — the rules a connection DRAG is measured against, decided BEFORE the
@@ -34,6 +35,9 @@ export type ConnectRejectionReason =
   | 'duplicate'
   | 'container-boundary'
   | 'forward-cycle'
+  /* U19 — the drawn condition is the PORT's, and an orphaned port offers one
+     the source no longer declares. See the rule in `connectRejection`. */
+  | 'undeclared-condition'
   /* U6e — the three back-edge rules, reachable only for a `back: true`
      candidate. See the block at the foot of `connectRejection`. */
   | 'back-ancestry'
@@ -102,6 +106,17 @@ export interface ConnectPrecheck {
    * container's children each time.
    */
   childOwner: ReadonlyMap<string, string>;
+  /**
+   * The ENCODED conditions each endpoint declares (`declaredConditionsOf`, the
+   * same predicate the source ports are drawn from).
+   *
+   * Hoisted like the rest: the rule below runs on every pointer-move of a drag,
+   * and re-deriving a source's declarations per move would re-read its config
+   * each time. Encoded rather than compared structurally so an operational
+   * `success` and a `switch` case labelled `success` stay distinct — the same
+   * reason the codec is tagged at all.
+   */
+  declared: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /**
@@ -121,9 +136,20 @@ export function edgeEndpointIds(
 }
 
 export function precomputeConnect(graph: ConnectGraph): ConnectPrecheck {
+  const endpoints = edgeEndpointIds(graph.nodes, graph.containers);
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   return {
     graph,
-    endpoints: edgeEndpointIds(graph.nodes, graph.containers),
+    endpoints,
+    /* A CONTAINER id resolves to `undefined` here, which `declaredConditionsOf`
+       reads as "no branches" — the four operational outcomes and nothing else,
+       which is exactly what a container can emit. */
+    declared: new Map(
+      [...endpoints].map((id) => [
+        id,
+        new Set(declaredConditionsOf(byId.get(id)).map((c) => encodeCondition(c))),
+      ]),
+    ),
     edgeKeys: new Set(graph.edges.map((e) => authoringEdgeKey(e))),
     nodeLabels: activityLabels(graph.nodes),
     containerNames: containerLabels(graph.containers),
@@ -236,6 +262,37 @@ export function connectRejection(
       message:
         `'${fromName}' → '${toName}' already has a '${edgeLabel(probe)}' edge — select it to ` +
         `change its condition, or delete it first`,
+    };
+  }
+
+  /* U19 — the source must actually DECLARE the outcome the drag was drawn from.
+     Reachable through exactly one affordance: an ORPHANED port. `sourcePortsOf`
+     draws a port for any condition an EXISTING edge routes on, even one the
+     source no longer declares (rename a `switch` case, or import a doc), because
+     without it React Flow resolves that edge's `sourceHandle` to nothing and
+     draws no line at all — silently. Keeping the port visible is right; letting
+     it start a NEW edge is not, and until this rule nothing stopped it: the
+     drawn condition comes off the port, and no other rule here compares it to
+     what the source offers. The stylesheet already mutes an orphan on the stated
+     grounds that "it is not a thing to draw a NEW edge from" — this is that
+     sentence enforced rather than merely written.
+     Refused HERE rather than by an inert `isConnectableStart={false}` handle,
+     because a handle that quietly declines a drag is the silent no this whole
+     panel exists to replace: the operator gets a sentence naming the outcome and
+     what to do about it. It also covers the backwards gesture and the back-edge
+     offer for free, both of which run through this same predicate.
+     EXISTING edges are untouched — this judges a CANDIDATE. The doc keeps its
+     orphan, the port keeps being drawn, and the validation badge keeps saying
+     so. */
+  const declared = pre.declared.get(from);
+  if (declared !== undefined && !declared.has(encodeCondition(candidate.condition))) {
+    const key = conditionLabel(candidate.condition);
+    return {
+      reason: 'undeclared-condition',
+      message:
+        `'${fromName}' no longer offers '${key}' — that port is only there for an edge that ` +
+        `already routes on it. Re-declare '${key}' on '${fromName}', or draw from an outcome ` +
+        `it does offer`,
     };
   }
 

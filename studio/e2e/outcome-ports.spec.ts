@@ -235,6 +235,9 @@ test.describe('U19 outcome ports', () => {
           position: { x: 0, y: 0 },
         },
         { id: 'b', position: { x: 360, y: 0 } },
+        // A THIRD node, so the orphan-drag below is judged as undeclared rather
+        // than as a duplicate of the `sw → b` edge that made the port an orphan.
+        { id: 'c', position: { x: 360, y: 220 } },
       ],
       edges: [{ from: 'sw', to: 'b', on: 'branch', branch: 'blue' }],
     });
@@ -269,6 +272,19 @@ test.describe('U19 outcome ports', () => {
     /* The point of the orphan port. Without it React Flow resolves this edge's
        `sourceHandle` to nothing and draws NO line — the edge stays in the doc,
        invisible, on the one surface meant to show it. */
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1);
+
+    /* …and the OTHER half of that: the port is there to keep an existing edge
+       drawn, not to start a new one. Drawing from it would author an outcome the
+       source does not declare, on a doc the save gate then refuses — the "draw
+       it, watch it appear, then find out it cannot save" defect the connect-time
+       rules exist to remove. Refused with a SENTENCE rather than by an inert
+       handle, so the operator is told why rather than left with a drag that does
+       nothing. */
+    await connectById(page, 'sw', 'c', undefined, 'branch:blue');
+    const refusal = page.locator('.canvas-refusal');
+    await expect(refusal.getByRole('alert')).toContainText('blue');
+    // The refusal is a refusal: nothing was authored.
     await expect(page.locator('.react-flow__edge')).toHaveCount(1);
   });
 });
