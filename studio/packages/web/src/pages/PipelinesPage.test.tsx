@@ -7,6 +7,8 @@ import { ApiError } from '../api/client';
 import { createPipelinesStore } from '../stores/pipelinesStore';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import * as pipelinesApi from '../api/pipelines';
+import * as downloadApi from '../api/download';
+import * as portabilityApi from '../api/portability';
 
 // Mock only the network layer. Since U4 the LIST lives in `pipelinesStore`, so
 // each case gets its own store — the app's singleton is shared with the Factory
@@ -21,9 +23,26 @@ vi.mock('../api/pipelines', async (importActual) => {
   };
 });
 
+// The real `downloadTextFile` clicks an anchor, which jsdom follows on the
+// NEXT TICK (its `_cannotNavigate` is always false for an `<a>`, whatever the
+// `download` attribute says) and then reports as an unimplemented-navigation
+// error — attributed to whichever test happens to be running by then. The
+// helper's own behaviour is covered directly in `api/download.test.ts`; here
+// only the fact that the page calls it, with what, is under test.
+vi.mock('../api/download', async (importActual) => ({
+  ...(await importActual<typeof import('../api/download')>()),
+  downloadTextFile: vi.fn(),
+}));
+vi.mock('../api/portability', async (importActual) => ({
+  ...(await importActual<typeof import('../api/portability')>()),
+  exportPipeline: vi.fn(),
+}));
+
 const listMock = vi.mocked(pipelinesApi.listPipelines);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
+const downloadMock = vi.mocked(downloadApi.downloadTextFile);
+const exportMock = vi.mocked(portabilityApi.exportPipeline);
 
 function pipeline(overrides: Partial<Pipeline> = {}): Pipeline {
   return {
@@ -48,6 +67,9 @@ beforeEach(() => {
   listMock.mockResolvedValue([]);
   createMock.mockResolvedValue(pipeline());
   deleteMock.mockResolvedValue(undefined);
+  downloadMock.mockReset();
+  exportMock.mockReset();
+  exportMock.mockResolvedValue('{"kind":"pipeline"}');
 });
 
 afterEach(() => {
@@ -128,6 +150,39 @@ describe('PipelinesPage', () => {
     renderPage();
     const open = await screen.findByRole('link', { name: /Open Editable/i });
     expect(open).toHaveAttribute('href', '/author/pipelines/pl%2F1');
+  });
+
+  it('exports a pipeline to a file named after it AND its id', async () => {
+    const user = userEvent.setup();
+    exportMock.mockResolvedValue('{"canonical":"bytes"}');
+    listMock.mockResolvedValue([pipeline({ id: 'pl_7', name: 'Nightly digest' })]);
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /Export Nightly digest/i }));
+
+    await waitFor(() => expect(exportMock).toHaveBeenCalledWith('pl_7'));
+    // The bytes go to disk untouched — an export is a canonical artifact.
+    expect(downloadMock).toHaveBeenCalledWith(
+      'pipeline-nightly-digest-pl_7.json',
+      '{"canonical":"bytes"}',
+    );
+  });
+
+  it('reports a failed export instead of saving the error body to disk', async () => {
+    const user = userEvent.setup();
+    exportMock.mockRejectedValue(new ApiError(404, 'pipeline "pl_1" not found'));
+    listMock.mockResolvedValue([pipeline({ name: 'Gone' })]);
+    renderPage();
+
+    await user.click(await screen.findByRole('button', { name: /Export Gone/i }));
+
+    expect(await screen.findByText(/Could not export “Gone”.*not found/)).toBeInTheDocument();
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
+  it('offers the import surface', async () => {
+    renderPage();
+    expect(await screen.findByLabelText('Export file')).toBeInTheDocument();
   });
 
   it('surfaces a load error', async () => {

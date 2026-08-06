@@ -3,8 +3,11 @@ import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
+import { downloadTextFile, exportFileName } from '../api/download';
 import { createPipeline, deletePipeline, describeDeleteFailure } from '../api/pipelines';
+import { exportPipeline } from '../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
+import { ImportPanel } from './ImportPanel';
 import { pipelinePath } from './author/pipelinePath';
 
 /**
@@ -73,6 +76,21 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     },
     [name, refresh],
   );
+
+  /**
+   * Save the pipeline's export envelope to disk (#959). The fetch happens
+   * first and its failure is REPORTED — a bare `<a download>` would have
+   * written a 404 body to the operator's disk as a `.json` file with nothing
+   * said (see `api/download.ts`).
+   */
+  const onExport = useCallback(async (p: Pipeline) => {
+    setActionMsg(null);
+    try {
+      downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
+    } catch (err) {
+      setActionMsg(`Could not export “${p.name}”: ${messageOf(err)}`);
+    }
+  }, []);
 
   const onDelete = useCallback(
     async (p: Pipeline) => {
@@ -145,6 +163,13 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                   </Link>
                   <button
                     type="button"
+                    onClick={() => void onExport(p)}
+                    aria-label={`Export ${p.name}`}
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void onDelete(p)}
                     aria-label={`Delete ${p.name}`}
                   >
@@ -178,6 +203,13 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </button>
         </div>
       </form>
+
+      {/* The import surface lives here, on the list an imported pipeline lands
+          in — but it takes ANY export envelope, because `POST /api/import` does
+          (see `ImportPanel`). A connection or trigger file is imported and then
+          reported with a pointer to its own section, rather than refused by a
+          client-side rule the server does not have. */}
+      <ImportPanel listKind="pipeline" onImported={refresh} />
     </section>
   );
 }
