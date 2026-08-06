@@ -1157,9 +1157,12 @@ td button + button {
   gap: 0.4rem;
 }
 
-/* The advisory is a WARNING about a default the server will accept and the run
-   will reject — deliberately not `.error`, which is reserved for something that
-   actually blocked an action. */
+/* A WARNING about something the save will nonetheless accept — deliberately not
+   `.error`, which is reserved for something that actually blocked an action.
+   Its original user (a param default the server accepted and the run would
+   reject) moved to `.error` when #843 made that a save gate; what is left is
+   the config form's "this form cannot show these saved settings", which really
+   does not block the save. */
 .contract-advisory {
   color: var(--warning);
 }

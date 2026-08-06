@@ -19,12 +19,17 @@ import {
  *    `min(1)` and `NewPipelineVersionSchema`'s `refuseDuplicateNames`), so it is
  *    safe to gate Save on: it only spares the author a round-trip to a 400 they
  *    were going to get anyway, and the editor that surfaces it can now repair it.
- *  - `defaultAdvisory` reports things the server ACCEPTS. It must NEVER gate
- *    Save. A version minted before this editor existed — or imported from git —
- *    can legitimately hold a type-mismatched default, and refusing to save such
- *    a doc would leave the operator unable to save ANY edit to that pipeline:
- *    exactly the one-way trap #748 closed, re-created by the check meant to
- *    help. Tell the truth, do not bar the exit.
+ *  - the TYPE-vs-`default` check is no longer here at all. It used to be
+ *    (`defaultAdvisory`), reporting a defect the server ACCEPTED and therefore
+ *    never gating Save: refusing to save a doc the server would take would have
+ *    left an imported pipeline holding such a default permanently unsaveable —
+ *    the one-way trap #748 closed. #843 moved the check to the SERVER
+ *    (`paramDefaultDefect`, reached through `validateDoc`), which changes that
+ *    calculus completely. The doc is refused with or without a client gate, so
+ *    a non-gating client only spends a round-trip on a 400, and the trap
+ *    argument no longer applies for the reason it never applied to `nameIssues`
+ *    either: the editor that surfaces the defect can also repair it — U16
+ *    renders an editable `type` and `default` for EVERY declared param.
  */
 
 /** A secret's value is a credential LABEL, never the credential — `engine/params.ts`. */
@@ -128,49 +133,6 @@ export function nameIssues(params: readonly Param[], outputs: readonly Output[])
   return [...schemaNameIssues('param', params), ...schemaNameIssues('output', outputs)];
 }
 
-/**
- * A non-gating warning about a param's stored `default`, or `null` if it is fine.
- *
- * The predicate mirrors run-time `coerce` (`engine/params.ts`), NOT the stricter
- * `matchesType` used for node outputs. That difference is deliberate and easy to
- * get wrong: `coerce` accepts the STRING `'5'` for a `number` param, so warning
- * about it would be a false alarm about a default that runs perfectly. The
- * agreement is not asserted in prose — `paramRules.test.ts` runs both this and
- * `resolveRunParams` over the same table and requires the verdicts to match.
- *
- * `required` is NOT an early-out, and that is the correction of a wrong belief
- * rather than an omission. `resolveRunParams` tests
- * `hasOwnProperty(p, 'default')` BEFORE it tests `p.required`, so a required
- * param that carries a default resolves FROM that default and never demands an
- * override — the precedence is override > default > required-throw. A required
- * param with a bad default therefore fails at run exactly like an optional one,
- * and skipping the check here would have stayed silent about it.
- */
-export function defaultAdvisory(p: Param): string | null {
-  if (!('default' in p)) return null;
-  const v = p.default;
-
-  switch (p.type) {
-    case 'number':
-      if (typeof v === 'number' && Number.isFinite(v)) return null;
-      if (typeof v === 'string' && NUMERIC_TEXT.test(v.trim()) && Number.isFinite(Number(v.trim())))
-        return null;
-      return 'default is not a finite number — the run will fail when it resolves this param';
-    case 'boolean':
-      if (typeof v === 'boolean' || v === 'true' || v === 'false') return null;
-      return 'default is not a boolean — the run will fail when it resolves this param';
-    case 'string':
-      if (typeof v === 'string') return null;
-      return 'default is not a string — the run will fail when it resolves this param';
-    case 'secret':
-      if (typeof v === 'string' && SECRET_LABEL.test(v)) return null;
-      return 'default is not a credential label ([A-Za-z0-9._-], max 64) — the run will fail when it resolves this param';
-    case 'json':
-      // `coerce` returns a `json` param's value as-is, so nothing can be wrong.
-      return null;
-  }
-}
-
 /** What a default field's text means: absent, a typed value, or a parse failure. */
 export type DefaultParse =
   { ok: true; has: false } | { ok: true; has: true; value: unknown } | { ok: false; error: string };
@@ -236,13 +198,19 @@ export function formatDefaultInput(value: unknown): string {
 }
 
 /**
- * Flip a param's `required`, honouring the schema's contract that `default` is
- * "only meaningful when `required` is false; omitted entirely otherwise".
+ * Flip a param's `required`.
  *
- * Becoming required DELETES the stored default rather than leaving it: a doc
- * field the schema calls meaningless is a fact nobody can act on, and it would
- * silently return if the param were made optional again — an edit the operator
- * never made.
+ * Becoming required DELETES the stored default rather than leaving it, and the
+ * reason is the ENGINE's precedence, not a schema comment (the comment that used
+ * to justify this said `default` was "only meaningful when `required` is false",
+ * which #843 established is simply false). `resolveRunParams` reads
+ * `hasOwnProperty(p, 'default')` BEFORE `p.required`, so a retained default
+ * silently satisfies the demand the toggle was just used to make: the param
+ * would read `required` on screen and never be asked for a value. Deleting it
+ * makes the control mean what it says. The doc REMAINS legal either way — a
+ * required param with a default is accepted on write and runs fine — so this is
+ * an authoring decision, and the canvas states the alternative outright for a
+ * doc that arrives holding one.
  */
 export function withRequired(p: Param, required: boolean): Param {
   if (!required) return { ...p, required: false };

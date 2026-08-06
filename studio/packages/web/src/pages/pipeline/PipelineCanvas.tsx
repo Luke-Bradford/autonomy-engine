@@ -9,6 +9,7 @@ import {
   formatZodIssues,
   getActivity,
   isStructuralCallActivity,
+  paramDefaultDefect,
   type RefSuggestion,
   type Container,
   type ConnectionPublic,
@@ -50,7 +51,6 @@ import {
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
 import {
   coerceDefaultInput,
-  defaultAdvisory,
   formatDefaultInput,
   nameIssues,
   withRequired,
@@ -993,7 +993,7 @@ function ParamRow({
     setError(null);
   }
 
-  const advisory = defaultAdvisory(param);
+  const defect = paramDefaultDefect(param);
 
   function commitDefault(text: string) {
     // A blur that changed nothing must not write. Tabbing THROUGH the field
@@ -1042,8 +1042,8 @@ function ParamRow({
             if (!parsed.success) return;
             // The stored default is deliberately KEPT across a type change, even
             // when it no longer fits: dropping it would destroy authored data on
-            // a mis-click, and `defaultAdvisory` already says plainly that the
-            // run will fail. Repair beats silent deletion.
+            // a mis-click, and the save gate below names the mismatch in the
+            // author's own words. Repair beats silent deletion.
             store.getState().updateParam(index, { ...param, type: parsed.data });
           }}
         >
@@ -1102,11 +1102,14 @@ function ParamRow({
           {error}
         </p>
       ) : null}
-      {!error && advisory ? (
-        // ADVISORY, never a save gate. The server accepts this doc, so refusing
-        // to save it would leave an imported pipeline that already holds such a
-        // default permanently unsaveable — the one-way trap #748 closed.
-        <p className="page-hint contract-advisory">{advisory}</p>
+      {!error && defect ? (
+        // #843 — a SAVE GATE now, not the advisory this used to be. The server
+        // refuses this doc (`paramDefaultDefect`, reached through
+        // `validateDoc`), so the badge below already bars Save; this row-level
+        // copy of the SAME sentence is where the fix is made. Word-for-word the
+        // same string on purpose: an operator reading the badge can find the
+        // field it is about.
+        <p className="error">{defect}</p>
       ) : null}
       <label>
         Description
