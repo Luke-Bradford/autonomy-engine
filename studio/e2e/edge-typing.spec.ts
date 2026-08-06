@@ -4,6 +4,7 @@ import {
   deselect,
   edgeGroup,
   firesOn,
+  outcomeRadio,
   pathStyle,
   seedSelectedEdge,
   selectEdge,
@@ -55,7 +56,7 @@ const IF_OPTIONS = [
 
 /** Pick a condition and WAIT for the variant class to land on the edge `<g>`. */
 async function pick(page: Page, value: string): Promise<void> {
-  await firesOn(page).selectOption(value);
+  await outcomeRadio(page, value).check();
   const variant = value.startsWith('branch:') ? 'branch' : value.slice('op:'.length);
   await expect(edgeGroup(page)).toHaveClass(new RegExp(`\\bedge-variant-${variant}\\b`));
 }
@@ -117,8 +118,8 @@ test.describe('U6a typed edge styling', () => {
     expect(isOpaque(canvasBg)).toBe(true);
 
     const offered = await firesOn(page)
-      .locator('option')
-      .evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+      .locator('input[type="radio"]')
+      .evaluateAll((os) => os.map((o) => (o as HTMLInputElement).value));
     expect(offered).toEqual([...IF_OPTIONS]);
 
     const strokes = await strokeByCondition(page);

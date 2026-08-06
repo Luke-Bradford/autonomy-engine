@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
+import { RECONNECT_RADIUS } from '../../packages/web/src/pages/pipeline/ports';
 
 /**
  * Driving the canvas: the toolbox, node placement, and building an actual GRAPH.
@@ -37,9 +38,22 @@ export function edgeGroup(page: Page): Locator {
   return page.locator('.react-flow__edge');
 }
 
-/** The edge-condition picker (U6a), present only while an edge is selected. */
+/**
+ * The edge-outcome picker, present only while an edge is selected.
+ *
+ * U19 slice 2 retired the `Fires on` `<select>` for a radio GROUP over the same
+ * outcomes (a `<fieldset>` + `<legend>`, so `getByLabel` no longer resolves it).
+ * Kept as one helper under the same name because two specs use it purely as a
+ * liveness probe for "the edge panel is open" — `selectEdge` and `deselect`
+ * below — and re-pointing it here keeps every caller working unchanged.
+ */
 export function firesOn(page: Page): Locator {
-  return page.getByLabel('Fires on');
+  return page.getByRole('group', { name: 'Fires on' });
+}
+
+/** One outcome radio inside that group, addressed by its encoded condition. */
+export function outcomeRadio(page: Page, encoded: string): Locator {
+  return firesOn(page).locator(`input[type="radio"][value="${encoded}"]`);
 }
 
 /** Add an activity by CLICK — the accessible path; no drag needed. */
@@ -218,6 +232,38 @@ export function connectById(
   outcome?: string,
 ): Promise<void> {
   return connectRefs(page, { id: from }, { id: to }, inspect, outcome);
+}
+
+/**
+ * U19 slice 2 — drag one END of the SELECTED edge onto another port.
+ *
+ * The grab point is NOT the port. React Flow draws the reconnect anchor tangent
+ * to the handle, displaced outward by `reconnectRadius` (`shiftX`,
+ * `@xyflow/react` 12.11.2 index.mjs:2834-2852) — and since nodes paint above
+ * edges, the handle itself covers the inner half, so a press on the port centre
+ * starts a NEW connection instead of picking the edge up. What is grabbable is
+ * the crescent beyond the handle, which is why this reaches PAST the port by a
+ * radius: `+r` on the right for a source end, `-r` on the left for a target end.
+ *
+ * The anchor exists only while the edge is SELECTED (`reconnectable` is set per
+ * edge on `selected`), so callers must select it first — `selectEdge` does.
+ */
+export async function reconnectEdgeEnd(
+  page: Page,
+  end: 'source' | 'target',
+  from: { id: string; outcome?: string },
+  to: { id: string; outcome?: string },
+): Promise<void> {
+  const grab = await portCentreOf(page, { id: from.id }, end, from.outcome);
+  const anchor = {
+    x: grab.x + (end === 'source' ? RECONNECT_RADIUS : -RECONNECT_RADIUS),
+    y: grab.y,
+  };
+  const drop = await portCentreOf(page, { id: to.id }, end, to.outcome);
+  await page.mouse.move(anchor.x, anchor.y);
+  await page.mouse.down();
+  await page.mouse.move(drop.x, drop.y, { steps: 10 });
+  await page.mouse.up();
 }
 
 /**
