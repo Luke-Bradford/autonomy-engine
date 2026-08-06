@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   historyCommandFor,
+  isDeleteKeystroke,
   isTextEntryTarget,
   redoDisabledReason,
   undoDisabledReason,
@@ -133,5 +134,36 @@ describe('historyCommandFor (U17)', () => {
 
   it('an unrelated key with the same modifiers is not ours', () => {
     expect(historyCommandFor(key('s', { metaKey: true }))).toBeNull();
+  });
+});
+
+describe('isDeleteKeystroke (U21)', () => {
+  it('Backspace and Delete both ask to delete the selection', () => {
+    expect(isDeleteKeystroke(key('Backspace'))).toBe(true);
+    expect(isDeleteKeystroke(key('Delete'))).toBe(true);
+  });
+
+  it('a keystroke inside a text field is not ours — Backspace edits the text', () => {
+    // The reach is the whole document (the canvas cannot rely on where focus
+    // is), so this guard is the entire reason that reach is safe.
+    expect(isDeleteKeystroke(key('Backspace', { target: document.createElement('input') }))).toBe(
+      false,
+    );
+    expect(
+      isDeleteKeystroke(key('Backspace', { target: document.createElement('textarea') })),
+    ).toBe(false);
+  });
+
+  it('a MODIFIED Backspace belongs to the browser, not to us', () => {
+    // ⌘⌫ is "delete to start of line" in a field and history-back in some
+    // browsers; ⌥⌫ deletes a word. Claiming them would break both.
+    expect(isDeleteKeystroke(key('Backspace', { metaKey: true }))).toBe(false);
+    expect(isDeleteKeystroke(key('Backspace', { ctrlKey: true }))).toBe(false);
+    expect(isDeleteKeystroke(key('Backspace', { altKey: true }))).toBe(false);
+  });
+
+  it('any other key is not ours', () => {
+    expect(isDeleteKeystroke(key('d'))).toBe(false);
+    expect(isDeleteKeystroke(key('Escape'))).toBe(false);
   });
 });

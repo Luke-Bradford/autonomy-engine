@@ -13,6 +13,9 @@ import {
   nextSelection,
   pruneContainerChild,
   sameSelection,
+  sameSelectionSet,
+  singleSelection,
+  type Selection,
 } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { DEFAULT_MAX_BOUNCES, type EdgeCondition } from './edgeCondition';
@@ -720,29 +723,10 @@ describe('selection model (#737)', () => {
     expect(sameSelection(nodeA, null)).toBe(false);
   });
 
-  it('nextSelection takes any select, and clears ONLY on the current selection', () => {
-    expect(nextSelection(null, nodeA, true)).toEqual(nodeA);
-    expect(nextSelection(edge1, nodeA, true)).toEqual(nodeA);
-    expect(nextSelection(nodeA, nodeA, false)).toBeNull();
-    expect(nextSelection(null, nodeA, false)).toBeNull();
-  });
-
-  it('nextSelection IGNORES the deselect of anything that is not selected', () => {
-    // The batch React Flow actually emits when node A is clicked: A selected,
-    // then a deselect for every other node AND every edge. Folding the batch in
-    // order must land on A, not null — an unguarded clear would open the property
-    // panel and shut it again in the same tick.
-    const batch: [{ kind: 'node' | 'edge'; id: string }, boolean][] = [
-      [nodeA, true],
-      [nodeB, false],
-      [edge1, false],
-    ];
-    const settled = batch.reduce<ReturnType<typeof nextSelection>>(
-      (current, [target, selected]) => nextSelection(current, target, selected),
-      edge1,
-    );
-    expect(settled).toEqual(nodeA);
-  });
+  // `nextSelection`'s own tests moved to "multi-selection (U21 #935)" when it
+  // widened from a single slot to a SET — including the RF batch fold this block
+  // used to own, which still lands on the clicked node and now does it without
+  // the deselect guard a single slot needed.
 
   it('select is idempotent — re-selecting the same element does not write', () => {
     const s = createCanvasStore();
@@ -2434,5 +2418,252 @@ describe('canvasStore — duplicateNode (U21)', () => {
     const body = toVersionBody(st.nodes, st.edges, st.containers, st.params, st.outputs, null);
     expect(body.nodes).toHaveLength(3);
     expect(body.nodes.filter((n) => n.type === 'llm_call')).toHaveLength(2);
+  });
+});
+
+describe('canvasStore — multi-selection (U21 #935)', () => {
+  const nodeA = { kind: 'node', id: 'n_a' } as const;
+  const nodeB = { kind: 'node', id: 'n_b' } as const;
+  const edge1 = { kind: 'edge', id: 'e_1' } as const;
+  const box = { kind: 'container', id: 'loop_1' } as const;
+
+  describe('sameSelectionSet', () => {
+    it('compares membership, not order — a reordered batch is the same selection', () => {
+      expect(sameSelectionSet([nodeA, nodeB], [nodeB, nodeA])).toBe(true);
+      expect(sameSelectionSet([], [])).toBe(true);
+      expect(sameSelectionSet([nodeA], [nodeA, nodeB])).toBe(false);
+      expect(sameSelectionSet([nodeA], [nodeB])).toBe(false);
+      // Same id, different kind — parted by kind, exactly as `sameSelection` is.
+      expect(sameSelectionSet([{ kind: 'node', id: 'x' }], [{ kind: 'edge', id: 'x' }])).toBe(false);
+    });
+  });
+
+  describe('singleSelection', () => {
+    it('is the member when there is EXACTLY one, and null otherwise', () => {
+      expect(singleSelection([])).toBeNull();
+      expect(singleSelection([nodeA])).toEqual(nodeA);
+      // Two selected is not "the first one selected" — the property panel edits
+      // one subject, and picking a winner would silently edit an arbitrary node.
+      expect(singleSelection([nodeA, nodeB])).toBeNull();
+    });
+  });
+
+  describe('nextSelection folds a React Flow batch into a SET', () => {
+    it('accumulates a marquee — every node in the box joins the selection', () => {
+      const afterA = nextSelection([], nodeA, true);
+      expect(nextSelection(afterA, nodeB, true)).toEqual([nodeA, nodeB]);
+    });
+
+    it('a deselect removes only its own member, leaving the rest', () => {
+      expect(nextSelection([nodeA, nodeB], nodeA, false)).toEqual([nodeB]);
+    });
+
+    it('still folds the single-click batch to just the clicked node', () => {
+      // The batch React Flow emits on a plain click: the clicked node selected,
+      // then a deselect for every other node AND every edge. #737's guard was
+      // needed because a single slot could not tell "clear me" from "clear the
+      // others"; a set can, so the fold lands on A without a special case.
+      const batch: [{ kind: 'node' | 'edge'; id: string }, boolean][] = [
+        [nodeA, true],
+        [nodeB, false],
+        [edge1, false],
+      ];
+      const settled = batch.reduce<Selection[]>(
+        (current, [target, selected]) => nextSelection(current, target, selected),
+        [edge1],
+      );
+      expect(settled).toEqual([nodeA]);
+    });
+
+    it('returns the SAME array when nothing changes — the render-loop guard', () => {
+      // Identity, not deep equality: a fresh-but-equal array on every one of the
+      // N changes in a batch re-renders the canvas, which re-derives the node
+      // array, which makes RF report the selection again (#737's cycle).
+      const current = [nodeA, nodeB];
+      expect(nextSelection(current, nodeA, true)).toBe(current);
+      expect(nextSelection(current, edge1, false)).toBe(current);
+    });
+
+    it('a container is EXCLUSIVE — it never shares the set with nodes or edges', () => {
+      // A container is not a React Flow selection at all (`selectable: false`),
+      // so a set holding one alongside nodes would carry a member group-move
+      // cannot move and RF cannot deselect.
+      expect(nextSelection([nodeA, nodeB], box, true)).toEqual([box]);
+      expect(nextSelection([box], nodeA, true)).toEqual([nodeA]);
+    });
+  });
+
+  describe('setSelection', () => {
+    it('is idempotent BY VALUE — an equal set does not write', () => {
+      const s = createCanvasStore();
+      s.getState().setSelection([nodeA, nodeB]);
+      const before = s.getState();
+      s.getState().setSelection([nodeB, nodeA]);
+      expect(s.getState()).toBe(before);
+      expect(s.getState().selected).toBe(before.selected);
+    });
+
+    it('select(sel) and select(null) still mean "just this one" and "none"', () => {
+      const s = createCanvasStore();
+      s.getState().setSelection([nodeA, nodeB]);
+      s.getState().select(edge1);
+      expect(s.getState().selected).toEqual([edge1]);
+      s.getState().select(null);
+      expect(s.getState().selected).toEqual([]);
+    });
+  });
+
+  describe('moveNodes', () => {
+    function loaded() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(version());
+      return s;
+    }
+
+    it('moves the whole group and records ONE undo entry', () => {
+      const s = loaded();
+      s.getState().moveNodes([
+        { id: 'n_a', position: { x: 11, y: 21 } },
+        { id: 'n_b', position: { x: 111, y: 21 } },
+      ]);
+
+      expect(s.getState().past).toHaveLength(1);
+      expect(s.getState().nodes.map((n) => n.position)).toEqual([
+        { x: 11, y: 21 },
+        { x: 111, y: 21 },
+      ]);
+
+      // The whole gesture comes back in one press — the point of batching. Per
+      // node it would take two, and the first press would leave the group
+      // half-moved, a state the operator never authored.
+      s.getState().undo();
+      expect(s.getState().nodes.map((n) => n.position)).toEqual([
+        { x: 10, y: 20 },
+        { x: 100, y: 20 },
+      ]);
+    });
+
+    it('records nothing when no member actually moved', () => {
+      const s = loaded();
+      const before = s.getState();
+      s.getState().moveNodes([
+        { id: 'n_a', position: { x: 10, y: 20 } },
+        { id: 'n_b', position: { x: 100, y: 20 } },
+      ]);
+      expect(s.getState().nodes).toBe(before.nodes);
+      expect(s.getState().past).toHaveLength(0);
+      expect(s.getState().dirty).toBe(false);
+    });
+
+    it('ignores an id that names no current node', () => {
+      const s = loaded();
+      s.getState().moveNodes([
+        { id: 'n_gone', position: { x: 5, y: 5 } },
+        { id: 'n_a', position: { x: 11, y: 21 } },
+      ]);
+      expect(s.getState().past).toHaveLength(1);
+      expect(s.getState().nodes).toHaveLength(2);
+      expect(s.getState().nodes[0]!.position).toEqual({ x: 11, y: 21 });
+    });
+  });
+
+  describe('deleteSelection', () => {
+    function loaded() {
+      const s = createCanvasStore();
+      s.getState().loadVersion(
+        version({
+          nodes: [
+            { id: 'n_a', type: 'http_request', config: {}, position: { x: 10, y: 20 } },
+            { id: 'n_b', type: 'llm_call', config: {}, position: { x: 100, y: 20 } },
+            { id: 'n_c', type: 'http_request', config: {}, position: { x: 200, y: 20 } },
+          ],
+          edges: [
+            { id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' },
+            { id: 'e_2', from: 'n_b', to: 'n_c', on: 'success' },
+          ],
+        }),
+      );
+      return s;
+    }
+
+    it('removes every selected node, cascades their edges, in ONE undo entry', () => {
+      const s = loaded();
+      s.getState().setSelection([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]);
+      s.getState().deleteSelection();
+
+      const st = s.getState();
+      expect(st.nodes.map((n) => n.id)).toEqual(['n_c']);
+      // e_1 is incident to both, e_2 to one — a cascade, not a selected edge.
+      expect(st.edges).toHaveLength(0);
+      expect(st.past).toHaveLength(1);
+      expect(st.selected).toEqual([]);
+
+      s.getState().undo();
+      expect(s.getState().nodes).toHaveLength(3);
+      expect(s.getState().edges).toHaveLength(2);
+    });
+
+    it('deletes a connected node and its edge together — ONE press brings both back', () => {
+      // The pre-existing split this fire closes: React Flow's own Backspace path
+      // fires the edge removals and the node removals as two separate callbacks,
+      // so the store recorded two entries and one undo restored the node while
+      // leaving its edge deleted. One gesture is one entry.
+      const s = loaded();
+      s.getState().select({ kind: 'node', id: 'n_b' });
+      s.getState().deleteSelection();
+      expect(s.getState().past).toHaveLength(1);
+
+      s.getState().undo();
+      expect(s.getState().nodes).toHaveLength(3);
+      expect(s.getState().edges.map((e) => e.id)).toEqual(['e_1', 'e_2']);
+    });
+
+    it('removes a selected EDGE without touching its endpoints', () => {
+      const s = loaded();
+      s.getState().setSelection([{ kind: 'edge', id: 'e_1' }]);
+      s.getState().deleteSelection();
+
+      const st = s.getState();
+      expect(st.nodes).toHaveLength(3);
+      expect(st.edges.map((e) => e.id)).toEqual(['e_2']);
+    });
+
+    it('prunes container membership for every deleted node (#746)', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_a', 'n_b'] });
+      s.getState().setSelection([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]);
+      s.getState().deleteSelection();
+
+      expect(s.getState().containers[0]!.children).toEqual([]);
+    });
+
+    it('never deletes a CONTAINER — that stays the confirm-gated affordance (#748)', () => {
+      const s = loaded();
+      s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_a'] });
+      s.getState().select({ kind: 'container', id: 'stage_1' });
+      const before = s.getState();
+      s.getState().deleteSelection();
+
+      const st = s.getState();
+      expect(st.containers).toHaveLength(1);
+      expect(st.nodes).toHaveLength(3);
+      // A refusal consumes no undo slot — a dead undo press is how undo loses trust.
+      expect(st.past).toBe(before.past);
+      expect(st.dirty).toBe(before.dirty);
+    });
+
+    it('is a no-op on an empty selection', () => {
+      const s = loaded();
+      const before = s.getState();
+      s.getState().deleteSelection();
+      expect(s.getState().nodes).toBe(before.nodes);
+      expect(s.getState().past).toHaveLength(0);
+    });
   });
 });

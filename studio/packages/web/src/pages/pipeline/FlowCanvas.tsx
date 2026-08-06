@@ -639,12 +639,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           // clicking it or by Enter. (Backspace would still delete it.) The
           // operator's only way out is to click empty canvas first.
           //
-          // The cost of re-deriving, stated plainly: a shift-marquee or
-          // ctrl-click collapses to a single selection, so multi-node drag is
-          // not available. That is the store's model — one `Selection` — and
-          // real multi-select is U21's, which widens it. Consistency beats a
-          // capability that leaves the canvas stuck.
-          selected: selected?.kind === 'node' && selected.id === n.id,
+          // U21 widened the store's model from one `Selection` to a SET, which
+          // is what let a shift-marquee and a ctrl-click survive: the gesture is
+          // still mirrored INTO the store and read back out here, so the two
+          // cannot disagree — the set is simply large enough to hold what React
+          // Flow reports instead of collapsing it to the last member.
+          selected: selected.some((s) => s.kind === 'node' && s.id === n.id),
         };
       });
     });
@@ -863,7 +863,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           label: labels.get(c.id) ?? c.kind,
           // Re-derived from the store, never carried forward — the same rule
           // and the same reason as the activity nodes' `selected` above.
-          selected: selected?.kind === 'container' && selected.id === c.id,
+          selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
           onDelete: confirmDeleteContainer,
           onConfigure: selectContainer,
         } satisfies ContainerData,
@@ -1029,8 +1029,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * variable — RF renders marker defs once, outside every edge `<g>` — so U6b
    * gives them their own defs and their own CSS rules: `EdgeMarkers`.)
    */
+  const sole = singleSelection(selected);
   const flowEdges: FlowEdge[] = edges.map((e) => {
-    const isSelected = selected?.kind === 'edge' && selected.id === e.id;
+    const isSelected = selected.some((s) => s.kind === 'edge' && s.id === e.id);
     return {
       ...toFlowEdge(e),
       selected: isSelected,
@@ -1049,8 +1050,15 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
        *
        * Set HERE and not in `toFlowEdge`, which the read-only run monitor also
        * calls: interaction is the author canvas's to grant.
+       *
+       * U21 keeps that decision intact under multi-select, which is why this
+       * reads `sole` and not `isSelected`. A marquee selects every edge incident
+       * to a lassoed node (React Flow's `commitUserSelectionRect` walks
+       * `connectionLookup`), so painting anchors on "any selected edge" would
+       * hand back exactly the stacked-anchor ambiguity above — several at once,
+       * on edges the operator never aimed at.
        */
-      reconnectable: isSelected,
+      reconnectable: sole?.kind === 'edge' && sole.id === e.id,
     };
   });
 
@@ -1073,7 +1081,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    */
   function applySelectChange(target: Selection, selected: boolean) {
     const st = store.getState();
-    st.select(nextSelection(st.selected, target, selected));
+    st.setSelection(nextSelection(st.selected, target, selected));
   }
 
   function onNodesChange(changes: NodeChange[]) {
@@ -1094,25 +1102,35 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     // selection).
     onNodesChangeRaw(own);
     const st = store.getState();
+
+    /* U21 — a group drag arrives as ONE batch carrying a `position` change per
+       moved node (`updateNodePositions` emits every drag item together), so the
+       moves are committed together. Per node it would be one undo entry each,
+       and the first press would leave the group half-moved — a state the
+       operator never authored. Mid-drag ticks are still dropped: the
+       `dragging !== true` filter gates the whole group at once, so the domain
+       graph does not churn while dragging. */
+    const moves = own.flatMap((c) =>
+      c.type === 'position' && c.position && c.dragging !== true
+        ? [{ id: c.id, position: c.position }]
+        : [],
+    );
+    if (moves.length > 0) st.moveNodes(moves);
+
+    const removed = own.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
+    if (removed.length > 0) st.deleteNodesAndEdges(removed, []);
+
     for (const c of own) {
-      // Commit a move to the domain store once the drag settles (or for a
-      // programmatic move) — not on every mid-drag tick, so the domain graph
-      // doesn't churn while dragging.
-      if (c.type === 'position' && c.position && c.dragging !== true) {
-        st.moveNode(c.id, c.position);
-      } else if (c.type === 'remove') {
-        st.deleteNode(c.id);
-      } else if (c.type === 'select') {
-        applySelectChange({ kind: 'node', id: c.id }, c.selected);
-      }
+      if (c.type === 'select') applySelectChange({ kind: 'node', id: c.id }, c.selected);
     }
   }
 
   function onEdgesChange(changes: EdgeChange[]) {
     const st = store.getState();
+    const removed = changes.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
+    if (removed.length > 0) st.deleteNodesAndEdges([], removed);
     for (const c of changes) {
-      if (c.type === 'remove') st.deleteEdge(c.id);
-      else if (c.type === 'select') applySelectChange({ kind: 'edge', id: c.id }, c.selected);
+      if (c.type === 'select') applySelectChange({ kind: 'edge', id: c.id }, c.selected);
     }
   }
 
@@ -1503,6 +1521,16 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            constrained by live together in `ports.ts`, with a test pinning the
            relationship. */
         connectionRadius={CONNECTION_RADIUS}
+        /* U21 — the canvas OWNS the delete key; React Flow does not.
+           `deleteElements` fires the edge removals and the node removals as two
+           separate callbacks (`triggerEdgeChanges` then `triggerNodeChanges`),
+           which through the change seam is two `edit()` calls and so two undo
+           entries: one press would restore a deleted node and leave its cascaded
+           edge gone. That split predates multi-select — a group delete would
+           have multiplied it. `PipelineCanvas`'s document keydown handler calls
+           `deleteSelection()` instead, which is one entry for the whole
+           gesture. */
+        deleteKeyCode={null}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
            `select:false` change for the element that was selected, which
