@@ -1104,7 +1104,16 @@ function ParamRow({
         // copy of the SAME sentence is where the fix is made. Word-for-word the
         // same string on purpose: an operator reading the badge can find the
         // field it is about.
-        <p className="error">{defect}</p>
+        //
+        // `role="alert"` like every other `.error` in this app, and the sibling
+        // eleven lines up. It does mean this sentence is announced twice — the
+        // doc-level badge is a `role="status"` carrying the same string — but
+        // the badge only says the DOC has issues, while this one is attached to
+        // the control the operator just changed. Announcing where the problem
+        // is beats staying silent on the field that caused it.
+        <p className="error" role="alert">
+          {defect}
+        </p>
       ) : null}
       <label>
         Description
