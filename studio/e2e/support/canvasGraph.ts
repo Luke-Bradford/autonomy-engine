@@ -101,12 +101,38 @@ export async function fitAndSettle(page: Page, index = 0): Promise<void> {
  * which matters here, because the thing this gesture creates (React Flow's
  * `nodesselection-rect`) is exactly such an overlay.
  *
- * The box is computed from the nodes' own bounding boxes with a margin, rather
- * than from fixed coordinates, so it keeps working under whatever zoom
- * `fitView` settled on. `selectionMode` is React Flow's default `Full`, so a
- * node counts only when the box contains it WHOLE.
+ * `expected` is how many nodes the caller needs the gesture to reach. It is not
+ * an assertion about the result — it decides how long to keep fitting, and
+ * turns "a node was still off screen" into a named failure rather than a wrong
+ * selection count at the caller.
  */
 export async function marqueeAllNodes(page: Page, expected: number): Promise<void> {
+  /* Fit until everything really is on screen, re-fitting each attempt.
+     ONE `fitAndSettle` is not enough after a node drag: the drag commits to the
+     domain store, which re-renders and can move the viewport again after
+     `viewportSettled` has already reported it steady — so a single fit
+     intermittently leaves the dragged node hanging over the pane edge, where a
+     `Full`-mode marquee cannot see it. Polling makes the wait a condition
+     ("all nodes are on screen") rather than a guess about timing. */
+  await expect
+    .poll(
+      async () => {
+        await fitAndSettle(page, 0);
+        return page.evaluate(() => {
+          const pane = document.querySelector('.react-flow__pane')?.getBoundingClientRect();
+          if (!pane) return -1;
+          return [...document.querySelectorAll('.react-flow__node')].filter((el) => {
+            const n = el.getBoundingClientRect();
+            return (
+              n.x >= pane.x && n.y >= pane.y && n.right <= pane.right && n.bottom <= pane.bottom
+            );
+          }).length;
+        });
+      },
+      { message: 'the view never fitted every node fully on screen' },
+    )
+    .toBeGreaterThanOrEqual(expected);
+
   const box = await page.evaluate(() => {
     const pane = document.querySelector('.react-flow__pane')?.getBoundingClientRect();
     const nodes = [...document.querySelectorAll('.react-flow__node')].map((el) =>

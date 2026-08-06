@@ -35,22 +35,30 @@ import {
  * when the behaviour it names is removed.
  */
 
-/** Two activities, spread apart, both measured — the shape every spec here needs. */
-async function seedTwoNodes(page: Page, name: string): Promise<void> {
+/**
+ * Two activities, spread apart, both measured and both fully on screen.
+ *
+ * The ORDER here is the whole point, and each step is load-bearing:
+ *  - the drag is 300px, far enough that the second node does not OVERLAP the
+ *    first — a shorter offset leaves it covering the first's source port, and
+ *    `connectNodes` then drags from the wrong element and authors no edge;
+ *  - the connect happens BEFORE the final fit, at the zoom `seedSelectedEdge`
+ *    is proven at — connecting after a re-fit authors nothing;
+ *  - the fit comes LAST, because a `Full`-mode marquee can only select a node
+ *    it contains whole, and a node dragged out of the viewport is not one.
+ */
+async function seedTwoNodes(page: Page, name: string, connect = false): Promise<void> {
   await openCanvas(page, name);
   await addActivity(page, 'HTTP Request');
   await expect(canvasNodes(page)).toHaveCount(1);
   await addActivity(page, 'Write File');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
-  // Clear of each other, so a marquee can contain both and neither hides the
-  // edge. Same gesture and same order as `seedSelectedEdge`, whose comment
-  // records why the drag comes before any connect.
-  // Far enough that the two do not OVERLAP — a shorter offset leaves the second
-  // node covering the first's source port, and `connectNodes` then drags from
-  // the wrong element and authors no edge. Then re-fit, so both are fully on
-  // screen for a Full-mode marquee.
   await dragNodeBy(page, 1, 300, 60);
+  if (connect) {
+    await connectNodes(page, 0, 1);
+    await expect(edgeGroup(page)).toHaveCount(1);
+  }
   await fitAndSettle(page, 1);
 }
 
@@ -65,7 +73,6 @@ test.describe('multi-select (U21)', () => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e marquee select');
 
-    await fitAndSettle(page, 1);
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
@@ -82,7 +89,6 @@ test.describe('multi-select (U21)', () => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e marquee clickable');
 
-    await fitAndSettle(page, 1);
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
@@ -116,7 +122,6 @@ test.describe('multi-select (U21)', () => {
       canvasNodes(page).evaluateAll((els) => els.map((el) => (el as HTMLElement).style.transform));
     const before = await positions();
 
-    await fitAndSettle(page, 1);
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
@@ -138,11 +143,8 @@ test.describe('multi-select (U21)', () => {
 
   test('Backspace deletes everything selected, and ONE undo restores it all', async ({ page }) => {
     const problems = collectPageProblems(page);
-    await seedTwoNodes(page, 'e2e marquee delete');
-    await connectNodes(page, 0, 1);
-    await expect(edgeGroup(page)).toHaveCount(1);
+    await seedTwoNodes(page, 'e2e marquee delete', true);
 
-    await fitAndSettle(page, 1);
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
@@ -164,9 +166,7 @@ test.describe('multi-select (U21)', () => {
     page,
   }) => {
     const problems = collectPageProblems(page);
-    await seedTwoNodes(page, 'e2e marquee anchors');
-    await connectNodes(page, 0, 1);
-    await expect(edgeGroup(page)).toHaveCount(1);
+    await seedTwoNodes(page, 'e2e marquee anchors', true);
 
     // One edge selected on its own: the U19 slice 2 behaviour, unchanged.
     await edgeGroup(page).first().click();
@@ -175,7 +175,6 @@ test.describe('multi-select (U21)', () => {
     // Marquee'd: React Flow also selects the edge (it is incident to both
     // lassoed nodes), so the anchors would come back if they were gated on
     // "selected" rather than "the ONE selected element".
-    await fitAndSettle(page, 1);
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
     await expect(reconnectAnchors(page)).toHaveCount(0);
