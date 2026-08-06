@@ -96,7 +96,10 @@ export function ConnectionsPage() {
   const onExport = useCallback(async (conn: ConnectionPublic) => {
     setLoadError(null);
     try {
-      downloadTextFile(exportFileName('connection', conn.name, conn.id), await exportConnection(conn.id));
+      downloadTextFile(
+        exportFileName('connection', conn.name, conn.id),
+        await exportConnection(conn.id),
+      );
     } catch (err) {
       setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
     }

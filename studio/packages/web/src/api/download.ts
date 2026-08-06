@@ -25,11 +25,7 @@
  * trimming it here would make this module a second authority on canonical
  * form, and a silent one.
  */
-export function downloadTextFile(
-  filename: string,
-  text: string,
-  mime = 'application/json',
-): void {
+export function downloadTextFile(filename: string, text: string, mime = 'application/json'): void {
   const url = URL.createObjectURL(new Blob([text], { type: mime }));
   try {
     const anchor = document.createElement('a');

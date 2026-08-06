@@ -866,7 +866,9 @@ describe('#959 portability — export and import on the triggers list', () => {
     await waitFor(() => expect(importMock).toHaveBeenCalled());
     // The ROW, not the panel's own sentence — both name the trigger, so this
     // asks for the one only a refreshed list can produce.
-    expect(await screen.findByRole('button', { name: 'Export Imported nightly' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Export Imported nightly' }),
+    ).toBeInTheDocument();
     const outcome = screen.getByRole('status');
     expect(outcome).toHaveTextContent(/not bound to a pipeline version/);
     // …and the fact NO attention item carries: the importer forces it disabled.

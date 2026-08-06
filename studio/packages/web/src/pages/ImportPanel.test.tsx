@@ -26,7 +26,14 @@ function envelopeFile(contents: string, name = 'pipeline-x.json'): File {
   return new File([contents], name, { type: 'application/json' });
 }
 
-function pipelineResult(overrides: Partial<ImportResult> = {}): ImportResult {
+/**
+ * The PIPELINE variant, narrowed. `ImportResult` is a discriminated union, so a
+ * helper typed as the union cannot have its `.pipeline` read back by a caller
+ * building a second fixture from the first.
+ */
+type PipelineImportResult = Extract<ImportResult, { kind: 'pipeline' }>;
+
+function pipelineResult(overrides: Partial<PipelineImportResult> = {}): PipelineImportResult {
   return {
     kind: 'pipeline',
     pipeline: {
@@ -42,7 +49,7 @@ function pipelineResult(overrides: Partial<ImportResult> = {}): ImportResult {
     versions: [],
     attention: [],
     ...overrides,
-  } as ImportResult;
+  };
 }
 
 async function pick(file: File) {
@@ -167,7 +174,7 @@ describe('ImportPanel', () => {
     importMock
       .mockResolvedValueOnce(pipelineResult())
       .mockResolvedValueOnce(
-        pipelineResult({ pipeline: { ...pipelineResult().pipeline, id: 'pl_second' } } as never),
+        pipelineResult({ pipeline: { ...pipelineResult().pipeline, id: 'pl_second' } }),
       );
     renderWithRouter(<ImportPanel listKind="pipeline" onImported={vi.fn()} />);
 

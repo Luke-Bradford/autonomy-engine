@@ -287,10 +287,7 @@ describe('FactoryResources — row actions', () => {
     await user.click(await screen.findByRole('menuitem', { name: 'Export' }));
 
     await waitFor(() => expect(exportMock).toHaveBeenCalledWith('pl_1'));
-    expect(downloadMock).toHaveBeenCalledWith(
-      'pipeline-alpha-pl_1.json',
-      '{"canonical":"bytes"}',
-    );
+    expect(downloadMock).toHaveBeenCalledWith('pipeline-alpha-pl_1.json', '{"canonical":"bytes"}');
     // An export mutates nothing, so it must not go through `run`, whose
     // refresh would imply to every other view that something moved.
     expect(listMock.mock.calls).toHaveLength(listCallsBefore);

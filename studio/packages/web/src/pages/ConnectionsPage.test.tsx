@@ -264,7 +264,9 @@ describe('ConnectionsPage', () => {
     await waitFor(() => expect(importMock).toHaveBeenCalled());
     // The ROW, not the panel's own sentence — both name the connection, so this
     // asks for the one only a refreshed list can produce.
-    expect(await screen.findByRole('button', { name: 'Export Imported Claude' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Export Imported Claude' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(/needs its secret/);
   });
 });

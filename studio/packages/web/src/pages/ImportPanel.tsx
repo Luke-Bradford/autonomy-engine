@@ -152,8 +152,8 @@ function ImportOutcome({
       )}
       {resource.kind !== listKind && (
         <p>
-          It is a {resource.kind}, so it is listed under <Link to={section.path}>{section.label}</Link>
-          , not on this page.
+          It is a {resource.kind}, so it is listed under{' '}
+          <Link to={section.path}>{section.label}</Link>, not on this page.
         </p>
       )}
       {resource.note && <p>{resource.note}</p>}

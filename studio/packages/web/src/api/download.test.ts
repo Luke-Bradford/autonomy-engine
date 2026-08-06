@@ -30,11 +30,11 @@ function stubBrowserDownload() {
       revoked.push(url);
     },
   });
-  const clickSpy = vi
-    .spyOn(HTMLAnchorElement.prototype, 'click')
-    .mockImplementation(function (this: HTMLAnchorElement) {
-      clicked.push(this);
-    });
+  const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    clicked.push(this);
+  });
 
   return { created, revoked, clicked, clickSpy };
 }

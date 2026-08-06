@@ -37,7 +37,8 @@ describe('exportPipeline', () => {
     // key) returns a different string and this test goes red. A compact,
     // already-sorted fixture would survive every one of those and prove
     // nothing; it did, until this comment was written.
-    const canonical = '\n{\n  "schemaVersion": 1,\n  "kind": "pipeline",\n  "unknownToClient": 7\n}\n';
+    const canonical =
+      '\n{\n  "schemaVersion": 1,\n  "kind": "pipeline",\n  "unknownToClient": 7\n}\n';
     fetchMock.mockResolvedValue(
       new Response(canonical, { status: 200, headers: { 'content-type': 'application/json' } }),
     );
