@@ -115,11 +115,17 @@ describe('costCell — a rerun states that its figure is INCREMENTAL', () => {
     expect(cell.note).toContain('run_source');
   });
 
-  it('stays true when the copied frontier was EMPTY (nothing was reusable)', () => {
-    /* Worded "any work it reused", not "excludes the work it reused" — the first
-       node failing means nothing was copied, and the sentence must not assert
-       something that did not happen. */
-    expect(cellFor(priced, { rerunOf: 'run_source' }).note).toContain('any work it reused');
+  it('HEDGES the claim, so it stays true when the copied frontier was empty', () => {
+    /* Deliberately frontier-state-INDEPENDENT: the list holds only `rerunOf`, not
+       the fold, so the cell cannot know whether anything was actually copied — a
+       rerun whose FIRST node failed reused nothing. The sentence therefore has to
+       be hedged ("ANY work it reused") rather than asserting reuse happened, and
+       this pins that property against a future rewording that reads better but
+       claims more than the row knows. */
+    const note = cellFor(priced, { rerunOf: 'run_source' }).note as string;
+    expect(note).toContain('any work it reused');
+    expect(note).not.toMatch(/\bthe work it reused\b/);
+    expect(note).not.toMatch(/excludes|does not include the work/);
   });
 
   it('says BOTH things when a rerun is still running', () => {
