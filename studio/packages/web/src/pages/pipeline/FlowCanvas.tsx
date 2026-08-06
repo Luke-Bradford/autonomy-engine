@@ -244,13 +244,19 @@ const CANVAS_CHROME_SELECTOR = '.react-flow__panel';
 /**
  * The modifiers that add an element to the selection instead of replacing it.
  *
- * MODULE-level, not an inline literal, and that is load-bearing rather than
- * tidiness: React Flow feeds this straight to `useKeyPress`, whose listener
- * effect and key-parsing memo are both keyed on the value's IDENTITY. A fresh
- * `['Meta', 'Control']` on every render would tear down and re-add a window
- * keydown listener on every render — and a modifier held ACROSS one of those
- * renders would lose its `keydown`, which is exactly the state this feature
- * reads. See the `multiSelectionKeyCode` prop for why both keys, not one.
+ * MODULE-level, not an inline literal. React Flow feeds this straight to
+ * `useKeyPress`, whose key-parsing memo and whose add/removeEventListener
+ * effect are both keyed on the value's IDENTITY, so a fresh
+ * `['Meta', 'Control']` per render would tear down and re-add a pair of window
+ * key listeners on every render of this canvas.
+ *
+ * The cost is listener CHURN, and it is worth being exact about that rather
+ * than claiming input loss: React runs an effect's cleanup and its re-run
+ * back-to-back inside one commit, so no key event can be dispatched into the
+ * gap, and `useKeyPress` holds the pressed keys in a ref that outlives the
+ * teardown anyway. Cheap to avoid, so avoided — not a correctness fix.
+ *
+ * See the `multiSelectionKeyCode` prop for why both keys, not one.
  */
 const MULTI_SELECT_KEYS = ['Meta', 'Control'];
 
@@ -1573,8 +1579,14 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            Mac is safe rather than merely harmless: `useKeyPress` clears its
            pressed state on `contextmenu`, which is precisely the event a Mac
            Control-click produces, so it cannot strand `multiSelectionActive`
-           on. The mirror case — a Windows operator's Super key — is covered by
-           the same hook's `blur` reset, since pressing it moves focus out.
+           on. The mirror case is the genuinely NEW behaviour here: Meta was
+           inert on Windows/Linux before, and is now a multi-select modifier
+           there too. Pressing Super normally moves focus to the Start menu or
+           the activities overview, and the same hook resets on `blur` — but a
+           compositor that grabs the key globally WITHOUT blurring the window
+           could swallow the `keyup` and leave the flag on. Worst case is that
+           the next plain click adds instead of replacing, and a pane click
+           clears it; not worth guarding, worth knowing.
 
            Fixing the harness's user agent instead would NOT do: `test:e2e` runs
            on ubuntu in CI and on macOS locally, so only a UA-independent prop
