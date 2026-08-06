@@ -136,17 +136,19 @@ export function ContainerPanel({
    * Of those, the ones the SAVE GATE actually refuses — read from the validator
    * rather than inferred from the map.
    *
-   * The two are not the same set, and assuming they were made the advisory say
-   * something false in the ONLY case it can currently appear. `illegal` means
-   * "no kind-legality rule permits this field here"; blocked means "`validateDoc`
-   * emits an issue about it". `stage` + `maxRounds` is illegal and NOT refused
-   * (#859), so the advisory promised a blocked save on a screen whose Save
-   * button was enabled — and since every other illegal combination is rejected
-   * by the server's own write gate before a version can be minted, that one case
-   * is the whole reachable population.
+   * `illegal` means "no kind-legality rule permits this field here"; blocked
+   * means "`validateDoc` emits an issue about it". Since #859 closed the last
+   * hole (`stage` + `maxRounds`, illegal but unrefused) the two sets AGREE for
+   * every kind/field pair, and this advisory now says "Saving is blocked" in
+   * every case it can appear.
    *
-   * Deriving it means the sentence stays true if #859 is ever closed, without
-   * this panel having to know that it was.
+   * The derivation is kept even so, and that is the point rather than a leftover.
+   * It is what let #859 land as a three-line validator change with no edit here:
+   * the panel tracked the refusal appearing without knowing it had. Inferring
+   * `blocked` from the field map instead would restate the kind-legality rules a
+   * second time, in a second place, with nothing holding the two together — the
+   * exact drift `CONTAINER_CONFIG_FIELDS` was exported to prevent. It also stays
+   * honest if a future field is added to the map ahead of its refusal.
    */
   const blocked = useMemo(() => {
     // Not computed when a stored value is unrenderable. That branch renders no

@@ -1414,12 +1414,13 @@ describe('CONTAINER_CONFIG_FIELDS', () => {
    * Kind-legality refusals `validateDoc` does NOT make, so the map cannot be
    * pinned for them. Each is a validator hole, not a map error — recorded here
    * so it cannot silently grow.
+   *
+   * EMPTY since #859, which closed the last one (`stage.maxRounds`). Kept rather
+   * than deleted because it is the mechanism, not the finding: the third test
+   * below asserts the list is EXHAUSTIVE, so a future hole has a declared home
+   * and cannot be papered over by quietly widening the second test's skip.
    */
-  const UNPINNED: ReadonlyArray<`${ContainerKind}.${ContainerConfigField}`> = [
-    // #859 — `maxRounds` is refused on a `foreach` but not on a `stage`, where
-    // it is equally dead. The map excludes it; the validator lets it through.
-    'stage.maxRounds',
-  ];
+  const UNPINNED: ReadonlyArray<`${ContainerKind}.${ContainerConfigField}`> = [];
 
   function kindLegalityErrors(kind: ContainerKind, field: ContainerConfigField): string[] {
     const errors = validateDoc({

@@ -1844,8 +1844,10 @@ export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number]
  * rather than beside `ContainerSchema`, which has no opinion on the matter.
  *
  * `validate-doc.test.ts` pins the two together in both directions against the
- * refusal grammar, and records the one case the validator does not refuse
- * (`stage.maxRounds`, #859) so the gap cannot silently grow.
+ * refusal grammar. Its `UNPINNED` list — the validator holes the map cannot be
+ * pinned for — is EMPTY since #859 closed the last one (`stage.maxRounds`), and
+ * a third test asserts that list is exhaustive, so a new gap cannot open
+ * silently.
  *
  * `join` appears on every kind because the reducer reads it on every kind: the
  * `containerJoin` helper below is applied unconditionally to all three from the
@@ -2073,6 +2075,22 @@ export function validateDoc(
     }
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
       errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
+    }
+    // #859 — a stage runs its body ONCE, so a round cap is exactly as dead here as
+    // it is on a foreach, which has been refused since #4 A4. This closed the one
+    // asymmetry in the kind-legality set: `maxRounds` was refused on a foreach and
+    // accepted on a stage, so the U23 config panel (which offers it on neither)
+    // and the validator disagreed by exactly this cell.
+    //
+    // NOT a new migration posture, which is why it could be closed as a defect
+    // rather than escalated. A stored version carrying a stray `stage.maxRounds`
+    // becomes unsavable exactly as one carrying a stray `stage.timeout` already
+    // does — and stays REPAIRABLE by the same route: reads never validate
+    // (`repo/pipeline-versions.ts`, write-path-only by design), so the canvas
+    // opens the doc, and `ContainerPanel` renders a carried illegal field under
+    // its clear-only rule (#860) so the operator can strip it and save.
+    if (c.kind === 'stage' && c.maxRounds !== undefined) {
+      errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a stage`);
     }
     // Symmetric to the exitWhen/maxRounds refusals: `items` is foreach-only, so a
     // stray `items` on a loop/stage is a dead field — refuse it LOUDLY rather than
