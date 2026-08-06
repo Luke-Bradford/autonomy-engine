@@ -186,7 +186,7 @@ test.describe('#884 — a canvas-authored issue names its subject', () => {
     // somewhere else in the sentence, and it names the SECOND HTTP Request
     // specifically: 'HTTP Request 1' is the node being edited, so a gloss that
     // echoed the wrong end would still contain 'HTTP Request'.
-    expect(all).toContain(`\${nodes.${second}.output.body} (HTTP Request 2)`);
+    expect(all).toContain(`\${nodes.${second}.output.body} (“HTTP Request 2”)`);
 
     await expectQuiet(page, problems);
   });
