@@ -307,7 +307,7 @@ describe('readableIssue', () => {
     // The span survives byte-identical — the property the anchor exists for.
     // #887's gloss is APPENDED after it and changes none of it.
     expect(out).toBe(
-      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} (HTTP Request 1) " +
+      "container 'stage 1' exitWhen: ${nodes.n_a.output.done} (“HTTP Request 1”) " +
         'does not name an upstream node',
     );
   });
@@ -321,7 +321,7 @@ describe('readableIssue', () => {
     const msg = 'the graph is unsound near ${nodes.n_a.output.done}';
     // Every byte of the original survives — the unanchored pass would have
     // corrupted the body; #887's gloss only ever adds after it.
-    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(`${msg} (HTTP Request 1)`);
+    expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(`${msg} (“HTTP Request 1”)`);
   });
 
   /**
@@ -360,9 +360,49 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      'forward cycle detected involving {HTTP Request 1, HTTP Request 2, stage 1} — ' +
+      'forward cycle detected involving {“HTTP Request 1”, “HTTP Request 2”, “stage 1”} — ' +
         'the forward graph must be a DAG',
     );
+  });
+
+  /**
+   * #909 — the reason those names are QUOTED at all.
+   *
+   * `activityLabel` falls back to the raw `type` for an activity the catalog does
+   * not know, and `NodeSchema.type` is an unconstrained `z.string().min(1)`, so
+   * an IMPORTED doc can carry one containing the very separator these lists are
+   * joined on. Unquoted, one name rendered as two, with nothing marking which —
+   * and both list sites did it, which is why the fix had to be one convention
+   * applied to both rather than a patch at the site that raised it.
+   *
+   * Not reachable from this canvas: no catalog title contains a comma. That
+   * is why the fixture has to import a type nothing registers.
+   */
+  const COMMA: Node = {
+    id: 'n_comma',
+    type: 'legacy, imported',
+    config: {},
+    position: { x: 0, y: 0 },
+  };
+
+  it('keeps a comma-BEARING name readable as one name, in the brace list', () => {
+    const out = readableIssue(
+      'forward cycle detected involving {n_comma, n_a} — the forward graph must be a DAG',
+      [COMMA, A],
+      [],
+      [],
+    );
+    expect(out).toContain('{“legacy, imported 1”, “HTTP Request 1”}');
+  });
+
+  it('keeps a comma-BEARING name readable as one name, in the expression gloss', () => {
+    const out = readableIssue(
+      'nodes.n_a.config.url: ${nodes.n_comma.output.v} does not name an upstream node',
+      [COMMA, A],
+      [],
+      [],
+    );
+    expect(out).toContain('(“legacy, imported 1”)');
   });
 
   /**
@@ -383,7 +423,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} (HTTP Request 2) " +
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.body} (“HTTP Request 2”) " +
         'does not name an upstream node (a self, downstream, or unrelated node has no output here)',
     );
   });
@@ -408,7 +448,7 @@ describe('readableIssue', () => {
     );
     expect(out).toBe(
       'node \'HTTP Request 1\' config.url: ${default(nodes.n_d.output.body, "{}")} ' +
-        '(HTTP Request 2) is not guaranteed here',
+        '(“HTTP Request 2”) is not guaranteed here',
     );
   });
 
@@ -418,7 +458,7 @@ describe('readableIssue', () => {
     expect(readableIssue(msg, [A, B, C, D], [], containers)).toBe(
       msg
         .replace('nodes.n_a.config.url', "node 'HTTP Request 1' config.url")
-        .replace('"x")}', '"x")} (HTTP Request 2)'),
+        .replace('"x")}', '"x")} (“HTTP Request 2”)'),
     );
   });
 
@@ -450,8 +490,8 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_b.output.v} (LLM Call 1) and " +
-        '${nodes.n_d.output.v} (HTTP Request 2) are both unreachable',
+      "node 'HTTP Request 1' config.url: ${nodes.n_b.output.v} (“LLM Call 1”) and " +
+        '${nodes.n_d.output.v} (“HTTP Request 2”) are both unreachable',
     );
   });
 
@@ -462,7 +502,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(LLM Call 1, HTTP Request 2)');
+    expect(out).toContain('(“LLM Call 1”, “HTTP Request 2”)');
   });
 
   /**
@@ -482,7 +522,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.status} (HTTP Request 2) is not " +
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.status} (“HTTP Request 2”) is not " +
         "settled here — 'HTTP Request 2' may still be running",
     );
   });
@@ -535,7 +575,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('${nodes.n_d[0]} (HTTP Request 2)');
+    expect(out).toContain('${nodes.n_d[0]} (“HTTP Request 2”)');
   });
 
   /** One node named twice in one span is named ONCE — the gloss dedups. */
@@ -546,8 +586,8 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(HTTP Request 2)');
-    expect(out).not.toContain('(HTTP Request 2, HTTP Request 2)');
+    expect(out).toContain('(“HTTP Request 2”)');
+    expect(out).not.toContain('(“HTTP Request 2”, “HTTP Request 2”)');
   });
 
   /**
@@ -577,7 +617,7 @@ describe('readableIssue', () => {
       containers,
     );
     expect(out).toBe(
-      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.v} (HTTP Request 2) " +
+      "node 'HTTP Request 1' config.url: ${nodes.n_d.output.v} (“HTTP Request 2”) " +
         'then ${nodes.n_b.output',
     );
   });
@@ -600,7 +640,7 @@ describe('readableIssue', () => {
       [],
       containers,
     );
-    expect(out).toContain('(HTTP Request 2)');
+    expect(out).toContain('(“HTTP Request 2”)');
   });
 });
 

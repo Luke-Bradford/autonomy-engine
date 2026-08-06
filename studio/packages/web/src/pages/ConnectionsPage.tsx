@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ConnectionKindSchema, type ConnectionPublic } from '@autonomy-studio/shared';
+import {
+  ConnectionKindSchema,
+  formatZodIssues,
+  type ConnectionPublic,
+} from '@autonomy-studio/shared';
 import { ApiError } from '../api/client';
 import {
   ConnectionWriteSchema,
@@ -205,7 +209,7 @@ function ConnectionForm({
 
     const parsed = ConnectionWriteSchema.safeParse(body);
     if (!parsed.success) {
-      setError(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+      setError(formatZodIssues(parsed.error.issues));
       return;
     }
 

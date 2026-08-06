@@ -3,6 +3,7 @@ import {
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
+  formatZodIssues,
   type Container,
   type ContainerConfigField,
   type Edge,
@@ -240,7 +241,7 @@ export function ContainerPanel({
     // round-trip to a 400 they were going to get anyway.
     const check = ContainerSchema.safeParse(next);
     if (!check.success) {
-      setError(check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+      setError(formatZodIssues(check.error.issues));
       return;
     }
     // The same pre-hoc gate a membership edit goes through. An `exitWhen` edit

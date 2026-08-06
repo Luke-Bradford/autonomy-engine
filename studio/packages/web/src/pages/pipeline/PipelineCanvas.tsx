@@ -6,6 +6,7 @@ import {
   OutputTypeSchema,
   ParamTypeSchema,
   availableRefs,
+  formatZodIssues,
   getActivity,
   isStructuralCallActivity,
   type RefSuggestion,
@@ -1931,7 +1932,7 @@ export function NodePanel({
     if (!entry) return null;
     const check = entry.configSchema.safeParse(candidate);
     if (check.success) return null;
-    return check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    return formatZodIssues(check.error.issues);
   }
 
   function applyJson() {

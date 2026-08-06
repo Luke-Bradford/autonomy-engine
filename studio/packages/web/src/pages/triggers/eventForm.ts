@@ -1,5 +1,4 @@
-import { EventConfigSchema, type EventConfig } from '@autonomy-studio/shared';
-import { formatZodIssues } from './formFields';
+import { EventConfigSchema, formatZodIssues, type EventConfig } from '@autonomy-studio/shared';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the event-subscription editor.
@@ -69,7 +68,7 @@ export function formToEvent(form: EventFormState): EventConversion {
   if (!parsed.success) {
     return {
       ok: false,
-      reason: formatZodIssues(parsed.error),
+      reason: formatZodIssues(parsed.error.issues),
     };
   }
   return { ok: true, event: parsed.data };

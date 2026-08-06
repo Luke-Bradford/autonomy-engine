@@ -223,6 +223,53 @@ export function connectNodes(
   return connectRefs(page, { index: from }, { index: to }, inspect, outcome);
 }
 
+/**
+ * CLICK-to-connect: the OTHER gesture React Flow authors an edge with (#941).
+ *
+ * Click a source port, then a target — no button held in between. RF runs this
+ * through `onClickConnectStart`/`onClickConnectEnd`, callbacks entirely separate
+ * from the drag path's, which is why it needs its own helper and why its absence
+ * from this file is how the missing refusal explanation stayed invisible.
+ *
+ * `mouse.click` moves then presses at a single point, so the drag threshold
+ * (`@xyflow/system` index.js:2471) is never crossed and the pure click path
+ * runs. There is deliberately no `inspect` hook: unlike a drag there is no
+ * moment with a button down, so RF's mid-gesture `connectingto` state — the
+ * thing `connectRefs`' hook exists to read — never exists here.
+ *
+ * Spelled out as move / down / up rather than `mouse.click`, and that is
+ * load-bearing rather than style. Measured: two `mouse.click` calls back to back
+ * leave the graph with no edge, no refusal, and the arm sitting on the TARGET
+ * handle — the second click found no armed handle and simply re-armed, because
+ * Playwright presses before the first gesture's pointer handlers have finished
+ * with the move that precedes it. Each step here is its own round-trip, which is
+ * the gap a real pointer always has between arriving at a port and being pressed.
+ * Nothing a person can reproduce: it needs two clicks on different ports inside a
+ * millisecond.
+ *
+ * Deliberately NOT synchronised on React Flow's `clickconnecting` class instead.
+ * That was tried: it is set and cleared faster than a Playwright locator can
+ * poll, so it reads as absent even on the runs that go on to author the edge.
+ *
+ * Takes `NodeRef`s rather than plain indices because `portCentreOf` is private
+ * to this module by design; a spec cannot address a port on its own.
+ */
+export async function clickConnect(
+  page: Page,
+  from: NodeRef,
+  to: NodeRef,
+  outcome?: string,
+): Promise<void> {
+  const source = await portCentreOf(page, from, 'source', outcome);
+  const target = await portCentreOf(page, to, 'target');
+  await page.mouse.move(source.x, source.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.mouse.move(target.x, target.y);
+  await page.mouse.down();
+  await page.mouse.up();
+}
+
 /** `connectNodes`, for a seeded doc where the endpoints are named by id. */
 export function connectById(
   page: Page,

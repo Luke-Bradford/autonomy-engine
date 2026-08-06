@@ -318,6 +318,40 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * is what keeps them correct; moving this rewrite inside `validateCanvas` would
  * silently break every one of them.
  */
+/**
+ * A list of resolved NAMES, rendered so a name cannot be mistaken for two (#909).
+ *
+ * `readableIssue` joins names with `', '` at two sites — the brace-wrapped shape
+ * in pass 3 and the expression gloss in pass 5 — and a name containing `, `
+ * split visually into what read as two names, with nothing marking which. One
+ * name in, two names out.
+ *
+ * Reachable, though narrowly: a name is minted by `activityLabels` as
+ * `` `${activityLabel(node)} ${n}` ``, and `activityLabel` falls back to the RAW
+ * TYPE for a type the catalog does not know. `NodeSchema.type` is an
+ * unconstrained `z.string().min(1)`, so an IMPORTED doc can carry a
+ * comma-bearing one. No catalog title contains a comma — checked against
+ * `catalog/registry.ts` rather than restated from the ticket — so no doc authored on
+ * this canvas can produce it.
+ *
+ * Quotes ALWAYS, not only when a name needs it. Quoting on demand would be
+ * quieter for the comma-free case that is effectively all of them, but it puts
+ * two renderings of one list in front of a reader who cannot see which rule
+ * produced either — and this app already answers this exact question one way:
+ * `runs/externalWaits.ts`'s `nameList` quotes every name with the same
+ * typographic pair. A second convention for the same problem is what #909 exists
+ * to prevent, not something to add to.
+ *
+ * The CONTAINER half needs no such treatment, for a different reason worth
+ * writing down rather than leaving to be re-derived: `containerLabels` mints
+ * `` `${c.kind} ${n}` `` from `kind`, which is a closed union rather than free
+ * text, so it cannot carry a separator at all. It is covered here anyway because
+ * both kinds of label flow through the same `label()` lookup.
+ */
+function namedList(names: readonly string[]): string {
+  return names.map((n) => `“${n}”`).join(', ');
+}
+
 export function readableIssue(
   issue: string,
   nodes: Node[],
@@ -390,7 +424,11 @@ export function readableIssue(
   const listed = nodeLocated.replace(/\{([^{}]*)\}/g, (whole, body: string) => {
     const parts = body.split(', ');
     const named = parts.map((id) => label(id) ?? id);
-    return named.some((name, i) => name !== parts[i]) ? `{${named.join(', ')}}` : whole;
+    /* The byte-identity test compares the RAW labels, never the quoted ones.
+       Quoting first would make every token differ from its source and rewrite
+       arbitrary prose that merely happens to be brace-wrapped — the `{role,
+       content}` class this pass's docblock promises to leave alone. */
+    return named.some((name, i) => name !== parts[i]) ? `{${namedList(named)}}` : whole;
   });
   // Pass 4 — the quoted shape, and the ONLY pass that is global and unanchored.
   // That is deliberate but asymmetric with pass 2, so it is written down: a quoted
@@ -511,7 +549,7 @@ export function readableIssue(
     }
     if (names.length === 0) continue;
     const after = span.end + 1;
-    glossed = `${glossed.slice(0, after)} (${names.join(', ')})${glossed.slice(after)}`;
+    glossed = `${glossed.slice(0, after)} (${namedList(names)})${glossed.slice(after)}`;
   }
   return glossed;
 }

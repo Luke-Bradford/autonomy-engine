@@ -1,13 +1,13 @@
 import {
   HONOURED_FIELDS,
   RecurrenceWriteSchema,
+  formatZodIssues,
   recurrenceToCron,
   type Recurrence,
   type RecurrenceFrequency,
   type RecurrenceSchedule,
 } from '@autonomy-studio/shared';
 import {
-  formatZodIssues,
   pad,
   parseWholeNumber,
   resolveBoundsInto,
@@ -199,7 +199,7 @@ export function formToRecurrence(form: RecurrenceFormState): RecurrenceConversio
   if (!parsed.success) {
     return {
       ok: false,
-      reason: formatZodIssues(parsed.error),
+      reason: formatZodIssues(parsed.error.issues),
     };
   }
   return { ok: true, recurrence: parsed.data };
