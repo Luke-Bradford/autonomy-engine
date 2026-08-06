@@ -55,9 +55,8 @@ import {
   withRequired,
 } from './paramRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
-import { declaredConditionsOf } from './ports';
+import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {
-  branchOptionsFor,
   conditionOf,
   decodeConditionValue,
   edgeLabel,
@@ -1253,16 +1252,22 @@ export function EdgePanel({
 }) {
   const current = conditionOf(edge);
   const currentValue = encodeCondition(current);
-  const branches = branchOptionsFor(nodes.find((n) => n.id === edge.from));
+  /* U19 — the source is found ONCE and asked to declare itself ONCE, and both
+     lists below come off that single answer. The panel needs two shapes of it:
+     the branch `<optgroup>` needs `branchConditionsOf`'s tri-state (`null` must
+     hide the group, not show it empty), and `offered` needs the whole set. Asked
+     separately, an `EdgePanel` render scanned `nodes` twice and re-derived the
+     source's branches twice, for one selected edge. */
+  const source = nodes.find((n) => n.id === edge.from);
+  const branchConditions = branchConditionsOf(source);
+  const branches = branchConditions?.map((c) => conditionLabel(c)) ?? null;
 
-  /* U19 — the SAME predicate the source ports are drawn from
-     (`declaredConditionsOf`), not a second list assembled the same way. The
-     `orphaned` disabled option below and the canvas's orphan PORT are one fact
-     asked from two sides; built separately they would eventually disagree about
-     which conditions a node offers. */
-  const offered = declaredConditionsOf(nodes.find((n) => n.id === edge.from)).map((c) =>
-    encodeCondition(c),
-  );
+  /* The SAME predicate the source ports are drawn from (`declaredConditionsOf`),
+     not a second list assembled the same way. The `orphaned` disabled option
+     below and the canvas's orphan PORT are one fact asked from two sides; built
+     separately they would eventually disagree about which conditions a node
+     offers. */
+  const offered = declaredConditionsOf(source, branchConditions).map((c) => encodeCondition(c));
 
   /**
    * Conditions ALREADY taken by another edge between the same two nodes.

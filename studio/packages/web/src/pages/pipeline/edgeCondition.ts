@@ -1,18 +1,11 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
-import {
-  branchConditionsOf,
-  conditionLabel,
-  conditionOf,
-  encodeCondition,
-  TARGET_PORT_ID,
-} from './ports';
+import { conditionLabel, conditionOf, encodeCondition, TARGET_PORT_ID } from './ports';
 import {
   EdgeOnSchema,
   MaxBouncesSchema,
   stableEdgeKey,
   type Edge,
   type EdgeOn,
-  type Node,
 } from '@autonomy-studio/shared';
 
 /**
@@ -178,29 +171,6 @@ export const DEFAULT_MAX_BOUNCES = 10;
  */
 export function isMaxBounces(n: number): boolean {
   return MaxBouncesSchema.safeParse(n).success;
-}
-
-/**
- * The business branch labels the edge's SOURCE declares, or `null` if it
- * declares none.
- *
- * `null` means "this source can never emit a branch" and must HIDE the branch
- * group — distinct from an empty list, which would read as "it branches but
- * offers nothing". `declaredBranchesOf` is the same SSOT `validatePipelineDoc`
- * reads, so every label this offers is one a save accepts, by construction.
- *
- * `source` may legitimately be `undefined`: an edge endpoint can be a CONTAINER
- * id (top-level↔container edges are valid), and a source node can be deleted
- * out from under a selected edge. Degrade to "no branches", never throw.
- */
-export function branchOptionsFor(source: Node | undefined): string[] | null {
-  /* ONE call, and the same one the source PORTS are built from — U19's whole
-     point is that the panel's options and the node's ports are one fact.
-     `branchConditionsOf` carries the tri-state (`null` = "can never emit a
-     branch", which must hide the group rather than show an empty one) precisely
-     so this does not have to ask `declaredBranchesOf` a second time to recover
-     it. */
-  return branchConditionsOf(source)?.map((c) => conditionLabel(c)) ?? null;
 }
 
 /**

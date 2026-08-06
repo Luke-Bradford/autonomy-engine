@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { MaxBouncesSchema, stableEdgeKey, type Edge, type Node } from '@autonomy-studio/shared';
+import { MaxBouncesSchema, stableEdgeKey, type Edge } from '@autonomy-studio/shared';
 import {
-  branchOptionsFor,
   conditionOf,
   decodeConditionValue,
   edgeAriaLabel,
@@ -27,13 +26,6 @@ const branchEdge = (branch: string): Edge => ({
   on: 'branch',
   branch,
 });
-const node = (id: string, type: string, config: Record<string, unknown> = {}): Node => ({
-  id,
-  type,
-  config,
-  position: { x: 0, y: 0 },
-});
-
 describe('edgeLabel', () => {
   it('labels an operational edge by its outcome', () => {
     expect(edgeLabel(opEdge('success'))).toBe('success');
@@ -211,41 +203,6 @@ describe('takenConditions', () => {
         stableEdgeKey(p) === stableEdgeKey(q),
       );
     }
-  });
-});
-
-describe('branchOptionsFor', () => {
-  it('offers an `if`s two arms in a stable order', () => {
-    expect(branchOptionsFor(node('n1', 'if'))).toEqual(['true', 'false']);
-  });
-
-  /**
-   * CONFIG order, not sorted: the list mirrors the author's own `cases` array,
-   * so the picker reads in the same order as the config they just edited.
-   * `default` comes last because it is the implicit fallthrough, not a case.
-   */
-  it('offers a `switch`s configured cases plus the implicit default, in config order', () => {
-    expect(branchOptionsFor(node('n1', 'switch', { cases: ['b', 'a'] }))).toEqual([
-      'b',
-      'a',
-      'default',
-    ]);
-  });
-
-  /**
-   * `undefined` ("this source can never emit a branch") is NOT the empty set
-   * ("it branches, but declares nothing"): the first must hide the branch
-   * group, the second must show it empty. Collapsing them would offer a branch
-   * group on an `http_request`.
-   */
-  it('returns null for a source that is not a branching activity', () => {
-    expect(branchOptionsFor(node('n1', 'http_request'))).toBeNull();
-  });
-
-  /** An edge whose source was deleted, or is a CONTAINER id (a legal edge
-   * endpoint), has no `Node` to ask — degrade, never throw. */
-  it('returns null for an absent source node', () => {
-    expect(branchOptionsFor(undefined)).toBeNull();
   });
 });
 

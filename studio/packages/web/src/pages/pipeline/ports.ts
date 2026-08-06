@@ -229,21 +229,34 @@ export function conditionLabel(c: EdgeCondition): string {
  * can be deleted out from under a selected edge. Degrade to "no branches", never
  * throw — a container declares the operational outcomes and nothing else.
  */
-export function declaredConditionsOf(source: Node | undefined): EdgeCondition[] {
+export function declaredConditionsOf(
+  source: Node | undefined,
+  /**
+   * The source's branches, if the caller has already asked for them.
+   *
+   * A seam for the ONE caller that needs both halves — the property panel shows
+   * a branch `<optgroup>` (which needs the tri-state) and an option list (which
+   * needs the whole set), and without this it would ask the source to declare
+   * itself twice per render. Every other caller omits it and gets the same
+   * single call it always made.
+   */
+  branches: EdgeCondition[] | null = branchConditionsOf(source),
+): EdgeCondition[] {
   const operational: EdgeCondition[] = OPERATIONAL_CONDITIONS.map((on) => ({ on }));
-  return [...operational, ...(branchConditionsOf(source) ?? [])];
+  return [...operational, ...(branches ?? [])];
 }
 
 /**
  * Just the BUSINESS branches, as a TRI-STATE: `null` when the source can never
  * emit one at all, distinct from `[]` ("it branches, and offers nothing").
  *
- * The distinction is the property panel's, not the canvas's — `branchOptionsFor`
- * must HIDE its branch group for a source that cannot branch, and show an empty
- * one for a `switch` with no cases yet, which a plain list cannot express. It
- * lives here anyway, rather than beside that caller, so `declaredBranchesOf` is
- * consulted exactly ONCE per question and the panel's option list and the node's
- * ports are one derivation by construction instead of two that happen to agree.
+ * The distinction is the property panel's, not the canvas's — `EdgePanel` must
+ * HIDE its branch `<optgroup>` for a source that cannot branch, and show an
+ * empty one for a `switch` with no cases yet, which a plain list cannot express.
+ * It lives here anyway, beside the ports rather than beside that caller, so
+ * `declaredBranchesOf` is consulted exactly ONCE per question and the panel's
+ * option list and the node's ports are one derivation by construction instead of
+ * two that happen to agree.
  */
 export function branchConditionsOf(source: Node | undefined): EdgeCondition[] | null {
   if (source === undefined) return null;

@@ -188,10 +188,10 @@ describe('declaredConditionsOf', () => {
 /**
  * The TRI-STATE both surfaces now read, pinned at the one place that decides it.
  *
- * `declaredConditionsOf` (the node's ports) and `branchOptionsFor` (the property
- * panel's option list) are both defined in terms of this, so that
- * `declaredBranchesOf` is consulted once per question and the two cannot come to
- * disagree about what a source offers. What only THIS function can express is
+ * `declaredConditionsOf` (the node's ports) and `EdgePanel`'s option list are
+ * both derived from this, so that `declaredBranchesOf` is consulted once per
+ * question and the two cannot come to disagree about what a source offers. What
+ * only THIS function can express is
  * the difference between `null` — "this source can never emit a branch", which
  * hides the panel's branch group entirely — and a list, which shows it. The
  * canvas flattens `null` to "no branch ports", so the distinction is invisible
