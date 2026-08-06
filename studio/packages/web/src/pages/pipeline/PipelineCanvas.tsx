@@ -1280,15 +1280,24 @@ export function EdgePanel({
   const taken = takenConditions(edges, edge);
 
   /**
-   * A `<select>` whose `value` matches no `<option>` renders the FIRST option
-   * instead — a silent lie about what is persisted. Reachable without leaving
-   * the canvas: `declaredBranchesOf` reads a `switch`'s `config.cases` LIVE, so
-   * editing that config in the node panel can un-declare a branch an existing
-   * edge still uses. (Also reachable via an API/git-imported doc.) The value is
-   * shown as a DISABLED option so the panel states the truth and refuses to
-   * re-select it; `validateCanvas` is already badging the doc as unsavable.
+   * The persisted condition is one this source no longer declares.
+   *
+   * Reachable without leaving the canvas: `declaredBranchesOf` reads a
+   * `switch`'s `config.cases` LIVE, so editing that config in the node panel can
+   * un-declare a branch an existing edge still uses. (Also via an API- or
+   * git-imported doc.)
+   *
+   * As a `<select>` this was a DISABLED option, because a select whose `value`
+   * matches no option silently renders the first one — a lie about what is
+   * persisted. A radio group has no such fallback: nothing is checked, which is
+   * already truthful. So the orphan is now STATED instead, as a sentence naming
+   * the value, and no radio is offered for it — it is a fact about the doc, not
+   * a choice. `validateCanvas` is already badging the doc as unsavable.
    */
   const orphaned = !offered.includes(currentValue);
+  /* Per EDGE, like the radio group's own `name`: two panels on one page must
+     not point their groups at the same note. */
+  const orphanNoteId = `edge-outcome-orphan-${edge.id}`;
 
   return (
     <aside className="property-panel" aria-label="Properties">
@@ -1310,10 +1319,17 @@ export function EdgePanel({
        * shape for "one of these" — arrow keys move within it, and the group is
        * one tab stop.
        */}
-      <fieldset className="edge-outcomes">
+      {/* The orphan note is tied to the GROUP, not left as a loose sibling: with
+          no radio checked, a screen-reader user tabbing in lands on an unchecked
+          `success` and would otherwise get no hint that the edge holds a value
+          this source no longer offers. The old `<select>` announced it for free,
+          because it WAS the control's current value. */}
+      <fieldset className="edge-outcomes" aria-describedby={orphaned ? orphanNoteId : undefined}>
         <legend>Fires on</legend>
         {orphaned && (
-          <p className="edge-outcome-orphan">{edgeLabel(edge)} — not offered by this source</p>
+          <p className="edge-outcome-orphan" id={orphanNoteId}>
+            {edgeLabel(edge)} — not offered by this source
+          </p>
         )}
         {OPERATIONAL_CONDITIONS.map((on) => (
           <ConditionChoice
@@ -1466,7 +1482,11 @@ function ConditionChoice({
   const value = encodeCondition(condition);
   const isTaken = taken.has(value);
   return (
-    <label className={`edge-outcome edge-outcome--${conditionHue(condition)}`}>
+    <label /* The class suffix IS the outcome — the same `${on}` shape
+         `edgeVariantClass` and `SourcePorts` use, and `palette.test.ts`
+         now pins all three to one hue table. */
+      className={`edge-outcome edge-outcome--${condition.on}`}
+    >
       <input
         type="radio"
         /* One group per EDGE, not per panel: the name has to be unique on the
@@ -1486,15 +1506,6 @@ function ConditionChoice({
       {isTaken ? `${label} — already used by another edge` : label}
     </label>
   );
-}
-
-/**
- * Which hue an outcome is drawn in — the SAME five `edge-variant-*` names the
- * canvas paints edges and ports with, so the panel's swatch and the port it
- * names cannot drift apart.
- */
-function conditionHue(condition: EdgeCondition): string {
-  return condition.on;
 }
 
 /**

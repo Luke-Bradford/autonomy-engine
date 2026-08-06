@@ -457,6 +457,27 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * once per gesture and before any move is judged.
    */
   const dragPre = useRef<ConnectPrecheck | null>(null);
+
+  /**
+   * A gesture ENDED — drop its context so the next judgement uses the live graph.
+   *
+   * `dragPre` holding `null` means "no drag in flight, judge against the live
+   * graph", and that is load-bearing rather than tidy. React Flow ALSO offers
+   * click-to-connect — click a source port, then a target (`connectOnClick`
+   * defaults to `true`, `@xyflow/react` 12.11.2 index.mjs:3333). That path runs
+   * through `onClickConnectStart`/`onClickConnectEnd`, NOT through the drag
+   * callbacks, while still consulting this same `isValidConnection`
+   * (index.mjs:1920). A ref left set by the previous drag would judge that click
+   * against a stale graph — and after a REWIRE, against one MISSING AN EDGE, so
+   * a duplicate would be reported valid, drawn as accepted, and then silently
+   * refused by the store's backstop. That is precisely the silent no this
+   * feature exists to remove, so every terminator clears the context.
+   */
+  const endGesture = useCallback(() => {
+    dragPre.current = null;
+    dragRewire.current = null;
+    startingRewire.current = null;
+  }, []);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
   // `setViewport` is the reveal below; it is the only imperative viewport write
@@ -1209,6 +1230,19 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     setAttempted(null);
   }, [rewirePre]);
 
+  /**
+   * Click-to-connect, the OTHER way React Flow starts a connection.
+   *
+   * Wired explicitly rather than left to `endGesture`'s clearing, so the
+   * property does not depend on the drag path having terminated tidily: a click
+   * gesture is never a rewire (the reconnect anchor is drag-only), so its
+   * context is "no rewire, live graph" stated outright.
+   */
+  const onClickConnectStart = useCallback(() => {
+    endGesture();
+    setAttempted(null);
+  }, [endGesture]);
+
   function onConnect(conn: Connection) {
     setAttempted(null);
     // The SAME condition `isValidConnection` judged, read from the same port, so
@@ -1243,6 +1277,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * message at all.
    */
   function onConnectEnd(_event: MouseEvent | TouchEvent, state: FinalConnectionState) {
+    /* Read the gesture's context, then END it — before any early return, so a
+       cancelled or accepted drag leaves nothing behind for the next one. */
+    const rewiring = dragRewire.current;
+    endGesture();
     if (state.isValid !== false) return;
     const origin = state.fromNode?.id;
     const release = state.toNode?.id;
@@ -1256,7 +1294,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     setAttempted({
       ...orientDrawnEnds(origin, release, state.fromHandle?.type),
       condition: conditionFromConnection({ sourceHandle }),
-      rewiring: dragRewire.current,
+      rewiring,
     });
   }
 
@@ -1367,6 +1405,8 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         onPaneClick={() => store.getState().select(null)}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
+        onClickConnectStart={onClickConnectStart}
+        onClickConnectEnd={endGesture}
         onReconnectStart={onReconnectStart}
         onReconnect={onReconnect}
         reconnectRadius={RECONNECT_RADIUS}

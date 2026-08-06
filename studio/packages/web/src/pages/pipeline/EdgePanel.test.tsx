@@ -166,7 +166,7 @@ describe('EdgePanel — branch picker', () => {
  * un-declare a branch an existing edge still uses.
  */
 describe('EdgePanel — a persisted value the source does not offer', () => {
-  it('shows the orphaned value as a DISABLED option rather than lying', () => {
+  it('STATES the orphaned value rather than lying, and offers no radio for it', () => {
     mount(
       { id: 'e1', from: 'n_sw', to: 'n_b', on: 'branch', branch: 'gone' },
       [node('n_sw', 'switch', { cases: ['approve'] })], // 'gone' was removed
@@ -186,6 +186,29 @@ describe('EdgePanel — a persisted value the source does not offer', () => {
     expect(branchLabels()).toBeNull();
     expect(checkedValue()).toBeNull();
     expect(within(outcomeGroup()).getByText(/^true — not offered/)).toBeTruthy();
+  });
+
+  /**
+   * The orphan note has to reach a SCREEN READER, not just the page.
+   *
+   * With no radio checked, someone tabbing into the group lands on an unchecked
+   * `success` — so a loose sibling paragraph is read only in browse mode and the
+   * edge's actual value goes unannounced in focus mode. The old `<select>` got
+   * this for free by BEING the value. `aria-describedby` puts it back.
+   */
+  it('ties the orphan note to the group, so focusing it announces the truth', () => {
+    mount({ id: 'e1', from: 'n_sw', to: 'n_b', on: 'branch', branch: 'gone' }, [
+      node('n_sw', 'switch', { cases: ['approve'] }),
+    ]);
+    const described = outcomeGroup().getAttribute('aria-describedby');
+    expect(described).not.toBeNull();
+    expect(document.getElementById(described!)?.textContent).toMatch(/^gone — not offered/);
+  });
+
+  /** ...and no dangling reference when there is nothing to describe. */
+  it('leaves the group undescribed when the condition IS offered', () => {
+    mount({ id: 'e1', from: 'n_a', to: 'n_b', on: 'success' }, [node('n_a', 'http_request')]);
+    expect(outcomeGroup().getAttribute('aria-describedby')).toBeNull();
   });
 
   /** An edge endpoint may be a CONTAINER id, or a deleted node. Degrade. */
