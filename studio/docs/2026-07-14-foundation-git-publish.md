@@ -147,7 +147,7 @@ reconcile are core. Corrections:
 | G7 | Trigger binding reconcile (concrete version / contentHash; absent → disabled) + scheduler-invariant tests — **SHIPPED 2026-07-24** (built-block below): resolved-space content compare kills the force-disabled-unbound-trigger churn (#668 resolved: `enabled` stays content), preview↔apply parity via `listVersionResourceIds`, scheduler-invariant end-to-end test |
 | G8 | Secret reconcile: connection `secretStatus`/`enabled` **readiness gate** + supply flow |
 | G9 | PR open/observe via git-host API (GitHub first) — else guided manual — **G9a (persisted `working_branch` + feature-branch selection + GUIDED-MANUAL compare URL) SHIPPED 2026-07-24**; **G9b (GitHub REST auto-open + PR-observe via an operator-env token) SHIPPED 2026-07-24** (built-block below). G9 core shipped; conflict/divergence + stored-PAT/multi-remote polish is G10 |
-| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**; **slice 3 (the PROACTIVE descendant guard — advisory `POST /api/workspace/git/divergence`, base = the imported-from commit #662) SHIPPED 2026-07-24**; **slice 4 (operator-env token wired into git HTTPS transport auth — github.com-scoped `http.extraHeader`, redacted; closes the G9b push-auth gap) SHIPPED 2026-07-24**; **slice 5 (a DB-STORED, encrypted-at-rest per-workspace token — `PUT`/`DELETE /api/workspace/git/token`, encrypted via `secrets.ts` under the boot master key, resolved per-request stored▸env, feeds BOTH transport AND REST PR-open) SHIPPED 2026-07-24** (built-block below). REMAINING: non-github hosts, multi-remote, and the token-entry UI (deferred to the UI epic) |
+| G10 | Conflict/divergence UX; multi-remote/auth polish — **slice 1 (advisory `POST /api/workspace/git/drift` uncommitted-status report) SHIPPED 2026-07-24**; **slice 2 (non-fast-forward push rejection classified as 409 `conflict` via `GitPushRejectedError`, not the opaque 502 `git_error`) SHIPPED 2026-07-24**; **slice 3 (the PROACTIVE descendant guard — advisory `POST /api/workspace/git/divergence`, base = the imported-from commit #662) SHIPPED 2026-07-24**; **slice 4 (operator-env token wired into git HTTPS transport auth — github.com-scoped `http.extraHeader`, redacted; closes the G9b push-auth gap) SHIPPED 2026-07-24**; **slice 5 (a DB-STORED, encrypted-at-rest per-workspace token — `PUT`/`DELETE /api/workspace/git/token`, encrypted via `secrets.ts` under the boot master key, resolved per-request stored▸env, feeds BOTH transport AND REST PR-open) SHIPPED 2026-07-24** (built-block below). **The token-entry UI SHIPPED 2026-08-06** (#956, UI epic U18 slice 1 — `Manage → Git`: store, replace and remove a token, write-only, `hasStoredToken` the only read signal). REMAINING: non-github hosts, multi-remote (#692). |
 
 ### G1 built-block (2026-07-23)
 
@@ -843,7 +843,8 @@ the `GitHostClient.token` param, the `KeyedQueue`.
   a concurrent set/clear can't race a network op's token read.
 - **Still github.com-scoped** (inherited from `githubTokenTransportAuth`): a
   stored token is inert on a non-github remote (url-match), same as the env
-  token. Non-github hosts + multi-remote + a token-entry UI remain later work.
+  token. The token-entry UI shipped 2026-08-06 (#956, U18 slice 1). Non-github hosts +
+  multi-remote remain later work (#692).
 
 ## Challenge-hardened CORE v2 (2026-07-14 — read the SHIPPED P1c code; MAJOR reshape)
 

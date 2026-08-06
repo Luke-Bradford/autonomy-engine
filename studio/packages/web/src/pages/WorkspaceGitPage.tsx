@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   formatZodIssues,
   type WorkspaceGitCommitResult,
@@ -18,6 +18,7 @@ import {
   readWorkspaceGitDrift,
   setWorkspaceGitToken,
 } from '../api/workspaceGit';
+import { ApiError, messageOf } from '../api/client';
 import { formatWhen } from './runs/format';
 
 /**
@@ -53,6 +54,37 @@ export function WorkspaceGitPage() {
   const [status, setStatus] = useState<WorkspaceGitStatus | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  /**
+   * ONE act at a time, across the whole page — not a per-section busy flag.
+   *
+   * Every act here returns or invalidates the SAME status object, and the
+   * sections are independent components, so per-section flags let two of them
+   * be in flight at once and the later resolution wins by accident. The case
+   * that made this a lock rather than a nicety: start "Store token", then
+   * confirm Disconnect before the PUT resolves. Disconnect lands first and the
+   * page correctly shows "no repository connected" — then the token PUT's
+   * response arrives and writes a CONNECTED status back, resurrecting a
+   * workspace the server no longer has. That is a manufactured fact (#473)
+   * arriving by a race rather than by a default.
+   *
+   * The ref is what makes the guard real: two clicks in one tick both read the
+   * same stale `busy` state, so the check has to be against a value that is
+   * already updated synchronously.
+   */
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
+  const runExclusive = useCallback(async (act: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await act();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     getWorkspaceGit(controller.signal)
@@ -62,7 +94,7 @@ export function WorkspaceGitPage() {
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
+        setLoadError(messageOf(err));
       });
     return () => controller.abort();
   }, []);
@@ -94,6 +126,8 @@ export function WorkspaceGitPage() {
           status={status}
           onStatus={setStatus}
           onDisconnected={() => setStatus(null)}
+          busy={busy}
+          runExclusive={runExclusive}
         />
       )}
     </section>
@@ -130,7 +164,7 @@ function ConnectForm({ onConnected }: { onConnected: (git: WorkspaceGitStatus) =
     try {
       onConnected(await connectWorkspaceGit(parsed.data));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(messageOf(err));
       setSaving(false);
     }
   }
@@ -189,24 +223,29 @@ function GitStatusPanel({
   status,
   onStatus,
   onDisconnected,
+  busy,
+  runExclusive,
 }: {
   status: WorkspaceGitStatus;
   onStatus: (git: WorkspaceGitStatus) => void;
   onDisconnected: () => void;
+  busy: boolean;
+  runExclusive: (act: () => Promise<void>) => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
-  const onRefresh = useCallback(async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      onStatus(await fetchWorkspaceGit());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setBusy(false);
-  }, [onStatus]);
+  const onRefresh = useCallback(
+    () =>
+      runExclusive(async () => {
+        setError(null);
+        try {
+          onStatus(await fetchWorkspaceGit());
+        } catch (err) {
+          setError(messageOf(err));
+        }
+      }),
+    [onStatus, runExclusive],
+  );
 
   const onDisconnect = useCallback(async () => {
     if (
@@ -215,21 +254,21 @@ function GitStatusPanel({
       )
     )
       return;
-    setError(null);
-    setBusy(true);
-    try {
-      await disconnectWorkspaceGit();
-      onDisconnected();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setBusy(false);
-    }
-  }, [status.repoUrl, onDisconnected]);
+    await runExclusive(async () => {
+      setError(null);
+      try {
+        await disconnectWorkspaceGit();
+        onDisconnected();
+      } catch (err) {
+        setError(messageOf(err));
+      }
+    });
+  }, [status.repoUrl, onDisconnected, runExclusive]);
 
   return (
     <>
       <h3>Connected</h3>
-      <dl className="git-facts">
+      <dl className="run-meta">
         <dt>Repository</dt>
         <dd>{status.repoUrl}</dd>
         <dt>Collaboration branch</dt>
@@ -269,8 +308,8 @@ function GitStatusPanel({
         </button>
       </div>
 
-      <TokenForm status={status} onStatus={onStatus} />
-      <CommitSection status={status} onStatus={onStatus} />
+      <TokenForm status={status} onStatus={onStatus} busy={busy} runExclusive={runExclusive} />
+      <CommitSection status={status} onStatus={onStatus} busy={busy} runExclusive={runExclusive} />
     </>
   );
 }
@@ -285,13 +324,16 @@ function GitStatusPanel({
 function TokenForm({
   status,
   onStatus,
+  busy,
+  runExclusive,
 }: {
   status: WorkspaceGitStatus;
   onStatus: (git: WorkspaceGitStatus) => void;
+  busy: boolean;
+  runExclusive: (act: () => Promise<void>) => Promise<void>;
 }) {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -303,27 +345,27 @@ function TokenForm({
       return;
     }
 
-    setSaving(true);
-    try {
-      onStatus(await setWorkspaceGitToken(parsed.data));
-      setToken('');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setSaving(false);
+    await runExclusive(async () => {
+      try {
+        onStatus(await setWorkspaceGitToken(parsed.data));
+        setToken('');
+      } catch (err) {
+        setError(messageOf(err));
+      }
+    });
   }
 
   async function onClear() {
     if (!window.confirm('Remove the stored token? Pushes will fall back to your git credentials.'))
       return;
-    setError(null);
-    setSaving(true);
-    try {
-      onStatus(await clearWorkspaceGitToken());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setSaving(false);
+    await runExclusive(async () => {
+      setError(null);
+      try {
+        onStatus(await clearWorkspaceGitToken());
+      } catch (err) {
+        setError(messageOf(err));
+      }
+    });
   }
 
   return (
@@ -353,11 +395,11 @@ function TokenForm({
       )}
 
       <div className="form-actions">
-        <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
+        <button type="submit" disabled={busy}>
+          {busy ? 'Saving…' : status.hasStoredToken ? 'Replace token' : 'Store token'}
         </button>
         {status.hasStoredToken && (
-          <button type="button" onClick={() => void onClear()} disabled={saving}>
+          <button type="button" onClick={() => void onClear()} disabled={busy}>
             Remove stored token
           </button>
         )}
@@ -370,15 +412,18 @@ function TokenForm({
 function CommitSection({
   status,
   onStatus,
+  busy,
+  runExclusive,
 }: {
   status: WorkspaceGitStatus;
   onStatus: (git: WorkspaceGitStatus) => void;
+  busy: boolean;
+  runExclusive: (act: () => Promise<void>) => Promise<void>;
 }) {
   const [drift, setDrift] = useState<WorkspaceGitDrift | null>(null);
   const [result, setResult] = useState<WorkspaceGitCommitResult | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   /**
    * Drift and commit both re-observe the remote server-side, which REWRITES the
@@ -396,22 +441,29 @@ function CommitSection({
     }
   }, [onStatus]);
 
-  const onCheck = useCallback(async () => {
-    setError(null);
-    setResult(null);
-    setBusy(true);
-    try {
-      setDrift(await readWorkspaceGitDrift());
-      await syncStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setBusy(false);
-  }, [syncStatus]);
+  const onCheck = useCallback(
+    () =>
+      runExclusive(async () => {
+        setError(null);
+        setResult(null);
+        try {
+          setDrift(await readWorkspaceGitDrift());
+          await syncStatus();
+        } catch (err) {
+          setError(messageOf(err));
+        }
+      }),
+    [syncStatus, runExclusive],
+  );
 
   async function onCommit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    // The notice belongs to the attempt that produced it. Without this, a
+    // commit that succeeds and is then re-attempted unsuccessfully leaves the
+    // old "Committed <sha>…" line on screen NEXT TO the new failure — which
+    // reads as confirmation that the failed attempt was pushed.
+    setResult(null);
 
     const parsed = CommitWorkspaceGitBodySchema.safeParse({ message });
     if (!parsed.success) {
@@ -419,19 +471,19 @@ function CommitSection({
       return;
     }
 
-    setBusy(true);
-    try {
-      const commit = await commitWorkspace(parsed.data);
-      setResult(commit);
-      // The drift on screen described the state BEFORE this commit; leaving it
-      // up would assert changes that are now committed.
-      setDrift(null);
-      if (commit.committed) setMessage('');
-      await syncStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-    setBusy(false);
+    await runExclusive(async () => {
+      try {
+        const commit = await commitWorkspace(parsed.data);
+        setResult(commit);
+        // The drift on screen described the state BEFORE this commit; leaving it
+        // up would assert changes that are now committed.
+        setDrift(null);
+        if (commit.committed) setMessage('');
+        await syncStatus();
+      } catch (err) {
+        setError(describeCommitFailure(err));
+      }
+    });
   }
 
   return (
@@ -542,6 +594,24 @@ function DriftReport({ drift }: { drift: WorkspaceGitDrift }) {
       )}
     </div>
   );
+}
+
+/**
+ * A commit failure, said in terms of what the operator can actually do here.
+ *
+ * The 409 case earns its own branch. The server's message for a non-fast-
+ * forward push (`GitPushRejectedError`) tells the reader to "fetch/import the
+ * latest changes and re-commit" — but `/import` is deferred out of this slice,
+ * so following that instruction is impossible from this page. Passing the
+ * message through unqualified would send the operator looking for a control
+ * that does not exist. Everything else is the server's own client-safe prose.
+ */
+function describeCommitFailure(err: unknown): string {
+  const message = messageOf(err);
+  if (err instanceof ApiError && err.status === 409) {
+    return `${message} Importing the branch is not yet available here — reconcile the two histories with git directly, then commit again.`;
+  }
+  return message;
 }
 
 /** The human line for the derived sync state, carrying the error when there is one. */

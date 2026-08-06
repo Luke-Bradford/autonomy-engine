@@ -7,6 +7,7 @@ import type {
   WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import { WorkspaceGitPage } from './WorkspaceGitPage';
+import { ApiError } from '../api/client';
 import * as api from '../api/workspaceGit';
 
 // Mock the NETWORK only. The body schemas re-exported by the same module stay
@@ -287,6 +288,32 @@ describe('WorkspaceGitPage', () => {
     });
   });
 
+  /**
+   * One act at a time, across the WHOLE page.
+   *
+   * The race this closes: start a token write, then disconnect before it
+   * resolves. Disconnect lands first and the page correctly shows the connect
+   * form — then the token response arrives carrying a CONNECTED status and
+   * writes it back, resurrecting a workspace the server no longer has. Because
+   * the sections are separate components, a per-section busy flag cannot see
+   * the other section's request at all.
+   */
+  it('locks every other act while one is in flight', async () => {
+    await renderConnected({ hasStoredToken: false });
+    // Never resolves: the act stays in flight for the whole assertion.
+    setTokenMock.mockReturnValue(new Promise(() => {}));
+
+    await userEvent.type(screen.getByLabelText('Token'), 'ghp_secret');
+    await userEvent.click(screen.getByRole('button', { name: 'Store token' }));
+
+    // Asserted over EVERY button rather than by name: a busy control relabels
+    // itself ("Refresh" → "Working…"), so naming them would test the labels.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled());
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.length).toBeGreaterThan(3);
+    for (const button of buttons) expect(button).toBeDisabled();
+  });
+
   describe('drift and commit', () => {
     it('says so plainly when nothing is uncommitted', async () => {
       await renderConnected();
@@ -403,6 +430,51 @@ describe('WorkspaceGitPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
 
       await waitFor(() => expect(screen.queryByRole('table')).toBeNull());
+    });
+
+    /**
+     * The notice belongs to the attempt that produced it.
+     *
+     * This has to commit SUCCESSFULLY first: the "rejected push" test below
+     * starts from no notice at all, so its `queryByRole('status')` assertion
+     * passes trivially and cannot see a stale one. The failure mode is a
+     * second attempt failing while the FIRST attempt's "Committed <sha>" line
+     * is still on screen — which reads as confirmation the failed attempt was
+     * pushed.
+     */
+    it('does not leave a previous success on screen when a later commit fails', async () => {
+      await renderConnected();
+      commitMock.mockResolvedValue(commitResult());
+
+      await userEvent.type(screen.getByLabelText('Message'), 'first');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+      expect(await screen.findByRole('status')).toHaveTextContent('Committed fedcba9');
+
+      commitMock.mockRejectedValue(new Error('push rejected: not a fast-forward'));
+      await userEvent.type(screen.getByLabelText('Message'), 'second');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/not a fast-forward/);
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    /**
+     * The server's 409 message says to "fetch/import the latest changes", and
+     * import is deferred out of this slice — so passing it through unqualified
+     * would send the operator hunting for a control that is not on the page.
+     */
+    it('qualifies a push conflict with a remedy this page can actually offer', async () => {
+      await renderConnected();
+      commitMock.mockRejectedValue(
+        new ApiError(409, 'push rejected: the remote has moved — fetch/import and re-commit.'),
+      );
+
+      await userEvent.type(screen.getByLabelText('Message'), 'racy');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/push rejected/);
+      expect(alert).toHaveTextContent(/not yet available here/);
     });
 
     it('surfaces a rejected push instead of reporting success', async () => {
