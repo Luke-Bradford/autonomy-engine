@@ -2118,7 +2118,6 @@ export function validateDoc(
     // returns it whole (`InvalidPipelineDocError`, capped at 100 by count) and the
     // canvas badge renders all of it — and no test pins the pair.
     if (c.kind !== 'loop' && c.maxRounds !== undefined) {
-    if (c.kind !== 'loop' && c.maxRounds !== undefined) {
       errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a ${c.kind}`);
     }
     // #4 A4b (#566 slice 2) — `batchCount` is foreach-only, mirroring the `items`
