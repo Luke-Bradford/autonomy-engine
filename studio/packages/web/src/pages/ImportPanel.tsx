@@ -95,6 +95,11 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         if (elsewhere !== null) {
           // Refused HERE, before the request. `POST /api/import` would have
           // taken it and minted a real resource on another page.
+          //
+          // Guarded like every other write in this function: `await
+          // file.text()` above is a suspension point, so the panel can already
+          // be unmounted by the time we get here.
+          if (!mounted.current) return;
           setForeign({ kind: elsewhere, name: file.name });
           return;
         }
