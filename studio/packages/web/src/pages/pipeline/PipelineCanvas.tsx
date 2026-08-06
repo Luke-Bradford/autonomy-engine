@@ -49,12 +49,7 @@ import {
   unrepresentableFields,
 } from './configForm';
 import { confirmContainerEdit, containerLabels, readableIssue } from './containerRules';
-import {
-  coerceDefaultInput,
-  formatDefaultInput,
-  nameIssues,
-  withRequired,
-} from './paramRules';
+import { coerceDefaultInput, formatDefaultInput, nameIssues, withRequired } from './paramRules';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
 import { branchConditionsOf, conditionLabel, declaredConditionsOf } from './ports';
 import {

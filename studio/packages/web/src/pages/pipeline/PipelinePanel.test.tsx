@@ -187,7 +187,7 @@ describe('PipelinePanel (U16) — params', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('expected a number');
   });
 
-  it('names a stored default the run would reject, in the SERVER\'s words (#843)', () => {
+  it("names a stored default the run would reject, in the SERVER's words (#843)", () => {
     // The row shows the same sentence the doc-level badge does, because both
     // come from `paramDefaultDefect` — so an operator reading "Save is off
     // because of this" can find the field it is about.

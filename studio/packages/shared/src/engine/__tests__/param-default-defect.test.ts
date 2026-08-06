@@ -126,13 +126,15 @@ describe('paramDefaultDefect — the accepted set', () => {
 
 describe('the save gate refuses a default the run would reject (#843)', () => {
   it('reports the defect from `validatePipelineDoc`', () => {
-    expect(validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: 'abc' }]))).toEqual(
-      ["param 'n': expected a finite number"],
-    );
+    expect(
+      validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: 'abc' }])),
+    ).toEqual(["param 'n': expected a finite number"]);
   });
 
   it('accepts a default the run resolves', () => {
-    expect(validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: 5 }]))).toEqual([]);
+    expect(
+      validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: 5 }])),
+    ).toEqual([]);
   });
 
   it('reports every offending param, not just the first', () => {
@@ -151,9 +153,9 @@ describe('the save gate refuses a default the run would reject (#843)', () => {
     // replayed"), and the type defect is the more useful of the two answers for
     // someone who typed it into a `number` field. Two sentences about one field
     // read as two separate problems.
-    expect(validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: Infinity }]))).toEqual(
-      ["param 'n': expected a finite number"],
-    );
+    expect(
+      validatePipelineDoc(doc([{ name: 'n', type: 'number', required: false, default: Infinity }])),
+    ).toEqual(["param 'n': expected a finite number"]);
   });
 
   it('still reports #547 replay safety where the type check cannot see it', () => {
