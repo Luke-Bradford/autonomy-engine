@@ -493,8 +493,14 @@ describe('validateDoc — foreach container (#4 A4)', () => {
    * The two refusals are ONE `kind !== 'loop'` rule, not a stage rule bolted
    * beside a foreach one — so a doc illegal on both counts is refused once per
    * container and worded identically. This is the pin for that: the foreach
-   * message is byte-identical to the dedicated rule it replaced (`${c.kind}`
+   * MESSAGE is byte-identical to the dedicated rule it replaced (`${c.kind}`
    * renders `foreach`), which is what made the consolidation safe to take.
+   *
+   * Message, not array position — a foreach carrying `maxRounds` alongside a
+   * foreach-specific defect reports the two in the other order now, since the
+   * rule moved out of the `kind === 'foreach'` block. Deliberately NOT pinned
+   * here: nothing consumes the array positionally, and a test asserting the
+   * order would be inventing a contract rather than recording one.
    */
   it('words both kinds through the same rule', () => {
     const stray = (kind: 'stage' | 'foreach') =>

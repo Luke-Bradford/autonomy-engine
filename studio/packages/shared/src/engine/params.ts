@@ -2101,9 +2101,23 @@ export function validateDoc(
     // illegal kinds — refused on a foreach, silently accepted on a stage — which
     // is exactly the asymmetry that let the hole sit unnoticed. Stating it the
     // way `items`/`timeout`/`batchCount` state theirs makes a future kind legal
-    // or illegal by the same single predicate. The foreach message is unchanged:
-    // `${c.kind}` renders `not a foreach` there, byte-identical to the rule this
-    // replaced.
+    // or illegal by the same single predicate. `ContainerKind` is closed
+    // (`loop | stage | foreach`), so this is exhaustive today, and a kind added
+    // later fails CLOSED — refused until someone decides otherwise — which is the
+    // direction #859 exists to protect.
+    //
+    // The foreach MESSAGE is unchanged (`${c.kind}` renders `not a foreach`), but
+    // its POSITION in the returned array is not: it is emitted here rather than
+    // inside the `c.kind === 'foreach'` block below, so a foreach carrying both a
+    // stray `maxRounds` AND a foreach-specific defect now reports them in the
+    // other order. Stated rather than glossed, because ~50 lines up the child
+    // existence/disjointness rules keep their interleaving deliberately to hold
+    // the error ARRAY byte-identical (#492). That discipline is not being dropped
+    // here, it does not reach: it was pinned for a rule whose ORDER was the
+    // behaviour under test. Nothing consumes this array positionally — the server
+    // returns it whole (`InvalidPipelineDocError`, capped at 100 by count) and the
+    // canvas badge renders all of it — and no test pins the pair.
+    if (c.kind !== 'loop' && c.maxRounds !== undefined) {
     if (c.kind !== 'loop' && c.maxRounds !== undefined) {
       errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a ${c.kind}`);
     }
