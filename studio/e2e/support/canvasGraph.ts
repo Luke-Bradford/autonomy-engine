@@ -92,6 +92,106 @@ export async function fitAndSettle(page: Page, index = 0): Promise<void> {
   await viewportSettled(page);
 }
 
+/**
+ * U21 — shift-drag a marquee over every node currently on the canvas.
+ *
+ * Raw `page.mouse` for the same reason `dragNodeBy` uses it: this is a gesture,
+ * not a click on an element, and Playwright's actionability checks have nothing
+ * to check. It also makes the spec immune to whatever sits on top of the pane —
+ * which matters here, because the thing this gesture creates (React Flow's
+ * `nodesselection-rect`) is exactly such an overlay.
+ *
+ * `expected` is how many nodes the caller needs the gesture to reach. It is not
+ * an assertion about the result — it decides how long to keep fitting, and
+ * turns "a node was still off screen" into a named failure rather than a wrong
+ * selection count at the caller.
+ */
+export async function marqueeAllNodes(page: Page, expected: number): Promise<void> {
+  /* Fit until everything really is on screen, re-fitting each attempt.
+     ONE `fitAndSettle` is not enough after a node drag: the drag commits to the
+     domain store, which re-renders and can move the viewport again after
+     `viewportSettled` has already reported it steady — so a single fit
+     intermittently leaves the dragged node hanging over the pane edge, where a
+     `Full`-mode marquee cannot see it. Polling makes the wait a condition
+     ("all nodes are on screen") rather than a guess about timing. */
+  await expect
+    .poll(
+      async () => {
+        await fitAndSettle(page, 0);
+        return page.evaluate(() => {
+          const pane = document.querySelector('.react-flow__pane')?.getBoundingClientRect();
+          if (!pane) return -1;
+          return [...document.querySelectorAll('.react-flow__node')].filter((el) => {
+            const n = el.getBoundingClientRect();
+            return (
+              n.x >= pane.x && n.y >= pane.y && n.right <= pane.right && n.bottom <= pane.bottom
+            );
+          }).length;
+        });
+      },
+      { message: 'the view never fitted every node fully on screen' },
+    )
+    .toBeGreaterThanOrEqual(expected);
+
+  const box = await page.evaluate(() => {
+    const pane = document.querySelector('.react-flow__pane')?.getBoundingClientRect();
+    const nodes = [...document.querySelectorAll('.react-flow__node')].map((el) =>
+      el.getBoundingClientRect(),
+    );
+    if (!pane || nodes.length === 0) return null;
+    /* The WHOLE pane, inset by 2px, rather than a box fitted to the nodes.
+       Two browser facts make the fitted version wrong, and both cost a
+       debugging session:
+
+       React Flow starts a box selection from a pointerdown on the pane element
+       ITSELF, so a corner computed from the node rects can begin on the toolbox
+       and the gesture is simply never seen.
+
+       And `selectionMode` is the default `Full`, so a node counts only when the
+       box contains it WHOLE — while a node can sit partly OUTSIDE the pane
+       (`fitView` is not re-run after every drag). A box clamped to the pane then
+       silently omits it, which reads as a selection bug rather than a layout
+       one. Marqueeing the whole pane makes the gesture's reach exactly "what is
+       on screen", and `expected` below turns any node still off-screen into a
+       named failure rather than a wrong count. */
+    const inside = nodes.filter(
+      (n) => n.x >= pane.x && n.y >= pane.y && n.right <= pane.right && n.bottom <= pane.bottom,
+    ).length;
+    const startsOnPane = document
+      .elementFromPoint(pane.x + 2, pane.y + 2)
+      ?.classList.contains('react-flow__pane');
+    return {
+      left: pane.x + 2,
+      top: pane.y + 2,
+      right: pane.right - 2,
+      bottom: pane.bottom - 2,
+      inside,
+      total: nodes.length,
+      startsOnPane: startsOnPane === true,
+    };
+  });
+  if (box === null) throw new Error('no pane or no nodes to marquee');
+  if (!box.startsOnPane) throw new Error('the pane corner is covered — the marquee cannot start');
+  if (box.inside < expected) {
+    throw new Error(
+      `only ${String(box.inside)} of ${String(box.total)} nodes are fully on screen, so a Full-mode marquee cannot select ${String(expected)} — fit the view first`,
+    );
+  }
+
+  await page.keyboard.down('Shift');
+  await page.mouse.move(box.left, box.top);
+  await page.mouse.down();
+  await page.mouse.move(box.right, box.bottom, { steps: 10 });
+  const started = await page.evaluate(
+    () => document.querySelector('.react-flow__selection') !== null,
+  );
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  // Distinguishes "the gesture was never seen" from "it ran and selected the
+  // wrong things" — the two failures look identical at the assertion.
+  if (!started) throw new Error('the marquee never started — React Flow drew no selection rect');
+}
+
 /** Drag a node by its body (never a handle — that starts a CONNECTION). */
 export async function dragNodeBy(page: Page, index: number, dx: number, dy: number): Promise<void> {
   const box = await canvasNodes(page).nth(index).boundingBox();

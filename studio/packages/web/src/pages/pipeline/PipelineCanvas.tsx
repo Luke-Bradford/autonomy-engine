@@ -22,7 +22,12 @@ import {
   type ParamType,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
-import { historyCommandFor, redoDisabledReason, undoDisabledReason } from './undoRedo';
+import {
+  historyCommandFor,
+  isDeleteKeystroke,
+  redoDisabledReason,
+  undoDisabledReason,
+} from './undoRedo';
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
@@ -37,6 +42,8 @@ import {
   buildContainer,
   containersWithNew,
   createCanvasStore,
+  singleSelection,
+  type Selection,
 } from './canvasStore';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { ContainerPanel } from './ContainerPanel';
@@ -214,6 +221,15 @@ export function PipelineCanvas({
    */
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      /* U21 — Backspace/Delete, taken off React Flow (`deleteKeyCode={null}`)
+         so the whole gesture is ONE undo entry. Read on the same document
+         listener and behind the same text-entry guard as the history keys. */
+      if (isDeleteKeystroke(e)) {
+        if (store.getState().selected.length === 0) return;
+        e.preventDefault();
+        store.getState().deleteSelection();
+        return;
+      }
       const command = historyCommandFor(e);
       if (command === null) return;
       const reason = command === 'undo' ? undoReason : redoReason;
@@ -826,12 +842,16 @@ function PropertyPanel({
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
 }) {
-  const selected = useStore(store, (s) => s.selected);
+  const selection = useStore(store, (s) => s.selected);
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
   const params = useStore(store, (s) => s.params);
 
+  // U21 — a marquee selects many, and the editor below edits ONE. `singleSelection`
+  // is the seam: many is its own state with its own panel, not "the first one".
+  if (selection.length > 1) return <MultiSelectionPanel store={store} selection={selection} />;
+  const selected = singleSelection(selection);
   if (!selected) return <PipelinePanel store={store} />;
 
   if (selected.kind === 'edge') {
@@ -877,6 +897,47 @@ function PropertyPanel({
       config={node.config}
       connectionId={node.connectionId}
     />
+  );
+}
+
+/**
+ * U21 — what the panel says when a marquee (or ⌘-click) has selected several
+ * things at once.
+ *
+ * It reports the CONNECTIONS as well as the activities, because React Flow
+ * selects every edge incident to a lassoed node, so a two-node marquee
+ * routinely carries edges the operator did not aim at — and the delete below
+ * removes them. Counting only the nodes would make that a surprise.
+ *
+ * Deleting a connection whose endpoints are both going anyway is not extra
+ * destruction: `deleteNodesAndEdges` cascades those edges regardless.
+ */
+export function MultiSelectionPanel({
+  store,
+  selection,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  selection: Selection[];
+}) {
+  const activities = selection.filter((s) => s.kind === 'node').length;
+  const connections = selection.filter((s) => s.kind === 'edge').length;
+  const parts = [
+    `${activities} ${activities === 1 ? 'activity' : 'activities'}`,
+    ...(connections > 0
+      ? [`${connections} ${connections === 1 ? 'connection' : 'connections'}`]
+      : []),
+  ];
+
+  return (
+    <aside className="property-panel" aria-label="Properties">
+      <h3>{selection.length} selected</h3>
+      <p className="page-hint">
+        {parts.join(', ')}. Editing is one at a time — click a single activity to configure it.
+      </p>
+      <button type="button" onClick={() => store.getState().deleteSelection()}>
+        Delete selection
+      </button>
+    </aside>
   );
 }
 

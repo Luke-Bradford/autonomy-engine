@@ -78,8 +78,16 @@ export function redoDisabledReason({
  * is not.
  */
 export function isTextEntryTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return true;
-  if (target.isContentEditable) return true;
+  /* `Element`, not `HTMLElement` — React Flow's edge wrapper is an SVG `<g>`
+     with a tabindex, so a keystroke aimed at a focused EDGE has an SVGElement
+     target. Under the old `HTMLElement` test that fell to the conservative
+     default and was read as text entry, which made the whole canvas keyboard
+     surface dead whenever an edge had focus (found by U21, when the canvas took
+     over the delete key from React Flow and edge deletion stopped working). The
+     conservative default still stands for a target that is not an element at
+     all — `window`, `document`, or a detached `EventTarget`. */
+  if (!(target instanceof Element)) return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
   const tag = target.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select';
 }
@@ -116,4 +124,30 @@ export function historyCommandFor(e: {
   // left alone rather than folded in.
   if (key === 'y' && !e.shiftKey) return 'redo';
   return null;
+}
+
+/**
+ * U21 — does this keydown ask to delete the canvas selection?
+ *
+ * Lives beside `historyCommandFor` because it is the same concern: a keystroke
+ * read on the DOCUMENT, where the canvas cannot rely on what has focus, made
+ * safe by the same `isTextEntryTarget` guard. The canvas reads it instead of
+ * letting React Flow's `deleteKeyCode` fire, because RF's delete path emits the
+ * edge removals and the node removals as two separate callbacks and so two undo
+ * entries (see `deleteSelection`).
+ *
+ * A MODIFIED Backspace is left alone: ⌘⌫ deletes to the start of a line (and is
+ * history-back in some browsers), ⌥⌫ deletes a word. Claiming them would break
+ * both while adding nothing — the bare key already says it.
+ */
+export function isDeleteKeystroke(e: {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  target: EventTarget | null;
+}): boolean {
+  if (e.metaKey || e.ctrlKey || e.altKey) return false;
+  if (isTextEntryTarget(e.target)) return false;
+  return e.key === 'Backspace' || e.key === 'Delete';
 }

@@ -308,7 +308,27 @@ describe('FlowCanvas container rendering (U6c)', () => {
   it('does not swallow changes for an ACTIVITY that shares a container id', () => {
     const { store, container } = withContainer([{ id: 'n_a', kind: 'stage', children: ['n_b'] }]);
     fireEvent.click(nodeWrapper(container, 'n_a'));
-    expect(store.getState().selected).toEqual({ kind: 'node', id: 'n_a' });
+    expect(store.getState().selected).toEqual([{ kind: 'node', id: 'n_a' }]);
+  });
+
+  /**
+   * U21 — the store's selection SET reaches React Flow whole.
+   *
+   * The half a store-only test would miss: the set is mirrored back out onto
+   * every member's rendered node, which is what a marquee's ring and RF's own
+   * group drag (`getDragItems` collects every node carrying `selected`) both
+   * depend on.
+   */
+  it('paints EVERY member of the selection set, not just one', () => {
+    const { store, container } = withContainer();
+    act(() =>
+      store.getState().setSelection([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]),
+    );
+    expect(nodeWrapper(container, 'n_a').className).toContain('selected');
+    expect(nodeWrapper(container, 'n_b').className).toContain('selected');
   });
 });
 
@@ -788,7 +808,7 @@ describe('FlowCanvas — a domain position write reaches the view (U17)', () => 
     const { store, container } = mounted();
     expect(transformOf(container, 'n_a')).toContain('translate(10px,20px)');
 
-    act(() => store.getState().moveNode('n_a', { x: 300, y: 400 }));
+    act(() => store.getState().moveNodes([{ id: 'n_a', position: { x: 300, y: 400 } }]));
     expect(transformOf(container, 'n_a')).toContain('translate(300px,400px)');
 
     act(() => store.getState().undo());

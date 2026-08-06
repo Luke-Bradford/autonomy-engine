@@ -1395,6 +1395,24 @@ td button + button {
   opacity: 1;
 }
 
+/* U21 — React Flow draws a rect over the bounding box of a multi-selection
+   (`.react-flow__nodesselection-rect`, `pointer-events: all; z-index: 3` in its
+   own stylesheet) as the handle for dragging the group. The whole wrapper it
+   nests in — `.react-flow__nodesselection` — is hidden here, which takes the
+   rect with it, because it swallows every gesture aimed at what is UNDER it:
+   with two nodes marquee'd, the nodes inside the box stop being clickable, and
+   so does the empty pane between them — the same interception class as the
+   container box above, which is why that one carries `pointer-events: none`.
+
+   Group drag survives without it. React Flow's `getDragItems` collects every
+   node carrying `selected`, so dragging any ONE member drags the whole set —
+   the rect is a second way to start that drag, not the only one. Pinned by
+   `e2e/multi-select.spec.ts`, which clicks a node inside a live marquee and
+   then drags the group by a member. */
+.react-flow__nodesselection {
+  display: none;
+}
+
 /* ── U6c container groups ────────────────────────────────────────────────────
  *
  * The box a container's children sit in. It fills its React Flow node, whose

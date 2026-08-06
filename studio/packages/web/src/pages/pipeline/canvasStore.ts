@@ -58,28 +58,85 @@ export function sameSelection(a: Selection | null, b: Selection | null): boolean
 }
 
 /**
- * #737 — the next single selection after React Flow reports that `target`
+ * Do two selections hold the same MEMBERS? Order-insensitive, because order
+ * carries no meaning — React Flow reports a marquee's members in its own
+ * internal order, and a reordered report of the same set must not count as a
+ * change (see `setSelection`, which guards the write with this).
+ */
+export function sameSelectionSet(a: Selection[], b: Selection[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((x) => b.some((y) => sameSelection(x, y)));
+}
+
+/**
+ * The ONE selected element, or `null` when zero or many are.
+ *
+ * "Many" is deliberately null rather than the first member: the property panel
+ * edits ONE subject, and picking a winner out of a marquee would silently point
+ * the editor at an arbitrary node. Two selected is its own state, and the panel
+ * says so (U21).
+ */
+export function singleSelection(selected: Selection[]): Selection | null {
+  return selected.length === 1 ? selected[0]! : null;
+}
+
+/**
+ * #737/U21 — the next selection SET after React Flow reports that `target`
  * became (or stopped being) selected.
  *
  * The canvas mirrors RF's selection into the store one `select` CHANGE at a
- * time, so this has to be decided per element, without the full selected set.
- *
- * The DESELECT guard is the load-bearing half. RF emits a select and the
- * matching deselects in one batch and across BOTH element kinds:
+ * time, so this is decided per element and folded across the batch. RF emits a
+ * select and the matching deselects together and across BOTH element kinds:
  * `addSelectedNodes` calls `triggerNodeChanges` and then
  * `triggerEdgeChanges(getSelectionChanges(edgeLookup, …))`, so selecting node A
- * arrives as `{A, selected:true}` immediately followed by a `selected:false` for
- * every other node AND every edge. Clearing on any deselect would therefore undo
- * the selection microseconds after making it — the panel would flicker open and
- * shut on every click. Only the CURRENT selection's own deselect clears.
+ * arrives as `{A, selected:true}` followed by a `selected:false` for every other
+ * node AND every edge.
+ *
+ * #737 needed a DESELECT guard for that, because a single slot could not tell
+ * "clear me" from "clear one of the others" — clearing on any deselect undid the
+ * selection microseconds after making it. A set does not need the guard: a
+ * deselect removes exactly its own member and the rest stand. That is also what
+ * makes a marquee work, where the batch is N selects with no deselect at all.
+ *
+ * Returns the CURRENT array by reference when nothing changed. That identity is
+ * load-bearing, not an optimisation — see `setSelection`.
  */
 export function nextSelection(
-  current: Selection | null,
+  current: Selection[],
   target: Selection,
   selected: boolean,
-): Selection | null {
-  if (selected) return target;
-  return sameSelection(current, target) ? null : current;
+): Selection[] {
+  if (!selected) {
+    const rest = current.filter((s) => !sameSelection(s, target));
+    return rest.length === current.length ? current : rest;
+  }
+  if (current.some((s) => sameSelection(s, target))) return current;
+  return [...current, target];
+}
+
+/**
+ * Enforce the one structural rule of a selection SET: a `container` is
+ * EXCLUSIVE — it never shares the set with a node or an edge.
+ *
+ * A container is not a React Flow selection at all (see the `Selection`
+ * docblock above), so a mixed set would carry a member that group-move cannot
+ * move, that RF can never deselect, and that the delete path has to
+ * special-case. Non-containers WIN, because the only way to reach a mixed set
+ * is to select a node while a container was selected — RF's gesture is the new
+ * intent, and the container was merely still standing.
+ *
+ * Lives HERE, applied by `setSelection`, rather than in `nextSelection`: the
+ * setter owns the state, so the invariant holds for EVERY writer instead of
+ * only for the one caller that remembered it. `nextSelection` folds React Flow
+ * changes, and RF never reports a container (the change seam filters container
+ * ids out before it), so it has no business deciding this.
+ */
+export function containerExclusive(next: Selection[]): Selection[] {
+  const others = next.filter((s) => s.kind !== 'container');
+  if (others.length === next.length) return next;
+  if (others.length === 0) return next.slice(0, 1);
+  return others;
 }
 
 /**
@@ -416,15 +473,13 @@ function inRange(index: number, length: number): boolean {
  * unasked-for effect.
  */
 function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasState> {
-  const sel = s.selected;
-  const survives =
-    sel === null
-      ? false
-      : sel.kind === 'node'
-        ? snap.nodes.some((n) => n.id === sel.id)
-        : sel.kind === 'edge'
-          ? snap.edges.some((e) => e.id === sel.id)
-          : snap.containers.some((c) => c.id === sel.id);
+  const survives = (sel: Selection): boolean =>
+    sel.kind === 'node'
+      ? snap.nodes.some((n) => n.id === sel.id)
+      : sel.kind === 'edge'
+        ? snap.edges.some((e) => e.id === sel.id)
+        : snap.containers.some((c) => c.id === sel.id);
+  const kept = s.selected.filter(survives);
   return {
     nodes: snap.nodes,
     edges: snap.edges,
@@ -432,7 +487,10 @@ function restoreFrom(snap: CanvasDocSnapshot, s: CanvasState): Partial<CanvasSta
     params: snap.params,
     outputs: snap.outputs,
     dirty: snap.dirty || snap.loadedId !== (s.loaded?.id ?? null),
-    selected: survives ? sel : null,
+    // Pruned member-wise: undoing an add removes one node of a marquee'd set and
+    // leaves the others genuinely selected, so dropping the whole set would be a
+    // second, unasked-for effect on top of the one edit being undone.
+    selected: kept.length === s.selected.length ? s.selected : kept,
   };
 }
 
@@ -475,7 +533,14 @@ export interface CanvasState {
   params: Param[];
   /** The pipeline's declared output contract — WORKING state as of U16. */
   outputs: Output[];
-  selected: Selection | null;
+  /**
+   * U21 — what is selected, as a SET. Empty is "nothing selected".
+   *
+   * An array rather than a `Set<string>` keyed `kind:id`: `Selection` is the
+   * type every reader already speaks, and a string key would mint a second
+   * encoding of a fact that already has one.
+   */
+  selected: Selection[];
   /** True once the working graph diverges from `loaded`; reset on load/save. */
   dirty: boolean;
   /**
@@ -544,8 +609,45 @@ export interface CanvasState {
    * slot.
    */
   duplicateNode(id: string): void;
-  moveNode(id: string, position: Position): void;
+  /**
+   * U21 — move nodes, in ONE undo entry.
+   *
+   * Plural with no singular companion, because React Flow reports a drag as one
+   * BATCH of `position` changes whether it moved one node or five, and the
+   * batch is the gesture: recording an entry per node would make undo restore a
+   * group half-moved, a state the operator never authored. Ids naming no
+   * current node are skipped, and a batch in which nothing actually moved
+   * records nothing — a drag that lands back where it started is not an edit,
+   * and a no-op that consumes an undo slot is a dead undo press.
+   */
+  moveNodes(moves: { id: string; position: Position }[]): void;
   deleteNode(id: string): void;
+  /**
+   * U21 — delete everything selected (nodes and edges) in ONE undo entry.
+   *
+   * The canvas OWNS this rather than leaving it to React Flow's `deleteKeyCode`,
+   * because RF's `deleteElements` fires the edge removals and the node removals
+   * as two separate callbacks. Through the change seam that is two `edit()`
+   * calls and so two undo entries — one press would restore a deleted node and
+   * leave its cascaded edge gone. That split predates multi-select; a group
+   * delete would have multiplied it.
+   *
+   * A selected CONTAINER is never deleted here. Removing one is a structure
+   * write that also destroys its config, so it keeps the confirm-gated
+   * affordance (#748) as its only path.
+   */
+  deleteSelection(): void;
+  /**
+   * The SINGLE cascade: remove these nodes and these edges, plus every edge
+   * incident to a removed node, plus their container membership, plus the
+   * selection members that no longer name anything — in one undo entry.
+   *
+   * `deleteNode` and `deleteSelection` both funnel here rather than each
+   * cascading for itself, for the reason `undo()`'s docblock gives for taking a
+   * snapshot instead of an inverse command: a second place the cascade rules are
+   * written is the first place they can come to disagree.
+   */
+  deleteNodesAndEdges(nodeIds: string[], edgeIds: string[]): void;
   /**
    * Remove a container, cascading the edges incident to it — and KEEPING its
    * children, which are un-grouped rather than deleted (#748).
@@ -676,7 +778,16 @@ export interface CanvasState {
   addOutput(): void;
   updateOutput(index: number, next: Output): void;
   removeOutput(index: number): void;
+  /** Select exactly one element, or nothing. Sugar over `setSelection`. */
   select(sel: Selection | null): void;
+  /**
+   * U21 — replace the whole selection set (what the React Flow seam folds to).
+   *
+   * The SINGLE writer of `selected`, and therefore where the set's one
+   * structural rule is enforced: `containerExclusive` normalises the argument,
+   * so no caller can install a container alongside a node.
+   */
+  setSelection(next: Selection[]): void;
   /**
    * U17 — step back one edit. A no-op when there is nothing to undo.
    *
@@ -759,7 +870,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       containers: [],
       params: [],
       outputs: [],
-      selected: null,
+      selected: [],
       dirty: false,
       addCount: 0,
       past: [],
@@ -854,7 +965,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           // it could choke on.
           params: v ? v.params.map((p) => structuredClone(p)) : [],
           outputs: v ? v.outputs.map((o) => ({ ...o })) : [],
-          selected: null,
+          selected: [],
           dirty: false,
           addCount: 0,
           past: [],
@@ -959,39 +1070,73 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             edges,
             // The copy, not the source, is what the operator is about to edit —
             // duplicating is how you say "another one of these, but different".
-            selected: { kind: 'node', id: copyId },
+            selected: [{ kind: 'node', id: copyId }],
             addCount: s.addCount + 1,
           };
         });
       },
 
-      moveNode(id, position) {
-        const current = get().nodes.find((n) => n.id === id);
-        if (current === undefined) return;
+      moveNodes(moves) {
+        const nodes = get().nodes;
         // A drag that lands back where it started is not an edit — `setNodeContainer`'s
         // rule, for its reason, plus one U17 adds: a no-op that records history is a
         // dead undo press, and a drag returning to its own origin is the easiest one
-        // to perform by accident.
-        if (current.position.x === position.x && current.position.y === position.y) return;
+        // to perform by accident. At set level the same rule reads: record nothing
+        // unless at least one member genuinely moved.
+        const real = moves.filter(({ id, position }) => {
+          const current = nodes.find((n) => n.id === id);
+          return (
+            current !== undefined &&
+            (current.position.x !== position.x || current.position.y !== position.y)
+          );
+        });
+        if (real.length === 0) return;
+        const byId = new Map(real.map((m) => [m.id, m.position]));
         edit((s) => ({
-          nodes: s.nodes.map((n) => (n.id === id ? { ...n, position } : n)),
+          nodes: s.nodes.map((n) => {
+            const position = byId.get(n.id);
+            return position === undefined ? n : { ...n, position };
+          }),
         }));
       },
 
       deleteNode(id) {
-        if (!get().nodes.some((n) => n.id === id)) return;
+        get().deleteNodesAndEdges([id], []);
+      },
+
+      deleteSelection() {
+        const selected = get().selected;
+        // Containers are filtered out, not refused: a container is EXCLUSIVE in
+        // the set, so this is the whole selection being one, and the press means
+        // "delete the box" — which only the confirm-gated affordance does.
+        get().deleteNodesAndEdges(
+          selected.filter((s) => s.kind === 'node').map((s) => s.id),
+          selected.filter((s) => s.kind === 'edge').map((s) => s.id),
+        );
+      },
+
+      deleteNodesAndEdges(nodeIds, edgeIds) {
+        const live = get();
+        const doomedNodes = new Set(nodeIds.filter((id) => live.nodes.some((n) => n.id === id)));
+        const doomedEdges = new Set(edgeIds.filter((id) => live.edges.some((e) => e.id === id)));
+        if (doomedNodes.size === 0 && doomedEdges.size === 0) return;
         edit((s) => {
-          const removedEdgeIds = new Set(
-            s.edges.filter((e) => e.from === id || e.to === id).map((e) => e.id),
+          const removedEdgeIds = new Set([
+            ...doomedEdges,
+            ...s.edges
+              .filter((e) => doomedNodes.has(e.from) || doomedNodes.has(e.to))
+              .map((e) => e.id),
+          ]);
+          const selected = s.selected.filter((sel) =>
+            sel.kind === 'node'
+              ? !doomedNodes.has(sel.id)
+              : sel.kind === 'edge'
+                ? !removedEdgeIds.has(sel.id)
+                : true,
           );
-          const selected =
-            sameSelection(s.selected, { kind: 'node', id }) ||
-            (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id))
-              ? null
-              : s.selected;
           return {
-            nodes: s.nodes.filter((n) => n.id !== id),
-            edges: s.edges.filter((e) => e.from !== id && e.to !== id),
+            nodes: s.nodes.filter((n) => !doomedNodes.has(n.id)),
+            edges: s.edges.filter((e) => !removedEdgeIds.has(e.id)),
             // #746 — container membership cascades exactly like the incident
             // edges above. A container listing a node that no longer exists is a
             // doc `validatePipelineDoc` refuses, so leaving the id behind made the
@@ -1014,7 +1159,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             // the box goes) rather than the only thing the canvas could do. The
             // fix was the affordance, not a better default here — this default is
             // unchanged.
-            containers: pruneContainerChild(s.containers, id),
+            //
+            // Pruned once per doomed node. `pruneContainerChild` is a pure
+            // `Container[] -> Container[]`, so folding it is the batch form —
+            // there is no second rule to write down.
+            containers: [...doomedNodes].reduce(pruneContainerChild, s.containers),
             selected,
           };
         });
@@ -1057,11 +1206,11 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             // and — since U23 — the deleted CONTAINER itself. RF drives neither
             // clear (it never sees a container at all, and the edge is gone
             // before it could emit a deselect), so both are this action's job.
-            selected:
-              (s.selected?.kind === 'edge' && removedEdgeIds.has(s.selected.id)) ||
-              (s.selected?.kind === 'container' && s.selected.id === id)
-                ? null
-                : s.selected,
+            selected: s.selected.filter(
+              (sel) =>
+                !(sel.kind === 'edge' && removedEdgeIds.has(sel.id)) &&
+                !(sel.kind === 'container' && sel.id === id),
+            ),
           };
         });
       },
@@ -1189,11 +1338,7 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       deleteEdge(id) {
-        if (!get().edges.some((e) => e.id === id)) return;
-        edit((s) => ({
-          edges: s.edges.filter((e) => e.id !== id),
-          selected: sameSelection(s.selected, { kind: 'edge', id }) ? null : s.selected,
-        }));
+        get().deleteNodesAndEdges([], [id]);
       },
 
       /**
@@ -1325,8 +1470,13 @@ export function createCanvasStore(): StoreApi<CanvasState> {
        * doc no longer contains).
        */
       select(sel) {
-        if (sameSelection(get().selected, sel)) return;
-        set({ selected: sel });
+        get().setSelection(sel === null ? [] : [sel]);
+      },
+
+      setSelection(next) {
+        const normalised = containerExclusive(next);
+        if (sameSelectionSet(get().selected, normalised)) return;
+        set({ selected: normalised });
       },
 
       undo() {
