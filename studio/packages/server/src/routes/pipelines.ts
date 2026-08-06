@@ -443,11 +443,15 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
    * `owner_id` — defense in depth, never trusting that every run under the
    * pipeline shares its owner.
    *
-   * NOTE (scope): this is the API/projection half of "→ Monitor". #866 shipped
-   * the first UI reader of cost — PER NODE, on the run monitor's drill-in, folded
-   * client-side from the run's event stream rather than from this route. The
-   * per-run and per-pipeline ROLLUP surfaces this route serves are still
-   * unrendered, and remain U27's (#439).
+   * NOTE (scope): this is the API/projection half of "→ Monitor", and THIS ROUTE
+   * still has no web caller. The per-RUN surfaces have since landed and neither
+   * reads it: #866 renders per-NODE cost on the drill-in and #930 the whole run's,
+   * both folded client-side from the event stream; #931 puts a cost column on the
+   * run LIST, from `aggregateRunCosts` — this aggregation's per-run twin, sharing
+   * its predicates and its one fail-closed derivation site, but grouped by run.
+   * What remains unrendered is the PIPELINE-level rollup this route actually
+   * serves, and it stays U27's (#439/#931): the route works, so that half is pure
+   * front-end consumption, deferred on WHERE it belongs rather than on how.
    */
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/cost', async (request) => {
     const pipeline = requireOwned(
