@@ -1,6 +1,6 @@
 import {
-  formatZodIssues,
   WindowConfigWriteSchema,
+  formatZodIssues,
   type WindowConfig,
   type WindowFrequency,
 } from '@autonomy-studio/shared';

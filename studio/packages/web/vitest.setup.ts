@@ -47,7 +47,7 @@ if (!('DOMMatrixReadOnly' in globalThis)) {
 
 // Third gap of the same kind: jsdom ships no `Document.elementFromPoint`, and
 // React Flow's `isValidHandle` calls it to find the handle under the pointer
-// (`@xyflow/system` index.js:2557). Without it CLICK-to-connect throws before
+// (`@xyflow/system` index.js:2569). Without it CLICK-to-connect throws before
 // the connection is ever judged, which is why that gesture had no unit coverage
 // at all (#941) — and that absence is much of why its missing refusal
 // explanation went unnoticed.

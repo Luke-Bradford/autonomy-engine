@@ -232,7 +232,7 @@ export function connectNodes(
  * from this file is how the missing refusal explanation stayed invisible.
  *
  * `mouse.click` moves then presses at a single point, so the drag threshold
- * (`@xyflow/system` index.js:2461-2467) is never crossed and the pure click path
+ * (`@xyflow/system` index.js:2471) is never crossed and the pure click path
  * runs. There is deliberately no `inspect` hook: unlike a drag there is no
  * moment with a button down, so RF's mid-gesture `connectingto` state — the
  * thing `connectRefs`' hook exists to read — never exists here.

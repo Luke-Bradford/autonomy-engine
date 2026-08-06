@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import {
-  formatZodIssues,
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
+  formatZodIssues,
   type Container,
   type ContainerConfigField,
   type Edge,

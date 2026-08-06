@@ -375,7 +375,7 @@ describe('readableIssue', () => {
    * and both list sites did it, which is why the fix had to be one convention
    * applied to both rather than a patch at the site that raised it.
    *
-   * Not reachable from this canvas: all 22 catalog titles are comma-free. That
+   * Not reachable from this canvas: no catalog title contains a comma. That
    * is why the fixture has to import a type nothing registers.
    */
   const COMMA: Node = {

@@ -4,7 +4,7 @@ import type { z } from 'zod';
  * Render a Zod failure as one operator-facing line (#856).
  *
  * `issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')` had been
- * written NINE times across `packages/web` and `packages/shared` — and the
+ * written EIGHT times across `packages/web` and `packages/shared` — and the
  * copies had already drifted into three different answers for the same case, an
  * issue whose `path` is EMPTY:
  *

@@ -463,10 +463,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    *
    * This is the seam that gives CLICK-to-connect a refusal explanation (#941).
    * React Flow hands `onClickConnectEnd` a `structuredClone` of its store's
-   * `connection` state (`@xyflow/react` 12.11.2 index.mjs:1938-1942), and on the
+   * `connection` state (`@xyflow/react` 12.11.2 index.mjs:1940-1943), and on the
    * click path that state is still `initialConnection` — every field `null`
    * (`@xyflow/system` 0.0.79 index.js:77-89), because `updateConnection` is wired
-   * only into the DRAG path (index.mjs:2863-2894). So the endpoints are NOT
+   * only into the DRAG path (index.mjs:1893). So the endpoints are NOT
    * recoverable from the argument, and the ticket's premise that they are is
    * wrong.
    *
@@ -1337,7 +1337,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    *    exactly these too, and for the same stated reason: the obstacle is the
    *    gesture, not a rule about the graph.
    *  - an ACCEPTED click records `null`, and RF has already called `onConnect`
-   *    (via `onConnectExtended`, index.mjs:1937) BEFORE this fires, so the edge
+   *    (via `onConnectExtended`, index.mjs:1938) BEFORE this fires, so the edge
    *    is authored and there is nothing to explain.
    *
    * `rewiring: null` is a fact, not a default: the reconnect anchor is

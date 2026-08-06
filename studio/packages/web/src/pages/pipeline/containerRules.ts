@@ -330,7 +330,8 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * `` `${activityLabel(node)} ${n}` ``, and `activityLabel` falls back to the RAW
  * TYPE for a type the catalog does not know. `NodeSchema.type` is an
  * unconstrained `z.string().min(1)`, so an IMPORTED doc can carry a
- * comma-bearing one. All 22 catalog titles are comma-free, so no doc authored on
+ * comma-bearing one. No catalog title contains a comma — checked against
+ * `catalog/registry.ts` rather than restated from the ticket — so no doc authored on
  * this canvas can produce it.
  *
  * Quotes ALWAYS, not only when a name needs it. Quoting on demand would be

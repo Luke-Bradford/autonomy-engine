@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
-  formatZodIssues,
   ContainerKindSchema,
   OutputTypeSchema,
   ParamTypeSchema,
   availableRefs,
+  formatZodIssues,
   getActivity,
   isStructuralCallActivity,
   type RefSuggestion,
