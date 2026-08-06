@@ -33,10 +33,11 @@ describe('SecondaryPane', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
 
     const links = within(pane()).getAllByRole('link');
-    expect(links.map((a) => a.textContent)).toEqual(['Connections', 'Triggers']);
+    expect(links.map((a) => a.textContent)).toEqual(['Connections', 'Triggers', 'Git']);
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/manage/connections',
       '/manage/triggers',
+      '/manage/git',
     ]);
   });
 
@@ -62,7 +63,7 @@ describe('SecondaryPane', () => {
   it('marks the current section, and only the current section', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/triggers');
     const links = within(pane()).getAllByRole('link');
-    expect(links.map((a) => a.getAttribute('aria-current'))).toEqual([null, 'page']);
+    expect(links.map((a) => a.getAttribute('aria-current'))).toEqual([null, 'page', null]);
   });
 
   /** A deeper route inside a section keeps that section lit. */

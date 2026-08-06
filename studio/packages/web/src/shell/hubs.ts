@@ -123,6 +123,7 @@ export const HUBS: readonly Hub[] = [
     sections: [
       { label: 'Connections', path: '/manage/connections' },
       { label: 'Triggers', path: '/manage/triggers' },
+      { label: 'Git', path: '/manage/git' },
     ],
     Icon: WrenchRegular,
     IconActive: WrenchFilled,

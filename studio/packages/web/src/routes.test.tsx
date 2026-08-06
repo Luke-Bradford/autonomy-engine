@@ -12,6 +12,15 @@ import { PANE_DEFAULT_WIDTH, uiStore } from './stores/uiStore';
 // the route tree (the only thing under test here) resolves without real I/O.
 // The run row is built INSIDE the factory: `vi.mock` is hoisted above every
 // top-level binding, so a shared const would be in its temporal dead zone here.
+// The Git page loads its connection on mount. Unmocked, `getWorkspaceGit`
+// would reach a real `fetch` in jsdom — and the "every hub section renders"
+// walk below mounts it for real, so this is load-bearing, not decoration.
+// `null` is the honest default here: no repo connected.
+vi.mock('./api/workspaceGit', async (importActual) => ({
+  ...(await importActual<typeof import('./api/workspaceGit')>()),
+  getWorkspaceGit: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('./api/runs', async (importActual) => ({
   ...(await importActual<typeof import('./api/runs')>()),
   listRuns: vi.fn().mockResolvedValue([]),
@@ -170,6 +179,7 @@ describe('route tree', () => {
     ['/monitor/runs', 'Runs'],
     ['/manage/connections', 'Connections'],
     ['/manage/triggers', 'Triggers'],
+    ['/manage/git', 'Git'],
   ])('renders %s', async (path, heading) => {
     renderAt(path);
     expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
@@ -535,6 +545,7 @@ describe('shell chrome over the real route tree', () => {
     ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
     ['/manage/connections', ['Manage', 'Connections']],
     ['/manage/triggers', ['Manage', 'Triggers']],
+    ['/manage/git', ['Manage', 'Git']],
   ])('breadcrumbs %s as %j', async (path, expected) => {
     renderAt(path);
     await waitFor(() =>
@@ -564,7 +575,7 @@ describe('shell chrome over the real route tree', () => {
       within(pane)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Connections', 'Triggers']);
+    ).toEqual(['Connections', 'Triggers', 'Git']);
     expect(screen.getByRole('separator')).toHaveAttribute('aria-controls', pane.id);
   });
 
