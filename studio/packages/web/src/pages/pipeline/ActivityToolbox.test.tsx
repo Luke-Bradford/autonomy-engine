@@ -1,14 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  ACTIVITY_CATEGORY_LABELS,
-  catalog,
-} from '@autonomy-studio/shared';
+import { ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { ActivityToolbox } from './ActivityToolbox';
 import { ACTIVITY_DND_MIME } from './activityDnd';
 import { createCanvasStore } from './canvasStore';
-
 
 function renderToolbox() {
   const store = createCanvasStore();

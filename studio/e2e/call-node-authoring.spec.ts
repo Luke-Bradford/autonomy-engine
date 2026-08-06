@@ -68,7 +68,9 @@ test.describe('#425 — call-node authoring', () => {
     // property of the target, not of the node — and the panel says so rather
     // than offering an empty form or a raw JSON box.
     await expect(panel(page).getByLabel('query')).toHaveCount(0);
-    await expect(panel(page).getByText('Choose a version to see the parameters it declares.')).toBeVisible();
+    await expect(
+      panel(page).getByText('Choose a version to see the parameters it declares.'),
+    ).toBeVisible();
 
     await panel(page).getByRole('combobox', { name: 'Pipeline' }).selectOption({ label: CHILD });
     await panel(page).getByRole('combobox', { name: 'Version' }).selectOption({ label: 'v1' });

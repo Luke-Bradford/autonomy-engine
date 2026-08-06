@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Param, PipelineVersion } from '@autonomy-studio/shared';
-import { CallPanel, buildParams, parseJsonParams, seedCall, type CallTarget } from './CallPanel';
+import { CallPanel } from './CallPanel';
+import { buildParams, parseJsonParams, seedCall, type CallTarget } from './callRules';
 import { createCanvasStore } from './canvasStore';
 
 /**
@@ -21,7 +22,13 @@ const CHILD_PARAMS: Param[] = [
 
 const TARGETS: CallTarget[] = [
   { pipelineId: 'p_a', pipelineName: 'Alpha', versionId: 'pv_a1', version: 1, params: [] },
-  { pipelineId: 'p_a', pipelineName: 'Alpha', versionId: 'pv_a2', version: 2, params: CHILD_PARAMS },
+  {
+    pipelineId: 'p_a',
+    pipelineName: 'Alpha',
+    versionId: 'pv_a2',
+    version: 2,
+    params: CHILD_PARAMS,
+  },
   { pipelineId: 'p_b', pipelineName: 'Beta', versionId: 'pv_b1', version: 1, params: [] },
 ];
 

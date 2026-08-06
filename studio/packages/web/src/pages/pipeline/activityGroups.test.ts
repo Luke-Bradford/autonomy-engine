@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ACTIVITY_CATEGORIES,
-  ACTIVITY_CATEGORY_LABELS,
-  catalog,
-} from '@autonomy-studio/shared';
+import { ACTIVITY_CATEGORIES, ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { toolboxGroups } from './activityGroups';
 
 /** Every activity the toolbox is allowed to offer. */
