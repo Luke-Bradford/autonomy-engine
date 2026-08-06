@@ -92,6 +92,38 @@ export async function fitAndSettle(page: Page, index = 0): Promise<void> {
   await viewportSettled(page);
 }
 
+/**
+ * U21 — shift-drag a marquee over every node currently on the canvas.
+ *
+ * Raw `page.mouse` for the same reason `dragNodeBy` uses it: this is a gesture,
+ * not a click on an element, and Playwright's actionability checks have nothing
+ * to check. It also makes the spec immune to whatever sits on top of the pane —
+ * which matters here, because the thing this gesture creates (React Flow's
+ * `nodesselection-rect`) is exactly such an overlay.
+ *
+ * The box is computed from the nodes' own bounding boxes with a margin, rather
+ * than from fixed coordinates, so it keeps working under whatever zoom
+ * `fitView` settled on. `selectionMode` is React Flow's default `Full`, so a
+ * node counts only when the box contains it WHOLE.
+ */
+export async function marqueeAllNodes(page: Page, margin = 40): Promise<void> {
+  const boxes = await canvasNodes(page).evaluateAll((els) =>
+    els.map((el) => el.getBoundingClientRect()).map((r) => ({ x: r.x, y: r.y, w: r.width, h: r.height })),
+  );
+  if (boxes.length === 0) throw new Error('no nodes to marquee');
+  const left = Math.min(...boxes.map((b) => b.x)) - margin;
+  const top = Math.min(...boxes.map((b) => b.y)) - margin;
+  const right = Math.max(...boxes.map((b) => b.x + b.w)) + margin;
+  const bottom = Math.max(...boxes.map((b) => b.y + b.h)) + margin;
+
+  await page.keyboard.down('Shift');
+  await page.mouse.move(left, top);
+  await page.mouse.down();
+  await page.mouse.move(right, bottom, { steps: 10 });
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+}
+
 /** Drag a node by its body (never a handle — that starts a CONNECTION). */
 export async function dragNodeBy(page: Page, index: number, dx: number, dy: number): Promise<void> {
   const box = await canvasNodes(page).nth(index).boundingBox();
