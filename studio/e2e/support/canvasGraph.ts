@@ -469,10 +469,7 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * single-edge condition picker `selectEdge` waits for is precisely what does
  * NOT appear.
  */
-export async function edgeMidpoint(
-  page: Page,
-  index = 0,
-): Promise<{ x: number; y: number }> {
+export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
   return page.evaluate((i) => {
     const paths = document.querySelectorAll('.react-flow__edge-path');
     const path = paths[i] as SVGPathElement | undefined;
