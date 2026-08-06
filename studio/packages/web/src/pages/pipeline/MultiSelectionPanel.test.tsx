@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { MultiSelectionPanel } from './PipelineCanvas';
 import { createCanvasStore } from './canvasStore';
+import { clearClipboard, readClipboard } from './clipboard';
 
 /**
  * U21 — the property panel's MANY-selected state.
@@ -40,6 +41,84 @@ function loaded() {
 }
 
 describe('MultiSelectionPanel (U21)', () => {
+  it('“Copy selection” puts the selected ACTIVITIES on the clipboard and says so', () => {
+    clearClipboard();
+    const store = loaded();
+    // The panel is a VIEW over the store: both buttons ask `store.selected`, so
+    // the prop below mirrors it rather than standing in for it.
+    store.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+      { kind: 'edge', id: 'e_1' },
+    ]);
+    const notices: string[] = [];
+    render(
+      <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={(m) => notices.push(m)}
+        store={store}
+        selection={[
+          { kind: 'node', id: 'n_a' },
+          { kind: 'node', id: 'n_b' },
+          // The incident edge a marquee drags along must NOT be counted as an
+          // activity in the sentence the operator reads.
+          { kind: 'edge', id: 'e_1' },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy selection' }));
+    expect(readClipboard()?.nodes.map((n) => n.id)).toEqual(['n_a', 'n_b']);
+    expect(notices).toEqual(['Copied 2 activities.']);
+    // A copy is not a doc edit.
+    expect(store.getState().past).toEqual([]);
+  });
+
+  it('“Duplicate selection” clones the activities in ONE undo entry', () => {
+    const store = loaded();
+    store.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+    ]);
+    const notices: string[] = [];
+    render(
+      <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={(m) => notices.push(m)}
+        store={store}
+        selection={[
+          { kind: 'node', id: 'n_a' },
+          { kind: 'node', id: 'n_b' },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Duplicate selection' }));
+    expect(store.getState().nodes).toHaveLength(4);
+    expect(store.getState().past).toHaveLength(1);
+    expect(notices).toEqual(['Duplicated 2 activities.']);
+  });
+
+  it('offers neither act when the selection is edges ONLY', () => {
+    const store = loaded();
+    render(
+      <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={() => {}}
+        store={store}
+        selection={[
+          { kind: 'edge', id: 'e_1' },
+          { kind: 'edge', id: 'e_2' },
+        ]}
+      />,
+    );
+
+    // An edge alone has nothing to copy INTO — a connection only means anything
+    // with the pair it joins, and both of those are still where they were.
+    expect(screen.getByRole('button', { name: 'Copy selection' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Duplicate selection' })).toBeDisabled();
+  });
+
   it('counts the activities AND the connections that came with them', () => {
     const store = loaded();
     render(

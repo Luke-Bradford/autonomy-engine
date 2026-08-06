@@ -253,13 +253,9 @@ export function PipelineCanvas({
           return;
         }
         if (clip === 'duplicate') {
-          const ids = store
-            .getState()
-            .selected.filter((sel) => sel.kind === 'node')
-            .map((sel) => sel.id);
-          if (ids.length === 0) return;
+          if (store.getState().selected.every((sel) => sel.kind !== 'node')) return;
           e.preventDefault();
-          const made = store.getState().duplicateNodes(ids);
+          const made = store.getState().duplicateSelection();
           setClipboardMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
           return;
         }
@@ -1025,8 +1021,7 @@ export function MultiSelectionPanel({
         type="button"
         disabled={activities === 0}
         onClick={() => {
-          const ids = selection.filter((s) => s.kind === 'node').map((s) => s.id);
-          const made = store.getState().duplicateNodes(ids);
+          const made = store.getState().duplicateSelection();
           onNotice(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
         }}
       >

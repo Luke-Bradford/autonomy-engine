@@ -34,6 +34,7 @@
 // ---------------------------------------------------------------------------
 
 import { isQuote, quotedSpanEnd, scanTemplateRefs } from './expr.js';
+import { MAX_CONFIG_DEPTH } from './params.js';
 
 /** The namespace a node reference is rooted at — `${nodes.<id>.output.x}`. */
 const NS = 'nodes';
@@ -197,6 +198,13 @@ export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, stri
  * `remapNodeRefsInString` over every string leaf of a config tree, returning a
  * fresh structure (the input is never mutated).
  *
+ * The walk is bounded by `MAX_CONFIG_DEPTH`, the same cap `scan` and
+ * `walkConfigForMarkers` hold it to (#537), and for the same reason: a
+ * pathologically nested config must not reach a raw `RangeError`. Over the cap
+ * the subtree is returned AS IS rather than throwing — this is a rewriter, and
+ * an un-remapped ref is a defect the save gate names, where a thrown stack
+ * overflow out of a keypress is not something the canvas can report at all.
+ *
  * It walks EVERYTHING, deliberately including the deferred-eval subtrees that
  * `validateRefs`'s generic scan must skip (`llm_call.tools`, a `filter`
  * predicate). Those carry `${nodes.<id>}` references too, and remapping is
@@ -209,15 +217,18 @@ export function remapNodeRefs<T>(value: T, idMap: ReadonlyMap<string, string>): 
   // so an empty map still yields a fresh structure and callers need no second
   // copy. (`structuredClone` is not reachable here: `shared` compiles without
   // the DOM lib, and the input is parsed JSON regardless.)
-  const walk = (v: unknown): unknown => {
+  const walk = (v: unknown, depth: number): unknown => {
     if (typeof v === 'string') return remapNodeRefsInString(v, idMap);
-    if (Array.isArray(v)) return v.map(walk);
+    if (depth > MAX_CONFIG_DEPTH) return v;
+    if (Array.isArray(v)) return v.map((child) => walk(child, depth + 1));
     if (v !== null && typeof v === 'object') {
       const out: Record<string, unknown> = {};
-      for (const [k, child] of Object.entries(v as Record<string, unknown>)) out[k] = walk(child);
+      for (const [k, child] of Object.entries(v as Record<string, unknown>)) {
+        out[k] = walk(child, depth + 1);
+      }
       return out;
     }
     return v;
   };
-  return walk(value) as T;
+  return walk(value, 0) as T;
 }

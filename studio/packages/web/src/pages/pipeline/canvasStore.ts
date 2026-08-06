@@ -363,7 +363,7 @@ export function buildContainer(
 }
 
 /** The doc a clone is grafted onto — the live graph, plus its stagger counter. */
-export interface CloneTarget {
+interface CloneTarget {
   nodes: Node[];
   edges: Edge[];
   containers: Container[];
@@ -371,7 +371,7 @@ export interface CloneTarget {
 }
 
 /** What a clone produced: the WHOLE new lists, plus the ids that are new. */
-export interface CloneResult {
+interface CloneResult {
   nodes: Node[];
   edges: Edge[];
   containers: Container[];
@@ -417,11 +417,7 @@ export interface CloneResult {
  * The stagger is computed ONCE per gesture, not per node, so a copied subgraph
  * keeps its internal layout — the one thing a group paste has to preserve.
  */
-export function cloneNodesInto(
-  target: CloneTarget,
-  sources: Node[],
-  internalEdges: Edge[],
-): CloneResult {
+function cloneNodesInto(target: CloneTarget, sources: Node[], internalEdges: Edge[]): CloneResult {
   const idMap = new Map(sources.map((n) => [n.id, newLocalId('n')]));
   const offset = 40 + (target.addCount % 5) * 40;
 
@@ -712,6 +708,9 @@ export interface CanvasState {
    * slot.
    */
   duplicateNode(id: string): void;
+  //  ^ sugar over `duplicateNodes([id])`. It carries that action's documented
+  //    BEHAVIOUR CHANGE for the single-node case: a config referencing the
+  //    node's OWN status now follows the copy. See `duplicateNodes` below.
   /**
    * U21 — duplicate a SET of nodes in one gesture, one undo entry.
    *
@@ -740,6 +739,16 @@ export interface CanvasState {
    * would fail open into exactly the dangling-ref doc it exists to prevent.
    */
   copySelection(pipelineId: string): number;
+  /**
+   * U21 — duplicate the selected ACTIVITIES, in ONE undo entry. Returns how many.
+   *
+   * Reads `selected` itself rather than taking ids, so every caller (the button
+   * and ⌘D) asks the same question of the same authority. A view that computed
+   * the ids from its own props could disagree with the store about what is
+   * selected, which is precisely the split #737 settled by making the store the
+   * single authority.
+   */
+  duplicateSelection(): number;
   /**
    * U21 — paste the canvas clipboard into this pipeline, in ONE undo entry.
    *
@@ -1200,6 +1209,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
           };
         });
         return sources.length;
+      },
+
+      duplicateSelection() {
+        return get().duplicateNodes(
+          get()
+            .selected.filter((sel) => sel.kind === 'node')
+            .map((sel) => sel.id),
+        );
       },
 
       copySelection(pipelineId) {
