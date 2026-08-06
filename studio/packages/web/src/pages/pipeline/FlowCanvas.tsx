@@ -459,6 +459,41 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const dragPre = useRef<ConnectPrecheck | null>(null);
 
   /**
+   * The candidate `isValidConnection` last REFUSED, or `null` if it accepted.
+   *
+   * This is the seam that gives CLICK-to-connect a refusal explanation (#941).
+   * React Flow hands `onClickConnectEnd` a `structuredClone` of its store's
+   * `connection` state (`@xyflow/react` 12.11.2 index.mjs:1938-1942), and on the
+   * click path that state is still `initialConnection` — every field `null`
+   * (`@xyflow/system` 0.0.79 index.js:77-89), because `updateConnection` is wired
+   * only into the DRAG path (index.mjs:2863-2894). So the endpoints are NOT
+   * recoverable from the argument, and the ticket's premise that they are is
+   * wrong.
+   *
+   * They are recoverable from this predicate. `isValidHandle` builds an already
+   * ORIENTED `{source, target, sourceHandle, targetHandle}` and passes it to us
+   * (`@xyflow/system` index.js:2591-2603) on BOTH paths, so what we record is
+   * exactly the connection React Flow judged — no re-derivation, and a backwards
+   * click-connect (armed on a target port) arrives the right way round already,
+   * which is why the click path needs no `orientDrawnEnds`.
+   *
+   * Reading `event.target`'s `data-nodeid` instead would be less faithful, not
+   * more: `isValidHandle` prefers `doc.elementFromPoint` over the clicked handle
+   * (index.js:2565-2570), so the DOM node under the pointer can differ from the
+   * one RF actually judged.
+   *
+   * Cleared at every gesture START as well as every END. A drag that never
+   * terminates tidily would otherwise leave a candidate here for the next click
+   * to report: RF fires `onConnectEnd` only when `connectionStarted`, and its
+   * `onPointerUp` early-returns before that on multi-touch (index.js:2521-2545).
+   */
+  const lastRefused = useRef<{
+    from: string;
+    to: string;
+    condition: EdgeCondition | null;
+  } | null>(null);
+
+  /**
    * A gesture ENDED — drop its context so the next judgement uses the live graph.
    *
    * `dragPre` holding `null` means "no drag in flight, judge against the live
@@ -486,14 +521,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * wrong on its own terms, and the only thing standing between that and a
    * visible defect is a backstop in another module.
    *
-   * The reason the false accept is silent at all — click-to-connect has NO
-   * refusal explanation, because the panel is wired to the drag callbacks only —
-   * is a pre-existing gap this PR did not introduce, filed separately.
+   * What made that false accept silent at all — click-to-connect having NO
+   * refusal explanation, because the panel was wired to the drag callbacks only
+   * — was a separate pre-existing gap, and is now closed by `onClickConnectEnd`
+   * below (#941). So a stale precheck here would today produce a VISIBLE wrong
+   * answer rather than an invisible one, which is the better reason for this
+   * clearing than the one above.
    */
   const endGesture = useCallback(() => {
     dragPre.current = null;
     dragRewire.current = null;
     startingRewire.current = null;
+    lastRefused.current = null;
   }, []);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
@@ -1212,6 +1251,10 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * Returning false makes RF refuse the DROP (`onConnect` never fires) and mark
    * the hovered handle invalid mid-gesture, which is the whole point: the store
    * has always refused these, but silently and only after the fact.
+   *
+   * Also RECORDS what it refused, in `lastRefused` — see that ref for why this
+   * is the click path's only faithful source of endpoints. Writing a ref from
+   * here is safe: RF calls this from an event handler, never during render.
    */
   const isValidConnection = useCallback(
     (c: Connection | FlowEdge) => {
@@ -1220,13 +1263,23 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
          alternative authors an outcome the operator did not draw, and would let
          the check and the store disagree about which edge was in question. */
       const condition = conditionFromConnection(c);
-      if (condition === null) return false;
       /* The precheck the CURRENT gesture set (see `dragPre`) — for a rewire that
          is the graph without the edge in hand. Falls back to the full graph for
          a check that somehow arrives outside a drag; the full graph is the
          stricter of the two, so the fallback cannot let something through. */
       const pre = dragPre.current ?? connectPre;
-      return connectRejection(pre, drawnCandidate(c.source, c.target, condition)) === null;
+      const ok =
+        condition !== null &&
+        connectRejection(pre, drawnCandidate(c.source, c.target, condition)) === null;
+      /* Recorded on BOTH refusal paths — including the undecodable port, where
+         `condition` is null. That does NOT mean an undecodable port always gets
+         a panel: `attempted.condition === null` sends the `refusal` memo through
+         `drawnCandidate`'s `success` fallback, and if that candidate is legal
+         the memo returns null and nothing renders. The drag path behaves the
+         same way, and matching it is the point — this predicate decides
+         validity, not what is worth saying. */
+      lastRefused.current = ok ? null : { from: c.source, to: c.target, condition };
+      return ok;
     },
     [connectPre, drawnCandidate],
   );
@@ -1244,6 +1297,11 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     dragRewire.current = startingRewire.current;
     startingRewire.current = null;
     dragPre.current = rewirePre(dragRewire.current);
+    /* Cleared at the START too, not only in `endGesture`: a drag that never
+       reaches `onConnectEnd` (multi-touch — `@xyflow/system` index.js:2521-2545)
+       would otherwise hand its candidate to the NEXT click-connect, which would
+       then name the wrong pair of nodes out loud. */
+    lastRefused.current = null;
     setAttempted(null);
   }, [rewirePre]);
 
@@ -1258,6 +1316,43 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   const onClickConnectStart = useCallback(() => {
     endGesture();
     setAttempted(null);
+  }, [endGesture]);
+
+  /**
+   * #941 — SAY WHY a CLICK-connected edge was refused.
+   *
+   * `onConnectEnd` below does this for the drag gesture. Click-to-connect runs
+   * through different callbacks entirely, so until now a refused click authored
+   * nothing and said nothing — the silent no U6a/U6b exist to remove, surviving
+   * in the one gesture no spec drove.
+   *
+   * Both gestures consult the same `isValidConnection`, so a refused click was
+   * always correctly REFUSED; only the explanation was missing. That is why this
+   * reads the refusal out of that predicate rather than re-deriving it.
+   *
+   * Silent when nothing was recorded, and each of those cases is deliberate:
+   *  - a STRUCTURALLY impossible click (source→source, or the same handle twice)
+   *    short-circuits at `isValid && isValidConnection(...)` (`@xyflow/system`
+   *    index.js:2603) so this predicate never runs. The drag path is silent for
+   *    exactly these too, and for the same stated reason: the obstacle is the
+   *    gesture, not a rule about the graph.
+   *  - an ACCEPTED click records `null`, and RF has already called `onConnect`
+   *    (via `onConnectExtended`, index.mjs:1937) BEFORE this fires, so the edge
+   *    is authored and there is nothing to explain.
+   *
+   * `rewiring: null` is a fact, not a default: the reconnect anchor is
+   * drag-only, so a click gesture never moves an existing edge. It follows that
+   * the back-edge offer stays available here, which is right — the offer AUTHORS
+   * an edge, and authoring is exactly what this gesture was trying to do.
+   */
+  const onClickConnectEnd = useCallback(() => {
+    /* Read the gesture's context, then END it — the clearing `endGesture` does
+       is load-bearing for the NEXT gesture's precheck, so it must happen on
+       every path through here, refusal or not. */
+    const refused = lastRefused.current;
+    endGesture();
+    if (refused === null) return;
+    setAttempted({ ...refused, rewiring: null });
   }, [endGesture]);
 
   function onConnect(conn: Connection) {
@@ -1423,7 +1518,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         onClickConnectStart={onClickConnectStart}
-        onClickConnectEnd={endGesture}
+        onClickConnectEnd={onClickConnectEnd}
         onReconnectStart={onReconnectStart}
         onReconnect={onReconnect}
         reconnectRadius={RECONNECT_RADIUS}
