@@ -369,6 +369,43 @@ describe('WorkspaceGitPage', () => {
       expect(screen.getByText(/not valid JSON/)).toBeInTheDocument();
     });
 
+    /**
+     * The server re-observes the remote BEFORE doing the work, so a failed
+     * check has still rewritten `state`/`lastFetchAt`/`lastFetchError` — and
+     * that is precisely when the recorded reason is worth showing. Re-reading
+     * only on success leaves the panel asserting a pre-failure "Ready" right
+     * next to the failure.
+     */
+    it('re-reads the status after a FAILED check, not just a successful one', async () => {
+      await renderConnected();
+      getMock.mockClear();
+      getMock.mockResolvedValue(
+        status({ state: 'fetch_error', lastFetchError: 'host unreachable' }),
+      );
+      driftMock.mockRejectedValue(new Error('could not reach the remote'));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Check for changes' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/could not reach the remote/);
+      await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+      expect(fact('State')).toBe('Last check failed: host unreachable');
+    });
+
+    it('re-reads the status after a FAILED commit too', async () => {
+      await renderConnected();
+      getMock.mockClear();
+      getMock.mockResolvedValue(
+        status({ state: 'fetch_error', lastFetchError: 'host unreachable' }),
+      );
+      commitMock.mockRejectedValue(new Error('push rejected'));
+
+      await userEvent.type(screen.getByLabelText('Message'), 'nope');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/push rejected/);
+      await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+    });
+
     it('refuses a blank commit message without calling the API', async () => {
       await renderConnected();
 

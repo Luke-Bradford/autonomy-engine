@@ -448,9 +448,16 @@ function CommitSection({
         setResult(null);
         try {
           setDrift(await readWorkspaceGitDrift());
-          await syncStatus();
         } catch (err) {
           setError(messageOf(err));
+        } finally {
+          // In the FINALLY, not the try. The server re-observes the remote
+          // before doing the work, so `lastFetchAt`/`state`/`lastFetchError`
+          // have been rewritten whether or not the work then succeeded — and a
+          // failed check is exactly when the recorded reason matters most.
+          // Re-reading only on success would leave the panel asserting a
+          // pre-failure "Ready" beside the failure itself.
+          await syncStatus();
         }
       }),
     [syncStatus, runExclusive],
@@ -479,9 +486,12 @@ function CommitSection({
         // up would assert changes that are now committed.
         setDrift(null);
         if (commit.committed) setMessage('');
-        await syncStatus();
       } catch (err) {
         setError(describeCommitFailure(err));
+      } finally {
+        // See `onCheck`: the remote was re-observed before the push either way,
+        // so the panel is re-read on the failure path too.
+        await syncStatus();
       }
     });
   }
