@@ -47,7 +47,11 @@ afterEach(() => {
 describe('downloadTextFile', () => {
   it('hands the browser the exact text, under the given file name', async () => {
     const { created, clicked } = stubBrowserDownload();
-    const text = '{"a":1,\n  "b":[2,3]}';
+    // Deliberately NOT a fixed point of any plausible tidy-up: it has leading
+    // and trailing whitespace, an unsorted key order and pretty-printing, so a
+    // helper that trimmed, re-indented or re-serialized would be caught. A
+    // fixture that already looks like the output proves nothing.
+    const text = '\n {\n  "zeta": 1,\n  "alpha": [2, 3]\n }\n';
 
     downloadTextFile('pipeline-x.json', text);
 

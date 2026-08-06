@@ -30,10 +30,14 @@ function jsonResponse(status: number, body: unknown): Response {
 describe('exportPipeline', () => {
   it('returns the response bytes VERBATIM, without reformatting them', async () => {
     // Canonical JSON (#3 G1) is a byte contract: identical content must
-    // download as identical bytes. This body is deliberately not what
-    // `JSON.stringify` would emit for the same value — a client that parsed
-    // and re-serialized would silently return a different string.
-    const canonical = '{"catalogVersion":3,"kind":"pipeline","schemaVersion":1}';
+    // download as identical bytes. The fixture is deliberately NOT a fixed
+    // point of `JSON.stringify(JSON.parse(x))` — unsorted keys, pretty-printed,
+    // surrounding whitespace — so a client that parsed and re-serialized (or
+    // round-tripped through a Zod schema, which would also STRIP the unknown
+    // key) returns a different string and this test goes red. A compact,
+    // already-sorted fixture would survive every one of those and prove
+    // nothing; it did, until this comment was written.
+    const canonical = '\n{\n  "schemaVersion": 1,\n  "kind": "pipeline",\n  "unknownToClient": 7\n}\n';
     fetchMock.mockResolvedValue(
       new Response(canonical, { status: 200, headers: { 'content-type': 'application/json' } }),
     );
