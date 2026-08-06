@@ -415,6 +415,42 @@ describe('FlowCanvas container rendering (U6c)', () => {
         { kind: 'node', id: 'n_b' },
       ]);
     });
+
+    /**
+     * The two ways the modifier can be released WITHOUT a `keyup`, which is the
+     * safety argument for admitting both keys on every platform. Prevention-log
+     * #25: the guard a comment argues for is the one nothing tests — so these
+     * exist to make that argument falsifiable rather than merely stated.
+     *
+     *  - `contextmenu` is what a Mac Control-click produces INSTEAD of a click,
+     *    so without this reset admitting Control on a Mac would latch the
+     *    modifier on with no keyup ever coming;
+     *  - `blur` is the Windows/Linux Super key, which moves focus to the Start
+     *    menu or the activities overview and swallows the keyup with it.
+     *
+     * Same discriminator as the test above, and it is the reason this asserts a
+     * NON-event: two nodes selected plus an unmodified click on one of them
+     * goes to ONE if the modifier is still latched (React Flow toggles it out)
+     * and stays at TWO if it was released. Asserting the pair survives is
+     * therefore a real claim about the reset, not an absence of one.
+     */
+    it.each([
+      ['contextmenu', () => fireEvent.contextMenu(window)],
+      ['blur', () => fireEvent.blur(window)],
+    ] as const)('releases the modifier on a window %s, with no keyup', (_name, reset) => {
+      const { store, container } = withContainer([]);
+      fireEvent.click(nodeWrapper(container, 'n_a'));
+      fireEvent.keyDown(window, { key: modifier });
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toHaveLength(2);
+
+      reset();
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toEqual([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]);
+    });
   });
 });
 

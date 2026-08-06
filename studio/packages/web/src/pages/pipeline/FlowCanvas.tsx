@@ -1588,14 +1588,24 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            the next plain click adds instead of replacing, and a pane click
            clears it; not worth guarding, worth knowing.
 
+           Both of those resets are TESTED, not merely argued — see the
+           `releases the modifier on a window %s` cases in `FlowCanvas.test.tsx`.
+           They assert a non-event (the selection SURVIVES an unmodified click),
+           which is only a real claim because the same click collapses the
+           selection while the modifier is latched; mutation-proved by dropping
+           the reset and watching all four go red.
+
            Fixing the harness's user agent instead would NOT do: `test:e2e` runs
            on ubuntu in CI and on macOS locally, so only a UA-independent prop
            lets ONE spec pass in both places.
 
-           Knowingly left: `zoomActivationKeyCode` carries the identical
-           `isMacOs()` guess. It gates scroll-zoom, which never meets the
-           `contextmenu`-instead-of-`click` failure above, so it is a separate
-           question rather than part of this one. */
+           Knowingly left, and FILED as #950 rather than deferred in this
+           comment: `zoomActivationKeyCode` carries the identical `isMacOs()`
+           guess. It gates scroll-zoom, where the wrong modifier degrades the
+           gesture instead of removing it — a wheel event meets no
+           `contextmenu`-instead-of-`click` substitution — so it is a separate
+           question. That difference is reasoned, not measured, which is
+           precisely why it needs a ticket and not a paragraph here. */
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
