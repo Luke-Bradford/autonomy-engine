@@ -4,6 +4,7 @@ import { RunStatusSchema, type RunSummary, type TriggerPublic } from '@autonomy-
 import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
 import { listRuns } from '../../api/runs';
+import { costCell } from './costColumn';
 import { listTriggers } from '../../api/triggers';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { formatRunDuration, formatWhen } from './format';
@@ -24,6 +25,23 @@ import {
   RUN_TABS,
   type RunTab,
 } from './runOrigin';
+
+/**
+ * One Cost cell. A component rather than an inline expression so the decision
+ * (`costCell`) stays a pure function this file merely renders — and so the
+ * unsettled qualifier has somewhere to be marked up rather than concatenated into
+ * a string, which is what lets it read as secondary while staying VISIBLE text
+ * rather than a hover.
+ */
+function RunCostCell({ run }: { run: RunSummary }) {
+  const cell = costCell(run);
+  return (
+    <td className="run-cost" {...(cell.note === null ? {} : { title: cell.note })}>
+      {cell.figure}
+      {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
+    </td>
+  );
+}
 
 /**
  * The Runs list — the entry to the P6 live monitor. Runs are created by the
@@ -367,6 +385,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                     <th scope="col">Status</th>
                     <th scope="col">Started</th>
                     <th scope="col">Duration</th>
+                    <th scope="col">Cost</th>
                     <th scope="col">Actions</th>
                   </tr>
                 </thead>
@@ -405,6 +424,11 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                           cell's title, the same demotion the pipeline cell applies to
                           the version id. */}
                       <td title={formatWhen(r.finishedAt)}>{formatRunDuration(r, loadedAt)}</td>
+                      {/* U27 slice 2 — the same headline authority the run detail
+                          page uses, so the two surfaces cannot say different things
+                          about one run's money. `costCell` owns which caveats
+                          survive the compression into one cell, and why. */}
+                      <RunCostCell run={r} />
                       <td>
                         {/* A real link, not `useNavigate()` on a button: the Shell
                             section records that U10 owns this conversion. It gives

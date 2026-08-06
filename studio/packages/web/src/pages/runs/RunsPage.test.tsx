@@ -4,7 +4,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
-import { RunStatusSchema, type RunSummary } from '@autonomy-studio/shared';
+import { computeRunCost, RunStatusSchema, type RunSummary } from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
@@ -32,8 +32,51 @@ vi.mock('../../api/triggers', async (importActual) => ({
 const listMock = vi.mocked(runsApi.listRuns);
 const triggersMock = vi.mocked(triggersApi.listTriggers);
 
+/** #931 — a run that billed nothing, which is the honest default for a fixture
+ * that is not about money: zero metered exchanges reads as "No billed exchange",
+ * never as `$0.00`. Tests that ARE about the column override it. */
+const noSpend = computeRunCost([]);
+
+/** A priced metered payload, in the shape `computeRunCost` folds. */
+function metered(fields: { cost: number }) {
+  return {
+    payload: {
+      type: 'activity.metered' as const,
+      runId: 'run_1',
+      nodeId: 'n1',
+      attemptId: 'n1#1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered' as const,
+      inputTokens: 10,
+      outputTokens: 20,
+      inUnitPrice: 5,
+      outUnitPrice: 5,
+      priceTableVersion: 'v1',
+      costEstimate: fields.cost,
+    },
+  };
+}
+
+/**
+ * The cell under a named column header. Indexed off the HEADER rather than a
+ * fixed position, so it also pins the thing that actually breaks when a column is
+ * inserted: a `<th>` and its `<td>` landing in different columns. Scoping matters
+ * here for a second reason — the Duration cell carries its own "so far" marker
+ * (`formatRunDuration`), so a row-wide query for it is ambiguous by construction.
+ */
+function cellUnder(row: HTMLElement, header: string): HTMLElement {
+  const table = row.closest('table') as HTMLElement;
+  const index = within(table)
+    .getAllByRole('columnheader')
+    .findIndex((h) => h.textContent === header);
+  expect(index).toBeGreaterThanOrEqual(0);
+  return within(row).getAllByRole('cell')[index] as HTMLElement;
+}
+
 function run(overrides: Partial<RunSummary> = {}): RunSummary {
   return {
+    cost: noSpend,
     id: 'run_1',
     ownerId: 'local',
     pipelineVersionId: 'pv_1',
@@ -88,6 +131,42 @@ describe('RunsPage', () => {
    * fails — which is the whole risk this ticket carries, since every path in
    * the app was rewritten.
    */
+  /**
+   * #931 (U27 slice 2) — the Cost column. Asserted against the ROW, not the page:
+   * the table header carries the same word, so a page-wide query would pass with
+   * the cell deleted.
+   */
+  it('states what a run cost, from the same authority the detail page uses', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    expect(cost).toHaveTextContent('$0.03');
+    expect(cost).not.toHaveTextContent(/so far/);
+  });
+
+  it('a run that billed nothing says so, rather than showing $0.00', async () => {
+    listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
+    renderWithRouter(<RunsPage />);
+    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    expect(cost).toHaveTextContent('No billed exchange');
+    expect(cost).not.toHaveTextContent('$0.00');
+  });
+
+  it('marks a LIVE run\'s figure as spend-so-far, visibly rather than on hover', async () => {
+    listMock.mockResolvedValue([
+      run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    const cost = cellUnder((await screen.findByText('run_abc')).closest('tr') as HTMLElement, 'Cost');
+    expect(cost).toHaveTextContent('$0.03 so far');
+    /* VISIBLE, not demoted to the title — the title carries the sentence, the
+       cell carries the qualifier. */
+    expect(cost.querySelector('.run-cost-unsettled')?.textContent).toBe(' so far');
+    expect(cost.title).toContain('has not settled');
+  });
+
   it('Watch navigates to the run detail route', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc' })]);
     vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);

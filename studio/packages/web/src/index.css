@@ -2401,6 +2401,21 @@ td button + button {
   font-size: 0.8rem;
 }
 
+/* #931 (U27 slice 2) — the run list's Cost cell. The figure itself keeps the
+   table's normal weight; only the "so far" qualifier is demoted, because it
+   modifies the number rather than being the number. It stays VISIBLE text (not a
+   `title`, which is the demotion this table uses for genuinely secondary detail
+   like the version id) — a live run's spend read as a final total is the exact
+   misreading `costReading` exists to prevent. */
+.run-cost {
+  white-space: nowrap;
+}
+
+.run-cost-unsettled {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 /* --- U22 slice 1: pipeline version history (#903) ------------------------- */
 
 .version-history {
