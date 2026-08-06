@@ -13,6 +13,7 @@ import {
   nextSelection,
   pruneContainerChild,
   sameSelection,
+  containerExclusive,
   sameSelectionSet,
   singleSelection,
   type Selection,
@@ -249,11 +250,11 @@ describe('canvasStore', () => {
   it('moveNode updates only the targeted node; an unknown id is a no-op', () => {
     const s = createCanvasStore();
     s.getState().loadVersion(version());
-    s.getState().moveNode('n_a', { x: 999, y: 888 });
+    s.getState().moveNodes([{ id: 'n_a', position: { x: 999, y: 888 } }]);
     expect(s.getState().nodes.find((n) => n.id === 'n_a')!.position).toEqual({ x: 999, y: 888 });
     expect(s.getState().nodes.find((n) => n.id === 'n_b')!.position).toEqual({ x: 100, y: 20 });
     const before = s.getState().nodes;
-    s.getState().moveNode('nope', { x: 1, y: 1 });
+    s.getState().moveNodes([{ id: 'nope', position: { x: 1, y: 1 } }]);
     expect(s.getState().nodes).toBe(before); // untouched reference — no state churn
   });
 
@@ -1934,7 +1935,7 @@ describe('canvasStore — undo/redo (U17)', () => {
 
   it('undo reverses a move — the position the node had before the drag', () => {
     const s = opened();
-    s.getState().moveNode('n_a', { x: 500, y: 600 });
+    s.getState().moveNodes([{ id: 'n_a', position: { x: 500, y: 600 } }]);
     s.getState().undo();
     expect(s.getState().nodes.find((n) => n.id === 'n_a')?.position).toEqual({ x: 10, y: 20 });
   });
@@ -2001,7 +2002,7 @@ describe('canvasStore — undo/redo (U17)', () => {
 
   it('a move that lands back on its own origin consumes no undo slot', () => {
     const s = opened();
-    s.getState().moveNode('n_a', { x: 10, y: 20 });
+    s.getState().moveNodes([{ id: 'n_a', position: { x: 10, y: 20 } }]);
     expect(s.getState().past).toHaveLength(0);
     expect(s.getState().dirty).toBe(false);
   });
@@ -2129,7 +2130,7 @@ describe('canvasStore — undo/redo (U17)', () => {
   it('the history is bounded — the oldest entry is dropped, never the newest', () => {
     const s = opened();
     for (let i = 0; i < HISTORY_LIMIT + 10; i += 1) {
-      s.getState().moveNode('n_a', { x: i + 1, y: 0 });
+      s.getState().moveNodes([{ id: 'n_a', position: { x: i + 1, y: 0 } }]);
     }
     expect(s.getState().past).toHaveLength(HISTORY_LIMIT);
 
@@ -2154,7 +2155,7 @@ describe('canvasStore — undo/redo (U17)', () => {
   it('an undo that leaves the selected node alone keeps the selection', () => {
     const s = opened();
     s.getState().select({ kind: 'node', id: 'n_b' });
-    s.getState().moveNode('n_a', { x: 500, y: 600 });
+    s.getState().moveNodes([{ id: 'n_a', position: { x: 500, y: 600 } }]);
 
     s.getState().undo();
     expect(s.getState().selected).toEqual([{ kind: 'node', id: 'n_b' }]);
@@ -2457,6 +2458,9 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
 
     it('a deselect removes only its own member, leaving the rest', () => {
       expect(nextSelection([nodeA, nodeB], nodeA, false)).toEqual([nodeB]);
+      // …down to the last one, which empties the set rather than leaving it
+      // holding an element React Flow has just said is no longer selected.
+      expect(nextSelection([nodeA], nodeA, false)).toEqual([]);
     });
 
     it('still folds the single-click batch to just the clicked node', () => {
@@ -2484,13 +2488,33 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
       expect(nextSelection(current, nodeA, true)).toBe(current);
       expect(nextSelection(current, edge1, false)).toBe(current);
     });
+  });
 
-    it('a container is EXCLUSIVE — it never shares the set with nodes or edges', () => {
+  describe('containerExclusive — enforced by setSelection, the one writer', () => {
+    it('drops the container when anything else is selected', () => {
       // A container is not a React Flow selection at all (`selectable: false`),
       // so a set holding one alongside nodes would carry a member group-move
-      // cannot move and RF cannot deselect.
-      expect(nextSelection([nodeA, nodeB], box, true)).toEqual([box]);
-      expect(nextSelection([box], nodeA, true)).toEqual([nodeA]);
+      // cannot move and RF cannot deselect. The NODES win: the only way to reach
+      // a mixed set is to select one while a container was still standing.
+      expect(containerExclusive([box, nodeA])).toEqual([nodeA]);
+      expect(containerExclusive([nodeA, box, edge1])).toEqual([nodeA, edge1]);
+    });
+
+    it('keeps ONE container when that is all there is', () => {
+      expect(containerExclusive([box])).toEqual([box]);
+      expect(containerExclusive([box, { kind: 'container', id: 'loop_2' }])).toEqual([box]);
+    });
+
+    it('returns the same array untouched when there is no container', () => {
+      const clean = [nodeA, nodeB];
+      expect(containerExclusive(clean)).toBe(clean);
+      expect(containerExclusive([])).toEqual([]);
+    });
+
+    it('holds through the STORE, not just the helper', () => {
+      const s = createCanvasStore();
+      s.getState().setSelection([box, nodeA]);
+      expect(s.getState().selected).toEqual([nodeA]);
     });
   });
 

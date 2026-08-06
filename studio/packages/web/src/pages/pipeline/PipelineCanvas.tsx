@@ -912,7 +912,7 @@ function PropertyPanel({
  * Deleting a connection whose endpoints are both going anyway is not extra
  * destruction: `deleteNodesAndEdges` cascades those edges regardless.
  */
-function MultiSelectionPanel({
+export function MultiSelectionPanel({
   store,
   selection,
 }: {

@@ -112,13 +112,31 @@ export function nextSelection(
     return rest.length === current.length ? current : rest;
   }
   if (current.some((s) => sameSelection(s, target))) return current;
-  // A container is EXCLUSIVE. It is not a React Flow selection at all (see the
-  // `Selection` docblock above), so a set holding one alongside nodes would
-  // carry a member that group-move cannot move, that RF can never deselect, and
-  // that the delete path has to special-case. Selecting either kind drops the
-  // other.
-  if (target.kind === 'container') return [target];
-  return [...current.filter((s) => s.kind !== 'container'), target];
+  return [...current, target];
+}
+
+/**
+ * Enforce the one structural rule of a selection SET: a `container` is
+ * EXCLUSIVE — it never shares the set with a node or an edge.
+ *
+ * A container is not a React Flow selection at all (see the `Selection`
+ * docblock above), so a mixed set would carry a member that group-move cannot
+ * move, that RF can never deselect, and that the delete path has to
+ * special-case. Non-containers WIN, because the only way to reach a mixed set
+ * is to select a node while a container was selected — RF's gesture is the new
+ * intent, and the container was merely still standing.
+ *
+ * Lives HERE, applied by `setSelection`, rather than in `nextSelection`: the
+ * setter owns the state, so the invariant holds for EVERY writer instead of
+ * only for the one caller that remembered it. `nextSelection` folds React Flow
+ * changes, and RF never reports a container (the change seam filters container
+ * ids out before it), so it has no business deciding this.
+ */
+export function containerExclusive(next: Selection[]): Selection[] {
+  const others = next.filter((s) => s.kind !== 'container');
+  if (others.length === next.length) return next;
+  if (others.length === 0) return next.slice(0, 1);
+  return others;
 }
 
 /**
@@ -591,15 +609,16 @@ export interface CanvasState {
    * slot.
    */
   duplicateNode(id: string): void;
-  moveNode(id: string, position: Position): void;
   /**
-   * U21 — move a whole selected group, in ONE undo entry.
+   * U21 — move nodes, in ONE undo entry.
    *
-   * React Flow reports a group drag as one batch of `position` changes, and the
-   * batch is the gesture: recording an entry per node would make undo restore
-   * the group half-moved, a state the operator never authored. Ids naming no
+   * Plural with no singular companion, because React Flow reports a drag as one
+   * BATCH of `position` changes whether it moved one node or five, and the
+   * batch is the gesture: recording an entry per node would make undo restore a
+   * group half-moved, a state the operator never authored. Ids naming no
    * current node are skipped, and a batch in which nothing actually moved
-   * records nothing (`moveNode`'s no-op rule, applied at set level).
+   * records nothing — a drag that lands back where it started is not an edit,
+   * and a no-op that consumes an undo slot is a dead undo press.
    */
   moveNodes(moves: { id: string; position: Position }[]): void;
   deleteNode(id: string): void;
@@ -761,7 +780,13 @@ export interface CanvasState {
   removeOutput(index: number): void;
   /** Select exactly one element, or nothing. Sugar over `setSelection`. */
   select(sel: Selection | null): void;
-  /** U21 — replace the whole selection set (what the React Flow seam folds to). */
+  /**
+   * U21 — replace the whole selection set (what the React Flow seam folds to).
+   *
+   * The SINGLE writer of `selected`, and therefore where the set's one
+   * structural rule is enforced: `containerExclusive` normalises the argument,
+   * so no caller can install a container alongside a node.
+   */
   setSelection(next: Selection[]): void;
   /**
    * U17 — step back one edit. A no-op when there is nothing to undo.
@@ -1049,10 +1074,6 @@ export function createCanvasStore(): StoreApi<CanvasState> {
             addCount: s.addCount + 1,
           };
         });
-      },
-
-      moveNode(id, position) {
-        get().moveNodes([{ id, position }]);
       },
 
       moveNodes(moves) {
@@ -1453,8 +1474,9 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       setSelection(next) {
-        if (sameSelectionSet(get().selected, next)) return;
-        set({ selected: next });
+        const normalised = containerExclusive(next);
+        if (sameSelectionSet(get().selected, normalised)) return;
+        set({ selected: normalised });
       },
 
       undo() {

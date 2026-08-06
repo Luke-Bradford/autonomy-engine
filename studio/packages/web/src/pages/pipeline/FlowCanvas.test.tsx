@@ -808,7 +808,7 @@ describe('FlowCanvas — a domain position write reaches the view (U17)', () => 
     const { store, container } = mounted();
     expect(transformOf(container, 'n_a')).toContain('translate(10px,20px)');
 
-    act(() => store.getState().moveNode('n_a', { x: 300, y: 400 }));
+    act(() => store.getState().moveNodes([{ id: 'n_a', position: { x: 300, y: 400 } }]));
     expect(transformOf(container, 'n_a')).toContain('translate(300px,400px)');
 
     act(() => store.getState().undo());

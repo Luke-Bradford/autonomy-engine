@@ -634,7 +634,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
           // is a dead end. `handleNodeClick` early-returns when the node it was
           // given is ALREADY `selected`, emitting no change at all. So any state
           // where the view says selected and the store says not — after a save,
-          // where `loadVersion` writes `selected: null` while the view entry
+          // where `loadVersion` empties the selection while the view entry
           // survives by id — leaves a node that paints its selection ring,
           // reports nothing to the property panel, and CANNOT be re-selected by
           // clicking it or by Enter. (Backspace would still delete it.) The
@@ -1118,6 +1118,12 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     );
     if (moves.length > 0) st.moveNodes(moves);
 
+    /* No LIVE path emits a `remove` today: React Flow produces one only from
+       `deleteElements`, which it calls only for `deleteKeyCode` — set to `null`
+       below — and nothing in this app calls it directly. Kept, and batched,
+       deliberately: it is the seam's job to funnel every removal React Flow
+       could ever report into the ONE cascade, so a future caller cannot bypass
+       the incident-edge and container-membership rules by going around it. */
     const removed = own.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
     if (removed.length > 0) st.deleteNodesAndEdges(removed, []);
 
