@@ -1595,9 +1595,18 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            selection while the modifier is latched; mutation-proved by dropping
            the reset and watching all four go red.
 
-           Fixing the harness's user agent instead would NOT do: `test:e2e` runs
-           on ubuntu in CI and on macOS locally, so only a UA-independent prop
-           lets ONE spec pass in both places.
+           WHAT THIS DID NOT FIX, because #947 asked and the answer is not the
+           one the ticket assumed. Its premise — "modifier-click does not reach
+           the store" — is FALSE for an operator on an unspoofed browser, and
+           that was MEASURED, not reasoned: with this prop removed and
+           `navigator.userAgent` stubbed to a real macOS string, ⌘-click was
+           already additive (Control was not), which is exactly `isMacOs()`
+           picking correctly when the UA tells the truth. So the shipped gesture
+           was never broken on the platform an operator is actually on. What was
+           broken is every case where the UA and the host DISAGREE, plus the
+           cross-platform modifier — and, the reason this is a prop and not a
+           harness fix, `test:e2e` runs on ubuntu in CI and macOS locally, so
+           only a UA-independent prop lets ONE spec pass in both places.
 
            Knowingly left, and FILED as #950 rather than deferred in this
            comment: `zoomActivationKeyCode` carries the identical `isMacOs()`
