@@ -10,8 +10,7 @@ import { deriveConfigFields } from './configForm';
 // routes to, not about the call editor's own behaviour (`CallPanel.test.tsx` owns
 // that), so the listing is stubbed empty rather than served.
 vi.mock('../../api/pipelines', () => ({
-  listPipelines: () => Promise.resolve([]),
-  listPipelineVersions: () => Promise.resolve([]),
+  listAllPipelineVersions: () => Promise.resolve([]),
 }));
 
 /**

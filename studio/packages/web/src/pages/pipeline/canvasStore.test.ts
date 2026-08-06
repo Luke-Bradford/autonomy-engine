@@ -270,6 +270,25 @@ describe('canvasStore', () => {
     expect(interleaved.getState().nodes[2]!.position).toEqual(secondClickAlone);
   });
 
+  it('duplicateNode carries an authored call blob to the copy, unaliased', () => {
+    // `duplicateNode` structuredClones the whole node rather than naming fields,
+    // which is what stops it going stale as `NodeSchema` grows — `call` is one
+    // of the fields riding on that. Asserted because a copy that silently lost
+    // its target would look identical on the canvas.
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('execute_pipeline');
+    const id = s.getState().nodes[0]!.id;
+    s.getState().updateNodeCall(id, { pipelineVersionId: 'pv_1', params: { a: 1 } });
+    s.getState().duplicateNode(id);
+
+    const [source, copy] = s.getState().nodes as [Node, Node];
+    expect(copy.call).toEqual(source.call);
+    // A COPY, not an alias — editing one target must not edit the other.
+    expect(copy.call).not.toBe(source.call);
+    expect(copy.call!.params).not.toBe(source.call!.params);
+  });
+
   it('addNode still refuses an UNKNOWN type WITH a position', () => {
     // The position argument is not a bypass: the drop path runs the same guards
     // as the click path, so a hand-crafted drag payload cannot author garbage.

@@ -130,12 +130,9 @@ describe('parseJsonParams (#425 unresolved-target fallback)', () => {
 // ---------------------------------------------------------------------------
 // The component, over a stubbed listing.
 
-const listPipelines = vi.fn();
-const listPipelineVersions = vi.fn();
+const listAllPipelineVersions = vi.fn();
 vi.mock('../../api/pipelines', () => ({
-  listPipelines: (signal?: AbortSignal) => listPipelines(signal) as unknown,
-  listPipelineVersions: (id: string, signal?: AbortSignal) =>
-    listPipelineVersions(id, signal) as unknown,
+  listAllPipelineVersions: (signal?: AbortSignal) => listAllPipelineVersions(signal) as unknown,
 }));
 
 function version(id: string, n: number, params: Param[]): PipelineVersion {
@@ -155,8 +152,9 @@ function version(id: string, n: number, params: Param[]): PipelineVersion {
 }
 
 function mount() {
-  listPipelines.mockResolvedValue([{ id: 'p_a', name: 'Alpha' }]);
-  listPipelineVersions.mockResolvedValue([version('pv_a2', 2, CHILD_PARAMS)]);
+  listAllPipelineVersions.mockResolvedValue([
+    { pipeline: { id: 'p_a', name: 'Alpha' }, version: version('pv_a2', 2, CHILD_PARAMS) },
+  ]);
   const store = createCanvasStore();
   store.getState().loadVersion(null);
   store.getState().addNode('execute_pipeline');
@@ -206,6 +204,47 @@ describe('CallPanel (component)', () => {
     fireEvent.change(screen.getByLabelText(/Version/), { target: { value: 'pv_a2' } });
     fireEvent.change(screen.getByLabelText(/Pipeline/), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply call' }));
+    expect(store.getState().nodes[0]!.call).toBeUndefined();
+  });
+
+  it('CARRIES the arguments across a pick→expression→pick mode switch', async () => {
+    // The data loss the switch used to cause: the two params editors hold the
+    // same fact in two shapes, and `apply` reads whichever the mode owns — so
+    // toggling the mode without translating silently discarded the other one's
+    // contents, with nothing on screen to say so.
+    const { store } = mount();
+    await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/Pipeline/), { target: { value: 'p_a' } });
+    fireEvent.change(screen.getByLabelText(/Version/), { target: { value: 'pv_a2' } });
+    await waitFor(() => expect(screen.getByLabelText(/query/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/query/), { target: { value: 'ships' } });
+    fireEvent.change(screen.getByLabelText(/limit/), { target: { value: '25' } });
+
+    fireEvent.click(screen.getByLabelText('Expression'));
+    // Translated, and TYPED — `limit` is a number on the far side, not '25'.
+    const json = (screen.getByLabelText(/Parameters/) as HTMLTextAreaElement).value;
+    expect(JSON.parse(json)).toEqual({ query: 'ships', limit: 25 });
+
+    fireEvent.click(screen.getByLabelText('Pick a version'));
+    expect(screen.getByLabelText(/query/)).toHaveProperty('value', 'ships');
+    expect(screen.getByLabelText(/limit/)).toHaveProperty('value', '25');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply call' }));
+    expect(store.getState().nodes[0]!.call?.params).toEqual({ query: 'ships', limit: 25 });
+  });
+
+  it('REFUSES a mode switch it cannot translate, rather than completing it lossily', async () => {
+    const { store } = mount();
+    await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/Pipeline/), { target: { value: 'p_a' } });
+    fireEvent.change(screen.getByLabelText(/Version/), { target: { value: 'pv_a2' } });
+    await waitFor(() => expect(screen.getByLabelText(/limit/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText(/limit/), { target: { value: 'lots' } });
+
+    fireEvent.click(screen.getByLabelText('Expression'));
+    // Still in pick mode, with the offending text visible and the reason said.
+    expect(screen.getByText('limit: expected a number')).toBeTruthy();
+    expect(screen.getByLabelText(/limit/)).toHaveProperty('value', 'lots');
     expect(store.getState().nodes[0]!.call).toBeUndefined();
   });
 

@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { ACTIVITY_CATEGORIES, ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { toolboxGroups } from './activityGroups';
 
-/** Every activity the toolbox is allowed to offer. */
-
 /** Flatten groups back to a type list, in render order. */
 function typesOf(groups: ReturnType<typeof toolboxGroups>): string[] {
   return groups.flatMap((g) => g.entries.map((e) => e.type));

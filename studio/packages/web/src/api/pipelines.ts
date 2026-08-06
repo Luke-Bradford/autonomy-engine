@@ -92,6 +92,32 @@ export function listPipelineVersions(
   });
 }
 
+/**
+ * One row per (pipeline, version) across the whole workspace, flattened.
+ *
+ * N+1 requests (one per pipeline), which is acceptable at MVP scale. Loading
+ * them ALL up front rather than fetching a pipeline's versions when it is
+ * chosen is what lets a caller answer "is this stored id a known version?" in
+ * one shot, with no second in-flight window in which the answer changes.
+ *
+ * Lives HERE rather than in either caller because there are two: the Triggers
+ * page's binding dropdown and the canvas's call-node target picker (#425) ask
+ * the same question of the same two endpoints, and two independent copies of
+ * "load every pipeline and every version" would drift.
+ */
+export async function listAllPipelineVersions(
+  signal?: AbortSignal,
+): Promise<{ pipeline: Pipeline; version: PipelineVersion }[]> {
+  const pipelines = await listPipelines(signal);
+  const perPipeline = await Promise.all(
+    pipelines.map(async (pipeline) => {
+      const versions = await listPipelineVersions(pipeline.id, signal);
+      return versions.map((version) => ({ pipeline, version }));
+    }),
+  );
+  return perPipeline.flat();
+}
+
 /** Create a pipeline (`POST /api/pipelines`). The server assigns the id. */
 export function createPipeline(body: PipelineWrite): Promise<Pipeline> {
   return apiFetch('/api/pipelines', {

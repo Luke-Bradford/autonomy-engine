@@ -4,8 +4,10 @@ import {
   buildParams,
   loadCallTargets,
   parseJsonParams,
+  rowsFrom,
   seedCall,
   type CallTarget,
+  type Mode,
   type Seed,
 } from './callRules';
 import type { createCanvasStore } from './canvasStore';
@@ -83,7 +85,7 @@ export function CallPanel({
   // section that appears only once a fetch resolves reads as a panel that is
   // missing rather than one that is loading.
   return (
-    <section className="call-panel">
+    <section className="contract-section">
       <h4>Call target</h4>
       {loadError !== null ? (
         // Fail LOUD. A silent empty picker would read as "there are no
@@ -159,6 +161,46 @@ function CallEditor({
     setDraft((d) => ({ ...d, pipelineId, versionId: '' }));
   }
 
+  /**
+   * Switch target mode, CARRYING the arguments across.
+   *
+   * The two params editors hold the same fact in two shapes — typed rows when
+   * the target resolves to a listable version, a JSON object when it does not —
+   * and `apply` reads whichever the current mode owns. Toggling the mode without
+   * reconciling them therefore SILENTLY DISCARDED whatever the operator had
+   * entered in the other one: type three arguments into the rows, switch to
+   * Expression to write a dynamic target, press Apply, and the arguments are
+   * gone with nothing on screen having said so.
+   *
+   * So a switch translates. When the source cannot be represented — a row that
+   * is not a legal value for its declared type, or a JSON box that does not
+   * parse — the switch is REFUSED with that reason rather than completed lossily.
+   * That is not a trap: the offending text stays visible and editable in the
+   * mode the operator is already in, so fixing it (or clearing it) is the way
+   * through.
+   */
+  function switchMode(next: Mode) {
+    if (next === draft.mode) return;
+    if (next === 'expression') {
+      const built = buildParams(draft.params, declared);
+      if (!built.ok) {
+        setError(built.error);
+        return;
+      }
+      const json = Object.keys(built.value).length ? JSON.stringify(built.value, null, 2) : '';
+      setError(null);
+      setDraft((d) => ({ ...d, mode: next, paramsJson: json }));
+      return;
+    }
+    const parsed = parseJsonParams(draft.paramsJson);
+    if (!parsed.ok) {
+      setError(parsed.error);
+      return;
+    }
+    setError(null);
+    setDraft((d) => ({ ...d, mode: next, params: rowsFrom(parsed.value, declared) }));
+  }
+
   function apply() {
     const target = draft.mode === 'expression' ? draft.expression.trim() : draft.versionId;
     if (target === '') {
@@ -190,14 +232,14 @@ function CallEditor({
 
   return (
     <>
-      <fieldset className="radio-group">
+      <fieldset className="call-mode">
         <legend>Target</legend>
         <label>
           <input
             type="radio"
             name={`call-mode-${nodeId}`}
             checked={draft.mode === 'pick'}
-            onChange={() => setDraft((d) => ({ ...d, mode: 'pick' }))}
+            onChange={() => switchMode('pick')}
           />
           Pick a version
         </label>
@@ -206,7 +248,7 @@ function CallEditor({
             type="radio"
             name={`call-mode-${nodeId}`}
             checked={draft.mode === 'expression'}
-            onChange={() => setDraft((d) => ({ ...d, mode: 'expression' }))}
+            onChange={() => switchMode('expression')}
           />
           Expression
         </label>
@@ -256,7 +298,7 @@ function CallEditor({
         </label>
       )}
 
-      <label className="checkbox-row">
+      <label className="contract-check">
         <input
           type="checkbox"
           checked={draft.wait}

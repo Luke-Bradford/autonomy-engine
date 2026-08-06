@@ -1137,6 +1137,19 @@ td button + button {
   padding: 0 0.3rem;
 }
 
+/* #425 — a call node's argument rows. A list, because the arguments ARE a list
+   the target declares, and `.property-panel label` already stacks each row's
+   label over its input — so this only has to strip the list chrome and space
+   the rows the way every other stacked group in the panel is spaced. */
+.call-params {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 /* U16 — the pipeline's typed params/outputs contract, in the nothing-selected
    property panel. `.property-panel` is already a flex column, so a section only
    needs the separation that says where one declaration ends and the next
@@ -1286,7 +1299,8 @@ td button + button {
  * keyboard path to retyping an edge, and a group of radios is one tab stop with
  * arrow-key movement inside it.
  */
-.edge-outcomes {
+.edge-outcomes,
+.call-mode {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem 0.6rem 0.6rem;
@@ -1296,13 +1310,19 @@ td button + button {
   gap: 0.15rem;
 }
 
-.edge-outcomes legend {
+.edge-outcomes legend,
+.call-mode legend {
   padding: 0 0.3rem;
   font-size: 0.72rem;
   color: var(--muted);
 }
 
-.edge-outcome {
+/* #425 — the call-node target-mode toggle shares the edge-outcome fieldset's
+   look for the reason it shares its shape: a small group of radios inside the
+   property panel, one tab stop with arrow-key movement inside it. A second set
+   of near-identical rules would be two answers to one question. */
+.edge-outcome,
+.call-mode label {
   display: flex;
   align-items: center;
   gap: 0.4rem;

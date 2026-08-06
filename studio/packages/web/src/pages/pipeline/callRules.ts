@@ -1,5 +1,5 @@
-import type { CallConfig, Param, PipelineVersion } from '@autonomy-studio/shared';
-import { listPipelines, listPipelineVersions } from '../../api/pipelines';
+import type { CallConfig, Param } from '@autonomy-studio/shared';
+import { listAllPipelineVersions } from '../../api/pipelines';
 import { coerceDefaultInput, formatDefaultInput } from './paramRules';
 
 /**
@@ -26,27 +26,19 @@ export type CallTarget = {
 /**
  * Flatten every pipeline's versions into pickable targets.
  *
- * N+1 requests (one per pipeline), which is what `TriggersPage` already does
- * for its binding picker at the same scale. Loading them ALL up front — rather
- * than fetching versions when a pipeline is chosen — is what lets the panel
- * answer "is this stored id a known version?" in one shot, with no second
- * in-flight window in which the answer changes.
+ * The load itself is `listAllPipelineVersions`, shared with the Triggers page's
+ * binding dropdown, which asks the same question of the same two endpoints.
+ * This function is only the projection into what the picker needs.
  */
 export async function loadCallTargets(signal?: AbortSignal): Promise<CallTarget[]> {
-  const pipelines = await listPipelines(signal);
-  const perPipeline = await Promise.all(
-    pipelines.map(async (p) => {
-      const versions: PipelineVersion[] = await listPipelineVersions(p.id, signal);
-      return versions.map((v) => ({
-        pipelineId: p.id,
-        pipelineName: p.name,
-        versionId: v.id,
-        version: v.version,
-        params: v.params,
-      }));
-    }),
-  );
-  return perPipeline.flat();
+  const all = await listAllPipelineVersions(signal);
+  return all.map(({ pipeline, version }) => ({
+    pipelineId: pipeline.id,
+    pipelineName: pipeline.name,
+    versionId: version.id,
+    version: version.version,
+    params: version.params,
+  }));
 }
 
 export type Mode = 'pick' | 'expression';
@@ -107,8 +99,23 @@ function seedParamText(
   stored: Record<string, unknown>,
   target: CallTarget | undefined,
 ): Record<string, string> {
+  return rowsFrom(stored, new Map((target?.params ?? []).map((p) => [p.name, p])));
+}
+
+/**
+ * The row seeding itself, over a DECLARED map rather than a target.
+ *
+ * Split out because the mode switch needs the identical union — carrying a JSON
+ * object back into typed rows is the same operation as seeding rows from a
+ * stored call, and two spellings of it would be two answers about whether an
+ * undeclared key survives.
+ */
+export function rowsFrom(
+  stored: Record<string, unknown>,
+  declared: ReadonlyMap<string, Param>,
+): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const p of target?.params ?? []) out[p.name] = '';
+  for (const name of declared.keys()) out[name] = '';
   for (const [k, v] of Object.entries(stored)) out[k] = formatDefaultInput(v);
   return out;
 }
