@@ -62,7 +62,15 @@ test.describe('#959 portability', () => {
         (envelope as { data: { pipeline: { id: string } } }).data.pipeline.id,
       )}/export`,
     );
-    expect(text).toBe(await raw.text());
+    // `exportedAt` is stamped per REQUEST, so a second export is never
+    // byte-identical to the first — comparing raw text passes only when both
+    // land in the same millisecond, which is a test that fails at random. It is
+    // the envelope's one volatile field (G1 excludes it from the content hash
+    // for exactly this reason); EVERYTHING else, key order and spacing
+    // included, must match exactly, which is what the download claim is about.
+    expect(text).toMatch(/"exportedAt":\d+/); // …so the substitution is not vacuous
+    const stable = (s: string) => s.replace(/"exportedAt":\d+/, '"exportedAt":0');
+    expect(stable(text)).toBe(stable(await raw.text()));
 
     // …and now back in through the picker.
     await page.getByLabel('Export file').setInputFiles(file as string);
