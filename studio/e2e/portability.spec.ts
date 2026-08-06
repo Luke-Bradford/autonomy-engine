@@ -94,4 +94,64 @@ test.describe('#959 portability', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /**
+   * The attention[] honesty surface, end to end.
+   *
+   * The pipeline test above cannot reach it: an empty pipeline has no nodes, so
+   * its import returns `attention: []`. A connection ALWAYS does — the export
+   * ships `requiresSecret: secretRef !== null` and never the ciphertext, so an
+   * import of a connection that HAD a secret arrives with none and says so.
+   * That sentence is the whole reason a "created" message would be a lie: the
+   * imported connection cannot call a provider until the operator re-enters it.
+   */
+  test('exports a connection, and the re-import says the secret did not travel', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    const name = `Portable conn ${Date.now()}`;
+
+    await page.goto('/#/manage/connections');
+    await page.getByRole('heading', { name: 'Connections' }).waitFor();
+    await fluentRootReady(page);
+
+    await page.getByRole('button', { name: 'New connection' }).click();
+    const form = page.getByRole('form', { name: 'Connection form' });
+    await form.getByLabel('Name').fill(name);
+    // A secret IS typed, so `secretRef !== null` server-side — which is the
+    // precondition for the attention item this test exists to prove.
+    await form.getByLabel('Secret').fill('sk-not-exported');
+    await form.getByRole('button', { name: 'Create connection' }).click();
+    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toBeVisible();
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: `Export ${name}`, exact: true }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/^connection-portable-conn-\d+-[\w-]+\.json$/);
+
+    const file = await download.path();
+    expect(file).not.toBeNull();
+
+    // The bytes must be the server's canonical envelope, not a re-serialization
+    // — and they must carry no secret material at all.
+    const saved = await download.createReadStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of saved) chunks.push(Buffer.from(chunk));
+    const text = Buffer.concat(chunks).toString('utf8');
+    expect(text).not.toContain('sk-not-exported');
+    expect(JSON.parse(text)).toMatchObject({ kind: 'connection' });
+
+    await page.getByLabel('Export file').setInputFiles(file as string);
+
+    const outcome = page.getByRole('status');
+    await expect(outcome).toContainText(`Imported connection “${name}”`);
+    // The honesty surface: not "created", but "created and it cannot run yet".
+    await expect(outcome).toContainText('needs its secret');
+
+    // Two rows with the same name now — the import minted a fresh id and does
+    // not dedupe by name, which is why the panel reports the id.
+    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toHaveCount(2);
+
+    await expectQuiet(page, problems);
+  });
 });
