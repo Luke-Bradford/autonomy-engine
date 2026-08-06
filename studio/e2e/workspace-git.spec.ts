@@ -168,7 +168,7 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   await expect(page.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Connected', exact: true })).toHaveCount(0);
 
-  expectQuiet(problems);
+  await expectQuiet(page, problems);
 });
 
 test('the Git section is reachable from the Manage pane', async ({ page }) => {
@@ -181,5 +181,5 @@ test('the Git section is reachable from the Manage pane', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Git', level: 2 })).toBeVisible();
   expect(new URL(page.url()).hash).toBe('#/manage/git');
 
-  expectQuiet(problems);
+  await expectQuiet(page, problems);
 });
