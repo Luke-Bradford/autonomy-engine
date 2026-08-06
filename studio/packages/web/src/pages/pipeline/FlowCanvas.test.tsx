@@ -882,7 +882,10 @@ describe('FlowCanvas click-to-connect refusal (#941)', () => {
     expect(refusal(container)?.textContent).toContain('cannot connect to itself');
   });
 
-  it('names the endpoints of the CLICKED pair, not a previously dragged one', () => {
+  // Named for what it asserts. An earlier title promised the drag→click leakage
+  // case, which this body never drives — that property is the clearing one, and
+  // it is pinned by the DISMISSED-refusal spec below.
+  it('authors the edge and says nothing when the clicked pair is legal', () => {
     const { store, container } = twoNodes();
     clickConnect(port(container, 'n_a', 'source'), port(container, 'n_b', 'target'));
 

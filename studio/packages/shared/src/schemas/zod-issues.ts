@@ -24,6 +24,14 @@ import type { z } from 'zod';
  * Deliberately NOT applied to `engine/params.ts`'s four sites: those compose a
  * prefix into a longer sentence rather than joining a list, so folding them in
  * would mean bending this signature around a different shape.
+ *
+ * Known blind spot, carried over rather than introduced: a path of exactly `['']`
+ * — a key that IS the empty string — joins to `''` and so reads as "no path",
+ * taking the fallback. Every copy this replaces had the same behaviour, no schema
+ * in the repo declares such a key, and distinguishing the two would mean testing
+ * `path.length` separately from the joined value for a case nothing can reach.
+ * Written down so the next reader does not have to re-derive that it is
+ * deliberate. A numeric index is NOT affected: `[0].join('.')` is `'0'`.
  */
 export function formatZodIssues(
   issues: ReadonlyArray<z.core.$ZodIssue>,
