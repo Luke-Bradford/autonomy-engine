@@ -9,6 +9,7 @@ import { PipelinesPage } from './pages/PipelinesPage';
 // `<Suspense>` boundary is in `AppShell`, inside `<main>`.
 import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute.lazy';
 import { TriggersPage } from './pages/TriggersPage';
+import { WorkspaceGitPage } from './pages/WorkspaceGitPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
 import { LegacyRunRedirect } from './pages/runs/LegacyRunRedirect';
@@ -173,6 +174,11 @@ export const ROUTES: RouteObject[] = [
             path: 'triggers',
             element: <TriggersPage />,
             handle: { crumb: sectionLabel('/manage/triggers') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'git',
+            element: <WorkspaceGitPage />,
+            handle: { crumb: sectionLabel('/manage/git') } satisfies ShellRouteHandle,
           },
         ],
       },

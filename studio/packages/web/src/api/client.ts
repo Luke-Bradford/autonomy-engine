@@ -64,7 +64,7 @@ function messageFromBody(status: number, body: ApiErrorBody | undefined): string
 }
 
 export interface ApiRequest<T> {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** JSON-serialised as the request body when present. */
   body?: unknown;
   /**
