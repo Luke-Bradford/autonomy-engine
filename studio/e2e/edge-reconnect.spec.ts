@@ -40,13 +40,6 @@ const CHAIN = {
   edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' as const }],
 };
 
-/** One handle on a named node. */
-function port(page: Page, nodeId: string, handleId: string) {
-  return page.locator(
-    `.react-flow__node[data-id="${nodeId}"] .react-flow__handle[data-handleid="${handleId}"]`,
-  );
-}
-
 /** What the panel says the SELECTED edge fires on. */
 async function checkedOutcome(page: Page): Promise<string | null> {
   return page.evaluate(() => {
@@ -199,53 +192,6 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
     await expect(page.locator('.canvas-refusal')).toHaveCount(0);
     expect(await renderedEdges(page)).toEqual([{ id: 'e_1', variant: 'success' }]);
     await expectQuiet(page, problems);
-  });
-
-  /**
-   * THE STALE-CONTEXT GUARD — a rewire must not poison the NEXT gesture.
-   *
-   * `isValidConnection` judges a rewire against the graph MINUS the edge in
-   * hand, and that reduced precheck is held in a ref because React Flow calls
-   * the predicate before React re-renders. React Flow also offers
-   * CLICK-to-connect (`connectOnClick` defaults to true), which runs through
-   * `onClickConnectStart`/`onClickConnectEnd` — different callbacks entirely —
-   * while still consulting that same predicate. So a ref left holding the last
-   * drag's reduced graph makes the next click-connect judge against a graph
-   * missing an edge: a duplicate reports VALID, paints as accepted, and is then
-   * refused by the store with nothing said.
-   *
-   * Asserted on the handle's own mid-gesture `valid` class, between the two
-   * clicks — which is the only place the difference is visible, since the store
-   * backstop means no edge is created either way.
-   */
-  test('a rewire does not leave a stale graph behind for the next click-connect', async ({
-    page,
-  }) => {
-    await openSeededCanvas(page, 'e2e u19s2 stale context', CHAIN);
-
-    // A rewire, which sets the reduced precheck: `e_1` becomes n_a -failure-> n_b.
-    await selectEdge(page);
-    await reconnectEdgeEnd(
-      page,
-      'source',
-      { id: 'n_a', outcome: outcomePort('success') },
-      { id: 'n_a', outcome: outcomePort('failure') },
-    );
-    await expect.poll(() => renderedEdges(page)).toEqual([{ id: 'e_1', variant: 'failure' }]);
-
-    // Now CLICK-connect the very pair that edge occupies. A duplicate.
-    await port(page, 'n_a', outcomePort('failure')).click();
-    await page.locator('.react-flow__node[data-id="n_b"] .react-flow__handle-left').hover();
-
-    /* Judged against the LIVE graph, `e_1` is there and this is a duplicate, so
-       the target handle must not advertise itself as a valid drop. Judged
-       against the stale rewire graph it would. */
-    await expect(
-      page.locator('.react-flow__node[data-id="n_b"] .react-flow__handle-left'),
-    ).not.toHaveClass(/\bvalid\b/);
-
-    // ...and nothing was authored either way.
-    expect(await renderedEdges(page)).toHaveLength(1);
   });
 
   /**

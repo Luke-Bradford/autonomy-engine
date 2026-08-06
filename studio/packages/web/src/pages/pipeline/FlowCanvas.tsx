@@ -472,6 +472,23 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
    * a duplicate would be reported valid, drawn as accepted, and then silently
    * refused by the store's backstop. That is precisely the silent no this
    * feature exists to remove, so every terminator clears the context.
+   *
+   * UNTESTED, deliberately and with the reason stated rather than a green test
+   * that proves nothing. The consequence is currently unobservable: the stale
+   * precheck is the live graph MINUS an edge, so it can only ever be more
+   * PERMISSIVE, and every false accept it produces is then refused by
+   * `canvasStore.connect`'s own live-graph backstop — no edge, no message,
+   * exactly as if the predicate had been right. (RF also clears
+   * `connectionClickStartHandle` unconditionally, index.mjs:1943, so not even
+   * the click-arm state differs.) A spec was written for this and DELETED after
+   * mutation testing showed it passed with the fix reverted. The fix stands
+   * anyway: a predicate that judges against a graph which is not the live one is
+   * wrong on its own terms, and the only thing standing between that and a
+   * visible defect is a backstop in another module.
+   *
+   * The reason the false accept is silent at all — click-to-connect has NO
+   * refusal explanation, because the panel is wired to the drag callbacks only —
+   * is a pre-existing gap this PR did not introduce, filed separately.
    */
   const endGesture = useCallback(() => {
     dragPre.current = null;
