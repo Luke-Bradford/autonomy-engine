@@ -4,11 +4,7 @@ import {
   type WindowConfig,
   type WindowFrequency,
 } from '@autonomy-studio/shared';
-import {
-  parseWholeNumber,
-  resolveBoundsInto,
-  utcIsoToLocalInput,
-} from './formFields';
+import { parseWholeNumber, resolveBoundsInto, utcIsoToLocalInput } from './formFields';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the tumbling-window builder:

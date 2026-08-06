@@ -1,8 +1,4 @@
-import {
-  EventConfigSchema,
-  formatZodIssues,
-  type EventConfig,
-} from '@autonomy-studio/shared';
+import { EventConfigSchema, formatZodIssues, type EventConfig } from '@autonomy-studio/shared';
 
 /**
  * #439 U14b remainder (#854) — the PURE half of the event-subscription editor.
