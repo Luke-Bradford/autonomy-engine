@@ -994,6 +994,42 @@ export function resolveRunParams(
   return out;
 }
 
+/**
+ * #843 — what is wrong with a param's stored `default`, or `null` if nothing is.
+ *
+ * This does not MIRROR run-start resolution, it IS run-start resolution, run
+ * over one param with no overrides. That distinction is the whole point: the
+ * canvas row, the canvas badge and the server write gate all ask this one
+ * question, so none of them can drift from `coerce` — an earlier client-side
+ * copy of these rules needed a 26-row table asserting the two agreed, and a
+ * table only catches a drift someone remembered to add a row for.
+ *
+ * The absent-`default` guard is load-bearing rather than an optimization:
+ * `resolveRunParams` throws `required param '<name>' has no value` for a
+ * required param with no default, which is a perfectly good declaration. Only a
+ * param that HAS a default is making a claim this can falsify.
+ *
+ * `required` is deliberately NOT an early-out. `resolveRunParams` reads
+ * `hasOwnProperty(p, 'default')` BEFORE `p.required`, so a required param
+ * carrying a default resolves from that default and is never asked for a value —
+ * a bad default fails at run exactly like an optional one's.
+ *
+ * PURE: `resolveRunParams` reads no clock and does no I/O, and the single-param
+ * doc constructed here is local, so nothing observable escapes.
+ */
+export function paramDefaultDefect(p: Param): string | null {
+  if (!Object.prototype.hasOwnProperty.call(p, 'default')) return null;
+  try {
+    resolveRunParams({ params: [p] }, {});
+    return null;
+  } catch (e) {
+    // A non-`ParamResolveError` is a bug in the resolver, not a verdict about
+    // the author's doc — never launder it into a validation issue.
+    if (e instanceof ParamResolveError) return e.message;
+    throw e;
+  }
+}
+
 function coerce(name: string, type: Param['type'], value: unknown): unknown {
   switch (type) {
     case 'number': {
@@ -1888,16 +1924,31 @@ export function validateDoc(
   const declared = new Map<string, Param>();
   for (const p of doc.params) {
     declared.set(p.name, p);
+    // #843 — a `default` the run's own `coerce` will REJECT. Until this gate
+    // existed the doc saved clean and failed at run start, inside a version
+    // that is IMMUTABLE (DB triggers `RAISE(ABORT)` on update) and so could
+    // never be repaired, only re-authored. Refusing at write is not additive —
+    // it refuses docs the server used to accept — and it is safe for the reason
+    // every gate here is safe: the offending fact is repairable in the editor
+    // that surfaces it (U16 renders an editable `type` and `default` for EVERY
+    // declared param), and a git file is repairable as text before import.
+    //
     // #547 — a param DEFAULT is applied by `resolveRunParams` for any
     // un-overridden param and, for a `json`-typed default, passed through
     // `coerce` UNTOUCHED into `run.params` → the `run.started` event, where a
     // non-finite number `JSON.stringify`s to `null` and replays silently-wrong.
-    // (A `number`-typed non-finite default already fails LOUD at `coerce`; this
-    // closes the `json` hole at the same save-time, write-path-only,
-    // by-construction gate as every other doc-integrity rule here — on an
-    // IMMUTABLE doc, so it can only be refused at write, never repaired later.)
+    // That walk is what catches a non-finite buried inside a `json` default,
+    // which `coerce` returns as-is and so cannot see.
+    //
+    // The two OVERLAP on exactly one shape — a non-finite number as the default
+    // of a non-`json` param — where both are true and say it differently. The
+    // type defect wins there: someone who typed `Infinity` into a `number`
+    // field is asking what that field accepts, not about replay fidelity. Only
+    // the reported SENTENCE is at stake; the doc is refused either way.
     if (Object.prototype.hasOwnProperty.call(p, 'default')) {
-      errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
+      const defect = paramDefaultDefect(p);
+      if (defect !== null) errors.push(defect);
+      else errors.push(...jsonReplaySafetyErrors(`param '${p.name}' default`, p.default));
     }
   }
   const outputsById = outputsByIdOf(doc.nodes, doc.containers ?? []);
