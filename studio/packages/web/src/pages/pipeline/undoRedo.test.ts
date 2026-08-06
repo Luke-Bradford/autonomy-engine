@@ -168,9 +168,7 @@ describe('clipboardCommandFor (U21)', () => {
       clipboardCommandFor(key('c', { metaKey: true, target: document.createElement('input') })),
     ).toBeNull();
     expect(
-      clipboardCommandFor(
-        key('v', { metaKey: true, target: document.createElement('textarea') }),
-      ),
+      clipboardCommandFor(key('v', { metaKey: true, target: document.createElement('textarea') })),
     ).toBeNull();
   });
 

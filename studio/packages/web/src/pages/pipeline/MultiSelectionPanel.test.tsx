@@ -44,6 +44,8 @@ describe('MultiSelectionPanel (U21)', () => {
     const store = loaded();
     render(
       <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={() => {}}
         store={store}
         selection={[
           { kind: 'node', id: 'n_a' },
@@ -60,6 +62,8 @@ describe('MultiSelectionPanel (U21)', () => {
     const store = loaded();
     render(
       <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={() => {}}
         store={store}
         selection={[
           { kind: 'node', id: 'n_a' },
@@ -78,6 +82,8 @@ describe('MultiSelectionPanel (U21)', () => {
     const store = loaded();
     render(
       <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={() => {}}
         store={store}
         selection={[
           { kind: 'node', id: 'n_a' },
@@ -94,7 +100,14 @@ describe('MultiSelectionPanel (U21)', () => {
       { kind: 'node', id: 'n_a' },
       { kind: 'node', id: 'n_b' },
     ]);
-    render(<MultiSelectionPanel store={store} selection={store.getState().selected} />);
+    render(
+      <MultiSelectionPanel
+        pipelineId="pl_1"
+        onNotice={() => {}}
+        store={store}
+        selection={store.getState().selected}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete selection' }));
 

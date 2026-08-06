@@ -24,7 +24,7 @@ function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
 function mount(v: PipelineVersion) {
   const store = createCanvasStore();
   store.getState().loadVersion(v);
-  render(<PipelinePanel store={store} />);
+  render(<PipelinePanel pipelineId="pl_1" onNotice={() => {}} store={store} />);
   return store;
 }
 

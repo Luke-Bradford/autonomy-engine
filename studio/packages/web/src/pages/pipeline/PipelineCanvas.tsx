@@ -24,6 +24,7 @@ import {
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import {
+  clipboardCommandFor,
   historyCommandFor,
   isDeleteKeystroke,
   redoDisabledReason,
@@ -118,6 +119,10 @@ export function PipelineCanvas({
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
+     outcome, and folding them would let a paste erase the sentence that
+     says whether the last save landed. */
+  const [clipboardMsg, setClipboardMsg] = useState<string | null>(null);
   // #907 — the unarchive request's own in-flight + failure state. Kept apart
   // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
   // next save; this one is about whether the pipeline can be saved at all.
@@ -232,6 +237,41 @@ export function PipelineCanvas({
         store.getState().deleteSelection();
         return;
       }
+      /* U21 — ⌘C/⌘V/⌘D, same document listener and same text-entry guard. Gated
+         on the preview for the reason Save is: a preview REPLACES the editor, so
+         a paste there would edit a working graph the operator cannot see. */
+      const clip = clipboardCommandFor(e);
+      if (clip !== null) {
+        if (previewing !== null || previewLocked) return;
+        if (clip === 'copy') {
+          const copied = store.getState().copySelection(pipelineId);
+          // Nothing of OURS to copy — leave ⌘C alone so the browser's own text
+          // copy still works for an operator selecting text on the page.
+          if (copied === 0) return;
+          e.preventDefault();
+          setClipboardMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
+          return;
+        }
+        if (clip === 'duplicate') {
+          const ids = store
+            .getState()
+            .selected.filter((sel) => sel.kind === 'node')
+            .map((sel) => sel.id);
+          if (ids.length === 0) return;
+          e.preventDefault();
+          const made = store.getState().duplicateNodes(ids);
+          setClipboardMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
+          return;
+        }
+        e.preventDefault();
+        const outcome = store.getState().pasteClipboard(pipelineId);
+        setClipboardMsg(
+          outcome.ok
+            ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
+            : outcome.reason,
+        );
+        return;
+      }
       const command = historyCommandFor(e);
       if (command === null) return;
       const reason = command === 'undo' ? undoReason : redoReason;
@@ -242,7 +282,7 @@ export function PipelineCanvas({
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [store, undoReason, redoReason]);
+  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked]);
 
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
@@ -682,6 +722,13 @@ export function PipelineCanvas({
       )}
 
       {saveMsg && <p className="notice">{saveMsg}</p>}
+      {/* `role="status"` so a keyboard-driven copy/paste — which changes
+          nothing an operator is looking at — is still announced. */}
+      {clipboardMsg && (
+        <p className="notice" role="status">
+          {clipboardMsg}
+        </p>
+      )}
 
       {/* #904 — a refused save. `role="alert"` because it is the ONE save
           outcome that is not self-explanatory and that the operator must act
@@ -825,7 +872,12 @@ export function PipelineCanvas({
               <FlowCanvas store={store} />
             </ReactFlowProvider>
           </div>
-          <PropertyPanel store={store} connections={connections} />
+          <PropertyPanel
+            store={store}
+            connections={connections}
+            pipelineId={pipelineId}
+            onNotice={setClipboardMsg}
+          />
         </div>
       )}
 
@@ -840,9 +892,13 @@ export function PipelineCanvas({
 function PropertyPanel({
   store,
   connections,
+  pipelineId,
+  onNotice,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   connections: ConnectionPublic[];
+  pipelineId: string;
+  onNotice: (message: string) => void;
 }) {
   const selection = useStore(store, (s) => s.selected);
   const nodes = useStore(store, (s) => s.nodes);
@@ -852,16 +908,25 @@ function PropertyPanel({
 
   // U21 — a marquee selects many, and the editor below edits ONE. `singleSelection`
   // is the seam: many is its own state with its own panel, not "the first one".
-  if (selection.length > 1) return <MultiSelectionPanel store={store} selection={selection} />;
+  if (selection.length > 1) {
+    return (
+      <MultiSelectionPanel
+        store={store}
+        selection={selection}
+        pipelineId={pipelineId}
+        onNotice={onNotice}
+      />
+    );
+  }
   const selected = singleSelection(selection);
-  if (!selected) return <PipelinePanel store={store} />;
+  if (!selected) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
 
   if (selected.kind === 'edge') {
     const edge = edges.find((e) => e.id === selected.id);
     // A selection pointing at an element that no longer exists is, from the
     // operator's side, indistinguishable from having nothing selected — so it
     // gets the same pipeline-level panel as the `!selected` branch above.
-    if (!edge) return <PipelinePanel store={store} />;
+    if (!edge) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
     // Keyed like `NodePanel`: `EdgePanel` holds a DRAFT for the bounce cap, and
     // selecting a different edge must not carry the previous one's half-typed
     // text (or its error) onto it.
@@ -870,7 +935,8 @@ function PropertyPanel({
 
   if (selected.kind === 'container') {
     const container = containers.find((c) => c.id === selected.id);
-    if (!container) return <PipelinePanel store={store} />;
+    if (!container)
+      return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
     // Keyed for the same reason the other two are: the form holds a draft per
     // field, and configuring a different container must not carry the previous
     // one's half-typed values (or its error) onto it.
@@ -888,7 +954,7 @@ function PropertyPanel({
   }
 
   const node = nodes.find((n) => n.id === selected.id);
-  if (!node) return <PipelinePanel store={store} />;
+  if (!node) return <PipelinePanel store={store} pipelineId={pipelineId} onNotice={onNotice} />;
   return (
     <NodePanel
       key={node.id}
@@ -918,9 +984,13 @@ function PropertyPanel({
 export function MultiSelectionPanel({
   store,
   selection,
+  pipelineId,
+  onNotice,
 }: {
   store: ReturnType<typeof createCanvasStore>;
   selection: Selection[];
+  pipelineId: string;
+  onNotice: (message: string) => void;
 }) {
   const activities = selection.filter((s) => s.kind === 'node').length;
   const connections = selection.filter((s) => s.kind === 'edge').length;
@@ -937,6 +1007,31 @@ export function MultiSelectionPanel({
       <p className="page-hint">
         {parts.join(', ')}. Editing is one at a time — click a single activity to configure it.
       </p>
+      {/* U21 — the three bulk acts, in the order an operator reaches for them.
+          Copy and Duplicate act on the ACTIVITIES only (an edge travels with the
+          pair it joins, and an edge alone has nothing to copy into), which is
+          why they are disabled when a marquee caught edges and nothing else. */}
+      <button
+        type="button"
+        disabled={activities === 0}
+        onClick={() => {
+          const copied = store.getState().copySelection(pipelineId);
+          onNotice(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
+        }}
+      >
+        Copy selection
+      </button>
+      <button
+        type="button"
+        disabled={activities === 0}
+        onClick={() => {
+          const ids = selection.filter((s) => s.kind === 'node').map((s) => s.id);
+          const made = store.getState().duplicateNodes(ids);
+          onNotice(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
+        }}
+      >
+        Duplicate selection
+      </button>
       <button type="button" onClick={() => store.getState().deleteSelection()}>
         Delete selection
       </button>
@@ -957,7 +1052,15 @@ export function MultiSelectionPanel({
  *
  * Exported for its own tests, the same reason `EdgePanel`/`NodePanel` are.
  */
-export function PipelinePanel({ store }: { store: ReturnType<typeof createCanvasStore> }) {
+export function PipelinePanel({
+  store,
+  pipelineId,
+  onNotice,
+}: {
+  store: ReturnType<typeof createCanvasStore>;
+  pipelineId: string;
+  onNotice: (message: string) => void;
+}) {
   const params = useStore(store, (s) => s.params);
   const outputs = useStore(store, (s) => s.outputs);
 
@@ -967,6 +1070,26 @@ export function PipelinePanel({ store }: { store: ReturnType<typeof createCanvas
       <p className="page-hint">
         Select a node or an edge to edit it, or use the ⚙ on a container box.
       </p>
+
+      {/* U21 — Paste lives in the NOTHING-selected panel because that is where an
+          operator is standing when they want it: they have just clicked the
+          background to deselect, and ⌘V is otherwise invisible. It is always
+          enabled — the refusal reason (empty clipboard, or one copied from
+          another pipeline) is more useful said than hidden behind a grey
+          button. */}
+      <button
+        type="button"
+        onClick={() => {
+          const outcome = store.getState().pasteClipboard(pipelineId);
+          onNotice(
+            outcome.ok
+              ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
+              : outcome.reason,
+          );
+        }}
+      >
+        Paste
+      </button>
 
       <section className="contract-section">
         <h4>Params</h4>

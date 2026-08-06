@@ -19,7 +19,9 @@ const MAP = new Map([
 
 describe('remapNodeRefsInString', () => {
   it('rewrites a whole-field output ref to the copied node', () => {
-    expect(remapNodeRefsInString(`\${nodes.${A}.output.text}`, MAP)).toBe(`\${nodes.${A2}.output.text}`);
+    expect(remapNodeRefsInString(`\${nodes.${A}.output.text}`, MAP)).toBe(
+      `\${nodes.${A2}.output.text}`,
+    );
   });
 
   it('rewrites a status ref', () => {

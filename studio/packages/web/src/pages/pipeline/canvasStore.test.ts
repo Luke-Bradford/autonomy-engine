@@ -2417,7 +2417,7 @@ describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
     expect(s.getState().edges.map((e) => e.id)).toEqual(['e_ab', 'e_bc']);
   });
 
-  it('keeps the copied subgraph\'s relative layout — one stagger per gesture', () => {
+  it("keeps the copied subgraph's relative layout — one stagger per gesture", () => {
     const s = loaded();
     s.getState().setSelection([
       { kind: 'node', id: 'n_b' },
