@@ -654,10 +654,7 @@ export interface CanvasState {
    * graph WITHOUT this edge — see the implementation for why that exclusion is
    * the load-bearing part.
    */
-  rewireEdge(
-    id: string,
-    target: { from: string; to: string; condition: EdgeCondition },
-  ): void;
+  rewireEdge(id: string, target: { from: string; to: string; condition: EdgeCondition }): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   /**

@@ -706,7 +706,9 @@ describe('connectRejection — undeclared conditions (U19)', () => {
 describe('backEdgeOffer (U6e/U19)', () => {
   it('offers the back-edge the forward rule refuses, carrying the DRAWN outcome', () => {
     const pre = precomputeConnect(CHAIN);
-    expect(backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' }, rewiring: null })).toEqual({
+    expect(
+      backEdgeOffer(pre, { from: 'c', to: 'a', condition: { on: 'failure' }, rewiring: null }),
+    ).toEqual({
       from: 'c',
       to: 'a',
       condition: { on: 'failure' },
@@ -720,7 +722,8 @@ describe('backEdgeOffer (U6e/U19)', () => {
     const g = graph([node('a'), node('b'), node('c', 'if')], [edge('a', 'b'), edge('b', 'c')]);
     const condition = { on: 'branch', branch: 'true' } as const;
     expect(
-      backEdgeOffer(precomputeConnect(g), { from: 'c', to: 'a', condition, rewiring: null })?.condition,
+      backEdgeOffer(precomputeConnect(g), { from: 'c', to: 'a', condition, rewiring: null })
+        ?.condition,
     ).toEqual(condition);
   });
 
@@ -750,7 +753,12 @@ describe('backEdgeOffer (U6e/U19)', () => {
     // Refused for `back-no-progress`, not for the condition — an offer shown on
     // the refusal's REASON alone would author a doc the save gate rejects.
     expect(
-      backEdgeOffer(precomputeConnect(g), { from: 'b', to: 'a', condition: { on: 'success' }, rewiring: null }),
+      backEdgeOffer(precomputeConnect(g), {
+        from: 'b',
+        to: 'a',
+        condition: { on: 'success' },
+        rewiring: null,
+      }),
     ).toBeNull();
   });
 });

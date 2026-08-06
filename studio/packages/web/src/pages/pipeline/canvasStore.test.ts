@@ -465,9 +465,7 @@ describe('canvasStore', () => {
     s.getState().rewireEdge('e_1', { from: 'n_a', to: 'n_c', condition: { on: 'failure' } });
     // The id is what selection, the run log and undo all address the edge by —
     // which is the thing delete-and-redraw could not preserve.
-    expect(s.getState().edges).toEqual([
-      { id: 'e_1', from: 'n_a', to: 'n_c', on: 'failure' },
-    ]);
+    expect(s.getState().edges).toEqual([{ id: 'e_1', from: 'n_a', to: 'n_c', on: 'failure' }]);
   });
 
   /**
