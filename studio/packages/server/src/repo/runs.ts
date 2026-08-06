@@ -1,6 +1,7 @@
 import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { ZodError } from 'zod';
 import {
+  computeRunCost,
   NewRunSchema,
   RunLifecyclePatchSchema,
   RunSchema,
@@ -13,6 +14,7 @@ import {
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
+import { aggregateRunCosts } from './run-events.js';
 import type { Db } from './types.js';
 
 export function createRun(db: Db, input: NewRun): Run {
@@ -194,28 +196,48 @@ export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): R
   if (filter.pipelineId !== undefined) {
     conditions.push(eq(pipelineVersions.pipelineId, filter.pipelineId));
   }
-  const query = db
-    .select({
-      run: runs,
-      pipelineName: pipelines.name,
-      pipelineVersion: pipelineVersions.version,
-      triggerName: triggers.name,
-    })
-    .from(runs)
-    .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
-    .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
-    .leftJoin(triggers, eq(runs.triggerId, triggers.id));
-  const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
-    .orderBy(desc(runs.startedAt), desc(sql`${runs}.rowid`))
-    .all();
-  return rows.map((row) =>
-    RunSummarySchema.parse({
-      ...row.run,
-      pipelineName: row.pipelineName,
-      pipelineVersion: row.pipelineVersion,
-      triggerName: row.triggerName,
-    }),
-  );
+  /* #931 — the rows and their costs are read inside ONE transaction, so both come
+     from a single consistent SQLite snapshot and a metered event appended between
+     the two reads cannot land in a cost whose row predates it. (A nested call would
+     drop to a SAVEPOINT and read the OUTER snapshot instead — still self-consistent,
+     which is all this claims. There is no such caller today: `listRunSummaries` is
+     reached only from `GET /api/runs`.) Read-only, so there is nothing to roll back;
+     the transaction is purely for snapshot isolation, exactly as
+     `aggregatePipelineCost`'s is. */
+  return db.transaction((tx) => {
+    const query = tx
+      .select({
+        run: runs,
+        pipelineName: pipelines.name,
+        pipelineVersion: pipelineVersions.version,
+        triggerName: triggers.name,
+      })
+      .from(runs)
+      .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
+      .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
+      .leftJoin(triggers, eq(runs.triggerId, triggers.id));
+    const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
+      .orderBy(desc(runs.startedAt), desc(sql`${runs}.rowid`))
+      .all();
+    const costs = aggregateRunCosts(
+      tx,
+      rows.map((row) => row.run.id),
+      filter.ownerId,
+    );
+    return rows.map((row) =>
+      RunSummarySchema.parse({
+        ...row.run,
+        pipelineName: row.pipelineName,
+        pipelineVersion: row.pipelineVersion,
+        triggerName: row.triggerName,
+        /* A run with no metered events has no aggregate GROUP, and its cost is a
+           genuine zero — nothing was billed. `computeRunCost([])` rather than a
+           hand-written zero object, so the empty value stays the FOLD's own and
+           cannot fall out of step when `RunCost` grows a field. */
+        cost: costs.get(row.run.id) ?? computeRunCost([]),
+      }),
+    );
+  });
 }
 
 /**
