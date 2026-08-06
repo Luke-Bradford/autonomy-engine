@@ -409,8 +409,15 @@ describe('canvasStore', () => {
    * Dropping an edge back exactly where it started produces a candidate that is
    * byte-identical to an edge that exists — itself. Judged against the full
    * graph the duplicate rule fires, and the operator's answer to "I changed my
-   * mind" is a refusal naming the edge they are holding. Delete the `.filter`
-   * in `rewireEdge` and this is the test that goes red.
+   * mind" is a refusal naming the edge they are holding.
+   *
+   * What this case actually pins is the NO-OP GUARD — established by mutation:
+   * remove the guard and `dirty` goes true, because the exclusion then lets the
+   * unchanged candidate through to a real write. The exclusion itself is not
+   * observable HERE (with the guard in place the store never reaches the rules),
+   * so its discriminating proofs are the cycle case below and, for the visible
+   * half, `e2e/edge-reconnect.spec.ts`'s "dropping an end back where it started
+   * says nothing at all" — which is where a self-duplicate refusal would show.
    */
   it('rewireEdge does not refuse an edge for DUPLICATING ITSELF', () => {
     const s = createCanvasStore();

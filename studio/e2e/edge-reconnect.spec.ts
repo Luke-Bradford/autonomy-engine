@@ -55,8 +55,9 @@ async function renderedEdges(page: Page): Promise<{ id: string; variant: string 
     [...document.querySelectorAll('.react-flow__edge')].map((g) => ({
       id: g.getAttribute('data-id') ?? '',
       variant:
-        [...g.classList].find((c) => c.startsWith('edge-variant-'))?.slice('edge-variant-'.length) ??
-        '',
+        [...g.classList]
+          .find((c) => c.startsWith('edge-variant-'))
+          ?.slice('edge-variant-'.length) ?? '',
     })),
   );
 }
@@ -82,9 +83,7 @@ test.describe('U19 slice 2 — rewiring an edge', () => {
        new outcome's hue. Delete-and-redraw would satisfy "an edge now fires on
        failure" while losing the identity selection and the run log address it
        by, so the id is the assertion that distinguishes the two. */
-    await expect
-      .poll(() => renderedEdges(page))
-      .toEqual([{ id: 'e_1', variant: 'failure' }]);
+    await expect.poll(() => renderedEdges(page)).toEqual([{ id: 'e_1', variant: 'failure' }]);
 
     await expectQuiet(page, problems);
   });

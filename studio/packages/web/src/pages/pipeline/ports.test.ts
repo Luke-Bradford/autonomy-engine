@@ -292,16 +292,19 @@ describe('port geometry', () => {
    * U19 slice 2 — the reconnect anchor is squeezed from BOTH sides, and only one
    * of the two bounds is the obvious one.
    *
-   * Upper: the anchor spans `±r` vertically about its port, so at half the pitch
-   * or beyond it reaches the next outcome's port and "grab this edge" and "draw a
-   * new edge from the outcome below" become one pixel.
-   *
    * Lower: the anchor is TANGENT to the handle, not centred on it (`shiftX`,
    * `@xyflow/react` 12.11.2 index.mjs:2834-2852), and nodes paint above edges —
    * so all that is grabbable is the crescent poking out beyond the handle. At
    * `r <= HANDLE_SIZE / 2` there is no crescent and the edge end cannot be picked
-   * up at all. That failure is invisible in a unit test and looks, in a browser,
-   * exactly like the feature having not been built.
+   * up at all. MEASURED: `e2e/edge-reconnect.spec.ts` goes red at `r = 3`.
+   *
+   * Upper: the anchor spans `±r` vertically about its port, so at half the pitch
+   * or beyond it reaches the next outcome's. Stated honestly, this bound is
+   * PRECAUTIONARY rather than currently live — at `r = 20` that same e2e suite
+   * stays green, because handles paint above edges and only the SELECTED edge is
+   * granted anchors. See `RECONNECT_RADIUS`'s docblock for why it is kept
+   * anyway; the short version is that both maskers are decisions, not
+   * invariants.
    */
   it('keeps the reconnect radius clear of the handle AND of the sibling port', () => {
     expect(RECONNECT_RADIUS).toBeGreaterThan(HANDLE_SIZE / 2);

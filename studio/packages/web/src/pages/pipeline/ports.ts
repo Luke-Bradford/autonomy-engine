@@ -439,10 +439,20 @@ export const HANDLE_SIZE = 6;
  * `r <= HANDLE_SIZE / 2` there is no crescent and the edge end cannot be picked
  * up at all, which would look exactly like the feature not working.
  *
- * The UPPER bound is the sibling port. The circle also spans `±r` VERTICALLY
- * about the port's centre, so a radius at or beyond half the pitch would let one
- * edge's grab area reach the next outcome's port and make "start a new edge from
- * `failure`" and "grab the `success` edge" the same pixel.
+ * The UPPER bound is the sibling port: the circle also spans `±r` VERTICALLY
+ * about the port's centre, so at or beyond half the pitch one edge's grab area
+ * reaches the next outcome's.
+ *
+ * The two bounds are NOT equally load-bearing today, and saying so is the point.
+ * The lower one is live and measured — `e2e/edge-reconnect.spec.ts` goes red at
+ * `r = 3` because the gesture stops working. The upper one is PRECAUTIONARY: at
+ * `r = 20` that same suite stays entirely green, because two other decisions
+ * currently mask it — handles paint above edges (so a port always wins a press
+ * on its own centre), and `FlowCanvas` grants `reconnectable` only to the
+ * SELECTED edge (so there is never a second anchor to collide with). It is kept
+ * because both of those are decisions rather than invariants: widen anchors to
+ * every edge, and a radius past half the pitch makes "grab this edge" and "draw
+ * from the outcome below" the same pixel, silently.
  *
  * `HANDLE_SIZE / 2 < RECONNECT_RADIUS < SOURCE_PORT_PITCH / 2` — pinned by a
  * test, because both bounds are invisible at the call site.
