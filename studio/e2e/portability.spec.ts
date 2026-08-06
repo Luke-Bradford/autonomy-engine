@@ -81,7 +81,11 @@ test.describe('#959 portability', () => {
     // The import minted a NEW id — the same name now names two pipelines, which
     // is exactly why the panel reports the id and why this assertion counts
     // rows rather than looking one up by name.
-    await expect(page.getByRole('link', { name: `Open ${name}`, exact: true })).toHaveCount(2);
+    //
+    // Counted by the ROW's Export button, not by the "Open" link: the outcome
+    // panel renders an `Open <name>` link of its own, so a link count here is
+    // 3 and says nothing about how many pipelines exist.
+    await expect(page.getByRole('button', { name: `Export ${name}`, exact: true })).toHaveCount(2);
 
     await expectQuiet(page, problems);
   });
