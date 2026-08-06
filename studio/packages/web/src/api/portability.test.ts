@@ -5,6 +5,7 @@ import {
   describeAttention,
   describeImported,
   exportPipeline,
+  foreignEnvelopeKind,
   importEnvelope,
   parseEnvelopeText,
 } from './portability';
@@ -99,6 +100,27 @@ describe('parseEnvelopeText', () => {
       kind: 'something-new',
       schemaVersion: 99,
     });
+  });
+});
+
+describe('foreignEnvelopeKind', () => {
+  it('names the section a mis-picked file belongs to, so it can be refused unsent', () => {
+    expect(foreignEnvelopeKind({ kind: 'connection' }, 'pipeline')).toBe('connection');
+    expect(foreignEnvelopeKind({ kind: 'pipeline' }, 'trigger')).toBe('pipeline');
+  });
+
+  it('passes this page\u2019s own kind through', () => {
+    expect(foreignEnvelopeKind({ kind: 'pipeline' }, 'pipeline')).toBeNull();
+  });
+
+  it('passes an UNRECOGNISED kind to the server rather than judging it', () => {
+    // The local check answers "does this belong on my page", NOT "is this
+    // importable" \u2014 the server owns that, and a client that refused an
+    // unknown kind would fail closed against its own server the day a fourth
+    // kind ships.
+    expect(foreignEnvelopeKind({ kind: 'workspace' }, 'pipeline')).toBeNull();
+    expect(foreignEnvelopeKind({}, 'pipeline')).toBeNull();
+    expect(foreignEnvelopeKind({ kind: 7 }, 'pipeline')).toBeNull();
   });
 });
 

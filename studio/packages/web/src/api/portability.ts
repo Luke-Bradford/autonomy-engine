@@ -1,4 +1,5 @@
 import {
+  ExportEnvelopeSchema,
   ImportResultSchema,
   type ImportAttentionItem,
   type ImportResult,
@@ -65,12 +66,15 @@ export function exportTrigger(id: string, signal?: AbortSignal): Promise<string>
  * anything on the operator's disk, and "notes.txt is not a JSON file" is a
  * better answer than a Fastify body-parse 400 that names nothing.
  *
- * It does NOT check `kind`, `schemaVersion` or `catalogVersion`.
- * `parseAndUpgradeEnvelope` on the server is the single authority on what is
- * importable, and it owns the message. A second copy of that rule here would
- * start refusing envelopes the server accepts the moment a fourth kind joined
- * `ExportEnvelopeSchema` — a client-side gate that fails CLOSED against its own
- * server is still a gate that is wrong.
+ * It does NOT check `schemaVersion` or `catalogVersion`, and it does not judge
+ * whether a `kind` is importable. `parseAndUpgradeEnvelope` on the server is
+ * the single authority on that, and it owns the message. A second copy of the
+ * version/upgrade rules here would start refusing envelopes the server accepts
+ * the moment either advanced.
+ *
+ * `foreignEnvelopeKind` below is a DIFFERENT question — "does this file belong
+ * on the page I am standing on" — which the server cannot answer because it
+ * does not know which page asked.
  */
 export function parseEnvelopeText(text: string, filename?: string): unknown {
   const named = filename === undefined ? 'That file' : `“${filename}”`;
@@ -84,6 +88,40 @@ export function parseEnvelopeText(text: string, filename?: string): unknown {
     throw new EnvelopeParseError(`${named} does not contain an export envelope.`);
   }
   return parsed;
+}
+
+/**
+ * The kinds an envelope can declare, from the schema that defines them rather
+ * than a hand-written list — so this cannot drift from `ExportEnvelopeSchema`.
+ */
+const ENVELOPE_KINDS: ReadonlySet<string> = new Set(
+  ExportEnvelopeSchema.options.map((member) => member.shape.kind.value),
+);
+
+/**
+ * The kind this envelope declares, when it is a kind this build knows AND it is
+ * not the kind of the list the operator is standing on. `null` otherwise —
+ * meaning "send it".
+ *
+ * This exists so a mis-picked file is refused BEFORE any request. `POST
+ * /api/import` takes all three kinds and mints a resource for whichever it
+ * gets, so dropping a connection export on the Triggers list would otherwise
+ * succeed — creating a real row on a page that cannot show it, which the
+ * operator then has to find and delete. There is no dry-run to fall back on.
+ *
+ * It is deliberately NOT a general "is this importable" gate, which would be a
+ * second authority on the server's own rules. An unrecognised `kind` returns
+ * `null` and goes to the server, so a v2 envelope this build has never heard of
+ * is judged by the thing that knows — never refused here. The only claim made
+ * locally is the one the server cannot make: which page asked.
+ */
+export function foreignEnvelopeKind(
+  envelope: unknown,
+  listKind: ImportResult['kind'],
+): ImportResult['kind'] | null {
+  const kind: unknown = (envelope as { kind?: unknown }).kind;
+  if (typeof kind !== 'string' || !ENVELOPE_KINDS.has(kind)) return null;
+  return kind === listKind ? null : (kind as ImportResult['kind']);
 }
 
 /** `POST /api/import` — the one entry point for every envelope kind. */

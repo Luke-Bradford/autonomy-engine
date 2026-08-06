@@ -4,6 +4,7 @@ import { messageOf } from '../api/client';
 import {
   describeAttention,
   describeImported,
+  foreignEnvelopeKind,
   importEnvelope,
   parseEnvelopeText,
   type ImportedResource,
@@ -14,20 +15,26 @@ import { pipelinePath } from './author/pipelinePath';
 /**
  * Bring a resource into this workspace from an export file (#959).
  *
- * ONE panel, not one per list page, because `POST /api/import` is ONE route
- * that switches on the envelope's own `kind` — pipeline, connection and
- * trigger all arrive through it. Three kind-policed copies would each be a
- * second authority on what is importable, and each would start refusing an
- * envelope the server accepts the moment a fourth kind is added. So this panel
- * takes any export file and REPORTS what it turned out to be, pointing at the
- * section that owns it when that is not the page you are standing on.
+ * ONE component, used by all three list pages, because `POST /api/import` is
+ * ONE route that switches on the envelope's own `kind` — three hand-written
+ * copies of this panel would drift.
+ *
+ * A file whose kind is not this page's is REFUSED before any request, with a
+ * pointer to the section that owns it. That check is `foreignEnvelopeKind`,
+ * and it is narrow on purpose: it answers "does this belong on the page I am
+ * standing on", which the server cannot answer because it does not know which
+ * page asked. It does NOT judge importability — an unrecognised kind is sent,
+ * because the server owns that rule. The refusal matters because there is no
+ * dry-run: without it, a mis-picked file is imported for real, creating a row
+ * on a page that cannot show it, which the operator must then hunt down and
+ * delete.
  *
  * It performs no I/O on mount — every request is behind the file picker. That
  * is a design constraint, not an accident: `routes.test.tsx` mounts every hub
  * section at once, and a page that fetches on mount has to be mocked there.
  */
 
-/** Where a resource of each kind lives, for the "not this page" pointer. */
+/** Where each kind lives — both this page's own name and the refusal pointer. */
 const SECTION: Record<ImportedResource['kind'], { label: string; path: string }> = {
   pipeline: { label: 'Author → Pipelines', path: '/author/pipelines' },
   connection: { label: 'Manage → Connections', path: '/manage/connections' },
@@ -41,17 +48,25 @@ interface Outcome {
 
 export interface ImportPanelProps {
   /**
-   * The list this panel sits beside. An import of THIS kind lands in it, so it
-   * is refreshed; an import of another kind is reported with a pointer instead.
+   * The list this panel sits beside. An import of THIS kind lands in it and
+   * refreshes it; a file of any OTHER known kind is refused before any request.
    */
   listKind: ImportedResource['kind'];
-  /** Reload the surrounding list. Awaited, so a failure to reload is visible. */
+  /**
+   * Reload the surrounding list. Awaited, so the imported row is on screen
+   * before the outcome names it — but its failure is reported SEPARATELY from
+   * the import's, because by then the resource already exists.
+   */
   onImported: () => Promise<void> | void;
 }
 
 export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A file that belongs to another section: refused locally, nothing sent. */
+  const [foreign, setForeign] = useState<{ kind: ImportedResource['kind']; name: string } | null>(
+    null,
+  );
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -72,16 +87,36 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
     async (file: File) => {
       setBusy(true);
       setError(null);
+      setForeign(null);
       setOutcome(null);
       try {
         const envelope = parseEnvelopeText(await file.text(), file.name);
+        const elsewhere = foreignEnvelopeKind(envelope, listKind);
+        if (elsewhere !== null) {
+          // Refused HERE, before the request. `POST /api/import` would have
+          // taken it and minted a real resource on another page.
+          setForeign({ kind: elsewhere, name: file.name });
+          return;
+        }
         const result = await importEnvelope(envelope);
         const resource = describeImported(result);
-        // Refresh BEFORE reporting: the row the message points at should
-        // already be on screen when the operator looks for it.
-        if (resource.kind === listKind) await onImported();
+        // Refresh BEFORE reporting, so the row is already on screen when the
+        // message names it — but catch its failure SEPARATELY rather than
+        // letting it reach the outer `catch`. Past this line the resource
+        // EXISTS; reporting a failed reload as a failed import would be a false
+        // negative, and `/api/import` does not dedupe, so the operator's
+        // natural retry would mint a duplicate.
+        let refreshFailure: string | null = null;
+        try {
+          await onImported();
+        } catch (refreshErr) {
+          refreshFailure = messageOf(refreshErr);
+        }
         if (!mounted.current) return;
         setOutcome({ resource, attention: result.attention });
+        if (refreshFailure !== null) {
+          setError(`Imported, but this list could not be reloaded: ${refreshFailure}`);
+        }
       } catch (err) {
         if (!mounted.current) return;
         setError(messageOf(err));
@@ -123,20 +158,21 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
           {error}
         </p>
       )}
-      {outcome && <ImportOutcome outcome={outcome} listKind={listKind} />}
+      {foreign && (
+        <p className="error" role="alert">
+          “{foreign.name}” is a {foreign.kind} export, and this is the{' '}
+          {SECTION[listKind].label} list. Import it from{' '}
+          <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
+          created.
+        </p>
+      )}
+      {outcome && <ImportOutcome outcome={outcome} />}
     </section>
   );
 }
 
-function ImportOutcome({
-  outcome,
-  listKind,
-}: {
-  outcome: Outcome;
-  listKind: ImportedResource['kind'];
-}) {
+function ImportOutcome({ outcome }: { outcome: Outcome }) {
   const { resource, attention } = outcome;
-  const section = SECTION[resource.kind];
   return (
     <div className="notice" role="status">
       <p>
@@ -148,12 +184,6 @@ function ImportOutcome({
       {resource.kind === 'pipeline' && (
         <p>
           <Link to={pipelinePath(resource.id)}>Open {resource.name}</Link>
-        </p>
-      )}
-      {resource.kind !== listKind && (
-        <p>
-          It is a {resource.kind}, so it is listed under{' '}
-          <Link to={section.path}>{section.label}</Link>, not on this page.
         </p>
       )}
       {resource.note && <p>{resource.note}</p>}

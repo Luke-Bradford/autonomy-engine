@@ -105,33 +105,49 @@ describe('ImportPanel', () => {
     expect(items[1]).toHaveTextContent(/classify/);
   });
 
-  it('says where a resource of ANOTHER kind went, rather than leaving it invisible', async () => {
+  it('refuses a file belonging to another section BEFORE sending it anywhere', async () => {
     // `/api/import` takes any envelope kind, so a connection export dropped on
-    // the pipelines page really does create a connection — which would appear
-    // nowhere on this page unless the panel says so.
-    importMock.mockResolvedValue({
-      kind: 'connection',
-      connection: {
-        id: 'conn_new',
-        name: 'OpenAI',
-        provider: 'openai',
-        model: 'gpt-4',
-        hasSecret: false,
-        createdAt: 1_754_438_400_000,
-        updatedAt: 1_754_438_400_000,
-      },
-      attention: [{ type: 'requiresSecret' }],
-    } as unknown as ImportResult);
+    // the pipelines page would really create a connection — a row on a page
+    // that cannot show it, which the operator then has to hunt down and delete.
+    // There is no dry-run, so the refusal has to happen here, before the POST.
     const onImported = vi.fn();
     renderWithRouter(<ImportPanel listKind="pipeline" onImported={onImported} />);
 
     await pick(envelopeFile('{"kind":"connection"}', 'connection-openai.json'));
 
-    expect(await screen.findByText(/conn_new/)).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/is a connection export/);
     expect(screen.getByRole('link', { name: 'Manage → Connections' })).toBeInTheDocument();
-    // Nothing landed in THIS list, so refreshing it would be a pointless
-    // request that implies something changed here.
+    // The whole point: nothing was sent, so nothing was created.
+    expect(importMock).not.toHaveBeenCalled();
     expect(onImported).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('sends an UNRECOGNISED kind anyway — the server owns what is importable', async () => {
+    // The local check answers "does this belong on my page", not "is this
+    // importable". A kind this build has never heard of is the server's call:
+    // refusing it here would be a client that fails closed against its own
+    // server the day a fourth kind ships.
+    importMock.mockResolvedValue(pipelineResult());
+    renderWithRouter(<ImportPanel listKind="pipeline" onImported={vi.fn()} />);
+
+    await pick(envelopeFile('{"kind":"workspace"}', 'future.json'));
+
+    await waitFor(() => expect(importMock).toHaveBeenCalledWith({ kind: 'workspace' }));
+  });
+
+  it('still reports the created resource when the list refresh fails', async () => {
+    // Past the POST the resource EXISTS. Reporting a failed reload as a failed
+    // import would be a false negative, and `/api/import` does not dedupe — so
+    // the operator's natural retry would mint a duplicate.
+    importMock.mockResolvedValue(pipelineResult());
+    const onImported = vi.fn().mockRejectedValue(new Error('list unavailable'));
+    renderWithRouter(<ImportPanel listKind="pipeline" onImported={onImported} />);
+
+    await pick(envelopeFile('{"kind":"pipeline"}'));
+
+    expect(await screen.findByRole('status')).toHaveTextContent(/pl_new/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/could not be reloaded/);
   });
 
   it('warns that an imported trigger arrives disabled — a fact no attention item carries', async () => {
@@ -148,7 +164,9 @@ describe('ImportPanel', () => {
       },
       attention: [{ type: 'unboundPipelineVersion' }],
     } as unknown as ImportResult);
-    renderWithRouter(<ImportPanel listKind="pipeline" onImported={vi.fn()} />);
+    // On the TRIGGERS list — a trigger file dropped on Pipelines is now refused
+    // before it is sent, and this case is about what the outcome SAYS.
+    renderWithRouter(<ImportPanel listKind="trigger" onImported={vi.fn()} />);
 
     await pick(envelopeFile('{"kind":"trigger"}', 'trigger-nightly.json'));
 

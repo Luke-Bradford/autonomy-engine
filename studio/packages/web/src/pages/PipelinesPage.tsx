@@ -136,7 +136,14 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </button>
         </p>
       )}
-      {actionMsg && <p className="notice">{actionMsg}</p>}
+      {/* Every message this carries is a FAILURE — a create, an export or a
+          delete that did not happen — so it announces as an alert, matching
+          the other three surfaces that report an export failure. */}
+      {actionMsg && (
+        <p className="error" role="alert">
+          {actionMsg}
+        </p>
+      )}
 
       {/* Gated on a load having SUCCEEDED: an empty list and a failed load are
           different facts, and "no pipelines yet" is a lie about the second. */}
