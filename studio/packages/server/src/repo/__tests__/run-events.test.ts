@@ -6,12 +6,14 @@ import {
   rollupFromAggregates,
   rollupPipelineCost,
   type NewPipelineVersion,
+  type RunCost,
 } from '@autonomy-studio/shared';
 import { runEvents } from '../../db/schema.js';
 import { createPipelineVersion } from '../pipeline-versions.js';
 import { createPipeline } from '../pipelines.js';
 import {
   aggregatePipelineCost,
+  aggregateRunCosts,
   appendRunEvent,
   getRunEvent,
   listRunEvents,
@@ -38,6 +40,77 @@ function setupRun(db: ReturnType<typeof freshDb>['db']) {
     parentRunId: null,
     params: {},
   });
+}
+
+/**
+ * Fixtures shared by the two bounded-SQL cost aggregates (#599 per pipeline, #931
+ * per run). Module-scoped rather than copied into each block: a second `metered`
+ * builder is a second definition of what a well-formed metered row IS, and the
+ * whole point of both aggregates is that they read the same rows the same way.
+ */
+// Well-formed metered payload (A1: the SQL path trusts the stored type +
+// payload, sound only because `appendEngineEvent` validates before insert —
+// so every fixture row here is a VALID metered event, `cost` present only
+// when priced). An ABSENT costEstimate is the cost-unknown signal.
+function metered(
+  runId: string,
+  fields: {
+    inputTokens: number;
+    outputTokens: number;
+    cost?: number;
+    meteringStatus?: 'metered' | 'unknown' | 'unpriced';
+  },
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    type: 'activity.metered',
+    runId,
+    nodeId: 'n1',
+    attemptId: 'n1#1',
+    provider: 'anthropic_api',
+    model: 'claude-opus-4-8',
+    meteringStatus: fields.meteringStatus ?? 'metered',
+    inputTokens: fields.inputTokens,
+    outputTokens: fields.outputTokens,
+  };
+  if (fields.cost !== undefined) {
+    base['inUnitPrice'] = 5;
+    base['outUnitPrice'] = 25;
+    base['costEstimate'] = fields.cost;
+    // Inert provenance for this suite (nothing here asserts on the version —
+    // `price-table.test.ts` owns that). Imported rather than pinned as a
+    // literal so a table bump does not need an edit here, per the repo's
+    // single-source-of-truth-for-constants rule.
+    base['priceTableVersion'] = BUILTIN_PRICE_TABLE_VERSION;
+  }
+  return base;
+}
+
+function mkVersion(db: ReturnType<typeof freshDb>['db'], pipelineId: string) {
+  return createPipelineVersion(db, {
+    pipelineId,
+    params: [],
+    outputs: [],
+    nodes: [],
+    edges: [],
+    catalogVersion: CATALOG_VERSION,
+  });
+}
+function mkRun(db: ReturnType<typeof freshDb>['db'], versionId: string, ownerId = 'local') {
+  return createRun(db, {
+    ownerId,
+    pipelineVersionId: versionId,
+    triggerId: null,
+    parentRunId: null,
+    params: {},
+  });
+}
+
+/** Read a run's cost out of the map, failing loudly rather than silently
+ * asserting against `undefined` if the group is missing. */
+function costOf(costs: Map<string, RunCost>, runId: string): RunCost {
+  const cost = costs.get(runId);
+  if (cost === undefined) throw new Error(`no aggregate group for run ${runId}`);
+  return cost;
 }
 
 describe('run-events repo', () => {
@@ -107,62 +180,6 @@ describe('run-events repo', () => {
   });
 
   describe('aggregatePipelineCost (#599 — bounded SQL rollup, fail-closed)', () => {
-    // Well-formed metered payload (A1: the SQL path trusts the stored type +
-    // payload, sound only because `appendEngineEvent` validates before insert —
-    // so every fixture row here is a VALID metered event, `cost` present only
-    // when priced). An ABSENT costEstimate is the cost-unknown signal.
-    function metered(
-      runId: string,
-      fields: {
-        inputTokens: number;
-        outputTokens: number;
-        cost?: number;
-        meteringStatus?: 'metered' | 'unknown' | 'unpriced';
-      },
-    ): Record<string, unknown> {
-      const base: Record<string, unknown> = {
-        type: 'activity.metered',
-        runId,
-        nodeId: 'n1',
-        attemptId: 'n1#1',
-        provider: 'anthropic_api',
-        model: 'claude-opus-4-8',
-        meteringStatus: fields.meteringStatus ?? 'metered',
-        inputTokens: fields.inputTokens,
-        outputTokens: fields.outputTokens,
-      };
-      if (fields.cost !== undefined) {
-        base['inUnitPrice'] = 5;
-        base['outUnitPrice'] = 25;
-        base['costEstimate'] = fields.cost;
-        // Inert provenance for this suite (nothing here asserts on the version —
-        // `price-table.test.ts` owns that). Imported rather than pinned as a
-        // literal so a table bump does not need an edit here, per the repo's
-        // single-source-of-truth-for-constants rule.
-        base['priceTableVersion'] = BUILTIN_PRICE_TABLE_VERSION;
-      }
-      return base;
-    }
-
-    function mkVersion(db: ReturnType<typeof freshDb>['db'], pipelineId: string) {
-      return createPipelineVersion(db, {
-        pipelineId,
-        params: [],
-        outputs: [],
-        nodes: [],
-        edges: [],
-        catalogVersion: CATALOG_VERSION,
-      });
-    }
-    function mkRun(db: ReturnType<typeof freshDb>['db'], versionId: string, ownerId = 'local') {
-      return createRun(db, {
-        ownerId,
-        pipelineVersionId: versionId,
-        triggerId: null,
-        parentRunId: null,
-        params: {},
-      });
-    }
 
     it('aggregates cost across ALL versions, fail-closed, owner-scoped, metered-only', () => {
       const { db } = freshDb();
@@ -430,5 +447,189 @@ describe('run-events repo', () => {
         outputTokens: 0,
       });
     });
+  });
+});
+
+/**
+ * #931 — the per-RUN bounded aggregate behind the run list's cost column. Same
+ * rows, same fail-closed rule as `aggregatePipelineCost`; what is new is the
+ * GROUPING, and therefore that a zero-metered run has no row to be.
+ */
+describe('aggregateRunCosts (#931 — bounded per-run SQL aggregate)', () => {
+  it('groups per run — one run\'s spend never leaks into another\'s', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const a = mkRun(db, v.id);
+    const b = mkRun(db, v.id);
+    appendRunEvent(db, {
+      runId: a.id,
+      type: 'activity.metered',
+      payload: metered(a.id, { inputTokens: 10, outputTokens: 20, cost: 0.03 }),
+    });
+    appendRunEvent(db, {
+      runId: a.id,
+      type: 'activity.metered',
+      payload: metered(a.id, { inputTokens: 1, outputTokens: 2, cost: 0.07 }),
+    });
+    appendRunEvent(db, {
+      runId: b.id,
+      type: 'activity.metered',
+      payload: metered(b.id, { inputTokens: 5, outputTokens: 5, cost: 0.5 }),
+    });
+
+    const costs = aggregateRunCosts(db, [a.id, b.id], 'local');
+    expect(costs.get(a.id)?.totalCostEstimate).toBeCloseTo(0.1, 10);
+    expect(costs.get(a.id)?.responseCount).toBe(2);
+    expect(costs.get(a.id)?.inputTokens).toBe(11);
+    expect(costs.get(b.id)?.totalCostEstimate).toBeCloseTo(0.5, 10);
+    expect(costs.get(b.id)?.responseCount).toBe(1);
+  });
+
+  it('a run with NO metered events is ABSENT from the map (not a zero row)', () => {
+    /* The load-bearing difference from the ungrouped aggregate, and the reason
+       `listRunSummaries` needs an explicit empty value: there is no group to
+       coalesce, so the zero has to come from the caller. */
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const quiet = mkRun(db, v.id);
+    appendRunEvent(db, { runId: quiet.id, type: 'run.started', payload: {} });
+
+    const costs = aggregateRunCosts(db, [quiet.id], 'local');
+    expect(costs.has(quiet.id)).toBe(false);
+    expect(costs.size).toBe(0);
+  });
+
+  it('an empty id list issues no query and returns an empty map', () => {
+    const { db } = freshDb();
+    expect(aggregateRunCosts(db, [], 'local').size).toBe(0);
+  });
+
+  it('FAIL-CLOSED: an absent costEstimate is a GAP, never summed as 0', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const run = mkRun(db, v.id);
+    appendRunEvent(db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered(run.id, { inputTokens: 10, outputTokens: 20, cost: 0.04 }),
+    });
+    // An unpriced MODEL: no costEstimate, status `metered` — a genuine gap.
+    appendRunEvent(db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered(run.id, { inputTokens: 3, outputTokens: 4 }),
+    });
+
+    const cost = costOf(aggregateRunCosts(db, [run.id], 'local'), run.id);
+    expect(cost.responseCount).toBe(2);
+    expect(cost.pricedResponseCount).toBe(1);
+    expect(cost.costUnknownResponseCount).toBe(1);
+    expect(cost.complete).toBe(false);
+    expect(cost.totalCostEstimate).toBeCloseTo(0.04, 10);
+  });
+
+  it('L14: an all-`unpriced` run stays COMPLETE — a subscription call is a known zero', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const run = mkRun(db, v.id);
+    for (const n of [1, 2]) {
+      appendRunEvent(db, {
+        runId: run.id,
+        type: 'activity.metered',
+        payload: metered(run.id, { inputTokens: n, outputTokens: n, meteringStatus: 'unpriced' }),
+      });
+    }
+
+    const cost = costOf(aggregateRunCosts(db, [run.id], 'local'), run.id);
+    expect(cost.unpricedResponseCount).toBe(2);
+    expect(cost.costUnknownResponseCount).toBe(0);
+    expect(cost.complete).toBe(true);
+    expect(cost.totalCostEstimate).toBe(0);
+  });
+
+  it('counts ONLY activity.metered rows — other event types contribute nothing', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const run = mkRun(db, v.id);
+    appendRunEvent(db, { runId: run.id, type: 'run.started', payload: {} });
+    appendRunEvent(db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered(run.id, { inputTokens: 1, outputTokens: 1, cost: 0.01 }),
+    });
+    appendRunEvent(db, { runId: run.id, type: 'node.succeeded', payload: { node: 'n1' } });
+
+    expect(costOf(aggregateRunCosts(db, [run.id], 'local'), run.id).responseCount).toBe(1);
+  });
+
+  it('is OWNER-SCOPED: another owner\'s run id yields nothing, even when named explicitly', () => {
+    /* Defense in depth. The ids normally arrive already owner-filtered, so this
+       is the second lock — and the one a caller that forgot the first would hit. */
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'other', name: 'Theirs' });
+    const v = mkVersion(db, pipeline.id);
+    const run = mkRun(db, v.id, 'other');
+    appendRunEvent(db, {
+      runId: run.id,
+      type: 'activity.metered',
+      payload: metered(run.id, { inputTokens: 1, outputTokens: 1, cost: 0.99 }),
+    });
+
+    expect(aggregateRunCosts(db, [run.id], 'local').size).toBe(0);
+    expect(costOf(aggregateRunCosts(db, [run.id], 'other'), run.id).totalCostEstimate).toBe(0.99);
+    // Unscoped (no ownerId) is the un-filtered read the pipeline aggregate also offers.
+    expect(costOf(aggregateRunCosts(db, [run.id]), run.id).totalCostEstimate).toBe(0.99);
+  });
+
+  it('SQL === the in-memory fold, per run, over a mixed event set — the paths cannot drift', () => {
+    /* The same anti-drift guard `aggregatePipelineCost` carries, at run scope:
+       priced, $0-priced, subscription-unpriced, unpriced-model gap and
+       `unknown`-usage gap, all in one run, through both derivations. */
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const run = mkRun(db, v.id);
+    const payloads = [
+      metered(run.id, { inputTokens: 10, outputTokens: 20, cost: 0.03 }),
+      metered(run.id, { inputTokens: 1, outputTokens: 1, cost: 0 }),
+      metered(run.id, { inputTokens: 5, outputTokens: 6, meteringStatus: 'unpriced' }),
+      metered(run.id, { inputTokens: 9, outputTokens: 9 }),
+      metered(run.id, { inputTokens: 2, outputTokens: 3, meteringStatus: 'unknown' }),
+    ];
+    for (const payload of payloads) {
+      appendRunEvent(db, { runId: run.id, type: 'activity.metered', payload });
+    }
+
+    expect(costOf(aggregateRunCosts(db, [run.id], 'local'), run.id)).toEqual(
+      computeRunCost(listRunEvents(db, run.id)),
+    );
+  });
+
+  it('chunks past the bind limit — 600 ids in one call all come back', () => {
+    /* RUN_ID_BIND_CHUNK is 500, so this crosses it. Without chunking the query
+       would still succeed here (SQLite allows 32766 binds) — what it proves is
+       that the chunk boundary does not DROP or duplicate a run. */
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const ids: string[] = [];
+    for (let i = 0; i < 600; i += 1) {
+      const run = mkRun(db, v.id);
+      ids.push(run.id);
+      appendRunEvent(db, {
+        runId: run.id,
+        type: 'activity.metered',
+        payload: metered(run.id, { inputTokens: 1, outputTokens: 1, cost: 0.01 }),
+      });
+    }
+
+    const costs = aggregateRunCosts(db, ids, 'local');
+    expect(costs.size).toBe(600);
+    expect([...costs.values()].every((c) => c.totalCostEstimate === 0.01)).toBe(true);
   });
 });
