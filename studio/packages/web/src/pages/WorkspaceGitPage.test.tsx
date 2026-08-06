@@ -208,7 +208,9 @@ describe('WorkspaceGitPage', () => {
 
   it('re-observes the remote on Refresh and shows the new reading', async () => {
     await renderConnected();
-    fetchMock.mockResolvedValue(status({ state: 'fetch_error', lastFetchError: 'host unreachable' }));
+    fetchMock.mockResolvedValue(
+      status({ state: 'fetch_error', lastFetchError: 'host unreachable' }),
+    );
 
     await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
@@ -328,7 +330,9 @@ describe('WorkspaceGitPage', () => {
       await renderConnected();
       driftMock.mockResolvedValue(
         drift({
-          diagnostics: [{ path: 'pipelines/broken.json', message: 'not valid JSON' }],
+          diagnostics: [
+            { path: 'pipelines/broken.json', code: 'unparseable', message: 'not valid JSON' },
+          ],
         }),
       );
 

@@ -94,7 +94,9 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
 
   // ── connect ────────────────────────────────────────────────────────────────
   await expect(page.getByRole('form', { name: 'Connect a repository' })).toBeVisible();
-  await page.getByLabel('Repository').fill(repoDir);
+  // By ROLE, not `getByLabel`: the form's own `aria-label` ("Connect a
+  // repository") also contains the word, and label matching is substring-based.
+  await page.getByRole('textbox', { name: 'Repository', exact: true }).fill(repoDir);
   await page.getByRole('button', { name: 'Connect' }).click();
 
   await expect(page.getByRole('heading', { name: 'Connected' })).toBeVisible();
@@ -123,7 +125,9 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   await expect(driftRows.filter({ hasText: 'added' }).first()).toBeVisible();
 
   // ── commit ─────────────────────────────────────────────────────────────────
-  await page.getByLabel('Message').fill('studio: first commit from the UI');
+  await page
+    .getByRole('textbox', { name: 'Message', exact: true })
+    .fill('studio: first commit from the UI');
   await page.getByRole('button', { name: 'Commit' }).click();
 
   const note = page.getByRole('status');
