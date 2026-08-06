@@ -82,14 +82,30 @@ function endsPath(ch: string | undefined): boolean {
   );
 }
 
-/** Is `s[i..]` the namespace token `nodes`, at the START of a path? */
+/**
+ * Is `s[i..]` the namespace token `nodes`, at the START of a path?
+ *
+ * Both boundaries have to be checked, and checking only the trailing one is a
+ * silent-corruption bug rather than a near miss: `${nodes.a.output.childnodes.a}`
+ * has the substring `nodes` inside the FIELD `childnodes`, followed by a `.`, so
+ * a trailing-only test reads `childnodes.a` as a second node reference and
+ * rewrites an id that is not one.
+ *
+ * The leading rule comes from the grammar, which has no infix operators
+ * (`parseExprAt` is call / ref / string / number / bool and nothing else). A
+ * path can therefore begin in exactly four places: the start of the body, after
+ * whitespace, after a `,` or `(` in an argument list, or after a `[` opening an
+ * index — an index body is its own expression, so `${a[nodes.x.output.i]}` is a
+ * genuine namespace. Everything else (a `.`, a `]`, a `)`, a quote, any field
+ * character) means this `nodes` is part of something larger.
+ */
 function atNamespace(s: string, i: number): boolean {
   if (!s.startsWith(NS, i)) return false;
-  // `params.cfg.nodes.x` — a field that happens to be called `nodes` is not the
-  // namespace. Only a preceding `.` disqualifies: `(`/`,`/space all open a path.
-  if (s[i - 1] === '.') return false;
   // The namespace is a whole token: `nodesX` is a different name entirely.
-  return s[i + NS.length] === '.';
+  if (s[i + NS.length] !== '.') return false;
+  const prev = s[i - 1];
+  if (prev === undefined) return true;
+  return prev === ',' || prev === '(' || prev === '[' || /\s/.test(prev);
 }
 
 /**

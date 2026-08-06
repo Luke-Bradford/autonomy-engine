@@ -71,6 +71,24 @@ describe('remapNodeRefsInString', () => {
     expect(remapNodeRefsInString(before, MAP)).toBe(before);
   });
 
+  it('does NOT rewrite a FIELD that merely ends in "nodes"', () => {
+    // `childnodes.` carries the substring `nodes` followed by a dot, so a check
+    // that only looked at the TRAILING boundary would read it as a second
+    // namespace and rewrite an id that is not a node reference at all.
+    const before = `\${nodes.${A}.output.childnodes.${A}}`;
+    expect(remapNodeRefsInString(before, MAP)).toBe(`\${nodes.${A2}.output.childnodes.${A}}`);
+  });
+
+  it('DOES rewrite a ref opening an argument list or an index body', () => {
+    // The four legal path starts: body start, whitespace, `,`/`(`, and `[`.
+    expect(remapNodeRefsInString(`\${default(nodes.${A}.status, 1)}`, MAP)).toBe(
+      `\${default(nodes.${A2}.status, 1)}`,
+    );
+    expect(remapNodeRefsInString(`\${params.rows[nodes.${A}.output.i]}`, MAP)).toBe(
+      `\${params.rows[nodes.${A2}.output.i]}`,
+    );
+  });
+
   it('does NOT rewrite outside a ${} span — plain prose is never touched', () => {
     const before = `see nodes.${A}.output.x in the docs`;
     expect(remapNodeRefsInString(before, MAP)).toBe(before);
