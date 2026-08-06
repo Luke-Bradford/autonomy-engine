@@ -658,21 +658,26 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
       containers,
       liveNodeRects(
         new Map(
-          flowNodes.map((n) => [
-            n.id,
-            {
-              x: n.position.x,
-              y: n.position.y,
-              /* The nominal size is asked for the port count this node will
-                 render, not taken flat: a node that declares more than the four
-                 operational outcomes is TALLER, and a container box derived from
-                 the flat figure would under-cover it for the frame before React
-                 Flow measures. One frame here rather than permanently (the run
-                 monitor never measures at all), but it is the same defect. */
-              width: n.measured?.width ?? unmeasuredNodeSize(portsOf(n.id).length).width,
-              height: n.measured?.height ?? unmeasuredNodeSize(portsOf(n.id).length).height,
-            },
-          ]),
+          flowNodes.map((n) => {
+            /* The nominal size is asked for the port count this node will
+               render, not taken flat: a node that declares more than the four
+               operational outcomes is TALLER, and a container box derived from
+               the flat figure would under-cover it for the frame before React
+               Flow measures. One frame here rather than permanently (the run
+               monitor never measures at all), but it is the same defect.
+               Computed ONCE and read for both axes — it is one answer about one
+               node, and asking twice re-derived that node's whole port set. */
+            const nominal = unmeasuredNodeSize(portsOf(n.id).length);
+            return [
+              n.id,
+              {
+                x: n.position.x,
+                y: n.position.y,
+                width: n.measured?.width ?? nominal.width,
+                height: n.measured?.height ?? nominal.height,
+              },
+            ] as const;
+          }),
         ),
         new Set(nodes.map((n) => n.id)),
       ),

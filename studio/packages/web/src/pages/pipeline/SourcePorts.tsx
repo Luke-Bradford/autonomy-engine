@@ -39,7 +39,6 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
               className={`flow-port flow-port--${port.orphaned ? 'orphaned' : port.condition.on}`}
               title={name}
               aria-label={name}
-              data-outcome={port.label}
             />
             <span className="flow-port-label" style={{ top }} aria-hidden="true">
               {port.label}
