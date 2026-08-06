@@ -65,11 +65,13 @@ test.describe('#425 — call-node authoring', () => {
     await expect(panel(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
 
     // The child's params are UNKNOWN until a version is chosen — they are a
-    // property of the target, not of the node.
+    // property of the target, not of the node — and the panel says so rather
+    // than offering an empty form or a raw JSON box.
     await expect(panel(page).getByLabel('query')).toHaveCount(0);
+    await expect(panel(page).getByText('Choose a version to see the parameters it declares.')).toBeVisible();
 
-    await panel(page).getByLabel('Pipeline').selectOption({ label: CHILD });
-    await panel(page).getByLabel('Version', { exact: true }).selectOption({ label: 'v1' });
+    await panel(page).getByRole('combobox', { name: 'Pipeline' }).selectOption({ label: CHILD });
+    await panel(page).getByRole('combobox', { name: 'Version' }).selectOption({ label: 'v1' });
 
     // Now they are on screen, straight from the version the picker resolved.
     await expect(panel(page).getByLabel('query')).toBeVisible();
@@ -90,8 +92,8 @@ test.describe('#425 — call-node authoring', () => {
 
     // Resolved back to the pipeline AND the version, from the stored id alone —
     // the picker is showing what the doc says, not a remembered selection.
-    await expect(panel(page).getByLabel('Pipeline')).toHaveValue(/.+/);
-    await expect(panel(page).getByLabel('Pipeline')).toContainText(CHILD);
+    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toHaveValue(/.+/);
+    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(CHILD);
     await expect(panel(page).getByLabel('query')).toHaveValue('ships');
     await expect(panel(page).getByLabel('limit')).toHaveValue('25');
     await expect(panel(page).getByLabel('Wait for the child run')).toBeChecked();
@@ -110,7 +112,7 @@ test.describe('#425 — call-node authoring', () => {
     expect(node.config['outputs'], 'a catalog outputs:[] was baked in').toBeUndefined();
     expect(node.call).toMatchObject({ params: { query: 'ships', limit: 25 }, wait: true });
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   test('an EXPRESSION target is authorable, and says it is not statically checked', async ({
@@ -153,6 +155,6 @@ test.describe('#425 — call-node authoring', () => {
       '{\n  "query": "ships"\n}',
     );
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 });

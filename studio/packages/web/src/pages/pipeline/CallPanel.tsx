@@ -359,7 +359,13 @@ function CallEditor({
       </label>
 
       <h4>Parameters</h4>
-      {draft.mode === 'pick' && chosen ? (
+      {draft.mode === 'pick' && !chosen ? (
+        // Pick mode with nothing chosen yet: the arguments are a property OF the
+        // target, so there is nothing honest to offer — and offering the JSON
+        // fallback here would invite an operator to hand-write a record this
+        // panel is about to be able to type for them.
+        <p className="page-hint">Choose a version to see the parameters it declares.</p>
+      ) : draft.mode === 'pick' && chosen ? (
         rows.length === 0 ? (
           <p className="page-hint">This pipeline version declares no parameters.</p>
         ) : (
