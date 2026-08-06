@@ -139,19 +139,42 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expectQuiet(page, problems);
   });
 
-  test('a type-mismatched default ADVISES but never blocks the save', async ({ page }) => {
-    // The posture that decided this ticket. A version minted before this editor
-    // existed can hold a default the run will reject; the server accepts such a
-    // doc, so REFUSING to save it would leave that pipeline permanently
-    // unsaveable — the one-way trap #748 closed, re-created by the check meant
-    // to help. Say what is wrong; do not bar the exit.
+  test('a type-mismatched default BLOCKS the save, and the editor is the exit', async ({
+    page,
+  }) => {
+    // This test asserted the OPPOSITE until #843, and the reversal is the
+    // ticket. The old posture — advise, never gate — rested on the server
+    // ACCEPTING such a doc, which made a client refusal a one-way trap (#748):
+    // an imported pipeline holding a bad default could never be saved again.
+    // #843 moved the check to the server write gate, so the doc is refused
+    // either way and the trap argument collapses. What makes gating safe is the
+    // same thing that makes it safe for a duplicate name: the editor that
+    // surfaces the defect can also repair it.
+    //
+    // Getting a bad default onto the canvas at all takes some care, and the
+    // reason is worth recording. It can no longer be SEEDED (the API 400s now),
+    // and it cannot be TYPED either — `coerceDefaultInput` refuses to store text
+    // that does not fit the declared type, so the field reports its own parse
+    // error and writes nothing. The one authoring gesture that mints this doc is
+    // a TYPE change over a default that was already stored, which the type
+    // `<select>` deliberately allows: dropping the default on a mis-click would
+    // destroy authored data, so it is kept and the gate explains it. That is
+    // also the realistic operator mistake, so it is the right thing to drive.
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u16 advisory', {
+    await openSeededCanvas(page, 'u16 default gate', {
       nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-      params: [{ name: 'n', type: 'number', required: false, default: 'abc' }],
+      params: [{ name: 'n', type: 'string', required: false, default: 'abc' }],
     });
 
-    await expect(panel(page).getByText(/not a finite number/)).toBeVisible();
+    await page.getByLabel('param 1 type').selectOption('number');
+
+    // The row names it, and the doc-level badge names it in the SAME words.
+    await expect(panel(page).getByText("param 'n': expected a finite number")).toBeVisible();
+    expect(await validationIssues(page)).toContain("param 'n': expected a finite number");
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    // The exit, through the control that got here.
+    await page.getByLabel('param 1 type').selectOption('string');
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 

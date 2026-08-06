@@ -1,10 +1,9 @@
-import { resolveRunParams, type Output, type Param, type ParamType } from '@autonomy-studio/shared';
+import { type Output, type Param } from '@autonomy-studio/shared';
 import { describe, expect, it } from 'vitest';
 import {
   blankOutput,
   blankParam,
   coerceDefaultInput,
-  defaultAdvisory,
   formatDefaultInput,
   nameIssues,
   withRequired,
@@ -90,74 +89,6 @@ describe('nameIssues — the save gate', () => {
       [output({ name: '' })],
     );
     expect(issues).toHaveLength(3);
-  });
-});
-
-describe('defaultAdvisory — non-gating, and it mirrors run-time `coerce`', () => {
-  it('says nothing about a param with no default', () => {
-    expect(defaultAdvisory(param({ type: 'number' }))).toBeNull();
-  });
-
-  it('DOES flag a required param that carries a bad default', () => {
-    // The correction of a wrong belief. `resolveRunParams` reads
-    // `hasOwnProperty(p,'default')` BEFORE `p.required`, so a required param
-    // holding a default resolves from it and never demands an override — the
-    // run fails on it exactly as it would for an optional param. An earlier cut
-    // returned null here and said nothing about a doc that cannot run.
-    expect(defaultAdvisory(param({ type: 'number', required: true, default: 'nope' }))).toContain(
-      'finite number',
-    );
-  });
-
-  it('still says nothing about a required param with NO default', () => {
-    expect(defaultAdvisory(param({ type: 'number', required: true }))).toBeNull();
-  });
-
-  it('accepts a numeric STRING for a number param, because `coerce` does', () => {
-    // engine/params.ts `coerce` accepts /^-?\d+(\.\d+)?$/. Advising against a
-    // default that runs fine would be a false alarm.
-    expect(defaultAdvisory(param({ type: 'number', default: '5' }))).toBeNull();
-    expect(defaultAdvisory(param({ type: 'number', default: -2.5 }))).toBeNull();
-  });
-
-  it('flags a number default that is not a number at all', () => {
-    expect(defaultAdvisory(param({ type: 'number', default: 'abc' }))).toContain('finite number');
-  });
-
-  it('flags a non-finite number, which `coerce` refuses', () => {
-    expect(defaultAdvisory(param({ type: 'number', default: Infinity }))).toContain(
-      'finite number',
-    );
-  });
-
-  it("accepts the strings 'true'/'false' for a boolean, because `coerce` does", () => {
-    expect(defaultAdvisory(param({ type: 'boolean', default: 'true' }))).toBeNull();
-    expect(defaultAdvisory(param({ type: 'boolean', default: false }))).toBeNull();
-  });
-
-  it('flags a boolean default that is neither', () => {
-    expect(defaultAdvisory(param({ type: 'boolean', default: 'yes' }))).toContain('boolean');
-  });
-
-  it('flags a non-string default on a string param', () => {
-    expect(defaultAdvisory(param({ type: 'string', default: 7 }))).toContain('string');
-  });
-
-  it('accepts anything for a json param, because `coerce` returns it as-is', () => {
-    expect(defaultAdvisory(param({ type: 'json', default: { a: [1] } }))).toBeNull();
-    expect(defaultAdvisory(param({ type: 'json', default: 'anything' }))).toBeNull();
-  });
-
-  it('flags a secret default that breaks the credential-label charset', () => {
-    expect(defaultAdvisory(param({ type: 'secret', default: 'has space' }))).toContain('label');
-  });
-
-  it('accepts a well-formed secret label', () => {
-    expect(defaultAdvisory(param({ type: 'secret', default: 'openai.key_1-A' }))).toBeNull();
-  });
-
-  it('flags a secret label over 64 characters', () => {
-    expect(defaultAdvisory(param({ type: 'secret', default: 'a'.repeat(65) }))).toContain('label');
   });
 });
 
@@ -253,7 +184,7 @@ describe('formatDefaultInput — round-trips a stored default back into the fiel
   });
 });
 
-describe('withRequired — the schema contract that `default` is optional-only', () => {
+describe('withRequired — the toggle means what it says', () => {
   it('DELETES the default when a param becomes required', () => {
     // ParamSchema: "Only meaningful when `required` is false; omitted entirely
     // otherwise." Keeping it would mint a doc field the schema calls meaningless.
@@ -273,59 +204,4 @@ describe('withRequired — the schema contract that `default` is optional-only',
     withRequired(p, true);
     expect(p.default).toBe('x');
   });
-});
-
-/**
- * The advisory claims to mirror run-time `coerce`. `coerce` is private, so that
- * agreement used to be asserted only in prose — which is exactly how two copies
- * of a rule drift apart without a test noticing.
- *
- * This runs both sides over one table: `defaultAdvisory` (web) and
- * `resolveRunParams` (the real engine, exported from shared). A row where one
- * says "fine" and the other throws is a divergence, whichever way round.
- */
-describe('defaultAdvisory agrees with the ENGINE, not just with its own comment', () => {
-  const CASES: { type: ParamType; value: unknown }[] = [
-    { type: 'number', value: 42 },
-    { type: 'number', value: -2.5 },
-    { type: 'number', value: '5' },
-    { type: 'number', value: ' 7 ' },
-    { type: 'number', value: 'abc' },
-    { type: 'number', value: Infinity },
-    { type: 'number', value: true },
-    { type: 'number', value: '1e400' },
-    { type: 'boolean', value: true },
-    { type: 'boolean', value: false },
-    { type: 'boolean', value: 'true' },
-    { type: 'boolean', value: 'false' },
-    { type: 'boolean', value: 'yes' },
-    { type: 'boolean', value: 1 },
-    { type: 'string', value: 'hi' },
-    { type: 'string', value: '' },
-    { type: 'string', value: 7 },
-    { type: 'string', value: null },
-    { type: 'json', value: { a: 1 } },
-    { type: 'json', value: [1, 2] },
-    { type: 'json', value: 'anything' },
-    { type: 'json', value: 5 },
-    { type: 'secret', value: 'my.key_1-A' },
-    { type: 'secret', value: 'has space' },
-    { type: 'secret', value: 'a'.repeat(65) },
-    { type: 'secret', value: 42 },
-  ];
-
-  for (const { type, value } of CASES) {
-    it(`${type} default ${JSON.stringify(value) ?? String(value)}`, () => {
-      const p: Param = { name: 'x', type, required: false, default: value };
-
-      let engineRejects = false;
-      try {
-        resolveRunParams({ params: [p] }, {});
-      } catch {
-        engineRejects = true;
-      }
-
-      expect(defaultAdvisory(p) !== null).toBe(engineRejects);
-    });
-  }
 });

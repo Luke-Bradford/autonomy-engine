@@ -141,6 +141,37 @@ describe('pipeline-versions repo — the write gate (#444)', () => {
     ).not.toThrow();
   });
 
+  // #843 — a default the run's own `coerce` will reject. This is the assertion
+  // that binds all THREE write paths at once: the `POST /versions` route, `POST
+  // /api/import` and the git-apply all funnel through `createPipelineVersion`,
+  // so a rule reaching here reaches them by construction rather than by each
+  // caller remembering.
+  it('REFUSES a param default that disagrees with its declared type (#843)', () => {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    let caught: InvalidPipelineDocError | undefined;
+    try {
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [{ name: 'n', type: 'number', required: false, default: 'abc' }],
+      });
+    } catch (err) {
+      caught = err as InvalidPipelineDocError;
+    }
+    expect(caught).toBeInstanceOf(InvalidPipelineDocError);
+    expect(caught?.issues).toEqual(["param 'n': expected a finite number"]);
+    expect(listPipelineVersions(db, pipeline.id)).toEqual([]);
+
+    // The STRING '5' is a legal default for a `number` param — `coerce` accepts
+    // it — so the gate must not refuse a doc that runs perfectly.
+    expect(() =>
+      createPipelineVersion(db, {
+        ...buildVersionInput(pipeline.id),
+        params: [{ name: 'n', type: 'number', required: false, default: '5' }],
+      }),
+    ).not.toThrow();
+  });
+
   it('carries EVERY issue on the error, not just the first', () => {
     const { db } = freshDb();
     const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });

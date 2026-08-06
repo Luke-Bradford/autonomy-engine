@@ -18,7 +18,25 @@ export const ParamSchema = z.object({
   name: z.string().min(1),
   type: ParamTypeSchema,
   required: z.boolean(),
-  /** Only meaningful when `required` is false; omitted entirely otherwise. */
+  /**
+   * The value a run resolves when the caller supplies no override.
+   *
+   * Precedence is **override > default > required-throw** (`resolveRunParams`),
+   * which this comment used to deny — it said the field was "only meaningful
+   * when `required` is false". It is not: the resolver reads
+   * `hasOwnProperty(p, 'default')` BEFORE it reads `p.required`, so a required
+   * param carrying a default resolves from that default and is never asked for
+   * a value. The RUNTIME is authoritative and the comment was wrong (#843).
+   *
+   * That combination is legal and runs fine, so the write gate does NOT refuse
+   * it — barring the exit on a working doc buys nothing. The canvas says it
+   * plainly instead ("this stored default already satisfies it"), and the
+   * `Required` toggle drops the default rather than leaving one that silently
+   * satisfies the demand it just made.
+   *
+   * A default that `coerce` would REJECT is a different matter and IS refused
+   * at write (`paramDefaultDefect`, #843) — that run is guaranteed to fail.
+   */
   default: z.unknown().optional(),
   description: z.string().optional(),
 });

@@ -79,8 +79,8 @@ describe('PipelinePanel (U16) — params', () => {
     expect(screen.getByLabelText('param 1 default')).toHaveValue('not a number');
     expect(screen.queryByText('A run must supply this param.')).toBeNull();
     expect(screen.getByText(/stored default already satisfies it/)).toBeInTheDocument();
-    // ...and the advisory reaches it, which the old early-out suppressed.
-    expect(screen.getByText(/not a finite number/)).toBeInTheDocument();
+    // ...and the defect reaches it, which the old early-out suppressed.
+    expect(screen.getByText("param 'x': expected a finite number")).toBeInTheDocument();
   });
 
   it('still says a run must supply a required param that has NO default', () => {
@@ -187,16 +187,17 @@ describe('PipelinePanel (U16) — params', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('expected a number');
   });
 
-  it('ADVISES about a stored default the run will reject, without blocking anything', () => {
-    // The server accepts this doc — gating Save on it would make an imported
-    // pipeline holding such a default permanently unsaveable (#748's trap).
+  it("names a stored default the run would reject, in the SERVER's words (#843)", () => {
+    // The row shows the same sentence the doc-level badge does, because both
+    // come from `paramDefaultDefect` — so an operator reading "Save is off
+    // because of this" can find the field it is about.
     mount(version({ params: [{ name: 'n', type: 'number', required: false, default: 'abc' }] }));
-    expect(screen.getByText(/not a finite number/)).toBeInTheDocument();
+    expect(screen.getByText("param 'n': expected a finite number")).toBeInTheDocument();
   });
 
-  it('does not advise about a numeric STRING, which the run coerces fine', () => {
+  it('says nothing about a numeric STRING, which the run coerces fine', () => {
     mount(version({ params: [{ name: 'n', type: 'number', required: false, default: '5' }] }));
-    expect(screen.queryByText(/not a finite number/)).toBeNull();
+    expect(screen.queryByText(/expected a finite number/)).toBeNull();
   });
 
   it('Remove drops the row', () => {

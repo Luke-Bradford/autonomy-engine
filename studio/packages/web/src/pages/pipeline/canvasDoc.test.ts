@@ -116,6 +116,22 @@ describe('validateCanvas', () => {
     const issues = validateCanvas(nodes, edges, [], []);
     expect(issues.length).toBeGreaterThan(0);
   });
+
+  // #843 — the badge, and therefore `canSave`, now bars a param default the run
+  // would reject. It arrives here for free through `validatePipelineDoc`, which
+  // is the point of `validateCanvas` delegating rather than re-implementing:
+  // the canvas gains a server rule without a line of client code.
+  it('bars a param default the run would reject (#843)', () => {
+    const bad: Param[] = [{ name: 'n', type: 'number', required: false, default: 'abc' }];
+    expect(validateCanvas([node('a')], [], [], bad)).toEqual([
+      "param 'n': expected a finite number",
+    ]);
+  });
+
+  it('does NOT bar a numeric string, which `coerce` accepts', () => {
+    const fine: Param[] = [{ name: 'n', type: 'number', required: false, default: '5' }];
+    expect(validateCanvas([node('a')], [], [], fine)).toEqual([]);
+  });
 });
 
 /**

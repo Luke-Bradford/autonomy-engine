@@ -1367,10 +1367,10 @@ resolve and a trigger had nothing typed to bind its values to. Closed here for P
 
 | Piece | Lives in |
 |---|---|
-| Name gate, default advisory, field parse/format, `withRequired` | `pages/pipeline/paramRules.ts` |
+| Name gate, field parse/format, `withRequired` | `pages/pipeline/paramRules.ts` |
 | `params`/`outputs` working state + add/update/remove actions | `pages/pipeline/canvasStore.ts` |
 | `PipelinePanel` / `ParamRow` / `OutputRow` | `pages/pipeline/PipelineCanvas.tsx` |
-| Card + checkbox + advisory styling | `index.css` — `.contract-section`, `.contract-row`, `.contract-check`, `.contract-advisory` |
+| Card + checkbox styling | `index.css` — `.contract-section`, `.contract-row`, `.contract-check` |
 | Browser coverage | `e2e/params-authoring.spec.ts` |
 
 Decisions worth not re-deriving:
@@ -1385,20 +1385,25 @@ Decisions worth not re-deriving:
   the store. This is the third field to make that move (`containers` was #746) and the failure is
   identical each time: a carry-forward that outlives its "no UI yet" premise silently DISCARDS the
   operator's edit at the moment they save it.
-- **The save gate and the advisory are deliberately different things.** Duplicate/empty names GATE
-  Save, and the rules come from parsing `NewPipelineVersionSchema.shape.params/outputs` — the
-  server's own field — so the message IS the server's and the two cannot drift. A type-mismatched
-  `default` only ADVISES: the write path accepts any `default` (`z.unknown().optional()`), so gating
-  on it would leave an imported pipeline that already holds one permanently unsaveable — the exact
-  one-way trap #748 closed, re-created by the check meant to help. Tell the truth; do not bar the exit.
+- **The save gate and the advisory were deliberately different things — and #843 later collapsed
+  the distinction.** Duplicate/empty names GATE Save, and the rules come from parsing
+  `NewPipelineVersionSchema.shape.params/outputs` — the server's own field — so the message IS the
+  server's and the two cannot drift. A type-mismatched `default` originally only ADVISED, because
+  the write path accepted any `default` (`z.unknown().optional()`) and gating on it would have left
+  an imported pipeline that already held one permanently unsaveable — the one-way trap #748 closed.
+  **#843 (2026-08-06) moved the check to the SERVER** (`paramDefaultDefect`, reached through
+  `validateDoc`), which dissolves that argument: the doc is refused either way, so a non-gating
+  client would only spend a round-trip on a 400. `defaultAdvisory` is gone and the row renders the
+  shared predicate's own sentence, word-for-word the one the badge shows. See the AS BUILT note at
+  the end of this section.
 - **A REQUIRED param's default IS read at run time.** `resolveRunParams` tests
   `hasOwnProperty(p, 'default')` BEFORE `p.required`, so the precedence is
   override > default > required-throw, and a required param carrying a default is never asked for a
   value. The panel therefore shows the default field whenever a default EXISTS, required or not.
   Hiding it (on the opposite belief) made an API-minted default invisible, un-editable and immune to
-  the advisory, while the panel asserted the reverse of what the engine does. `paramRules.test.ts`
-  now cross-checks every advisory verdict against `resolveRunParams` itself rather than against a
-  comment.
+  the advisory, while the panel asserted the reverse of what the engine does. The verdict table now
+  lives in `packages/shared/src/engine/__tests__/param-default-defect.test.ts` (#843), where the
+  predicate it pins IS `resolveRunParams` rather than a copy of it.
 - **`default` and `optional` are ABSENT-means-something fields.** Ticking Required DELETES the
   stored default (`withRequired`); blanking the field REMOVES the key rather than writing
   `undefined`, which `hasOwnProperty` would read as "the default is undefined". Same for an output's
@@ -1410,9 +1415,29 @@ Decisions worth not re-deriving:
   object arrives exactly when the row's param is replaced.
 
 Deferred, with tickets rather than silence: a `json` param whose default is a string gets no
-advisory (runtime accepts any value for `json`, so it is a UX heuristic, not a defect);
+advisory (runtime accepts any value for `json`, so it is a UX heuristic, not a defect); and
 pipeline-level `outputs` get NO static validation at all, because `validatePipelineDoc`'s `Pick`
-excludes them; and the write path has no type-vs-default consistency check.
+excludes them (**#842**, still open). The third deferral — the write path having no
+type-vs-default consistency check — was **#843, closed 2026-08-06**.
+
+**AS BUILT (2026-08-06, #843 — the type-vs-default check became a WRITE GATE).** A param default
+that run-start `coerce` will reject is now refused at save, by `paramDefaultDefect` inside
+`validateDoc`. Three things are worth not re-deriving. **(a)** The predicate does not mirror
+run-start resolution, it IS run-start resolution — it calls `resolveRunParams` over the single param
+and returns the `ParamResolveError` message — so the canvas row, the canvas badge and the server
+gate cannot drift from `coerce`; the 26-row agreement table that used to guard that drift is now a
+characterization of the ACCEPTED SET instead (the STRING `'5'` is a fine `number` default, and
+refusing it would bar a save that runs perfectly). **(b)** Because `createPipelineVersion` is the
+single write gate, the rule binds the `POST /versions` route, `POST /api/import` and the git-apply
+by construction. **(c)** The gate is safe for the same reason the duplicate-name gate is: the editor
+that surfaces the defect can repair it. Note what that means for the browser spec — a bad default
+can no longer be seeded (the API 400s) and cannot be typed either (`coerceDefaultInput` refuses to
+store text that does not fit), so the one gesture that mints this doc is a TYPE change over a
+default already stored, which the type `<select>` deliberately permits rather than destroy authored
+data on a mis-click. The `required`-carrying-a-default question the ticket raised alongside it was
+answered the other way: that doc RUNS FINE, so it is advised, never refused — `ParamSchema.default`'s
+comment claiming the field is "only meaningful when `required` is false" was simply wrong and is
+corrected.
 
 ## U11 — the run monitor's node-state overlay (AS BUILT, 2026-07-31)
 
