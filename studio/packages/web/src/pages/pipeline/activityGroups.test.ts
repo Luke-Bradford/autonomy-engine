@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ACTIVITY_CATEGORIES,
-  ACTIVITY_CATEGORY_LABELS,
-  catalog,
-  isStructuralCallActivity,
-} from '@autonomy-studio/shared';
+import { ACTIVITY_CATEGORIES, ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { toolboxGroups } from './activityGroups';
-
-/** Every activity the toolbox is allowed to offer. */
-const authorable = [...catalog.values()].filter((e) => !isStructuralCallActivity(e.type));
 
 /** Flatten groups back to a type list, in render order. */
 function typesOf(groups: ReturnType<typeof toolboxGroups>): string[] {
@@ -16,12 +8,13 @@ function typesOf(groups: ReturnType<typeof toolboxGroups>): string[] {
 }
 
 describe('toolboxGroups', () => {
-  it('offers every generically-authorable activity and hides the structural-call one', () => {
+  it('offers EVERY catalogued activity, the structural-call one included (#425)', () => {
     const types = typesOf(toolboxGroups(''));
-    expect(types.sort()).toEqual(authorable.map((e) => e.type).sort());
-    // The #4 A9 exclusion the flat palette carried: `execute_pipeline` stores its
-    // settings in `node.call`, so the generic config form cannot author it (#425).
-    expect(types).not.toContain('execute_pipeline');
+    expect(types.sort()).toEqual([...catalog.values()].map((e) => e.type).sort());
+    // `execute_pipeline` stores its settings in `node.call`, which the generic
+    // config form cannot author — but `CallPanel` can, so the palette no longer
+    // hides the one activity that composes pipelines out of pipelines.
+    expect(types).toContain('execute_pipeline');
   });
 
   it('renders groups in the shared ACTIVITY_CATEGORIES order, not catalog order', () => {
@@ -84,9 +77,10 @@ describe('toolboxGroups', () => {
     expect(toolboxGroups('zzzz-no-such-activity')).toEqual([]);
   });
 
-  it('never matches the structural-call activity even by an exact query', () => {
-    // The exclusion is by TYPE, not by the filter happening not to hit it.
-    expect(toolboxGroups('execute_pipeline')).toEqual([]);
-    expect(toolboxGroups('Execute Pipeline')).toEqual([]);
+  it('matches the structural-call activity by type AND by title (#425)', () => {
+    // Searchable by both, like every other entry: the type is what an export
+    // envelope and an error message name, the title is what the toolbox shows.
+    expect(typesOf(toolboxGroups('execute_pipeline'))).toEqual(['execute_pipeline']);
+    expect(typesOf(toolboxGroups('Execute Pipeline'))).toEqual(['execute_pipeline']);
   });
 });

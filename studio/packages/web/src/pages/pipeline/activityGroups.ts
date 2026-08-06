@@ -2,7 +2,6 @@ import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
   catalog,
-  isStructuralCallActivity,
   type ActivityCatalogEntry,
   type ActivityCategory,
 } from '@autonomy-studio/shared';
@@ -42,9 +41,11 @@ export interface ToolboxGroup {
  * 3. **A group with no matches is OMITTED.** A heading over nothing is a false
  *    "this category has matches" signal, and dead height in a 180px column.
  *
- * The structural-call activity (`execute_pipeline`) is excluded outright: its
- * settings ride `node.call`, not `node.config`, so the generic config form cannot
- * author it (#4 A9; call-node authoring is #425).
+ * The structural-call activity (`execute_pipeline`) USED to be excluded outright,
+ * because its settings ride `node.call` rather than `node.config` and the generic
+ * config form cannot author them (#4 A9). #425 gave it a dedicated editor
+ * (`CallPanel`), so it is now offered like any other entry — the exclusion lives
+ * nowhere in this file any more.
  */
 export function toolboxGroups(query: string): ToolboxGroup[] {
   const needle = query.trim().toLowerCase();
@@ -53,7 +54,6 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
   for (const category of ACTIVITY_CATEGORIES) {
     const entries = [...catalog.values()]
       .filter((e) => e.category === category)
-      .filter((e) => !isStructuralCallActivity(e.type))
       // Title AND type: the title is what the toolbox shows, but the type is what
       // the docs, an export envelope and an error message all name, so an author
       // who knows `file_read` should not have to guess it is called "Read File".

@@ -5,6 +5,7 @@ import {
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
+  type CallConfig,
   type Container,
   type ContainerKind,
   type Edge,
@@ -759,6 +760,28 @@ export interface CanvasState {
    */
   rewireEdge(id: string, target: { from: string; to: string; condition: EdgeCondition }): void;
   updateNodeConfig(id: string, config: Record<string, unknown>): void;
+  /**
+   * #425 — set (or clear) a call node's `Node.call` blob.
+   *
+   * The `node.call` counterpart of `updateNodeConfig`, and separate from it for
+   * the reason the two fields are separate on `NodeSchema`: a call node's
+   * settings are STRUCTURAL (the engine routes on `Node.call`'s presence), not
+   * activity config, so folding them into the config record would make the
+   * generic config form able to author a dispatch mechanism.
+   *
+   * Takes the WHOLE blob, not a patch — `wait` is an absent-or-present key, and
+   * a patch signature cannot express "remove it" without a JSON-hostile
+   * sentinel (the `updateParam`/`createContainer` precedent).
+   *
+   * REFUSES a node whose type is not a structural-call activity: `Node.call` on
+   * any other type is a field the reducer would act on while the node's own
+   * catalog entry knows nothing about it. This is the same rail as
+   * `updateEdgeBounces` refusing a forward edge — never persist a lie about how
+   * a graph element behaves. (`undefined` clears it, which is the state a
+   * freshly added call node starts in and the state the save gate reports as
+   * "needs a call config".)
+   */
+  updateNodeCall(id: string, call: CallConfig | undefined): void;
   setNodeConnection(id: string, connectionId: string | undefined): void;
   /**
    * U16 — the pipeline's typed contract. Each takes a WHOLE replacement row
@@ -979,13 +1002,14 @@ export function createCanvasStore(): StoreApi<CanvasState> {
 
       addNode(type, position) {
         if (!getActivity(type)) return; // unknown catalog type — ignore rather than author garbage
-        // A structural-call activity (`execute_pipeline`) stores its settings in
-        // `node.call`, not `node.config`, so this generic config-form path would
-        // author a call-less, un-saveable node. Refuse it (the toolbox also hides
-        // its entry, and the drop path refuses the payload); call-node authoring is
-        // #425. Both guards run for a DROPPED node too — a position argument is
-        // placement, never a bypass.
-        if (isStructuralCallActivity(type)) return;
+        // #425 — a structural-call activity (`execute_pipeline`) is now authorable.
+        // It is added with NO `call` blob: there is no honest default target, and
+        // `CallConfigSchema.pipelineVersionId` is `.min(1)`, so seeding a blank one
+        // would author a node that fails a raw Zod parse instead of the readable
+        // "an execute_pipeline needs a call config" the doc validator already emits.
+        // The save gate therefore holds the node until `CallPanel` sets a target,
+        // and `lowerPipelineNodes` skips it by TYPE in the meantime (#425 in
+        // `catalog/lower.ts`) so no `outputs: []` gets baked into the window.
         const n = get().addCount;
         const created: Node = {
           id: newLocalId('n'),
@@ -1403,6 +1427,21 @@ export function createCanvasStore(): StoreApi<CanvasState> {
         if (!get().nodes.some((n) => n.id === id)) return;
         edit((s) => ({
           nodes: s.nodes.map((n) => (n.id === id ? { ...n, config } : n)),
+        }));
+      },
+
+      updateNodeCall(id, call) {
+        const node = get().nodes.find((n) => n.id === id);
+        if (node === undefined) return;
+        if (!isStructuralCallActivity(node.type)) return;
+        edit((s) => ({
+          nodes: s.nodes.map((n) => {
+            if (n.id !== id) return n;
+            const next = { ...n };
+            if (call) next.call = call;
+            else delete next.call;
+            return next;
+          }),
         }));
       },
 

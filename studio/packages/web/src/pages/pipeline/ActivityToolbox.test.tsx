@@ -1,16 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  ACTIVITY_CATEGORY_LABELS,
-  catalog,
-  isStructuralCallActivity,
-} from '@autonomy-studio/shared';
+import { ACTIVITY_CATEGORY_LABELS, catalog } from '@autonomy-studio/shared';
 import { ActivityToolbox } from './ActivityToolbox';
 import { ACTIVITY_DND_MIME } from './activityDnd';
 import { createCanvasStore } from './canvasStore';
-
-const authorable = [...catalog.values()].filter((e) => !isStructuralCallActivity(e.type));
 
 function renderToolbox() {
   const store = createCanvasStore();
@@ -37,6 +31,10 @@ function offeredNames(): string[] {
     .map((b) => b.textContent ?? '');
 }
 
+// #425 retired the structural-call exclusion, so every catalogued activity is
+// authorable — the name is kept because it still says what the list MEANS.
+const authorable = [...catalog.values()];
+
 describe('ActivityToolbox', () => {
   it('offers every generically-authorable activity, grouped under its category heading', () => {
     renderToolbox();
@@ -52,12 +50,14 @@ describe('ActivityToolbox', () => {
     expect(within(general).queryByRole('button', { name: 'LLM Call' })).toBeNull();
   });
 
-  it('hides execute_pipeline — the #4 A9 structural-call exclusion the flat palette carried', () => {
-    renderToolbox();
-    expect(screen.queryByRole('button', { name: 'Execute Pipeline' })).toBeNull();
-    // The exclusion is real and removed exactly one entry, not the whole toolbox.
-    expect(offeredNames()).toHaveLength(authorable.length);
-    expect(authorable.length).toBe(catalog.size - 1);
+  it('OFFERS execute_pipeline, and clicking it authors a call node — #425', () => {
+    // The structural-call exclusion retired with #425: `CallPanel` authors the
+    // `node.call` blob the generic config form could not, so the palette offers
+    // the whole catalog and nothing is left unreachable from the canvas.
+    const store = renderToolbox();
+    expect(offeredNames()).toHaveLength(catalog.size);
+    fireEvent.click(screen.getByRole('button', { name: 'Execute Pipeline' }));
+    expect(store.getState().nodes[0]!.type).toBe('execute_pipeline');
   });
 
   it('adds the activity on CLICK — the keyboard-operable path drag cannot provide', () => {

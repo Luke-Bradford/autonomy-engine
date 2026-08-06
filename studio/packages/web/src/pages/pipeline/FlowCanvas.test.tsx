@@ -106,13 +106,14 @@ describe('FlowCanvas drop target (U5)', () => {
     expect(prevented).toBe(true);
   });
 
-  it('CLAIMS a drop naming the structural-call activity, and authors nothing (#4 A9 / #425)', () => {
+  it('AUTHORS a dropped structural-call activity — #425 made it authorable', () => {
     const { store, surface } = mountCanvas();
     const prevented = !fireEvent.drop(surface, {
       dataTransfer: activityDrag('execute_pipeline'),
       clientX: 0,
+      clientY: 0,
     });
-    expect(store.getState().nodes).toHaveLength(0);
+    expect(store.getState().nodes.map((n) => n.type)).toEqual(['execute_pipeline']);
     expect(prevented).toBe(true);
   });
 

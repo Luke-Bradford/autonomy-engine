@@ -3,6 +3,7 @@ import {
   EdgeSchema,
   PipelineVersionSchema,
   type Container,
+  type Node,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
 import {
@@ -194,16 +195,49 @@ describe('canvasStore', () => {
     expect(s.getState().dirty).toBe(false);
   });
 
-  it('addNode refuses a structural-call type (execute_pipeline) — config rides node.call, #425', () => {
-    // `execute_pipeline`'s settings live in `node.call`, not `node.config`, so the
-    // generic config-form path here would author a call-less, un-saveable node.
-    // Call-node authoring is #425; until then the store refuses it, like an unknown
-    // type — and the palette hides its button (see PipelineCanvas).
+  it('addNode ADDS a structural-call type with NO call blob and NO seeded outputs — #425', () => {
+    // #425 made `execute_pipeline` authorable. The node is added WITHOUT a `call`
+    // (there is no honest default target, and a blank one fails `CallConfigSchema`
+    // outright instead of producing the doc validator's readable diagnostic), and
+    // WITHOUT a seeded `config.outputs`: a call node's outputs come from the child
+    // projection, so seeding the catalog's `[]` would flip the contract from
+    // absent (store all child outputs) to declared-empty (store none) — and F13b
+    // never overwrites a present value, so the flip would outlive the fix.
     const s = createCanvasStore();
     s.getState().loadVersion(null);
     s.getState().addNode('execute_pipeline');
-    expect(s.getState().nodes).toHaveLength(0);
-    expect(s.getState().dirty).toBe(false);
+    const node = s.getState().nodes[0]!;
+    expect(node.type).toBe('execute_pipeline');
+    expect(node.call).toBeUndefined();
+    expect(node.config['outputs']).toBeUndefined();
+    expect(s.getState().dirty).toBe(true);
+  });
+
+  it('updateNodeCall sets, clears and undoes a call blob — and refuses a non-call node', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('execute_pipeline');
+    s.getState().addNode('http_request');
+    const [callNode, httpNode] = s.getState().nodes as [Node, Node];
+
+    s.getState().updateNodeCall(callNode.id, { pipelineVersionId: 'pv_1', params: { a: 1 } });
+    expect(s.getState().nodes[0]!.call).toEqual({ pipelineVersionId: 'pv_1', params: { a: 1 } });
+
+    // ONE gesture is ONE undo entry, and the undo restores the previous blob.
+    s.getState().undo();
+    expect(s.getState().nodes[0]!.call).toBeUndefined();
+    s.getState().redo();
+    expect(s.getState().nodes[0]!.call?.pipelineVersionId).toBe('pv_1');
+
+    s.getState().updateNodeCall(callNode.id, undefined);
+    expect(s.getState().nodes[0]!.call).toBeUndefined();
+    expect('call' in s.getState().nodes[0]!).toBe(false);
+
+    // A `call` on a non-call type is a field the reducer would act on while the
+    // node's own catalog entry knows nothing about it — refused, not written.
+    s.getState().updateNodeCall(httpNode.id, { pipelineVersionId: 'pv_1', params: {} });
+    expect(s.getState().nodes[1]!.call).toBeUndefined();
+    s.getState().updateNodeCall('n_missing', { pipelineVersionId: 'pv_1', params: {} });
   });
 
   // U5 — a node dropped from the toolbox lands where the pointer released it,
@@ -236,13 +270,33 @@ describe('canvasStore', () => {
     expect(interleaved.getState().nodes[2]!.position).toEqual(secondClickAlone);
   });
 
-  it('addNode still refuses an unknown or structural-call type WITH a position', () => {
+  it('duplicateNode carries an authored call blob to the copy, unaliased', () => {
+    // `duplicateNode` structuredClones the whole node rather than naming fields,
+    // which is what stops it going stale as `NodeSchema` grows — `call` is one
+    // of the fields riding on that. Asserted because a copy that silently lost
+    // its target would look identical on the canvas.
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.getState().addNode('execute_pipeline');
+    const id = s.getState().nodes[0]!.id;
+    s.getState().updateNodeCall(id, { pipelineVersionId: 'pv_1', params: { a: 1 } });
+    s.getState().duplicateNode(id);
+
+    const [source, copy] = s.getState().nodes as [Node, Node];
+    expect(copy.call).toEqual(source.call);
+    // A COPY, not an alias — editing one target must not edit the other.
+    expect(copy.call).not.toBe(source.call);
+    expect(copy.call!.params).not.toBe(source.call!.params);
+  });
+
+  it('addNode still refuses an UNKNOWN type WITH a position', () => {
     // The position argument is not a bypass: the drop path runs the same guards
     // as the click path, so a hand-crafted drag payload cannot author garbage.
+    // (The structural-call arm of this guard retired with #425 — `execute_pipeline`
+    // is authorable now, by click and by drop alike.)
     const s = createCanvasStore();
     s.getState().loadVersion(null);
     s.getState().addNode('not_a_real_activity', { x: 10, y: 10 });
-    s.getState().addNode('execute_pipeline', { x: 10, y: 10 });
     expect(s.getState().nodes).toHaveLength(0);
     expect(s.getState().dirty).toBe(false);
   });

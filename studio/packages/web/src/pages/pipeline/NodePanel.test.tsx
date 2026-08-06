@@ -1,10 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { getActivity, isStructuralCallActivity, type Node } from '@autonomy-studio/shared';
 import { NodePanel } from './PipelineCanvas';
 import { useStore } from 'zustand';
 import { createCanvasStore } from './canvasStore';
 import { deriveConfigFields } from './configForm';
+
+// `CallPanel` lists pipelines on mount. This suite is about which PANEL NodePanel
+// routes to, not about the call editor's own behaviour (`CallPanel.test.tsx` owns
+// that), so the listing is stubbed empty rather than served.
+vi.mock('../../api/pipelines', () => ({
+  listAllPipelineVersions: () => Promise.resolve([]),
+}));
 
 /**
  * Mount the panel over a store holding ONE node, and hand back a reader for that
@@ -33,6 +40,7 @@ function mountOver(target: Node, connections: Parameters<typeof NodePanel>[0]['c
         nodeType={node.type}
         config={node.config}
         connectionId={node.connectionId}
+        call={undefined}
       />
     );
   }
@@ -60,12 +68,13 @@ const httpNode = (config: Record<string, unknown>): Node => node('n_http', 'http
 // `src/palette.test.ts` — the CSS COLOUR-palette test — already owned the word
 // "palette" in this package's test names.
 
-// A structural-call node can still be LOADED (authored via the API), so the
-// inspector must not offer the generic `node.config` editor for it — that would
-// validate `node.config` against `CallConfigSchema` (the `node.call` blob) and
-// always fail. It shows a read-only stub deferring to #425 instead.
-describe('NodePanel (#4 A9 structural-call stub)', () => {
-  it('renders a read-only stub (no config editor) for an execute_pipeline node', () => {
+// A structural-call node's settings live in `node.call`, so the inspector must
+// not offer the generic `node.config` editor for it — that would validate
+// `node.config` against `CallConfigSchema` (the `node.call` blob) and always
+// fail. #425 replaced the read-only stub that used to stand here with the
+// dedicated `CallPanel`.
+describe('NodePanel (#4 A9 structural-call routing)', () => {
+  it('renders the call editor, not the generic config editor, for an execute_pipeline node', () => {
     render(
       <NodePanel
         store={createCanvasStore()}
@@ -74,10 +83,11 @@ describe('NodePanel (#4 A9 structural-call stub)', () => {
         nodeType="execute_pipeline"
         config={{}}
         connectionId={undefined}
+        call={undefined}
       />,
     );
     expect(isStructuralCallActivity('execute_pipeline')).toBe(true);
-    expect(screen.getByText(/call-node editor \(#425\)/)).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
     // The generic config-JSON editor + Apply are NOT offered.
     expect(screen.queryByLabelText(/Config \(JSON\)/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
@@ -92,11 +102,12 @@ describe('NodePanel (#4 A9 structural-call stub)', () => {
         nodeType="http_request"
         config={{}}
         connectionId={undefined}
+        call={undefined}
       />,
     );
     // A normal activity keeps the config editor + Apply button.
     expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
-    expect(screen.queryByText(/call-node editor \(#425\)/)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Call target' })).toBeNull();
   });
 });
 
@@ -130,6 +141,7 @@ describe('NodePanel heading (#878)', () => {
         nodeType={node.type}
         config={node.config}
         connectionId={undefined}
+        call={undefined}
       />,
     );
     return screen.getAllByRole('heading', { level: 3 })[0]!.textContent ?? '';
@@ -139,11 +151,9 @@ describe('NodePanel heading (#878)', () => {
     expect(heading([http('n_1'), http('n_2')], 'n_2')).toBe('HTTP Request 2');
   });
 
-  /* The stub arm is a SECOND copy of the heading, behind an early `return` — a
-     fix applied to the editor arm alone would leave it saying the kind. The
-     catalog DOES know this type (the palette hides it; `getActivity` does not),
-     so the name is the ordinary catalog title plus its ordinal. */
-  it('names a structural-call node the same way in its read-only stub', () => {
+  /* The call arm is a SECOND copy of the heading, behind an early `return` — a
+     fix applied to the config arm alone would leave it saying the kind. */
+  it('names a structural-call node the same way in its call-editor arm', () => {
     const call: Node = {
       id: 'n_ep',
       type: 'execute_pipeline',

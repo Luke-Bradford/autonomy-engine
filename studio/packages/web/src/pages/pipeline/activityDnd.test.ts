@@ -41,13 +41,14 @@ describe('setActivityDragType / readActivityDragType', () => {
     expect(readActivityDragType(dt)).toBeNull();
   });
 
-  it('ignores a payload naming the structural-call activity', () => {
-    // `execute_pipeline` is catalogued but un-authorable by the generic config
-    // form (#4 A9 / #425). The toolbox never offers it; this is the second gate,
-    // so a payload from anywhere else cannot smuggle one in.
+  it('ACCEPTS a payload naming the structural-call activity — #425 made it authorable', () => {
+    // `execute_pipeline` used to be refused here, because the generic config form
+    // could not author its `node.call` blob. `CallPanel` now can, so the drop path
+    // must accept what the toolbox offers — a palette entry that is draggable but
+    // undroppable is a worse failure than the one the old guard prevented.
     const dt = fakeDataTransfer();
     dt.setData(ACTIVITY_DND_MIME, 'execute_pipeline');
-    expect(readActivityDragType(dt)).toBeNull();
+    expect(readActivityDragType(dt)).toBe('execute_pipeline');
   });
 
   it('ignores an EMPTY payload under the right MIME type', () => {

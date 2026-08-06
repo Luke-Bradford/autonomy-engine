@@ -63,7 +63,7 @@ describe('lowerNodeOutputs', () => {
     // uncatalogued escape hatch above no longer protects a call node. Lowering
     // MUST still skip it: seeding `outputs:[]` would flip the node's contract from
     // `absent` (stores ALL child outputs) to `declared []` (stores NONE), silently
-    // dropping every child output. The skip keys off `node.call`, not the type.
+    // dropping every child output. The skip keys off `node.call` OR the type.
     const n: Node = {
       id: 'c',
       type: 'execute_pipeline',
@@ -71,6 +71,19 @@ describe('lowerNodeOutputs', () => {
       position: { x: 0, y: 0 },
       call: { pipelineVersionId: 'pv_1', params: {} },
     };
+    const [lowered] = lowerNodeOutputs([n]);
+    expect(lowered!.config['outputs']).toBeUndefined();
+    expect(lowered).toBe(n);
+  });
+
+  it('leaves a HALF-AUTHORED execute_pipeline node (no call blob yet) absent — #425', () => {
+    // The canvas now adds a call node BEFORE its target is chosen, so there is a
+    // window where the node is a call node by TYPE and carries no `call`. Keying
+    // the skip only off `node.call` would bake `outputs: []` in during that
+    // window — and F13b never overwrites a present value, so the absent→declared
+    // -empty flip would SURVIVE the author picking a target and permanently drop
+    // every child output.
+    const n: Node = { id: 'c', type: 'execute_pipeline', config: {}, position: { x: 0, y: 0 } };
     const [lowered] = lowerNodeOutputs([n]);
     expect(lowered!.config['outputs']).toBeUndefined();
     expect(lowered).toBe(n);

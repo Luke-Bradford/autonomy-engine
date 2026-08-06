@@ -34,7 +34,7 @@ import {
   type ScheduleKind,
 } from './triggers/recurrenceForm';
 
-import { listPipelines, listPipelineVersions } from '../api/pipelines';
+import { listAllPipelineVersions } from '../api/pipelines';
 import { runDetailPath } from './runs/runPath';
 import {
   createTrigger,
@@ -183,18 +183,15 @@ export function TriggersPage() {
     deliveryUrl: string;
   } | null>(null);
 
-  // Load every pipeline's versions once, flattened into binding options. N+1
-  // requests (one per pipeline) is acceptable at MVP scale; the canvas (P5c)
-  // will own richer pipeline browsing.
+  // Every pipeline's versions, as binding options. The LOAD is shared with the
+  // canvas's call-node target picker (`listAllPipelineVersions`); only the
+  // option label is this page's own.
   const loadBindings = useCallback(async (signal?: AbortSignal): Promise<BindingOption[]> => {
-    const pipelines = await listPipelines(signal);
-    const perPipeline = await Promise.all(
-      pipelines.map(async (p) => {
-        const versions = await listPipelineVersions(p.id, signal);
-        return versions.map((v) => ({ value: v.id, label: `${p.name} v${v.version}` }));
-      }),
-    );
-    return perPipeline.flat();
+    const all = await listAllPipelineVersions(signal);
+    return all.map(({ pipeline, version }) => ({
+      value: version.id,
+      label: `${pipeline.name} v${version.version}`,
+    }));
   }, []);
 
   // Refetch after a mutation. Catches internally (rather than relying on a

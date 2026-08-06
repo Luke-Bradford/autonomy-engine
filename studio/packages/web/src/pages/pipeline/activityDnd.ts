@@ -1,4 +1,4 @@
-import { getActivity, isStructuralCallActivity } from '@autonomy-studio/shared';
+import { getActivity } from '@autonomy-studio/shared';
 
 /**
  * The drag-and-drop PROTOCOL between the activity toolbox (drag source) and the
@@ -53,18 +53,19 @@ export function hasActivityDragType(dataTransfer: DataTransfer | null): boolean 
  * The MIME type alone is NOT authority — the payload is a string from outside
  * this document (another tab, an older or newer build, a hand-crafted drag), so
  * it is checked against the live catalog before it can mint a node:
- *  - an uncatalogued type would author a node no executor can dispatch;
- *  - a structural-call type (`execute_pipeline`) would author a call-less,
- *    un-saveable node — the #4 A9 / #425 exclusion the toolbox already applies
- *    to what it OFFERS, applied again to what it ACCEPTS.
+ * an uncatalogued type would author a node no executor can dispatch.
  *
- * `canvasStore.addNode` refuses both a third time. That is deliberate: this
+ * `canvasStore.addNode` refuses it a second time. That is deliberate: this
  * function decides whether a drop is ours to handle at all, and the store
  * defends its own invariants regardless of caller.
+ *
+ * #425 RETIRED the structural-call (`execute_pipeline`) half of this check: a
+ * call node is authorable now, and the drop path must accept what the toolbox
+ * offers or a palette entry would be draggable but undroppable.
  */
 export function readActivityDragType(dataTransfer: DataTransfer | null): string | null {
   if (!hasActivityDragType(dataTransfer)) return null;
   const type = dataTransfer!.getData(ACTIVITY_DND_MIME);
-  if (type === '' || !getActivity(type) || isStructuralCallActivity(type)) return null;
+  if (type === '' || !getActivity(type)) return null;
   return type;
 }

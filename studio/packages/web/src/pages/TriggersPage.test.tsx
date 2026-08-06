@@ -25,6 +25,12 @@ vi.mock('../api/triggers', async (importActual) => {
   };
 });
 vi.mock('../api/pipelines', () => ({
+  // The page loads its binding options through `listAllPipelineVersions`, which
+  // is shared with the canvas's call-node target picker (#425). It is mocked
+  // DIRECTLY rather than composed from the two primitives below, because the
+  // real one calls them through module-internal references that `vi.mock` does
+  // not intercept — a composed stub would reach the network.
+  listAllPipelineVersions: vi.fn(),
   listPipelines: vi.fn(),
   listPipelineVersions: vi.fn(),
 }));
@@ -47,8 +53,7 @@ const updateMock = vi.mocked(triggersApi.updateTrigger);
 const deleteMock = vi.mocked(triggersApi.deleteTrigger);
 const fireMock = vi.mocked(triggersApi.fireTrigger);
 const provisionMock = vi.mocked(triggersApi.provisionWebhookSecret);
-const listPipelinesMock = vi.mocked(pipelinesApi.listPipelines);
-const listVersionsMock = vi.mocked(pipelinesApi.listPipelineVersions);
+const listAllVersionsMock = vi.mocked(pipelinesApi.listAllPipelineVersions);
 
 function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
   return {
@@ -109,8 +114,7 @@ beforeEach(() => {
   deleteMock.mockResolvedValue(undefined);
   fireMock.mockResolvedValue({ outcome: 'started', runId: 'run_9' });
   provisionMock.mockResolvedValue({ secret: 'sk_abc', deliveryUrl: '/api/webhooks/trg_1' });
-  listPipelinesMock.mockResolvedValue([pipeline]);
-  listVersionsMock.mockResolvedValue([version]);
+  listAllVersionsMock.mockResolvedValue([{ pipeline, version }]);
 });
 
 afterEach(() => {

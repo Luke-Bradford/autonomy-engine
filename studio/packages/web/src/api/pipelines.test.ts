@@ -8,6 +8,7 @@ import {
   duplicatePipeline,
   getPipeline,
   latestVersion,
+  listAllPipelineVersions,
   listPipelines,
   listPipelineVersions,
   renamePipeline,
@@ -105,6 +106,43 @@ describe('pipelines API', () => {
     const out = await listPipelineVersions('pl/1');
     expect(out).toEqual([version]);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/versions');
+  });
+
+  it('flattens EVERY pipeline’s versions, one versions request per pipeline (#425)', async () => {
+    // Covered here rather than through a caller: both callers (the Triggers
+    // page's binding dropdown and the canvas's call-node picker) now mock this
+    // function wholesale, so nothing else exercises the fan-out and flatten.
+    const other = { ...pipeline, id: 'pl_2', name: 'Other' };
+    const v2 = { ...version, id: 'pv_2', pipelineId: 'pl_2', version: 3 };
+    const fetchMock = stubFetchSequence([
+      { status: 200, body: { items: [pipeline, other], nextCursor: null } },
+      { status: 200, body: [version] },
+      { status: 200, body: [v2] },
+    ]);
+
+    const out = await listAllPipelineVersions();
+
+    expect(out).toEqual([
+      { pipeline, version },
+      { pipeline: other, version: v2 },
+    ]);
+    expect(urls(fetchMock)).toEqual([
+      '/api/pipelines?limit=100',
+      '/api/pipelines/pl_1/versions',
+      '/api/pipelines/pl_2/versions',
+    ]);
+  });
+
+  it('rejects if ANY pipeline’s versions fail to load — never a partial list (#425)', async () => {
+    // A partial answer is the dangerous one: the call-node picker uses "is this
+    // stored id a known version?" to decide whether a target is a literal or an
+    // expression, so a silently short list would flip a good target into the
+    // expression field.
+    stubFetchSequence([
+      { status: 200, body: { items: [pipeline], nextCursor: null } },
+      { status: 500, body: { error: 'boom' } },
+    ]);
+    await expect(listAllPipelineVersions()).rejects.toThrow();
   });
 
   it('validates versions through the shared schema — a bad row rejects', async () => {
