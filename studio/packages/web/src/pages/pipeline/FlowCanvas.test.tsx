@@ -801,3 +801,123 @@ describe('FlowCanvas — a domain position write reaches the view (U17)', () => 
   // place — the exact limit this file's reconciler docblock states. That half is
   // `e2e/canvas-drag-reconciliation.spec.ts`'s, and stays there.
 });
+
+/**
+ * #941 — CLICK-to-connect, the gesture no spec drove.
+ *
+ * React Flow authors an edge two ways: drag a port to a port, and click a source
+ * port then a target (`connectOnClick` defaults true). Both consult the same
+ * `isValidConnection`, so a refused click was always correctly refused — but the
+ * panel that says WHY was wired to the drag callbacks only, so the click
+ * gesture failed silently, which is the defect U6a/U6b exist to remove.
+ *
+ * Unit-testable at all only because of the `elementFromPoint` shim in
+ * `vitest.setup.ts`; see there for why `null` is the honest stub. What jsdom
+ * cannot show is the panel's placement under a real viewport — that is
+ * `e2e/canvas-click-connect.spec.ts`'s half.
+ */
+describe('FlowCanvas click-to-connect refusal (#941)', () => {
+  function twoNodes() {
+    const store = createCanvasStore();
+    store.getState().loadVersion(
+      PipelineVersionSchema.parse({
+        id: 'plv_1',
+        resourceId: 'res_plv1',
+        pipelineId: 'pl_1',
+        version: 1,
+        params: [],
+        outputs: [],
+        nodes: [
+          { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
+          { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
+        ],
+        edges: [],
+        containers: [],
+        catalogVersion: 1,
+        createdAt: 1,
+      }),
+    );
+    const { container } = render(
+      <ReactFlowProvider>
+        <FlowCanvas store={store} />
+      </ReactFlowProvider>,
+    );
+    return { store, container };
+  }
+
+  /** A node's port, addressed the way React Flow labels it in the DOM. */
+  function port(
+    container: HTMLElement,
+    nodeId: string,
+    type: 'source' | 'target',
+    handleId = 'op:success',
+  ): HTMLElement {
+    const selector =
+      type === 'source'
+        ? `.react-flow__handle[data-nodeid="${nodeId}"][data-handleid="${handleId}"]`
+        : `.react-flow__handle.target[data-nodeid="${nodeId}"]`;
+    const el = container.querySelector<HTMLElement>(selector);
+    expect(el, `no ${type} port on ${nodeId}`).not.toBeNull();
+    return el!;
+  }
+
+  /** The gesture itself: two clicks, no pointer-down in between. */
+  function clickConnect(from: HTMLElement, to: HTMLElement): void {
+    fireEvent.click(from);
+    fireEvent.click(to);
+  }
+
+  function refusal(container: HTMLElement): HTMLElement | null {
+    return container.querySelector<HTMLElement>('.canvas-refusal [role="alert"]');
+  }
+
+  it('SAYS WHY a clicked connection was refused, naming the activity', () => {
+    const { container } = twoNodes();
+    // Asserted absent FIRST: a panel left over from an earlier gesture would
+    // make the assertion below pass with the fix reverted.
+    expect(refusal(container)).toBeNull();
+
+    clickConnect(port(container, 'n_a', 'source'), port(container, 'n_a', 'target'));
+
+    expect(refusal(container)?.textContent).toContain('cannot connect to itself');
+  });
+
+  it('names the endpoints of the CLICKED pair, not a previously dragged one', () => {
+    const { store, container } = twoNodes();
+    clickConnect(port(container, 'n_a', 'source'), port(container, 'n_b', 'target'));
+
+    // Accepted: the edge exists, and there is nothing to explain.
+    expect(store.getState().edges).toHaveLength(1);
+    expect(refusal(container)).toBeNull();
+  });
+
+  it('refuses a DUPLICATE click-connect out loud, having authored the first', () => {
+    const { store, container } = twoNodes();
+    clickConnect(port(container, 'n_a', 'source'), port(container, 'n_b', 'target'));
+    expect(store.getState().edges).toHaveLength(1);
+
+    clickConnect(port(container, 'n_a', 'source'), port(container, 'n_b', 'target'));
+
+    expect(store.getState().edges).toHaveLength(1);
+    expect(refusal(container)?.textContent).toMatch(/already/i);
+  });
+
+  it('does not re-report a DISMISSED refusal when the next gesture says nothing', () => {
+    const { container } = twoNodes();
+    // A refused gesture, so there is a candidate in hand to go stale.
+    clickConnect(port(container, 'n_a', 'source'), port(container, 'n_a', 'target'));
+    expect(refusal(container)).not.toBeNull();
+    fireEvent.click(within(container).getByLabelText('Dismiss'));
+    expect(refusal(container)).toBeNull();
+
+    // Now a STRUCTURALLY impossible click — source to that same source. React
+    // Flow short-circuits `isValid && isValidConnection(...)` (`@xyflow/system`
+    // index.js:2603), so our predicate never runs and records nothing. Unless
+    // the previous gesture's candidate is cleared, this gesture reports THAT
+    // one: a panel about two nodes the operator did not just click.
+    const source = port(container, 'n_a', 'source');
+    clickConnect(source, source);
+
+    expect(refusal(container)).toBeNull();
+  });
+});

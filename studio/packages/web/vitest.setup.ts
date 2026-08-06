@@ -45,6 +45,22 @@ if (!('DOMMatrixReadOnly' in globalThis)) {
   (globalThis as { DOMMatrixReadOnly?: unknown }).DOMMatrixReadOnly = DOMMatrixReadOnlyStub;
 }
 
+// Third gap of the same kind: jsdom ships no `Document.elementFromPoint`, and
+// React Flow's `isValidHandle` calls it to find the handle under the pointer
+// (`@xyflow/system` index.js:2557). Without it CLICK-to-connect throws before
+// the connection is ever judged, which is why that gesture had no unit coverage
+// at all (#941) — and that absence is much of why its missing refusal
+// explanation went unnoticed.
+//
+// `null` is the truthful answer here rather than a convenience: jsdom lays
+// everything out at zero size, so there is genuinely no element at any point.
+// `isValidHandle` then falls back to the handle it resolved by `data-id`, which
+// jsdom DOES answer — so the fallback is what makes the path testable, and
+// hit-testing under a real zoom stays the e2e's job.
+if (!('elementFromPoint' in Document.prototype)) {
+  (Document.prototype as { elementFromPoint?: unknown }).elementFromPoint = (): null => null;
+}
+
 // Unmount React trees between tests so queries never leak across cases.
 afterEach(() => {
   cleanup();
