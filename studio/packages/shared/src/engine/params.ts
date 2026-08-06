@@ -1844,8 +1844,10 @@ export type ContainerConfigField = (typeof CONTAINER_CONFIG_FIELD_NAMES)[number]
  * rather than beside `ContainerSchema`, which has no opinion on the matter.
  *
  * `validate-doc.test.ts` pins the two together in both directions against the
- * refusal grammar, and records the one case the validator does not refuse
- * (`stage.maxRounds`, #859) so the gap cannot silently grow.
+ * refusal grammar. Its `UNPINNED` list — the validator holes the map cannot be
+ * pinned for — is EMPTY since #859 closed the last one (`stage.maxRounds`), and
+ * a third test asserts that list is exhaustive, so a new gap cannot open
+ * silently.
  *
  * `join` appears on every kind because the reducer reads it on every kind: the
  * `containerJoin` helper below is applied unconditionally to all three from the
@@ -2088,6 +2090,36 @@ export function validateDoc(
     if (c.kind !== 'loop' && c.timeout !== undefined) {
       errors.push(`container '${c.id}': timeout is only meaningful on a loop, not a ${c.kind}`);
     }
+    // #859 — `maxRounds` is a loop's ROUND CAP. A stage and a foreach each run
+    // their body a fixed number of times (once, and once per item), so the field
+    // is as dead on either as `timeout` is, and the reducer reads it only in the
+    // loop arm.
+    //
+    // ONE `kind !== 'loop'` rule, deliberately, rather than a stage-specific rule
+    // added beside the foreach one. Until #859 this was the only config field
+    // with a per-kind refusal that had been written for just ONE of the two
+    // illegal kinds — refused on a foreach, silently accepted on a stage — which
+    // is exactly the asymmetry that let the hole sit unnoticed. Stating it the
+    // way `items`/`timeout`/`batchCount` state theirs makes a future kind legal
+    // or illegal by the same single predicate. `ContainerKind` is closed
+    // (`loop | stage | foreach`), so this is exhaustive today, and a kind added
+    // later fails CLOSED — refused until someone decides otherwise — which is the
+    // direction #859 exists to protect.
+    //
+    // The foreach MESSAGE is unchanged (`${c.kind}` renders `not a foreach`), but
+    // its POSITION in the returned array is not: it is emitted here rather than
+    // inside the `c.kind === 'foreach'` block below, so a foreach carrying both a
+    // stray `maxRounds` AND a foreach-specific defect now reports them in the
+    // other order. Stated rather than glossed, because ~50 lines up the child
+    // existence/disjointness rules keep their interleaving deliberately to hold
+    // the error ARRAY byte-identical (#492). That discipline is not being dropped
+    // here, it does not reach: it was pinned for a rule whose ORDER was the
+    // behaviour under test. Nothing consumes this array positionally — the server
+    // returns it whole (`InvalidPipelineDocError`, capped at 100 by count) and the
+    // canvas badge renders all of it — and no test pins the pair.
+    if (c.kind !== 'loop' && c.maxRounds !== undefined) {
+      errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a ${c.kind}`);
+    }
     // #4 A4b (#566 slice 2) — `batchCount` is foreach-only, mirroring the `items`
     // rule: on a loop/stage it is a dead field, refused LOUDLY rather than
     // silently accepted.
@@ -2111,9 +2143,9 @@ export function validateDoc(
       if (c.exitWhen !== undefined) {
         errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a foreach`);
       }
-      if (c.maxRounds !== undefined) {
-        errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a foreach`);
-      }
+      // `maxRounds` was refused HERE until #859; it is now the generic
+      // `kind !== 'loop'` rule above, which covers a stage too and emits the
+      // identical message for a foreach.
       if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }

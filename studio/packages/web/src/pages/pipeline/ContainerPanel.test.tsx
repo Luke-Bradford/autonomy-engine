@@ -150,10 +150,17 @@ describe('ContainerPanel — applying', () => {
 
 describe('ContainerPanel — a field that is dead on this kind', () => {
   /**
-   * Reachable through exactly one combination — `stage` + `maxRounds` — because
-   * the server's write gate refuses every other. That asymmetry is #859, a hole
-   * in `validateDoc`'s kind-legality refusals, and this is the repair path for
-   * its consequence.
+   * Since #859 closed the last kind-legality hole, NO illegal container field
+   * can be minted through any supported path — the write gate refuses all of
+   * them. The population this repair path serves is therefore versions minted
+   * BEFORE the refusal existed, which are immutable and still openable (reads
+   * never validate), plus any future field added to the map ahead of its rule.
+   *
+   * That population is real but unseedable through the API, so it is covered
+   * HERE rather than end to end: this suite mounts the panel on the container
+   * directly, which is a component test's licence and not a gate bypass. The
+   * e2e that used to cover it seeded through the real write gate and could no
+   * longer do so — see #939.
    */
   const STAGE_WITH_ROUNDS: Container = {
     id: 'st_1',
@@ -169,20 +176,23 @@ describe('ContainerPanel — a field that is dead on this kind', () => {
   });
 
   /**
-   * The advisory must not promise a blocked save that will not happen.
+   * The advisory's blocked-save claim is DERIVED from the validator, never
+   * inferred from the field map — and this is the test that proves the
+   * derivation is load-bearing rather than decorative.
    *
-   * `stage` + `maxRounds` is the only illegal combination a stored doc can carry
-   * (the server's write gate refuses the rest), and `validateDoc` does NOT
-   * refuse it — #859. So on this exact screen Save is ENABLED, and an advisory
-   * claiming otherwise is false every time it can be read. The claim is derived
-   * from the validator instead of from the field map, which is what makes it
-   * track #859 being closed without this panel knowing.
+   * It used to assert the opposite. `stage` + `maxRounds` was illegal and NOT
+   * refused (#859), so on this exact screen Save was enabled and an advisory
+   * promising otherwise would have been false every time it could be read.
+   * Closing #859 flipped it, and the flip needed NO change to `ContainerPanel`:
+   * the refusal appeared, `validateCanvas` began emitting it, and the sentence
+   * corrected itself. Had `blocked` been inferred from `CONTAINER_CONFIG_FIELDS`
+   * instead, the panel would have been right by luck here and would still carry
+   * a second, drifting copy of the kind-legality rules.
    */
-  it('does not claim a blocked save when the validator does not block it', () => {
+  it('claims a blocked save exactly when the validator blocks it', () => {
     mount(STAGE_WITH_ROUNDS);
     const advisory = screen.getByText(/not valid on a stage/).textContent ?? '';
-    expect(advisory).toContain('does nothing');
-    expect(advisory).not.toContain('Saving is blocked');
+    expect(advisory).toContain('Saving is blocked');
   });
 
   /**
