@@ -456,7 +456,21 @@ export function connectByIdBackwards(page: Page, from: string, to: string): Prom
  * while reporting an edge failure.
  */
 export async function selectEdge(page: Page, index = 0): Promise<void> {
-  const point = await page.evaluate((i) => {
+  const point = await edgeMidpoint(page, index);
+  await page.mouse.click(point.x, point.y);
+  await expect(firesOn(page)).toBeVisible();
+}
+
+/**
+ * The screen point at the middle of an edge's rendered path.
+ *
+ * Split out of `selectEdge` for callers that need the point but not its
+ * assertion — a MODIFIED click adds the edge to a multi-selection, where the
+ * single-edge condition picker `selectEdge` waits for is precisely what does
+ * NOT appear.
+ */
+export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
+  return page.evaluate((i) => {
     const paths = document.querySelectorAll('.react-flow__edge-path');
     const path = paths[i] as SVGPathElement | undefined;
     if (!path)
@@ -467,8 +481,6 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
     const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
     return { x: p.x, y: p.y };
   }, index);
-  await page.mouse.click(point.x, point.y);
-  await expect(firesOn(page)).toBeVisible();
 }
 
 /**

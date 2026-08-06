@@ -242,6 +242,25 @@ const IMPLICIT_CHAIN_PREVIEW = 6;
 const CANVAS_CHROME_SELECTOR = '.react-flow__panel';
 
 /**
+ * The modifiers that add an element to the selection instead of replacing it.
+ *
+ * MODULE-level, not an inline literal. React Flow feeds this straight to
+ * `useKeyPress`, whose key-parsing memo and whose add/removeEventListener
+ * effect are both keyed on the value's IDENTITY, so a fresh
+ * `['Meta', 'Control']` per render would tear down and re-add a pair of window
+ * key listeners on every render of this canvas.
+ *
+ * The cost is listener CHURN, and it is worth being exact about that rather
+ * than claiming input loss: React runs an effect's cleanup and its re-run
+ * back-to-back inside one commit, so no key event can be dispatched into the
+ * gap, and `useKeyPress` holds the pressed keys in a ref that outlives the
+ * teardown anyway. Cheap to avoid, so avoided — not a correctness fix.
+ *
+ * See the `multiSelectionKeyCode` prop for why both keys, not one.
+ */
+const MULTI_SELECT_KEYS = ['Meta', 'Control'];
+
+/**
  * Is this drag event over the canvas surface (as opposed to its chrome)?
  *
  * `event.target` — not `currentTarget` (always the wrapper) and not
@@ -1538,6 +1557,65 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
            `deleteSelection()` instead, which is one entry for the whole
            gesture. */
         deleteKeyCode={null}
+        /* #947 — BOTH modifiers, on every platform, instead of React Flow's
+           default `isMacOs() ? 'Meta' : 'Control'`.
+
+           That default is a USER-AGENT test, not a platform one, and the two
+           can disagree: an embedded webview, a spoofed UA, or Playwright's
+           `devices['Desktop Chrome']` (which reports Windows while running on
+           a Mac) each pick the modifier the HOST does not use. On a Mac the
+           consequence of picking Control is not a degraded gesture but no
+           gesture at all: Control-click there IS the secondary-button
+           gesture, so Chromium dispatches `contextmenu` INSTEAD of `click`
+           (measured — the button stays 0; it is the click that goes missing).
+           Node selection by pointer runs in React's `onClick`, because React
+           Flow's default `nodeDragThreshold` of 1 defers `handleNodeClick`
+           off the drag-start path, so the whole selection handler simply
+           never runs.
+
+           Accepting the array costs nothing — `useKeyPress` matches any entry
+           — and removes the guess: ⌘-click and Ctrl-click both add to the
+           selection wherever the operator actually is. Admitting Control on a
+           Mac is safe rather than merely harmless: `useKeyPress` clears its
+           pressed state on `contextmenu`, which is precisely the event a Mac
+           Control-click produces, so it cannot strand `multiSelectionActive`
+           on. The mirror case is the genuinely NEW behaviour here: Meta was
+           inert on Windows/Linux before, and is now a multi-select modifier
+           there too. Pressing Super normally moves focus to the Start menu or
+           the activities overview, and the same hook resets on `blur` — but a
+           compositor that grabs the key globally WITHOUT blurring the window
+           could swallow the `keyup` and leave the flag on. Worst case is that
+           the next plain click adds instead of replacing, and a pane click
+           clears it; not worth guarding, worth knowing.
+
+           Both of those resets are TESTED, not merely argued — see the
+           `releases the modifier on a window %s` cases in `FlowCanvas.test.tsx`.
+           They assert a non-event (the selection SURVIVES an unmodified click),
+           which is only a real claim because the same click collapses the
+           selection while the modifier is latched; mutation-proved by dropping
+           the reset and watching all four go red.
+
+           WHAT THIS DID NOT FIX, because #947 asked and the answer is not the
+           one the ticket assumed. Its premise — "modifier-click does not reach
+           the store" — is FALSE for an operator on an unspoofed browser, and
+           that was MEASURED, not reasoned: with this prop removed and
+           `navigator.userAgent` stubbed to a real macOS string, ⌘-click was
+           already additive (Control was not), which is exactly `isMacOs()`
+           picking correctly when the UA tells the truth. So the shipped gesture
+           was never broken on the platform an operator is actually on. What was
+           broken is every case where the UA and the host DISAGREE, plus the
+           cross-platform modifier — and, the reason this is a prop and not a
+           harness fix, `test:e2e` runs on ubuntu in CI and macOS locally, so
+           only a UA-independent prop lets ONE spec pass in both places.
+
+           Knowingly left, and FILED as #950 rather than deferred in this
+           comment: `zoomActivationKeyCode` carries the identical `isMacOs()`
+           guess. It gates scroll-zoom, where the wrong modifier degrades the
+           gesture instead of removing it — a wheel event meets no
+           `contextmenu`-instead-of-`click` substitution — so it is a separate
+           question. That difference is reasoned, not measured, which is
+           precisely why it needs a ticket and not a paragraph here. */
+        multiSelectionKeyCode={MULTI_SELECT_KEYS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
            `select:false` change for the element that was selected, which

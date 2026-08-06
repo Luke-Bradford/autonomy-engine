@@ -7,6 +7,7 @@ import {
   connectNodes,
   dragNodeBy,
   edgeGroup,
+  edgeMidpoint,
   fitAndSettle,
   marqueeAllNodes,
 } from './support/canvasGraph';
@@ -178,6 +179,108 @@ test.describe('multi-select (U21)', () => {
     await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
     await expect(reconnectAnchors(page)).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+});
+
+/**
+ * #947 — the OTHER way to build a selection: hold a modifier and click.
+ *
+ * The marquee above proves the store's set model end to end, but only through
+ * one gesture. This one takes a different route into the same seam — React
+ * Flow's `handleNodeClick`/`addSelectedEdges`, which branch on
+ * `multiSelectionActive` — and #935 shipped without covering it because it
+ * could not be driven.
+ *
+ * WHY IT COULD NOT BE DRIVEN, since the answer is a trap worth keeping written
+ * down. React Flow reads the modifier from a `keydown` listener, and picks
+ * WHICH modifier from `isMacOs()` — a user-agent substring test. Playwright's
+ * `devices['Desktop Chrome']` descriptor carries a WINDOWS user agent, so on a
+ * Mac host React Flow listened for Control while the host treated Control-click
+ * as its secondary-button gesture: Chromium then dispatches `contextmenu`
+ * INSTEAD of `click` (the button stays 0 — it is the click that goes missing),
+ * and since `nodeDragThreshold` defaults to 1, pointer selection runs in
+ * React's `onClick` and so never ran at all. Passing both modifiers explicitly
+ * (`multiSelectionKeyCode` in `FlowCanvas`) is what makes the gesture
+ * independent of what the user agent claims to be.
+ *
+ * Meta throughout, deliberately and on every platform: Control-click is the
+ * secondary-button gesture on macOS, so it is not drivable there and never will
+ * be, while Meta is a plain modifier everywhere. Nor is `ControlOrMeta` any use
+ * here — Playwright resolves that from the RUNNER's platform, so on CI's ubuntu
+ * it becomes Control, which is what React Flow's spoofed-UA default already
+ * watches, and the spec would pass without the prop it exists to guard.
+ *
+ * The Control half — the gesture a Windows/Linux operator actually makes — is
+ * therefore covered in `FlowCanvas.test.tsx` instead, where jsdom's own user
+ * agent makes Control React Flow's default and both modifiers are reachable.
+ * The two tests below are the ones that need a real browser: genuine hit
+ * testing on a bezier, and the property panel rendering the result.
+ */
+test.describe('modifier-click multi-select (#947)', () => {
+  /**
+   * Hold Meta across an arbitrary gesture.
+   *
+   * A wrapper rather than `click({ modifiers: ['Meta'] })` — which does work,
+   * and does dispatch real key events (`ensureModifiers` calls `keyboard.down`
+   * per modifier) — because `page.mouse.click`, which the edge case below needs
+   * for a point ON the bezier, takes no `modifiers` option. One mechanism for
+   * both gesture styles beats two that look interchangeable and are not.
+   *
+   * #947's own report claimed the `modifiers` option dispatches no key event.
+   * It does; that attempt failed for the same reason the manual one did, which
+   * was React Flow watching the OTHER modifier. Recorded here so the false
+   * explanation does not get picked up again.
+   */
+  async function metaClick(page: Page, act: () => Promise<void>): Promise<void> {
+    await page.keyboard.down('Meta');
+    try {
+      await act();
+    } finally {
+      await page.keyboard.up('Meta');
+    }
+  }
+
+  const panelOf = (page: Page) => page.getByRole('complementary', { name: 'Properties' });
+
+  test('⌘-click ADDS a node to the selection instead of replacing it', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedTwoNodes(page, 'e2e modifier add');
+
+    await canvasNodes(page).nth(0).click();
+    await expect(selectedNodes(page)).toHaveCount(1);
+
+    await metaClick(page, () => canvasNodes(page).nth(1).click());
+    await expect(selectedNodes(page)).toHaveCount(2);
+
+    // The panel agrees, which is what makes this a claim about the STORE and
+    // not merely about React Flow's own view array.
+    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+    await expect(panelOf(page).getByText('2 activities')).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+
+  test('⌘-click builds a MIXED node-and-edge selection', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await seedTwoNodes(page, 'e2e modifier mixed', true);
+
+    await canvasNodes(page).nth(0).click();
+    await expect(selectedNodes(page)).toHaveCount(1);
+
+    /* Edges take an ASYMMETRIC path through this canvas — React Flow owns node
+       selection in the `nodes` array but the store owns edge selection, so an
+       edge's `select` change arrives through `onEdgesChange` and a different
+       `multiSelectionActive` branch (`addSelectedEdges`). A spec covering only
+       nodes would leave that half unguarded. */
+    const edge = await edgeMidpoint(page);
+    await metaClick(page, () => page.mouse.click(edge.x, edge.y));
+
+    await expect(selectedNodes(page)).toHaveCount(1);
+    await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
+    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+    await expect(panelOf(page).getByText('1 activity, 1 connection')).toBeVisible();
 
     await expectQuiet(page, problems);
   });
