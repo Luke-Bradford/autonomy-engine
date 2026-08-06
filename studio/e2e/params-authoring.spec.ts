@@ -151,27 +151,30 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     // same thing that makes it safe for a duplicate name: the editor that
     // surfaces the defect can also repair it.
     //
-    // The doc can no longer be SEEDED through the API (that 400s now), so the
-    // bad default is authored here the way an operator would — which is better
-    // coverage than the seed ever was.
+    // Getting a bad default onto the canvas at all takes some care, and the
+    // reason is worth recording. It can no longer be SEEDED (the API 400s now),
+    // and it cannot be TYPED either — `coerceDefaultInput` refuses to store text
+    // that does not fit the declared type, so the field reports its own parse
+    // error and writes nothing. The one authoring gesture that mints this doc is
+    // a TYPE change over a default that was already stored, which the type
+    // `<select>` deliberately allows: dropping the default on a mis-click would
+    // destroy authored data, so it is kept and the gate explains it. That is
+    // also the realistic operator mistake, so it is the right thing to drive.
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'u16 default gate', {
       nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-      params: [{ name: 'n', type: 'number', required: false }],
+      params: [{ name: 'n', type: 'string', required: false, default: 'abc' }],
     });
 
-    await page.getByLabel('param 1 default').fill('abc');
-    await page.getByLabel('param 1 name').click(); // blur commits the draft
+    await page.getByLabel('param 1 type').selectOption('number');
 
     // The row names it, and the doc-level badge names it in the SAME words.
     await expect(panel(page).getByText("param 'n': expected a finite number")).toBeVisible();
     expect(await validationIssues(page)).toContain("param 'n': expected a finite number");
     await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
 
-    // The exit, through the control that got here — and '5' is a STRING the run
-    // coerces fine, so the gate must reopen on it rather than demand a number.
-    await page.getByLabel('param 1 default').fill('5');
-    await page.getByLabel('param 1 name').click();
+    // The exit, through the control that got here.
+    await page.getByLabel('param 1 type').selectOption('string');
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
