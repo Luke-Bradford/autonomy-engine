@@ -260,8 +260,8 @@ export function connectRejection(
     return {
       reason: 'duplicate',
       message:
-        `'${fromName}' → '${toName}' already has a '${edgeLabel(probe)}' edge — select it to ` +
-        `change its condition, or delete it first`,
+        `'${fromName}' → '${toName}' already has a '${edgeLabel(probe)}' edge — drag that edge's ` +
+        `end onto another outcome to retype it, or delete it first`,
     };
   }
 
@@ -418,6 +418,15 @@ export interface DrawnAttempt {
   to: string;
   /** The outcome the drag was drawn from; `null` when the port could not be read. */
   condition: EdgeCondition | null;
+  /**
+   * U19 slice 2 — the id of the edge this gesture was REWIRING, or `null` for an
+   * ordinary drag that would author a new edge.
+   *
+   * Required rather than optional on purpose. The unsafe value is the one a
+   * forgotten field would default to, so the type makes every caller say which
+   * gesture it is holding rather than letting silence mean "not a rewire".
+   */
+  rewiring: string | null;
 }
 
 /**
@@ -444,6 +453,14 @@ export interface DrawnAttempt {
  * authored, not the refusal's reason — cycle-closure implies the ancestry rule
  * but not the progress rule, so an offer shown on reason alone would author a
  * doc the save gate refuses on topology.
+ *
+ * The third (U19 slice 2) is that the gesture must not be a REWIRE. This button
+ * calls `connect`, which mints an edge; during a rewire the operator already has
+ * one in hand, so taking the offer would answer "this edge cannot go there" by
+ * leaving them with two edges instead of one moved. The decision lives here, not
+ * in the canvas, for the same reason as the rest of this function: it is the one
+ * branch in the feature that can silently author state, and a component memo is
+ * not reachable by a test that can prove it.
  */
 export function backEdgeOffer(
   pre: ConnectPrecheck,
@@ -451,6 +468,7 @@ export function backEdgeOffer(
 ): { from: string; to: string; condition: EdgeCondition } | null {
   const { from, to, condition } = attempt;
   if (condition === null) return null;
+  if (attempt.rewiring !== null) return null;
   if (connectRejection(pre, { from, to, condition, back: true }) !== null) return null;
   return { from, to, condition };
 }
