@@ -231,22 +231,34 @@ export function conditionLabel(c: EdgeCondition): string {
  */
 export function declaredConditionsOf(source: Node | undefined): EdgeCondition[] {
   const operational: EdgeCondition[] = OPERATIONAL_CONDITIONS.map((on) => ({ on }));
-  if (source === undefined) return operational;
+  return [...operational, ...(branchConditionsOf(source) ?? [])];
+}
+
+/**
+ * Just the BUSINESS branches, as a TRI-STATE: `null` when the source can never
+ * emit one at all, distinct from `[]` ("it branches, and offers nothing").
+ *
+ * The distinction is the property panel's, not the canvas's — `branchOptionsFor`
+ * must HIDE its branch group for a source that cannot branch, and show an empty
+ * one for a `switch` with no cases yet, which a plain list cannot express. It
+ * lives here anyway, rather than beside that caller, so `declaredBranchesOf` is
+ * consulted exactly ONCE per question and the panel's option list and the node's
+ * ports are one derivation by construction instead of two that happen to agree.
+ */
+export function branchConditionsOf(source: Node | undefined): EdgeCondition[] | null {
+  if (source === undefined) return null;
   const declared = declaredBranchesOf(source);
-  if (declared === undefined) return operational;
-  return [
-    ...operational,
-    /* EMPTY labels are dropped. `declaredBranchesOf` filters `cases` on
-       `typeof c === 'string'` only, while `validateSwitchConfig` additionally
-       refuses `''` — so a git-imported `cases: ['']` would otherwise render a
-       port with no visible text whose id (`branch:`) `decodeConditionValue`
-       rejects: a handle that can be grabbed and authors nothing, on a doc the
-       save gate refuses anyway. Offering only what a save accepts is this
-       module's whole claim. */
-    ...[...declared]
-      .filter((branch) => branch.length > 0)
-      .map((branch): EdgeCondition => ({ on: 'branch', branch })),
-  ];
+  if (declared === undefined) return null;
+  /* EMPTY labels are dropped. `declaredBranchesOf` filters `cases` on
+     `typeof c === 'string'` only, while `validateSwitchConfig` additionally
+     refuses `''` — so a git-imported `cases: ['']` would otherwise render a
+     port with no visible text whose id (`branch:`) `decodeConditionValue`
+     rejects: a handle that can be grabbed and authors nothing, on a doc the
+     save gate refuses anyway. Offering only what a save accepts is this
+     module's whole claim. */
+  return [...declared]
+    .filter((branch) => branch.length > 0)
+    .map((branch): EdgeCondition => ({ on: 'branch', branch }));
 }
 
 /** One outgoing port: the outcome it routes, and how it is drawn and named. */

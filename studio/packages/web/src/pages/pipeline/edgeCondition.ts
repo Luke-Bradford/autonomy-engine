@@ -1,13 +1,12 @@
 import type { Edge as FlowEdge } from '@xyflow/react';
 import {
+  branchConditionsOf,
   conditionLabel,
   conditionOf,
-  declaredConditionsOf,
   encodeCondition,
   TARGET_PORT_ID,
 } from './ports';
 import {
-  declaredBranchesOf,
   EdgeOnSchema,
   MaxBouncesSchema,
   stableEdgeKey,
@@ -195,15 +194,13 @@ export function isMaxBounces(n: number): boolean {
  * out from under a selected edge. Degrade to "no branches", never throw.
  */
 export function branchOptionsFor(source: Node | undefined): string[] | null {
-  if (source === undefined || declaredBranchesOf(source) === undefined) return null;
-  /* The LIST comes from `declaredConditionsOf`, so the panel offers exactly the
-     set the source ports draw — U19's whole point is that those two are one
-     fact. Only the tri-state stays here: `undefined` ("this source can never
-     emit a branch") must hide the group entirely, not show an empty one, and a
-     list cannot carry that distinction. */
-  return declaredConditionsOf(source)
-    .filter((c) => c.on === 'branch')
-    .map((c) => conditionLabel(c));
+  /* ONE call, and the same one the source PORTS are built from — U19's whole
+     point is that the panel's options and the node's ports are one fact.
+     `branchConditionsOf` carries the tri-state (`null` = "can never emit a
+     branch", which must hide the group rather than show an empty one) precisely
+     so this does not have to ask `declaredBranchesOf` a second time to recover
+     it. */
+  return branchConditionsOf(source)?.map((c) => conditionLabel(c)) ?? null;
 }
 
 /**
