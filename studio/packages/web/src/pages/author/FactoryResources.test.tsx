@@ -9,6 +9,8 @@ import { createPipelinesStore } from '../../stores/pipelinesStore';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { hubById } from '../../shell/hubs';
 import * as pipelinesApi from '../../api/pipelines';
+import * as downloadApi from '../../api/download';
+import * as portabilityApi from '../../api/portability';
 
 vi.mock('../../api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('../../api/pipelines')>()),
@@ -19,7 +21,21 @@ vi.mock('../../api/pipelines', async (importActual) => ({
   deletePipeline: vi.fn(),
 }));
 
+// See `PipelinesPage.test.tsx` for why the real download helper is kept out of
+// jsdom: an anchor click schedules a navigation jsdom cannot perform, on a
+// later tick, in whichever test is running by then.
+vi.mock('../../api/download', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/download')>()),
+  downloadTextFile: vi.fn(),
+}));
+vi.mock('../../api/portability', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/portability')>()),
+  exportPipeline: vi.fn(),
+}));
+
 const listMock = vi.mocked(pipelinesApi.listPipelines);
+const downloadMock = vi.mocked(downloadApi.downloadTextFile);
+const exportMock = vi.mocked(portabilityApi.exportPipeline);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const renameMock = vi.mocked(pipelinesApi.renamePipeline);
 const duplicateMock = vi.mocked(pipelinesApi.duplicatePipeline);
@@ -251,6 +267,30 @@ describe('FactoryResources — row actions', () => {
 
     await waitFor(() => expect(renameMock).toHaveBeenCalledWith('pl_1', 'Alpha 2'));
     await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * #959 — the pane and the pipelines page are two views of ONE list, mounted
+   * at the same time. An act offered on one and not the other is a hole the
+   * operator finds by looking in the wrong place.
+   */
+  it('exports from the row menu, without refreshing a list nothing changed in', async () => {
+    const user = userEvent.setup();
+    exportMock.mockReset();
+    downloadMock.mockReset();
+    exportMock.mockResolvedValue('{"canonical":"bytes"}');
+    renderPane();
+    await screen.findByRole('link', { name: 'Alpha' });
+    const listCallsBefore = listMock.mock.calls.length;
+
+    await openRowMenu(user, 'Alpha');
+    await user.click(await screen.findByRole('menuitem', { name: 'Export' }));
+
+    await waitFor(() => expect(exportMock).toHaveBeenCalledWith('pl_1'));
+    expect(downloadMock).toHaveBeenCalledWith('pipeline-alpha-pl_1.json', '{"canonical":"bytes"}');
+    // An export mutates nothing, so it must not go through `run`, whose
+    // refresh would imply to every other view that something moved.
+    expect(listMock.mock.calls).toHaveLength(listCallsBefore);
   });
 
   it('duplicates through a name row prefilled with a "(copy)" suffix', async () => {

@@ -11,7 +11,10 @@ import {
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { useNavigate } from 'react-router';
-import { ApiError } from '../api/client';
+import { ApiError, messageOf } from '../api/client';
+import { downloadTextFile, exportFileName } from '../api/download';
+import { exportTrigger } from '../api/portability';
+import { ImportPanel } from './ImportPanel';
 import { RecurrenceEditor } from './triggers/RecurrenceEditor';
 import { WindowEditor } from './triggers/WindowEditor';
 import {
@@ -244,6 +247,29 @@ export function TriggersPage() {
     [refresh],
   );
 
+  /**
+   * Save the trigger's export envelope to disk (#959). The fetch happens first
+   * and its failure is REPORTED — a bare `<a download>` would have written a
+   * 404 body to the operator's disk as a `.json` file with nothing said (see
+   * `api/download.ts`).
+   *
+   * SECURITY: the envelope carries no `webhook.secretRef`, and no binding —
+   * both come back as attention items on import, which the panel below
+   * renders. That is the server's guarantee, not this page's.
+   */
+  const onExport = useCallback(async (t: TriggerPublic) => {
+    setLoadError(null);
+    try {
+      downloadTextFile(exportFileName('trigger', t.name, t.id), await exportTrigger(t.id));
+    } catch (err) {
+      // `loadError`, not `actionMsg`: this page's `actionMsg` is a
+      // `role="status"` notice (it carries "Fired X: started"), and a failed
+      // export is an ERROR. `onDelete` already routes its failure here, so
+      // this is the page's existing surface for "an action did not happen".
+      setLoadError(`Could not export “${t.name}”: ${messageOf(err)}`);
+    }
+  }, []);
+
   const onFire = useCallback(
     async (t: TriggerPublic) => {
       // Guard against a double-click firing twice before the request resolves.
@@ -380,6 +406,13 @@ export function TriggersPage() {
                   <button type="button" onClick={() => setForm(formForEdit(t))}>
                     Edit
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void onExport(t)}
+                    aria-label={`Export ${t.name}`}
+                  >
+                    Export
+                  </button>
                   {t.mode === 'webhook' && (
                     <button
                       type="button"
@@ -415,6 +448,13 @@ export function TriggersPage() {
           }}
         />
       )}
+
+      {/* The import surface lives on the list an imported trigger lands in —
+          but it takes ANY export envelope, because `POST /api/import` does (see
+          `ImportPanel`). A pipeline or connection file is imported and then
+          reported with a pointer to its own section, rather than refused by a
+          client-side rule the server does not have. */}
+      <ImportPanel listKind="trigger" onImported={refresh} />
     </section>
   );
 }

@@ -24,6 +24,8 @@ import {
   duplicatePipeline,
   renamePipeline,
 } from '../../api/pipelines';
+import { downloadTextFile, exportFileName } from '../../api/download';
+import { exportPipeline } from '../../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { pipelinePath } from './pipelinePath';
 import type { Hub } from '../../shell/hubs';
@@ -320,6 +322,20 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
     if (ok) closeDraft();
   }, [activeDraft, closeDraft, run]);
 
+  /**
+   * Export (#959). Deliberately NOT routed through `run`: `run` refreshes the
+   * shared list because it exists for MUTATIONS, and an export changes nothing
+   * — a refresh here would be a request that implies something moved.
+   */
+  const onExport = useCallback(async (p: Pipeline) => {
+    setActionError(null);
+    try {
+      downloadTextFile(exportFileName('pipeline', p.name, p.id), await exportPipeline(p.id));
+    } catch (err) {
+      setActionError(`Could not export “${p.name}”: ${messageOf(err)}`);
+    }
+  }, []);
+
   const onDelete = useCallback(
     async (p: Pipeline) => {
       if (!window.confirm(`Delete pipeline “${p.name}”? This cannot be undone.`)) return;
@@ -513,6 +529,7 @@ export function FactoryResources({ hub, store = pipelinesStore }: FactoryResourc
                     >
                       Duplicate
                     </MenuItem>
+                    <MenuItem onClick={() => void onExport(p)}>Export</MenuItem>
                     <MenuItem onClick={() => void onDelete(p)}>Delete</MenuItem>
                   </MenuList>
                 </MenuPopover>
