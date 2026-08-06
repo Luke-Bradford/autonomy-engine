@@ -139,19 +139,39 @@ test.describe('U16 — pipeline params/outputs authoring', () => {
     await expectQuiet(page, problems);
   });
 
-  test('a type-mismatched default ADVISES but never blocks the save', async ({ page }) => {
-    // The posture that decided this ticket. A version minted before this editor
-    // existed can hold a default the run will reject; the server accepts such a
-    // doc, so REFUSING to save it would leave that pipeline permanently
-    // unsaveable — the one-way trap #748 closed, re-created by the check meant
-    // to help. Say what is wrong; do not bar the exit.
+  test('a type-mismatched default BLOCKS the save, and the editor is the exit', async ({
+    page,
+  }) => {
+    // This test asserted the OPPOSITE until #843, and the reversal is the
+    // ticket. The old posture — advise, never gate — rested on the server
+    // ACCEPTING such a doc, which made a client refusal a one-way trap (#748):
+    // an imported pipeline holding a bad default could never be saved again.
+    // #843 moved the check to the server write gate, so the doc is refused
+    // either way and the trap argument collapses. What makes gating safe is the
+    // same thing that makes it safe for a duplicate name: the editor that
+    // surfaces the defect can also repair it.
+    //
+    // The doc can no longer be SEEDED through the API (that 400s now), so the
+    // bad default is authored here the way an operator would — which is better
+    // coverage than the seed ever was.
     const problems = collectPageProblems(page);
-    await openSeededCanvas(page, 'u16 advisory', {
+    await openSeededCanvas(page, 'u16 default gate', {
       nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
-      params: [{ name: 'n', type: 'number', required: false, default: 'abc' }],
+      params: [{ name: 'n', type: 'number', required: false }],
     });
 
-    await expect(panel(page).getByText(/not a finite number/)).toBeVisible();
+    await page.getByLabel('param 1 default').fill('abc');
+    await page.getByLabel('param 1 name').click(); // blur commits the draft
+
+    // The row names it, and the doc-level badge names it in the SAME words.
+    await expect(panel(page).getByText("param 'n': expected a finite number")).toBeVisible();
+    expect(await validationIssues(page)).toContain("param 'n': expected a finite number");
+    await expect(page.getByRole('button', { name: 'Save version' })).toBeDisabled();
+
+    // The exit, through the control that got here — and '5' is a STRING the run
+    // coerces fine, so the gate must reopen on it rather than demand a number.
+    await page.getByLabel('param 1 default').fill('5');
+    await page.getByLabel('param 1 name').click();
     expect(await validationIssues(page)).toEqual([]);
     await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
 
