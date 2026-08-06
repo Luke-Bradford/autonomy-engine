@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { seedVersion } from './support/seedDoc';
 
 /**
  * #3 G10 / U18 slice 1 — Manage → Git (#956).
@@ -84,11 +85,18 @@ test.afterAll(async ({ request }) => {
 test('a workspace connects to a repo, commits itself, and disconnects', async ({ page }) => {
   const problems = collectPageProblems(page);
 
-  // A resource to commit, so the drift below cannot be trivially empty.
-  const created = await page.request.post('/api/pipelines', {
-    data: { name: `git-e2e-${Date.now()}` },
+  /**
+   * A resource to commit, so the drift below cannot be trivially empty.
+   *
+   * It must be a pipeline with a VERSION, not a bare pipeline: the serializer
+   * writes immutable versions, so a pipeline that has never been saved
+   * contributes no file and the workspace serializes to nothing — which is
+   * exactly what the first draft of this spec hit.
+   */
+  const pipelineName = `git-e2e-${Date.now()}`;
+  await seedVersion(page, pipelineName, {
+    nodes: [{ id: 'n1', position: { x: 0, y: 0 } }],
   });
-  expect(created.ok()).toBe(true);
 
   await openGitPage(page);
 
@@ -122,7 +130,7 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
    * matters is that the pipeline just created is in it, as an addition.
    */
   const driftRows = page.getByRole('table').last().getByRole('row');
-  await expect(driftRows.filter({ hasText: 'added' }).first()).toBeVisible();
+  await expect(driftRows.filter({ hasText: pipelineName })).toContainText('added');
 
   // ── commit ─────────────────────────────────────────────────────────────────
   await page
