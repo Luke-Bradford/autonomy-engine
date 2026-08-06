@@ -1569,7 +1569,21 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
 
            Accepting the array costs nothing — `useKeyPress` matches any entry
            — and removes the guess: ⌘-click and Ctrl-click both add to the
-           selection wherever the operator actually is. */
+           selection wherever the operator actually is. Admitting Control on a
+           Mac is safe rather than merely harmless: `useKeyPress` clears its
+           pressed state on `contextmenu`, which is precisely the event a Mac
+           Control-click produces, so it cannot strand `multiSelectionActive`
+           on. The mirror case — a Windows operator's Super key — is covered by
+           the same hook's `blur` reset, since pressing it moves focus out.
+
+           Fixing the harness's user agent instead would NOT do: `test:e2e` runs
+           on ubuntu in CI and on macOS locally, so only a UA-independent prop
+           lets ONE spec pass in both places.
+
+           Knowingly left: `zoomActivationKeyCode` carries the identical
+           `isMacOs()` guess. It gates scroll-zoom, which never meets the
+           `contextmenu`-instead-of-`click` failure above, so it is a separate
+           question rather than part of this one. */
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a

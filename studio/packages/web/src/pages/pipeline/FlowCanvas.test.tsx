@@ -330,6 +330,92 @@ describe('FlowCanvas container rendering (U6c)', () => {
     expect(nodeWrapper(container, 'n_a').className).toContain('selected');
     expect(nodeWrapper(container, 'n_b').className).toContain('selected');
   });
+
+  /**
+   * #947 — a modifier held while clicking ADDS to the selection.
+   *
+   * These live here, not only in `e2e/multi-select.spec.ts`, because jsdom is
+   * the ONLY place both modifiers can be exercised. React Flow decides which
+   * one to watch from `isMacOs()` — a user-agent substring test — and the
+   * browser harness cannot cover the pair: Playwright's
+   * `devices['Desktop Chrome']` reports a Windows UA, and on a macOS host
+   * Control-click is the secondary-button gesture, so Chromium sends
+   * `contextmenu` and never a `click`. The Windows/Linux operator's actual
+   * gesture is therefore undrivable in a browser spec on a Mac, and only
+   * reachable here.
+   *
+   * jsdom's own UA (`Mozilla/5.0 (darwin) … jsdom/…`) contains no "Mac", so
+   * React Flow's DEFAULT here is Control. That asymmetry is what makes the two
+   * cases guard different things, and it is worth stating plainly:
+   *
+   *  - the Meta case fails without the explicit `multiSelectionKeyCode` prop —
+   *    it is the guard on the prop itself;
+   *  - the Control case passes either way — it is the guard on the seam, that a
+   *    modifier-click reaches `nextSelection` and folds into the SET at all.
+   *
+   * `keyDown` on `window` rather than on the node, because that is where React
+   * Flow's `useKeyPress` binds for this key. A bare `{ key }` with no `code` is
+   * enough: `useKeyOrCode` falls back to `event.key` when the code is not one
+   * of the keys being watched.
+   */
+  describe.each(['Meta', 'Control'] as const)('%s-click multi-select (#947)', (modifier) => {
+    it('adds a second node to the selection instead of replacing it', () => {
+      const { store, container } = withContainer([]);
+      fireEvent.click(nodeWrapper(container, 'n_a'));
+      expect(store.getState().selected).toEqual([{ kind: 'node', id: 'n_a' }]);
+
+      fireEvent.keyDown(window, { key: modifier });
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+
+      expect(store.getState().selected).toEqual([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]);
+      fireEvent.keyUp(window, { key: modifier });
+    });
+
+    it('takes a node back OUT when it is already a member', () => {
+      const { store, container } = withContainer([]);
+      fireEvent.click(nodeWrapper(container, 'n_a'));
+      fireEvent.keyDown(window, { key: modifier });
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toHaveLength(2);
+
+      /* A different React Flow branch, not the inverse of the one above:
+         `handleNodeClick` routes an already-selected node to
+         `unselectNodesAndEdges`, which emits a `select:false` change the canvas
+         has to fold. Unmodified, this same click would COLLAPSE the selection
+         onto that one node instead. */
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toEqual([{ kind: 'node', id: 'n_a' }]);
+      fireEvent.keyUp(window, { key: modifier });
+    });
+
+    it('does NOT keep toggling once the modifier is released', () => {
+      const { store, container } = withContainer([]);
+      fireEvent.click(nodeWrapper(container, 'n_a'));
+      fireEvent.keyDown(window, { key: modifier });
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toHaveLength(2);
+
+      /* The half that makes the feature safe rather than merely present: a
+         modifier stuck latched would make every later click additive, and the
+         previous test's toggle-out would fire on a plain click — grabbing one
+         member of a group would silently drop it from the selection.
+
+         Two selected nodes and an unmodified click on one of them is exactly
+         the discriminator. Latched, React Flow takes `n_b` back out and this
+         lands on one; released, `handleNodeClick` matches neither branch (the
+         node is already selected and nothing asked to unselect it) and the pair
+         survives — which is also what lets a group be dragged by one member. */
+      fireEvent.keyUp(window, { key: modifier });
+      fireEvent.click(nodeWrapper(container, 'n_b'));
+      expect(store.getState().selected).toEqual([
+        { kind: 'node', id: 'n_a' },
+        { kind: 'node', id: 'n_b' },
+      ]);
+    });
+  });
 });
 
 /**

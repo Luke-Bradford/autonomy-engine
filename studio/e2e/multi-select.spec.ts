@@ -207,18 +207,31 @@ test.describe('multi-select (U21)', () => {
  *
  * Meta throughout, deliberately and on every platform: Control-click is the
  * secondary-button gesture on macOS, so it is not drivable there and never will
- * be, while Meta is a plain modifier everywhere. The Control half of the pair
- * is what a Windows/Linux operator presses, and is covered by the unit-level
- * assertion that the prop carries both.
+ * be, while Meta is a plain modifier everywhere. Nor is `ControlOrMeta` any use
+ * here — Playwright resolves that from the RUNNER's platform, so on CI's ubuntu
+ * it becomes Control, which is what React Flow's spoofed-UA default already
+ * watches, and the spec would pass without the prop it exists to guard.
+ *
+ * The Control half — the gesture a Windows/Linux operator actually makes — is
+ * therefore covered in `FlowCanvas.test.tsx` instead, where jsdom's own user
+ * agent makes Control React Flow's default and both modifiers are reachable.
+ * The two tests below are the ones that need a real browser: genuine hit
+ * testing on a bezier, and the property panel rendering the result.
  */
 test.describe('modifier-click multi-select (#947)', () => {
   /**
-   * `keyboard.down` + click, NOT `click({ modifiers: ['Meta'] })`.
+   * Hold Meta across an arbitrary gesture.
    *
-   * Playwright's `modifiers` option sets the flag on the mouse event and
-   * dispatches no key event at all, while React Flow tracks the modifier
-   * through `keydown`/`keyup` on the window. The option looks exactly right and
-   * silently does nothing here.
+   * A wrapper rather than `click({ modifiers: ['Meta'] })` — which does work,
+   * and does dispatch real key events (`ensureModifiers` calls `keyboard.down`
+   * per modifier) — because `page.mouse.click`, which the edge case below needs
+   * for a point ON the bezier, takes no `modifiers` option. One mechanism for
+   * both gesture styles beats two that look interchangeable and are not.
+   *
+   * #947's own report claimed the `modifiers` option dispatches no key event.
+   * It does; that attempt failed for the same reason the manual one did, which
+   * was React Flow watching the OTHER modifier. Recorded here so the false
+   * explanation does not get picked up again.
    */
   async function metaClick(page: Page, act: () => Promise<void>): Promise<void> {
     await page.keyboard.down('Meta');
@@ -245,29 +258,6 @@ test.describe('modifier-click multi-select (#947)', () => {
     // not merely about React Flow's own view array.
     await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
     await expect(panelOf(page).getByText('2 activities')).toBeVisible();
-
-    await expectQuiet(page, problems);
-  });
-
-  test('⌘-click on a member takes it back OUT', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    await seedTwoNodes(page, 'e2e modifier toggle');
-
-    await canvasNodes(page).nth(0).click();
-    await metaClick(page, () => canvasNodes(page).nth(1).click());
-    await expect(selectedNodes(page)).toHaveCount(2);
-
-    /* A distinct React Flow path, not the inverse of the one above:
-       `handleNodeClick` routes an already-selected node to
-       `unselectNodesAndEdges` rather than to `addSelectedNodes`, so it emits a
-       `select:false` change that the canvas has to fold. Without a modifier
-       held this same click would COLLAPSE the selection to that one node. */
-    await metaClick(page, () => canvasNodes(page).nth(1).click());
-    await expect(selectedNodes(page)).toHaveCount(1);
-
-    // Down to one, the single-node editor is back — the panel followed the
-    // removal rather than being left on the multi-selection summary.
-    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toHaveCount(0);
 
     await expectQuiet(page, problems);
   });
