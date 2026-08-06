@@ -1,5 +1,5 @@
 import type { Node } from '../schemas/pipeline.js';
-import { getActivity } from './registry.js';
+import { getActivity, isStructuralCallActivity } from './registry.js';
 import {
   findLlmMessagesRowIndex,
   isLlmTranscriptRow,
@@ -67,6 +67,16 @@ import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
  * child outputs) to `declared []` (stores NONE) — silently dropping every child
  * output. The skip keys off `Node.call`, so it protects a call node of ANY type.
  *
+ * #425 widens that skip to `isStructuralCallActivity(node.type)` as well, because
+ * `Node.call` is no longer present from the instant a call node exists: the canvas
+ * now ADDS an `execute_pipeline` node and the author fills its target in
+ * afterwards, so there is a real window where the node is a call node by TYPE and
+ * has no `call` blob yet. Lowering such a node would bake `outputs: []` into it,
+ * and F13b never overwrites a present value — so the flip would survive the author
+ * choosing a target and become permanent. The two conditions are deliberately
+ * OR-ed rather than one replacing the other: `Node.call` still catches a call node
+ * of an unknown/foreign type, and the type check still catches a half-authored one.
+ *
  * ## Immutability
  *
  * The catalog's `outputs` are DEEP-COPIED into the node (`{ ...o }` per output):
@@ -80,8 +90,10 @@ export function lowerNodeOutputs(nodes: Node[]): Node[] {
     if (node.config['outputs'] !== undefined) return node;
     // A call node's outputs come from the child projection, never a catalog
     // template — skip it EXPLICITLY (not via the uncatalogued escape hatch below,
-    // which #4 A9's `execute_pipeline` entry no longer takes). See the class doc.
-    if (node.call !== undefined) return node;
+    // which #4 A9's `execute_pipeline` entry no longer takes). By `Node.call` OR by
+    // type, so a canvas-authored call node is skipped in the window before its
+    // target is chosen too (#425). See the class doc.
+    if (node.call !== undefined || isStructuralCallActivity(node.type)) return node;
     const entry = getActivity(node.type);
     if (entry === undefined) return node; // unknown type — no default to seed
     return {

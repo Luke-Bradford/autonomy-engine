@@ -2,7 +2,6 @@ import {
   ACTIVITY_CATEGORIES,
   ACTIVITY_CATEGORY_LABELS,
   catalog,
-  isStructuralCallActivity,
   type ActivityCatalogEntry,
   type ActivityCategory,
 } from '@autonomy-studio/shared';
@@ -53,7 +52,6 @@ export function toolboxGroups(query: string): ToolboxGroup[] {
   for (const category of ACTIVITY_CATEGORIES) {
     const entries = [...catalog.values()]
       .filter((e) => e.category === category)
-      .filter((e) => !isStructuralCallActivity(e.type))
       // Title AND type: the title is what the toolbox shows, but the type is what
       // the docs, an export envelope and an error message all name, so an author
       // who knows `file_read` should not have to guess it is called "Read File".
