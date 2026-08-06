@@ -63,6 +63,33 @@ function messageFromBody(status: number, body: ApiErrorBody | undefined): string
   return `request failed (${status})`;
 }
 
+/**
+ * Turn a non-2xx `Response` into a thrown `ApiError`. Always throws; the
+ * `never` return lets a caller write `if (!res.ok) await throwApiError(res)`
+ * and have TypeScript narrow the rest of the function.
+ *
+ * Extracted so `apiFetchText` reports failures identically to `apiFetch`.
+ * It CONSUMES the body, which is why both callers must check `res.ok` and
+ * delegate here BEFORE reading the body themselves — a `res.text()` first
+ * would leave this with an already-consumed stream, and every error in the
+ * app would silently degrade to `request failed (<status>)`.
+ */
+async function throwApiError(res: Response): Promise<never> {
+  let parsed: ApiErrorBody | undefined;
+  try {
+    // Parse (not blind-cast) through the shared contract: a body that does
+    // not match is treated as absent rather than trusted by type assertion.
+    // `safeParse` — never `.parse()` — because we must not throw a SECOND
+    // error while handling the first; a malformed error body just falls back
+    // to `messageFromBody`'s generic `request failed (<status>)`.
+    const result = ApiErrorBodySchema.safeParse(await res.json());
+    parsed = result.success ? result.data : undefined;
+  } catch {
+    parsed = undefined;
+  }
+  throw new ApiError(res.status, messageFromBody(res.status, parsed), parsed);
+}
+
 export interface ApiRequest<T> {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   /** JSON-serialised as the request body when present. */
@@ -100,21 +127,7 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
 
   const res = await fetch(path, init);
 
-  if (!res.ok) {
-    let parsed: ApiErrorBody | undefined;
-    try {
-      // Parse (not blind-cast) through the shared contract: a body that does
-      // not match is treated as absent rather than trusted by type assertion.
-      // `safeParse` — never `.parse()` — because we must not throw a SECOND
-      // error while handling the first; a malformed error body just falls back
-      // to `messageFromBody`'s generic `request failed (<status>)`.
-      const result = ApiErrorBodySchema.safeParse(await res.json());
-      parsed = result.success ? result.data : undefined;
-    } catch {
-      parsed = undefined;
-    }
-    throw new ApiError(res.status, messageFromBody(res.status, parsed), parsed);
-  }
+  if (!res.ok) await throwApiError(res);
 
   // 204 No Content (and 205) carry no body — nothing to parse.
   if (res.status === 204 || res.status === 205) {
@@ -123,4 +136,26 @@ export async function apiFetch<T = unknown>(path: string, opts: ApiRequest<T> = 
 
   const json: unknown = await res.json();
   return schema ? schema.parse(json) : (json as T);
+}
+
+/**
+ * `apiFetch`'s sibling for a response whose BYTES are the payload: the same
+ * failure mapping, but the 2xx body is returned as raw text and never parsed.
+ *
+ * This is the one response in the app that is not validated against a shared
+ * Zod schema, and that is the deliberate point of it. The portability export
+ * routes send canonical JSON (#3 G1 — sorted keys, stable bytes) and the
+ * operator's artifact must be the server's exact bytes. Round-tripping it
+ * through `ExportEnvelopeSchema.parse` + a re-serialize would make the client
+ * a second authority on canonical form, and a lossy one: `z.object` STRIPS
+ * unknown keys, so any field a client schema copy lagged behind the server on
+ * would be quietly dropped from the file the operator keeps.
+ */
+export async function apiFetchText(
+  path: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const res = await fetch(path, { method: 'GET', signal: opts.signal });
+  if (!res.ok) await throwApiError(res);
+  return res.text();
 }
