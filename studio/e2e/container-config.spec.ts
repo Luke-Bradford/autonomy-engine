@@ -313,59 +313,49 @@ test.describe('U23 — container config editing', () => {
   });
 
   /**
-   * The repair path for a field that is DEAD on this container's kind.
+   * A field that is DEAD on this container's kind cannot be MINTED at all.
    *
-   * The seeded doc is `stage` + `maxRounds`, and the choice is forced: every
-   * other illegal combination is refused by the server's own write gate, so it
-   * cannot be minted at all. `maxRounds` on a `stage` is the ONE that gets
-   * through, because `validateDoc` refuses it on a `foreach` and forgets to on a
-   * `stage` — the hole this work found and filed as #859. `CONTAINER_CONFIG_FIELDS`
-   * declares it unpinnable for exactly that reason, and this spec is where the
-   * consequence of the hole is visible to an operator.
+   * This spec used to walk the panel's repair path (`ContainerPanel`'s
+   * render-the-illegal-field + clear-only rule, #860) on a seeded `stage` +
+   * `maxRounds` doc. That combination was the only illegal one a seed could
+   * mint, because `validateDoc` refused every other and forgot this one — the
+   * hole filed as #859.
    *
-   * Before U23 there was nothing to do about it: `kind` is not editable, and no
-   * panel showed the field. Rendering it makes the existing "blank an optional
-   * control to drop the key" rule the repair, with no new mechanism.
+   * #859 is now closed, which REMOVED this spec's subject rather than broke it.
+   * `support/seedDoc.ts` mints through the real write gate on purpose ("a seed
+   * that bypassed validation could put the canvas in a state nothing else can
+   * reach, and the spec would be guarding a fiction"), and there is no longer
+   * any illegal container field that gate will accept — so the old seed does
+   * not fail an assertion, it 400s at setup.
+   *
+   * So this asserts what is now true and operator-visible, at the same boundary:
+   * the mint is REFUSED, naming the field and both kinds. The repair path itself
+   * still matters — versions minted before the refusal existed are immutable and
+   * still openable, since reads never validate — and is covered by
+   * `ContainerPanel.test.tsx`, which mounts the panel on such a container
+   * directly. Restoring browser-level coverage of it would need a seed that
+   * bypasses the write gate, which is a deliberate decision this ticket does not
+   * take: **#939**.
    */
-  test('offers a repair for a field that is dead on this kind', async ({ page }) => {
-    const problems = collectPageProblems(page);
-    const pipelineId = await openSeededCanvas(page, 'u23 dead field', {
-      nodes: [{ id: 'n_a', position: AT }],
-      containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], maxRounds: 3 }],
+  test('refuses a field that is dead on this kind, at the write gate', async ({ page }) => {
+    const created = await page.request.post('/api/pipelines', { data: { name: 'u23 dead field' } });
+    expect(created.status(), await created.text()).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+
+    const minted = await page.request.post(`/api/pipelines/${encodeURIComponent(id)}/versions`, {
+      data: {
+        params: [],
+        outputs: [],
+        nodes: [{ id: 'n_a', type: 'http_request', config: {}, position: AT }],
+        edges: [],
+        containers: [{ id: 'stage_1', kind: 'stage', children: ['n_a'], maxRounds: 3 }],
+        basedOnVersionId: null,
+      },
     });
 
-    await configure(page, 'stage 1');
-    const advisory = page.locator('.contract-advisory');
-    await expect(advisory).toContainText('maxRounds');
-    // #859 is the reason this combination is reachable AND the reason the
-    // advisory must not promise a blocked save: validateDoc does not refuse it,
-    // so Save is enabled on this very screen. The claim is derived from the
-    // validator, not from the field map, so it stays true if #859 is closed.
-    await expect(advisory).toContainText('does nothing');
-    await expect(advisory).not.toContainText('Saving is blocked');
-    await expect(page.getByRole('button', { name: 'Save version' })).toBeEnabled();
-    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('3');
-
-    // Clear-only: typing a new value into a dead field is refused, not minted.
-    // The refusal keeps the typed text, as every other refusal here does.
-    await page.getByLabel(/^maxRounds/).fill('10');
-    await page.getByRole('button', { name: 'Apply container settings' }).click();
-    await expect(page.getByRole('alert')).toContainText('maxRounds');
-    await expect(page.getByLabel(/^maxRounds/)).toHaveValue('10');
-
-    await page.getByLabel(/^maxRounds/).fill('');
-    await page.getByRole('button', { name: 'Apply container settings' }).click();
-
-    // Gone from the panel too: the field was only rendered because the doc
-    // carried it, so the repair removes the control along with the key.
-    await expect(page.locator('.contract-advisory')).toHaveCount(0);
-    await expect(page.getByLabel(/^maxRounds/)).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Save version' }).click();
-    await expect(page.locator('.notice')).toHaveText('Saved v2.');
-    expect(await savedContainers(page, pipelineId)).toEqual([
-      { id: 'stage_1', kind: 'stage', children: ['n_a'] },
-    ]);
-    await expectQuiet(page, problems);
+    expect(minted.status()).toBe(400);
+    expect(await minted.text()).toContain(
+      "container 'stage_1': maxRounds is only meaningful on a loop, not a stage",
+    );
   });
 });

@@ -2076,22 +2076,6 @@ export function validateDoc(
     if (c.kind === 'stage' && c.exitWhen !== undefined) {
       errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a stage`);
     }
-    // #859 — a stage runs its body ONCE, so a round cap is exactly as dead here as
-    // it is on a foreach, which has been refused since #4 A4. This closed the one
-    // asymmetry in the kind-legality set: `maxRounds` was refused on a foreach and
-    // accepted on a stage, so the U23 config panel (which offers it on neither)
-    // and the validator disagreed by exactly this cell.
-    //
-    // NOT a new migration posture, which is why it could be closed as a defect
-    // rather than escalated. A stored version carrying a stray `stage.maxRounds`
-    // becomes unsavable exactly as one carrying a stray `stage.timeout` already
-    // does — and stays REPAIRABLE by the same route: reads never validate
-    // (`repo/pipeline-versions.ts`, write-path-only by design), so the canvas
-    // opens the doc, and `ContainerPanel` renders a carried illegal field under
-    // its clear-only rule (#860) so the operator can strip it and save.
-    if (c.kind === 'stage' && c.maxRounds !== undefined) {
-      errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a stage`);
-    }
     // Symmetric to the exitWhen/maxRounds refusals: `items` is foreach-only, so a
     // stray `items` on a loop/stage is a dead field — refuse it LOUDLY rather than
     // silently accept it (the reducer ignores it, so nothing else would surface it).
@@ -2105,6 +2089,23 @@ export function validateDoc(
     // loop-vs-foreach refusals.
     if (c.kind !== 'loop' && c.timeout !== undefined) {
       errors.push(`container '${c.id}': timeout is only meaningful on a loop, not a ${c.kind}`);
+    }
+    // #859 — `maxRounds` is a loop's ROUND CAP. A stage and a foreach each run
+    // their body a fixed number of times (once, and once per item), so the field
+    // is as dead on either as `timeout` is, and the reducer reads it only in the
+    // loop arm.
+    //
+    // ONE `kind !== 'loop'` rule, deliberately, rather than a stage-specific rule
+    // added beside the foreach one. Until #859 this was the only config field
+    // with a per-kind refusal that had been written for just ONE of the two
+    // illegal kinds — refused on a foreach, silently accepted on a stage — which
+    // is exactly the asymmetry that let the hole sit unnoticed. Stating it the
+    // way `items`/`timeout`/`batchCount` state theirs makes a future kind legal
+    // or illegal by the same single predicate. The foreach message is unchanged:
+    // `${c.kind}` renders `not a foreach` there, byte-identical to the rule this
+    // replaced.
+    if (c.kind !== 'loop' && c.maxRounds !== undefined) {
+      errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a ${c.kind}`);
     }
     // #4 A4b (#566 slice 2) — `batchCount` is foreach-only, mirroring the `items`
     // rule: on a loop/stage it is a dead field, refused LOUDLY rather than
@@ -2129,9 +2130,9 @@ export function validateDoc(
       if (c.exitWhen !== undefined) {
         errors.push(`container '${c.id}': exitWhen is only meaningful on a loop, not a foreach`);
       }
-      if (c.maxRounds !== undefined) {
-        errors.push(`container '${c.id}': maxRounds is only meaningful on a loop, not a foreach`);
-      }
+      // `maxRounds` was refused HERE until #859; it is now the generic
+      // `kind !== 'loop'` rule above, which covers a stage too and emits the
+      // identical message for a foreach.
       if (c.children.filter((ch) => nodeIdSet.has(ch)).length === 0) {
         errors.push(`container '${c.id}': a foreach needs at least one child (its per-item body)`);
       }

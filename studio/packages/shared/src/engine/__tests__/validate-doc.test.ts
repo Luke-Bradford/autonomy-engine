@@ -473,6 +473,56 @@ describe('validateDoc — foreach container (#4 A4)', () => {
     );
   });
 
+  /**
+   * #859 — the hole this closed. `maxRounds` had a foreach-only refusal, so a
+   * `stage` carrying a round cap validated CLEAN: the U23 config panel (which
+   * offers the field on neither) and the validator disagreed by exactly this
+   * cell, and `CONTAINER_CONFIG_FIELDS` had to declare it unpinnable.
+   *
+   * A stage runs its body once, so the field is as dead here as it is on a
+   * foreach — and as `timeout` already was on both.
+   */
+  it('rejects a maxRounds on a stage (loop-only)', () => {
+    const d = doc([node('w')], [], [{ id: 'st', kind: 'stage', children: ['w'], maxRounds: 3 }]);
+    expect(validateDoc(d)).toContain(
+      "container 'st': maxRounds is only meaningful on a loop, not a stage",
+    );
+  });
+
+  /**
+   * The two refusals are ONE `kind !== 'loop'` rule, not a stage rule bolted
+   * beside a foreach one — so a doc illegal on both counts is refused once per
+   * container and worded identically. This is the pin for that: the foreach
+   * message is byte-identical to the dedicated rule it replaced (`${c.kind}`
+   * renders `foreach`), which is what made the consolidation safe to take.
+   */
+  it('words both kinds through the same rule', () => {
+    const stray = (kind: 'stage' | 'foreach') =>
+      validateDoc(
+        doc(
+          [node('w')],
+          [],
+          [
+            {
+              id: 'c',
+              kind,
+              children: ['w'],
+              maxRounds: 3,
+              ...(kind === 'foreach' ? { items: '${params.list}' } : {}),
+            },
+          ],
+          kind === 'foreach' ? [LIST] : [],
+        ),
+      ).filter((e) => e.includes('maxRounds'));
+
+    expect(stray('foreach')).toEqual([
+      "container 'c': maxRounds is only meaningful on a loop, not a foreach",
+    ]);
+    expect(stray('stage')).toEqual([
+      "container 'c': maxRounds is only meaningful on a loop, not a stage",
+    ]);
+  });
+
   it('rejects a stray items on a loop or stage (foreach-only, symmetric with exitWhen)', () => {
     const onLoop = doc(
       [node('w', { outputs: [{ name: 'done', type: 'boolean' }] })],
