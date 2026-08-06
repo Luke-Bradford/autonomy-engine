@@ -1,3 +1,5 @@
+import type { ImportResult } from '@autonomy-studio/shared';
+
 /**
  * Saving a server response to the operator's disk.
  *
@@ -56,7 +58,8 @@ const NON_SLUG = /[^a-z0-9]+/g;
  * something real to fall back to.
  */
 export function exportFileName(
-  kind: 'pipeline' | 'connection' | 'trigger',
+  // The kind union from the schema that owns it, not a third hand-written copy.
+  kind: ImportResult['kind'],
   name: string,
   id: string,
 ): string {

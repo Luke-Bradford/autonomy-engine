@@ -160,8 +160,8 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
       )}
       {foreign && (
         <p className="error" role="alert">
-          “{foreign.name}” is a {foreign.kind} export, and this is the{' '}
-          {SECTION[listKind].label} list. Import it from{' '}
+          “{foreign.name}” is a {foreign.kind} export, and this is the {SECTION[listKind].label}{' '}
+          list. Import it from{' '}
           <Link to={SECTION[foreign.kind].path}>{SECTION[foreign.kind].label}</Link>. Nothing was
           created.
         </p>
