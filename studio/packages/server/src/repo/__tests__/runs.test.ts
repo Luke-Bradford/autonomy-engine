@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeRunCost,
   CATALOG_VERSION,
   RunStatusSchema,
   type NewPipelineVersion,
@@ -26,6 +27,7 @@ import {
   queuedTriggerCandidatesForPipeline,
   updateRun,
 } from '../runs.js';
+import { appendRunEvent } from '../run-events.js';
 import { freshDb } from './helpers.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -618,6 +620,64 @@ describe('listRunSummaries (R2)', () => {
       enabled: false,
     });
   }
+
+  /**
+   * #931 — the ASSEMBLY point, which the standalone `aggregateRunCosts` tests do
+   * not reach: the aggregate returns a `Map<runId, RunCost>`, and this is where
+   * it is joined back onto the rows. A swapped or misaligned id mapping is
+   * invisible with one run — it needs several, with DIFFERENT totals, and one
+   * that billed nothing so the `computeRunCost([])` substitution is exercised in
+   * the same list as real groups.
+   */
+  it('attaches each run its OWN cost, and a zeroed one to a run that billed nothing', () => {
+    const { db, version } = setup();
+    const cheap = createRun(db, buildRunInput(version.id));
+    const dear = createRun(db, buildRunInput(version.id));
+    const quiet = createRun(db, buildRunInput(version.id));
+    const metered = (runId: string, cost: number) => ({
+      type: 'activity.metered',
+      runId,
+      nodeId: 'n1',
+      attemptId: 'n1#1',
+      provider: 'anthropic_api',
+      model: 'claude-opus-4-8',
+      meteringStatus: 'metered',
+      inputTokens: 10,
+      outputTokens: 20,
+      inUnitPrice: 5,
+      outUnitPrice: 5,
+      priceTableVersion: 'v1',
+      costEstimate: cost,
+    });
+    appendRunEvent(db, {
+      runId: cheap.id,
+      type: 'activity.metered',
+      payload: metered(cheap.id, 0.01),
+    });
+    appendRunEvent(db, {
+      runId: dear.id,
+      type: 'activity.metered',
+      payload: metered(dear.id, 0.5),
+    });
+    appendRunEvent(db, {
+      runId: dear.id,
+      type: 'activity.metered',
+      payload: metered(dear.id, 0.25),
+    });
+    /* A non-metered event on the quiet run, so it is not merely a run with an
+       empty log — nothing about it should produce a cost. */
+    appendRunEvent(db, { runId: quiet.id, type: 'run.started', payload: {} });
+
+    const byId = new Map(listRunSummaries(db, { ownerId: 'local' }).map((r) => [r.id, r.cost]));
+    expect(byId.get(cheap.id)?.totalCostEstimate).toBeCloseTo(0.01, 10);
+    expect(byId.get(cheap.id)?.responseCount).toBe(1);
+    expect(byId.get(dear.id)?.totalCostEstimate).toBeCloseTo(0.75, 10);
+    expect(byId.get(dear.id)?.responseCount).toBe(2);
+    /* Zeroed, not absent, and not `null`: nothing was billed, which is a fact —
+       distinct from "cost unknown", which is what a null would assert. */
+    expect(byId.get(quiet.id)).toEqual(computeRunCost([]));
+    expect(byId.get(quiet.id)?.complete).toBe(true);
+  });
 
   it('resolves the pipeline name, version NUMBER and trigger name', () => {
     const { db, version } = setup();

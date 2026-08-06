@@ -14,6 +14,16 @@
  * should probably be together; that is a deliberate open question, not an
  * oversight.
  *
+ * ANSWERED (#931, U27 slice 2). U27 has now landed in full and the condition DID
+ * hold — `costReading.ts` is still the only file that calls this, because the run
+ * list's new cost cell routes through `costFigure` rather than formatting money
+ * itself. The answer is nonetheless to LEAVE IT HERE. Moving it beside
+ * `formatNodeDuration` would put the money-rendering rule inside one page while
+ * the money MODEL stays in shared, which is the split this file's own opening
+ * paragraph argues against; and `RunCostSchema` now sits in `pricing/` for the
+ * same reason. The count of callers was the wrong test — the right one is which
+ * fact the rule is about.
+ *
  * THE RULE: money that was spent is never rendered as `$0.00`.
  *
  * L5 stamps `costEstimate` RAW and unrounded, and a single cheap exchange is

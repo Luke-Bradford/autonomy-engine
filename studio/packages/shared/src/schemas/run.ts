@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RunCostSchema } from '../pricing/run-cost.js';
 import { TriggerContextSchema } from './trigger-context.js';
 
 export const RunStatusSchema = z.enum([
@@ -145,6 +146,36 @@ export type Run = z.infer<typeof RunSchema>;
  * elapsed for a still-running run would be stale the instant it was serialized —
  * a second, immediately-wrong authority for a value the row already fixes. The
  * client derives it (`pages/runs/format.ts::formatRunDuration`).
+ *
+ * COST *is* a field (#931), and the rule above is why that needed answering
+ * rather than assuming. It clears BOTH halves of the duration objection:
+ *
+ *  - Not a SECOND authority. Duration is derivable from `startedAt`/`finishedAt`,
+ *    which this row already carries, so a `duration` field would be a second
+ *    statement of a fact the row already fixes. Cost is not derivable from
+ *    anything here — it lives in `run_events`, two reads away — so this is the
+ *    row's FIRST statement of it, resolved server-side for the same reason R2
+ *    resolves `pipelineName`/`triggerName`: "so U10 needn't N+1". Not by the same
+ *    MEANS, though, and the difference is worth being exact about — those two are
+ *    columns of the row SELECT's own join, whereas cost is a SECOND statement
+ *    (`aggregateRunCosts`, its own `GROUP BY run_id`) joined to the rows in
+ *    memory. What makes the pair coherent is that both run inside ONE
+ *    `db.transaction`, so they read one SQLite snapshot — a transaction, not a
+ *    query (`repo/runs.ts::listRunSummaries`).
+ *  - Not IMMEDIATELY-WRONG. A live run's spend genuinely does move after
+ *    serialization, exactly as an elapsed clock does. The difference is that a
+ *    moving cost is still a TRUE statement of spend-so-far, where a frozen
+ *    elapsed is simply wrong the next millisecond; and the list says which it is
+ *    looking at — the cell marks a non-terminal run's figure as so-far
+ *    (`TERMINAL_RUN_ROW_STATUS`, `pages/runs/costColumn.ts`). Without that
+ *    marker this field WOULD be the thing the paragraph above forbids.
+ *
+ * A consequence worth stating: the list's cost and the run-detail page's cost are
+ * read at different instants and by different means (this is a bounded SQL
+ * aggregate; the detail page folds the live event tail). For a settled run they
+ * agree by construction — one derivation site, pinned by an SQL-vs-fold
+ * equivalence test. For a LIVE one they may differ by whatever was billed in
+ * between, which is the same "so far" the marker already declares.
  */
 export const RunSummarySchema = RunSchema.extend({
   pipelineName: z.string(),
@@ -153,6 +184,18 @@ export const RunSummarySchema = RunSchema.extend({
   pipelineVersion: z.number().int(),
   /** `null` for a rerun, or for a run whose trigger has been deleted. */
   triggerName: z.string().nullable(),
+  /**
+   * #931 — what this run has been billed, as a bounded per-run SQL aggregate
+   * (`repo/run-events.ts::aggregateRunCosts`).
+   *
+   * NEVER nullable, and a run with no metered events carries a ZEROED cost rather
+   * than an absent one: zero metered rows genuinely IS zero billed exchanges,
+   * which `readCost` classifies `'none'` → "No billed exchange". A `null` would
+   * assert "cost unknown", a different and false claim — and manufacturing the
+   * wrong one of those two is the whole failure mode this money model is built
+   * around.
+   */
+  cost: RunCostSchema,
 });
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 

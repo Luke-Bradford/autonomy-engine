@@ -1,5 +1,5 @@
 import { AGENT_CLI_CONNECTION_KIND, formatTokenCount, formatUsd } from '@autonomy-studio/shared';
-import type { NodeCost } from '@autonomy-studio/shared';
+import type { NodeCost, RunCost } from '@autonomy-studio/shared';
 
 /**
  * #866 — HOW a folded cost figure must be read, as a pure function of the fold.
@@ -50,10 +50,7 @@ export type CostKind =
   /** Every exchange's cost is known: the figure is the cost. */
   | 'exact';
 
-export interface CostReading {
-  kind: CostKind;
-  /** The summed KNOWN cost. Meaningful only for `exact` and `lower-bound`. */
-  amount: number;
+export interface CostReading extends CostHeadline {
   /** Exchanges whose cost could not be resolved (the incompleteness signal). */
   unknownCount: number;
   /** Exchanges that carry no unit price by design (subscription/CLI). */
@@ -92,6 +89,51 @@ export interface CostReading {
   outputReportedCount: number;
 }
 
+/**
+ * The five-way classification itself, over the NARROW {@link RunCost} shape.
+ *
+ * Split out of `readCost` by #931, when the run LIST needed the same reading from
+ * a bounded SQL aggregate. That path can supply every field the ladder below
+ * actually reads — and NONE of the caveat facts `readCost` adds on top
+ * (`providers`, the per-side reported-token counts), because counting those in
+ * SQL is a different query. The alternative was to hand the aggregate's cost to
+ * `readCost` with those fields defaulted, which would have manufactured exactly
+ * the two claims this module exists to refuse: "no `agent_cli` here, so the
+ * exchange count is a census" and "0 tokens" where nobody measured.
+ *
+ * So the classification is the shared part and the caveats are the node/detail
+ * part. There is still ONE ladder; a surface that cannot honestly answer the
+ * caveats simply does not ask them.
+ */
+export function costKindOf(cost: RunCost): CostKind {
+  if (cost.responseCount === 0) return 'none';
+  /* NOTHING priced, but gaps exist — the figure is 0 and saying "at least
+     $0.00" is worse than saying nothing, because it presents a total that was
+     never measured. Ordered BEFORE `lower-bound` for exactly that reason. */
+  if (cost.costUnknownResponseCount > 0 && cost.pricedResponseCount === 0) return 'unknown';
+  if (cost.costUnknownResponseCount > 0) return 'lower-bound';
+  /* No gaps and nothing priced ⇒ every exchange was `unpriced`. A KNOWN zero. */
+  if (cost.pricedResponseCount === 0) return 'covered';
+  return 'exact';
+}
+
+/**
+ * The minimum a HEADLINE needs: which reading it is, and the summed known amount.
+ * {@link CostReading} is this plus the caveats, so every existing caller keeps
+ * working; a surface holding only a {@link RunCost} builds one with
+ * {@link costHeadline}.
+ */
+export interface CostHeadline {
+  kind: CostKind;
+  /** The summed KNOWN cost. Meaningful only for `exact` and `lower-bound`. */
+  amount: number;
+}
+
+/** The headline facts of a narrow {@link RunCost} — what a cell can state. */
+export function costHeadline(cost: RunCost): CostHeadline {
+  return { kind: costKindOf(cost), amount: cost.totalCostEstimate };
+}
+
 /** Classify a folded cost into the one reading that is true of it. */
 export function readCost(cost: NodeCost): CostReading {
   const base = {
@@ -110,17 +152,7 @@ export function readCost(cost: NodeCost): CostReading {
     outputReportedCount: cost.outputReportedResponseCount,
   };
 
-  if (cost.responseCount === 0) return { ...base, kind: 'none' };
-  /* NOTHING priced, but gaps exist — the figure is 0 and saying "at least
-     $0.00" is worse than saying nothing, because it presents a total that was
-     never measured. Ordered BEFORE `lower-bound` for exactly that reason. */
-  if (cost.costUnknownResponseCount > 0 && cost.pricedResponseCount === 0) {
-    return { ...base, kind: 'unknown' };
-  }
-  if (cost.costUnknownResponseCount > 0) return { ...base, kind: 'lower-bound' };
-  /* No gaps and nothing priced ⇒ every exchange was `unpriced`. A KNOWN zero. */
-  if (cost.pricedResponseCount === 0) return { ...base, kind: 'covered' };
-  return { ...base, kind: 'exact' };
+  return { ...base, kind: costKindOf(cost) };
 }
 
 /**
@@ -150,7 +182,7 @@ export function tokenSummary(reading: CostReading, cost: NodeCost): string {
  * prevent. Both collapse to one true statement: the priced part tells us nothing,
  * and there is more we could not price.
  */
-function statesAnAmount(reading: CostReading): boolean {
+function statesAnAmount(reading: CostHeadline): boolean {
   return reading.amount >= 0.000001;
 }
 
@@ -162,12 +194,12 @@ function statesAnAmount(reading: CostReading): boolean {
  * `lower-bound` too small to state. Anything hanging a caveat off "the figure"
  * has to ask this first, or it qualifies a number that is not on screen.
  */
-function showsAnAmount(reading: CostReading): boolean {
+function showsAnAmount(reading: CostHeadline): boolean {
   return reading.kind === 'exact' || (reading.kind === 'lower-bound' && statesAnAmount(reading));
 }
 
 /** The headline, which for three readings is deliberately not a money amount. */
-export function costFigure(reading: CostReading): string {
+export function costFigure(reading: CostHeadline): string {
   switch (reading.kind) {
     case 'none':
       return 'No billed exchange';
@@ -228,7 +260,7 @@ export function costSentence(reading: CostReading, subject: CostSubject): string
  * billed exchange" would qualify a figure that is not on screen — the same
  * contradiction the `lower-bound` sentence already answers.
  */
-export function unsettledSentence(reading: CostReading, subject: CostSubject): string {
+export function unsettledSentence(reading: CostHeadline, subject: CostSubject): string {
   return showsAnAmount(reading)
     ? `This ${subject} has not settled, so this is what it has spent SO FAR — not a final figure.`
     : `This ${subject} has not settled, so more exchanges may still be billed to it.`;

@@ -1,9 +1,11 @@
-import { and, asc, count, eq, max, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, max, sql } from 'drizzle-orm';
 import {
   NewRunEventSchema,
   RunEventSchema,
+  runCostFromAggregates,
   type NewRunEvent,
   type PipelineCostAggregates,
+  type RunCost,
   type RunEvent,
 } from '@autonomy-studio/shared';
 import { pipelineVersions, runEvents, runs } from '../db/schema.js';
@@ -75,6 +77,117 @@ export function maxRunEventSeq(db: Db, runId: string): number | null {
 }
 
 /**
+ * The ONE SQL statement of the fail-closed three-way categorisation, so the
+ * per-PIPELINE aggregate (#599) and the per-RUN aggregate (#931) cannot say
+ * different things about the same money — the SQL-layer twin of
+ * `runCostFromAggregates` being the one derivation site.
+ *
+ * `costEstimate` is the presence test the whole model turns on: `json_extract`
+ * yields NULL for an absent key, and `costEstimate` is `.optional()` (never JSON
+ * null), so absent ⟺ NULL ⟺ not priced.
+ */
+const meteredCostEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
+
+/**
+ * #2 L14 — the per-group SUM of `unpriced` (subscription/CLI) responses: metered
+ * rows with NO `costEstimate` whose `meteringStatus` is `unpriced`. The
+ * `costEstimate is null` guard keeps this DISJOINT from `count(costEstimate)`
+ * exactly as the pure fold's `else if` does (the executor never stamps a price on
+ * an `unpriced` response, so the guard is belt-and-suspenders that pins fold-SQL
+ * equivalence). `case ... then 1 else 0` never yields NULL, so the sum is a real
+ * number over any non-empty group.
+ */
+const meteredUnpricedCount = sql`sum(case when ${meteredCostEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
+
+/**
+ * The `MeteredAggregates` selection, valid both UNGROUPED (one row for the whole
+ * filtered set) and GROUPED (one row per `run_id`).
+ *
+ * The `coalesce(sum(...), 0)` wrappers exist ONLY for the empty-set case — SQL's
+ * `sum` of no rows is NULL — and NEVER per-row-pad a 0 where a value is absent
+ * (that is the fail-closed rule this whole module is built on). GROUPED, they are
+ * therefore dead weight: a group exists only because it has at least one row. The
+ * empty case does not disappear though, it MOVES — a run with no metered events
+ * produces no group at all, so its zeroed cost comes from the caller's lookup
+ * miss rather than from a coalesced NULL. `aggregateRunCosts` says where.
+ */
+function meteredAggregateColumns() {
+  return {
+    responseCount: count(),
+    pricedResponseCount: count(meteredCostEstimate),
+    unpricedResponseCount: sql<number>`coalesce(${meteredUnpricedCount}, 0)`,
+    totalCostEstimate: sql<number>`coalesce(sum(${meteredCostEstimate}), 0)`,
+    inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
+    outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
+  };
+}
+
+/**
+ * How many run ids `aggregateRunCosts` binds per statement.
+ *
+ * MEASURED against this repo's `better-sqlite3` (SQLite 3.53.2): the parameter
+ * ceiling is `SQLITE_MAX_VARIABLE_NUMBER = 32766`, and 32767 binds raise
+ * "too many SQL variables". This sits well below it deliberately — that limit is
+ * a COMPILE-TIME option (it defaulted to 999 before SQLite 3.32), so a differently
+ * built binary could be far lower, and the failure mode of guessing high is the
+ * whole runs page 500ing rather than one slow query.
+ */
+const RUN_ID_BIND_CHUNK = 500;
+
+/**
+ * #931 — the per-RUN cost aggregation behind the run list's cost column: the same
+ * bounded SUM/COUNT as {@link aggregatePipelineCost}, `GROUP BY run_id`, for a
+ * KNOWN set of run ids.
+ *
+ * WHY BY ID rather than by re-applying the list's own filter conditions. Both
+ * would work, but the id set makes set-equality with the rendered rows true BY
+ * CONSTRUCTION rather than by an argument about two predicate lists staying in
+ * step — and `listRunSummaries`' predicates are demonstrably NOT one list (the
+ * `pipelineId` axis is pushed on outside the shared builder because it reads a
+ * joined column). It is also the cheaper query: `run_events_run_id_idx` serves an
+ * `IN` directly, where a re-filtered form would scan on `type`, which is indexed
+ * nowhere. The in-file precedent is `queuedTriggerCandidatesForPipeline`
+ * (`repo/runs.ts`), which collects ids then re-queries by `inArray` for the same
+ * reason.
+ *
+ * A run with NO metered events is ABSENT from the returned map — deliberately, and
+ * it is the one thing a caller must handle. Ungrouped, `aggregatePipelineCost` gets
+ * "no metered events at all" as a single all-zero row; grouped, that case has no
+ * row to be, so the zero has to come from the caller. `listRunSummaries` answers it
+ * with `computeRunCost([])`, i.e. the fold's own empty value rather than a
+ * hand-written zero object that could be missed when `RunCost` grows a field.
+ *
+ * Owner-scoped when `ownerId` is passed (authentication ≠ authorization). Defense
+ * in depth: the ids handed in have normally ALREADY cleared an owner filter, and
+ * the join can never drop a row of its own (`run_events.run_id` is a cascading FK),
+ * so this is a second lock on the same door rather than the only one.
+ */
+export function aggregateRunCosts(
+  db: Db,
+  runIds: readonly string[],
+  ownerId?: string,
+): Map<string, RunCost> {
+  const costs = new Map<string, RunCost>();
+  for (let i = 0; i < runIds.length; i += RUN_ID_BIND_CHUNK) {
+    const chunk = runIds.slice(i, i + RUN_ID_BIND_CHUNK);
+    const conditions = [inArray(runEvents.runId, chunk), eq(runEvents.type, 'activity.metered')];
+    if (ownerId !== undefined) conditions.push(eq(runs.ownerId, ownerId));
+    const rows = db
+      .select({ runId: runEvents.runId, ...meteredAggregateColumns() })
+      .from(runEvents)
+      .innerJoin(runs, eq(runEvents.runId, runs.id))
+      .where(and(...conditions))
+      .groupBy(runEvents.runId)
+      .all();
+    for (const row of rows) {
+      const { runId, ...aggregates } = row;
+      costs.set(runId, runCostFromAggregates(aggregates));
+    }
+  }
+  return costs;
+}
+
+/**
  * #2 L6 / #599 — the per-pipeline cost rollup's BOUNDED aggregation: SUM/COUNT
  * `activity.metered` cost + tokens across ALL runs of a pipeline (all versions)
  * in a fixed number of scalar queries whose result set is O(1), rather than
@@ -138,15 +251,6 @@ export function aggregatePipelineCost(
   if (ownerId !== undefined) {
     meteredConditions.push(eq(runs.ownerId, ownerId));
   }
-  const costEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
-  // #2 L14 — the per-group SUM of `unpriced` (subscription/CLI) responses: metered
-  // rows with NO `costEstimate` whose `meteringStatus` is `unpriced`. The
-  // `costEstimate is null` guard keeps this DISJOINT from `count(costEstimate)`
-  // exactly as the pure fold's `else if` does (the executor never stamps a price on
-  // an `unpriced` response, so the guard is belt-and-suspenders that pins fold-SQL
-  // equivalence). `case ... then 1 else 0` never yields NULL, so the sum is a real
-  // number over any non-empty group.
-  const unpricedCount = sql`sum(case when ${costEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
   const runConditions = [eq(pipelineVersions.pipelineId, pipelineId)];
   if (ownerId !== undefined) {
     runConditions.push(eq(runs.ownerId, ownerId));
@@ -163,16 +267,7 @@ export function aggregatePipelineCost(
   return db.transaction((tx): PipelineCostAggregates => {
     // (A) Pipeline-wide scalar sums/counts over metered events.
     const sums = tx
-      .select({
-        responseCount: count(),
-        pricedResponseCount: count(costEstimate),
-        // coalesce handles the empty-set case (sum of no rows is NULL); the inner
-        // case-expression never per-row-pads a 0 where a status is absent.
-        unpricedResponseCount: sql<number>`coalesce(${unpricedCount}, 0)`,
-        totalCostEstimate: sql<number>`coalesce(sum(${costEstimate}), 0)`,
-        inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
-        outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
-      })
+      .select(meteredAggregateColumns())
       .from(runEvents)
       .innerJoin(runs, eq(runEvents.runId, runs.id))
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
@@ -190,7 +285,7 @@ export function aggregatePipelineCost(
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
       .where(and(...meteredConditions))
       .groupBy(runEvents.runId)
-      .having(sql`count(*) > count(${costEstimate}) + ${unpricedCount}`)
+      .having(sql`count(*) > count(${meteredCostEstimate}) + ${meteredUnpricedCount}`)
       .as('incomplete_runs');
     const incompleteRunCount = tx.select({ n: count() }).from(incompleteRuns).get()?.n ?? 0;
 

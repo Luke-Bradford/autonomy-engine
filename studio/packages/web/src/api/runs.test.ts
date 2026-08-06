@@ -1,3 +1,4 @@
+import { computeRunCost } from '@autonomy-studio/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getRun, getRunEvents, listExternalWaits, listRuns } from './runs';
 
@@ -28,6 +29,9 @@ const sampleRunSummary = {
   pipelineName: 'Nightly report',
   pipelineVersion: 3,
   triggerName: 'Every morning',
+  /* #931 — the summary now carries the run's cost. `computeRunCost([])` rather
+     than a literal, so the fixture cannot drift from `RunCost`'s own shape. */
+  cost: computeRunCost([]),
 };
 
 const sampleEvent = {
