@@ -923,7 +923,9 @@ function MultiSelectionPanel({
   const connections = selection.filter((s) => s.kind === 'edge').length;
   const parts = [
     `${activities} ${activities === 1 ? 'activity' : 'activities'}`,
-    ...(connections > 0 ? [`${connections} ${connections === 1 ? 'connection' : 'connections'}`] : []),
+    ...(connections > 0
+      ? [`${connections} ${connections === 1 ? 'connection' : 'connections'}`]
+      : []),
   ];
 
   return (

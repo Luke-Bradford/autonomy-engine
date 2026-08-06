@@ -2433,7 +2433,9 @@ describe('canvasStore — multi-selection (U21 #935)', () => {
       expect(sameSelectionSet([nodeA], [nodeA, nodeB])).toBe(false);
       expect(sameSelectionSet([nodeA], [nodeB])).toBe(false);
       // Same id, different kind — parted by kind, exactly as `sameSelection` is.
-      expect(sameSelectionSet([{ kind: 'node', id: 'x' }], [{ kind: 'edge', id: 'x' }])).toBe(false);
+      expect(sameSelectionSet([{ kind: 'node', id: 'x' }], [{ kind: 'edge', id: 'x' }])).toBe(
+        false,
+      );
     });
   });
 

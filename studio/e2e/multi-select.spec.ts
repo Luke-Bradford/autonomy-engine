@@ -43,8 +43,10 @@ async function seedTwoNodes(page: Page, name: string): Promise<void> {
   await addActivity(page, 'Write File');
   await fitAndSettle(page, 1);
   await expect(canvasNodes(page)).toHaveCount(2);
-  // Clear of each other, so a marquee can contain both and neither hides the edge.
-  await dragNodeBy(page, 1, 260, 40);
+  // Clear of each other, so a marquee can contain both and neither hides the
+  // edge. Same gesture and same order as `seedSelectedEdge`, whose comment
+  // records why the drag comes before any connect.
+  await dragNodeBy(page, 1, 200, 40);
   await fitAndSettle(page, 1);
 }
 
@@ -59,7 +61,8 @@ test.describe('multi-select (U21)', () => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e marquee select');
 
-    await marqueeAllNodes(page);
+    await fitAndSettle(page, 1);
+    await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
     // The panel agrees — the half a class-only assertion would miss, and the
@@ -75,7 +78,8 @@ test.describe('multi-select (U21)', () => {
     const problems = collectPageProblems(page);
     await seedTwoNodes(page, 'e2e marquee clickable');
 
-    await marqueeAllNodes(page);
+    await fitAndSettle(page, 1);
+    await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
     // React Flow's selection rect covers the bounding box of both nodes. If it
@@ -97,12 +101,11 @@ test.describe('multi-select (U21)', () => {
     await seedTwoNodes(page, 'e2e marquee move');
 
     const positions = async () =>
-      canvasNodes(page).evaluateAll((els) =>
-        els.map((el) => (el as HTMLElement).style.transform),
-      );
+      canvasNodes(page).evaluateAll((els) => els.map((el) => (el as HTMLElement).style.transform));
     const before = await positions();
 
-    await marqueeAllNodes(page);
+    await fitAndSettle(page, 1);
+    await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
     await dragNodeBy(page, 0, 90, 70);
@@ -127,7 +130,8 @@ test.describe('multi-select (U21)', () => {
     await connectNodes(page, 0, 1);
     await expect(edgeGroup(page)).toHaveCount(1);
 
-    await marqueeAllNodes(page);
+    await fitAndSettle(page, 1);
+    await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
 
     await page.keyboard.press('Backspace');
@@ -159,7 +163,8 @@ test.describe('multi-select (U21)', () => {
     // Marquee'd: React Flow also selects the edge (it is incident to both
     // lassoed nodes), so the anchors would come back if they were gated on
     // "selected" rather than "the ONE selected element".
-    await marqueeAllNodes(page);
+    await fitAndSettle(page, 1);
+    await marqueeAllNodes(page, 2);
     await expect(selectedNodes(page)).toHaveCount(2);
     await expect(reconnectAnchors(page)).toHaveCount(0);
 
