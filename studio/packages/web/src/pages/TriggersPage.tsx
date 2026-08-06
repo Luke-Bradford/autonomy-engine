@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import {
+  formatZodIssues,
   ConcurrencyPolicySchema,
   TriggerModeSchema,
   type ConcurrencyPolicy,
@@ -566,7 +567,7 @@ function TriggerForm({
 
     const parsed = TriggerWriteSchema.safeParse(fullBody);
     if (!parsed.success) {
-      setError(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+      setError(formatZodIssues(parsed.error.issues));
       return;
     }
 

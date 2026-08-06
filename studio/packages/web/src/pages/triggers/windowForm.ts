@@ -1,10 +1,10 @@
 import {
+  formatZodIssues,
   WindowConfigWriteSchema,
   type WindowConfig,
   type WindowFrequency,
 } from '@autonomy-studio/shared';
 import {
-  formatZodIssues,
   parseWholeNumber,
   resolveBoundsInto,
   utcIsoToLocalInput,
@@ -142,7 +142,7 @@ export function formToWindow(form: WindowFormState): WindowConversion {
   if (!parsed.success) {
     return {
       ok: false,
-      reason: formatZodIssues(parsed.error),
+      reason: formatZodIssues(parsed.error.issues),
     };
   }
   return { ok: true, window: parsed.data };

@@ -97,22 +97,6 @@ export function resolveBound(local: string, originalIso: string): string | null 
   return localInputToUtcIso(local);
 }
 
-/**
- * Flatten a Zod failure into one operator-facing line.
- *
- * Every trigger-config builder delegates its validation WHOLE to a shared write
- * schema, so every one of them needs this — and each carrying its own copy is
- * how three subtly different renderings of the same failure appear on one page.
- * (`packages/web` has the same duplication at a larger scale: see #856.)
- */
-export function formatZodIssues(error: {
-  issues: ReadonlyArray<{ path: PropertyKey[]; message: string }>;
-}): string {
-  return error.issues
-    .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-    .join('; ');
-}
-
 /** The two `datetime-local` bound controls every builder shares. */
 export interface BoundFields {
   startTime: string;

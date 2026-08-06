@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isOptionalProperty } from './llm-config.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import type { LlmOutputSchema } from './llm-config.js';
 
 /**
@@ -112,9 +113,7 @@ export function validateStructuredOutput(
   // reject them, nor `.passthrough()`, which would persist an undeclared key).
   const parsed = z.object(shape).safeParse(payload);
   if (!parsed.success) {
-    const reason = parsed.error.issues
-      .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-      .join('; ');
+    const reason = formatZodIssues(parsed.error.issues);
     return { ok: false, reason };
   }
   // Present-null normalization: an OPTIONAL property that was absent (Zod drops

@@ -5,6 +5,7 @@ import {
   type Output,
   type OutputType,
 } from '../schemas/pipeline.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 
 /**
  * A node's declared output contract, read from `config.outputs`. This module is
@@ -69,9 +70,7 @@ export type CheckedContract = Exclude<OutputContract, { kind: 'invalid' }>;
 export function outputContract(node: Node): OutputContract {
   const parsed = NodeOutputsFieldSchema.safeParse(node.config['outputs']);
   if (!parsed.success) {
-    const reason = parsed.error.issues
-      .map((i) => (i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message))
-      .join('; ');
+    const reason = formatZodIssues(parsed.error.issues);
     return { kind: 'invalid', reason };
   }
   return parsed.data === undefined

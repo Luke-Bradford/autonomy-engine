@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
+  formatZodIssues,
   ContainerKindSchema,
   OutputTypeSchema,
   ParamTypeSchema,
@@ -1931,7 +1932,7 @@ export function NodePanel({
     if (!entry) return null;
     const check = entry.configSchema.safeParse(candidate);
     if (check.success) return null;
-    return check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    return formatZodIssues(check.error.issues);
   }
 
   function applyJson() {

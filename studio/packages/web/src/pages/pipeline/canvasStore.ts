@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import {
+  formatZodIssues,
   ContainerSchema,
   getActivity,
   isStructuralCallActivity,
@@ -295,7 +296,7 @@ export function buildContainer(
   const parsed = ContainerSchema.safeParse(candidate);
   if (!parsed.success) {
     return {
-      error: parsed.error.issues.map((i) => `${i.path.join('.') || kind}: ${i.message}`).join('; '),
+      error: formatZodIssues(parsed.error.issues, kind),
     };
   }
   return { container: parsed.data };

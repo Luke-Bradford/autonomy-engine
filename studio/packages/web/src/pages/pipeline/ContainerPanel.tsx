@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  formatZodIssues,
   CONTAINER_CONFIG_FIELDS,
   CONTAINER_CONFIG_FIELD_NAMES,
   ContainerSchema,
@@ -240,7 +241,7 @@ export function ContainerPanel({
     // round-trip to a 400 they were going to get anyway.
     const check = ContainerSchema.safeParse(next);
     if (!check.success) {
-      setError(check.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+      setError(formatZodIssues(check.error.issues));
       return;
     }
     // The same pre-hoc gate a membership edit goes through. An `exitWhen` edit
