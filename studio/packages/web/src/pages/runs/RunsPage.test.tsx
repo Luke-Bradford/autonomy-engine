@@ -176,6 +176,33 @@ describe('RunsPage', () => {
     expect(cost.title).toContain('has not settled');
   });
 
+  /*
+     `costCell` is pinned as a pure function in `costColumn.test.ts`; this pins
+     the WIRING of its third input. `cost` and `status` are both proved above by
+     cells that would visibly change, but `rerunOf` reaches the operator only
+     through the title — so a `RunCostCell` that never forwarded it (or forwarded
+     a hardcoded null) would pass every other test on this page, and the caveat
+     that keeps a rerun from reading as inexplicably cheap would just be absent.
+  */
+  it("forwards a rerun's identity, so its figure says it is only the INCREMENT", async () => {
+    listMock.mockResolvedValue([
+      run({
+        id: 'run_abc',
+        status: 'success',
+        rerunOf: 'run_source',
+        cost: computeRunCost([metered({ cost: 0.03 })]),
+      }),
+    ]);
+    renderWithRouter(<RunsPage />);
+    const cost = cellUnder(
+      (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
+      'Cost',
+    );
+    expect(cost).toHaveTextContent('$0.03');
+    expect(cost.title).toContain('run_source');
+    expect(cost.title).toMatch(/re-executed only from the failure onward/);
+  });
+
   it('Watch navigates to the run detail route', async () => {
     listMock.mockResolvedValue([run({ id: 'run_abc' })]);
     vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);

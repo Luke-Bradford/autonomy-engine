@@ -154,8 +154,14 @@ export type Run = z.infer<typeof RunSchema>;
  *    which this row already carries, so a `duration` field would be a second
  *    statement of a fact the row already fixes. Cost is not derivable from
  *    anything here — it lives in `run_events`, two reads away — so this is the
- *    row's FIRST statement of it, resolved server-side in the same query the way
- *    R2 already resolves `pipelineName`/`triggerName` "so U10 needn't N+1".
+ *    row's FIRST statement of it, resolved server-side for the same reason R2
+ *    resolves `pipelineName`/`triggerName`: "so U10 needn't N+1". Not by the same
+ *    MEANS, though, and the difference is worth being exact about — those two are
+ *    columns of the row SELECT's own join, whereas cost is a SECOND statement
+ *    (`aggregateRunCosts`, its own `GROUP BY run_id`) joined to the rows in
+ *    memory. What makes the pair coherent is that both run inside ONE
+ *    `db.transaction`, so they read one SQLite snapshot — a transaction, not a
+ *    query (`repo/runs.ts::listRunSummaries`).
  *  - Not IMMEDIATELY-WRONG. A live run's spend genuinely does move after
  *    serialization, exactly as an elapsed clock does. The difference is that a
  *    moving cost is still a TRUE statement of spend-so-far, where a frozen
