@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   EdgeSchema,
   PipelineVersionSchema,
@@ -20,6 +20,7 @@ import {
   type Selection,
 } from './canvasStore';
 import { canSave, toVersionBody, validateCanvas } from './canvasDoc';
+import { clearClipboard, readClipboard } from './clipboard';
 import { DEFAULT_MAX_BOUNCES, type EdgeCondition } from './edgeCondition';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -2236,6 +2237,253 @@ describe('canvasStore — undo/redo (U17)', () => {
     // store action being the only thing that mints a fresh array.
     expect(s.getState().past[0]!.nodes).toBe(nodesBefore);
     expect(s.getState().nodes).toBe(nodesBefore);
+  });
+});
+
+describe('canvasStore — copy/paste and duplicate-selection (U21)', () => {
+  /** `n_a → n_b → n_c`, where `n_b` reads `n_a` and `n_c` reads `n_b`. */
+  function loaded() {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_a',
+            type: 'http_request',
+            config: { outputs: [{ name: 'body', type: 'string' }] },
+            position: { x: 0, y: 0 },
+          },
+          {
+            id: 'n_b',
+            type: 'llm_call',
+            config: {
+              prompt: 'summarise ${nodes.n_a.output.body}',
+              outputs: [{ name: 'text', type: 'string' }],
+            },
+            position: { x: 100, y: 0 },
+          },
+          {
+            id: 'n_c',
+            type: 'llm_call',
+            config: { prompt: 'expand ${nodes.n_b.output.text}', outputs: [] },
+            position: { x: 200, y: 0 },
+          },
+        ],
+        edges: [
+          { id: 'e_ab', from: 'n_a', to: 'n_b', on: 'success' },
+          { id: 'e_bc', from: 'n_b', to: 'n_c', on: 'success' },
+        ],
+      }),
+    );
+    return s;
+  }
+
+  const promptOf = (n: Node): string => (n.config as { prompt?: string }).prompt ?? '';
+
+  beforeEach(() => clearClipboard());
+
+  it('a ref BETWEEN two copied nodes follows the copies, not the originals', () => {
+    // The whole reason this slice exists: copy `n_b` and `n_c` together and
+    // `n_c`'s `${nodes.n_b…}` must name the COPY of n_b. Left unremapped it
+    // still validates, still saves and still runs — reading the wrong node.
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    expect(s.getState().copySelection('pl_1')).toBe(2);
+    expect(s.getState().pasteClipboard('pl_1')).toEqual({ ok: true, count: 2 });
+
+    const st = s.getState();
+    expect(st.nodes).toHaveLength(5);
+    const copyB = st.nodes[3]!;
+    const copyC = st.nodes[4]!;
+    expect(promptOf(copyC)).toBe(`expand \${nodes.${copyB.id}.output.text}`);
+    // ...and the ref OUT of the copied set is untouched: `n_a` still exists, and
+    // pointing at the same upstream is what "another one of these" means.
+    expect(promptOf(copyB)).toBe('summarise ${nodes.n_a.output.body}');
+  });
+
+  it('copies the edge BETWEEN the copied nodes, remapped to both copies', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    const [copyB, copyC] = [st.nodes[3]!, st.nodes[4]!];
+    expect(st.edges.some((e) => e.from === copyB.id && e.to === copyC.id)).toBe(true);
+  });
+
+  it('re-derives the external in-edge, so the copy keeps an upstream and SAVES', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    const copyB = st.nodes[3]!;
+    expect(st.edges.some((e) => e.from === 'n_a' && e.to === copyB.id)).toBe(true);
+    // The point of that edge: `validateRefs` scopes a ref to the node's UPSTREAM
+    // set, so a copy arriving without it is refused at the save gate.
+    expect(validateCanvas(st.nodes, st.edges, st.containers, st.params)).toEqual([]);
+  });
+
+  it('drops an external in-edge whose source was deleted after the copy', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
+    s.getState().copySelection('pl_1');
+    s.getState().deleteNode('n_a');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    const copyB = st.nodes.at(-1)!;
+    expect(st.edges.some((e) => e.to === copyB.id)).toBe(false);
+  });
+
+  it('re-derives container membership from the LIVE doc, not the clipboard', () => {
+    const s = loaded();
+    s.getState().createContainer({ id: 'stage_1', kind: 'stage', children: ['n_b'] });
+    s.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    const copyId = st.nodes.at(-1)!.id;
+    expect(st.containers[0]!.children).toContain(copyId);
+
+    // Delete the container, then paste the SAME clipboard again: the copy must
+    // not be put back into a container that no longer exists.
+    s.getState().deleteContainer(st.containers[0]!.id);
+    s.getState().pasteClipboard('pl_1');
+    const after = s.getState();
+    expect(after.containers).toEqual([]);
+  });
+
+  it('refuses a paste from a DIFFERENT pipeline, and touches nothing', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
+    s.getState().copySelection('pl_1');
+    const before = s.getState();
+
+    expect(s.getState().pasteClipboard('pl_OTHER')).toEqual({
+      ok: false,
+      reason:
+        'That was copied from a different pipeline. Pasting across pipelines is not supported yet.',
+    });
+    expect(s.getState().nodes).toBe(before.nodes);
+    expect(s.getState().past).toBe(before.past);
+  });
+
+  it('refuses a paste with nothing copied, and a copy with nothing selected', () => {
+    const s = loaded();
+    expect(s.getState().pasteClipboard('pl_1')).toEqual({
+      ok: false,
+      reason: 'Nothing has been copied yet.',
+    });
+    expect(s.getState().copySelection('pl_1')).toBe(0);
+    expect(s.getState().past).toEqual([]);
+  });
+
+  it('a copy is NOT a doc edit — no undo entry, and the doc is untouched', () => {
+    const s = loaded();
+    s.getState().setSelection([{ kind: 'node', id: 'n_b' }]);
+    const before = s.getState();
+    s.getState().copySelection('pl_1');
+    expect(s.getState().past).toBe(before.past);
+    expect(s.getState().dirty).toBe(before.dirty);
+  });
+
+  it('a paste of three nodes is ONE undo entry that removes the whole paste', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_a' },
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+    expect(s.getState().nodes).toHaveLength(6);
+    expect(s.getState().past).toHaveLength(1);
+
+    s.getState().undo();
+    expect(s.getState().nodes).toHaveLength(3);
+    expect(s.getState().edges.map((e) => e.id)).toEqual(['e_ab', 'e_bc']);
+  });
+
+  it('keeps the copied subgraph\'s relative layout — one stagger per gesture', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    const [copyB, copyC] = [st.nodes[3]!, st.nodes[4]!];
+    expect(copyC.position.x - copyB.position.x).toBe(100);
+    expect(copyB.position.y).toBe(copyC.position.y);
+  });
+
+  it('selects the pasted nodes, so the next edit lands on the copies', () => {
+    const s = loaded();
+    s.getState().setSelection([
+      { kind: 'node', id: 'n_b' },
+      { kind: 'node', id: 'n_c' },
+    ]);
+    s.getState().copySelection('pl_1');
+    s.getState().pasteClipboard('pl_1');
+
+    const st = s.getState();
+    expect(st.selected).toEqual([
+      { kind: 'node', id: st.nodes[3]!.id },
+      { kind: 'node', id: st.nodes[4]!.id },
+    ]);
+  });
+
+  it('duplicateNodes remaps the same way, without touching the clipboard', () => {
+    const s = loaded();
+    expect(s.getState().duplicateNodes(['n_b', 'n_c'])).toBe(2);
+
+    const st = s.getState();
+    const [copyB, copyC] = [st.nodes[3]!, st.nodes[4]!];
+    expect(promptOf(copyC)).toBe(`expand \${nodes.${copyB.id}.output.text}`);
+    expect(readClipboard()).toBeNull();
+  });
+
+  it('duplicateNodes ignores ids naming no current node, and refuses an empty set', () => {
+    const s = loaded();
+    expect(s.getState().duplicateNodes(['nope'])).toBe(0);
+    expect(s.getState().past).toEqual([]);
+    expect(s.getState().duplicateNodes(['n_b', 'nope'])).toBe(1);
+    expect(s.getState().nodes).toHaveLength(4);
+  });
+
+  it('a SELF-reference follows the copy — the documented behaviour change', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(
+      version({
+        nodes: [
+          {
+            id: 'n_a',
+            type: 'llm_call',
+            config: { prompt: 'was ${nodes.n_a.status}', outputs: [] },
+            position: { x: 0, y: 0 },
+          },
+        ],
+        edges: [],
+      }),
+    );
+    s.getState().duplicateNode('n_a');
+    const copy = s.getState().nodes[1]!;
+    expect(promptOf(copy)).toBe(`was \${nodes.${copy.id}.status}`);
   });
 });
 

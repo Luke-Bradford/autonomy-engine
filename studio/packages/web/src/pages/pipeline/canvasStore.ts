@@ -5,6 +5,7 @@ import {
   getActivity,
   isStructuralCallActivity,
   lowerPipelineNodes,
+  remapNodeRefs,
   type CallConfig,
   type Container,
   type ContainerKind,
@@ -25,6 +26,7 @@ import {
 } from './edgeCondition';
 import { connectRejection, edgeEndpointIds, precomputeConnect } from './connectRules';
 import { blankOutput, blankParam } from './paramRules';
+import { readClipboard, writeClipboard } from './clipboard';
 
 /** How a connection differs from an ordinary forward edge (U6e). */
 export interface ConnectOptions {
@@ -360,6 +362,106 @@ export function buildContainer(
   return { container: parsed.data };
 }
 
+/** The doc a clone is grafted onto — the live graph, plus its stagger counter. */
+export interface CloneTarget {
+  nodes: Node[];
+  edges: Edge[];
+  containers: Container[];
+  addCount: number;
+}
+
+/** What a clone produced: the WHOLE new lists, plus the ids that are new. */
+export interface CloneResult {
+  nodes: Node[];
+  edges: Edge[];
+  containers: Container[];
+  newIds: string[];
+}
+
+/**
+ * U21 — graft a COPY of `sources` (plus the edges between them) onto `target`.
+ *
+ * The ONE cloning path: `duplicateNode`, duplicate-selection and paste all go
+ * through here so they cannot drift on the four rules that make a copy a legal
+ * doc rather than a plausible-looking one.
+ *
+ * 1. **References follow the copies.** `remapNodeRefs` rewrites every
+ *    `${nodes.<id>}` naming a member of the copied set to that member's copy.
+ *    A ref naming a node OUTSIDE the set is left alone — it still resolves, and
+ *    pointing at the same upstream is what "another one of these" means. This is
+ *    also the single deep clone: `remapNodeRefs` returns a fresh structure, so
+ *    `config` (an arbitrarily nested `z.record`) is never shared with the source.
+ *
+ * 2. **Internal edges are copied VERBATIM, not re-offered to `connectRejection`.**
+ *    An edge between two copies with identical container membership is not new
+ *    authoring — it is a structural copy of a decision the doc already records,
+ *    so the gate's answer is the one already on file. Re-offering it would drop
+ *    it SILENTLY where it disagrees (a container-boundary edge is legal today
+ *    because U6d WARNS rather than refuses on a membership edit), and the copy's
+ *    freshly-remapped ref would then have no upstream and refuse to save — a
+ *    paste that reported success producing an unsavable doc. Copying it verbatim
+ *    can at worst carry a defect the save gate and the validation badge report
+ *    LOUDLY, which is the direction this repo errs in everywhere else.
+ *
+ * 3. **External in-edges are re-derived from the LIVE graph** and DO go through
+ *    the gate, because their target genuinely is a new node. Without them a copy
+ *    whose config references an un-copied upstream has no upstream in scope and
+ *    `validateRefs` refuses the save. Re-deriving (rather than carrying them on
+ *    the clipboard) is what makes ⌘V and ⌘D agree, and it drops an edge whose
+ *    source has since been deleted instead of resurrecting it.
+ *
+ * 4. **Container membership is re-derived from the LIVE containers** by SOURCE
+ *    id, for the same reason: a clipboard written before the container was
+ *    deleted must not put its copies back into a container that is gone.
+ *
+ * The stagger is computed ONCE per gesture, not per node, so a copied subgraph
+ * keeps its internal layout — the one thing a group paste has to preserve.
+ */
+export function cloneNodesInto(
+  target: CloneTarget,
+  sources: Node[],
+  internalEdges: Edge[],
+): CloneResult {
+  const idMap = new Map(sources.map((n) => [n.id, newLocalId('n')]));
+  const offset = 40 + (target.addCount % 5) * 40;
+
+  const copies: Node[] = sources.map((source) => ({
+    ...remapNodeRefs(source, idMap),
+    id: idMap.get(source.id) as string,
+    position: { x: source.position.x + offset, y: source.position.y + offset },
+  }));
+
+  let containers = target.containers;
+  for (const source of sources) {
+    const owner = containers.find((c) => c.children.includes(source.id))?.id ?? null;
+    containers = assignContainerChild(containers, idMap.get(source.id) as string, owner);
+  }
+
+  const edges = [...target.edges];
+  for (const e of internalEdges) {
+    const from = idMap.get(e.from);
+    const to = idMap.get(e.to);
+    if (from === undefined || to === undefined) continue;
+    edges.push({ ...e, id: newLocalId('e'), from, to });
+  }
+
+  const nodes = [...target.nodes, ...copies];
+  for (const e of target.edges) {
+    const to = idMap.get(e.to);
+    if (to === undefined || idMap.has(e.from)) continue;
+    const candidate = { from: e.from, to, condition: conditionOf(e), back: e.back === true };
+    // Judged against the graph INCLUDING the edges accepted before it, for the
+    // same reason `connect` judges against the live graph: an accepted edge
+    // changes the answer for the next one.
+    if (connectRejection(precomputeConnect({ nodes, edges, containers }), candidate) !== null) {
+      continue;
+    }
+    edges.push({ ...e, id: newLocalId('e'), to });
+  }
+
+  return { nodes, edges, containers, newIds: [...idMap.values()] };
+}
+
 /**
  * U17 — how many undo steps the canvas keeps.
  *
@@ -610,6 +712,42 @@ export interface CanvasState {
    * slot.
    */
   duplicateNode(id: string): void;
+  /**
+   * U21 — duplicate a SET of nodes in one gesture, one undo entry.
+   *
+   * `duplicateNode` is the singular sugar over this, so the two cannot drift.
+   * BEHAVIOUR CHANGE it carries for the singular case, deliberately: a config
+   * that references the node's OWN status (`${nodes.a.status}` inside `a`) now
+   * follows the copy, where before it kept reading the source. A self-reference
+   * is about "this node", so the copy asking about itself is the correct
+   * reading; the previous answer was an accident of not remapping at all.
+   *
+   * Returns how many nodes were copied — 0 when no id names a current node,
+   * which returns before `edit` so a refused press consumes no undo slot.
+   */
+  duplicateNodes(ids: string[]): number;
+  /**
+   * U21 — put the selected nodes (and every edge BETWEEN them) on the canvas
+   * clipboard. Returns how many nodes were copied; 0 means nothing was selected.
+   *
+   * NOT a doc edit, so it records no undo entry — there is nothing to undo, and
+   * an entry here would make ⌘Z after a copy silently revert the edit before it.
+   *
+   * `pipelineId` is a parameter rather than store state on purpose: it is a
+   * `PipelineCanvas` prop, and deriving it from `loaded` would read `null` for a
+   * never-saved pipeline, so two unsaved pipelines would compare EQUAL and the
+   * cross-pipeline refusal — the guard standing in for the deferred slice —
+   * would fail open into exactly the dangling-ref doc it exists to prevent.
+   */
+  copySelection(pipelineId: string): number;
+  /**
+   * U21 — paste the canvas clipboard into this pipeline, in ONE undo entry.
+   *
+   * Refuses (without touching the doc) an empty clipboard, or one copied from
+   * another pipeline — see `CanvasClipboard` for why cross-pipeline paste is a
+   * later slice rather than a matter of copying more state.
+   */
+  pasteClipboard(pipelineId: string): { ok: true; count: number } | { ok: false; reason: string };
   /**
    * U21 — move nodes, in ONE undo entry.
    *
@@ -1035,69 +1173,72 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       },
 
       duplicateNode(id) {
-        if (!get().nodes.some((n) => n.id === id)) return;
+        get().duplicateNodes([id]);
+      },
+
+      duplicateNodes(ids) {
+        const live = get();
+        const sources = live.nodes.filter((n) => ids.includes(n.id));
+        if (sources.length === 0) return 0;
+        const kept = new Set(sources.map((n) => n.id));
+        // Every edge WITHIN the copied set travels with it. Membership, not
+        // selection, decides: selecting two nodes and asking for a copy means the
+        // pair, and an operator does not think of the arrow between them as a
+        // third thing they forgot to click.
+        const internal = live.edges.filter((e) => kept.has(e.from) && kept.has(e.to));
         edit((s) => {
-          const source = s.nodes.find((n) => n.id === id)!;
-          const copyId = newLocalId('n');
-          /* `structuredClone`, not a spread: `config` is a `z.record(unknown)`
-             that nests arbitrarily, and `assembleConfig` preserves the
-             keys no field owns BY REFERENCE — so a shallow copy would leave the
-             source and the copy sharing one `config.outputs` array, where
-             editing either edits both. The value arrived as parsed JSON (or was
-             authored by a form over one), so there is nothing `structuredClone`
-             can choke on. It is also what carries `connectionParams`, `call` and
-             `policy` without this action having to name every field, which is
-             what stops it going stale the next time `NodeSchema` grows one.
-
-             Deliberately NOT re-run through `lowerPipelineNodes`: the source has
-             already been lowered (by `addNode` or by `loadVersion`), so it would
-             be a no-op — and the server lowers again on save regardless. */
-          const copy: Node = {
-            ...structuredClone(source),
-            id: copyId,
-            // Offset so the copy is visibly its own node, staggered on the same
-            // counter `addNode` uses so duplicating twice does not stack two
-            // copies on one spot. It wraps every 5, as an add does.
-            position: {
-              x: source.position.x + 40 + (s.addCount % 5) * 40,
-              y: source.position.y + 40 + (s.addCount % 5) * 40,
-            },
-          };
-          // The copy joins the container the source is in. A container BOX is
-          // derived from `children`, so a copy that lands 40px from a member and
-          // is not one would draw a box around a node it does not contain.
-          // `assignContainerChild` rather than an append here, because
-          // disjointness is that function's property to keep, not this caller's.
-          const owner = s.containers.find((c) => c.children.includes(id))?.id ?? null;
-          const containers = assignContainerChild(s.containers, copyId, owner);
-
-          /* Each candidate is judged against the graph INCLUDING the edges
-             accepted before it, for the same reason `connect` judges against the
-             live graph: an accepted edge changes the answer for the next one. */
-          const edges = [...s.edges];
-          for (const e of s.edges) {
-            if (e.to !== id) continue;
-            const candidate = {
-              from: e.from,
-              to: copyId,
-              condition: conditionOf(e),
-              back: e.back === true,
-            };
-            const graph = { nodes: [...s.nodes, copy], edges, containers };
-            if (connectRejection(precomputeConnect(graph), candidate) !== null) continue;
-            edges.push({ ...e, id: newLocalId('e'), to: copyId });
-          }
-
+          const cloned = cloneNodesInto(s, sources, internal);
           return {
-            nodes: [...s.nodes, copy],
-            containers,
-            edges,
-            // The copy, not the source, is what the operator is about to edit —
-            // duplicating is how you say "another one of these, but different".
-            selected: [{ kind: 'node', id: copyId }],
+            nodes: cloned.nodes,
+            edges: cloned.edges,
+            containers: cloned.containers,
+            // The copies, not the sources, are what the operator is about to edit
+            // — duplicating is how you say "another one of these, but different".
+            selected: cloned.newIds.map((id) => ({ kind: 'node' as const, id })),
+            // ONE gesture consumes ONE stagger slot, however many nodes it copied.
             addCount: s.addCount + 1,
           };
         });
+        return sources.length;
+      },
+
+      copySelection(pipelineId) {
+        const live = get();
+        const ids = live.selected.filter((s) => s.kind === 'node').map((s) => s.id);
+        const nodes = live.nodes.filter((n) => ids.includes(n.id));
+        if (nodes.length === 0) return 0;
+        const kept = new Set(nodes.map((n) => n.id));
+        writeClipboard({
+          pipelineId,
+          nodes,
+          edges: live.edges.filter((e) => kept.has(e.from) && kept.has(e.to)),
+        });
+        return nodes.length;
+      },
+
+      pasteClipboard(pipelineId) {
+        const held = readClipboard();
+        if (held === null || held.nodes.length === 0) {
+          return { ok: false, reason: 'Nothing has been copied yet.' };
+        }
+        if (held.pipelineId !== pipelineId) {
+          return {
+            ok: false,
+            reason:
+              'That was copied from a different pipeline. Pasting across pipelines is not supported yet.',
+          };
+        }
+        edit((s) => {
+          const cloned = cloneNodesInto(s, held.nodes, held.edges);
+          return {
+            nodes: cloned.nodes,
+            edges: cloned.edges,
+            containers: cloned.containers,
+            selected: cloned.newIds.map((id) => ({ kind: 'node' as const, id })),
+            addCount: s.addCount + 1,
+          };
+        });
+        return { ok: true, count: held.nodes.length };
       },
 
       moveNodes(moves) {

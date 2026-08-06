@@ -189,7 +189,10 @@ export function remapNodeRefsInString(s: string, idMap: ReadonlyMap<string, stri
  * left alone — only values are rewritten.
  */
 export function remapNodeRefs<T>(value: T, idMap: ReadonlyMap<string, string>): T {
-  if (idMap.size === 0) return structuredClone(value);
+  // The walk itself is the clone — it rebuilds every array and object it meets,
+  // so an empty map still yields a fresh structure and callers need no second
+  // copy. (`structuredClone` is not reachable here: `shared` compiles without
+  // the DOM lib, and the input is parsed JSON regardless.)
   const walk = (v: unknown): unknown => {
     if (typeof v === 'string') return remapNodeRefsInString(v, idMap);
     if (Array.isArray(v)) return v.map(walk);
