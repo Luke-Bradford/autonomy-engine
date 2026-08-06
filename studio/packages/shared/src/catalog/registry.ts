@@ -290,8 +290,10 @@ const ENTRIES: ActivityCatalogEntry[] = [
     //
     // THE STRUCTURAL-CALL EXCEPTION: `configSchema` here types the `Node.call` blob
     // (reused from `CallConfigSchema`, the SSOT), NOT `Node.config` like every other
-    // entry — so `isStructuralCallActivity` flags it and the generic palette/inspector
-    // exclude it (call-node authoring is #425). `outputs:[]`: a call node's outputs
+    // entry — so `isStructuralCallActivity` flags it, and the generic schema→form
+    // CONFIG path routes away from it. It is no longer hidden: #425 gave it a
+    // dedicated editor (`CallPanel`), so the palette offers it and the inspector
+    // renders that editor for it. `outputs:[]`: a call node's outputs
     // come from the CHILD projection, never a catalog template, so `lowerNodeOutputs`
     // skips call nodes (seeding `[]` would flip the contract absent→declared-empty and
     // silently drop every child output). Cataloguing this TYPE does NOT bump

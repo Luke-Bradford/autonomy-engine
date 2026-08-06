@@ -120,7 +120,59 @@ export function rowsFrom(
   return out;
 }
 
-/** Is this raw text a `${}` expression, to be stored verbatim rather than coerced? */
+/**
+ * Are two seeds the same, FIELD-WISE?
+ *
+ * Deliberately not `JSON.stringify(a) === JSON.stringify(b)`. `containerRules`
+ * records why: `sameContainerConfig` replaced exactly that comparison, because
+ * it makes "did anything change?" depend on the key order whichever module
+ * happened to build the object in. Here that answer decides whether an
+ * in-progress edit is DISCARDED and re-seeded, so a spurious inequality is a
+ * clobber — the same failure the container panel's `sameSeededInputs` exists to
+ * prevent, and this is its counterpart.
+ */
+export function sameSeed(a: Seed, b: Seed): boolean {
+  return (
+    a.mode === b.mode &&
+    a.pipelineId === b.pipelineId &&
+    a.versionId === b.versionId &&
+    a.expression === b.expression &&
+    a.wait === b.wait &&
+    a.paramsJson === b.paramsJson &&
+    sameText(a.params, b.params)
+  );
+}
+
+function sameText(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => k in b && a[k] === b[k]);
+}
+
+/**
+ * The keys a stored call carries as an explicit `''`.
+ *
+ * Computed from the STORED blob rather than tracked as draft state, because it
+ * is a fact about what is persisted and must not drift as the operator types.
+ */
+export function storedBlankKeys(call: CallConfig | undefined): Set<string> {
+  return new Set(
+    Object.entries(call?.params ?? {})
+      .filter(([, v]) => v === '')
+      .map(([k]) => k),
+  );
+}
+
+/**
+ * Is this raw text a `${}` expression, to be stored verbatim rather than coerced?
+ *
+ * WHOLE-SPAN only: `foo-${params.x}` is treated as a literal and coerced against
+ * the declared type, so it fits a `string` param and is rejected for a `number`.
+ * That is deliberate and narrow — a whole-span ref is the form that needs to
+ * escape coercion (its VALUE has the declared type; its text does not), while an
+ * interpolated string is already a string. It is not parity with the config
+ * surface's interpolation, and this panel makes no claim that it is.
+ */
 function isExpressionText(raw: string): boolean {
   const t = raw.trim();
   return t.startsWith('${') && t.endsWith('}');
@@ -137,6 +189,16 @@ type ParamsParse = { ok: true; value: Record<string, unknown> } | { ok: false; e
  * default applies. That is the only way to say "let the child decide" here, and
  * it is what `coerceDefaultInput`'s blank case already means.
  *
+ * EXCEPT for a key the node already carries as an explicit `''` (`storedBlank`).
+ * `formatDefaultInput` renders that as a blank row, which is indistinguishable
+ * on screen from "nothing entered" — so without this the argument would be
+ * dropped merely by opening the node, editing some OTHER field and pressing
+ * Apply, silently and with nothing on screen having said so. That is the same
+ * class of loss as the mode-switch discard `switchMode` exists to prevent, so it
+ * gets the same answer: a value the operator never touched survives. Clearing a
+ * row that held a NON-blank value still omits the key, which is how "let the
+ * child decide" is said.
+ *
  * A `${}` value is stored VERBATIM whatever the declared type, because it is
  * resolved at dispatch and the text is not the value: coercing `${params.n}`
  * against a `number` param would reject the one form the schema documents.
@@ -144,11 +206,16 @@ type ParamsParse = { ok: true; value: Record<string, unknown> } | { ok: false; e
 export function buildParams(
   text: Record<string, string>,
   declared: ReadonlyMap<string, Param>,
+  storedBlank: ReadonlySet<string> = new Set(),
 ): ParamsParse {
   const out: Record<string, unknown> = {};
   for (const [name, raw] of Object.entries(text)) {
     if (isExpressionText(raw)) {
       out[name] = raw.trim();
+      continue;
+    }
+    if (raw === '' && storedBlank.has(name)) {
+      out[name] = '';
       continue;
     }
     // An undeclared key has no type to coerce against, so it is carried as the

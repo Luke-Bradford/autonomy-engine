@@ -5,7 +5,9 @@ import {
   loadCallTargets,
   parseJsonParams,
   rowsFrom,
+  sameSeed,
   seedCall,
+  storedBlankKeys,
   type CallTarget,
   type Mode,
   type Seed,
@@ -73,7 +75,10 @@ export function CallPanel({
   useEffect(() => {
     const controller = new AbortController();
     loadCallTargets(controller.signal)
-      .then((t) => setTargets(t))
+      .then((t) => {
+        if (controller.signal.aborted) return;
+        setTargets(t);
+      })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setLoadError(err instanceof Error ? err.message : String(err));
@@ -124,7 +129,7 @@ function CallEditor({
    * action mints a new node object.
    */
   const [syncedSeed, setSyncedSeed] = useState(seeded);
-  if (JSON.stringify(syncedSeed) !== JSON.stringify(seeded)) {
+  if (!sameSeed(syncedSeed, seeded)) {
     setSyncedSeed(seeded);
     setDraft(seeded);
     setError(null);
@@ -149,6 +154,8 @@ function CallEditor({
    * the node already carries stay on the list (flagged) rather than vanishing.
    */
   const declared = useMemo(() => new Map((chosen?.params ?? []).map((p) => [p.name, p])), [chosen]);
+  /** Keys the STORED call carries as an explicit `''` — see `buildParams`. */
+  const storedBlank = useMemo(() => storedBlankKeys(call), [call]);
   const rows = useMemo(() => {
     const names = new Set([...declared.keys(), ...Object.keys(draft.params)]);
     return [...names].sort();
@@ -182,7 +189,7 @@ function CallEditor({
   function switchMode(next: Mode) {
     if (next === draft.mode) return;
     if (next === 'expression') {
-      const built = buildParams(draft.params, declared);
+      const built = buildParams(draft.params, declared, storedBlank);
       if (!built.ok) {
         setError(built.error);
         return;
@@ -215,7 +222,7 @@ function CallEditor({
     const params =
       draft.mode === 'expression' || !chosen
         ? parseJsonParams(draft.paramsJson)
-        : buildParams(draft.params, declared);
+        : buildParams(draft.params, declared, storedBlank);
     if (!params.ok) {
       setError(params.error);
       return;

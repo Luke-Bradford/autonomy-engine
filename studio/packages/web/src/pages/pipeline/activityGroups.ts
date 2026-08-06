@@ -41,9 +41,11 @@ export interface ToolboxGroup {
  * 3. **A group with no matches is OMITTED.** A heading over nothing is a false
  *    "this category has matches" signal, and dead height in a 180px column.
  *
- * The structural-call activity (`execute_pipeline`) is excluded outright: its
- * settings ride `node.call`, not `node.config`, so the generic config form cannot
- * author it (#4 A9; call-node authoring is #425).
+ * The structural-call activity (`execute_pipeline`) USED to be excluded outright,
+ * because its settings ride `node.call` rather than `node.config` and the generic
+ * config form cannot author them (#4 A9). #425 gave it a dedicated editor
+ * (`CallPanel`), so it is now offered like any other entry — the exclusion lives
+ * nowhere in this file any more.
  */
 export function toolboxGroups(query: string): ToolboxGroup[] {
   const needle = query.trim().toLowerCase();
