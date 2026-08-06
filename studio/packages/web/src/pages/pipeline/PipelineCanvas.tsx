@@ -85,6 +85,16 @@ import {
   restoreRefusal,
   saveAnywayLabel,
 } from './versionHistory';
+import { useTransientNotice } from './useTransientNotice';
+
+/**
+ * How long a copy/paste/duplicate notice stays up.
+ *
+ * Long enough to read a short sentence unhurriedly, short enough that it is
+ * gone before the next thing the operator does — the point of the line is to
+ * confirm a gesture landed, and nothing about it is worth going back to.
+ */
+const CLIPBOARD_NOTICE_MS = 6_000;
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -121,8 +131,13 @@ export function PipelineCanvas({
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   /* U21 — the clipboard's own line, not `saveMsg`: a copy is not a save
      outcome, and folding them would let a paste erase the sentence that
-     says whether the last save landed. */
-  const [clipboardMsg, setClipboardMsg] = useState<string | null>(null);
+     says whether the last save landed.
+
+     TRANSIENT, because nothing else on this canvas has any business clearing
+     it. `saveMsg` is wiped by the next save attempt; a copy has no successor
+     act, so an un-expiring line would sit under unrelated later work still
+     claiming to describe it. */
+  const [clipboardMsg, showClipboardMsg] = useTransientNotice(CLIPBOARD_NOTICE_MS);
   // #907 — the unarchive request's own in-flight + failure state. Kept apart
   // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
   // next save; this one is about whether the pipeline can be saved at all.
@@ -249,19 +264,19 @@ export function PipelineCanvas({
           // copy still works for an operator selecting text on the page.
           if (copied === 0) return;
           e.preventDefault();
-          setClipboardMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
+          showClipboardMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
           return;
         }
         if (clip === 'duplicate') {
           if (store.getState().selected.every((sel) => sel.kind !== 'node')) return;
           e.preventDefault();
           const made = store.getState().duplicateSelection();
-          setClipboardMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
+          showClipboardMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
           return;
         }
         e.preventDefault();
         const outcome = store.getState().pasteClipboard(pipelineId);
-        setClipboardMsg(
+        showClipboardMsg(
           outcome.ok
             ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
             : outcome.reason,
@@ -278,7 +293,9 @@ export function PipelineCanvas({
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked]);
+    // `showClipboardMsg` is stable (the notice window is a module constant), so
+    // listing it does not re-bind the keydown listener on every render.
+  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked, showClipboardMsg]);
 
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
@@ -872,7 +889,7 @@ export function PipelineCanvas({
             store={store}
             connections={connections}
             pipelineId={pipelineId}
-            onNotice={setClipboardMsg}
+            onNotice={showClipboardMsg}
           />
         </div>
       )}

@@ -123,6 +123,12 @@ test.describe('copy/paste on the canvas (U21)', () => {
     // `${nodes.a…}` in scope for `validateRefs`.
     expect(latest.edges).toContainEqual(expect.objectContaining({ from: 'a', to: copyB!.id }));
 
+    // The clipboard line CLEARS ITSELF. Unlike the save line, which the next
+    // save wipes, no later act on this canvas owns it — so left un-expiring it
+    // would still be sitting here under the save that came after it, claiming
+    // to describe work the operator has long since moved on from.
+    await expect(page.getByText('Pasted 2 activities.')).toBeHidden({ timeout: 15_000 });
+
     await expectQuiet(page, problems);
   });
 
