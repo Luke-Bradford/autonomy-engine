@@ -51,6 +51,13 @@ banned 'NEXT ITEM *='                    'a second declaration of what is next (
 banned 'build it first'                  'an inline ordering assertion outside THE QUEUE (rounds 2-5)'
 banned 'see the (CUTOVER|WORK ORDER)[^.]*(sequence|ordering)' \
                                          'a cross-reference pointing at a section for the ordering (round 6)'
+# ⚠ Instance NINE, and this test did not catch it — Codex did, on the very
+# commit that added the test. The specs paragraph said the overview's ordered
+# list "IS your queue", which is a THIRD home for the order and reads as
+# authoritative because it sits next to the spec map. A guard written from the
+# findings it has seen only covers the phrasings it has seen; this one widens to
+# the CLAIM ("X is the/your queue") rather than any particular sentence.
+banned '(is|IS) (your|the) queue'        'another section claiming to BE the queue (round 8, found by Codex)'
 
 # --- required ownership statements ------------------------------------------
 # The positive half. Deleting the pointers is not enough — the file has to SAY

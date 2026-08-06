@@ -28,7 +28,7 @@ Run: `git log --oneline -15 origin/main` · `gh pr list --state open` (for each:
 Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → reconcile before building. (A supervisor engine PR open ALONGSIDE your studio PR is fine and expected — it is not a race, not yours.)
 
 ## THE PLAN LIVES IN THE SPECS (read them — do not reinvent)
-`studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list IS your queue. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
+`studio/docs/2026-07-14-foundation-overview.md` is the MAP: the layer model, the **11 cross-cutting interlocks**, the **"Master build order (CORRECTED …)"** + **"Round-1/Round-3 amendments"** sections — that ordered list is the dependency BACKGROUND THE QUEUE draws from, never a queue to read instead of it. Each foundation spec has a **ticket table** (F/L/G/A/S/E/U/RS series) = the granular work, and a **"Spike-hardened" / "Codex-hardened"** block carrying code-validated decisions you MUST honour. Specs:
 - `#1 foundation-domain-activity-framework.md` (F0-F15) · `#6 foundation-expression-language.md` (E1-E8) · `#5 foundation-scheduler-lifecycle.md` (S1-S12) · `#2 foundation-llm-activity-model.md` (L1-L14) · `#4 foundation-activity-library.md` (A0-A17) · `#3 foundation-git-publish.md` (G1-G10) · `RS foundation-rerun-from-failed.md` (RS1-RS6) · UI `adf-grade-ui-design.md` (U0-U29, R1-R3).
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
