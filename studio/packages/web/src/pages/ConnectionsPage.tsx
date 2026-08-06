@@ -4,7 +4,7 @@ import {
   formatZodIssues,
   type ConnectionPublic,
 } from '@autonomy-studio/shared';
-import { ApiError } from '../api/client';
+import { ApiError, messageOf } from '../api/client';
 import {
   ConnectionWriteSchema,
   createConnection,
@@ -13,6 +13,9 @@ import {
   updateConnection,
   type ConnectionWrite,
 } from '../api/connections';
+import { downloadTextFile, exportFileName } from '../api/download';
+import { exportConnection } from '../api/portability';
+import { ImportPanel } from './ImportPanel';
 
 const KINDS = ConnectionKindSchema.options;
 
@@ -79,6 +82,26 @@ export function ConnectionsPage() {
     return () => controller.abort();
   }, []);
 
+  /**
+   * Save the connection's export envelope to disk (#959). The fetch happens
+   * first and its failure is REPORTED — a bare `<a download>` would have
+   * written a 404 body to the operator's disk as a `.json` file with nothing
+   * said (see `api/download.ts`).
+   *
+   * SECURITY: the envelope carries NO secret material. The export route ships
+   * `requiresSecret: secretRef !== null` — a boolean, never the ciphertext —
+   * and an import turns that boolean into the `requiresSecret` attention item
+   * the panel below renders. That is the server's guarantee, not this page's.
+   */
+  const onExport = useCallback(async (conn: ConnectionPublic) => {
+    setLoadError(null);
+    try {
+      downloadTextFile(exportFileName('connection', conn.name, conn.id), await exportConnection(conn.id));
+    } catch (err) {
+      setLoadError(`Could not export “${conn.name}”: ${messageOf(err)}`);
+    }
+  }, []);
+
   const onDelete = useCallback(
     async (conn: ConnectionPublic) => {
       if (!window.confirm(`Delete connection "${conn.name}"?`)) return;
@@ -140,6 +163,13 @@ export function ConnectionsPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => void onExport(conn)}
+                    aria-label={`Export ${conn.name}`}
+                  >
+                    Export
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void onDelete(conn)}
                     aria-label={`Delete ${conn.name}`}
                   >
@@ -163,6 +193,13 @@ export function ConnectionsPage() {
           }}
         />
       )}
+
+      {/* The import surface lives on the list an imported connection lands in —
+          but it takes ANY export envelope, because `POST /api/import` does (see
+          `ImportPanel`). A pipeline or trigger file is imported and then
+          reported with a pointer to its own section, rather than refused by a
+          client-side rule the server does not have. */}
+      <ImportPanel listKind="connection" onImported={refresh} />
     </section>
   );
 }

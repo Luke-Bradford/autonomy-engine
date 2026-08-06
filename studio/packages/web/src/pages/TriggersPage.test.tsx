@@ -8,6 +8,8 @@ import { TriggersPage } from './TriggersPage';
 import * as triggersApi from '../api/triggers';
 import * as pipelinesApi from '../api/pipelines';
 import * as runsApi from '../api/runs';
+import * as downloadApi from '../api/download';
+import * as portabilityApi from '../api/portability';
 import { ROUTES } from '../routes';
 
 // Mock only the network layers; keep TriggerWriteSchema real so the form's
@@ -46,6 +48,22 @@ vi.mock('./runs/useRunStream', async (importActual) => ({
   ...(await importActual<typeof import('./runs/useRunStream')>()),
   useRunStream: vi.fn().mockReturnValue({ events: [], phase: 'connecting', error: undefined }),
 }));
+// The real `downloadTextFile` clicks an anchor, which jsdom follows on the NEXT
+// TICK and then reports as an unimplemented-navigation error attributed to
+// whichever test happens to be running by then. Its own behaviour is covered in
+// `api/download.test.ts`; here only the fact that the page calls it, with what.
+vi.mock('../api/download', async (importActual) => ({
+  ...(await importActual<typeof import('../api/download')>()),
+  downloadTextFile: vi.fn(),
+}));
+// Only the two network calls are mocked. `parseEnvelopeText`,
+// `describeImported` and `describeAttention` stay REAL, so the import case
+// below asserts the sentence the operator actually reads.
+vi.mock('../api/portability', async (importActual) => ({
+  ...(await importActual<typeof import('../api/portability')>()),
+  exportTrigger: vi.fn(),
+  importEnvelope: vi.fn(),
+}));
 
 const listTriggersMock = vi.mocked(triggersApi.listTriggers);
 const createMock = vi.mocked(triggersApi.createTrigger);
@@ -54,6 +72,9 @@ const deleteMock = vi.mocked(triggersApi.deleteTrigger);
 const fireMock = vi.mocked(triggersApi.fireTrigger);
 const provisionMock = vi.mocked(triggersApi.provisionWebhookSecret);
 const listAllVersionsMock = vi.mocked(pipelinesApi.listAllPipelineVersions);
+const downloadMock = vi.mocked(downloadApi.downloadTextFile);
+const exportMock = vi.mocked(portabilityApi.exportTrigger);
+const importMock = vi.mocked(portabilityApi.importEnvelope);
 
 function trigger(overrides: Partial<TriggerPublic> = {}): TriggerPublic {
   return {
@@ -115,6 +136,7 @@ beforeEach(() => {
   fireMock.mockResolvedValue({ outcome: 'started', runId: 'run_9' });
   provisionMock.mockResolvedValue({ secret: 'sk_abc', deliveryUrl: '/api/webhooks/trg_1' });
   listAllVersionsMock.mockResolvedValue([{ pipeline, version }]);
+  exportMock.mockResolvedValue('{"kind":"trigger"}');
 });
 
 afterEach(() => {
@@ -777,5 +799,77 @@ describe('#854 review follow-ups', () => {
 
     expect(await form.findByRole('alert')).toHaveTextContent(/would discard/i);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('#959 portability — export and import on the triggers list', () => {
+  // #959 — the export half. The server has carried
+  // `GET /api/triggers/:id/export` since P1c with no web caller.
+  it('exports a trigger as the server bytes, under a name carrying its id', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ id: 'trg_9', name: 'Nightly' })]);
+    exportMock.mockResolvedValue('{"kind":"trigger","canonical":true}');
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
+
+    expect(exportMock).toHaveBeenCalledWith('trg_9');
+    // The bytes go to disk UNCHANGED — an export body is canonical JSON, and
+    // re-serializing it here would make this page a second authority on it.
+    expect(downloadMock).toHaveBeenCalledWith(
+      'trigger-nightly-trg_9.json',
+      '{"kind":"trigger","canonical":true}',
+    );
+  });
+
+  it('reports a failed export instead of writing an error body to disk', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    exportMock.mockRejectedValue(new Error('trigger not found'));
+    renderWithRouter(<TriggersPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Export Nightly' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Could not export .*Nightly.*trigger not found/,
+    );
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
+  it('offers the import surface, and says an imported trigger is unbound AND disabled', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([]);
+    renderWithRouter(<TriggersPage />);
+
+    const picker = await screen.findByLabelText('Export file');
+    listTriggersMock.mockResolvedValue([
+      trigger({ id: 'trg_new', name: 'Imported nightly', pipelineVersionId: null, enabled: false }),
+    ]);
+    importMock.mockResolvedValue({
+      kind: 'trigger',
+      trigger: trigger({
+        id: 'trg_new',
+        name: 'Imported nightly',
+        pipelineVersionId: null,
+        enabled: false,
+      }),
+      // Every trigger export drops its binding — an unbound trigger never
+      // fires, so reporting only "created" would be a lie of omission.
+      attention: [{ type: 'unboundPipelineVersion' }],
+    });
+
+    await user.upload(
+      picker,
+      new File(['{"kind":"trigger"}'], 'trigger.json', { type: 'application/json' }),
+    );
+
+    await waitFor(() => expect(importMock).toHaveBeenCalled());
+    // The ROW, not the panel's own sentence — both name the trigger, so this
+    // asks for the one only a refreshed list can produce.
+    expect(await screen.findByRole('button', { name: 'Export Imported nightly' })).toBeInTheDocument();
+    const outcome = screen.getByRole('status');
+    expect(outcome).toHaveTextContent(/not bound to a pipeline version/);
+    // …and the fact NO attention item carries: the importer forces it disabled.
+    expect(outcome).toHaveTextContent(/arrive disabled/);
   });
 });
