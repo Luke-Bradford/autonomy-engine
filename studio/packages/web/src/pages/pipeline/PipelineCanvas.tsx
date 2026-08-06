@@ -22,7 +22,12 @@ import {
   type ParamType,
   type PipelineVersion,
 } from '@autonomy-studio/shared';
-import { historyCommandFor, redoDisabledReason, undoDisabledReason } from './undoRedo';
+import {
+  historyCommandFor,
+  isDeleteKeystroke,
+  redoDisabledReason,
+  undoDisabledReason,
+} from './undoRedo';
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
@@ -37,6 +42,8 @@ import {
   buildContainer,
   containersWithNew,
   createCanvasStore,
+  singleSelection,
+  type Selection,
 } from './canvasStore';
 import { ConfigFieldControl, type FieldPicker } from './ConfigFieldControl';
 import { ContainerPanel } from './ContainerPanel';

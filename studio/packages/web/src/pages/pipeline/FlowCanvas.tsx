@@ -76,6 +76,7 @@ import {
 import {
   cascadeDeleteContainer,
   nextSelection,
+  singleSelection,
   type CanvasState,
   type Selection,
 } from './canvasStore';

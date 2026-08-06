@@ -81,7 +81,7 @@ describe('canvasStore', () => {
     expect(st.loaded).toBeNull();
     expect(st.nodes).toEqual([]);
     expect(st.edges).toEqual([]);
-    expect(st.selected).toBeNull();
+    expect(st.selected).toEqual([]);
     expect(st.dirty).toBe(false);
   });
 
@@ -311,7 +311,7 @@ describe('canvasStore', () => {
     const st = s.getState();
     expect(st.nodes.map((n) => n.id)).toEqual(['n_b']);
     expect(st.edges).toHaveLength(0); // e_1 (n_a→n_b) cascaded away
-    expect(st.selected).toBeNull();
+    expect(st.selected).toEqual([]);
     expect(st.dirty).toBe(true);
   });
 
@@ -321,7 +321,7 @@ describe('canvasStore', () => {
     s.getState().select({ kind: 'edge', id: 'e_1' });
     s.getState().deleteEdge('e_1');
     expect(s.getState().edges).toHaveLength(0);
-    expect(s.getState().selected).toBeNull();
+    expect(s.getState().selected).toEqual([]);
   });
 
   it('rewireEdge retypes and changes the `on` outcome of the targeted edge', () => {
@@ -751,9 +751,9 @@ describe('selection model (#737)', () => {
     const s = createCanvasStore();
     s.getState().select(nodeA);
     s.getState().select(edge1);
-    expect(s.getState().selected).toEqual(edge1);
+    expect(s.getState().selected).toEqual([edge1]);
     s.getState().select(null);
-    expect(s.getState().selected).toBeNull();
+    expect(s.getState().selected).toEqual([]);
   });
 });
 
@@ -1059,7 +1059,7 @@ describe('canvasStore — deleteContainer (#748)', () => {
     s.getState().loadVersion(boxed());
     s.getState().select({ kind: 'edge', id: 'e_out' });
     s.getState().deleteContainer('c_1');
-    expect(s.getState().selected).toBeNull();
+    expect(s.getState().selected).toEqual([]);
   });
 
   it('leaves a selection the delete did not touch', () => {
@@ -1067,7 +1067,7 @@ describe('canvasStore — deleteContainer (#748)', () => {
     s.getState().loadVersion(boxed());
     s.getState().select({ kind: 'node', id: 'n_a' });
     s.getState().deleteContainer('c_1');
-    expect(s.getState().selected).toEqual({ kind: 'node', id: 'n_a' });
+    expect(s.getState().selected).toEqual([{ kind: 'node', id: 'n_a' }]);
   });
 
   /**
@@ -1522,7 +1522,7 @@ describe('canvasStore — container membership (U6d)', () => {
     it('is cleared when that container is deleted', () => {
       const s = selected();
       s.getState().deleteContainer('loop_1');
-      expect(s.getState().selected).toBeNull();
+      expect(s.getState().selected).toEqual([]);
     });
 
     it('survives the deletion of a DIFFERENT container', () => {
@@ -1532,7 +1532,7 @@ describe('canvasStore — container membership (U6d)', () => {
       );
       s.getState().select({ kind: 'container', id: 'loop_1' });
       s.getState().deleteContainer('stage_1');
-      expect(s.getState().selected).toEqual({ kind: 'container', id: 'loop_1' });
+      expect(s.getState().selected).toEqual([{ kind: 'container', id: 'loop_1' }]);
     });
 
     /**
@@ -1542,10 +1542,9 @@ describe('canvasStore — container membership (U6d)', () => {
      */
     it('is not cleared by a node deselect', () => {
       const s = selected();
-      expect(nextSelection(s.getState().selected, { kind: 'node', id: 'n_a' }, false)).toEqual({
-        kind: 'container',
-        id: 'loop_1',
-      });
+      expect(nextSelection(s.getState().selected, { kind: 'node', id: 'n_a' }, false)).toEqual([
+        { kind: 'container', id: 'loop_1' },
+      ]);
     });
   });
 });
@@ -2149,7 +2148,7 @@ describe('canvasStore — undo/redo (U17)', () => {
     s.getState().select({ kind: 'node', id: added.id });
 
     s.getState().undo();
-    expect(s.getState().selected).toBeNull();
+    expect(s.getState().selected).toEqual([]);
   });
 
   it('an undo that leaves the selected node alone keeps the selection', () => {
@@ -2158,7 +2157,7 @@ describe('canvasStore — undo/redo (U17)', () => {
     s.getState().moveNode('n_a', { x: 500, y: 600 });
 
     s.getState().undo();
-    expect(s.getState().selected).toEqual({ kind: 'node', id: 'n_b' });
+    expect(s.getState().selected).toEqual([{ kind: 'node', id: 'n_b' }]);
   });
 
   it('an undo across a rebase reports DIRTY, because the basis moved under it', () => {
@@ -2378,14 +2377,14 @@ describe('canvasStore — duplicateNode (U21)', () => {
     s.getState().duplicateNode('n_b');
 
     const copyId = s.getState().nodes[2]!.id;
-    expect(s.getState().selected).toEqual({ kind: 'node', id: copyId });
+    expect(s.getState().selected).toEqual([{ kind: 'node', id: copyId }]);
 
     s.getState().undo();
     const st = s.getState();
     expect(st.nodes).toHaveLength(2);
     expect(st.edges).toHaveLength(1);
     // The restored doc no longer holds the copy, so the selection cannot survive.
-    expect(st.selected).toBeNull();
+    expect(st.selected).toEqual([]);
   });
 
   it('records exactly one history step, and clears the redo future', () => {
