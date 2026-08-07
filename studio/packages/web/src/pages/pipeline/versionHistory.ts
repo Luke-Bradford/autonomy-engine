@@ -17,7 +17,7 @@
  * covered by an e2e and everything decidable is decided out here, where a unit
  * test can reach it.
  */
-import type { PipelineVersion } from '@autonomy-studio/shared';
+import type { ActivePipelineVersion, PipelineVersion } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
 import { latestVersion, type PipelineVersionWrite } from '../../api/pipelines';
 import { toVersionBody } from './canvasDoc';
@@ -36,7 +36,27 @@ export interface VersionEntry {
   isHead: boolean;
   /** The version the canvas is currently based on (`canvasStore.loaded`). */
   isCurrent: boolean;
+  /**
+   * #979 — the ACTIVE published version (G6c-1). A third, independent fact: the
+   * head is what the next save advances from, `current` is what the editor is
+   * based on, and this is what a new `active`-bound trigger will resolve to. All
+   * three routinely name different versions.
+   */
+  isActive: boolean;
 }
+
+/**
+ * #979 — the active pointer as this page knows it, in THREE states.
+ *
+ * `undefined` is not a stylistic nullable — it is the load-bearing distinction.
+ * `null` is the assertion "this pipeline has never been published", which is
+ * exactly what `expectedActiveVersionId: null` claims to the CAS
+ * (`PublishPipelineBodySchema` makes that field required and undefaulted so an
+ * absent fact is never manufactured). Collapsing an unread or failed fetch into
+ * `null` would send that assertion on no evidence — the #473 fail-open shape —
+ * and would also render "nothing is published" as though it were known.
+ */
+export type ActiveVersionState = ActivePipelineVersion | null | undefined;
 
 /**
  * The versions newest-first, each marked against the head and against the one
@@ -52,6 +72,16 @@ export interface VersionEntry {
 export function historyEntries(
   versions: PipelineVersion[],
   currentVersion: number | null,
+  /**
+   * The active published version's id, `null` for never-published, `undefined`
+   * while unread. Required rather than defaulted, the convention this panel's
+   * `locked` prop set: a caller that forgets it should fail to compile, not
+   * silently render a pipeline as having nothing deployed.
+   *
+   * Unread and never-published both mark NO row — the tag's absence claims only
+   * "not known to be active", and no prose here asserts the stronger reading.
+   */
+  activeVersionId: string | null | undefined,
 ): VersionEntry[] {
   // `latestVersion` and not a local reduce: its docblock states it is the ONE
   // rule for "the highest version", shared so two readers cannot drift.
@@ -69,6 +99,9 @@ export function historyEntries(
       outputCount: v.outputs.length,
       isHead: v.version === head,
       isCurrent: currentVersion !== null && v.version === currentVersion,
+      // By ID, never by version number: the pointer the server projects is a
+      // version id, and it is the only thing the two sides agree on.
+      isActive: activeVersionId != null && v.id === activeVersionId,
     }));
 }
 
@@ -252,6 +285,146 @@ export function restoreRefusal({
  * this button discards their later work will not press it, and the feature is
  * then no more reachable than it was before.
  */
+export interface PublishCheck {
+  /** The version being previewed — the one a Publish would make active. */
+  selected: PipelineVersion;
+  active: ActiveVersionState;
+  /** Is a git repo connected to this workspace? `undefined` while unread. */
+  gitConnected: boolean | undefined;
+  archived: boolean;
+}
+
+/**
+ * #979 — why this version cannot be published right now, or `null` if it can.
+ *
+ * The rungs are the SERVER's rungs, checked in the server's order
+ * (`routes/pipelines.ts` publish: no repo → archived → no provenance → CAS), so
+ * the two cannot come to disagree about which reason an operator is shown. What
+ * is NOT duplicated here is the CAS itself: a stale pointer is only knowable at
+ * the server, and it arrives as a refusal (see `isPublishRefused`).
+ *
+ * The unread rung is hoisted above all of them because it gates our right to
+ * judge any of the others — see `ActiveVersionState` for why unread must never
+ * be read as "never published".
+ *
+ * Every message names the ACT that clears it. This surface is unusual in that
+ * its most common refusal — no git provenance — is the NORMAL state of almost
+ * every version (provenance is stamped only on a git import,
+ * `portability/workspace-apply.ts`), so a disabled button explained in server
+ * vocabulary would read as a broken feature rather than as a step not yet taken.
+ */
+export function publishRefusal({ selected, active, gitConnected, archived }: PublishCheck): string | null {
+  if (gitConnected === undefined || active === undefined) {
+    return 'This pipeline’s publish state could not be read, so publishing is held back rather than guessed at — reload the page.';
+  }
+  if (!gitConnected) {
+    return 'Publishing needs a git repo: it makes a COMMITTED version the active one. Connect a repo in Manage → Git.';
+  }
+  if (archived) {
+    return 'This pipeline is archived — restore it before publishing.';
+  }
+  if (selected.sourceCommit === null || selected.sourceBlobSha === null) {
+    return (
+      `v${String(selected.version)} was authored here, not imported from a commit, so git cannot name it. ` +
+      'Commit this pipeline in Manage → Git and import it back — publish the version that import mints.'
+    );
+  }
+  if (active !== null && active.versionId === selected.id) {
+    return `v${String(selected.version)} is already the active version — there is nothing to publish.`;
+  }
+  return null;
+}
+
+/**
+ * The confirmation an operator reads before a publish.
+ *
+ * The trigger sentence is the part that cannot be guessed and is the reason this
+ * prose exists at all: `resolveBindToActive` (`routes/triggers.ts`) resolves a
+ * binding ONCE, at trigger creation, so publishing re-points what is created
+ * NEXT and moves nothing that already exists. An operator who assumed publishing
+ * re-deploys their live triggers would be wrong in the direction that matters.
+ *
+ * States what is KEPT for the same reason `restoreConfirmMessage` does:
+ * publishing appends a pointer event and destroys nothing.
+ */
+export function publishConfirmMessage({
+  selectedVersion,
+  activeVersion,
+}: {
+  selectedVersion: number;
+  activeVersion: number | null;
+}): string {
+  const replacing =
+    activeVersion === null
+      ? 'Nothing is published for this pipeline yet.'
+      : `It replaces v${String(activeVersion)}.`;
+  return (
+    `Publish v${String(selectedVersion)}?\n\n` +
+    `v${String(selectedVersion)} becomes this pipeline’s active version. ${replacing}\n\n` +
+    `A NEW trigger set to bind to “active” will resolve to v${String(selectedVersion)}. Triggers that ` +
+    'already exist resolved their version once, when they were created, and do NOT move.\n\n' +
+    'No version is changed or deleted — publishing moves a pointer.'
+  );
+}
+
+/**
+ * What an operator reads after a publish returns.
+ *
+ * Derived from `published` rather than assumed: the server answers
+ * `published: false` for the idempotent re-publish of the already-active version
+ * and appends NO event (the audit records effect, not attempts). The refusal
+ * ladder makes that unreachable except by a race, which is precisely why it must
+ * not be reported as a publish — it will only ever arrive unexpectedly.
+ */
+export function publishOutcomeMessage({
+  published,
+  selectedVersion,
+}: {
+  published: boolean;
+  selectedVersion: number;
+}): string {
+  return published
+    ? `Published v${String(selectedVersion)} — it is now this pipeline’s active version.`
+    : `v${String(selectedVersion)} was already the active version, so nothing changed.`;
+}
+
+/**
+ * #979 — is this failure the publish route refusing on a business rule?
+ *
+ * `PublishRefusedError` maps to 409 `conflict` (`server/src/errors.ts`), and all
+ * FOUR of its causes — no repo, archived, no provenance, stale CAS — share that
+ * one undifferentiated code. So this predicate cannot say WHICH, and the caller
+ * must not claim to know; it can only re-read the state and say what it now
+ * sees. `stale_write` is excluded because it is the version route's code, not
+ * this one's, and it offers a different act.
+ */
+export function isPublishRefused(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.body?.error === 'conflict';
+}
+
+/**
+ * What an operator reads when a publish was refused.
+ *
+ * Deliberately NOT the server's own sentence, for the reason the refused-restore
+ * path already states: it names internal DB ids. And deliberately not a CAS
+ * story either — `isPublishRefused` cannot tell a stale pointer from a
+ * disconnected repo, so this names the re-read fact and points at the one place
+ * that explains the rest, rather than asserting a cause it does not have.
+ *
+ * `null` covers a workspace with nothing published, including the case where the
+ * pointer was cleared between the click and the re-read.
+ */
+export function describePublishRefusal(activeVersion: number | null): string {
+  const now =
+    activeVersion === null
+      ? 'nothing is published for this pipeline'
+      : `the active version is v${String(activeVersion)}`;
+  return (
+    `Not published: the server refused it, and this pipeline’s publish state has been re-read — ${now}. ` +
+    'Nothing was changed. If the repo was disconnected or this pipeline archived, Manage → Git says so.'
+  );
+}
+
 export function restoreConfirmMessage({
   selectedVersion,
   headVersion,
