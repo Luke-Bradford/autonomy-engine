@@ -896,6 +896,116 @@ describe('#2 L13b — connectionParams ${} refs at SAVE time', () => {
   });
 });
 
+describe('#952 — a call node’s `call` refs at SAVE time', () => {
+  /**
+   * A call node. `node()` builds an `agent_task`; a call node carries the
+   * `call_pipeline` type and the top-level `call` object, which lives BESIDE
+   * `config` rather than inside it — which is precisely why the config scan
+   * never reached it.
+   */
+  function callNode(id: string, call: Node['call']): Node {
+    return { ...node(id, {}), type: 'call_pipeline', call };
+  }
+
+  const literalCall = { pipelineVersionId: 'pv_123', params: {} };
+
+  it('ACCEPTS a literal target and literal params (no ${} — the scan no-ops)', () => {
+    expect(
+      validateRefs(doc([callNode('n', { pipelineVersionId: 'pv_123', params: { a: 1 } })], [])),
+    ).toEqual([]);
+  });
+
+  it('ACCEPTS a ${} target whose ref is a declared param', () => {
+    const errors = validateRefs(
+      doc(
+        [callNode('n', { ...literalCall, pipelineVersionId: '${params.child}' })],
+        [],
+        [{ name: 'child', type: 'string', required: true }],
+      ),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('REJECTS a ${} target referencing an undeclared param', () => {
+    const errors = validateRefs(
+      doc([callNode('n', { ...literalCall, pipelineVersionId: '${params.nope}' })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/call\.pipelineVersionId/);
+  });
+
+  it('REPORTS a malformed ${} target ONCE (the ref scan is its only reporter)', () => {
+    // `literalCallTargets` drops a non-literal target, and `validateCallGraph`
+    // reports only cycles/depth — so nothing else diagnoses this, and nothing
+    // else can double-report it.
+    const errors = validateRefs(
+      doc([callNode('n', { ...literalCall, pipelineVersionId: '${params.a[0}' })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/call\.pipelineVersionId/);
+  });
+
+  it('REJECTS an undeclared ref in a param ARG, nested included', () => {
+    const errors = validateRefs(
+      doc([callNode('n', { ...literalCall, params: { opts: { region: '${params.nope}' } } })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/not a declared param/);
+    expect(errors[0]).toMatch(/call\.params/);
+  });
+
+  it('ACCEPTS a param arg reading a GUARANTEED producer’s output', () => {
+    const nodes = [
+      node('a', { outputs: [{ name: 'sku', type: 'string' }] }),
+      callNode('n', { ...literalCall, params: { sku: '${nodes.a.output.sku}' } }),
+    ];
+    expect(validateRefs(doc(nodes, [edge('a', 'n', 'success')]))).toEqual([]);
+  });
+
+  it('REJECTS a param arg reading an output that is only REACHABLE, not guaranteed', () => {
+    // Availability is dominance, exactly as for `config` — the reducer builds
+    // the call env from the same `scopedEvalState`, so the same rule applies.
+    const nodes = [
+      node('a', { outputs: [{ name: 'sku', type: 'string' }] }),
+      node('b', {}),
+      callNode('n', { ...literalCall, params: { sku: '${nodes.a.output.sku}' } }),
+    ];
+    const errors = validateRefs(
+      doc(nodes, [edge('a', 'n', 'success'), edge('b', 'n', 'success')]),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/call\.params/);
+  });
+
+  it('REJECTS an authored {$secret} marker in a param arg (call params are never sinks)', () => {
+    const errors = validateRefs(
+      doc([callNode('n', { ...literalCall, params: { apiKey: { $secret: 'my-key' } } })], []),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/call\.params/);
+    expect(errors[0]).toMatch(/secret/);
+  });
+
+  it('binds ${item} for a call INSIDE a foreach body, and refuses it outside one', () => {
+    const inBody = doc(
+      [callNode('n', { ...literalCall, params: { one: '${item}' } })],
+      [],
+      [],
+      [{ id: 'fe', kind: 'foreach', children: ['n'], items: '${params.xs}' }],
+    );
+    expect(validateRefs({ ...inBody, params: [{ name: 'xs', type: 'json', required: true }] })).toEqual(
+      [],
+    );
+
+    const outside = validateRefs(
+      doc([callNode('n', { ...literalCall, params: { one: '${item}' } })], []),
+    );
+    expect(outside).toHaveLength(1);
+    expect(outside[0]).toMatch(/call\.params/);
+  });
+});
+
 describe('validateRefs — deep `[]`/`.` addressing at SAVE time (#6 E7)', () => {
   const producer = node('a', {
     outputs: [

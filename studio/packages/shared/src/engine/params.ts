@@ -1359,6 +1359,52 @@ export function validateRefs(
       // resolve run-supplied json this gate never sees.
       scanSecretSinks(`nodes.${node.id}.connectionParams`, node.connectionParams, [], errors);
     }
+    // #952 — a call node's `call` refs. `call` sits BESIDE `config`, not inside
+    // it (`schemas/pipeline.ts`), so neither the config scan above nor
+    // `scanSecretSinks` below has ever reached it: a `${}` target id or param
+    // arg got NO save-time checking and surfaced only as a run-time failure.
+    // The pre-run inspection that does exist (`literalCallTargets` /
+    // `validateCallGraph`) only classifies literal-vs-`${}` for the cycle and
+    // depth guards, and drops a `${}` target — so this scan is the sole
+    // reporter of a bad ref here, and cannot double-report one.
+    //
+    // The SAME `scope` and `itemInScope` as this node's config, because the
+    // reducer resolves both halves from the same env: `prepDispatch` builds
+    // `buildCtx(scopedEvalState(state, sid))` + `foreachItemOf(state, sid)` for
+    // `config`, and the call branch (`reduce.ts`) builds it identically for
+    // `pipelineVersionId` and `params`. So availability is dominance here too —
+    // a merely-reachable producer is refused with the same `default()` advice.
+    if (node.call !== undefined) {
+      scan(
+        `nodes.${node.id}.call.pipelineVersionId`,
+        node.call.pipelineVersionId,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+      scan(
+        `nodes.${node.id}.call.params`,
+        node.call.params,
+        scope,
+        errors,
+        0,
+        undefined,
+        foreachChildIds.has(node.id),
+      );
+      // Call params are NEVER secret sinks, so an empty sink list refuses every
+      // authored `{$secret}` marker here — the `connectionParams` treatment
+      // above, for the same fail-closed reason. Landing it NOW rather than with
+      // P3b is deliberate: `startChild` is not implemented yet (the executor
+      // yields an immediate `call.returned{failure}`), so no stored doc's call
+      // params have ever reached a child and this refusal cannot break anything
+      // live. Adding it after P3b would instead refuse docs authored in the
+      // meantime. Nothing else would catch a marker on this path — the
+      // executor's runtime marker refusal covers CONNECTION parameters only —
+      // so omitting it is a genuine fail-open, not a symmetry argument.
+      scanSecretSinks(`nodes.${node.id}.call.params`, node.call.params, [], errors);
+    }
     // Item 7 / S2: a `{ "$secret": "<name>" }` marker is valid ONLY within a
     // declared sink field of this node's activity. `getActivity` reads the
     // shared module catalog (no signature change to this fn or its callers,
