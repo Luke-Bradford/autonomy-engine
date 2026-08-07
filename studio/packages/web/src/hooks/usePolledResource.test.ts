@@ -129,6 +129,31 @@ describe('usePolledResource', () => {
       return { fetcher, settlers };
     }
 
+    /**
+     * The mount load is NOT gated on visibility, and that is deliberate rather
+     * than an oversight — newly written into the docblock, so newly pinned.
+     * The interval-less callers (the quota panel, the triggers page) return
+     * before the visibility listener is even registered, so gating this would
+     * leave them with no data at all and no route to any but a manual refresh.
+     * Without this test a future "the docblock says it pauses while hidden"
+     * cleanup would break both pages and no suite would notice.
+     */
+    it('still loads once on mount when the tab is ALREADY hidden', async () => {
+      setVisibility('hidden');
+      const fetcher = vi.fn().mockResolvedValue('x');
+
+      const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+
+      await waitFor(() => expect(result.current.data).toBe('x'));
+      expect(fetcher).toHaveBeenCalledTimes(1);
+
+      // …and the CADENCE is what the hidden tab suppresses.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
     it('skips every tick that lands while a load is still in flight', async () => {
       const { fetcher, settlers } = pendingFetcher();
 

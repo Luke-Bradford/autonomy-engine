@@ -163,6 +163,17 @@ export function NodeActivityPanel({
                  said `skipped` here (`untimedReason` in `attemptSpans.ts`), so
                  until this arm existed one page described one fact two ways.
 
+                 BOTH halves of the test are load-bearing. `skipped` does not
+                 imply "never ran": `abandonLiveChildren` flips a live child to
+                 `skipped` on a container timeout without touching `attempts`,
+                 and `reconcileNodeActivity` then clears the open span's start —
+                 so such a row arrives here with no `startedAtMs`, a `skipped`
+                 status and `attempts >= 1`. On status alone this arm would tell
+                 the operator a node that was running when its container gave up
+                 "was never going to run". With `attempts` in the test it falls
+                 through to "No span was recorded for this attempt", which is
+                 true of it, and `untimedReason` divides the same way.
+
                  The two chains stay SEPARATE, as `untimedReason`'s docblock
                  argues: it answers why the node contributed no span AT ALL to
                  the chart, this answers why the LATEST ATTEMPT has no duration,
@@ -170,7 +181,7 @@ export function NodeActivityPanel({
                  duration or the reverse. Only the FACT is shared, never the
                  string — `untimedReason` returns a fragment for `name — reason`,
                  these arms are standalone sentences. */
-              node.status === 'skipped'
+              node.status === 'skipped' && node.attempts === 0
               ? 'This node was routed around, so it was never going to run and there is nothing to measure.'
               : node.attempts === 0
                 ? 'This node has not started, so there is nothing to measure yet.'

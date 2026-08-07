@@ -248,6 +248,31 @@ describe('CallPanel (component)', () => {
     expect(store.getState().nodes[0]!.call).toBeUndefined();
   });
 
+  /**
+   * #952 — the hint is a CLAIM ABOUT ANOTHER MODULE'S BEHAVIOUR, so it drifts
+   * silently when that module changes. It shipped saying a `${}` target "is not
+   * checked when you save", which was true until `validateRefs` learned to scan
+   * `node.call` — at which point the panel was telling the operator to distrust
+   * a check that had started working. Nothing caught it, because no test read
+   * the sentence.
+   *
+   * Pinned as the two halves that must stay OPPOSITE, rather than as the exact
+   * wording: the refs ARE checked at save, and the depth guard still is not
+   * (`literalCallTargets` drops a `${}` target, and `startChild` has no runtime
+   * guard). A future rewording is free; flipping either claim is not.
+   */
+  it('tells the operator which call-node guards actually run at save time', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Expression'));
+
+    const hint = screen.getByText(/resolved when the node dispatches/);
+    expect(hint.textContent).toMatch(/references are checked when you save/i);
+    expect(hint.textContent).not.toMatch(/not checked when you save/i);
+    // The half that is still true, and the reason the hint survives at all.
+    expect(hint.textContent).toMatch(/call-depth guards only see literal targets/i);
+  });
+
   it('does not write anything to the store while the listing is still in flight', () => {
     // The clobber hazard the loading gate exists for: a literal target must not
     // be re-decided (or written) before the list that could resolve it arrives.

@@ -88,7 +88,17 @@ export function untimedReason(node: NodeActivity): string {
   if (node.copiedFromRunId !== undefined) {
     return 'copied from an earlier run — it did not run again here';
   }
-  if (node.status === 'skipped') {
+  /* `attempts === 0` is part of the test, not an implied consequence of the
+     status. `skipped` is NOT only the routed-around case: `abandonLiveChildren`
+     flips a LIVE child (dispatched, parked, retry-pending) straight to `skipped`
+     when its container times out — "abandoned mid-flight, not failed", as the
+     reducer puts it — and leaves `attempts` alone. Such a node did run, so
+     "the engine appends no event for it" is false about it, and it falls
+     through to the final answer below, which describes the LOG and is true of
+     it. Naming the abandonment as the cause is what this chain deliberately
+     will not do: the row carries no container, so that would be inventing a
+     reason (see the docblock above). */
+  if (node.status === 'skipped' && node.attempts === 0) {
     return 'skipped — the engine appends no event for a node it routes around';
   }
   if (node.attempts === 0) return 'has not started';
