@@ -281,6 +281,17 @@ export interface NodeActivity {
    * still hold several entries. `attempts` above counts starts and folds rounds
    * the same way; neither number is an attempt ORDINAL a reader should print.
    *
+   * "Retired" means no LATER attempt rewrites an entry — it does not promise
+   * immunity to a REDELIVERED terminal for the same one. `closeSpan` leaves the
+   * node tracked, so a second terminal event for the same attempt would rewrite
+   * that entry's end in place. This array inherits the fold's stated
+   * no-staleness-guard posture (see the note above `ensure`) rather than
+   * carrying its own: on such a log the arm has ALREADY rewritten the row's
+   * status and outputs, and guarding only the span would leave the row reading
+   * one attempt's verdict beside another attempt's bar — a second, drifting
+   * authority on a redelivery the append gate is the single owner of. The
+   * residual is the same one that note names, and no larger.
+   *
    * READ-ONLY to every caller. Unlike `cost` and `toolCalls`, a pass-through row
    * out of `reconcileNodeActivity` shares this array with the folded row rather
    * than copying it — deliberately, since copying it per row per render would
@@ -1091,7 +1102,14 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
        reasoning applies to it (no close will ever arrive, so it measured
        nothing). Closed entries are completed measurements the engine's verdict on
        the node's CURRENT state says nothing about, and a node settled `skipped`
-       after an attempt genuinely succeeded still ran that attempt. */
+       after an attempt genuinely succeeded still ran that attempt.
+
+       The `last` test below is redundant while the fold's invariants hold (an
+       `open` row is tracked, and a tracked span is the array's last entry and is
+       itself open), and is kept for its POLARITY: if that invariant were ever
+       broken, this no-ops and retains a span, where trusting `open` alone would
+       delete a completed measurement. Retaining too much is recoverable; a
+       measurement dropped here is gone from the timeline with nothing to say so. */
     const last = row.spans[row.spans.length - 1];
     const spans =
       open && settled && last !== undefined && last.endedAtMs === undefined
