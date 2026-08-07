@@ -8,7 +8,7 @@ import {
 import { fetchAccountQuota, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline } from '../runs/costReading';
-import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS } from '../runs/runFilters';
+import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
 import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
 
@@ -259,9 +259,16 @@ export function AiActivityPage() {
         <h2 id="ai-activity-heading">AI activity</h2>
         <label className="ai-window-picker">
           Window{' '}
+          {/* `onChange` VALIDATES rather than casts. `e.target.value` is a
+              `string`, and `as RunSince` would assert instead of check — so any
+              off-vocabulary value that ever reached the DOM would sail through
+              to the request and come back a 400 with nothing to explain it.
+              `isRunSince` is the same guard `RunsPage`'s since-picker uses. */}
           <select
             value={since}
-            onChange={(e) => setSince(e.target.value as RunSince)}
+            onChange={(e) => {
+              if (isRunSince(e.target.value)) setSince(e.target.value);
+            }}
             aria-label="Activity window"
           >
             {/* The SAME vocabulary and prose the run list's own since-picker
