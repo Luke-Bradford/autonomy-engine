@@ -64,6 +64,15 @@ import type { Db } from '../repo/types.js';
  * "no binding" posture as `assertBindableIfEnabled`. The read is deliberately
  * OUTSIDE any transaction: resolve-once needs no compare-and-set (unlike CAS
  * Publish), it just snapshots whatever is active/latest now.
+ *
+ * #981 — both refusals name the pipeline by NAME, never by id. `BadRequestError`
+ * is surfaced VERBATIM by contract ("no input echo, no internal detail"), and
+ * the client punts to this gate whenever its own publish read is still in flight
+ * or failed — so whatever these say is what an operator reads. The name is
+ * resolved and owner-checked here (`requireOwned` above), which is the same rule
+ * `PublishRefusedError` states: an error may name only what the server itself
+ * resolved, never request input. The id it used to interpolate was the internal
+ * DB id and told the operator nothing.
  */
 function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): string {
   const pipeline = requireOwned(getPipeline(db, pipelineId), principal, 'pipeline', pipelineId);
@@ -71,8 +80,8 @@ function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): 
     const active = getActivePublishedVersion(db, principal.ownerId, pipeline.resourceId);
     if (active === null) {
       throw new BadRequestError(
-        `cannot bind trigger to active: pipeline "${pipelineId}" has no active published ` +
-          `version — publish a version first, or bind a concrete pipelineVersionId`,
+        `cannot bind trigger to active: pipeline "${pipeline.name}" has no active published ` +
+          `version — publish a version first, or bind a specific version`,
       );
     }
     return active.to;
@@ -80,7 +89,7 @@ function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): 
   const latest = getLatestPipelineVersion(db, pipeline.id);
   if (latest === null) {
     throw new BadRequestError(
-      `cannot bind trigger to latest: pipeline "${pipelineId}" has no versions`,
+      `cannot bind trigger to latest: pipeline "${pipeline.name}" has no versions`,
     );
   }
   return latest.id;

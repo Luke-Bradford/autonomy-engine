@@ -119,10 +119,17 @@ export function activeBindingAdvice(args: {
   }
 
   if (reading.active === null) {
+    /*
+     * The prose stops at the alternative it can offer in place ("pick a version
+     * directly"); the way to the OTHER remedy is a link the form renders after
+     * this text, and only for this state. Naming the panel here too said it
+     * twice — and this same string is also the SUBMIT refusal, where there is no
+     * link, so it has to stand alone without repeating what one would say.
+     */
     const reason =
       `"${pipelineName}" has no published version. This workspace is connected to a ` +
-      `repository, so a trigger can only bind to a version you have published — open the ` +
-      `pipeline and publish one from the Version history panel, or pick a version directly.`;
+      `repository, so a trigger can only bind to a version you have published — publish ` +
+      `one, or pick a version directly.`;
     return { text: reason, refusal: reason };
   }
 

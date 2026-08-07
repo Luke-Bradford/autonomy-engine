@@ -1327,21 +1327,34 @@ describe('triggers routes — bind-to-active (#3 G6c-2)', () => {
 
   it('git-mode with NO active published version: refuses (400)', async () => {
     connectRepo();
-    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Nightly build' });
     gitVersion(pipeline.id, 'commit1', 'blob1'); // exists but never published
 
     const res = await create(bindBody(pipeline.id));
     expect(res.statusCode).toBe(400);
+    /*
+     * #981 — this message is read by an OPERATOR, not only by an API client: the
+     * form punts to this gate whenever its own publish read is still in flight or
+     * failed, and `BadRequestError` is surfaced verbatim by contract. So it names
+     * the pipeline the operator named it, and never the internal DB id it used to
+     * interpolate, which identified nothing to them.
+     */
+    expect(res.json().message).toContain('Nightly build');
+    expect(res.json().message).not.toContain(pipeline.id);
+    expect(res.json().message).toMatch(/publish/i);
   });
 
   it('DB-only with a versionless pipeline: refuses (400)', async () => {
     // `createPipeline` mints NO initial version — a pipeline can exist with zero
     // versions, so "bind to latest" has nothing to resolve. Fail closed (400),
     // never silently birth an unbound trigger.
-    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'P' });
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Versionless' });
 
     const res = await create(bindBody(pipeline.id));
     expect(res.statusCode).toBe(400);
+    // Same rule on the latest branch — named, not id'd.
+    expect(res.json().message).toContain('Versionless');
+    expect(res.json().message).not.toContain(pipeline.id);
   });
 
   it('rejects supplying BOTH bindToActive and pipelineVersionId (400)', async () => {

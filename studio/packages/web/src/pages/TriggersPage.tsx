@@ -72,8 +72,6 @@ const POLICIES = ConcurrencyPolicySchema.options;
 interface BindingOption {
   value: string; // pipelineVersionId
   label: string; // `${pipeline.name} v${version}`
-  pipelineId: string;
-  version: number;
 }
 
 /**
@@ -234,8 +232,6 @@ export function TriggersPage() {
       const options = all.map(({ pipeline, version }) => ({
         value: version.id,
         label: `${pipeline.name} v${version.version}`,
-        pipelineId: pipeline.id,
-        version: version.version,
       }));
       // #981 — the same rows, grouped, for the bind-to-active control. A Map
       // keeps first-seen order (the order `listAllPipelineVersions` returns) so
@@ -911,12 +907,25 @@ function TriggerForm({
 
       {advice && activePipeline && (
         <p className="page-hint" role="status">
-          {advice.text}{' '}
-          <Link to={pipelinePath(activePipeline.pipelineId)}>Open {activePipeline.name}</Link>{' '}
-          {/* There is no route to the version-history panel — it is a toggle on
-              the canvas — so the link goes to the canvas and the prose names the
-              panel, rather than inventing URL state for a panel. */}
-          and use the Version history panel to publish.
+          {advice.text}
+          {/* The way OUT is offered only by the state that needs one. Rendered
+              unconditionally it told a DB-only workspace to publish — which this
+              app's own gate refuses without a connected repo — and told anyone
+              mid-read to act on a reading that had not arrived. `refusal` is the
+              honest discriminator: it is non-null exactly when the read SUCCEEDED
+              and said there is nothing to bind to. */}
+          {advice.refusal !== null && (
+            <>
+              {' '}
+              <Link to={pipelinePath(activePipeline.pipelineId)}>
+                Open {activePipeline.name}
+              </Link>{' '}
+              {/* There is no route to the version-history panel — it is a toggle
+                  on the canvas — so the link goes to the canvas and the prose
+                  names the panel, rather than inventing URL state for a panel. */}
+              and use the Version history panel to publish.
+            </>
+          )}
         </p>
       )}
 

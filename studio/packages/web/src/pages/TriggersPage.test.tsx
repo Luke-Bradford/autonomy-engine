@@ -970,6 +970,13 @@ describe('TriggersPage — binding to the active published version', () => {
     const user = userEvent.setup();
     const form = await chooseActive(user);
     expect(await form.findByText(/latest saved version/i)).toBeInTheDocument();
+    /*
+     * #981 — no way-out link here. A DB-only workspace CANNOT publish (the app's
+     * own publish gate refuses without a connected repo), so offering "publish
+     * one" would send the operator at a door that does not open. The link belongs
+     * to the refusal state alone.
+     */
+    expect(form.queryByRole('link', { name: /^Open / })).not.toBeInTheDocument();
 
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
@@ -988,6 +995,12 @@ describe('TriggersPage — binding to the active published version', () => {
 
     const form = await chooseActive(user);
     expect(await form.findByText(/has no published version/i)).toBeInTheDocument();
+    // This IS the state that needs a way out, so the link is here — and it goes
+    // to the canvas, which is where the Version history panel lives.
+    expect(form.getByRole('link', { name: /^Open / })).toHaveAttribute(
+      'href',
+      expect.stringContaining('pl_1'),
+    );
 
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
     await waitFor(() => expect(form.getByRole('alert')).toHaveTextContent(/publish/i));
@@ -1004,6 +1017,8 @@ describe('TriggersPage — binding to the active published version', () => {
 
     const form = await chooseActive(user);
     expect(await form.findByText(/v3/)).toBeInTheDocument();
+    // Already published — nothing to clear, so no way-out link either.
+    expect(form.queryByRole('link', { name: /^Open / })).not.toBeInTheDocument();
 
     await user.click(form.getByRole('button', { name: /Create trigger/i }));
     await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
