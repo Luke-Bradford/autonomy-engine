@@ -2,7 +2,7 @@
 
 ## When to use
 
-Editing or adding ANY shell under `start`, `engine/bin/`, `engine/bin/agents/`, `engine/tests/`, or
+Editing or adding ANY shell under `engine/start`, `engine/bin/`, `engine/bin/agents/`, `engine/tests/`, or
 `engine/templates/autonomy-pack/qa/`.
 
 ## The floor: macOS /bin/bash 3.2.57

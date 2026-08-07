@@ -39,8 +39,8 @@ half-done branches, no unpushed WIP).
    (no APPROVE yet, CI not green), leave the PR open and move on — a later iteration re-checks.
 
    **Push discipline — run the push + PR step in the FOREGROUND, never backgrounded.** The pre-push
-   gate (`bash engine/tests/run_all.sh` + `shellcheck -S warning start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh
-   engine/templates/autonomy-pack/qa/*.sh`) is slow; run `git push` as a foreground call (long timeout,
+   gate (`bash engine/tests/run_all.sh` + `shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh
+   engine/lib/ci_retry.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh`) is slow; run `git push` as a foreground call (long timeout,
    up to 600000 ms) and `gh pr create` right after it succeeds. A headless run that ends kills any
    still-running background task, so a backgrounded push never finishes and no PR opens even though
    the commit exists locally. Only AFTER the branch is pushed AND the PR URL exists may you
