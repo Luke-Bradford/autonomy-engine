@@ -7,6 +7,7 @@ import {
   codexQuotaSourcePresent,
   createCodexAccountQuotaReader,
   mapCodexWindow,
+  withDeadline,
   DISABLED_CODEX_QUOTA_READER,
 } from '../codex-quota.js';
 
@@ -406,6 +407,36 @@ describe('createCodexAccountQuotaReader', () => {
     // the walk got — a partial walk's "newest file" is only the newest so far.
     expect(outcome.value).toBeNull();
     expect(outcome.unavailable).toBe('reader_error');
+  });
+
+  it('stops waiting on an operation that never returns at all', async () => {
+    // The test above advances a fake clock, so every syscall in it COMPLETES
+    // and the walk merely notices it is late. That proves the cooperative half
+    // of the budget and nothing about the other half: a stale NFS handle or a
+    // departed autofs mount does not return slowly, it does not return, and a
+    // deadline polled between operations never gets its turn to fire.
+    //
+    // Tested on the race directly, with a promise that genuinely never settles.
+    // The in-process alternative — a FIFO named `rollout-*.jsonl`, on which
+    // `readFile` really does block forever — strands a libuv threadpool thread
+    // for the life of the worker and leaves the event loop with a pending
+    // request at teardown, so it buys realism with a hanging test run.
+    const started = Date.now();
+    await expect(withDeadline(new Promise<string>(() => {}), 25)).rejects.toThrow();
+    // Bounded, and bounded by the DEADLINE rather than by anything the work
+    // did — the work here does nothing at all, forever.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('surfaces the work’s own failure instead of swallowing it into the deadline', async () => {
+    // The race must stay transparent to everything that is not the deadline.
+    // `sample` decides what becomes a `reader_error` by testing for
+    // `DeadlineExceeded` specifically, so a helper that folded every rejection
+    // into one would dress a programming error up as "the mount is unwell" —
+    // indistinguishable, on the wire, from a genuinely slow filesystem.
+    await expect(
+      withDeadline(Promise.reject(new Error('not the deadline')), 5_000),
+    ).rejects.toThrow('not the deadline');
   });
 
   it('does not follow a symlink out of the sessions tree', async () => {

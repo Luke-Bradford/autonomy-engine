@@ -126,11 +126,52 @@ const DEFAULT_MAX_FILES_SCANNED = 25;
  * the safe direction — rather than to a partial answer assembled from whatever
  * the walk had reached. A partial walk's "newest file" is only the newest so
  * far, so a reading built from it could silently be an old one.
+ *
+ * The budget is enforced in TWO ways, because one of them alone is a bound only
+ * on a filesystem that answers:
+ *
+ * - **Cooperatively**, by `expired()` between operations. This stops the walk
+ *   STARTING more work, which is what bounds the wide-tree and slow-but-alive
+ *   cases, and it stops them without stranding anything.
+ * - **Preemptively**, by `withDeadline` racing the whole sample against a
+ *   timer. This bounds the case cooperation cannot: a single syscall that never
+ *   returns at all (a stale NFS handle, an autofs mount that has gone away)
+ *   is awaited, not polled, so no amount of checking the clock between
+ *   operations preempts it.
  */
 const DEFAULT_DEADLINE_MS = 3_000;
 
 /** Thrown internally when the walk runs out of time; never escapes `sample`. */
 class DeadlineExceeded extends Error {}
+
+/**
+ * `work`, or `DeadlineExceeded` once `ms` of wall clock has passed.
+ *
+ * The point is to bound the CALLER, not the operation: node's fs promises have
+ * no cancellation, so a hung syscall keeps occupying its threadpool slot until
+ * the kernel releases it. What this guarantees is that the request handler and
+ * everyone queued behind the in-flight dedupe stop waiting on it — which is the
+ * property the deadline was documented to provide and, polled cooperatively,
+ * did not.
+ *
+ * The timer is `unref`d and always cleared, so a pending deadline never holds
+ * the process open and a completed sample leaves nothing behind. The loser of
+ * the race still has its rejection handled by `Promise.race` itself, so a
+ * syscall that fails long after we gave up cannot surface as an unhandled
+ * rejection.
+ */
+export async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new DeadlineExceeded()), ms);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([work, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export type CodexAccountQuotaReading =
   | { value: CodexAccountQuota; unavailable: null }
@@ -329,7 +370,32 @@ export function createCodexAccountQuotaReader(
   let cachedAt: number | null = null;
   let inFlight: Promise<CodexAccountQuotaReading> | null = null;
 
+  /**
+   * The whole sample under the wall-clock budget.
+   *
+   * Wrapping the ENTIRE walk, rather than each syscall, is deliberate: the
+   * budget is a bound on how long a caller waits, and per-call timeouts would
+   * let a tree of individually-quick-enough operations add up past it. It also
+   * covers the root `stat` — the first thing a dead mount hangs on, and the one
+   * call that happens before any `expired()` check exists to consult.
+   *
+   * Only `DeadlineExceeded` is caught. Everything else keeps propagating
+   * exactly as it does today; a catch-all here would turn a programming error
+   * into a plausible-looking `reader_error` and hide it behind the same wire
+   * shape a genuinely slow filesystem produces.
+   */
   async function sample(at: number): Promise<CodexAccountQuotaReading> {
+    try {
+      return await withDeadline(sampleFilesystem(at), deadlineMs);
+    } catch (error) {
+      if (error instanceof DeadlineExceeded) {
+        return { value: null, unavailable: 'reader_error' };
+      }
+      throw error;
+    }
+  }
+
+  async function sampleFilesystem(at: number): Promise<CodexAccountQuotaReading> {
     const rootInfo = await stat(sessionsRoot).catch(() => null);
     // Nothing to read FROM. Distinct from a source that is present and empty.
     if (rootInfo === null) return { value: null, unavailable: 'no_credential' };
