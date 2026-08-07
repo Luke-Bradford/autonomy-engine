@@ -794,7 +794,31 @@ describe('WorkspaceGitPage', () => {
       await checkForIncoming();
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
-      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differ/);
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differs from/);
+    });
+
+    /**
+     * The count and its verb have to agree, because the singular case is the
+     * common one — one edited pipeline is the ordinary import — and "1 resource
+     * differ" is the sentence the operator reads most often.
+     */
+    it('agrees the verb with the count in the confirmation', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ path: 'a.json', disposition: 'update' }),
+            previewResource({ path: 'b.json', disposition: 'create' }),
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/2 resources on the branch differ from/);
     });
 
     /** `refused: true` arrives as a 200. A 200 is not an import. */

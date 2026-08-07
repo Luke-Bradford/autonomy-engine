@@ -1123,7 +1123,7 @@ function buildImportConfirmation(
   const lines = [
     `Import ${shortSha(preview.head)} from ${status.collabBranch} into this workspace?`,
     '',
-    `${countResources(differing.length)} on the branch differ from this workspace and will be applied. The branch is re-read now, so what lands may differ from the preview.`,
+    `${countResources(differing.length)} on the branch ${differing.length === 1 ? 'differs' : 'differ'} from this workspace and will be applied. The branch is re-read now, so what lands may differ from the preview.`,
   ];
 
   if (preview.archive.length > 0) {
