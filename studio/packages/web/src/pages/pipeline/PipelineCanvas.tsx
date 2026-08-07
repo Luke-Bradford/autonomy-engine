@@ -79,6 +79,7 @@ import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import {
+  activeVersionLabel,
   describePublishRefusal,
   describeRestoreConflict,
   describeSaveConflict,
@@ -726,13 +727,11 @@ export function PipelineCanvas({
     // non-null for `undefined`, so this is unreachable — but the CAS argument is
     // too important to rest on a function's return value alone.
     if (active === undefined) return;
-    const activeVersionNumber =
-      active === null ? null : (versions.find((v) => v.id === active.versionId)?.version ?? null);
     if (
       !window.confirm(
         publishConfirmMessage({
           selectedVersion: previewed.version,
-          activeVersion: activeVersionNumber,
+          activeVersion: activeVersionLabel(active, versions),
         }),
       )
     ) {
@@ -771,9 +770,10 @@ export function PipelineCanvas({
           setGitConnected(undefined);
           fresh = undefined;
         }
-        const freshVersion =
-          fresh == null ? null : (versions.find((v) => v.id === fresh.versionId)?.version ?? null);
-        setSaveMsg(describePublishRefusal(freshVersion));
+        // Through the ONE resolver, so a failed re-read stays `undefined` and a
+        // version this page cannot name stays distinct from "nothing published".
+        // Both were collapsed to `null` here, and both read as a false fact.
+        setSaveMsg(describePublishRefusal(activeVersionLabel(fresh, versions)));
         return;
       }
       setSaveMsg(`Publish failed: ${messageOf(err)}`);

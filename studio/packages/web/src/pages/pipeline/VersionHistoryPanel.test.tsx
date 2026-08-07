@@ -323,10 +323,33 @@ describe('VersionPreviewBar', () => {
     const publish = screen.getByRole('button', { name: /publish v2/i });
     expect(publish).toBeDisabled();
     expect(publish).toHaveAttribute('title', 'v2 was authored here, not imported from a commit.');
-    // Deliberately NOT in the bar's prose, unlike the restore refusal: this is
-    // the ordinary state of nearly every version, and standing text saying so
-    // would read as a permanent error.
-    expect(screen.getByTestId('version-preview-bar').textContent).not.toContain('authored here');
+    // Reachable by AT, not by hover alone: a disabled control has no tooltip a
+    // keyboard can summon, so the reason is also described.
+    const describedBy = publish.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+    expect(document.getElementById(describedBy!)?.textContent).toBe(
+      'v2 was authored here, not imported from a commit.',
+    );
+    // Present to AT, absent from the layout — the visual argument above stands.
+    expect(document.getElementById(describedBy!)).toHaveClass('visually-hidden');
+  });
+
+  it('describes nothing when Publish is available', () => {
+    render(
+      <VersionPreviewBar
+        version={2}
+        refusal={null}
+        restoring={false}
+        publishRefusal={null}
+        publishing={false}
+        onPublish={vi.fn()}
+        onRestore={vi.fn()}
+        onBackToEditing={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /publish v2/i })).not.toHaveAttribute(
+      'aria-describedby',
+    );
   });
 
   it('cannot be clicked twice while a publish is in flight, and locks the bar', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
 import {
+  activeVersionLabel,
   describePublishRefusal,
   describeRestoreConflict,
   describeSaveConflict,
@@ -198,6 +199,32 @@ describe('publishRefusal', () => {
   });
 });
 
+describe('activeVersionLabel', () => {
+  const vs = [version({ id: 'plv_1', version: 1 }), version({ id: 'plv_2', version: 2 })];
+  const pointer = (versionId: string) => ({
+    versionId,
+    commit: 'c'.repeat(40),
+    blob: 'd'.repeat(40),
+  });
+
+  it('names a version this page holds', () => {
+    expect(activeVersionLabel(pointer('plv_2'), vs)).toBe(2);
+  });
+
+  it('keeps "not read" and "nothing published" apart', () => {
+    expect(activeVersionLabel(undefined, vs)).toBeUndefined();
+    expect(activeVersionLabel(null, vs)).toBeNull();
+  });
+
+  /* The bug this resolver exists to kill. Another session publishes a version
+     minted after this page loaded: the pointer is real, the number is not
+     knowable here, and the obvious `?? null` reported it as NOTHING published —
+     the exact opposite of the truth. */
+  it('does not report an unnameable active version as “nothing published”', () => {
+    expect(activeVersionLabel(pointer('plv_minted_elsewhere'), vs)).toBe('unnamed');
+  });
+});
+
 describe('publishConfirmMessage', () => {
   it('states what moves, what does NOT move, and that nothing is destroyed', () => {
     const msg = publishConfirmMessage({ selectedVersion: 7, activeVersion: 6 });
@@ -215,6 +242,13 @@ describe('publishConfirmMessage', () => {
     const msg = publishConfirmMessage({ selectedVersion: 1, activeVersion: null });
     expect(msg).toMatch(/never been published|nothing is published/i);
     expect(msg).not.toMatch(/vnull|undefined/i);
+  });
+
+  it('does not claim "nothing is published" when the active version is merely unnameable', () => {
+    const msg = publishConfirmMessage({ selectedVersion: 7, activeVersion: 'unnamed' });
+    expect(msg).toMatch(/replaces the version that is currently active/i);
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vunnamed/);
   });
 });
 
@@ -261,6 +295,23 @@ describe('describePublishRefusal', () => {
     const msg = describePublishRefusal(null);
     expect(msg).not.toMatch(/vnull|undefined/);
     expect(msg).toMatch(/nothing is published/i);
+  });
+
+  it('names an unnameable active version without inventing a number', () => {
+    const msg = describePublishRefusal('unnamed');
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vunnamed/);
+    expect(msg).toMatch(/currently active/i);
+  });
+
+  it('does not report a FAILED re-read as “nothing is published”', () => {
+    // The two are opposite claims. `null` is a fact the re-read established;
+    // `undefined` is the absence of one, and printing it as the fact would be
+    // the manufactured-default shape this module exists to refuse.
+    const msg = describePublishRefusal(undefined);
+    expect(msg).toMatch(/unknown/i);
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vundefined/);
   });
 });
 

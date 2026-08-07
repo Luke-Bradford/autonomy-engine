@@ -59,6 +59,47 @@ export interface VersionEntry {
 export type ActiveVersionState = ActivePipelineVersion | null | undefined;
 
 /**
+ * #979 — the active version as this PAGE is able to NAME it, in four states.
+ *
+ * The pointer is a version id; the prose wants a version number, and this page
+ * can only supply one for a version in the list it fetched. A version published
+ * by another session AFTER this page loaded is genuinely active and genuinely
+ * unnameable here — `'unnamed'` is that case, and it exists because the obvious
+ * `?? null` fallback reports it as "nothing is published", which is the opposite
+ * of the truth.
+ *
+ * - `number`   — published, and in this page's history list
+ * - `'unnamed'`— published, but minted after this page loaded
+ * - `null`     — nothing is published
+ * - `undefined`— the pointer was not read at all
+ */
+export type ActiveVersionLabel = number | 'unnamed' | null | undefined;
+
+/**
+ * Resolve the pointer to something the prose can say.
+ *
+ * ONE resolver, because there were two call sites doing
+ * `versions.find(…)?.version ?? null` inline and both carried the same defect.
+ * The `isActive` TAG needs no equivalent: it matches by id and simply does not
+ * mark a row it cannot find, which is silence rather than a false claim.
+ */
+export function activeVersionLabel(
+  active: ActiveVersionState,
+  versions: PipelineVersion[],
+): ActiveVersionLabel {
+  if (active === undefined) return undefined;
+  if (active === null) return null;
+  return versions.find((v) => v.id === active.versionId)?.version ?? 'unnamed';
+}
+
+/** The active version in a sentence, however much of it is known. */
+function activePhrase(activeVersion: number | 'unnamed'): string {
+  return activeVersion === 'unnamed'
+    ? 'the version that is currently active (published after this page loaded, so it is not in the history list yet)'
+    : `v${String(activeVersion)}`;
+}
+
+/**
  * The versions newest-first, each marked against the head and against the one
  * the canvas is open on.
  *
@@ -357,12 +398,17 @@ export function publishConfirmMessage({
   activeVersion,
 }: {
   selectedVersion: number;
-  activeVersion: number | null;
+  activeVersion: ActiveVersionLabel;
 }): string {
   const replacing =
     activeVersion === null
       ? 'Nothing is published for this pipeline yet.'
-      : `It replaces v${String(activeVersion)}.`;
+      : activeVersion === undefined
+        ? // Unreachable via the refusal ladder, which holds a publish back until
+          // the pointer is read. Stated rather than assumed away: silence here
+          // would read as "nothing is published", the one thing it is not.
+          'What is published now could not be read.'
+        : `It replaces ${activePhrase(activeVersion)}.`;
   return (
     `Publish v${String(selectedVersion)}?\n\n` +
     `v${String(selectedVersion)} becomes this pipeline’s active version. ${replacing}\n\n` +
@@ -416,14 +462,24 @@ export function isPublishRefused(err: unknown): boolean {
  * disconnected repo, so this names the re-read fact and points at the one place
  * that explains the rest, rather than asserting a cause it does not have.
  *
- * `null` covers a workspace with nothing published, including the case where the
- * pointer was cleared between the click and the re-read.
+ * THREE states again, and for the same reason as `ActiveVersionState`:
+ * `null` is "nothing is published" — a fact, including the case where the
+ * pointer was cleared between the click and the re-read — while `undefined` is
+ * "the re-read ITSELF failed". Reporting the second as the first would print an
+ * absent fact as a benign default, one file away from where that is preached.
  */
-export function describePublishRefusal(activeVersion: number | null): string {
+export function describePublishRefusal(activeVersion: ActiveVersionLabel): string {
+  if (activeVersion === undefined) {
+    return (
+      'Not published: the server refused it, and this pipeline’s publish state could not be re-read ' +
+      'afterwards — so what is active now is unknown. Nothing was changed. Reload the page, and check ' +
+      'Manage → Git if the repo was disconnected.'
+    );
+  }
   const now =
     activeVersion === null
       ? 'nothing is published for this pipeline'
-      : `the active version is v${String(activeVersion)}`;
+      : `the active version is ${activePhrase(activeVersion)}`;
   return (
     `Not published: the server refused it, and this pipeline’s publish state has been re-read — ${now}. ` +
     'Nothing was changed. If the repo was disconnected or this pipeline archived, Manage → Git says so.'

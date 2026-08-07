@@ -177,11 +177,24 @@ export function VersionPreviewBar({
           /* Unlike the restore refusal, this one is NOT printed in the bar: it
              is the ordinary state of nearly every version (git provenance is
              stamped only on an import), so showing it standingly would read as
-             a permanent error banner. The title carries it on demand. */
+             a permanent error banner.
+
+             But `title` alone is not an accessible substitute for the restore
+             refusal's on-screen sentence — a disabled control is skipped by
+             much AT, and a tooltip needs a hover nobody on a keyboard can
+             produce. So the reason is also carried in a visually-hidden element
+             the button DESCRIBES itself by: hidden from the layout, present in
+             the accessibility tree. */
           title={publishRefusal ?? undefined}
+          aria-describedby={publishRefusal !== null ? 'publish-refusal' : undefined}
         >
           {publishing ? 'Publishing…' : `Publish v${version}`}
         </button>
+        {publishRefusal !== null && (
+          <span id="publish-refusal" className="visually-hidden">
+            {publishRefusal}
+          </span>
+        )}
       </div>
     </div>
   );
