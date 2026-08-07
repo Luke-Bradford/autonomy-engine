@@ -157,6 +157,9 @@ export function PipelineCanvas({
      act, so an un-expiring line would sit under unrelated later work still
      claiming to describe it. */
   const [canvasMsg, showCanvasMsg] = useTransientNotice(CANVAS_NOTICE_MS);
+  /* U9 — bumped by Arrange to ask the canvas to fit what it just laid out. See
+     `FlowCanvas`'s `fitSignal` prop for why it is a counter. */
+  const [fitSignal, setFitSignal] = useState(0);
   // #907 — the unarchive request's own in-flight + failure state. Kept apart
   // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
   // next save; this one is about whether the pipeline can be saved at all.
@@ -286,6 +289,7 @@ export function PipelineCanvas({
       return;
     }
     state.moveNodes(changed);
+    setFitSignal((n) => n + 1);
     showCanvasMsg(
       `Arranged ${changed.length} ${changed.length === 1 ? 'activity' : 'activities'}.`,
     );
@@ -1079,7 +1083,7 @@ export function PipelineCanvas({
           <ActivityToolbox store={store} />
           <div className="canvas-wrap">
             <ReactFlowProvider>
-              <FlowCanvas store={store} />
+              <FlowCanvas store={store} fitSignal={fitSignal} />
             </ReactFlowProvider>
           </div>
           <PropertyPanel

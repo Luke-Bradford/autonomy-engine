@@ -159,9 +159,8 @@ describe('autoLayout', () => {
   });
 
   it('anchors the result at the top-left of where the graph already was', () => {
-    // No viewport write: the result lands where the operator is already
-    // looking, so the existing React Flow fit control stays the only thing
-    // that moves the camera.
+    // So a graph that already fits barely moves, and the fit that follows has a
+    // short distance to travel rather than a jump to the origin.
     const nodes = [node('a', { x: 400, y: 250 }), node('b', { x: 400, y: 250 })];
     const pos = positionsOf(nodes, [edge('a', 'b')]);
 

@@ -21,12 +21,17 @@ import { sourcePortsOf, usedConditionsBySource } from './ports';
  *
  * ## What this is NOT
  *
- * It writes NO viewport state. The result is anchored at the top-left of where
- * the graph already was (see `anchor` below), so the camera does not move and
- * React Flow's own `<Controls>` fit button stays the one thing that moves it.
- * That keeps Arrange a pure domain write, which is what lets it ride the
- * existing undo seam and what keeps it out of the way of the drag-reconcile
- * invariant `e2e/canvas-drag-reconciliation.spec.ts` pins.
+ * This function is PURE and moves no camera: it answers "where does each node
+ * go", nothing more. The viewport is a separate concern that the caller owns —
+ * and it does have to own it. A re-layout is exactly the operation that makes a
+ * graph wider than the pane, `onlyRenderVisibleElements` then removes the
+ * off-screen nodes from the DOM, and the operator is left looking at a fraction
+ * of their pipeline. `FlowCanvas`'s `fitSignal` is where that is handled, and
+ * its docblock records the measurement.
+ *
+ * The result is still ANCHORED at the top-left of where the graph already was
+ * (see the anchor step below), so nothing teleports to the origin and a small
+ * graph that already fits barely moves at all.
  *
  * It also does not reduce edge CROSSINGS. Order within a column is document
  * order — deterministic and explainable. A barycenter pass is a real
@@ -195,9 +200,10 @@ export function autoLayout(
     slotById,
   );
 
-  /* Anchor at the top-left of where the graph already was. Laying out from the
-     origin instead would demand a viewport write to follow it, and that is the
-     one thing this action deliberately does not do. */
+  /* Anchor at the top-left of where the graph already was, rather than at the
+     origin: a graph that already fits then barely moves, and the fit that
+     follows has a short distance to travel instead of jumping across the plane
+     from wherever the operator had panned to. */
   const anchorX = Math.min(...nodes.map((n) => n.position.x));
   const anchorY = Math.min(...nodes.map((n) => n.position.y));
   return packed.moves.map((m) => ({
