@@ -202,3 +202,174 @@ describe('usePolledResource', () => {
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   });
 });
+
+/**
+ * #989 — the TEARDOWN half of the contract, which nothing pinned until now.
+ *
+ * The tab showing `/monitor/ai` crashed once and auto-reloaded (an OOM or a
+ * runaway allocation, not a plain exception), and this hook was the suspect: it
+ * is the app's only polling primitive, and a polled surface is the classic home
+ * for a timer that compounds instead of being replaced, a retained set that
+ * grows, or a cleanup that leaves orphans behind on unmount.
+ *
+ * These tests are the MEASUREMENT that settles the suspicion rather than a
+ * reading of the code. They are deliberately about what does NOT happen after
+ * the component goes away — which is exactly the half the original suite left
+ * to inspection, because every existing case here keeps the hook mounted.
+ *
+ * WHAT THIS LEVEL CANNOT SEE: `unmount()` is not how the page unmounts in
+ * production, where a react-router route swap does it. The equivalent assertion
+ * at that layer — navigate away, watch the request count stay frozen — lives in
+ * `e2e/monitor-ai-activity.spec.ts` against the real bundle, and the two are
+ * complementary rather than duplicates.
+ */
+describe('usePolledResource teardown (#989)', () => {
+  it('stops polling and leaves no timer behind after unmount', async () => {
+    const fetcher = vi.fn().mockResolvedValue('x');
+
+    // Baseline BEFORE mounting: `shouldAdvanceTime` runs a ticker of its own, so
+    // the honest measure is that the count RETURNS to where it started, not that
+    // it reaches zero.
+    const baselineTimers = vi.getTimerCount();
+
+    const { unmount } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(vi.getTimerCount()).toBeGreaterThan(baselineTimers);
+
+    unmount();
+
+    // The direct measurement: the interval is gone, not merely quiet.
+    expect(vi.getTimerCount()).toBe(baselineTimers);
+
+    const afterUnmount = fetcher.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(fetcher.mock.calls.length).toBe(afterUnmount);
+  });
+
+  /**
+   * The `#896` shape: a listener that outlives its component. An orphan here is
+   * worse than an orphan interval, because the document-level `visibilitychange`
+   * keeps firing it forever and each unmounted instance answers with a fetch —
+   * so the cost grows with how many times the page has been visited, which is
+   * precisely the profile of a tab that dies after hours of navigation.
+   */
+  it('does not answer a visibility change after unmount', async () => {
+    const fetcher = vi.fn().mockResolvedValue('x');
+
+    const { unmount } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    unmount();
+    const afterUnmount = fetcher.mock.calls.length;
+
+    await act(async () => {
+      setVisibility('hidden');
+      setVisibility('visible');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fetcher.mock.calls.length).toBe(afterUnmount);
+  });
+
+  /**
+   * Repeated visits must cost what ONE visit costs. This is the arithmetic the
+   * crash hypothesis turns on: if teardown were partial, every mount would add a
+   * poller and the request rate would climb with visit count rather than stay
+   * flat with elapsed time.
+   */
+  it('does not accumulate pollers across repeated mounts', async () => {
+    const fetcher = vi.fn().mockResolvedValue('x');
+    const baselineTimers = vi.getTimerCount();
+
+    for (let visit = 0; visit < 5; visit += 1) {
+      // Wait for THIS mount's load, not for "the mock has ever been called" —
+      // the fetcher accumulates across the loop, so a bare `toHaveBeenCalled()`
+      // is already satisfied by visit 0 and every later iteration would unmount
+      // without waiting at all.
+      const before = fetcher.mock.calls.length;
+      const { unmount } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThan(before));
+      unmount();
+    }
+
+    expect(vi.getTimerCount()).toBe(baselineTimers);
+
+    const afterVisits = fetcher.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetcher.mock.calls.length).toBe(afterVisits);
+  });
+
+  /**
+   * The third shape the ticket names — state that APPENDS rather than replaces,
+   * so the retained set grows with every poll. Pinned rather than left to
+   * inspection: it is one line in the hook and the whole difference between a
+   * page that can sit open all day and one that cannot.
+   */
+  it('replaces the polled value rather than accumulating it', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce('first')
+      .mockResolvedValueOnce('second')
+      .mockResolvedValue('third');
+
+    const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 1_000 }));
+    await waitFor(() => expect(result.current.data).toBe('first'));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500);
+    });
+
+    // `toBe` is identity, so this already excludes an accumulator: an appending
+    // setData would hold ['first','second','third'] here, not the string.
+    await waitFor(() => expect(result.current.data).toBe('third'));
+  });
+
+  /**
+   * The LITERAL "timer that compounds" the ticket names, which none of the
+   * tests above reach. Every remount and every revisit they exercise passes
+   * through a real `stop()` first — unmount, or a genuine hidden phase — so the
+   * `timer ??=` guard in `start()` is never the thing keeping the count at one.
+   * Pre-PR review caught that: with the guard mutated to a plain assignment,
+   * all of them still passed.
+   *
+   * The path that does reach it: two `visibilitychange` events both reporting
+   * `visible`, with no `hidden` in between. Browsers do fire a redundant one,
+   * and `onVisibility` calls `start()` on every visible event without a
+   * matching `stop()` — so without the guard the second one arms a SECOND
+   * interval and orphans the first, doubling the poll rate for as long as the
+   * page stays open. That is the compounding shape exactly, and it needs no
+   * navigation at all to happen.
+   */
+  it('does not arm a second interval when visible fires twice without a hidden', async () => {
+    const fetcher = vi.fn().mockResolvedValue('x');
+    const baselineTimers = vi.getTimerCount();
+
+    renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    const withOneInterval = vi.getTimerCount();
+    expect(withOneInterval).toBeGreaterThan(baselineTimers);
+
+    // Redundant `visible`, no `hidden` first. The immediate refresh it triggers
+    // is intended and counted below; a second INTERVAL is not.
+    await act(async () => {
+      setVisibility('visible');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(vi.getTimerCount()).toBe(withOneInterval);
+
+    // And the cadence is unchanged, which is the consequence that matters: one
+    // interval over 12s is exactly two ticks, two intervals would be four. The
+    // baseline is taken AFTER the eager refresh the redundant event legitimately
+    // caused, so that refresh is excluded and this counts ticks alone.
+    const beforeWindow = fetcher.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(fetcher.mock.calls.length - beforeWindow).toBe(2);
+  });
+});
