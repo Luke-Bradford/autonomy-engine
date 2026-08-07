@@ -322,4 +322,48 @@ describe('usePolledResource teardown (#989)', () => {
     // setData would hold ['first','second','third'] here, not the string.
     await waitFor(() => expect(result.current.data).toBe('third'));
   });
+
+  /**
+   * The LITERAL "timer that compounds" the ticket names, which none of the
+   * tests above reach. Every remount and every revisit they exercise passes
+   * through a real `stop()` first — unmount, or a genuine hidden phase — so the
+   * `timer ??=` guard in `start()` is never the thing keeping the count at one.
+   * Pre-PR review caught that: with the guard mutated to a plain assignment,
+   * all of them still passed.
+   *
+   * The path that does reach it: two `visibilitychange` events both reporting
+   * `visible`, with no `hidden` in between. Browsers do fire a redundant one,
+   * and `onVisibility` calls `start()` on every visible event without a
+   * matching `stop()` — so without the guard the second one arms a SECOND
+   * interval and orphans the first, doubling the poll rate for as long as the
+   * page stays open. That is the compounding shape exactly, and it needs no
+   * navigation at all to happen.
+   */
+  it('does not arm a second interval when visible fires twice without a hidden', async () => {
+    const fetcher = vi.fn().mockResolvedValue('x');
+    const baselineTimers = vi.getTimerCount();
+
+    renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+
+    const withOneInterval = vi.getTimerCount();
+    expect(withOneInterval).toBeGreaterThan(baselineTimers);
+
+    // Redundant `visible`, no `hidden` first. The immediate refresh it triggers
+    // is intended and counted below; a second INTERVAL is not.
+    await act(async () => {
+      setVisibility('visible');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(vi.getTimerCount()).toBe(withOneInterval);
+
+    // And the cadence is unchanged, which is the consequence that matters: one
+    // interval over 12s is two ticks, two intervals would be four. The `+ 1`
+    // is the eager refresh the redundant event legitimately caused.
+    const beforeWindow = fetcher.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(fetcher.mock.calls.length - beforeWindow).toBe(2);
+  });
 });
