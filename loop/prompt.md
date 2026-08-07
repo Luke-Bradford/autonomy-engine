@@ -47,7 +47,8 @@ FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket
    module + app wiring landed DORMANT behind `CLAUDE_QUOTA_SAMPLER`, so no second poller existed.
 3. **C3 `#410`** — SPLIT INTO TWO HALVES, because they are independently verifiable and the quota
    half must be able to roll back on its own:
-   - **3a. the QUOTA cutover — CODE DONE** (PR #973). Arms `CLAUDE_QUOTA_SAMPLER=1` in the service
+   - **3a. the QUOTA cutover — CODE DONE** (on `main`; `git log --oneline --grep '#410' loop/`
+     names the merge). Arms `CLAUDE_QUOTA_SAMPLER=1` in the service
      plist, reorders `quota_pct` to **studio → dashboard → loop reader**, and removes the now
      unreachable shadow probe. **The LIVE step may still be outstanding — CHECK BEFORE ASSUMING:**
      ```sh
@@ -73,7 +74,7 @@ and the loop exists to build it — not to build the loop.
 
 ### CUTOVER C1-C3 — UNBLOCKED 2026-08-05. It is buildable work, not an operator gate.
 - **C1 `#440`** native control room + machine-readable quota endpoint — **DONE** (issue CLOSED).
-- **C2** — **DONE** (2026-07-29), and **SUPERSEDED by C3a** (2026-08-07, PR #973). C2 wired studio
+- **C2** — **DONE** (2026-07-29), and **SUPERSEDED by C3a** (2026-08-07). C2 wired studio
   in as the **THIRD** source in `loop/drive.sh` `quota_pct()`, deliberately behind the dashboard and
   the loop's own reader, because studio's `/api/quota` returned `account.claude: null` on every
   probe — it was a LAZY reader, so every read was the direct poll that 429s. C3a moved it to
