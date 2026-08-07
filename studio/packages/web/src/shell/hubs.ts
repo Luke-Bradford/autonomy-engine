@@ -109,7 +109,14 @@ export const HUBS: readonly Hub[] = [
     id: 'monitor',
     label: 'Monitor',
     path: '/monitor',
-    sections: [{ label: 'Runs', path: '/monitor/runs' }],
+    sections: [
+      { label: 'Runs', path: '/monitor/runs' },
+      // #917 — the cross-cutting AI/LLM view. The per-run cost lives on a run's
+      // own page; this section is the only place that answers "across
+      // EVERYTHING, what are my connected AIs doing and what is left of my
+      // quota", which is what the old prototype dashboard was still kept for.
+      { label: 'AI activity', path: '/monitor/ai' },
+    ],
     Icon: PulseRegular,
     IconActive: PulseFilled,
   },
