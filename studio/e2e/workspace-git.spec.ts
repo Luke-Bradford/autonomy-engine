@@ -383,6 +383,17 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
 
   // `publishName` was published as v1 immediately above.
   await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: publishName });
+  /*
+   * The id is read off the SELECT rather than looked up in `GET /api/pipelines`:
+   * that list is keyset-paginated (`{items, nextCursor}`, #534) and the shared DB
+   * carries every other spec's pipelines, so a first-page scan finds this one only
+   * by luck — it did not, which is what this read replaces. The option value IS
+   * the pipeline id (`TriggersPage.tsx`), and it is the exact id the client sends
+   * as `bindToActive.pipelineId`, so the pointer below is read for the same
+   * pipeline the binding resolved against.
+   */
+  const publishedPipelineId = await triggerForm.getByLabel(/^Pipeline/).inputValue();
+  expect(publishedPipelineId, `no pipeline id selected for ${publishName}`).toBeTruthy();
   await expect(triggerForm.getByText(/v1/)).toBeVisible();
   await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
   await expect(triggerForm).toBeHidden();
@@ -402,13 +413,8 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * stronger than a truthiness check — it fails if the binding resolves to any
    * OTHER version — without asserting an identity the system does not promise.
    */
-  const allPipelines = (await (await page.request.get('/api/pipelines')).json()) as
-    Array<{ id: string; name: string }> | { items: Array<{ id: string; name: string }> };
-  const rows = Array.isArray(allPipelines) ? allPipelines : allPipelines.items;
-  const publishedPipeline = rows.find((p) => p.name === publishName);
-  expect(publishedPipeline, `no pipeline named ${publishName}`).toBeDefined();
   const activeNow = (await (
-    await page.request.get(`/api/pipelines/${encodeURIComponent(publishedPipeline!.id)}/active`)
+    await page.request.get(`/api/pipelines/${encodeURIComponent(publishedPipelineId)}/active`)
   ).json()) as { active: { versionId: string } | null };
   expect(activeNow.active, 'the pipeline should have an active published version').not.toBeNull();
   expect(bound?.pipelineVersionId).toBe(activeNow.active!.versionId);
