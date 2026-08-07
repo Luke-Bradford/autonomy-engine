@@ -14,11 +14,24 @@ interface CommandBarProps {
 /**
  * The shell's command bar (U3): the pane toggle and the breadcrumb.
  *
- * NO ACTIONS REGION YET. The spec's shell diagram shows `Validate` and
- * `Save(→v)` here, but those are **U9**'s row, and they need canvas state this
- * bar has no access to. An empty labelled container shipped now would be dead
- * code plus a seam chosen before its first consumer exists; U9 adds the region
- * together with the first action that goes in it.
+ * NO ACTIONS REGION. The spec's shell diagram shows `Validate` and `Save(→v)`
+ * here, and this file used to say U9 would add the region together with the
+ * first action that went in it.
+ *
+ * U9 SHIPPED (#1004, Arrange) and did not, so that promise is retracted rather
+ * than left standing. The reason is the one this comment already gave: every
+ * action on that row needs canvas state — the working graph, `dirty`, the
+ * preview lock — and the command bar is a SHELL component that deliberately
+ * subscribes to no page-domain store (see U4's note on why the `:pipelineId`
+ * crumb is the id and not the name). Lifting Arrange up here would have meant
+ * either that coupling or a context/portal seam built for one button, when the
+ * canvas already has a toolbar holding Undo, Redo, Version history and Save —
+ * the actions Arrange belongs beside, since undoing it is literally the button
+ * to its left.
+ *
+ * So the region is not "not yet", it is "not here unless something changes":
+ * what would justify it is an action that is genuinely SHELL-level (one that
+ * makes sense across hubs, or with no pipeline open). None exists today.
  *
  * The toggle lives HERE rather than at the pane's foot, where the spec diagram
  * draws `«collapse`. A control inside the pane disappears when the pane

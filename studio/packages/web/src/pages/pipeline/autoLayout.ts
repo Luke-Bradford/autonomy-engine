@@ -33,6 +33,18 @@ import { sourcePortsOf, usedConditionsBySource } from './ports';
  * (see the anchor step below), so nothing teleports to the origin and a small
  * graph that already fits barely moves at all.
  *
+ * ## The one assumption it makes, stated because it is not free
+ *
+ * Sizes are NOMINAL (`unmeasuredNodeSize`), never measured. A node's real width
+ * is whatever its title makes it — `.flow-node` sets `min-width: 120px` and no
+ * maximum — so a node with a long title renders wider than the 150px assumed
+ * here, and past `150 + LAYOUT_GAP` it crowds the column to its right. The
+ * layout cannot see that: measured sizes live in React Flow's store, and this
+ * runs from a click handler outside it. The failure degrades gently (a tight
+ * graph, not a pile) and is tracked separately; what would NOT be acceptable is
+ * leaving the assumption unwritten, since every overlap guarantee below is
+ * conditional on it.
+ *
  * It also does not reduce edge CROSSINGS. Order within a column is document
  * order — deterministic and explainable. A barycenter pass is a real
  * improvement and a separate one; nothing here forecloses it.
