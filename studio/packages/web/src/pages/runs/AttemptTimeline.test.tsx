@@ -179,11 +179,19 @@ describe('<AttemptTimeline>', () => {
         nameOf={noNames}
       />,
     );
-    const open = container.querySelector('.timeline-span[data-open="true"]');
+    const open = container.querySelector<HTMLElement>('.timeline-span[data-open="true"]');
     expect(open).not.toBeNull();
     expect(open!.textContent).toContain('no end on record');
-    // …and it must not have been given a width, which would be a stated length.
-    expect((open as HTMLElement).style.width).toBe('');
+    /* …and it must carry NO width, which would be a stated length. It is pinned
+       against the measured bar in the same render rather than against `''`
+       alone: an assertion that a style is absent passes just as well when the
+       style never parsed, which is how the first version of this test went
+       vacuous (jsdom silently drops an inline `max(2px, 25%)`). */
+    expect(open!.style.width).toBe('');
+    expect(open!.style.right).toBe('0px');
+    const measured = container.querySelector<HTMLElement>('.timeline-span:not([data-open])');
+    expect(measured!.style.width).not.toBe('');
+    expect(measured!.style.right).toBe('');
   });
 
   it('names every untimed node with its reason instead of dropping it', () => {

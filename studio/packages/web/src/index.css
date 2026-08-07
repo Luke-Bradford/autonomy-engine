@@ -2698,6 +2698,9 @@ td button + button {
   bottom: 0;
   border-radius: 3px;
   background: var(--muted);
+  /* A measured span shorter than a pixel of the axis still HAPPENED, and a bar
+     with no width reads as a missing node rather than a fast one. */
+  min-width: 2px;
 }
 
 /* An OPEN span makes a different claim from a long one — "started here, no end

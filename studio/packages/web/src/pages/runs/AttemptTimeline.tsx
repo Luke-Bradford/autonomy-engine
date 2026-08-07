@@ -168,13 +168,16 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                       left: `${placed.left}%`,
                       /* An open or unmeasurable span runs to the right edge
                          hatched, which is a DIFFERENT claim from a long bar: it
-                         says "started here, no end on record". A measured span
-                         gets a floor so a sub-millisecond one is still visible —
-                         it really happened, and an invisible bar reads as a
-                         missing node rather than a fast one. */
+                         says "started here, no end on record". The visibility
+                         floor for a sub-millisecond measured span is `min-width`
+                         in the stylesheet rather than a `max()` here — a bar
+                         that really happened must not be invisible, since that
+                         reads as a missing node rather than a fast one, but
+                         expressing it inline made the inline style unparseable
+                         to jsdom and quietly voided the test asserting it. */
                       ...(placed.width === null
                         ? { right: '0' }
-                        : { width: `max(2px, ${placed.width}%)` }),
+                        : { width: `${placed.width}%` }),
                     }}
                     title={`${name ?? node.nodeId} · ${spanLabel(placed.span)} · started ${formatClock(
                       placed.span.startedAtMs,
