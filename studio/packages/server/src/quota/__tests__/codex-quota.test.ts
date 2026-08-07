@@ -448,10 +448,16 @@ describe('createCodexAccountQuotaReader', () => {
     // is not a regular file).
     //
     // The tree here is PERFECTLY GOOD and holds a readable snapshot, so a
-    // reader that consulted the filesystem would return that value. Getting
-    // `reader_error` instead is what shows the check happens BEFORE the walk —
-    // which is the whole point, since a refusal issued after walking would
-    // strand exactly the threadpool slot it exists to protect.
+    // reader that used what the filesystem offered would return that value.
+    // `reader_error` instead pins the refusal itself.
+    //
+    // What it does NOT pin — checked, not assumed — is the ORDERING. Moving
+    // `latch.blocked()` below `sampleFilesystem(at)` leaves this test green,
+    // because that call only STARTS the walk and is never awaited on the
+    // refusal path, so the outcome is identical while a threadpool slot has
+    // quietly been spent. The ordering is the load-bearing half and it rests on
+    // review of `sample`, not on this test. Observing it would need a spy on
+    // `node:fs`, which this file deliberately does without.
     const sessionsRoot = await makeSessionsRoot();
     await writeSession(
       sessionsRoot,
