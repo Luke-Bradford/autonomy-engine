@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../../quota/claude-quota.js';
+import type { CodexAccountQuotaReader } from '../../quota/codex-quota.js';
 import {
   ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
   AccountQuotaDisplayStateSchema,
@@ -372,5 +373,221 @@ describe('GET /api/quota/display', () => {
         last_known: { claude: READING, read_at: 1_785_495_000 },
       }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * #990 — codex on the DISPLAY surface, and nowhere else.
+ *
+ * Three states, and the tests exist because two of them are easy to conflate:
+ * ABSENT (no codex on this host — key omitted), UNREADABLE (`null` + a reason)
+ * and a reading. Collapsing absent into unreadable would put a fault on the
+ * operator's panel for software they never installed; collapsing unreadable
+ * into absent would hide a real failure.
+ */
+describe('GET /api/quota/display — codex (#990)', () => {
+  const CODEX_READING = {
+    seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+    read_at: 1_786_106_974,
+  };
+
+  async function appWithCodex(
+    codexAccountQuotaReader: CodexAccountQuotaReader | null,
+    claude: ClaudeAccountQuota | null = READING,
+  ): Promise<FastifyInstance> {
+    const reading =
+      claude === null
+        ? ({ value: null, unavailable: 'provider_error' } as const)
+        : ({ value: claude, unavailable: null } as const);
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaReader: { read: async () => reading },
+      codexAccountQuotaReader,
+    });
+    apps.push(app);
+    return app;
+  }
+
+  it('omits the codex key entirely when codex is ABSENT from the host', async () => {
+    const app = await appWithCodex(null);
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account).not.toHaveProperty('codex');
+    expect(body).not.toHaveProperty('unavailable');
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('carries a codex reading with the instant it was scraped at', async () => {
+    const app = await appWithCodex({
+      read: async () => ({ value: CODEX_READING, unavailable: null }),
+    });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account.codex).toEqual(CODEX_READING);
+    // A scraped reading MUST state its own age — it is as old as the last codex
+    // run, not one TTL old like claude's.
+    expect(body.account.codex.read_at).toBe(1_786_106_974);
+    expect(body).not.toHaveProperty('unavailable');
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('reports an UNREADABLE codex as null WITH a reason, never as a number', async () => {
+    const app = await appWithCodex({
+      read: async () => ({ value: null, unavailable: 'no_reading' }),
+    });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account.codex).toBeNull();
+    expect(body.unavailable.codex).toBe('no_reading');
+    // Claude's reading is untouched by codex's failure.
+    expect(body.account.claude).toEqual(READING);
+    expect(body.unavailable).not.toHaveProperty('claude');
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('survives a throwing codex reader without losing claude\'s reading', async () => {
+    const app = await appWithCodex({
+      read: async () => {
+        throw new Error('walk exploded');
+      },
+    });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account.claude).toEqual(READING);
+    expect(body.account.codex).toBeNull();
+    expect(body.unavailable.codex).toBe('reader_error');
+  });
+
+  /**
+   * THE ISOLATION ASSERTION, mirroring #987's.
+   *
+   * #990: "The spend guard reads only Claude and should keep doing so." The
+   * guard's body is a documented compat contract, and a codex read on that
+   * route would also spend the guard's `curl --max-time 8` budget walking a
+   * filesystem tree — a timeout there does not degrade to a stale number, it
+   * spends one of a bounded allowance of BLIND fires.
+   */
+  it('never puts codex on the guard route, even with a perfectly good reading', async () => {
+    const app = await appWithCodex({
+      read: async () => ({ value: CODEX_READING, unavailable: null }),
+    });
+    // Prove the reading is available on the surface that may have it...
+    const display = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+    expect(display.account.codex).toEqual(CODEX_READING);
+    // ...and absent from the one that may not.
+    const guard = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+
+    expect(guard.account).not.toHaveProperty('codex');
+    expect(guard).not.toHaveProperty('unavailable');
+    expect(JSON.stringify(guard)).not.toContain('0.64');
+    expect(AccountQuotaStateSchema.safeParse(guard).success).toBe(true);
+    // The consumer's own arithmetic still reads claude, unchanged.
+    expect(consumerPercent(guard)).toBe(7);
+  });
+
+  it('shows codex beside an aged last-known claude reading', async () => {
+    const app = await appWithCodex(
+      { read: async () => ({ value: CODEX_READING, unavailable: null }) },
+      null,
+    );
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account.claude).toBeNull();
+    expect(body.unavailable.claude).toBe('provider_error');
+    expect(body.account.codex).toEqual(CODEX_READING);
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+});
+
+describe('the display schema per-provider iff (#990)', () => {
+  const CODEX_READING = {
+    seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+    read_at: 1_786_106_974,
+  };
+  const base = { generated_at: 1_785_495_913 };
+
+  /**
+   * THE REGRESSION #990 OPENS THE DOOR TO.
+   *
+   * The one-provider refinement tested `unavailable === undefined` on the
+   * CONTAINER. With two providers that is satisfied by a codex reason while
+   * claude's `null` carries none — the unattributed UNREADABLE #825 exists to
+   * remove, re-entering sideways.
+   */
+  it('REJECTS a null claude whose only reason belongs to codex', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: null, codex: null },
+        unavailable: { codex: 'no_reading' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('REJECTS a reason for a provider that is ABSENT from the body', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING },
+        unavailable: { codex: 'no_reading' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('REJECTS a codex reading that also carries a reason for its absence', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING, codex: CODEX_READING },
+        unavailable: { codex: 'no_reading' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('REJECTS a null codex with no reason', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING, codex: null },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('REJECTS an empty `unavailable` — it says nothing while looking like it does', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING },
+        unavailable: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  it('REJECTS a codex reading with no windows at all — that is not a reading', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING, codex: { read_at: 1_786_106_974 } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('ACCEPTS a single-window codex reading — the measured plus-plan shape', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: READING, codex: CODEX_READING },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('ACCEPTS each provider in a different state at the same time', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        ...base,
+        account: { claude: null, codex: CODEX_READING },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: READING, read_at: 1_785_495_000 },
+      }).success,
+    ).toBe(true);
   });
 });

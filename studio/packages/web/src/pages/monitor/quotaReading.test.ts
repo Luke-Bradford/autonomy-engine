@@ -3,7 +3,13 @@ import {
   ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
   type AccountQuotaDisplayState,
 } from '@autonomy-studio/shared';
-import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
+import {
+  formatPct,
+  quotaUnavailableText,
+  readAccountQuota,
+  readAccountQuotas,
+  type ProviderQuotaReading,
+} from './quotaReading';
 
 function stateWith(
   claude: AccountQuotaDisplayState['account']['claude'],
@@ -109,8 +115,12 @@ describe('readAccountQuota', () => {
       // No path from an absent reading to a window figure.
       expect(reading).not.toHaveProperty('windows');
       // Every reason has operator-facing prose, and none of it is a bare token.
-      expect(QUOTA_UNAVAILABLE_TEXT[reason]).toBeTruthy();
-      expect(QUOTA_UNAVAILABLE_TEXT[reason]).not.toBe(reason);
+      expect(quotaUnavailableText('claude', reason)).toBeTruthy();
+      expect(quotaUnavailableText('claude', reason)).not.toBe(reason);
+      // #990 — and every reason is sayable for EVERY provider, not just the
+      // one that happened to be built first.
+      expect(quotaUnavailableText('codex', reason)).toBeTruthy();
+      expect(quotaUnavailableText('codex', reason)).not.toBe(reason);
     },
   );
 
@@ -190,5 +200,145 @@ describe('formatPct', () => {
    * later be widened to swallow, say, 0.4%. */
   it('does not round a meaningful percentage down to zero', () => {
     expect(formatPct(0.5)).toBe('0.5%');
+  });
+});
+
+/**
+ * #990 — the panel is driven by the providers the BODY carries.
+ *
+ * The three states, and the two that are easy to conflate: ABSENT (omitted from
+ * the list entirely), UNREADABLE (a named reason, never a number) and a reading
+ * (which, for a scraped provider, states its own age).
+ */
+describe('readAccountQuotas', () => {
+  const CLAUDE = {
+    five_hour: { utilization: 0.08, resets_at: 1_785_100_200 },
+    seven_day: { utilization: 0.07, resets_at: 1_785_636_000 },
+  };
+  const GENERATED_AT = 1_786_106_974;
+
+  /** The entry for one provider, or a failure — never an `undefined` to chain off. */
+  function entry(
+    providers: ProviderQuotaReading[],
+    provider: 'claude' | 'codex',
+  ): ProviderQuotaReading {
+    const found = providers.find((p) => p.provider === provider);
+    if (found === undefined) throw new Error(`no ${provider} entry in the panel`);
+    return found;
+  }
+
+  /** A `reading` entry, narrowed — an unreadable one is a test failure here. */
+  function windowsOf(providers: ProviderQuotaReading[], provider: 'claude' | 'codex') {
+    const { reading } = entry(providers, provider);
+    if (reading.kind !== 'reading') throw new Error(`${provider} was ${reading.kind}`);
+    return reading;
+  }
+
+  it('lists only claude when the body carries no codex key', () => {
+    const providers = readAccountQuotas(stateWith(CLAUDE));
+    expect(providers.map((p) => p.provider)).toEqual(['claude']);
+  });
+
+  it('lists codex when the body carries it, labelled for the operator', () => {
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: {
+        claude: CLAUDE,
+        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT - 600 },
+      },
+    });
+    expect(providers.map((p) => p.provider)).toEqual(['claude', 'codex']);
+    expect(entry(providers, 'codex').label).toBe('Codex');
+  });
+
+  it('renders a single-window codex reading without inventing the missing window', () => {
+    // The measured plus-plan shape. A placeholder 5-hour row would state a
+    // figure codex never reported.
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: {
+        claude: CLAUDE,
+        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT },
+      },
+    });
+    const codex = windowsOf(providers, 'codex');
+    expect(codex.windows).toHaveLength(1);
+    expect(codex.windows.map((w) => w.label)).toEqual(['7-day']);
+    const sevenDay = codex.windows.find((w) => w.label === '7-day');
+    expect(sevenDay?.usedPct).toBeCloseTo(64);
+    expect(sevenDay?.headroomPct).toBeCloseTo(36);
+  });
+
+  it('carries the AGE of a scraped reading, and none for a polled one', () => {
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: {
+        claude: CLAUDE,
+        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT - 900 },
+      },
+    });
+    // Claude is polled and at most one TTL old — it has no age to state.
+    expect(windowsOf(providers, 'claude').ageMs).toBeUndefined();
+    expect(windowsOf(providers, 'codex').ageMs).toBe(900_000);
+  });
+
+  it('floors a negative age — a wall-clock step-back must not read as the future', () => {
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: {
+        claude: CLAUDE,
+        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT + 60 },
+      },
+    });
+    expect(windowsOf(providers, 'codex').ageMs).toBe(0);
+  });
+
+  it('reports an UNREADABLE codex with its reason and NO number', () => {
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: { claude: CLAUDE, codex: null },
+      unavailable: { codex: 'no_reading' },
+    });
+    const codex = entry(providers, 'codex').reading;
+    expect(codex.kind).toBe('unreadable');
+    if (codex.kind !== 'unreadable') throw new Error('unreachable');
+    expect(codex.reason).toBe('no_reading');
+    // Claude's reading survives its neighbour's failure.
+    expect(entry(providers, 'claude').reading.kind).toBe('reading');
+  });
+
+  it('treats a codex reading with NO windows as UNREADABLE, not an empty table', () => {
+    /*
+     * The wire schema already refuses this, so it is unreachable from the
+     * shipped server — but an empty table renders as a header with nothing
+     * under it, which reads as "nothing to report" rather than "not known".
+     * That is the fail-open presentation on the one side of the contract the
+     * schema cannot reach, so it is pinned here too.
+     */
+    const providers = readAccountQuotas({
+      generated_at: GENERATED_AT,
+      account: {
+        claude: CLAUDE,
+        // Cast: the schema makes this unrepresentable, which is the point.
+        codex: { read_at: GENERATED_AT } as unknown as NonNullable<
+          AccountQuotaDisplayState['account']['codex']
+        >,
+      },
+    });
+    const codex = entry(providers, 'codex').reading;
+    expect(codex.kind).toBe('unreadable');
+    if (codex.kind !== 'unreadable') throw new Error('unreachable');
+    expect(codex.reason).toBe('unrecognized_payload');
+  });
+
+  it('gives claude and codex DIFFERENT copy for the same reason', () => {
+    // Both readers fail in different places — a Keychain token versus a session
+    // directory — so identical wording would send an operator to fix the wrong
+    // thing.
+    expect(quotaUnavailableText('codex', 'no_credential')).not.toBe(
+      quotaUnavailableText('claude', 'no_credential'),
+    );
+    expect(quotaUnavailableText('claude', 'no_credential')).toContain('macOS');
+    expect(quotaUnavailableText('codex', 'no_credential')).toContain('codex');
   });
 });
