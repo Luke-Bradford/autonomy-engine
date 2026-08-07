@@ -266,7 +266,8 @@ describe('GET /api/quota/display', () => {
     const { app } = await buildTestAppWithContext({
       claudeAccountQuotaReader: {
         read: async () => {
-          const next = outcomes[Math.min(i, outcomes.length - 1)];
+          const next = outcomes.at(Math.min(i, outcomes.length - 1));
+          if (next === undefined) throw new Error('appScripted: empty script');
           i += 1;
           return typeof next === 'string'
             ? ({ value: null, unavailable: next } as const)

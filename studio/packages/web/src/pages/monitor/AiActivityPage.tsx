@@ -30,9 +30,15 @@ import {
  * things to read. AI activity is a local SQLite read over the run-event log, so
  * it polls. Quota reaches the PROVIDER, and the standing one-sampler invariant
  * means an open tab must not poll it on a timer — so it loads on mount, refreshes
- * on an explicit click, and always states when it was read. The asymmetry is
- * visible in the UI rather than hidden: the quota panel says "as of <time>", so
- * a reading the operator has not refreshed can never pass for a live one.
+ * on an explicit click, and always states when it was last CHECKED. The asymmetry
+ * is visible in the UI rather than hidden: a reading the operator has not
+ * refreshed can never pass for a live one.
+ *
+ * #987 added the second freshness fact, and the two are deliberately different
+ * things: "last checked" is when the BROWSER asked; a last-known reading states
+ * how old the NUMBER is. When the provider is refusing they disagree by minutes,
+ * which is exactly why the panel used to be useless — it said UNREADABLE and
+ * stamped that with a reassuringly recent time.
  */
 
 /** Local reads are cheap; this is fast enough to feel live without being busy. */
@@ -105,7 +111,10 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
             <td>
               {formatWhen(w.resetsAtMs)}
               {w.resetsAtMs > now && (
-                <span className="quota-reset-relative"> (in {formatElapsed(w.resetsAtMs - now)})</span>
+                <span className="quota-reset-relative">
+                  {' '}
+                  (in {formatElapsed(w.resetsAtMs - now)})
+                </span>
               )}
             </td>
           </tr>
@@ -161,11 +170,14 @@ function QuotaPanel() {
           {reading.lastKnown !== undefined && (
             <div className="quota-last-known">
               <p className="page-hint">
-                <strong>Last known reading</strong>, taken{' '}
-                {formatElapsed(reading.lastKnown.ageMs)} ago — not a current figure.
+                <strong>Last known reading</strong>, taken {formatElapsed(reading.lastKnown.ageMs)}{' '}
+                ago — not a current figure.
                 {reading.lastKnown.ageMs > QUOTA_STALE_AFTER_MS && (
-                  <> The reader refreshes far more often than that, so it has been failing for a
-                    while and this number may have moved.</>
+                  <>
+                    {' '}
+                    The reader refreshes far more often than that, so it has been failing for a
+                    while and this number may have moved.
+                  </>
                 )}
               </p>
               <QuotaWindowTable windows={reading.lastKnown.windows} now={now} />

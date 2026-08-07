@@ -22,7 +22,11 @@ function scriptedReader(outcomes: AccountQuotaReading[]): ClaudeAccountQuotaRead
   let i = 0;
   return {
     read: async () => {
-      const outcome = outcomes[Math.min(i, outcomes.length - 1)];
+      // `.at` + an explicit throw rather than an index assertion: an empty
+      // script is a broken test, and it should say so rather than resolve
+      // `undefined` into a reading.
+      const outcome = outcomes.at(Math.min(i, outcomes.length - 1));
+      if (outcome === undefined) throw new Error('scriptedReader: empty script');
       i += 1;
       return outcome;
     },
@@ -86,10 +90,7 @@ describe('createLastKnownQuotaRecorder', () => {
     // brand new — an age wrong in the looks-fresher direction.
     const cached: AccountQuotaReading = { value: quota(0.42), unavailable: null };
     let clock = 1_000;
-    const recorder = createLastKnownQuotaRecorder(
-      { read: async () => cached },
-      () => clock,
-    );
+    const recorder = createLastKnownQuotaRecorder({ read: async () => cached }, () => clock);
 
     await recorder.reader.read();
     clock = 61_000;
