@@ -76,16 +76,37 @@ export function formatRunDuration(
  * different number on a different scope.
  */
 export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs'>): string {
-  if (node.startedAtMs === undefined || node.endedAtMs === undefined) return '—';
-  const span = node.endedAtMs - node.startedAtMs;
-  /* A NEGATIVE span is a corrupt log, not a fast node: both stamps are
-     `Date.now()` taken by one single-writer append path, so an end before its
-     start means the wall clock stepped backwards. Clamping it to `0ms` would
-     print exactly the measurement-nobody-took this function refuses two
-     paragraphs above, and would hide the corruption behind a plausible number.
-     (`formatRunDuration` clamps because its inputs are two DB columns written
-     by different paths — a different question, deliberately left alone.) */
-  return span < 0 ? '—' : formatElapsed(span);
+  return isMeasurableSpan(node) ? formatElapsed(node.endedAtMs - node.startedAtMs) : '—';
+}
+
+/**
+ * Whether a start/end pair states a duration at all — the predicate behind the
+ * em-dash above, exported because U12a (#1007) needs the same question answered
+ * as a BOOLEAN (a bar's width, and whether an instant belongs on the axis) and a
+ * second copy of the rule is how the two surfaces would come to disagree about
+ * what a corrupt log looks like.
+ *
+ * A NEGATIVE span is a corrupt log, not a fast node: both stamps are
+ * `Date.now()` taken by one single-writer append path, so an end before its
+ * start means the wall clock stepped backwards. Clamping it to `0ms` would
+ * print exactly the measurement-nobody-took `formatNodeDuration` refuses two
+ * paragraphs above, and would hide the corruption behind a plausible number.
+ * (`formatRunDuration` clamps because its inputs are two DB columns written by
+ * different paths — a different question, deliberately left alone.)
+ *
+ * A TYPE PREDICATE rather than a `boolean`, and generic so it narrows whatever
+ * it was handed rather than widening it to the bare pair. Every caller subtracts
+ * the two fields immediately after asking, and while it returned `boolean` each
+ * one needed a `!` — an assertion that was only sound because the reader had
+ * gone and read this body. Now the checker proves it, and a future edit that
+ * stopped guaranteeing non-nullness here would fail at those call sites instead
+ * of silently licensing `undefined - undefined`, i.e. `NaN`.
+ */
+export function isMeasurableSpan<
+  T extends { startedAtMs: number | undefined; endedAtMs: number | undefined },
+>(span: T): span is T & { startedAtMs: number; endedAtMs: number } {
+  if (span.startedAtMs === undefined || span.endedAtMs === undefined) return false;
+  return span.endedAtMs >= span.startedAtMs;
 }
 
 /** Epoch-ms → a compact time-of-day, for the dense event feed. */

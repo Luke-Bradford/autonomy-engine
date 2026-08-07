@@ -2646,3 +2646,128 @@ td button + button {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* U12a (#1007) — the attempt timeline. Bars are absolutely positioned inside a
+   relative track, so one row is one node and horizontal position IS time; the
+   percentages come from `placeSpans`, which owns the arithmetic (and the
+   divide-by-zero floor that keeps a degenerate window from emitting `NaN%`). */
+.attempt-timeline {
+  margin-top: 1.5rem;
+}
+
+.timeline-axis-note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+}
+
+.timeline-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 12rem) 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.timeline-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+}
+
+.timeline-track {
+  position: relative;
+  display: block;
+  height: 1.1rem;
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.timeline-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--muted);
+  /* A measured span shorter than a pixel of the axis still HAPPENED, and a bar
+     with no width reads as a missing node rather than a fast one. */
+  min-width: 2px;
+}
+
+/* An OPEN span makes a different claim from a long one — "started here, no end
+   on record" — so it is hatched rather than solid and runs to the right edge.
+   The stripes are the only encoding here that is not colour, which is
+   deliberate: it is also the only distinction whose meaning is not restated in
+   the bar's `title` and visually-hidden text. */
+.timeline-span[data-open='true'] {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel) 0,
+    var(--panel) 3px,
+    transparent 3px,
+    transparent 7px
+  );
+  opacity: 0.75;
+}
+
+/* Exactly the tones `nodeStatusTone` can emit, no gaps and nothing beyond them —
+   the same correspondence `palette.test.ts` already asserts in both directions
+   for `.run-node-*`, extended to this surface so a bar can never fall through to
+   the default grey and silently misreport a failure as a park. */
+.timeline-span[data-tone='neutral'] {
+  background-color: var(--muted);
+}
+
+.timeline-span[data-tone='running'] {
+  background-color: var(--accent);
+}
+
+.timeline-span[data-tone='holding'] {
+  background-color: var(--warning);
+}
+
+.timeline-span[data-tone='success'] {
+  background-color: var(--success);
+}
+
+.timeline-span[data-tone='failure'] {
+  background-color: var(--error);
+}
+
+/* `--muted`, NOT `--border`: the track itself is `--border`, so a skipped bar in
+   that colour would be an INVISIBLE bar — the exact "falls through and says
+   nothing" failure the exhaustive tone set above exists to prevent, reintroduced
+   by a coincidence of two rules naming one token. `.run-node-skipped` sets the
+   same precedent (grey like neutral, distinguished by a non-colour cue). */
+.timeline-span[data-tone='skipped'] {
+  background-color: var(--muted);
+}
+
+.timeline-untimed {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.timeline-untimed h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.timeline-untimed ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.timeline-untimed-name {
+  color: var(--text);
+}

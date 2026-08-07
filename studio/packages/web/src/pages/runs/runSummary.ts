@@ -248,6 +248,58 @@ export interface NodeActivity {
   startedAtMs: number | undefined;
   endedAtMs: number | undefined;
   /**
+   * #1007 / U12a — EVERY span this node recorded, oldest first, not just the
+   * latest one the two scalars above describe.
+   *
+   * The scalars are unchanged and still written by the same three helpers; this
+   * array is kept BESIDE them (the pattern `cost`/`toolCalls` already use) rather
+   * than being made their source. That is deliberate, and the reason is the one
+   * arm where the two differ: `node.retryDue` DROPS the span, because between a
+   * retry firing and the re-dispatch the row must not show the previous
+   * attempt's completed duration beside a running status. For the scalars that
+   * drop is required behaviour; for a timeline it would erase exactly the
+   * history the timeline exists to show — every policy retry would delete the
+   * attempt it retried. So a drop discards an OPEN span (nothing was measured)
+   * and RETIRES a closed one into this array (something was).
+   *
+   * The two therefore part company exactly when `dropSpan` retires a CLOSED
+   * span, which has TWO producers, not one: `node.retryDue`/`node.retryRequested`
+   * as described, and `closeSpan`'s instance-mismatch arm, which calls the same
+   * helper — so a parallel-`foreach` row holding one completed attempt can also
+   * end with scalars saying "no span" beside a last entry that has a real end.
+   * Otherwise they agree, and no reader should re-derive either from this array.
+   *
+   * An entry is one START event to its matching TERMINAL — the same pairing the
+   * `startedAtMs` docblock above defines, with the same consequences: a node
+   * whose only event is its terminal (`fail`, `filter`, `call_pipeline`, `if`,
+   * `switch`) contributes NO entry rather than a zero-length one, and a parallel
+   * `foreach` body node contributes none either, because a start and a terminal
+   * from different items are not a measurement of anything.
+   *
+   * These are SPANS, not attempts, and the difference is visible on a sequential
+   * `foreach`: each round re-dispatches the node, so a node that never failed can
+   * still hold several entries. `attempts` above counts starts and folds rounds
+   * the same way; neither number is an attempt ORDINAL a reader should print.
+   *
+   * "Retired" means no LATER attempt rewrites an entry — it does not promise
+   * immunity to a REDELIVERED terminal for the same one. `closeSpan` leaves the
+   * node tracked, so a second terminal event for the same attempt would rewrite
+   * that entry's end in place. This array inherits the fold's stated
+   * no-staleness-guard posture (see the note above `ensure`) rather than
+   * carrying its own: on such a log the arm has ALREADY rewritten the row's
+   * status and outputs, and guarding only the span would leave the row reading
+   * one attempt's verdict beside another attempt's bar — a second, drifting
+   * authority on a redelivery the append gate is the single owner of. The
+   * residual is the same one that note names, and no larger.
+   *
+   * READ-ONLY to every caller. Unlike `cost` and `toolCalls`, a pass-through row
+   * out of `reconcileNodeActivity` shares this array with the folded row rather
+   * than copying it — deliberately, since copying it per row per render would
+   * allocate on a live tail's hot path to guard a hazard with no writer. Nothing
+   * downstream mutates it; anything that wants to must copy first.
+   */
+  spans: AttemptSpan[];
+  /**
    * #866 — what this node SPENT: the `activity.metered` responses billed under
    * it, folded through the shared fail-closed accumulator so the per-node and
    * per-run readings cannot drift (`pricing/run-cost.ts` owns the rule).
@@ -286,6 +338,37 @@ export interface NodeActivity {
    * is the fold that makes it so.
    */
   toolCalls: NodeToolCall[];
+}
+
+/**
+ * One start-event→terminal-event span of a node's life, as the LOG recorded it.
+ *
+ * `startedAs`/`endedAs` are the node status the fold had already assigned when
+ * the span opened and closed — read off the row rather than passed in, so they
+ * cannot become a second opinion about what an event means. They are the log's
+ * word for THAT span, which is not always the engine's current word for the
+ * NODE: `reconcileNodeActivity` overwrites `NodeActivity.status` with the
+ * engine's and deliberately does not touch these, because the engine has no
+ * per-span opinion to overwrite them with. A reader showing both must say which
+ * is which.
+ *
+ * `endedAs`/`endedAtMs` are `undefined` together, and mean the span is still
+ * open — the terminal has not been appended. That is the absence of a
+ * measurement, never a zero: this view has no clock (a live elapsed counter is
+ * #890's, deliberately deferred with #867), so an open span states its start and
+ * claims no length at all.
+ */
+export interface AttemptSpan {
+  startedAtMs: number;
+  endedAtMs: number | undefined;
+  startedAs: NodeRunStatus;
+  endedAs: NodeRunStatus | undefined;
+  /**
+   * Which parallel-foreach ITEM opened the span (`w@1`), or `undefined` for the
+   * canvas node itself. Carried per span rather than in a map beside the fold so
+   * the record and the instance it belongs to cannot be separated.
+   */
+  instanceId: string | undefined;
 }
 
 /**
@@ -409,6 +492,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         instanceId: undefined,
         startedAtMs: undefined,
         endedAtMs: undefined,
+        spans: [],
       };
       byNode.set(nodeId, n);
     }
@@ -465,36 +549,90 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   };
 
   /**
-   * #867 — which foreach INSTANCE the currently-open span belongs to, kept here
-   * rather than on the row because it is bookkeeping for the fold, not a fact
-   * about the node that any reader should render.
+   * #867 — whether the node's LAST `spans` entry is the one the two scalars
+   * currently describe, i.e. "a span is being tracked".
+   *
+   * #1007 replaced the `Map<nodeId, instanceId>` this used to be. The instance
+   * now rides on the span record itself, so the map had nothing left to hold but
+   * its own presence, and presence is what a Set says. Membership is exactly the
+   * old `spanInstance.has(nodeId)` and moves at exactly the same three moments;
+   * the old `.get()` is `trackedSpan(n)?.instanceId`. Bookkeeping for the fold,
+   * not a fact about the node.
    */
-  const spanInstance = new Map<string, string | undefined>();
+  const tracked = new Set<string>();
+
+  /**
+   * The span the scalars describe, or `undefined` when none is tracked.
+   *
+   * TWO invariants make this exact, and both are worth stating because
+   * `closeSpan`'s instance comparison would otherwise be ambiguous — a node with
+   * no tracked span and a tracked span whose `instanceId` is `undefined` (the
+   * canvas node's own, which is the COMMON case) would both answer `undefined`.
+   *
+   *  1. `n.startedAtMs !== undefined` iff `tracked.has(n.nodeId)`. `openSpan`
+   *     sets both, `dropSpan` clears both, `closeSpan` changes neither — and
+   *     `closeSpan` returns early on `startedAtMs === undefined`, so by the time
+   *     it compares an instance the node IS tracked and this cannot be
+   *     `undefined`. That is what keeps the comparison a question about
+   *     INSTANCES rather than about existence.
+   *  2. The tracked span is the LAST element of `n.spans`. Only `openSpan`
+   *     pushes (and adds to the Set in the same breath) and only `dropSpan`
+   *     pops (from the tail, clearing the Set); `closeSpan` mutates fields in
+   *     place. `n.spans` is per-node, so no other node's fold can disturb it.
+   */
+  const trackedSpan = (n: FoldingNode): AttemptSpan | undefined =>
+    tracked.has(n.nodeId) ? n.spans[n.spans.length - 1] : undefined;
 
   /**
    * Open the latest attempt's span, discarding the previous attempt's end. The
    * reset is the point: a re-dispatched node that kept its old `endedAtMs`
    * would render the PREVIOUS attempt's duration beside a row that is running
    * again.
+   *
+   * #1007 — and the ORPHAN rule keeps `spans` honest across the same event. A
+   * tracked span that is still OPEN when a second one opens was never closed and
+   * never will be: that is the parallel `foreach` collapse (`dispatched w@1`
+   * then `dispatched w@2` onto one row), where the scalars simply overwrite the
+   * first start. Popping it says the same thing the overwrite says — nothing was
+   * measured. A tracked span that is CLOSED is a completed measurement and stays.
    */
   const openSpan = (n: FoldingNode, rawNodeId: string, at: number): void => {
+    const orphan = trackedSpan(n);
+    if (orphan !== undefined && orphan.endedAtMs === undefined) n.spans.pop();
     n.startedAtMs = at;
     n.endedAtMs = undefined;
-    spanInstance.set(n.nodeId, instanceOf(rawNodeId));
+    n.spans.push({
+      startedAtMs: at,
+      endedAtMs: undefined,
+      startedAs: n.status,
+      endedAs: undefined,
+      instanceId: instanceOf(rawNodeId),
+    });
+    tracked.add(n.nodeId);
   };
 
   /**
    * Forget the span entirely — no start, no end, and no claim about either.
    *
-   * The map delete keeps the invariant "an entry exists iff a span is open"
+   * The Set delete keeps the invariant "a member exists iff a span is tracked"
    * true. Nothing reads a stale entry today (`openSpan` is the only writer of
    * `startedAtMs` and always rewrites it), so it is belt-and-braces rather than
    * load-bearing — stated so a later reader does not mistake it for a fix.
+   *
+   * #1007 — `spans` parts company with the scalars HERE, and only here. The
+   * scalars must forget an already-CLOSED span too (`node.retryDue` drops one, so
+   * that the row shows no duration beside a node that is running again), but the
+   * timeline must not: a closed span is a measurement that really happened, and
+   * discarding it would delete attempt n every time attempt n+1 was scheduled —
+   * erasing precisely the retry history U12a exists to draw. So an OPEN span is
+   * popped (nothing was measured) and a CLOSED one is retired into the array.
    */
   const dropSpan = (n: FoldingNode): void => {
+    const span = trackedSpan(n);
+    if (span !== undefined && span.endedAtMs === undefined) n.spans.pop();
     n.startedAtMs = undefined;
     n.endedAtMs = undefined;
-    spanInstance.delete(n.nodeId);
+    tracked.delete(n.nodeId);
   };
 
   /**
@@ -515,11 +653,16 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    */
   const closeSpan = (n: FoldingNode, rawNodeId: string, at: number): void => {
     if (n.startedAtMs === undefined) return;
-    if (spanInstance.get(n.nodeId) !== instanceOf(rawNodeId)) {
+    if (trackedSpan(n)?.instanceId !== instanceOf(rawNodeId)) {
       dropSpan(n);
       return;
     }
     n.endedAtMs = at;
+    const span = trackedSpan(n);
+    if (span !== undefined) {
+      span.endedAtMs = at;
+      span.endedAs = n.status;
+    }
   };
 
   for (const row of events) {
@@ -953,8 +1096,27 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
        an attempt is still running. */
     const open = row.startedAtMs !== undefined && row.endedAtMs === undefined;
     const settled = TERMINAL_NODE.has(engine.status);
+    /* #1007 — and the same judgement has to reach `spans`, or the timeline would
+       keep drawing the bar the scalars just retracted. Only a TRAILING OPEN entry
+       is dropped: it is the same span the scalars describe, and the same
+       reasoning applies to it (no close will ever arrive, so it measured
+       nothing). Closed entries are completed measurements the engine's verdict on
+       the node's CURRENT state says nothing about, and a node settled `skipped`
+       after an attempt genuinely succeeded still ran that attempt.
+
+       The `last` test below is redundant while the fold's invariants hold (an
+       `open` row is tracked, and a tracked span is the array's last entry and is
+       itself open), and is kept for its POLARITY: if that invariant were ever
+       broken, this no-ops and retains a span, where trusting `open` alone would
+       delete a completed measurement. Retaining too much is recoverable; a
+       measurement dropped here is gone from the timeline with nothing to say so. */
+    const last = row.spans[row.spans.length - 1];
+    const spans =
+      open && settled && last !== undefined && last.endedAtMs === undefined
+        ? row.spans.slice(0, -1)
+        : row.spans;
     return open && settled
-      ? { ...row, status: engine.status, startedAtMs: undefined }
+      ? { ...row, status: engine.status, startedAtMs: undefined, spans }
       : { ...row, status: engine.status };
   });
 
@@ -1007,6 +1169,7 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          never manufactured (#867). */
       startedAtMs: undefined,
       endedAtMs: undefined,
+      spans: [],
       /* #866 — likewise. A row reached here because NO event named this node, so
          nothing billed under it and no tool ran: an empty cost and an empty list
          are the MEASURED answer here, not a placeholder standing in for one. */

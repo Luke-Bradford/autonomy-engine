@@ -7,6 +7,7 @@ import {
   deriveRunLifecycle,
   reconcileNodeActivity,
   runStreamUrl,
+  type AttemptSpan,
   type NodeActivity,
 } from './runSummary';
 
@@ -118,6 +119,15 @@ describe('deriveNodeActivity', () => {
         instanceId: undefined,
         startedAtMs: 1_000,
         endedAtMs: 1_400,
+        spans: [
+          {
+            startedAtMs: 1_000,
+            endedAtMs: 1_400,
+            startedAs: 'dispatched',
+            endedAs: 'success',
+            instanceId: undefined,
+          },
+        ],
       },
       {
         ...NO_LLM_ACTIVITY,
@@ -135,6 +145,15 @@ describe('deriveNodeActivity', () => {
         instanceId: undefined,
         startedAtMs: 2_000,
         endedAtMs: 2_300,
+        spans: [
+          {
+            startedAtMs: 2_000,
+            endedAtMs: 2_300,
+            startedAs: 'dispatched',
+            endedAs: 'failure',
+            instanceId: undefined,
+          },
+        ],
       },
     ]);
   });
@@ -205,6 +224,11 @@ describe('deriveNodeActivity', () => {
         // output values were recorded" rather than hiding the section as it does
         // for a node that has not reported yet.
         outputValues: {},
+        /* #1007 — and NO span: `call.returned` is a terminal with no start to
+           pair it with until #796 appends `call.started`. The other absent
+           fields above are `undefined`, which `toEqual` treats as missing; an
+           empty array is a value, so it has to be stated. */
+        spans: [],
       },
     ]);
   });
@@ -485,6 +509,24 @@ describe('deriveNodeActivity — the non-dispatch node lifecycles (#483)', () =>
         // stamps come from a file-wide sequence.
         startedAtMs: events[4]!.ts,
         endedAtMs: events[5]!.ts,
+        /* #1007 — and BOTH attempts survive here, which the scalars above cannot
+           say: the first span is the one `node.retryDue` drops from them. */
+        spans: [
+          {
+            startedAtMs: events[0]!.ts,
+            endedAtMs: events[1]!.ts,
+            startedAs: 'dispatched',
+            endedAs: 'failure',
+            instanceId: undefined,
+          },
+          {
+            startedAtMs: events[4]!.ts,
+            endedAtMs: events[5]!.ts,
+            startedAs: 'dispatched',
+            endedAs: 'success',
+            instanceId: undefined,
+          },
+        ],
       },
     ]);
   });
@@ -1254,6 +1296,10 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
         // observed.
         startedAtMs: undefined,
         endedAtMs: undefined,
+        /* #1007 — and no span either, for the same reason and with the same
+           consequence: a copied node did not run in THIS run, so the timeline
+           lists it as untimed rather than drawing it a bar. */
+        spans: [],
       },
       {
         ...NO_LLM_ACTIVITY,
@@ -1270,6 +1316,7 @@ describe("deriveNodeActivity — a rerun's COPIED frontier (#918)", () => {
         instanceId: undefined,
         startedAtMs: undefined,
         endedAtMs: undefined,
+        spans: [],
       },
     ]);
   });
@@ -1447,6 +1494,7 @@ describe('reconcileNodeActivity', () => {
       instanceId: undefined,
       startedAtMs: undefined,
       endedAtMs: undefined,
+      spans: [],
       ...over,
     };
   }
@@ -1629,6 +1677,44 @@ describe('reconcileNodeActivity', () => {
     );
     expect(only!.startedAtMs).toBe(1_000);
     expect(only!.endedAtMs).toBe(4_000);
+  });
+
+  it('#1007 — retracts the trailing OPEN span too, but keeps the closed history beside it', () => {
+    /* The same judgement as the first test in this group, reaching `spans`. The
+       three tests above pass rows whose `spans` is empty, so NONE of them can
+       tell whether the array is touched at all — this one carries a real history:
+       one attempt that completed, then one still in flight when the engine
+       settled the node. Only the in-flight entry may go. Keeping it would draw a
+       bar the scalars have already retracted; dropping the closed one would
+       delete an attempt that demonstrably ran. */
+    const state = stateOf(aSucceededLog());
+    const abandoned = {
+      ...state,
+      nodes: { ...state.nodes, a: { status: 'skipped' as const, attempts: 2, retries: 0 } },
+    };
+    const history: AttemptSpan[] = [
+      {
+        startedAtMs: 1_000,
+        endedAtMs: 1_400,
+        startedAs: 'dispatched',
+        endedAs: 'failure',
+        instanceId: undefined,
+      },
+      {
+        startedAtMs: 2_000,
+        endedAtMs: undefined,
+        startedAs: 'dispatched',
+        endedAs: undefined,
+        instanceId: undefined,
+      },
+    ];
+    const [only] = reconcileNodeActivity(
+      [row({ nodeId: 'a', startedAtMs: 2_000, spans: history })],
+      abandoned,
+    );
+    expect(only!.status).toBe('skipped');
+    expect(only!.startedAtMs).toBeUndefined();
+    expect(only!.spans).toEqual([history[0]]);
   });
 });
 
@@ -1901,6 +1987,271 @@ describe('deriveNodeActivity — duration span (#867)', () => {
     const row = rowFor(events, 'w');
     expect(row.startedAtMs).toBe(1_000);
     expect(row.endedAtMs).toBe(1_400);
+  });
+});
+
+describe('deriveNodeActivity — the span HISTORY behind U12a (#1007)', () => {
+  const rowFor = (events: RunEvent[], nodeId: string): NodeActivity => {
+    const row = deriveNodeActivity(events).find((r) => r.nodeId === nodeId);
+    if (row === undefined) throw new Error(`no row for ${nodeId}`);
+    return row;
+  };
+
+  const dispatched = (nodeId: string, attempt: number, ts: number): RunEvent =>
+    envelope(
+      {
+        type: 'node.dispatched',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId}#${attempt}`,
+        idempotent: true,
+      },
+      ts,
+    );
+
+  const succeeded = (nodeId: string, attempt: number, ts: number): RunEvent =>
+    envelope(
+      {
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId}#${attempt}`,
+        outputs: {},
+      },
+      ts,
+    );
+
+  const failed = (nodeId: string, attempt: number, ts: number): RunEvent =>
+    envelope(
+      {
+        type: 'node.failed',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId}#${attempt}`,
+        error: 'boom',
+        kind: 'transient',
+      },
+      ts,
+    );
+
+  it('KEEPS the failed attempt when a policy retry drops the span — the history the scalars cannot hold', () => {
+    /* The defect this pins, and the whole reason `spans` is kept BESIDE the two
+       scalars instead of being their source. `node.retryDue` calls `dropSpan`,
+       which the scalars NEED (between the retry firing and the re-dispatch the
+       row must not show attempt 1's completed duration beside a running status).
+       Derive the array from the scalars and that drop deletes attempt 1
+       outright, so every policy retry — the single most important thing an
+       attempt timeline has to draw — erases the attempt it retried. */
+    const events = [
+      dispatched('a', 0, 1_000),
+      failed('a', 0, 1_200),
+      envelope(
+        {
+          type: 'node.retryScheduled',
+          runId: 'r',
+          nodeId: 'a',
+          attemptId: 'a#0',
+          nextAttemptAt: 61_000,
+        },
+        1_200,
+      ),
+      envelope(
+        { type: 'node.retryDue', runId: 'r', nodeId: 'a', previousAttemptId: 'a#0' },
+        61_000,
+      ),
+      dispatched('a', 1, 61_010),
+      succeeded('a', 1, 61_310),
+    ];
+
+    const row = rowFor(events, 'a');
+    expect(row.spans).toEqual([
+      {
+        startedAtMs: 1_000,
+        endedAtMs: 1_200,
+        startedAs: 'dispatched',
+        endedAs: 'failure',
+        instanceId: undefined,
+      },
+      {
+        startedAtMs: 61_010,
+        endedAtMs: 61_310,
+        startedAs: 'dispatched',
+        endedAs: 'success',
+        instanceId: undefined,
+      },
+    ]);
+    // And the scalars still describe only the LATEST, unchanged by #1007.
+    expect(row.startedAtMs).toBe(61_010);
+    expect(row.endedAtMs).toBe(61_310);
+    // The hold falls BETWEEN the two spans rather than inside either — which is
+    // what makes it visible as a gap instead of being billed as runtime.
+    expect(row.spans[1]!.startedAtMs - row.spans[0]!.endedAtMs!).toBe(59_810);
+  });
+
+  it('DISCARDS an open span that is dropped, because nothing was measured', () => {
+    /* The boot reconciler's crash-recovery decision: the process died mid-flight,
+       so `node.dispatched` has no terminal and `node.retryRequested` re-opens the
+       node. That span has a start and will never have an end — retiring it into
+       the history would draw a bar for an attempt whose length nobody knows. */
+    const events = [
+      dispatched('a', 0, 1_000),
+      envelope(
+        {
+          type: 'node.retryRequested',
+          runId: 'r',
+          nodeId: 'a',
+          previousAttemptId: 'a#0',
+          reason: 'interrupted',
+        },
+        5_000,
+      ),
+      dispatched('a', 1, 5_010),
+      succeeded('a', 1, 5_300),
+    ];
+
+    const row = rowFor(events, 'a');
+    expect(row.spans).toEqual([
+      {
+        startedAtMs: 5_010,
+        endedAtMs: 5_300,
+        startedAs: 'dispatched',
+        endedAs: 'success',
+        instanceId: undefined,
+      },
+    ]);
+  });
+
+  it('records a PARK as its own span, saying which park it was', () => {
+    // A `wait` node is never dispatched: `timer.waitScheduled` starts it and
+    // `timer.due` is its success event. The span IS the park, and `startedAs`
+    // is what lets a reader colour it as a hold rather than as execution.
+    const events = [
+      envelope(
+        {
+          type: 'timer.waitScheduled',
+          runId: 'r',
+          nodeId: 'w',
+          attemptId: 'w#0',
+          dueAt: 31_000,
+        },
+        1_000,
+      ),
+      envelope({ type: 'timer.due', runId: 'r', nodeId: 'w', previousAttemptId: 'w#0' }, 31_050),
+    ];
+
+    expect(rowFor(events, 'w').spans).toEqual([
+      {
+        startedAtMs: 1_000,
+        endedAtMs: 31_050,
+        startedAs: 'wait_pending',
+        endedAs: 'success',
+        instanceId: undefined,
+      },
+    ]);
+  });
+
+  it('leaves an in-flight span OPEN, claiming no length', () => {
+    const row = rowFor([dispatched('a', 0, 9_000)], 'a');
+    expect(row.spans).toEqual([
+      {
+        startedAtMs: 9_000,
+        endedAtMs: undefined,
+        startedAs: 'dispatched',
+        endedAs: undefined,
+        instanceId: undefined,
+      },
+    ]);
+  });
+
+  it('accumulates a span per ROUND of a sequential foreach, which are not attempts', () => {
+    /* `reduce.ts` re-dispatches the bare node id each round, so these are three
+       measured runs of one node with no failure anywhere. The array records what
+       happened; it is the READER's job not to label entry n "attempt n". */
+    const events = [
+      dispatched('w', 0, 1_000),
+      succeeded('w', 0, 1_100),
+      dispatched('w', 1, 1_200),
+      succeeded('w', 1, 1_300),
+      dispatched('w', 2, 1_400),
+      succeeded('w', 2, 1_500),
+    ];
+    expect(rowFor(events, 'w').spans.map((s) => [s.startedAtMs, s.endedAtMs])).toEqual([
+      [1_000, 1_100],
+      [1_200, 1_300],
+      [1_400, 1_500],
+    ]);
+  });
+
+  it('records NOTHING for a PARALLEL foreach, rather than a span across two items', () => {
+    /* Two items run concurrently and fold onto one `w` row, so the array would
+       have to hold two overlapping spans to be honest — and the fold tracks one.
+       Subtracting `dispatched w@1` from `succeeded w@2` measures neither item, so
+       the pair is dropped. This matches what the scalars already do (#867); it is
+       pinned here because an array LOOKS like it could represent the overlap. */
+    const events = [
+      dispatched('w@1', 0, 1_000),
+      dispatched('w@2', 0, 1_050),
+      succeeded('w@1', 0, 1_400),
+      succeeded('w@2', 0, 1_600),
+    ];
+    const row = rowFor(events, 'w');
+    expect(row.spans).toEqual([]);
+    expect(row.startedAtMs).toBeUndefined();
+  });
+
+  it('retires a CLOSED span when a mismatched terminal drops the open one — the second divergence', () => {
+    /* The docblock's exception has TWO producers, and this is the one no test
+       reached: `closeSpan`'s instance-mismatch arm calls the same `dropSpan` as
+       `node.retryDue`. A foreach row that already holds one COMPLETED attempt,
+       opens a second, and then receives a terminal from a THIRD item ends with
+       the scalars retracted while the array still holds the completed one.
+
+       Both halves matter. Popping the closed span too would delete an attempt
+       that demonstrably ran; keeping the open one would draw a bar for an
+       attempt whose end will never arrive and which measured nothing. */
+    const events = [
+      dispatched('w@1', 0, 1_000),
+      succeeded('w@1', 0, 1_400),
+      dispatched('w@2', 0, 2_000),
+      succeeded('w@3', 0, 2_400),
+    ];
+
+    const row = rowFor(events, 'w');
+    expect(row.spans).toEqual([
+      {
+        startedAtMs: 1_000,
+        endedAtMs: 1_400,
+        startedAs: 'dispatched',
+        endedAs: 'success',
+        instanceId: 'w@1',
+      },
+    ]);
+    // …and the scalars say no span at all, which is the divergence itself.
+    expect(row.startedAtMs).toBeUndefined();
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
+  it('records NO span for a node whose only event is its terminal', () => {
+    // A `fail`/`filter` node, and a `call_pipeline` node until #796 appends
+    // `call.started`. There is no start to pair, so there is no measurement —
+    // and `0ms` would be a number nothing measured.
+    const events = [
+      failed('boom', 0, 2_000),
+      envelope(
+        {
+          type: 'call.returned',
+          runId: 'r',
+          callNodeId: 'c',
+          attemptId: 'c#0',
+          childRunId: 'child',
+          childOutcome: 'success',
+          outputs: {},
+        },
+        3_000,
+      ),
+    ];
+    expect(rowFor(events, 'boom').spans).toEqual([]);
+    expect(rowFor(events, 'c').spans).toEqual([]);
   });
 });
 
