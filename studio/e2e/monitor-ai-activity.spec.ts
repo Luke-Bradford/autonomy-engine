@@ -192,6 +192,70 @@ test.describe('#917 Monitor › AI activity', () => {
   });
 
   /**
+   * #989 — the poller stops when you navigate AWAY.
+   *
+   * The tab on this page crashed once and auto-reloaded, which is an OOM or a
+   * runaway allocation rather than an exception, and an orphan poller surviving
+   * unmount is the shape that produces it: cost grows with how many times the
+   * page has been VISITED instead of staying flat with elapsed time, so a long
+   * session degrades and a short one looks fine.
+   *
+   * The hook's own teardown is pinned in `usePolledResource.test.ts`, and this
+   * is deliberately NOT a duplicate of it. That suite unmounts with
+   * `renderHook().unmount()`, which always runs React's cleanup; the question
+   * only production can answer is whether the route swap unmounts the page AT
+   * ALL. Hence a CLICK through the hub pane rather than a `page.goto` — a full
+   * navigation would tear down the whole JS context and this would hold
+   * vacuously.
+   *
+   * WHAT THIS PINS, EXACTLY, because the mutation testing was surprising: it
+   * reds when the effect's cleanup does not run (an orphan poller then issues
+   * REAL requests after the swap). It does NOT red when only `stop()` is
+   * removed from that cleanup — the orphan interval still fires, but
+   * `controller.abort()` has already run, so each tick's `fetch` rejects on an
+   * aborted signal without touching the network and nothing is counted here.
+   * That single-line case is caught by the hook suite, which counts fetcher
+   * INVOCATIONS rather than network traffic. Neither level subsumes the other,
+   * and this comment is here so the next reader does not assume this one covers
+   * the case it cannot see.
+   */
+  test('stops polling activity once you navigate away from the page', async ({ page }) => {
+    const problems = collectPageProblems(page);
+    await stubQuota(page, {
+      generated_at: Math.floor(Date.now() / 1000),
+      account: { claude: null },
+      unavailable: { claude: 'no_credential' },
+    });
+
+    let activityCalls = 0;
+    await page.route('**/api/monitor/ai-activity*', (route) => {
+      activityCalls += 1;
+      return route.continue();
+    });
+
+    await page.goto('/#/monitor/ai');
+    await fluentRootReady(page);
+    await expect(page.getByRole('heading', { name: 'AI activity', exact: true })).toBeVisible();
+
+    // Long enough for several 5s polls. Asserting the count ROSE is what keeps
+    // the freeze below non-vacuous: a page that never polled at all would also
+    // "stop polling", and would pass an assertion that only checked for silence.
+    await page.waitForTimeout(12_000);
+    const whileOpen = activityCalls;
+    expect(whileOpen).toBeGreaterThan(1);
+
+    await page.getByRole('link', { name: 'Runs', exact: true }).click();
+    await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
+
+    // The count is frozen from the moment the route swapped — not merely slower.
+    const atNavigation = activityCalls;
+    await page.waitForTimeout(12_000);
+    expect(activityCalls).toBe(atNavigation);
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
    * #987 — the panel said "Quota UNREADABLE" while the build loop's spend guard
    * had read 58% minutes earlier. The reader deliberately keeps no last-good
    * value, which is right for a gate and useless for a person; the split is in
