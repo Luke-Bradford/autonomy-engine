@@ -39,7 +39,10 @@ test.describe('#917 Monitor › AI activity', () => {
     await page.goto('/');
     await fluentRootReady(page);
 
-    await page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Monitor' }).click();
+    await page
+      .getByRole('navigation', { name: 'Primary' })
+      .getByRole('link', { name: 'Monitor' })
+      .click();
     // The section link lives in the secondary pane — the only thing that makes a
     // hub's second section reachable by clicking rather than by typing a URL.
     await page.getByRole('link', { name: 'AI activity', exact: true }).click();

@@ -2,12 +2,12 @@ import { useCallback, useState } from 'react';
 import {
   RUN_SINCE_WINDOWS,
   formatTokenCount,
-  formatUsd,
   type AiActivitySnapshot,
   type RunSince,
 } from '@autonomy-studio/shared';
 import { fetchAccountQuota, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
+import { costFigure, costHeadline } from '../runs/costReading';
 import { formatElapsed, formatWhen } from '../runs/format';
 import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
 
@@ -153,12 +153,15 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         </div>
         <div>
           <dt>Spend</dt>
-          <dd>
-            {formatUsd(totals.totalCostEstimate)}
-            {/* An incomplete window is a LOWER BOUND and says so, rather than
-                presenting a partial sum as the whole truth. */}
-            {!totals.complete && <span className="cost-qualifier"> at least</span>}
-          </dd>
+          {/* `costFigure`, not a hand-rolled amount, because the five-way reading
+              it encodes is the money model's own vocabulary and getting it
+              slightly different here would be a SECOND answer to the same
+              question. Concretely: when exchanges happened but NONE could be
+              priced, the sum is 0 and the honest headline is "Cost unknown" —
+              writing `$0.00` with an "at least" beside it presents a total that
+              was never measured, which `costKindOf` documents as worse than
+              saying nothing at all. */}
+          <dd>{costFigure(costHeadline(totals))}</dd>
         </div>
       </dl>
 
@@ -190,10 +193,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                 <td>
                   {formatTokenCount(m.cost.inputTokens)} / {formatTokenCount(m.cost.outputTokens)}
                 </td>
-                <td>
-                  {formatUsd(m.cost.totalCostEstimate)}
-                  {!m.cost.complete && <span className="cost-qualifier"> at least</span>}
-                </td>
+                <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
                 <td>{formatWhen(m.lastAt)}</td>
               </tr>
             ))}

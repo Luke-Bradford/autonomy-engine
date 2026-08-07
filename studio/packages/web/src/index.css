@@ -2609,13 +2609,10 @@ td button + button {
   border-bottom: 1px solid var(--border);
 }
 
-/* The reset instant's relative half, and the "at least" that marks an
-   incomplete cost: both MODIFY the figure beside them rather than being the
-   figure, so they are demoted the same way `.run-cost-unsettled` is — and stay
-   visible text, because a spend read as a final total is the misreading the
-   whole money model exists to prevent. */
-.quota-reset-relative,
-.cost-qualifier {
+/* The reset instant's relative half MODIFIES the instant beside it rather than
+   being the instant, so it is demoted the same way `.run-cost-unsettled` is —
+   and stays visible text rather than a `title`. */
+.quota-reset-relative {
   color: var(--muted);
   font-size: 0.8rem;
 }
