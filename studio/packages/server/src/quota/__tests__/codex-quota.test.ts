@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, utimes, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, utimes, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -138,6 +138,28 @@ describe('buildCodexQuota', () => {
       seven_day: { utilization: 0.64, resets_at: 200 },
       read_at: 5,
     });
+  });
+
+  it('lets a DECLARED window win the slot over a positional guess listed first', () => {
+    // The single-pass "first writer wins" rule got this wrong in the permissive
+    // direction: `primary` has no `window_minutes`, so it guesses `five_hour`
+    // and claims the slot; `secondary` then explicitly SAYS it is the 5-hour
+    // window, finds the slot taken and is dropped. The operator sees "5-hour:
+    // 5%" while the real 5-hour figure is 95%.
+    const quota = buildCodexQuota(
+      {
+        primary: { used_percent: 5, resets_at: 100 },
+        secondary: { used_percent: 95, window_minutes: 300, resets_at: 200 },
+      },
+      7,
+    );
+    expect(quota?.five_hour).toEqual({ utilization: 0.95, resets_at: 200 });
+    // The displaced guess is DROPPED, not re-homed into the free slot. Its only
+    // claim to `five_hour` was its position, and that claim has just been shown
+    // wrong — moving it to `seven_day` would be a second guess stacked on a
+    // discredited first one, and this surface does not state windows it cannot
+    // identify.
+    expect(quota?.seven_day).toBeUndefined();
   });
 
   it('is UNREADABLE, never zero, when no window survives mapping', () => {
@@ -351,6 +373,62 @@ describe('createCodexAccountQuotaReader', () => {
     );
     clock = NOW_MS - 5_000;
     expect((await reader.read()).value?.seven_day?.utilization).toBe(0.7);
+  });
+
+  it('gives up rather than hanging when the filesystem is too slow', async () => {
+    // A network-mounted home or an autofs mount that has gone away would
+    // otherwise stall a request handler indefinitely, and the in-flight dedupe
+    // would hang every concurrent caller with it. A clock that runs past the
+    // budget stands in for the slow mount.
+    const sessionsRoot = await makeSessionsRoot();
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'fine',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
+
+    let clock = NOW_MS;
+    const outcome = await createCodexAccountQuotaReader({
+      sessionsRoot,
+      // Every consultation of the clock advances it a second — so the deadline
+      // is passed during the walk, on a tree that is otherwise perfectly good.
+      now: () => {
+        const at = clock;
+        clock += 1_000;
+        return at;
+      },
+      deadlineMs: 2_000,
+    }).read();
+
+    // An absence of evidence, NOT a partial reading assembled from however far
+    // the walk got — a partial walk's "newest file" is only the newest so far.
+    expect(outcome.value).toBeNull();
+    expect(outcome.unavailable).toBe('reader_error');
+  });
+
+  it('does not follow a symlink out of the sessions tree', async () => {
+    // `readdir(..., {withFileTypes:true})` reports a link as a link, not a
+    // directory, so a cycle cannot loop the walk. Pinned because the walk has
+    // no depth bound and relies on exactly this.
+    const sessionsRoot = await makeSessionsRoot();
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'real',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
+    await symlink(sessionsRoot, join(sessionsRoot, '2026/08/07', 'loop'), 'dir');
+
+    const outcome = await createCodexAccountQuotaReader({
+      sessionsRoot,
+      now: () => NOW_MS,
+    }).read();
+
+    // Terminates, and still finds the real reading.
+    expect(outcome.value?.seven_day?.utilization).toBe(0.64);
   });
 
   it('never lets a filesystem failure become a reading', async () => {

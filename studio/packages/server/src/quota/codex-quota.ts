@@ -50,6 +50,15 @@ import { isoToEpochSeconds } from './claude-quota.js';
  *   `CodexAccountQuotaSchema`.
  * - The newest file by mtime frequently has **no snapshot at all**, so the walk
  *   must fall through to the next file rather than conclude UNREADABLE.
+ * - `plan_type` and `credits` are present in the payload and are deliberately
+ *   DROPPED. #990 asks for per-window utilization, the reset instant and
+ *   headroom; a plan name and a credit balance are a different question
+ *   (what the account IS, not how much of the window is left) with no consumer
+ *   on this surface. Noted rather than left silent because every other
+ *   divergence from the prototype here is justified, and an unexplained
+ *   omission reads as an oversight. One consequence is worth stating: codex has
+ *   no `overage` analogue, so an account drawing on credits shows 0% headroom
+ *   with no badge to explain it.
  *
  * ## Security model
  *
@@ -100,6 +109,28 @@ const DEFAULT_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
  * which is honest, rather than a partial answer.
  */
 const DEFAULT_MAX_FILES_SCANNED = 25;
+
+/**
+ * The longest a single sample may spend on the filesystem before it gives up.
+ *
+ * `claude-quota.ts` bounds BOTH its I/O calls (`KEYCHAIN_TIMEOUT_MS`,
+ * `HTTP_TIMEOUT_MS`) because a hung one would stall a Fastify request handler
+ * indefinitely. This reader runs on a request path too, and a walk has exactly
+ * the same failure mode with none of the same excuses: a network-mounted home
+ * directory, an autofs mount that has gone away, or simply years of session
+ * history. Without a bound, every cache miss (once per TTL) can hang the
+ * response, and the in-flight dedupe means it hangs every concurrent caller
+ * with it.
+ *
+ * Exceeding it degrades to `reader_error` — an absence of evidence, which is
+ * the safe direction — rather than to a partial answer assembled from whatever
+ * the walk had reached. A partial walk's "newest file" is only the newest so
+ * far, so a reading built from it could silently be an old one.
+ */
+const DEFAULT_DEADLINE_MS = 3_000;
+
+/** Thrown internally when the walk runs out of time; never escapes `sample`. */
+class DeadlineExceeded extends Error {}
 
 export type CodexAccountQuotaReading =
   | { value: CodexAccountQuota; unavailable: null }
@@ -170,16 +201,35 @@ export function mapCodexWindow(input: unknown): AccountQuotaWindow | null {
 export function buildCodexQuota(rateLimits: unknown, readAt: number): CodexAccountQuota | null {
   if (!isRecord(rateLimits)) return null;
   const windows: { five_hour?: AccountQuotaWindow; seven_day?: AccountQuotaWindow } = {};
+  // TWO PASSES, because a DECLARED slot must beat a POSITIONAL GUESS regardless
+  // of which entry codex happened to list first.
+  //
+  // One pass with "first writer wins" is wrong in a way that shows the operator
+  // a real number under the wrong heading. Given `primary` with no
+  // `window_minutes` and `secondary` declaring `300`, the single pass writes
+  // `primary` into `five_hour` on a guess, then finds the slot taken and DROPS
+  // the entry that actually said it was the 5-hour window — so a 95% figure is
+  // discarded and `primary`'s 5% is captioned "5-hour". Understating usage is
+  // the permissive direction, which is the one this surface may not take.
+  const declared: { slot: 'five_hour' | 'seven_day'; raw: Record<string, unknown> }[] = [];
+  const positional: typeof declared = [];
   for (const [key, positionalSlot] of CODEX_WINDOW_POSITIONS) {
     const raw = rateLimits[key];
     if (!isRecord(raw)) continue;
-    const declared = raw.window_minutes;
-    const slot =
-      typeof declared === 'number'
-        ? (CODEX_WINDOW_MINUTES[declared] ?? positionalSlot)
-        : positionalSlot;
-    // First writer wins: a declared slot already filled must not be overwritten
-    // by a positional guess about a later entry.
+    const declaredMinutes = raw.window_minutes;
+    const namedSlot =
+      typeof declaredMinutes === 'number' ? CODEX_WINDOW_MINUTES[declaredMinutes] : undefined;
+    if (namedSlot !== undefined) declared.push({ slot: namedSlot, raw });
+    else positional.push({ slot: positionalSlot, raw });
+  }
+  for (const { slot, raw } of [...declared, ...positional]) {
+    // A displaced positional guess is DROPPED, not re-homed into whichever slot
+    // is still free. Its only claim to that slot was its position, and being
+    // displaced has just shown that claim wrong — re-homing it would stack a
+    // second guess on a discredited first one and caption a number with a
+    // window nobody reported. Within a pass, first writer likewise wins: two
+    // entries declaring the same window is a payload we have no basis to
+    // arbitrate, and preferring the later one is as arbitrary as the earlier.
     if (windows[slot] !== undefined) continue;
     const window = mapCodexWindow(raw);
     if (window !== null) windows[slot] = window;
@@ -197,12 +247,19 @@ async function collectSessionFiles(
   dir: string,
   cutoffMs: number,
   out: SessionFile[],
+  expired: () => boolean,
 ): Promise<void> {
+  if (expired()) throw new DeadlineExceeded();
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (expired()) throw new DeadlineExceeded();
     const path = join(dir, entry.name);
+    // `isDirectory()` is false for a SYMLINK (readdir reports link entries as
+    // links, verified on this platform), so the walk never follows one and a
+    // symlink cycle under the sessions root cannot loop it. Real directories
+    // only, which is also why no depth bound is needed: a real tree is finite.
     if (entry.isDirectory()) {
-      await collectSessionFiles(path, cutoffMs, out);
+      await collectSessionFiles(path, cutoffMs, out, expired);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -254,6 +311,8 @@ export interface CodexAccountQuotaReaderOptions {
   ttlMs?: number;
   cutoffMs?: number;
   maxFilesScanned?: number;
+  /** Wall-clock budget for one sample's filesystem work. */
+  deadlineMs?: number;
 }
 
 export function createCodexAccountQuotaReader(
@@ -264,6 +323,7 @@ export function createCodexAccountQuotaReader(
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
   const cutoffMs = opts.cutoffMs ?? DEFAULT_CUTOFF_MS;
   const maxFilesScanned = opts.maxFilesScanned ?? DEFAULT_MAX_FILES_SCANNED;
+  const deadlineMs = opts.deadlineMs ?? DEFAULT_DEADLINE_MS;
 
   let cached: CodexAccountQuotaReading | null = null;
   let cachedAt: number | null = null;
@@ -274,18 +334,23 @@ export function createCodexAccountQuotaReader(
     // Nothing to read FROM. Distinct from a source that is present and empty.
     if (rootInfo === null) return { value: null, unavailable: 'no_credential' };
 
+    const expired = (): boolean => now() - at >= deadlineMs;
     let files: SessionFile[];
     try {
       files = [];
-      await collectSessionFiles(sessionsRoot, at - cutoffMs, files);
+      await collectSessionFiles(sessionsRoot, at - cutoffMs, files, expired);
     } catch {
-      // A walk that threw is an absence of evidence, never evidence of headroom.
+      // A walk that threw OR ran out of time is an absence of evidence, never
+      // evidence of headroom. Both collapse to the same honest answer.
       return { value: null, unavailable: 'reader_error' };
     }
 
     files.sort((a, b) => b.mtimeMs - a.mtimeMs);
     let sawPayloadWithoutWindow = false;
     for (const file of files.slice(0, maxFilesScanned)) {
+      // Reading the files is the other half of the budget: a handful of large
+      // sessions off a slow mount can exhaust it just as a wide tree can.
+      if (expired()) return { value: null, unavailable: 'reader_error' };
       let text: string;
       try {
         text = await readFile(file.path, 'utf8');
