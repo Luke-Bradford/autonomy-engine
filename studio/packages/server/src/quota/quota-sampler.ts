@@ -46,6 +46,37 @@ import {
  * boot, then an `unref`'d interval whose handle the caller stops on close).
  */
 
+/**
+ * Resolves whether the sampler is armed: an explicit option, else the env var.
+ *
+ * A function rather than an inline expression at the one call site, because the
+ * polarity here is a safety property and a pure function is the only way to test
+ * it without mutating `process.env` — which is process-global and shared across
+ * concurrently-running test files, so a test that set `CLAUDE_QUOTA_SAMPLER` to
+ * an invalid value would fail an unrelated file's `buildApp`.
+ *
+ * `'1'` arms. `'0'`, empty and unset are dormant. ANYTHING ELSE THROWS, matching
+ * this repo's fail-fast convention for env misconfiguration (port, retention) —
+ * and note that this is the OPPOSITE of the neighbouring `CLAUDE_QUOTA_ENABLED`,
+ * which tolerates any value and stays ENABLED. The two flags fail in opposite
+ * directions on purpose: that one fails towards armed because a typo that
+ * disarmed the spend guard is the worse outcome, and this one refuses to guess
+ * at all because BOTH of its wrong answers are bad — a spurious arm breaches
+ * #770's one-poller invariant, while a spurious dormant leaves the cutover with
+ * zero pollers and nothing said about it.
+ */
+export function resolveQuotaSamplerEnabled(
+  override: boolean | undefined,
+  raw: string | undefined,
+): boolean {
+  if (override !== undefined) return override;
+  if (raw === undefined || raw === '' || raw === '0') return false;
+  if (raw === '1') return true;
+  throw new Error(
+    `Invalid CLAUDE_QUOTA_SAMPLER '${raw}' — must be '1' (arm the background quota sampler) or '0'/unset (dormant)`,
+  );
+}
+
 export interface QuotaSampler {
   /** Stops further sampling. Idempotent; safe to call from a shutdown hook. */
   stop(): void;
@@ -95,12 +126,13 @@ export function startClaudeQuotaSampler(
     }
   };
 
-  let stopped = false;
   const sample = (): void => {
-    // A tick can only be delivered before `clearInterval` takes effect in
-    // pathological orderings, but the flag also covers a sample already queued
-    // by the prime call when `stop()` runs synchronously after `start`.
-    if (stopped) return;
+    // No `stopped` guard, deliberately — an earlier draft had one and a mutation
+    // test showed it could not fail: `clearInterval` already prevents every
+    // future callback on a single-threaded loop, and it cannot un-issue the
+    // prime read, which has already happened by the time any caller could call
+    // `stop()`. A second mechanism that no test can distinguish from the first
+    // is a branch that will never be exercised.
     try {
       // `Promise.resolve` rather than `reader.read().then(...)`: a reader that
       // breaks its contract by throwing SYNCHRONOUSLY would otherwise escape
@@ -124,9 +156,8 @@ export function startClaudeQuotaSampler(
   timer.unref();
 
   return {
-    stop() {
-      stopped = true;
-      clearInterval(timer);
-    },
+    // Idempotent because `clearInterval` is: a second call on a cleared handle
+    // is a documented no-op, so no flag is needed to make the contract true.
+    stop: () => clearInterval(timer),
   };
 }

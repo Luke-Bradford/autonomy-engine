@@ -59,7 +59,11 @@ import {
   DEFAULT_QUOTA_SAMPLE_INTERVAL_MS,
   type ClaudeAccountQuotaReader,
 } from './quota/claude-quota.js';
-import { startClaudeQuotaSampler, type QuotaSampler } from './quota/quota-sampler.js';
+import {
+  startClaudeQuotaSampler,
+  resolveQuotaSamplerEnabled,
+  type QuotaSampler,
+} from './quota/quota-sampler.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -380,19 +384,11 @@ export async function buildApp(opts?: BuildAppOptions) {
   // `app.close()` ever coming to stop it.
   //
   // `'1'` arms, `'0'`/empty/unset is dormant, ANYTHING ELSE THROWS — see
-  // `claudeAccountQuotaSamplerEnabled` for why silence is the wrong default on
-  // this particular flag.
-  const claudeAccountQuotaSamplerEnabled = ((): boolean => {
-    if (opts?.claudeAccountQuotaSamplerEnabled !== undefined) {
-      return opts.claudeAccountQuotaSamplerEnabled;
-    }
-    const raw = process.env.CLAUDE_QUOTA_SAMPLER;
-    if (raw === undefined || raw === '' || raw === '0') return false;
-    if (raw === '1') return true;
-    throw new Error(
-      `Invalid CLAUDE_QUOTA_SAMPLER '${raw}' — must be '1' (arm the background quota sampler) or '0'/unset (dormant)`,
-    );
-  })();
+  // `resolveQuotaSamplerEnabled` for why silence is the wrong default here.
+  const claudeAccountQuotaSamplerEnabled = resolveQuotaSamplerEnabled(
+    opts?.claudeAccountQuotaSamplerEnabled,
+    process.env.CLAUDE_QUOTA_SAMPLER,
+  );
   const claudeAccountQuotaSamplerIntervalMs =
     opts?.claudeAccountQuotaSamplerIntervalMs ?? DEFAULT_QUOTA_SAMPLE_INTERVAL_MS;
   if (
