@@ -87,10 +87,10 @@ MAX_BUDGET_REGRANTS="${MAX_BUDGET_REGRANTS:-1}"  # how many times ONE driver run
 QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last READABLE reading
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
 QUOTA_POLL_MEMO="${QUOTA_POLL_MEMO:-$INFRA/.last_quota_poll}"  # "<epoch> <pct|->" of the last
-                                  # source-2 POLL -- its OUTCOME, success or failure, not a reading
+                                  # loop-reader POLL -- its OUTCOME, success or failure, not a reading
                                   # to fall back on. See quota_poll_memo_read (#777).
 QUOTA_POLL_MIN_INTERVAL="${QUOTA_POLL_MIN_INTERVAL:-60}"  # min seconds between DIRECT polls of the
-                                  # shared rate-limited upstream by source 2. 60s to match what the
+                                  # shared rate-limited upstream by the loop reader. 60s to match what the
                                   # other two sources already do -- studio's `DEFAULT_TTL_MS`
                                   # (`claude-quota.ts`) and the prototype dashboard's sampler TTL
                                   # (engine `lib/claude_usage.py`) are both 60s. 0 disables.
@@ -368,26 +368,6 @@ is_loop_ref() {
 # property to hold anything new to -- including a rollback: re-loading the dashboard
 # means DISARMING studio's sampler in the same breath, or the rollback recreates
 # exactly the contention C3 removed.
-#
-# #765 stated that invariant as "exactly ONE process may poll `/api/oauth/usage`
-# directly", and #777 asked which way to reconcile it, because the post-C3 pair
-# structurally violates it -- source 2 polls directly and so does studio. The
-# EXCLUSIVITY reading is too strong and is not what #770 measured: it also outlaws
-# the prototype dashboard's own sampler, which is the sanctioned poller, and it would
-# make source 2 illegal for its entire life rather than merely unthrottled. What
-# actually protects a shared rate-limited budget is a RATE bound. Not because N
-# on-demand pollers are always cheaper than one standing sampler -- two pollers at
-# 1/60s is 2 per window while the driver is active, i.e. MORE than the sampler they
-# replace; that only comes out ahead integrated over the idle time, which is most of
-# it. The reason is that a rate bound is what the 429 actually responds to: the
-# measured failure was eight polls in 12s, and an unconditional sampler cannot be
-# asked to poll less when it starts failing, whereas a bounded on-demand poller can.
-# So the invariant is narrower than stated, and reads:
-# at most ONE process may hold a STANDING (unconditional, background) sample
-# -- today the dashboard, tomorrow nobody -- and every other direct poller must be
-# rate-bounded AND must throttle its FAILED reads too. Studio satisfies that via
-# `claude-quota.ts`; source 2 satisfies it via the #777 poll memo; a second standing
-# sampler is still refused. That is the property to hold anything new to.
 #
 # "" (unknown) is a distinct outcome from "0" and the caller must not conflate
 # them -- 0% means wide open, "" means blind.
@@ -967,7 +947,7 @@ quota_stamped_read() {  # $1=file $2=max_age_seconds
   # fail-OPEN -- the one polarity this guard may not have. `$(( ))` wraps silently, so
   # an epoch of 2^64+now made `qsr_age` land inside the window and the memo's value was
   # served as though freshly polled (measured: `18446744075494925739 10` -> 10), which
-  # PERMITS a fire, suppresses the real poll and suppresses source 3. The identical
+  # PERMITS a fire, suppresses the real poll and suppresses the sources after it. The identical
   # line is merely fail-safe for `.last_quota` (a bogus low reading just falls through
   # to the blind allowance), which is why the polarity only flipped once the memo
   # started sharing this parser -- and why the review round that added `quota_sane`'s
@@ -1008,13 +988,13 @@ quota_cache_read() {
 # one -- it was the only unthrottled DIRECT poller of `GET /api/oauth/usage`, which
 # 429s under exactly that treatment (measured 2026-07-29: eight consecutive polls
 # over 12s, all 429). `quota_pct` runs up to three times per iteration plus once per
-# AUTH_LONG_BLOCK retry while blocked, and post-C3 (#410) source 1 is gone, so every
+# AUTH_LONG_BLOCK retry while blocked, and post-C3 (#410) the dashboard is gone, so every
 # one of those becomes a direct poll. The guard could exhaust the very budget it
 # reads and then be unable to read it -- a self-denial-of-service, fail-SAFE in
 # direction (UNREADABLE refuses) but it costs the loop its fires.
 #
 # So the memo records the OUTCOME of the last poll and, inside
-# QUOTA_POLL_MIN_INTERVAL, source 2 answers from it instead of polling again.
+# QUOTA_POLL_MIN_INTERVAL, the loop reader answers from it instead of polling again.
 #
 # WHY A FILE and not a shell variable, which would need no gitignore entry, no
 # sentinel and no parse: every read goes through `qg_pct="$(quota_pct)"` -- a COMMAND
@@ -1086,7 +1066,7 @@ quota_poll_memo_write() {  # $1=pct, or "" for a poll that failed
   # The ""->"-" mapping stays HERE, not in `quota_stamped_write`: "a failed poll
   # is remembered as a sentinel" is this memo's semantics, not the format's. The
   # writer owns the record shape; the caller owns what the value means.
-  # Status discarded -- a lost memo just means source 2 is re-polled next call.
+  # Status discarded -- a lost memo just means the loop reader is re-polled next call.
   quota_stamped_write "$QUOTA_POLL_MEMO" "${1:--}" || true
 }
 quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
@@ -1334,7 +1314,7 @@ except Exception:
 # --- drift_report_studio_server: is the QUOTA SOURCE running merged code?
 #
 # The third process in the same question. The two halves above ask it of this
-# driver's file and of this driver's process; the spend guard's source 3 is a
+# driver's file and of this driver's process; the spend guard's PRIMARY source is a
 # THIRD program -- the supervised `com.autonomy.studio-server` unit, running
 # from an isolated clone under its own state dir -- and nothing moved it forward
 # or said that it had not.
@@ -1572,7 +1552,7 @@ drift_report_studio_server() {
           ds_studio_clause="$ds_behind_studio of them touching studio/"
           ;;
       esac
-      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's PRIMARY source is answering from SUPERSEDED code -- treat the readings it produced as evidence about that build, not about main. Since C3 (#410) this is the source the guard normally uses, and a superseded build may also predate the quota SAMPLER, in which case studio is answering from the request path and will 429. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
     fi
   fi
   return 0

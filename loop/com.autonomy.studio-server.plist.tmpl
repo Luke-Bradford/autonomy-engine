@@ -40,18 +40,25 @@
       NEW key and orphan every existing secret. The key stays at its
       cwd-independent default, shared with any dev server, which is what lets
       both decrypt the same secrets.
-    * CLAUDE_QUOTA_ENABLED, left ON. The reader is lazy (no sampler) behind a
-      60s TTL with 429 backoff, and drive.sh reaches studio only after its other
-      sources fail, so this adds no standing poller to the one rate-limited
-      upstream. #765's "exactly one process may poll /api/oauth/usage directly"
-      invariant is preserved.
-    * CLAUDE_QUOTA_SAMPLER, which arms studio's background quota sampler and so
-      makes the sentence above stop being true. It is left UNSET on purpose: the
-      one process currently polling that endpoint is the prototype dashboard's
-      sampler, and arming this one before that one is retired would make two.
-      C3 (#410) retires the dashboard and sets this key to 1 in the SAME step,
-      so there is never a moment with two pollers and never one with none. The
-      key is absent rather than set to 0 because absence is the gate.
+    * CLAUDE_QUOTA_ENABLED, left ON. Studio's quota reader is the build loop's
+      PRIMARY source since C3, so turning it off blinds the spend guard.
+  SET BY C3 (#410), and the reason it is set HERE and nowhere else:
+    * CLAUDE_QUOTA_SAMPLER=1 arms studio's background quota sampler, so this
+      process holds a STANDING sample of api/oauth/usage and answers /api/quota
+      from that cache instead of polling on the request path. That is what lets
+      drive.sh put studio FIRST and poll it on every read without touching the
+      upstream at all.
+      This key used to be deliberately ABSENT. The reason was that the one
+      process polling that endpoint was the prototype dashboard's sampler, and
+      arming this one alongside it would have made two -- which #770 refuses.
+      C3 retires the dashboard and sets this key in the SAME step, so the
+      standing-sample slot is TRANSFERRED rather than duplicated: never a moment
+      with two pollers, never a moment with none.
+      IT FOLLOWS THAT A ROLLBACK IS SYMMETRIC. Re-loading the prototype
+      dashboard means removing this key (or setting it to 0) and re-running the
+      installer in the same breath. Re-arming the dashboard while this stays 1
+      recreates exactly the contention the cutover removed, which is worse than
+      whatever it is rolling back.
 -->
 <plist version="1.0">
 <dict>
@@ -84,6 +91,8 @@
     <string>{{WORKSPACE_GIT_ROOT}}</string>
     <key>WEB_ROOT</key>
     <string>{{WEB_ROOT}}</string>
+    <key>CLAUDE_QUOTA_SAMPLER</key>
+    <string>1</string>
   </dict>
 
   <!-- RunAtLoad + KeepAlive: a quota source that is only up when someone
