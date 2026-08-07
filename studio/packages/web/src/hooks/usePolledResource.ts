@@ -51,19 +51,36 @@ export function usePolledResource<T>(
     const controller = new AbortController();
     let cancelled = false;
 
+    /*
+     * LATEST-WINS. Loads overlap: a tick fires every `intervalMs` regardless of
+     * whether the previous request has come back, and a visibility change can
+     * start one alongside. Without a guard the results apply in RESOLUTION order,
+     * so a slow first request landing after a fast second one overwrites fresh
+     * data with stale — and stamps `lastUpdatedAt` with the moment the STALE
+     * response arrived, which makes the "as of" text an understatement of how old
+     * the figures are. That is the one failure this surface cannot have: its
+     * entire claim is that it says how current it is.
+     *
+     * A monotonic token rather than aborting the previous request, because the
+     * controller is per-EFFECT (its abort means "tear down"), and reusing it to
+     * cancel one poll would abort every later one too.
+     */
+    let latest = 0;
+
     const load = async (): Promise<void> => {
+      const token = ++latest;
       try {
         const next = await fetcher(controller.signal);
-        if (cancelled) return;
+        if (cancelled || token !== latest) return;
         setData(next);
         setError(null);
         setLastUpdatedAt(Date.now());
       } catch (err) {
         // An abort is this effect tearing down, not a failure to report.
-        if (cancelled || controller.signal.aborted) return;
+        if (cancelled || controller.signal.aborted || token !== latest) return;
         setError(messageOf(err));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && token === latest) setLoading(false);
       }
     };
 

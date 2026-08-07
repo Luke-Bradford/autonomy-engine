@@ -1,13 +1,9 @@
 import { useCallback, useState } from 'react';
-import {
-  RUN_SINCE_WINDOWS,
-  formatTokenCount,
-  type AiActivitySnapshot,
-  type RunSince,
-} from '@autonomy-studio/shared';
+import { formatTokenCount, type AiActivitySnapshot, type RunSince } from '@autonomy-studio/shared';
 import { fetchAccountQuota, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline } from '../runs/costReading';
+import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
 import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
 
@@ -236,9 +232,12 @@ export function AiActivityPage() {
             onChange={(e) => setSince(e.target.value as RunSince)}
             aria-label="Activity window"
           >
-            {RUN_SINCE_WINDOWS.map((w) => (
+            {/* The SAME vocabulary and prose the run list's own since-picker
+                uses — two monitoring surfaces should not disagree about what
+                "24h" is called, and a raw enum token is not a label. */}
+            {RUN_SINCE_OPTIONS.map((w) => (
               <option key={w} value={w}>
-                {w}
+                {RUN_SINCE_LABEL[w]}
               </option>
             ))}
           </select>

@@ -105,6 +105,77 @@ describe('usePolledResource', () => {
     expect(second).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * Polls OVERLAP — a tick fires whether or not the previous request came back.
+   * Applying results in resolution order would let a slow early request land on
+   * top of a fresh later one, and stamp `lastUpdatedAt` with the moment the
+   * STALE response arrived, making the page's "as of" text an understatement of
+   * how old the figures are. Latest-wins is what makes that claim honest.
+   */
+  it('ignores a slow earlier response that resolves after a newer one', async () => {
+    const resolvers: Array<(value: string) => void> = [];
+    const fetcher = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+
+    // A second poll starts while the first is still in flight.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_100);
+    });
+    expect(resolvers).toHaveLength(2);
+
+    // The NEWER request answers first…
+    await act(async () => {
+      resolvers[1]!('fresh');
+    });
+    await waitFor(() => expect(result.current.data).toBe('fresh'));
+    const stampAfterFresh = result.current.lastUpdatedAt;
+
+    // …and then the older one finally lands. It must be discarded outright.
+    await act(async () => {
+      resolvers[0]!('stale');
+    });
+
+    expect(result.current.data).toBe('fresh');
+    expect(result.current.lastUpdatedAt).toBe(stampAfterFresh);
+  });
+
+  it('does not let a stale rejection overwrite a newer success', async () => {
+    const settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }> = [];
+    const fetcher = vi.fn(
+      () =>
+        new Promise<string>((resolve, reject) => {
+          settlers.push({ resolve, reject });
+        }),
+    );
+
+    const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+    await waitFor(() => expect(settlers).toHaveLength(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_100);
+    });
+    expect(settlers).toHaveLength(2);
+
+    await act(async () => {
+      settlers[1]!.resolve('fresh');
+    });
+    await waitFor(() => expect(result.current.data).toBe('fresh'));
+
+    await act(async () => {
+      settlers[0]!.reject(new Error('stale failure'));
+    });
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.data).toBe('fresh');
+  });
+
   it('surfaces a failure as an error and clears it on the next success', async () => {
     const fetcher = vi.fn().mockRejectedValueOnce(new Error('boom')).mockResolvedValue('recovered');
 
