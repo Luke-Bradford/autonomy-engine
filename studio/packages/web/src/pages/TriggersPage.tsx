@@ -244,7 +244,12 @@ export function TriggersPage() {
       for (const { pipeline, version } of all) {
         const existing = byPipeline.get(pipeline.id);
         if (existing) existing.versions.push(version);
-        else byPipeline.set(pipeline.id, { pipelineId: pipeline.id, name: pipeline.name, versions: [version] });
+        else
+          byPipeline.set(pipeline.id, {
+            pipelineId: pipeline.id,
+            name: pipeline.name,
+            versions: [version],
+          });
       }
       return { options, pipelines: [...byPipeline.values()] };
     },
@@ -554,7 +559,10 @@ function TriggerForm({
   const fetchPublishState = useCallback(
     async (signal: AbortSignal) => {
       if (activePipelineId === null) return null;
-      return { pipelineId: activePipelineId, state: await readPublishState(activePipelineId, signal) };
+      return {
+        pipelineId: activePipelineId,
+        state: await readPublishState(activePipelineId, signal),
+      };
     },
     [activePipelineId],
   );
@@ -567,7 +575,9 @@ function TriggerForm({
   }
 
   const activePipeline =
-    activePipelineId === null ? null : (pipelines.find((p) => p.pipelineId === activePipelineId) ?? null);
+    activePipelineId === null
+      ? null
+      : (pipelines.find((p) => p.pipelineId === activePipelineId) ?? null);
   const advice =
     activePipeline === null
       ? null
@@ -724,8 +734,7 @@ function TriggerForm({
       // always concrete or unbound.
       const patchBody: TriggerWrite = {
         ...common,
-        pipelineVersionId:
-          form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : null,
+        pipelineVersionId: form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : null,
       };
       const parsed = TriggerWriteSchema.safeParse(patchBody);
       if (!parsed.success) {
@@ -829,7 +838,9 @@ function TriggerForm({
           Pipeline
           <select
             value={form.binding.pipelineId}
-            onChange={(e) => onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })}
+            onChange={(e) =>
+              onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
+            }
           >
             {pipelines.map((p) => (
               <option key={p.pipelineId} value={p.pipelineId}>

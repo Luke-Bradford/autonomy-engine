@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
-import { z } from 'zod';
 import {
   FireRequestSchema,
   SubstituteError,

@@ -945,7 +945,9 @@ describe('TriggersPage — binding to the active published version', () => {
     const row = within(await screen.findByRole('row', { name: /Nightly/ }));
     await user.click(row.getByRole('button', { name: 'Edit' }));
     const form = within(screen.getByRole('form', { name: /Trigger form/i }));
-    expect(form.queryByRole('radio', { name: /active published version/i })).not.toBeInTheDocument();
+    expect(
+      form.queryByRole('radio', { name: /active published version/i }),
+    ).not.toBeInTheDocument();
     expect(form.getByLabelText('Pipeline version')).toBeInTheDocument();
   });
 
