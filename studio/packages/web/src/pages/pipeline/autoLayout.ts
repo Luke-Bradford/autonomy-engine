@@ -83,7 +83,7 @@ export function autoLayout(
 ): LayoutMove[] {
   if (nodes.length === 0) return [];
 
-  const { owner } = containerMembership(containers);
+  const { owner } = containerMembership([...containers]);
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
   /* Sizes come from the SAME nominal-size function the canvas falls back to
@@ -109,7 +109,7 @@ export function autoLayout(
     if (list === undefined) memberIdsByContainer.set(own, [n.id]);
     else list.push(n.id);
   }
-  const laidOut = containers.filter((c) => memberIdsByContainer.has(c.id));
+  const laidOut = [...containers].filter((c) => memberIdsByContainer.has(c.id));
 
   /* The top-level participants, in document order: every node that is not
      inside a laid-out container, plus each laid-out container. Containers come
@@ -206,6 +206,30 @@ export function autoLayout(
   }));
 }
 
+/**
+ * The moves an Arrange press should apply: the layout, less every node it would
+ * leave exactly where it already is.
+ *
+ * Separate from `autoLayout`, and exported, because the difference decides what
+ * the operator is TOLD. `moveNodes` silently drops no-op moves and records no
+ * history entry when none are real, so an already-arranged graph makes the
+ * button look broken unless the caller can tell the two apart. Extracted here
+ * rather than left in the click handler for the reason `undoRedo.ts` states
+ * about its own rules: `PipelineCanvas` has no unit test, so a rule inside it is
+ * a rule nothing checks.
+ */
+export function arrangeMoves(
+  nodes: readonly Node[],
+  edges: readonly Edge[],
+  containers: readonly Container[],
+): LayoutMove[] {
+  const current = new Map(nodes.map((n) => [n.id, n.position]));
+  return autoLayout(nodes, edges, containers).filter((move) => {
+    const was = current.get(move.id);
+    return was !== undefined && (was.x !== move.position.x || was.y !== move.position.y);
+  });
+}
+
 interface Pair {
   from: string;
   to: string;
@@ -218,9 +242,16 @@ interface Pair {
  * `effectiveEdges` rather than `edges` because a doc with no declared edges RUNS
  * as the implicit success-chain over node order, and a layout that drew it as
  * a row of unconnected roots would contradict the engine about the same doc.
- * The dangling-endpoint guard is not defensive decoration: an imported doc is
- * precisely the input this feature exists for, and `params.ts` carries the same
- * guard for the same reason.
+ * The dangling-endpoint guard IS belt-and-braces, and is kept knowingly. An
+ * imported doc — precisely the input this feature exists for — can carry an
+ * endpoint matching nothing, and `params.ts` guards its own walks the same way
+ * (`forwardCycleErrors` builds its endpoint set from nodes ∪ containers for
+ * exactly this). But a dangling id is ALSO excluded downstream twice over: it is
+ * never a top-level participant, so the `topSet` check drops it when bucketing,
+ * and `rank` skips any pair whose ends are not in the id set it was given. So no
+ * test can attribute the behaviour to this line specifically — mutating it away
+ * leaves the suite green, which is recorded here rather than hidden behind a
+ * test that looks like coverage and is not.
  */
 function forwardEdges(
   nodes: readonly Node[],

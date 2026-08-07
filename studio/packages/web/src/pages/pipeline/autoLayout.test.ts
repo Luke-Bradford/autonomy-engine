@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Container, Edge, Node } from '@autonomy-studio/shared';
-import { autoLayout, LAYOUT_GAP } from './autoLayout';
+import { arrangeMoves, autoLayout, LAYOUT_GAP } from './autoLayout';
 import { containerRects, unmeasuredNodeSize, type Rect } from './containerLayout';
 
 const node = (id: string, position = { x: 0, y: 0 }): Node => ({
@@ -70,8 +70,15 @@ describe('autoLayout', () => {
   it('ignores a back-edge when ranking', () => {
     // The loop idiom: c feeds back to a. Ranking must read the FORWARD graph
     // only, or every node is in one residual cycle and the columns collapse.
+    //
+    // The nodes are declared in an order that DISAGREES with the topology on
+    // purpose. Honouring the back-edge makes the whole graph one cycle, and the
+    // residual-cycle fallback then ranks in document order — which, for a doc
+    // whose declaration order happens to match its topology, produces the same
+    // left-to-right answer and lets a broken filter pass. Declaring `c` first
+    // separates the two: the fallback would put `c` in column 0.
     const pos = positionsOf(
-      [node('a'), node('b'), node('c')],
+      [node('c'), node('a'), node('b')],
       [edge('a', 'b'), edge('b', 'c'), edge('c', 'a', { back: true })],
     );
 
@@ -169,9 +176,16 @@ describe('autoLayout', () => {
     expect(autoLayout(nodes, edges, [])).toEqual(autoLayout(nodes, edges, []));
   });
 
-  it('skips an edge whose endpoint matches no node or container', () => {
+  it('neither throws nor constrains the layout on a dangling endpoint', () => {
     // An imported doc is exactly the input this feature exists for, and it can
-    // carry a dangling endpoint. It must not rank anything, and must not throw.
+    // carry an endpoint matching no node and no container.
+    //
+    // Pinned as BEHAVIOUR, deliberately not as coverage of one guard. Dangling
+    // ids are excluded independently in three places — the endpoint set in
+    // `forwardEdges`, the `topSet` check when bucketing, and `rank`'s own
+    // membership filter — so removing any single one of them leaves this test
+    // green. That redundancy is stated in `forwardEdges`' docblock rather than
+    // papered over with a test that cannot see it.
     const nodes = [node('a'), node('b')];
     const pos = positionsOf(nodes, [edge('a', 'ghost'), edge('ghost', 'b')]);
 
@@ -200,5 +214,42 @@ describe('autoLayout', () => {
     const pos = positionsOf([node('a'), node('b')], [edge('a', 'b')]);
 
     expect(pos.get('b')!.x - pos.get('a')!.x).toBeGreaterThanOrEqual(LAYOUT_GAP);
+  });
+});
+
+describe('arrangeMoves', () => {
+  const piled = [node('a'), node('b'), node('c')];
+  const chain = [edge('a', 'b'), edge('b', 'c')];
+
+  it('breaks up a doc that arrived as one pile', () => {
+    // `a` is absent on purpose and is not an omission: the layout is anchored at
+    // the graph's existing top-left, and the pile is already there, so the node
+    // that lands in column 0 is genuinely not moving. What matters is that the
+    // pile stops being a pile.
+    const moves = arrangeMoves(piled, chain, []);
+
+    expect(moves.map((m) => m.id)).toEqual(['b', 'c']);
+    expect(new Set(moves.map((m) => `${m.position.x},${m.position.y}`)).size).toBe(2);
+    expect(moves.some((m) => m.position.x === 0 && m.position.y === 0)).toBe(false);
+  });
+
+  it('reports NOTHING to move for an already-arranged doc', () => {
+    // The distinction the button's message hangs off: `moveNodes` would drop
+    // these silently, leaving a press that does nothing and says nothing.
+    const arranged = piled.map((n) => ({
+      ...n,
+      position: autoLayout(piled, chain, []).find((m) => m.id === n.id)!.position,
+    }));
+
+    expect(arrangeMoves(arranged, chain, [])).toEqual([]);
+  });
+
+  it('moves only the node that is out of place', () => {
+    const laid = autoLayout(piled, chain, []);
+    const mostly = piled.map((n) =>
+      n.id === 'c' ? n : { ...n, position: laid.find((m) => m.id === n.id)!.position },
+    );
+
+    expect(arrangeMoves(mostly, chain, []).map((m) => m.id)).toEqual(['c']);
   });
 });

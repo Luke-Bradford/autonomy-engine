@@ -26,11 +26,13 @@ import {
 } from '@autonomy-studio/shared';
 import {
   clipboardCommandFor,
+  arrangeDisabledReason,
   historyCommandFor,
   isDeleteKeystroke,
   redoDisabledReason,
   undoDisabledReason,
 } from './undoRedo';
+import { arrangeMoves } from './autoLayout';
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
@@ -98,13 +100,20 @@ import { useTransientNotice } from './useTransientNotice';
 import { readPublishState } from './publishState';
 
 /**
- * How long a copy/paste/duplicate notice stays up.
+ * How long a canvas-gesture notice stays up — copy/paste/duplicate, and U9's
+ * Arrange.
  *
  * Long enough to read a short sentence unhurriedly, short enough that it is
  * gone before the next thing the operator does — the point of the line is to
  * confirm a gesture landed, and nothing about it is worth going back to.
+ *
+ * ONE line for all of them, not one per feature. They are the same kind of fact
+ * (a gesture that is already over), only one gesture can be the most recent, and
+ * two live regions on one page can announce over each other — a collision this
+ * canvas already has a ticket for (#960). Arrange reuses it rather than adding
+ * the third.
  */
-const CLIPBOARD_NOTICE_MS = 6_000;
+const CANVAS_NOTICE_MS = 6_000;
 
 interface PipelineCanvasProps {
   pipelineId: string;
@@ -147,7 +156,7 @@ export function PipelineCanvas({
      it. `saveMsg` is wiped by the next save attempt; a copy has no successor
      act, so an un-expiring line would sit under unrelated later work still
      claiming to describe it. */
-  const [clipboardMsg, showClipboardMsg] = useTransientNotice(CLIPBOARD_NOTICE_MS);
+  const [canvasMsg, showCanvasMsg] = useTransientNotice(CANVAS_NOTICE_MS);
   // #907 — the unarchive request's own in-flight + failure state. Kept apart
   // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
   // next save; this one is about whether the pipeline can be saved at all.
@@ -249,6 +258,40 @@ export function PipelineCanvas({
   const redoReason = redoDisabledReason({ available: canRedo, previewing, busy: previewLocked });
 
   /**
+   * U9 — re-lay-out the working graph (#1004).
+   *
+   * Read through `store.getState()` rather than the rendered `nodes`, for the
+   * reason Undo and Redo do: the handler must act on the graph as it is at the
+   * moment of the click, not as it was when this render was produced.
+   *
+   * The no-op case is REPORTED rather than left silent. `moveNodes` drops moves
+   * that change nothing and records no history entry when none are real, so an
+   * already-arranged graph would otherwise make the button look broken —
+   * indistinguishable, from the operator's side, from one that failed.
+   * `arrangeMoves` owns that distinction (and is where it is tested);
+   * `moveNodes` still applies its own filter, so the two cannot disagree.
+   *
+   * It marks the document DIRTY, and that is intended. A position is real
+   * persisted doc state — the same class of write as an undo of a move or a
+   * version restore — so a re-layout that left `dirty` alone would be silently
+   * discarded the moment the operator navigated away, having shown them a
+   * readable graph it never meant to keep. The cost is that Arrange obliges a
+   * Save to persist; Undo is right there if that is not wanted.
+   */
+  const onArrange = useCallback(() => {
+    const state = store.getState();
+    const changed = arrangeMoves(state.nodes, state.edges, state.containers);
+    if (changed.length === 0) {
+      showCanvasMsg('Already arranged — nothing moved.');
+      return;
+    }
+    state.moveNodes(changed);
+    showCanvasMsg(
+      `Arranged ${changed.length} ${changed.length === 1 ? 'activity' : 'activities'}.`,
+    );
+  }, [showCanvasMsg, store]);
+
+  /**
    * ⌘Z / ⇧⌘Z on the document, gated by the same two reasons the buttons are.
    *
    * On the DOCUMENT rather than on a wrapper div, because the shortcut has to
@@ -284,19 +327,19 @@ export function PipelineCanvas({
           // copy still works for an operator selecting text on the page.
           if (copied === 0) return;
           e.preventDefault();
-          showClipboardMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
+          showCanvasMsg(`Copied ${copied} ${copied === 1 ? 'activity' : 'activities'}.`);
           return;
         }
         if (clip === 'duplicate') {
           if (store.getState().selected.every((sel) => sel.kind !== 'node')) return;
           e.preventDefault();
           const made = store.getState().duplicateSelection();
-          showClipboardMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
+          showCanvasMsg(`Duplicated ${made} ${made === 1 ? 'activity' : 'activities'}.`);
           return;
         }
         e.preventDefault();
         const outcome = store.getState().pasteClipboard(pipelineId);
-        showClipboardMsg(
+        showCanvasMsg(
           outcome.ok
             ? `Pasted ${outcome.count} ${outcome.count === 1 ? 'activity' : 'activities'}.`
             : outcome.reason,
@@ -313,9 +356,9 @@ export function PipelineCanvas({
     }
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-    // `showClipboardMsg` is stable (the notice window is a module constant), so
+    // `showCanvasMsg` is stable (the notice window is a module constant), so
     // listing it does not re-bind the keydown listener on every render.
-  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked, showClipboardMsg]);
+  }, [store, undoReason, redoReason, pipelineId, previewing, previewLocked, showCanvasMsg]);
 
   const historyDisabledReason = !ready
     ? 'Loading this pipeline’s versions…'
@@ -380,6 +423,13 @@ export function PipelineCanvas({
   const outputs = useStore(store, (s) => s.outputs);
   const dirty = useStore(store, (s) => s.dirty);
   const loaded = useStore(store, (s) => s.loaded);
+
+  const arrangeReason = arrangeDisabledReason({
+    ready,
+    available: nodes.length > 0,
+    previewing,
+    busy: previewLocked,
+  });
 
   // #903 — three derived facts the history needs. `headVersion` is read off the
   // versions this page holds rather than off `loaded`: the two part company the
@@ -790,6 +840,23 @@ export function PipelineCanvas({
           >
             ↷ Redo
           </button>
+          {/* U9 — Arrange. Beside Undo/Redo because it is the same kind of
+              thing: a write to the working graph that Save will later mint,
+              undoable by the button immediately to its left. Deliberately NOT
+              in React Flow's `<Controls>` panel, which owns the CAMERA — this
+              moves the document, not the view, and putting a document edit in
+              the viewport chrome would be the one place an operator does not
+              expect one. `onMouseDown={preventDefault}`, like its neighbours,
+              so arranging does not blur the field being edited. */}
+          <button
+            type="button"
+            onClick={onArrange}
+            disabled={arrangeReason !== null}
+            title={arrangeReason ?? 'Lay the activities out left to right by their dependencies'}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            Arrange
+          </button>
           <button
             type="button"
             aria-expanded={historyOpen}
@@ -864,9 +931,9 @@ export function PipelineCanvas({
       {saveMsg && <p className="notice">{saveMsg}</p>}
       {/* `role="status"` so a keyboard-driven copy/paste — which changes
           nothing an operator is looking at — is still announced. */}
-      {clipboardMsg && (
+      {canvasMsg && (
         <p className="notice" role="status">
-          {clipboardMsg}
+          {canvasMsg}
         </p>
       )}
 
@@ -1019,7 +1086,7 @@ export function PipelineCanvas({
             store={store}
             connections={connections}
             pipelineId={pipelineId}
-            onNotice={showClipboardMsg}
+            onNotice={showCanvasMsg}
           />
         </div>
       )}
