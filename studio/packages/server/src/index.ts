@@ -918,10 +918,20 @@ export async function buildApp(opts?: BuildAppOptions) {
   });
 
   // #765 — arm the sampler LAST, after the `onClose` teardown above is
-  // registered and after everything in this function that can throw. Nothing
-  // between here and `return` can fail, so this timer can never be armed and
-  // then abandoned — the failure mode that matters because, unlike the retention
-  // sweeps, this one reaches the rate-limited provider #770 caps at one poller.
+  // registered and after every throw-point in this function's own body. That
+  // matters more here than for the other boot-time timers because, unlike the
+  // retention sweeps (which touch a local db), this one reaches the rate-limited
+  // provider #770 caps at ONE poller, so an armed-then-abandoned instance is a
+  // breach of that invariant rather than wasted housekeeping.
+  //
+  // It is NOT an absolute guarantee, and the distinction is worth stating rather
+  // than implying: Fastify defers plugin and route execution to `ready()`, which
+  // runs after this function returns, so a plugin that throws THERE would leave
+  // this armed with no `close()` ever coming. That exposure is shared by every
+  // timer armed in here and is not introduced by this one; in the real entry
+  // point `main()` exits the process on any post-`buildApp` failure, which takes
+  // the `unref`'d interval with it. What arming here does buy is that none of
+  // the four validation throws above can leak it.
   //
   // Armed against the DECORATED reader (injected or real), skipping the
   // always-UNREADABLE one: sampling a constant is pure waste, and it is also
