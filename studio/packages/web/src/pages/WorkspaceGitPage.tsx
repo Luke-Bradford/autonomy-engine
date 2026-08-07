@@ -1004,10 +1004,13 @@ function ImportOutcomeReport({
         </p>
       )}
 
-      {changed.length === 0 && result.archived.length === 0 ? (
+      {changed.length === 0 && result.archived.length === 0 && result.deferred.length === 0 ? (
         /* The commonest outcome, and the analogue of `committed: false`: every
            resource came back `unchanged`, so "0 changed" is a success, not a
-           failure, and must not be phrased as one. */
+           failure, and must not be phrased as one. `deferred` is part of the
+           condition because "already matches" is a claim about the WHOLE
+           branch: with anything deferred it is false, and would otherwise be
+           asserted a few lines above the alert that contradicts it. */
         <p role="status">
           Nothing to import — this workspace already matches {collabBranch} at{' '}
           {shortSha(result.head)}.

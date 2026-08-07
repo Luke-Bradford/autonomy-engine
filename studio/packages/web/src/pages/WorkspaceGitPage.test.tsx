@@ -923,6 +923,49 @@ describe('WorkspaceGitPage', () => {
     });
 
     /**
+     * "Already matches" is a claim about the WHOLE branch, so anything deferred
+     * falsifies it. Without `deferred` in the condition the page states it as a
+     * `role="status"` success a few lines above the `role="alert"` saying the
+     * workspace does NOT match — a contradiction, and a screen reader hears the
+     * reassuring half first.
+     */
+    it('does not claim the workspace already matches when a resource was deferred', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'current' }));
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'unchanged',
+              versionMinted: false,
+            },
+          ],
+          deferred: [
+            {
+              path: 'datasets/orders.json',
+              kind: 'connection',
+              resourceId: null,
+              disposition: 'create',
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /This workspace does not match main/,
+      );
+      expect(screen.queryByText(/already matches main/)).toBeNull();
+    });
+
+    /**
      * The time-of-check/time-of-use gap made visible. No CAS token exists to
      * close it, so the least dishonest thing available is to say when the thing
      * applied was not the thing shown.
