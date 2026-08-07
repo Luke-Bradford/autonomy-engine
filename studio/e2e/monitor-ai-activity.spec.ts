@@ -298,7 +298,7 @@ test.describe('#917 Monitor › AI activity', () => {
         },
       });
 
-      await page.goto('/monitor/ai');
+      await page.goto('/#/monitor/ai');
       const panel = quotaPanel(page);
 
       await expect(panel).toContainText('Codex');
@@ -310,7 +310,7 @@ test.describe('#917 Monitor › AI activity', () => {
       await expect(panel).toContainText('2099');
       // And the age, because this figure is scraped rather than polled.
       await expect(panel).toContainText('12m 30s ago');
-      expect(problems()).toEqual([]);
+      await expectQuiet(page, problems);
     });
 
     test('says nothing whatsoever about codex when it is absent from the host', async ({
@@ -322,13 +322,13 @@ test.describe('#917 Monitor › AI activity', () => {
         account: { claude: CLAUDE },
       });
 
-      await page.goto('/monitor/ai');
+      await page.goto('/#/monitor/ai');
       const panel = quotaPanel(page);
 
       await expect(panel).toContainText('Claude');
       await expect(panel).not.toContainText('Codex');
       await expect(panel).not.toContainText('UNREADABLE');
-      expect(problems()).toEqual([]);
+      await expectQuiet(page, problems);
     });
 
     test('an unreadable codex names a reason and puts no number on the page', async ({ page }) => {
@@ -339,7 +339,7 @@ test.describe('#917 Monitor › AI activity', () => {
         unavailable: { claude: 'rate_limited', codex: 'no_reading' },
       });
 
-      await page.goto('/monitor/ai');
+      await page.goto('/#/monitor/ai');
       const panel = quotaPanel(page);
 
       await expect(panel).toContainText('Codex quota UNREADABLE.');
@@ -347,7 +347,7 @@ test.describe('#917 Monitor › AI activity', () => {
       // Neither provider has a reading, and neither may show a percentage —
       // "0%" would read as wide open, the opposite of "unknown".
       await expect(panel).not.toContainText('%');
-      expect(problems()).toEqual([]);
+      await expectQuiet(page, problems);
     });
   });
 
