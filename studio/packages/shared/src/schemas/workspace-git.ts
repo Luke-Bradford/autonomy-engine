@@ -586,6 +586,25 @@ export const WorkspaceGitAppliedActionSchema = z.enum([
 ]);
 export type WorkspaceGitAppliedAction = z.infer<typeof WorkspaceGitAppliedActionSchema>;
 
+/**
+ * #963 — whether an `action` means NOTHING WAS WRITTEN for that resource.
+ *
+ * A predicate rather than the `action !== 'unchanged'` comparison its two callers
+ * used to spell out, because adding `superseded` proved that comparison is a
+ * silent trap: both readers ask "did anything change?" structurally, so neither
+ * failed to compile when a THIRD did-nothing value appeared, and both would have
+ * started counting a pure no-op as a change — the audit log emitting an
+ * `import.applied` for an import that wrote nothing, and the Git page's roll-up
+ * saying "N changed" about resources it did not touch.
+ *
+ * `versionMinted` is deliberately NOT folded in here: it is ORTHOGONAL to
+ * `action` (#672), so a caller that cares about mints must test it separately —
+ * as `buildImportAppliedEvent` does. This answers only the row-level question.
+ */
+export function appliedActionWroteNothing(action: WorkspaceGitAppliedAction): boolean {
+  return action === 'unchanged' || action === 'superseded';
+}
+
 /** #3 G5c — one resource the apply wrote (or confirmed unchanged), with the
  * concrete `action` taken. `resourceId` is the resource's stable identity after
  * apply (never null — a pre-G1 file's create mints one). `versionMinted` is the

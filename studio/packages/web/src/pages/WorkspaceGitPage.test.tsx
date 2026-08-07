@@ -917,6 +917,39 @@ describe('WorkspaceGitPage', () => {
       expect(screen.queryByLabelText('Incoming changes')).toBeNull();
     });
 
+    /**
+     * #963 — `superseded` (the branch names a version this workspace already holds
+     * and has authored past) writes nothing, so it must not inflate the roll-up.
+     * The filter was a bare `action !== 'unchanged'`, which is structural and so
+     * failed to compile nowhere when a THIRD did-nothing action arrived: the page
+     * would have said "1 resource changed" about an import that touched nothing,
+     * while the row beside it correctly read "already here".
+     */
+    it('does not count a SUPERSEDED resource as a change', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'superseded',
+              versionMinted: false,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent(/Nothing to import/);
+    });
+
     /** The commonest outcome, and the analogue of `committed: false`. */
     it('does NOT phrase an all-unchanged import as a failure', async () => {
       await renderConnected();

@@ -1,3 +1,4 @@
+import { appliedActionWroteNothing } from '@autonomy-studio/shared';
 import type { ImportAppliedEvent, WorkspaceGitApplyResult } from '@autonomy-studio/shared';
 
 /**
@@ -7,8 +8,9 @@ import type { ImportAppliedEvent, WorkspaceGitApplyResult } from '@autonomy-stud
  * independent of the heavy import route.
  *
  * Records EFFECT, not attempts: a refused import (corrupt branch), an empty-repo
- * no-op (`head === null`, nothing applied), and an idempotent all-`unchanged`
- * re-import all return `null`. Emitting on those would drown the audit's "what
+ * no-op (`head === null`, nothing applied), and an idempotent re-import in which
+ * every resource wrote nothing (`appliedActionWroteNothing` — `unchanged`, and
+ * #963's `superseded`) all return `null`. Emitting on those would drown the audit's "what
  * changed" value in noise. `versionMinted` is part of the effectful test because
  * a restore can mint a version while its `action` reads `restored` (#672 — the
  * two are orthogonal), and an archive-only import has an empty `applied` but a
@@ -21,7 +23,7 @@ export function buildImportAppliedEvent(
   if (result.refused || result.head === null) return null;
   const effectful =
     result.archived.length > 0 ||
-    result.applied.some((a) => a.action !== 'unchanged' || a.versionMinted);
+    result.applied.some((a) => !appliedActionWroteNothing(a.action) || a.versionMinted);
   if (!effectful) return null;
   return {
     type: 'import.applied',

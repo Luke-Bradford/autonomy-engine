@@ -106,6 +106,37 @@ describe('buildImportAppliedEvent (#3 G6a — effectful-only audit)', () => {
     expect(event).toBeNull();
   });
 
+  // #963 — `superseded` is a did-nothing outcome exactly like `unchanged`: the
+  // branch names a version this workspace already holds and has authored past, so
+  // nothing is written. The effectful test used to be a bare `action !==
+  // 'unchanged'`, which would have called this an effect and put an
+  // `import.applied` in the audit log for an import that touched nothing — the
+  // noise this function's own docblock exists to keep out.
+  it('does NOT emit when every resource was superseded (a re-pull that wrote nothing)', () => {
+    const event = buildImportAppliedEvent(
+      result({
+        applied: [
+          {
+            path: 'p/a.json',
+            kind: 'pipeline',
+            resourceId: 'res_a',
+            action: 'superseded',
+            versionMinted: false,
+          },
+          {
+            path: 'c/b.json',
+            kind: 'connection',
+            resourceId: 'res_b',
+            action: 'unchanged',
+            versionMinted: false,
+          },
+        ],
+      }),
+      CTX,
+    );
+    expect(event).toBeNull();
+  });
+
   it('does NOT emit for a refused import', () => {
     expect(buildImportAppliedEvent(result({ refused: true }), CTX)).toBeNull();
   });

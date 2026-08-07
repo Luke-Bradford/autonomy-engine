@@ -32,6 +32,13 @@ import type { createCanvasStore } from './canvasStore';
  * validation against a field it cannot see. Hence a dedicated panel, in its own
  * file, on the `ContainerPanel` precedent.
  *
+ * #953 widened WHEN this panel is reached: the inspector now routes on
+ * `authorsCallBlob`, not on `isStructuralCallActivity` alone, so a legacy node
+ * carrying `Node.call` under a different `type` (an imported or API-seeded
+ * `call_pipeline`) gets this editor too. The reasoning above is unchanged and
+ * applies harder to that case — such a type is not catalogued at all, so the
+ * generic form derived no fields and the blob was simply uneditable.
+ *
  * ## One draft, one Apply, one undo entry
  *
  * Target, `wait` and every param edit land as a SINGLE `updateNodeCall` write.
