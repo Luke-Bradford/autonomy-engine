@@ -2564,3 +2564,85 @@ td button + button {
   color: var(--warning);
   font-size: 0.85rem;
 }
+
+/* --- #917 Monitor › AI activity ------------------------------------------- */
+
+/* The at-a-glance row. A definition list rather than divs, because each tile IS
+   a term and its value, and that is what a screen reader should hear. */
+.monitor-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.monitor-tiles > div {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.9rem;
+  min-width: 8rem;
+}
+
+.monitor-tiles dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.monitor-tiles dd {
+  margin: 0.15rem 0 0;
+  font-size: 1.15rem;
+}
+
+.quota-table,
+.ai-model-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+
+.quota-table th,
+.quota-table td,
+.ai-model-table th,
+.ai-model-table td {
+  text-align: left;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The reset instant's relative half, and the "at least" that marks an
+   incomplete cost: both MODIFY the figure beside them rather than being the
+   figure, so they are demoted the same way `.run-cost-unsettled` is — and stay
+   visible text, because a spend read as a final total is the misreading the
+   whole money model exists to prevent. */
+.quota-reset-relative,
+.cost-qualifier {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.quota-overage {
+  color: var(--warning);
+}
+
+/* An UNREADABLE quota is a NOTICE, never styled as a value — there is no number
+   here to make prominent, and making the absence look like a reading is the
+   fail-open shape this panel refuses. */
+.quota-unreadable strong {
+  letter-spacing: 0.02em;
+}
+
+.monitor-panel {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.agent-cli-summary {
+  color: var(--muted);
+  margin-top: 0.75rem;
+}
+
+.ai-window-picker {
+  color: var(--muted);
+  font-size: 0.9rem;
+}

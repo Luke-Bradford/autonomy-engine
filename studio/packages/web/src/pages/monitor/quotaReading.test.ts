@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
-  type AccountQuotaState,
-} from '@autonomy-studio/shared';
+import { ACCOUNT_QUOTA_UNAVAILABLE_REASONS, type AccountQuotaState } from '@autonomy-studio/shared';
 import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
 
 function stateWith(claude: AccountQuotaState['account']['claude']): AccountQuotaState {

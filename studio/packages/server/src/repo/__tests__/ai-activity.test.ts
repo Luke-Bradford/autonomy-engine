@@ -225,8 +225,20 @@ describe('aggregateAiActivity', () => {
   it('orders groups by spend descending, breaking ties on provider then model', () => {
     const { db } = freshDb();
     const run = mkRun(db);
-    insertMetered(db, run.id, { ts: 1, model: 'b-model', inputTokens: 1, outputTokens: 1, cost: 1 });
-    insertMetered(db, run.id, { ts: 2, model: 'a-model', inputTokens: 1, outputTokens: 1, cost: 1 });
+    insertMetered(db, run.id, {
+      ts: 1,
+      model: 'b-model',
+      inputTokens: 1,
+      outputTokens: 1,
+      cost: 1,
+    });
+    insertMetered(db, run.id, {
+      ts: 2,
+      model: 'a-model',
+      inputTokens: 1,
+      outputTokens: 1,
+      cost: 1,
+    });
     insertMetered(db, run.id, { ts: 3, model: 'big', inputTokens: 1, outputTokens: 1, cost: 5 });
 
     const snapshot = aggregateAiActivity(db, { sinceMs: 0, ownerId: 'local' });

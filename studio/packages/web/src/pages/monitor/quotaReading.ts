@@ -77,7 +77,11 @@ export function readAccountQuota(state: AccountQuotaState): QuotaReading {
      * job is to say what it does not know: an exception here would blank the
      * panel, which reads as "nothing to report" — the fail-open shape again.
      */
-    return { kind: 'unreadable', reason: state.unavailable?.claude ?? 'reader_error', generatedAtMs };
+    return {
+      kind: 'unreadable',
+      reason: state.unavailable?.claude ?? 'reader_error',
+      generatedAtMs,
+    };
   }
   return {
     kind: 'reading',
@@ -103,7 +107,8 @@ export const QUOTA_UNAVAILABLE_TEXT: Record<AccountQuotaUnavailableReason, strin
     'The provider is rate-limiting the reading. The account is busy; the reader is backing off rather than making it worse.',
   provider_error: 'The provider call failed, so no reading could be taken.',
   unrecognized_payload: 'The provider answered in a shape this reader does not recognise.',
-  reader_error: 'The quota reader itself failed. This should not happen; it is reported rather than hidden.',
+  reader_error:
+    'The quota reader itself failed. This should not happen; it is reported rather than hidden.',
 };
 
 /** A percentage → at most one decimal place, without a trailing `.0`. */

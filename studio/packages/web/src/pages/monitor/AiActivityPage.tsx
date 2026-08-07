@@ -77,7 +77,7 @@ function QuotaPanel() {
 
       {reading?.kind === 'reading' && (
         <table className="quota-table">
-          <caption className="sr-only">Account quota by window</caption>
+          <caption className="visually-hidden">Account quota by window</caption>
           <thead>
             <tr>
               <th scope="col">Window</th>
@@ -100,7 +100,10 @@ function QuotaPanel() {
                 <td>
                   {formatWhen(w.resetsAtMs)}
                   {w.resetsAtMs > now && (
-                    <span className="quota-reset-relative"> (in {formatElapsed(w.resetsAtMs - now)})</span>
+                    <span className="quota-reset-relative">
+                      {' '}
+                      (in {formatElapsed(w.resetsAtMs - now)})
+                    </span>
                   )}
                 </td>
               </tr>
@@ -165,7 +168,9 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         </p>
       ) : (
         <table className="ai-model-table">
-          <caption className="sr-only">Billed exchanges by connection kind and model</caption>
+          <caption className="visually-hidden">
+            Billed exchanges by connection kind and model
+          </caption>
           <thead>
             <tr>
               <th scope="col">Connection kind</th>
@@ -215,10 +220,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
 
 export function AiActivityPage() {
   const [since, setSince] = useState<RunSince>('1h');
-  const fetcher = useCallback(
-    (signal: AbortSignal) => fetchAiActivity(since, signal),
-    [since],
-  );
+  const fetcher = useCallback((signal: AbortSignal) => fetchAiActivity(since, signal), [since]);
   const { data, error, loading, lastUpdatedAt } = usePolledResource(fetcher, {
     intervalMs: ACTIVITY_POLL_MS,
   });
@@ -244,8 +246,8 @@ export function AiActivityPage() {
       </div>
 
       <p className="page-hint">
-        What your connected AIs and agent CLIs have actually been doing, across every run — including
-        runs still in flight. Refreshes itself every few seconds.
+        What your connected AIs and agent CLIs have actually been doing, across every run —
+        including runs still in flight. Refreshes itself every few seconds.
       </p>
 
       {error !== null && (

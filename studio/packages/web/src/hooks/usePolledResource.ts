@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { messageOf } from '../api/client';
 
 /**
@@ -16,6 +16,13 @@ import { messageOf } from '../api/client';
  * It refreshes IMMEDIATELY on becoming visible again, so the pause can never be
  * mistaken for stale data being presented as current — the returned
  * `lastUpdatedAt` is what the UI stamps so "as of" is always literally true.
+ *
+ * THE FETCHER MUST BE MEMOIZED (`useCallback`). It is a dependency of the effect
+ * below, which is what makes a fetcher that closes over changed state — a new
+ * window, a new filter — actually refetch rather than keep serving the old
+ * query. The cost of that correctness is that an unmemoized inline arrow would
+ * re-arm the interval on every render, and at a 5s cadence could approach never
+ * firing. Memoizing is the caller's half of the contract.
  */
 export interface PolledResource<T> {
   data: T | null;
@@ -37,15 +44,6 @@ export function usePolledResource<T>(
   const [loading, setLoading] = useState(true);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
-  /*
-   * The fetcher is held in a ref so that a caller passing an inline arrow (the
-   * ordinary way to call this) does not re-arm the interval on every render.
-   * Without it the effect below would tear down and recreate its timer each
-   * render, which for a 5s interval means it can approach never actually firing.
-   */
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
-
   const [reloadKey, setReloadKey] = useState(0);
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
 
@@ -55,7 +53,7 @@ export function usePolledResource<T>(
 
     const load = async (): Promise<void> => {
       try {
-        const next = await fetcherRef.current(controller.signal);
+        const next = await fetcher(controller.signal);
         if (cancelled) return;
         setData(next);
         setError(null);
@@ -107,7 +105,7 @@ export function usePolledResource<T>(
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [intervalMs, reloadKey]);
+  }, [fetcher, intervalMs, reloadKey]);
 
   return { data, error, loading, lastUpdatedAt, refresh };
 }
