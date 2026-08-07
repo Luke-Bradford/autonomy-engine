@@ -7,12 +7,13 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedVersion } from './support/seedDoc';
 
 /**
- * #3 G10 / U18 slice 1 — Manage → Git (#956).
+ * #3 G10 / U18 slices 1-2 — Manage → Git (#956, #962).
  *
  * This is the first end-to-end exercise of the workspace-git subsystem: until
- * this slice the server owned all thirteen routes and no client called any of
+ * slice 1 the server owned all thirteen routes and no client called any of
  * them, so the whole connect → inspect → commit path had never been walked
- * against a real repository.
+ * against a real repository. Slice 2 walks the other direction — divergence,
+ * preview, import — and closes the round trip inside one spec.
  *
  * The repo is a REAL `git init --bare` in a scratch directory, connected by
  * absolute path (which `WorkspaceGitRepoUrlSchema` accepts precisely so a local
@@ -82,7 +83,9 @@ test.afterAll(async ({ request }) => {
   if (repoDir) rmSync(repoDir, { recursive: true, force: true });
 });
 
-test('a workspace connects to a repo, commits itself, and disconnects', async ({ page }) => {
+test('a workspace connects to a repo, commits itself, imports it back, and disconnects', async ({
+  page,
+}) => {
   const problems = collectPageProblems(page);
 
   /**
@@ -158,6 +161,70 @@ test('a workspace connects to a repo, commits itself, and disconnects', async ({
   // ── drift is clean afterwards ──────────────────────────────────────────────
   await page.getByRole('button', { name: 'Check for changes' }).click();
   await expect(page.getByText('No uncommitted changes.')).toBeVisible();
+
+  /**
+   * ── the incoming half (#962) ───────────────────────────────────────────────
+   *
+   * `update-ref` points the collaboration branch at the commit the workspace
+   * just pushed to its working branch — what a merged pull request does,
+   * expressed as the one command a bare repo needs. The workspace can then
+   * import its own commit back, which walks the whole client path for real:
+   * divergence, preview, apply, and the import base moving as a result.
+   *
+   * WHAT THIS DELIBERATELY DOES NOT COVER, and why. The import applies content
+   * identical to the database, so every disposition is `unchanged` and NO
+   * version is minted — which means the `sourceCommit` provenance stamp, the
+   * thing this slice exists to unblock for Publish, is not exercised here.
+   *
+   * The obvious way to force a mint — advance the database past the branch,
+   * then re-import the branch — is blocked by a SERVER defect (#963): the apply
+   * compares the branch's version against the pipeline's CURRENT HEAD rather
+   * than against the stored row that owns that version's `resourceId`, so
+   * re-importing a commit you have since edited past is refused as if you had
+   * tampered with an immutable row. Asserting the minted-version path here
+   * would mean asserting a behaviour the server does not have. It belongs in
+   * this spec once #963 lands.
+   */
+  execFileSync('git', ['update-ref', 'refs/heads/main', 'refs/heads/studio/local/work'], {
+    cwd: repoDir,
+    stdio: 'ignore',
+  });
+
+  // Scoped: the commit above left its own `role="status"` on the page, so an
+  // unscoped read of either role would be a strict-mode violation from here on.
+  const incoming = page.getByRole('region', { name: 'Incoming', exact: true });
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+
+  // Never imported before, so there is no base to compare the branch against.
+  await expect(incoming).toContainText('never imported from main');
+  const previewRows = incoming.getByRole('table').getByRole('row');
+  await expect(previewRows.filter({ hasText: pipelineName })).toContainText('unchanged');
+
+  /**
+   * A GATE, not a comment. One SQLite database is shared by every spec file, so
+   * a preview proposing archives would mean this import is about to archive
+   * OTHER specs' pipelines and disable their triggers — and `withConfirm` below
+   * accepts blindly, so nothing else would stop it. The set is empty by
+   * construction (the branch was written from this very database, and drift was
+   * asserted clean two steps ago); this is what makes that safe by check rather
+   * than safe by argument.
+   */
+  await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
+
+  const confirmed = await withConfirm(page, () =>
+    incoming.getByRole('button', { name: 'Import' }).click(),
+  );
+  expect(confirmed).toContain('re-read now');
+
+  // An all-unchanged import is a SUCCESS, and must not be phrased as a failure.
+  await expect(incoming.getByRole('status')).toContainText('Nothing to import');
+
+  // The import base moved even so: a real sha, where an em-dash stood before.
+  await expect(fact(page, 'Imported from')).toHaveText(/^[0-9a-f]{7}$/);
+
+  // ── and the workspace is now measurably up to date, not merely unchanged ───
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+  await expect(incoming).toContainText('Up to date with main.');
 
   // ── disconnect ─────────────────────────────────────────────────────────────
   const message = await withConfirm(page, () =>

@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type {
+  WorkspaceGitApplyResult,
   WorkspaceGitCommitResult,
+  WorkspaceGitDivergence,
   WorkspaceGitDrift,
+  WorkspaceGitImportPreview,
   WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
 import { WorkspaceGitPage } from './WorkspaceGitPage';
@@ -24,6 +27,9 @@ vi.mock('../api/workspaceGit', async (importActual) => {
     clearWorkspaceGitToken: vi.fn(),
     readWorkspaceGitDrift: vi.fn(),
     commitWorkspace: vi.fn(),
+    readWorkspaceGitDivergence: vi.fn(),
+    previewWorkspaceGitImport: vi.fn(),
+    importWorkspaceGit: vi.fn(),
   };
 });
 
@@ -35,6 +41,12 @@ const setTokenMock = vi.mocked(api.setWorkspaceGitToken);
 const clearTokenMock = vi.mocked(api.clearWorkspaceGitToken);
 const driftMock = vi.mocked(api.readWorkspaceGitDrift);
 const commitMock = vi.mocked(api.commitWorkspace);
+const divergenceMock = vi.mocked(api.readWorkspaceGitDivergence);
+const previewMock = vi.mocked(api.previewWorkspaceGitImport);
+const importMock = vi.mocked(api.importWorkspaceGit);
+
+/** The collab head `status()` reports as observed — a preview at this sha is CURRENT. */
+const HEAD = 'abcdef1234567890';
 
 function status(overrides: Partial<WorkspaceGitStatus> = {}): WorkspaceGitStatus {
   return {
@@ -73,6 +85,58 @@ function commitResult(overrides: Partial<WorkspaceGitCommitResult> = {}): Worksp
     files: ['pipelines/a.json'],
     ...overrides,
   };
+}
+
+function divergence(overrides: Partial<WorkspaceGitDivergence> = {}): WorkspaceGitDivergence {
+  return { state: 'behind', importBase: '1111111222222', collabHead: HEAD, ...overrides };
+}
+
+function preview(overrides: Partial<WorkspaceGitImportPreview> = {}): WorkspaceGitImportPreview {
+  return { head: HEAD, resources: [], archive: [], diagnostics: [], ...overrides };
+}
+
+function previewResource(
+  overrides: Partial<WorkspaceGitImportPreview['resources'][number]> = {},
+): WorkspaceGitImportPreview['resources'][number] {
+  return {
+    path: 'pipelines/nightly.json',
+    kind: 'pipeline',
+    resourceId: 'res_1',
+    name: 'Nightly',
+    disposition: 'update',
+    nameChanged: false,
+    contentChanged: true,
+    ...overrides,
+  };
+}
+
+function applyResult(overrides: Partial<WorkspaceGitApplyResult> = {}): WorkspaceGitApplyResult {
+  return {
+    head: HEAD,
+    refused: false,
+    applied: [],
+    deferred: [],
+    archived: [],
+    diagnostics: [],
+    ...overrides,
+  };
+}
+
+/**
+ * Read a check for incoming to completion.
+ *
+ * The two reads are SEQUENTIAL in the component, so the assertion has to wait
+ * for the second — a test that clicked and asserted immediately would be racing
+ * the preview and would pass or fail on scheduling.
+ */
+async function checkForIncoming(): Promise<void> {
+  await userEvent.click(screen.getByRole('button', { name: 'Check for incoming' }));
+  await waitFor(() => expect(previewMock).toHaveBeenCalled());
+}
+
+/** The import surface's own region — every other section has a table too. */
+function incoming(): HTMLElement {
+  return screen.getByLabelText('Incoming changes');
 }
 
 /**
@@ -511,7 +575,9 @@ describe('WorkspaceGitPage', () => {
 
       const alert = await screen.findByRole('alert');
       expect(alert).toHaveTextContent(/push rejected/);
-      expect(alert).toHaveTextContent(/not yet available here/);
+      // Slice 2 turned the apology into a pointer: the remedy the server's own
+      // message names is now a control on this page.
+      expect(alert).toHaveTextContent(/Check for incoming/);
     });
 
     it('surfaces a rejected push instead of reporting success', async () => {
@@ -523,6 +589,586 @@ describe('WorkspaceGitPage', () => {
 
       expect(await screen.findByRole('alert')).toHaveTextContent(/not a fast-forward/);
       expect(screen.queryByRole('status')).toBeNull();
+    });
+  });
+
+  describe('incoming (divergence, preview and import)', () => {
+    it('reads divergence AND the preview from one check', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'behind' }));
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+
+      await checkForIncoming();
+
+      expect(divergenceMock).toHaveBeenCalledTimes(1);
+      expect(previewMock).toHaveBeenCalledTimes(1);
+      expect(incoming()).toHaveTextContent(/main has moved on/);
+      expect(within(incoming()).getByRole('row', { name: /Nightly/ })).toHaveTextContent(
+        'content differs',
+      );
+    });
+
+    /**
+     * `unknown` is TWO different facts wearing one enum value, and the server
+     * hands back both shas precisely so the client can tell them apart. A single
+     * string would be false for whichever case it was not written for.
+     */
+    it('says a null import base means this workspace has never imported', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(
+        divergence({ state: 'unknown', importBase: null, collabHead: HEAD }),
+      );
+      previewMock.mockResolvedValue(preview());
+
+      await checkForIncoming();
+
+      expect(incoming()).toHaveTextContent(/never imported from main/);
+      expect(incoming()).not.toHaveTextContent(/Up to date/);
+    });
+
+    it('says a null collab head means the branch is empty or gone, not that nothing was imported', async () => {
+      await renderConnected({ observedCollabHead: null });
+      divergenceMock.mockResolvedValue(
+        divergence({ state: 'unknown', importBase: '1111111222222', collabHead: null }),
+      );
+      previewMock.mockResolvedValue(preview({ head: null }));
+
+      await checkForIncoming();
+
+      expect(incoming()).toHaveTextContent(
+        /main has no commits at the remote, or no longer exists/,
+      );
+      expect(incoming()).not.toHaveTextContent(/never imported/);
+    });
+
+    it('warns that a diverged branch replaces local resources', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'diverged' }));
+      previewMock.mockResolvedValue(preview());
+
+      await checkForIncoming();
+
+      expect(incoming()).toHaveTextContent(/history was rewritten/);
+    });
+
+    /**
+     * A pruned import base comes back as a 502 from `/divergence`. Leaving the
+     * previous "Up to date" beside that error would render a FAILED check as a
+     * clean one — the #473 shape, in the one place where the manufactured fact
+     * talks the operator out of an import they need.
+     */
+    it('clears the previous reading when a later check fails', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'current' }));
+      previewMock.mockResolvedValue(preview());
+
+      await checkForIncoming();
+      expect(incoming()).toHaveTextContent(/Up to date with main/);
+
+      divergenceMock.mockRejectedValue(new Error('import base 1111111 is not in the repository'));
+      await userEvent.click(screen.getByRole('button', { name: 'Check for incoming' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/not in the repository/);
+      expect(screen.queryByLabelText('Incoming changes')).toBeNull();
+    });
+
+    it('offers no Import at all until a check has been made', async () => {
+      await renderConnected();
+
+      expect(screen.queryByRole('button', { name: 'Import' })).toBeNull();
+    });
+
+    it('refuses to import an empty branch, which would report a success that did nothing', async () => {
+      await renderConnected({ observedCollabHead: null });
+      divergenceMock.mockResolvedValue(divergence({ collabHead: null, state: 'unknown' }));
+      previewMock.mockResolvedValue(preview({ head: null }));
+
+      await checkForIncoming();
+
+      expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+      expect(screen.getByText(/nothing on the branch to import/)).toBeInTheDocument();
+    });
+
+    it('refuses to import while a file on the branch cannot be read', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          diagnostics: [
+            { path: 'pipelines/broken.json', code: 'unparseable', message: 'unexpected token' },
+          ],
+        }),
+      );
+
+      await checkForIncoming();
+
+      expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+      expect(incoming()).toHaveTextContent(/an import refuses outright and changes nothing/);
+    });
+
+    /**
+     * The branch moving between the preview and the import is a gap no control
+     * can close — `/import` takes no expected-head token. So the UI's job is to
+     * stop offering a reading it can already see is stale.
+     */
+    it('refuses to import a preview the branch has already moved past', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ collabHead: 'deadbeef00000000' }));
+      previewMock.mockResolvedValue(preview({ head: 'deadbeef00000000' }));
+
+      await checkForIncoming();
+
+      expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+      expect(screen.getByText(/out of date — check again/)).toBeInTheDocument();
+    });
+
+    it('refuses to import when the two halves of one check saw different commits', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ collabHead: HEAD }));
+      previewMock.mockResolvedValue(preview({ head: 'deadbeef00000000' }));
+
+      await checkForIncoming();
+
+      expect(screen.getByRole('button', { name: 'Import' })).toBeDisabled();
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /moved while it was being checked/,
+      );
+    });
+
+    /**
+     * The widest-blast-radius consequence on the page, and the one nobody
+     * clicked for: a pipeline missing from the branch is archived and its
+     * triggers are switched off.
+     */
+    it('names the pipelines an import would archive, in the confirmation', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          archive: [
+            {
+              path: 'pipelines/legacy.json',
+              kind: 'pipeline',
+              resourceId: 'res_9',
+              name: 'Legacy',
+            },
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      expect(incoming()).toHaveTextContent(/Legacy/);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      const message = confirm.mock.calls[0]?.[0] as string;
+      expect(message).toContain('Legacy');
+      expect(message).toMatch(/ARCHIVED/);
+      expect(message).toMatch(/trigger depending on them will be disabled/);
+      // The preview is not a promise — the branch is re-read on import.
+      expect(message).toMatch(/re-read now/);
+      expect(importMock).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The confirmation counts the way the OUTCOME counts. Stating the whole
+     * branch's resource count would overstate the blast radius at exactly the
+     * moment the operator is deciding, and would then be contradicted by the
+     * "N resources changed" line that follows.
+     */
+    it('counts only the differing resources in the confirmation, not the whole branch', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ path: 'a.json', disposition: 'update' }),
+            previewResource({ path: 'b.json', disposition: 'unchanged' }),
+            previewResource({ path: 'c.json', disposition: 'unchanged' }),
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differs from/);
+    });
+
+    /**
+     * The count and its verb have to agree, because the singular case is the
+     * common one — one edited pipeline is the ordinary import — and "1 resource
+     * differ" is the sentence the operator reads most often.
+     */
+    it('agrees the verb with the count in the confirmation', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ path: 'a.json', disposition: 'update' }),
+            previewResource({ path: 'b.json', disposition: 'create' }),
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/2 resources on the branch differ from/);
+    });
+
+    /** `refused: true` arrives as a 200. A 200 is not an import. */
+    it('reports a refusal as a refusal, not as a successful import', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          refused: true,
+          diagnostics: [
+            { path: 'pipelines/broken.json', code: 'unparseable', message: 'unexpected token' },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Import refused/);
+      expect(screen.getByText(/unexpected token/)).toBeInTheDocument();
+      expect(screen.queryByRole('status')).toBeNull();
+      // A refusal wrote nothing, so the reading it was taken against is still
+      // an accurate account of the branch. Discarding it would cost the
+      // operator a second check to see the very same thing.
+      expect(screen.queryByLabelText('Incoming changes')).not.toBeNull();
+    });
+
+    /**
+     * `deferred` has no producer today. The day one appears, a client that
+     * ignores it reports a clean import over resources that were never applied
+     * — the silent-omission shape this page refuses everywhere else.
+     */
+    it('surfaces resources the server neither applied nor explained', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          deferred: [
+            {
+              path: 'datasets/orders.json',
+              kind: 'connection',
+              resourceId: null,
+              disposition: 'create',
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /1 resource it did not apply and did not explain/,
+      );
+      expect(screen.getByText('datasets/orders.json')).toBeInTheDocument();
+    });
+
+    it('reports what changed, and does not count an unchanged resource as a change', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'updated',
+              versionMinted: true,
+            },
+            {
+              path: 'connections/api.json',
+              kind: 'connection',
+              resourceId: 'res_2',
+              action: 'unchanged',
+              versionMinted: false,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent('1 resource changed');
+      expect(screen.getByText(/pipelines\/nightly\.json/)).toHaveTextContent('new version');
+      expect(screen.queryByText(/connections\/api\.json/)).toBeNull();
+      // The preview described the pre-import state; leaving it up would assert
+      // changes that have now been applied.
+      expect(screen.queryByLabelText('Incoming changes')).toBeNull();
+    });
+
+    /** The commonest outcome, and the analogue of `committed: false`. */
+    it('does NOT phrase an all-unchanged import as a failure', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'current' }));
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'unchanged',
+              versionMinted: false,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        /Nothing to import — this workspace already matches main at abcdef1/,
+      );
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    /**
+     * "Already matches" is a claim about the WHOLE branch, so anything deferred
+     * falsifies it. Without `deferred` in the condition the page states it as a
+     * `role="status"` success a few lines above the `role="alert"` saying the
+     * workspace does NOT match — a contradiction, and a screen reader hears the
+     * reassuring half first.
+     */
+    it('does not claim the workspace already matches when a resource was deferred', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ state: 'current' }));
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'unchanged',
+              versionMinted: false,
+            },
+          ],
+          deferred: [
+            {
+              path: 'datasets/orders.json',
+              kind: 'connection',
+              resourceId: null,
+              disposition: 'create',
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /This workspace does not match main/,
+      );
+      expect(screen.queryByText(/already matches main/)).toBeNull();
+    });
+
+    /**
+     * The time-of-check/time-of-use gap made visible. No CAS token exists to
+     * close it, so the least dishonest thing available is to say when the thing
+     * applied was not the thing shown.
+     */
+    it('says so when the branch moved between the preview and the import', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(applyResult({ head: '9999999888888888' }));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /abcdef1 was shown, 9999999 was applied/,
+      );
+    });
+
+    it('reports an archive the preview never proposed', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ archive: [] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          archived: [{ resourceId: 'res_9', name: 'Legacy', disabledTriggerIds: ['tr_1', 'tr_2'] }],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      const archived = await screen.findByText(/Legacy/);
+      expect(archived).toHaveTextContent('2 triggers disabled');
+    });
+
+    /**
+     * `WorkspaceApplyError` reaches the client as a bare 500 "An unexpected
+     * error occurred", which leaves the only question that matters unanswered.
+     * The apply and the import-base stamp share one transaction, so the answer
+     * is assertable rather than hoped for.
+     */
+    it('states that a thrown import changed nothing and did not move the base', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockRejectedValue(new ApiError(500, 'An unexpected error occurred.'));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        /No resources were changed and the import base did not move/,
+      );
+      expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    /**
+     * Both acts re-observe the remote server-side, so the status panel above is
+     * rewritten whether or not the act then succeeded — and a failed check is
+     * exactly when the recorded reason matters most.
+     */
+    it('re-reads the status after a FAILED import too', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockRejectedValue(new ApiError(502, 'git fetch failed'));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      const before = getMock.mock.calls.length;
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      await waitFor(() => expect(getMock.mock.calls.length).toBeGreaterThan(before));
+    });
+
+    /**
+     * The counterpart to the reassurance above, and the reason it is
+     * conditional. A transport failure carries NO response, so the request may
+     * well have been applied and acknowledged into a socket nobody was left
+     * holding. Claiming "nothing changed" there would be a guess in the voice
+     * of a guarantee, and would send the operator to retry an import that has
+     * already landed.
+     */
+    it('refuses to promise anything when the failure carried no response', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockRejectedValue(new TypeError('Failed to fetch'));
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(/not known whether the import was applied/);
+      expect(alert).not.toHaveTextContent(/No resources were changed/);
+    });
+
+    /**
+     * A commit rewrites the working copy every disposition was computed
+     * against: a resource just committed would still read `unchanged` in a
+     * preview taken before it.
+     */
+    it('discards an incoming reading once a commit rewrites the working copy', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+
+      await checkForIncoming();
+      expect(incoming()).toBeInTheDocument();
+
+      commitMock.mockResolvedValue(commitResult({ committed: true }));
+      await userEvent.type(screen.getByLabelText('Message'), 'later work');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      await waitFor(() => expect(screen.queryByLabelText('Incoming changes')).toBeNull());
+    });
+
+    /**
+     * The companion to the test above, and the one that makes it mean
+     * something: `committed: false` means the branch already matched, so the
+     * working copy did NOT change and the reading is still good. Without this,
+     * hoisting the invalidation out of the `if (commit.committed)` guard would
+     * leave every test green.
+     */
+    it('keeps an incoming reading when a commit turns out to be a no-op', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+
+      await checkForIncoming();
+
+      commitMock.mockResolvedValue(commitResult({ committed: false }));
+      await userEvent.type(screen.getByLabelText('Message'), 'nothing to say');
+      await userEvent.click(screen.getByRole('button', { name: 'Commit' }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('status')).toHaveTextContent(/Nothing to commit/),
+      );
+      expect(screen.queryByLabelText('Incoming changes')).not.toBeNull();
+    });
+
+    /**
+     * The staleness check compares the preview's head against the status
+     * panel's — so if OUR OWN status re-read failed, the panel still holds the
+     * pre-check head and the comparison would report "the branch moved" on the
+     * strength of nothing but our own failure. A check almost always advances
+     * the head, so this would fire on virtually every workspace whose refresh
+     * blipped, blocking Import behind a fact nobody observed.
+     */
+    it('does not claim the branch moved when its own status re-read failed', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence({ collabHead: 'deadbeef00000000' }));
+      previewMock.mockResolvedValue(
+        preview({ head: 'deadbeef00000000', resources: [previewResource()] }),
+      );
+      // The status GET that follows the check fails, so the panel keeps the OLD
+      // head — which is exactly the disagreement that must NOT be read as drift.
+      getMock.mockRejectedValueOnce(new Error('service unavailable'));
+
+      await checkForIncoming();
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled());
+      expect(screen.queryByText(/has moved since this preview was taken/)).toBeNull();
+    });
+
+    it('takes part in the page-wide lock rather than running beside another act', async () => {
+      await renderConnected();
+      divergenceMock.mockReturnValue(new Promise(() => {}));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Check for incoming' }));
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Disconnect' })).toBeDisabled(),
+      );
+      for (const button of screen.getAllByRole('button')) expect(button).toBeDisabled();
     });
   });
 });
