@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildCodexQuota,
   codexQuotaSourcePresent,
+  createAbandonmentLatch,
   createCodexAccountQuotaReader,
   mapCodexWindow,
   withDeadline,
@@ -439,6 +440,37 @@ describe('createCodexAccountQuotaReader', () => {
     ).rejects.toThrow('not the deadline');
   });
 
+  it('refuses to start a walk while an abandoned one is still outstanding', async () => {
+    // `maxAbandonedSamples: 0` stands in for "one walk is already stranded".
+    // The refusal cannot be reached any other way in-process: it needs a
+    // syscall that genuinely never returns, and a real filesystem will not
+    // provide one (a FIFO, the usual trick, is skipped by the walk because it
+    // is not a regular file).
+    //
+    // The tree here is PERFECTLY GOOD and holds a readable snapshot, so a
+    // reader that consulted the filesystem would return that value. Getting
+    // `reader_error` instead is what shows the check happens BEFORE the walk —
+    // which is the whole point, since a refusal issued after walking would
+    // strand exactly the threadpool slot it exists to protect.
+    const sessionsRoot = await makeSessionsRoot();
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'good',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
+
+    const outcome = await createCodexAccountQuotaReader({
+      sessionsRoot,
+      now: () => NOW_MS,
+      maxAbandonedSamples: 0,
+    }).read();
+
+    expect(outcome.value).toBeNull();
+    expect(outcome.unavailable).toBe('reader_error');
+  });
+
   it('does not follow a symlink out of the sessions tree', async () => {
     // `readdir(..., {withFileTypes:true})` reports a link as a link, not a
     // directory, so a cycle cannot loop the walk. Pinned because the walk has
@@ -498,5 +530,63 @@ describe('codexQuotaSourcePresent', () => {
     const sessionsRoot = await makeSessionsRoot();
     await writeFile(sessionsRoot, 'not a directory', 'utf8');
     expect(await codexQuotaSourcePresent(sessionsRoot)).toBe(false);
+  });
+});
+
+describe('createAbandonmentLatch', () => {
+  // A stranded walk is a libuv threadpool slot the process does not get back
+  // until the kernel releases it, and node cannot cancel an fs promise. With
+  // the default pool of four, a reader that starts a fresh doomed walk on every
+  // cache miss takes down every async `fs` operation in the process — including
+  // claude's own quota reader, which the spend guard depends on. Hence a cap.
+  //
+  // Tested here rather than through the reader because the arithmetic is the
+  // part that can be wrong, and a promise that never settles is the same
+  // hazard as a hung syscall without needing a filesystem to produce one.
+  const never = (): Promise<never> => new Promise<never>(() => {});
+
+  it('blocks once the cap is reached and not before', () => {
+    const latch = createAbandonmentLatch(2);
+    expect(latch.blocked()).toBe(false);
+    latch.track(never());
+    expect(latch.blocked()).toBe(false);
+    latch.track(never());
+    expect(latch.blocked()).toBe(true);
+  });
+
+  it('unblocks when the stranded work finally settles', async () => {
+    // Self-healing is the reason one is a safe cap: the reader refuses only for
+    // as long as the filesystem is genuinely stuck, and resumes by itself.
+    const latch = createAbandonmentLatch(1);
+    let release: (() => void) | undefined;
+    latch.track(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    expect(latch.blocked()).toBe(true);
+    release?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(latch.blocked()).toBe(false);
+  });
+
+  it('unblocks on work that REJECTS, not only on work that succeeds', async () => {
+    // A walk that eventually fails has handed its threadpool slot back exactly
+    // as one that eventually succeeds has. Decrementing only on success would
+    // latch the reader off permanently the first time a mount errored — a
+    // display panel that never recovers without a restart.
+    const latch = createAbandonmentLatch(1);
+    let fail: ((error: Error) => void) | undefined;
+    latch.track(
+      new Promise<void>((_resolve, reject) => {
+        fail = reject;
+      }),
+    );
+    expect(latch.blocked()).toBe(true);
+    fail?.(new Error('the mount went away'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(latch.blocked()).toBe(false);
   });
 });

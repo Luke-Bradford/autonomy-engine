@@ -159,6 +159,9 @@ class DeadlineExceeded extends Error {}
  * the race still has its rejection handled by `Promise.race` itself, so a
  * syscall that fails long after we gave up cannot surface as an unhandled
  * rejection.
+ *
+ * The abandoned work is not free, which is what `MAX_ABANDONED_SAMPLES` exists
+ * to bound — see there.
  */
 export async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -171,6 +174,60 @@ export async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * How many timed-out walks may still be outstanding before the reader stops
+ * starting new ones.
+ *
+ * Abandoning a walk bounds the CALLER but not the WORK: node cannot cancel an
+ * fs promise, so a syscall hung on a dead mount keeps its libuv threadpool slot
+ * until the kernel gives it back. Without this cap the reader starts a fresh
+ * doomed walk on every cache miss for as long as the outage lasts, and with the
+ * default `UV_THREADPOOL_SIZE` of 4 a handful of refreshes strands the whole
+ * pool. That does not merely break this endpoint — it stalls every async `fs`
+ * operation in the process, `claude-quota.ts`'s own reader included. A display
+ * panel must not be able to take the spend guard's reader down with it.
+ *
+ * One is enough, and self-healing: while a walk is genuinely stuck the reader
+ * answers `reader_error` immediately without touching the filesystem, and the
+ * moment the kernel releases that walk the counter drops and normal sampling
+ * resumes. A merely slow walk — abandoned at the deadline but still completing
+ * a second later — has already settled by the next cache miss, so this costs
+ * nothing in the case that is only slow rather than hung.
+ */
+const MAX_ABANDONED_SAMPLES = 1;
+
+/**
+ * Counts walks that were preempted and have not yet been released.
+ *
+ * A separate object because the counting is the part worth pinning and it
+ * cannot be reached through the reader: a preempted walk needs a syscall that
+ * genuinely never returns, and there is no way to produce one in-process
+ * against a real filesystem. (A FIFO is the usual trick and does not work here
+ * — `collectSessionFiles` skips anything that is not a regular file, so the
+ * walk never opens it.) Extracted, the arithmetic is testable against promises
+ * that never settle, which is the same hazard without the kernel.
+ */
+export function createAbandonmentLatch(max: number): {
+  blocked: () => boolean;
+  track: (work: Promise<unknown>) => void;
+} {
+  let outstanding = 0;
+  return {
+    blocked: () => outstanding >= max,
+    track: (work) => {
+      outstanding += 1;
+      const release = (): void => {
+        outstanding -= 1;
+      };
+      // Settled either way: a walk that eventually FAILS has released its
+      // threadpool slot exactly as one that eventually succeeds has, so both
+      // outcomes must decrement or an erroring mount latches the reader off
+      // permanently.
+      void work.then(release, release);
+    },
+  };
 }
 
 export type CodexAccountQuotaReading =
@@ -354,6 +411,12 @@ export interface CodexAccountQuotaReaderOptions {
   maxFilesScanned?: number;
   /** Wall-clock budget for one sample's filesystem work. */
   deadlineMs?: number;
+  /**
+   * How many preempted walks may be outstanding before the reader refuses to
+   * start another. `0` means "never sample", which is how a test reaches the
+   * refusal path without needing a syscall that hangs.
+   */
+  maxAbandonedSamples?: number;
 }
 
 export function createCodexAccountQuotaReader(
@@ -369,6 +432,7 @@ export function createCodexAccountQuotaReader(
   let cached: CodexAccountQuotaReading | null = null;
   let cachedAt: number | null = null;
   let inFlight: Promise<CodexAccountQuotaReading> | null = null;
+  const latch = createAbandonmentLatch(opts.maxAbandonedSamples ?? MAX_ABANDONED_SAMPLES);
 
   /**
    * The whole sample under the wall-clock budget.
@@ -385,10 +449,22 @@ export function createCodexAccountQuotaReader(
    * shape a genuinely slow filesystem produces.
    */
   async function sample(at: number): Promise<CodexAccountQuotaReading> {
+    // Refused BEFORE the filesystem is touched: the whole point is not to add
+    // another stranded threadpool slot while the last one is still stranded.
+    if (latch.blocked()) {
+      return { value: null, unavailable: 'reader_error' };
+    }
+    const work = sampleFilesystem(at);
     try {
-      return await withDeadline(sampleFilesystem(at), deadlineMs);
+      return await withDeadline(work, deadlineMs);
     } catch (error) {
       if (error instanceof DeadlineExceeded) {
+        // Only a PREEMPTED walk counts as abandoned. A cooperative expiry
+        // inside the walk returns normally, having stopped of its own accord
+        // and left nothing outstanding — it is late, not stuck, and gating the
+        // next sample on it would refuse to read a filesystem that is merely
+        // slow and has since recovered.
+        latch.track(work);
         return { value: null, unavailable: 'reader_error' };
       }
       throw error;
