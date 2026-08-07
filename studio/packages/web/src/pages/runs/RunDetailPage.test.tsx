@@ -1021,7 +1021,9 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     await user.click(within(seededRow).getByRole('button', { name: 'HTTP Request 2' }));
     const panel = screen.getByRole('complementary', { name: /Node HTTP Request 2/ });
     expect(within(panel).queryByText(/reused its result from run/)).not.toBeInTheDocument();
-    expect(within(panel).getByText(/has not started/)).toBeInTheDocument();
+    /* `never` is downstream of a failure edge the copied `greet` did not take,
+       so the reseed leaves it SKIPPED rather than merely unstarted (#1008). */
+    expect(within(panel).getByText(/routed around, so it was never going to run/i)).toBeInTheDocument();
   });
 });
 
@@ -1176,12 +1178,15 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     expect(within(skippedRow).getByText('—')).toBeInTheDocument();
   });
 
-  it('the panel says a node has not STARTED, rather than blaming a single-step activity', async () => {
+  it('the panel says a node was SKIPPED, not that it has yet to start (#1008)', async () => {
     // Three different absences render the same em-dash, and only one of them is
     // "the engine evaluates this in one step". The fixture routes
     // `greet --failure--> never`, so a successful `greet` leaves `never` with no
-    // events at all — a node that never ran. Telling an operator it was
-    // evaluated in a single step would be a confident, wrong explanation.
+    // events at all. Telling an operator it was evaluated in a single step would
+    // be a confident, wrong explanation — and so, #1008, is telling them it has
+    // not started yet: it was routed around, so it is never going to. The
+    // timeline on this same page has always said `skipped` for this node, and
+    // the two surfaces described one fact differently.
     useRunStreamMock.mockReturnValue(
       stream({
         events: [
@@ -1213,6 +1218,41 @@ describe('RunDetailPage — how long a node took (#867)', () => {
 
     const skippedRow = (await screen.findByText('never')).closest('tr')!;
     await userEvent.click(within(skippedRow).getByRole('button'));
+    const panel = screen.getByRole('complementary');
+    expect(within(panel).getByText(/routed around, so it was never going to run/i)).toBeInTheDocument();
+    expect(within(panel).queryByText(/has not started/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * #1008's other half — the new arm must not SWALLOW the case it sits in front
+   * of. There was no genuinely-unstarted fixture on this page before: every
+   * `attempts === 0` row the file rendered was in fact a skipped one, which is
+   * exactly how the wrong sentence survived so long. Here `greet` is dispatched
+   * and unsettled, so `never` is still `pending` — it really has not started,
+   * and really might.
+   */
+  it('still says a PENDING node has not started (the skipped arm does not swallow it)', async () => {
+    useRunStreamMock.mockReturnValue(
+      stream({
+        events: [
+          envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
+          envelope(
+            {
+              type: 'node.dispatched',
+              runId: 'run_1',
+              nodeId: 'greet',
+              attemptId: 'greet#0',
+              idempotent: true,
+            },
+            1_000,
+          ),
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetailPage runId="run_1" />);
+
+    const pendingRow = (await screen.findByText('never')).closest('tr')!;
+    await userEvent.click(within(pendingRow).getByRole('button'));
     const panel = screen.getByRole('complementary');
     expect(
       within(panel).getByText(/has not started, so there is nothing to measure/i),

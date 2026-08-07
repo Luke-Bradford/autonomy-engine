@@ -74,9 +74,15 @@ export function timelineWindow(nodes: NodeActivity[]): { from: number; to: numbe
  * attempt and a corrupt one each get their own sentence), while this asks why the
  * node contributed NO SPAN AT ALL to the chart (keyed on `spans.length === 0`).
  * A node can have several measured spans and still have no current duration, and
- * vice versa. They do disagree on one shared case today — the panel has no
- * `skipped` branch and calls a routed-around node "has not started" — which is a
- * defect in the panel rather than in the split, and is #1008.
+ * vice versa.
+ *
+ * They no longer disagree on the one shared case where they did (#1008): the
+ * panel had no `skipped` branch and called a routed-around node "has not
+ * started", which was a defect in the panel rather than in the split. It now
+ * carries its own `skipped` arm. The two chains share the FACT and never the
+ * string — this returns a fragment (`name — reason`), the panel's arms are
+ * standalone sentences — so there is nothing to extract, only a reason to keep
+ * both in step when either changes.
  */
 export function untimedReason(node: NodeActivity): string {
   if (node.copiedFromRunId !== undefined) {

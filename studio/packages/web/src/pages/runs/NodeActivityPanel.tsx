@@ -154,9 +154,27 @@ export function NodeActivityPanel({
                  It did start — in the run it was copied from, which is the one
                  place a span for it exists. */
               'This node was not executed in this run, so there is no span to measure here.'
-            : node.attempts === 0
-              ? 'This node has not started, so there is nothing to measure yet.'
-              : 'No span was recorded for this attempt.')}
+            : /* #1008 — AHEAD of the `attempts === 0` arm, which a routed-around
+                 node otherwise falls through to. The engine appends no event for
+                 a node it routes around, so `attempts` is 0 for both cases and
+                 only the status separates them — and "has not started" says the
+                 wrong thing about this one, which did not fail to start but was
+                 never going to run. The timeline on this same page has always
+                 said `skipped` here (`untimedReason` in `attemptSpans.ts`), so
+                 until this arm existed one page described one fact two ways.
+
+                 The two chains stay SEPARATE, as `untimedReason`'s docblock
+                 argues: it answers why the node contributed no span AT ALL to
+                 the chart, this answers why the LATEST ATTEMPT has no duration,
+                 and a node can have several measured spans and no current
+                 duration or the reverse. Only the FACT is shared, never the
+                 string — `untimedReason` returns a fragment for `name — reason`,
+                 these arms are standalone sentences. */
+              node.status === 'skipped'
+              ? 'This node was routed around, so it was never going to run and there is nothing to measure.'
+              : node.attempts === 0
+                ? 'This node has not started, so there is nothing to measure yet.'
+                : 'No span was recorded for this attempt.')}
         {node.startedAtMs !== undefined &&
           node.endedAtMs === undefined &&
           'This attempt has not settled yet, so its span is not complete.'}
