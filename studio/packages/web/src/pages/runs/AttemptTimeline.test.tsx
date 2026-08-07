@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { AttemptTimeline, placeSpans, timelineWindow, untimedReason } from './AttemptTimeline';
+import { AttemptTimeline } from './AttemptTimeline';
+import { placeSpans, timelineWindow, untimedReason } from './attemptTimeline';
 import { emptyNodeCost, type AttemptSpan, type NodeActivity } from './runSummary';
 
 const span = (over: Partial<AttemptSpan> & { startedAtMs: number }): AttemptSpan => ({

@@ -276,6 +276,12 @@ export interface NodeActivity {
    * `foreach`: each round re-dispatches the node, so a node that never failed can
    * still hold several entries. `attempts` above counts starts and folds rounds
    * the same way; neither number is an attempt ORDINAL a reader should print.
+   *
+   * READ-ONLY to every caller. Unlike `cost` and `toolCalls`, a pass-through row
+   * out of `reconcileNodeActivity` shares this array with the folded row rather
+   * than copying it — deliberately, since copying it per row per render would
+   * allocate on a live tail's hot path to guard a hazard with no writer. Nothing
+   * downstream mutates it; anything that wants to must copy first.
    */
   spans: AttemptSpan[];
   /**
@@ -540,7 +546,25 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    */
   const tracked = new Set<string>();
 
-  /** The span the scalars describe, or `undefined` when none is tracked. */
+  /**
+   * The span the scalars describe, or `undefined` when none is tracked.
+   *
+   * TWO invariants make this exact, and both are worth stating because
+   * `closeSpan`'s instance comparison would otherwise be ambiguous — a node with
+   * no tracked span and a tracked span whose `instanceId` is `undefined` (the
+   * canvas node's own, which is the COMMON case) would both answer `undefined`.
+   *
+   *  1. `n.startedAtMs !== undefined` iff `tracked.has(n.nodeId)`. `openSpan`
+   *     sets both, `dropSpan` clears both, `closeSpan` changes neither — and
+   *     `closeSpan` returns early on `startedAtMs === undefined`, so by the time
+   *     it compares an instance the node IS tracked and this cannot be
+   *     `undefined`. That is what keeps the comparison a question about
+   *     INSTANCES rather than about existence.
+   *  2. The tracked span is the LAST element of `n.spans`. Only `openSpan`
+   *     pushes (and adds to the Set in the same breath) and only `dropSpan`
+   *     pops (from the tail, clearing the Set); `closeSpan` mutates fields in
+   *     place. `n.spans` is per-node, so no other node's fold can disturb it.
+   */
   const trackedSpan = (n: FoldingNode): AttemptSpan | undefined =>
     tracked.has(n.nodeId) ? n.spans[n.spans.length - 1] : undefined;
 
