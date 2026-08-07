@@ -86,7 +86,7 @@ export function maxRunEventSeq(db: Db, runId: string): number | null {
  * yields NULL for an absent key, and `costEstimate` is `.optional()` (never JSON
  * null), so absent ⟺ NULL ⟺ not priced.
  */
-const meteredCostEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
+export const meteredCostEstimate = sql`json_extract(${runEvents.payload}, '$.costEstimate')`;
 
 /**
  * #2 L14 — the per-group SUM of `unpriced` (subscription/CLI) responses: metered
@@ -97,7 +97,7 @@ const meteredCostEstimate = sql`json_extract(${runEvents.payload}, '$.costEstima
  * equivalence). `case ... then 1 else 0` never yields NULL, so the sum is a real
  * number over any non-empty group.
  */
-const meteredUnpricedCount = sql`sum(case when ${meteredCostEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
+export const meteredUnpricedCount = sql`sum(case when ${meteredCostEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
 
 /**
  * The `MeteredAggregates` selection, valid both UNGROUPED (one row for the whole
@@ -111,7 +111,7 @@ const meteredUnpricedCount = sql`sum(case when ${meteredCostEstimate} is null an
  * produces no group at all, so its zeroed cost comes from the caller's lookup
  * miss rather than from a coalesced NULL. `aggregateRunCosts` says where.
  */
-function meteredAggregateColumns() {
+export function meteredAggregateColumns() {
   return {
     responseCount: count(),
     pricedResponseCount: count(meteredCostEstimate),

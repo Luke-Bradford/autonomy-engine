@@ -11,6 +11,7 @@ import { PipelineCanvasRoute } from './pages/author/PipelineCanvasRoute.lazy';
 import { TriggersPage } from './pages/TriggersPage';
 import { WorkspaceGitPage } from './pages/WorkspaceGitPage';
 import { RunsPage } from './pages/runs/RunsPage';
+import { AiActivityPage } from './pages/monitor/AiActivityPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
 import { LegacyRunRedirect } from './pages/runs/LegacyRunRedirect';
 
@@ -156,6 +157,11 @@ export const ROUTES: RouteObject[] = [
                 } satisfies ShellRouteHandle,
               },
             ],
+          },
+          {
+            path: 'ai',
+            element: <AiActivityPage />,
+            handle: { crumb: sectionLabel('/monitor/ai') } satisfies ShellRouteHandle,
           },
         ],
       },

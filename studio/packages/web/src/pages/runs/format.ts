@@ -7,7 +7,7 @@ export function formatWhen(ms: number | null): string {
 }
 
 /** A span in ms → the two most significant units, e.g. `1h 04m`, `3m 07s`, `820ms`. */
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   if (ms < 1_000) return `${ms}ms`;
   const totalSeconds = Math.floor(ms / 1_000);
   const seconds = totalSeconds % 60;

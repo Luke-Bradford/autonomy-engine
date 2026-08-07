@@ -23,4 +23,5 @@ export * from './wakeup.js';
 export * from './workspace-git.js';
 export * from './workspace-event.js';
 export * from './quota.js';
+export * from './ai-activity.js';
 export * from './zod-issues.js';
