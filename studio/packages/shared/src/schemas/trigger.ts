@@ -265,6 +265,71 @@ export const NewTriggerSchema = TriggerSchema.omit({
 export type NewTrigger = z.input<typeof NewTriggerSchema>;
 
 /**
+ * The API write body: `NewTriggerSchema` minus `ownerId`, which is stamped
+ * server-side from the principal and never client-supplied.
+ *
+ * Lives HERE, shared, rather than once in the route and once in the web API
+ * client. Both derived it independently from `NewTriggerSchema` and both
+ * documented that they matched the other "EXACTLY" — a claim nothing enforced.
+ * PATCH remains `.partial()` of this, applied at the route.
+ */
+export const TriggerWriteBodySchema = NewTriggerSchema.omit({ ownerId: true });
+export type TriggerWriteBody = z.input<typeof TriggerWriteBodySchema>;
+
+/**
+ * #3 G6c-2 — the CREATE body only. A trigger always persists a CONCRETE
+ * `pipelineVersionId` (#1 immutability; "unbound never fires"), so "bind to
+ * active" is a creation-time CONVENIENCE that resolves ONCE server-side and
+ * stores the resolved id — never a live-follow binding, never a stored "active"
+ * indirection. The client supplies EXACTLY ONE of:
+ *   - `pipelineVersionId` (a concrete id, or `null` for a deliberately unbound
+ *     trigger — the pre-G6c-2 path, unchanged), or
+ *   - `bindToActive: { pipelineId }` — resolve-once (git-mode → the `active`
+ *     published version; DB-only → the latest immutable version).
+ *
+ * The XOR keys on PRESENCE, not truthiness: `pipelineVersionId: null` is a
+ * legitimate explicit "unbound" and counts as supplied (the same null-vs-absent
+ * distinction `NewTriggerSchema` documents on its `.default(null)` fields).
+ * A client on the bind-to-active path must therefore OMIT the key entirely —
+ * sending `pipelineVersionId: null` alongside `bindToActive` is the XOR
+ * violation, not the unbound request it looks like.
+ *
+ * This is a SEPARATE schema from `TriggerWriteBodySchema` on purpose: PATCH
+ * (`.partial()` of the latter) stays concrete-only — bind-to-active is a
+ * creation act, and leaking `bindToActive`/optional-`pipelineVersionId` into
+ * the PATCH shape would let a patch silently re-resolve a pinned binding.
+ *
+ * Shared because it carries a cross-field REFINEMENT. A response envelope can
+ * reasonably be re-declared client-side; a rule about which combinations of
+ * fields are legal cannot — a copy drifts silently, and the drift only shows up
+ * as a 400 the client believed it had already ruled out.
+ */
+export const TriggerCreateBodySchema = TriggerWriteBodySchema.extend({
+  pipelineVersionId: TriggerWriteBodySchema.shape.pipelineVersionId.optional(),
+  bindToActive: z.object({ pipelineId: z.string().min(1) }).optional(),
+}).superRefine((body, ctx) => {
+  const hasConcrete = body.pipelineVersionId !== undefined;
+  const hasBind = body.bindToActive !== undefined;
+  if (hasConcrete && hasBind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'supply EITHER pipelineVersionId (a concrete binding, or null for unbound) OR ' +
+        'bindToActive (resolve-once) — not both',
+    });
+  }
+  if (!hasConcrete && !hasBind) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'a trigger create must supply pipelineVersionId (a concrete binding, or ' +
+        'null for unbound) or bindToActive (resolve-once)',
+    });
+  }
+});
+export type TriggerCreateBody = z.input<typeof TriggerCreateBodySchema>;
+
+/**
  * `webhook.secretRef` with `secretRef` stripped — mirrors
  * `WebhookConfigSchema` with its one required field relaxed to optional and
  * then stripped — same shape a client should see as `ConnectionPublicSchema`
