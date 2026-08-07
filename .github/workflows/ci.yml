@@ -21,8 +21,8 @@ jobs:
   # machinery untested, which is a worse state than a slightly overscoped job.
   #
   # Narrowing this to just that surface needs the four files lifted OUT of the
-  # parked tree into a shared home first; that is a separate ticket, not this
-  # one. Until then the job stays whole and green.
+  # parked tree into a shared home first; that is #977, not this ticket. Until
+  # then the job stays whole and green -- do not delete it to "finish" C3b.
   lint-and-test:
     runs-on: ubuntu-latest
     steps:

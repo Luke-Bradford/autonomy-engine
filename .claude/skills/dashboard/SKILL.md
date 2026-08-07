@@ -11,10 +11,10 @@ No build step, no framework, stdlib only. Four layers:
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Server | `bin/dashboard.py` | `http.server`, **loopback only** (127.0.0.1 default; `localhost` accepted; anything else refused at startup); routes; SSE; control token; owns the git/gh calls + TTL cache |
-| State | `lib/dashboard_state.py` | PURE builders: read engine artifacts (session logs, supervisor.log, config) → JSON-able dicts. git/gh state is INJECTED by the server (`build_repo_state(git_in_flight=…)`) — builders never call the network. Unit-tested against `tests/fixtures/repo-alpha` |
-| Control | `lib/dashboard_control.py` | PURE decisions for lifecycle writes (`control_plan`) + input validation (`_MODEL_RE` parity with the supervisor's `valid_model_id`) |
-| Pages | `lib/dashboard_page.html` (main), `lib/config_page.html` (config), `lib/pipeline_page.html` (canvas viewer, #357) | Vanilla JS, single file each, `__CONTROL_TOKEN__`/`__MODEL_CHOICES__` substituted at serve time (absent placeholder = no-op) |
+| Server | `engine/bin/dashboard.py` | `http.server`, **loopback only** (127.0.0.1 default; `localhost` accepted; anything else refused at startup); routes; SSE; control token; owns the git/gh calls + TTL cache |
+| State | `engine/lib/dashboard_state.py` | PURE builders: read engine artifacts (session logs, supervisor.log, config) → JSON-able dicts. git/gh state is INJECTED by the server (`build_repo_state(git_in_flight=…)`) — builders never call the network. Unit-tested against `engine/tests/fixtures/repo-alpha` |
+| Control | `engine/lib/dashboard_control.py` | PURE decisions for lifecycle writes (`control_plan`) + input validation (`_MODEL_RE` parity with the supervisor's `valid_model_id`) |
+| Pages | `engine/lib/dashboard_page.html` (main), `engine/lib/config_page.html` (config), `engine/lib/pipeline_page.html` (canvas viewer, #357) | Vanilla JS, single file each, `__CONTROL_TOKEN__`/`__MODEL_CHOICES__` substituted at serve time (absent placeholder = no-op) |
 
 Routes: pages `GET /` · `/config` · `/pipeline` · reads `GET /api/state` ·
 `/api/config` · `/api/models` · `/api/ws-prompt` · `/api/pipeline`
@@ -94,7 +94,7 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
 
 1. **Launch against the fixture repo** (background):
    ```bash
-   python3 engine/bin/dashboard.py --repo tests/fixtures/repo-alpha --port 8790
+   python3 engine/bin/dashboard.py --repo engine/tests/fixtures/repo-alpha --port 8790
    ```
    Use a non-default port so a running operator dashboard is untouched.
 2. **Drive it** with the chrome-devtools MCP tools:
@@ -165,13 +165,13 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
 5. Kill the server; note the verification (page, actions, console-clean, and the
    temporal readings) in the PR's Testing section.
 
-Unit tests still carry the logic coverage (`tests/test_dashboard_state.py`,
-`tests/test_dashboard_control.py`); the browser loop is for what unit tests
+Unit tests still carry the logic coverage (`engine/tests/test_dashboard_state.py`,
+`engine/tests/test_dashboard_control.py`); the browser loop is for what unit tests
 can't see — JS wiring, token plumbing, layout collapse, console errors.
 
 ## The operator's LIVE dashboard (do not manage it yourself)
 
-The instance on 127.0.0.1:8787 is a SUPERVISED CHILD of `bin/console.py`
+The instance on 127.0.0.1:8787 is a SUPERVISED CHILD of `engine/bin/console.py`
 (VSCode task "Autonomy: console" / `Start Autonomy.command`): a watchdog
 relaunches it within ~1s of any exit, and startup consolidates to one
 dashboard. Blessed as THE manager (settled decision 32; launchd rejected —
@@ -183,7 +183,7 @@ a second manager fights the watchdog).
   `Errno 48 Address already in use` against your orphan (2026-07-04
   incident, operator's terminal spammed with tracebacks).
 - Page + lib modules hot-reload per request (#166) — page/state-only merges
-  need NO restart, just a browser refresh; only `bin/dashboard.py` changes
+  need NO restart, just a browser refresh; only `engine/bin/dashboard.py` changes
   need the kill-and-respawn.
 - The page is served from the MAIN checkout — after merging UI work, pull
   that checkout or the operator keeps seeing the old page (#270's chip now

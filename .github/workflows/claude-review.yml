@@ -160,7 +160,7 @@ jobs:
 
       - name: Build review prompt
         # #468: the charter is SCOPE-AWARE and lives in engine/lib/review_prompt.py
-        # (tested by tests/test_review_prompt.py), NOT inline here -- one charter
+        # (tested by engine/tests/test_review_prompt.py), NOT inline here -- one charter
         # cannot review both the bash/Python engine and the studio/ TypeScript,
         # and reviewing a studio diff against engine invariants made the bot emit
         # an ARBITRARY verdict a merge rail read as truth. An inline heredoc is

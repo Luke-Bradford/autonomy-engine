@@ -1,5 +1,15 @@
 # autonomy-engine
 
+> **Where to start: [`studio/`](studio/README.md).** `studio/` is the active project — a ground-up
+> re-platform of this engine into an ADF-style, config-driven, open-source AI-automation harness
+> (TypeScript: React Flow / Fastify / Drizzle+SQLite).
+>
+> **The rest of this README documents the original bash/python engine, which was PARKED under
+> [`engine/`](engine/) by C3b (`#410`).** Parked means moved, not deleted: it is preserved in
+> history, still builds and still passes its full test suite — it is simply no longer where work
+> starts. It remains the prototype and the spec source that `studio/` is built from. Every command
+> below is written for its new home, so it is accurate; it is just no longer the front door.
+
 Repo-agnostic engine for running Claude Code (and, in future, other CLI agents) autonomy loops
 against any target repo, from one operator's account.
 
@@ -12,16 +22,16 @@ engine/start                      # detects: setup needed, or just run the app
 engine/start /path/to/target-repo # first time: guided setup for that repo, then the app
 ```
 
-`./start` looks at `~/.config/autonomy/repos`: nothing registered → setup guidance
+`engine/start` looks at `~/.config/autonomy/repos`: nothing registered → setup guidance
 (with a target argument it chains the guided quickstart and registers the repo);
-something registered → loop-state summary (`bin/control.sh list`) and the
+something registered → loop-state summary (`engine/bin/control.sh list`) and the
 control-room dashboard. It never runs `launchctl` — loading a supervisor stays a
-deliberate step (`bin/control.sh start`, or the printed go-live lines).
+deliberate step (`engine/bin/control.sh start`, or the printed go-live lines).
 
 Under the hood, the guided setup is:
 
 ```bash
-bin/quickstart.sh /path/to/target-repo
+engine/bin/quickstart.sh /path/to/target-repo
 ```
 
 It scaffolds the `.autonomy/` pack, walks you through the minimum config
@@ -40,14 +50,14 @@ Under the hood it runs the same tools you can drive by hand:
 
 ```bash
 # 1. Scaffold a new target repo's pack:
-bin/onboard.sh /path/to/target-repo
+engine/bin/onboard.sh /path/to/target-repo
 # edit /path/to/target-repo/.autonomy/config.yaml
 
 # 2. Check it's ready:
-bin/doctor.sh /path/to/target-repo
+engine/bin/doctor.sh /path/to/target-repo
 
 # 3. Create its dedicated worktree + launchd plist:
-bin/setup_worktree.sh /path/to/target-repo
+engine/bin/setup_worktree.sh /path/to/target-repo
 
 # 4. Load it (see setup_worktree.sh's own printed next-steps for the exact commands)
 ```
@@ -58,7 +68,7 @@ The engine's supported host is **macOS**: it uses `launchd` (background loops),
 the **Keychain** (API-key storage), and targets the stock **`/bin/bash` 3.2.57**
 floor. Config parsing and all helpers are **Python 3 stdlib only** — no PyYAML,
 no third-party packages. Those four are non-negotiable; everything below is
-per-feature and `bin/doctor.sh <repo>` reports each one (diagnostic-only — it
+per-feature and `engine/bin/doctor.sh <repo>` reports each one (diagnostic-only — it
 warns, never blocks or provisions).
 
 | You want… | Requires | doctor line |
@@ -72,7 +82,7 @@ warns, never blocks or provisions).
 | **Local-LLM roles** (`openai_compatible`) | a local OpenAI-compatible endpoint (Ollama / LM Studio) reachable from the role's configured host | (adapter-checked at dispatch) |
 
 `gh auth refresh -s repo,project,workflow` grants all three GitHub scopes at
-once. `bin/quickstart.sh` runs `doctor.sh` as step 3/6, so these same checks
+once. `engine/bin/quickstart.sh` runs `doctor.sh` as step 3/6, so these same checks
 surface during guided onboarding.
 
 ## Run model & health
@@ -82,10 +92,10 @@ Two tiers of process, deliberately different lifetimes:
 - **The loops are background services.** Each registered repo's supervisor runs under
   **launchd** (the plist `setup_worktree.sh` installs), so it survives closing your
   terminal and, with `KeepAlive=true`, is **relaunched if it crashes**. Loading one is a
-  deliberate step — `bin/control.sh start <repo>` (or the go-live lines quickstart prints).
+  deliberate step — `engine/bin/control.sh start <repo>` (or the go-live lines quickstart prints).
   This is the tier that does the engineering.
-- **The dashboard is a managed service too.** `./start` (with repos registered) loads
-  `bin/dashboard.py` as a **launchd service** (`com.autonomy.dashboard`) and opens the
+- **The dashboard is a managed service too.** `engine/start` (with repos registered) loads
+  `engine/bin/dashboard.py` as a **launchd service** (`com.autonomy.dashboard`) and opens the
   browser — so it survives closing your terminal and restarts on crash/reboot, just like the
   loops. Stop it with **`engine/start stop`** (booting the service out is the only thing that
   actually stops it under `KeepAlive`); check it with `engine/start status`. Two opt-outs when you
@@ -94,19 +104,19 @@ Two tiers of process, deliberately different lifetimes:
   prints the command without running anything. For a single terminal-native window onto the
   live work log instead, **`engine/start console`** runs the engine as one foreground service.
 
-So the everyday model is: **loops run unattended under launchd; `./start` brings up the
+So the everyday model is: **loops run unattended under launchd; `engine/start` brings up the
 dashboard service and opens it; `engine/start stop` takes the dashboard back down.**
 
 **Is it healthy?** Two read-only checks, no side effects:
 
 ```bash
 engine/start status        # one-screen OK/WARN report, then exits
-bin/control.sh list   # per-repo loop state: running / paused / stopped
+engine/bin/control.sh list   # per-repo loop state: running / paused / stopped
 ```
 
 `engine/start status` reports the dashboard process (is one running?), `gh` auth, how many repos
 are registered, **each registered loop's running / paused / stopped state** (folded in from
-`bin/control.sh list` so you don't need a second command), any BYO-LLM local endpoint's
+`engine/bin/control.sh list` so you don't need a second command), any BYO-LLM local endpoint's
 reachability (see [BYO-LLM](docs/byo-llm.md)),
 and **loop-worktree cleanliness** — it WARNs when a registered worktree is left dirty while
 its loop is *not* running (a finished loop should leave a clean tree), or when a worktree is
@@ -128,8 +138,8 @@ Every target repo needs a `.autonomy/` directory with exactly these three files:
 
 - **`loop_prompt.md`** — the standing task, passed as the primary prompt (`claude -p`).
 - **`hard_rules.md`** — non-negotiable safety rules, appended to the session's system prompt.
-- **`config.yaml`** — project policy (see schema below). `bin/onboard.sh` scaffolds all three from
-  `templates/autonomy-pack/`.
+- **`config.yaml`** — project policy (see schema below). `engine/bin/onboard.sh` scaffolds all three from
+  `engine/templates/autonomy-pack/`.
 
 `.autonomy/config.yaml` existing and parsing is the engine's hard requirement for treating a
 directory as a valid target repo — `doctor.sh`/`supervisor.sh` both refuse to proceed without it.
@@ -238,14 +248,14 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 | `bot_comment` | Latest matching issue comment (by `author_login` + `marker`) postdates the head commit and reads APPROVE, no BLOCKING/REQUEST CHANGES. Includes a doc-only fast path for PRs where every changed file matches `doc_only_extensions`. |
 | `gh_review` | Latest GitHub Review object from `reviewer_login` postdates the head commit and its `state == APPROVED`. |
 
-`bin/safe_merge.sh <pr-number>` is the only sanctioned merge path — the loop must never call
+`engine/bin/safe_merge.sh <pr-number>` is the only sanctioned merge path — the loop must never call
 `gh pr merge` directly.
 
-## `bin/` reference
+## `engine/bin/` reference
 
 | Script | Purpose |
 |---|---|
-| `.engine/start [target-repo] [--port N] [--no-launch]` | THE entry point (repo root): setup-or-app detection — guided quickstart on first run, loop-state summary + dashboard after |
+| `../start [target-repo] [--port N] [--no-launch]` | THE entry point (repo root): setup-or-app detection — guided quickstart on first run, loop-state summary + dashboard after |
 | `supervisor.sh --repo <path> [--agent-type] [--model] [--fallback-model] [--label]` | The main loop launchd runs |
 | `quickstart.sh <target-repo> [flags]` | Guided single-entry onboarding: onboard → minimum config → doctor → optional worktree → optional dashboard registration → printed go-live commands (never runs `launchctl`) |
 | `control.sh list \| register \| unregister \| start \| stop \| pause \| resume` | Multi-repo control unit over `~/.config/autonomy/repos`: loop states from the supervisor's own lock/sentinel, start/stop via `launchctl` against the installed plists, graceful pause/resume via the sentinel. `--all` fans out. Never provisions |
@@ -278,7 +288,7 @@ Three levers, distinct on purpose:
 The dashboard's graceful-stop / resume controls (issue #10) drive this sentinel.
 
 All three levers are also available across every registered repo at once through
-`bin/control.sh` (`start`/`stop` wrap `launchctl` against the installed plist;
+`engine/bin/control.sh` (`start`/`stop` wrap `launchctl` against the installed plist;
 `pause`/`resume` wrap the sentinel; `--all` fans out over `~/.config/autonomy/repos`).
 
 ## Usage-limit backoff (account-shared)
@@ -313,7 +323,7 @@ staleness costs tokens, never buried work. The idle is pause-aware
 ## Control room (P1 dashboard)
 
 ```bash
-bin/dashboard.py --repo /path/to/worktree [--repo /another] [--port 8787]
+engine/bin/dashboard.py --repo /path/to/worktree [--repo /another] [--port 8787]
 # open http://127.0.0.1:8787/
 ```
 
@@ -354,7 +364,7 @@ Design + the research behind it: [docs/dashboard-design.md](docs/dashboard-desig
 
 ## Agent adapters
 
-`bin/agents/<type>.sh`, dispatched by `agent.type`. Each implements two functions:
+`engine/bin/agents/<type>.sh`, dispatched by `agent.type`. Each implements two functions:
 
 - `agent_invoke(prompt_file, safety_file, model, fallback_model, log_file) -> exit code`
 - `agent_classify_outcome(log_file, exit_code) -> "success" | "usage_limit [epoch]" | "error"`

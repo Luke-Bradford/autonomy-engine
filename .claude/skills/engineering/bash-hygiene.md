@@ -2,8 +2,8 @@
 
 ## When to use
 
-Editing or adding ANY shell under `start`, `bin/`, `bin/agents/`, `tests/`, or
-`templates/autonomy-pack/qa/`.
+Editing or adding ANY shell under `start`, `engine/bin/`, `engine/bin/agents/`, `engine/tests/`, or
+`engine/templates/autonomy-pack/qa/`.
 
 ## The floor: macOS /bin/bash 3.2.57
 
@@ -19,7 +19,7 @@ the replacement this repo actually uses:
 | `&>` redirect | `>file 2>&1` |
 
 Empty-array expansion under `set -u`: `${arr[@]+"${arr[@]}"}`
-(see `bin/agents/claude.sh` `effort_args`).
+(see `engine/bin/agents/claude.sh` `effort_args`).
 
 ## The gate
 
@@ -27,7 +27,7 @@ Empty-array expansion under `set -u`: `${arr[@]+"${arr[@]}"}`
 shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 ```
 
-`tests/*.sh` is part of the gate — a common miss. CI (`lint-and-test`) runs the
+`engine/tests/*.sh` is part of the gate — a common miss. CI (`lint-and-test`) runs the
 same line; local and CI must agree.
 
 ## Structural rules
@@ -35,12 +35,12 @@ same line; local and CI must agree.
 - **Source-guard every executable script:** body wrapped in
   `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then … fi` (or the `|| return 0` form)
   so tests can `source` it to get functions only. Functions-only files
-  (`bin/agents/*.sh`) need no guard.
+  (`engine/bin/agents/*.sh`) need no guard.
 - `set -uo pipefail` at the top. NOT `set -e` — the supervisor's control flow
   depends on inspecting return codes.
 - **Best-effort scripts never hard-fail their caller:** `board.sh` and
   `unblock_dependents.sh` warn to stderr and `exit 0` on every failure path.
-- Python belongs in `lib/*.py` or a `python3 - <<'PY'` heredoc — never awk/sed
+- Python belongs in `engine/lib/*.py` or a `python3 - <<'PY'` heredoc — never awk/sed
   towers for structured parsing.
 
 ## Bug classes with repo precedent
@@ -74,7 +74,7 @@ A directive needs a trailing comment saying WHY. Existing legitimate uses:
 - `SC2163` on `export "${var}=${val}"` when a `case` guard already validated
   the name.
 
-Never file-level-disable in `bin/`.
+Never file-level-disable in `engine/bin/`.
 
 ## Pre-push
 

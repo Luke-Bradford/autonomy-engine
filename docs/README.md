@@ -24,7 +24,7 @@ which one you are reading:
   journal and earned-autonomy trust tiers, and the `/pipeline` dashboard
   canvas.
 - **[dashboard-design.md](dashboard-design.md)** — the control-room UI
-  design. The dashboard is BUILT and live (`bin/dashboard.py`; pages `/`,
+  design. The dashboard is BUILT and live (`engine/bin/dashboard.py`; pages `/`,
   `/config`, `/pipeline`); this doc is its design rationale.
 - **[byo-llm.md](byo-llm.md)** — pointing a role at a local
   OpenAI-compatible endpoint.
@@ -54,7 +54,7 @@ which one you are reading:
 
 ## Scope boundaries (deliberate non-goals today)
 
-- Merges happen ONLY through `bin/safe_merge.sh` — no pipeline, agent, or
+- Merges happen ONLY through `engine/bin/safe_merge.sh` — no pipeline, agent, or
   dashboard action can bypass the merge gate.
 - The engine diagnoses a cold repo's GitHub state (`doctor.sh`) but never
   provisions it.
@@ -66,7 +66,7 @@ which one you are reading:
 
 ## Current state (high level)
 
-Multi-repo registry + lifecycle control (`bin/control.sh`), Claude + Codex
+Multi-repo registry + lifecycle control (`engine/bin/control.sh`), Claude + Codex
 agent adapters, cron/event/loop/manual triggers, the pipeline sequencer
 with bounded parallel dispatch, the live dashboard (fleet rail, config
 authoring, pipeline canvas), run journal + trust ledger. The issue tracker

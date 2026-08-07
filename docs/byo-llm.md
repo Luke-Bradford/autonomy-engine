@@ -20,17 +20,17 @@ one at `http://localhost:1234/v1`.
 
 ## 2. Register it as an account
 
-    python3 lib/accounts.py set local-llm openai_compatible http://localhost:11434/v1
+    python3 engine/lib/accounts.py set local-llm openai_compatible http://localhost:11434/v1
     # a remote endpoint that needs a key: store the key in the credentials
     # manager first, then pass its LABEL (the registry never stores the secret):
-    #   python3 lib/accounts.py set remote openai_compatible https://gw.example/v1 <cred-label>
+    #   python3 engine/lib/accounts.py set remote openai_compatible https://gw.example/v1 <cred-label>
 
 `resolve` exports `OPENAI_BASE_URL` (+ `OPENAI_API_KEY` — the real key when a
 credential label is set, otherwise the dummy `local`). The index stores the URL
 and the credential **label** only, never a secret (mode 600, atomic writes). A
 malformed base_url is refused at `set` and again at `resolve` (fail-safe).
 
-    python3 lib/accounts.py list-models local-llm   # what the endpoint advertises
+    python3 engine/lib/accounts.py list-models local-llm   # what the endpoint advertises
 
 ## 3. Point a role at it
 

@@ -31,7 +31,7 @@ half-done branches, no unpushed WIP).
    mechanically verifies review-bot APPROVE on the latest SHA + CI green before merging; a doc-only
    (`.md`) PR merges on CI green alone (the bot skips doc diffs, so there's no APPROVE to wait for).
    NEVER `gh pr merge` directly. Note the guardrail rule in `hard_rules.md`: do not open PRs that
-   modify `.autonomy/**`, `bin/safe_merge.sh`, or `.github/workflows/**` unattended.
+   modify `.autonomy/**`, `engine/bin/safe_merge.sh`, or `.github/workflows/**` unattended.
 
    If the latest round is **rebuttal-only** (no code change; you think the bot is wrong), do NOT
    merge unattended — that needs Codex checkpoint 3 + human judgment. Leave the PR open with your
@@ -39,18 +39,18 @@ half-done branches, no unpushed WIP).
    (no APPROVE yet, CI not green), leave the PR open and move on — a later iteration re-checks.
 
    **Push discipline — run the push + PR step in the FOREGROUND, never backgrounded.** The pre-push
-   gate (`bash tests/run_all.sh` + `shellcheck -S warning start bin/*.sh bin/agents/*.sh tests/*.sh
-   templates/autonomy-pack/qa/*.sh`) is slow; run `git push` as a foreground call (long timeout,
+   gate (`bash engine/tests/run_all.sh` + `shellcheck -S warning start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh
+   engine/templates/autonomy-pack/qa/*.sh`) is slow; run `git push` as a foreground call (long timeout,
    up to 600000 ms) and `gh pr create` right after it succeeds. A headless run that ends kills any
    still-running background task, so a backgrounded push never finishes and no PR opens even though
    the commit exists locally. Only AFTER the branch is pushed AND the PR URL exists may you
    background the review/CI poll. Never end a turn with an unpushed commit or an un-opened PR for
    work you meant to ship.
 
-3. **Dashboard FE-QA (periodic — the engine's only UI surface).** When you touch `bin/dashboard.py`,
-   `lib/dashboard_*`, or `lib/*.html`, and every few iterations regardless, run the browser verify
-   loop from `.claude/skills/dashboard/SKILL.md`: launch `python3 bin/dashboard.py --repo
-   tests/fixtures/repo-alpha --port 8790` (non-default port), drive `/` and `/config` via the
+3. **Dashboard FE-QA (periodic — the engine's only UI surface).** When you touch `engine/bin/dashboard.py`,
+   `engine/lib/dashboard_*`, or `engine/lib/*.html`, and every few iterations regardless, run the browser verify
+   loop from `.claude/skills/dashboard/SKILL.md`: launch `python3 engine/bin/dashboard.py --repo
+   engine/tests/fixtures/repo-alpha --port 8790` (non-default port), drive `/` and `/config` via the
    chrome-devtools MCP tools (`new_page` → `take_snapshot` → `list_console_messages` →
    `list_network_requests`), assert the sections render with fixture data, ZERO console `error`
    entries, `/api/state` + `/api/stream` return 200, and any control POST you triggered returns
@@ -120,7 +120,7 @@ Codex checkpoints still run — the pair adds a gate, it never replaces one.
 - **Never weaken a settled decision or an engine invariant to make a ticket pass** (fail-safe never
   fail-open, reset-epoch split, bash 3.2 floor, stdlib-only, repo-agnostic, safe-merge default).
   If a ticket seems to require it, that's a human-decision stop.
-- **Never touch a target repo's work** — this loop operates on autonomy-engine only. `tests/fixtures/`
+- **Never touch a target repo's work** — this loop operates on autonomy-engine only. `engine/tests/fixtures/`
   are fixtures; don't treat them as live repos to modify beyond a test's own scope.
 
 ## When to stop (leave a clean state + a note)

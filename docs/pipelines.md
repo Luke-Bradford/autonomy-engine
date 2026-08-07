@@ -167,7 +167,7 @@ Supported today: `pick`, `agent_task`, `plan`, `gather`, `check`,
 `subagent_review`, `summarize`, `notify`, `transform`, `triage`,
 `journal`, `housekeep`, `git_ops`, `call_pipeline`. Each type has a
 **spec sheet** (required fields, optional fields, what it emits) defined
-in one place in the code (`lib/pipeline.py`, `SPEC_SHEETS`) — the
+in one place in the code (`engine/lib/pipeline.py`, `SPEC_SHEETS`) — the
 validator, the canvas palette, and the property pane all read the same
 table, so they cannot disagree.
 
@@ -329,7 +329,7 @@ fires and how overlapping runs behave:
   mode into `.autonomy/triggers/` (`continuous-example`, `nightly-example`,
   `on-pr-sync-example`, `manual-example`), each `"enabled": false` so a
   fresh onboard never auto-arms a loop. They exist to be copied and edited;
-  see `.autonomy/triggers/README.md`. `bin/doctor.sh <repo>` reports every
+  see `.autonomy/triggers/README.md`. `engine/bin/doctor.sh <repo>` reports every
   trigger — validity, mode, native-vs-shim, enabled/disabled, bound
   pipeline — as read-only INFO lines (it never provisions).
 
@@ -428,7 +428,7 @@ recorded runs with ≥95% passing over the last 20, then `auto`.
   off-lane triggers still contribute (pausing a trigger never hides
   its record).
 
-`python3 lib/triggers.py trust <repo> <journal>` prints one `TRIGGER`
+`python3 engine/lib/triggers.py trust <repo> <journal>` prints one `TRIGGER`
 row per trigger (name, pipeline, kind, runs, passes, tier), one
 `REFUSED` row per unreadable trigger file (an unreadable trigger cannot
 be attributed to a pipeline, so the report itself carries the caveat),
@@ -576,7 +576,7 @@ roles:
 - No `pipeline:` key → the role runs its classic single-prompt session,
   internally wrapped as a one-activity pipeline. Existing configurations
   keep working unchanged.
-- Starter pipelines ship in `templates/autonomy-pack/pipelines/` and are
+- Starter pipelines ship in `engine/templates/autonomy-pack/pipelines/` and are
   scaffolded into new target repos by onboarding.
 - Onboarding also seeds two optional **starter skills** into the target
   repo's `.claude/skills/` (`working-under-the-loop`,

@@ -2,12 +2,12 @@
 
 ## When to use
 
-Editing or adding anything under `lib/` or `bin/*.py`.
+Editing or adding anything under `engine/lib/` or `engine/bin/*.py`.
 
 ## Stdlib only — no exceptions without an operator decision
 
 No PyYAML, no yq, no requests, no third-party anything. Config parsing goes
-through `lib/config_parser.py` (restricted YAML subset) — never a new parser,
+through `engine/lib/config_parser.py` (restricted YAML subset) — never a new parser,
 never `import yaml`. If a dependency looks unavoidable, stop and surface it;
 do not add it.
 
@@ -27,7 +27,7 @@ do not add it.
   document the code map in the module docstring (`roles.py`: 0 valid / 3
   valid-no-block / 1 invalid / 2 unreadable) and never repurpose a code.
 - **In-function `import config_parser`** in CLI entrypoints is the existing
-  style (keeps `lib/` importable without path setup); keep it there, put
+  style (keeps `engine/lib/` importable without path setup); keep it there, put
   everything else at module top.
 
 ## Fail-safe raises
@@ -67,6 +67,6 @@ calls trust their callers.
 
 ## Repo-agnostic rule
 
-Nothing in `lib/` or `bin/` may hardcode a target repo's values (GitHub owner,
+Nothing in `engine/lib/` or `engine/bin/` may hardcode a target repo's values (GitHub owner,
 board title, issue numbers). Repo-specifics come from the target's
-`.autonomy/config.yaml`. `templates/` and `docs/` may use placeholders.
+`.autonomy/config.yaml`. `engine/templates/` and `docs/` may use placeholders.

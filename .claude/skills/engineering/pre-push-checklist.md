@@ -20,7 +20,7 @@ Additionally:
    `codex-checkpoints.md`.
 3. If the diff touched the dashboard: the browser verify loop from
    `.claude/skills/dashboard/SKILL.md`.
-4. If the diff touched `templates/autonomy-pack/`: mechanically re-validate the
+4. If the diff touched `engine/templates/autonomy-pack/`: mechanically re-validate the
    template (copy to a temp repo pack, uncomment the roles example, run
    `python3 engine/lib/roles.py <tmp-repo>` → exit 0) and run
    `bash engine/tests/test_onboard.sh`.
