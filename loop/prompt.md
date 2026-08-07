@@ -109,9 +109,19 @@ page outrank the UI epic.
    positioning/opacity. Test that an edge's `sourceHandle` is identical before, during and after
    hover, and that `U6b`'s typed connect-time validation still refuses invalid targets.
 
+   **The hover behaviour is SPECIFIED in `#997`, not left to you as a hazard** — it is the
+   flyout-menu problem (hover intent + buffer zone) and has a settled solution: ONE hover container
+   whose bounds already include the fan-out area (so there is no gap to cross and no safe-triangle
+   needed — these ports are adjacent, not across a gap), a ~120ms open delay so a passing cursor does
+   not set off a wave of fan-outs, a ~200ms close grace cancelled if the pointer returns, and
+   invisible hit-slop to reach a ≥24×24px target while the drawn dot stays small. **Noise is what is
+   DRAWN, not what is clickable.** The trap: that buffer must be `pointer-events: none` unless the
+   node's hover is active, or it swallows marquee-select and canvas panning — assert both still work
+   adjacent to a collapsed node.
+
    Both carry the same accessibility clause: reveal on **keyboard focus** as well as hover, keep the
-   routing key / port name in the accessible name at all times, and give a revealed port a real
-   ≥24×24px hit target. Hidden visually is fine; unreachable without a mouse is a regression.
+   routing key / port name in the accessible name at all times, and honour `prefers-reduced-motion`.
+   Hidden visually is fine; unreachable without a mouse is a regression.
 6. **`#996` — WRITE THE DATA-MOVEMENT SPEC.** `#993` is DECIDED (operator, 2026-08-07): **ADF-grade
    data movement is the intent, at ADF's scale.** Source and sink are independent and heterogeneous
    — CSV/Excel → database, database → CSV, any-to-any, with column mapping. This needs three layers
