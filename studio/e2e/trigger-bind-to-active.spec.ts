@@ -44,6 +44,28 @@ test('binds a new trigger to the active version, resolved once by the server', a
 
   const form = triggerForm(page);
   await form.getByLabel('Name').fill('Follows the active version');
+
+  /*
+   * The binding fieldset is the fourth grouped sub-form in this form, and
+   * `index.css` states in a comment that a new one "has to add itself to these
+   * selector lists" — a bare <fieldset> otherwise inherits the browser default
+   * border and reads nothing like the recurrence and window editors beside it.
+   * Asserted as a COMPUTED value against the established editor, because that
+   * is the claim; a screenshot could not tell the two borders apart.
+   */
+  const borders = await page.evaluate(() => {
+    const read = (sel: string) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { style: s.borderTopStyle, width: s.borderTopWidth, radius: s.borderRadius };
+    };
+    return { binding: read('.trigger-form .binding-kind') };
+  });
+  expect(borders.binding, 'the binding fieldset is not on the page').not.toBeNull();
+  expect(borders.binding!.style).toBe('solid');
+  expect(borders.binding!.radius).toBe('6px');
+
   await form.getByRole('radio', { name: /active published version/i }).check();
   await form.getByLabel('Pipeline', { exact: true }).selectOption(pipelineId);
 

@@ -392,8 +392,12 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
     (t) => t.name === 'Bound to active',
   );
   // Resolve-once stored a CONCRETE id — the version that was active at create
-  // time, not an "active" indirection the row would follow.
-  expect(bound?.pipelineVersionId).toBeTruthy();
+  // time, not an "active" indirection the row would follow. The EXACT id, not
+  // merely a truthy one: `pushNewPipelineFile` mints deterministic ids, so
+  // asserting the precise version also catches a binding resolved to the wrong
+  // one, which a truthiness check would wave through.
+  const publishedSlug = publishName.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+  expect(bound?.pipelineVersionId).toBe(`plv_${publishedSlug}_1`);
 
   await openGitPage(page);
 

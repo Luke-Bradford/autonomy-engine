@@ -540,6 +540,12 @@ function TriggerForm({
   const scheduleKindId = useId();
   const bindingKindId = useId();
   const editing = form.id !== null;
+  /* The version last chosen on the concrete side, so switching to bind-to-active
+     and back does not silently discard it. Local to the form: it is undo state
+     for a control, not part of what gets written. */
+  const [lastConcrete, setLastConcrete] = useState<string | null>(
+    form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : null,
+  );
 
   /*
    * #981 — the publish pair for the pipeline currently selected for
@@ -826,7 +832,20 @@ function TriggerForm({
               type="radio"
               name={bindingKindId}
               checked={form.binding.kind !== 'active'}
-              onChange={() => onChange({ ...form, binding: { kind: 'unbound' } })}
+              // Switching back RESTORES the version that was picked before,
+              // rather than dropping to unbound. Toggling a radio to look at
+              // the other option is not an instruction to discard the choice
+              // already made, and the version select is long enough that
+              // re-finding an entry is real work.
+              onChange={() =>
+                onChange({
+                  ...form,
+                  binding:
+                    lastConcrete === null
+                      ? { kind: 'unbound' }
+                      : { kind: 'concrete', pipelineVersionId: lastConcrete },
+                })
+              }
             />
             A specific version
           </label>
@@ -869,15 +888,16 @@ function TriggerForm({
           Pipeline version
           <select
             value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
-            onChange={(e) =>
+            onChange={(e) => {
+              setLastConcrete(e.target.value === '' ? null : e.target.value);
               onChange({
                 ...form,
                 binding:
                   e.target.value === ''
                     ? { kind: 'unbound' }
                     : { kind: 'concrete', pipelineVersionId: e.target.value },
-              })
-            }
+              });
+            }}
           >
             <option value="">— unbound —</option>
             {bindings.map((b) => (

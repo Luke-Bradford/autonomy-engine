@@ -936,6 +936,21 @@ describe('TriggersPage — binding to the active published version', () => {
     expect(form.getByLabelText('Pipeline')).toBeInTheDocument();
   });
 
+  /* Toggling a radio to look at the other option is not an instruction to
+     discard the choice already made. */
+  it('restores the version already picked when switching back off bind-to-active', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.click(form.getByRole('radio', { name: /active published version/i }));
+    await user.click(form.getByRole('radio', { name: /A specific version/i }));
+
+    expect(form.getByLabelText('Pipeline version')).toHaveValue('plv_1');
+  });
+
   /* PATCH is concrete-only by design, so that a patch can never silently
      re-resolve a pinned binding (`TriggerCreateBodySchema`). */
   it('does NOT offer bind-to-active when editing an existing trigger', async () => {
