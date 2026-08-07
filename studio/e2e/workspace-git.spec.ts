@@ -370,7 +370,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await triggerForm.getByRole('radio', { name: /active published version/i }).check();
 
   // `pipelineName` was committed and re-imported, but never published.
-  await triggerForm.getByLabel('Pipeline', { exact: true }).selectOption({ label: pipelineName });
+  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: pipelineName });
   await expect(triggerForm.getByText(/has no published version/i)).toBeVisible();
   await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
   // Refused HERE — the request that would 400 is never sent, and the message
@@ -382,7 +382,7 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(triggerForm).toBeVisible();
 
   // `publishName` was published as v1 immediately above.
-  await triggerForm.getByLabel('Pipeline', { exact: true }).selectOption({ label: publishName });
+  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: publishName });
   await expect(triggerForm.getByText(/v1/)).toBeVisible();
   await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
   await expect(triggerForm).toBeHidden();
@@ -391,13 +391,27 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   const bound = (boundList as Array<{ name: string; pipelineVersionId: string | null }>).find(
     (t) => t.name === 'Bound to active',
   );
-  // Resolve-once stored a CONCRETE id — the version that was active at create
-  // time, not an "active" indirection the row would follow. The EXACT id, not
-  // merely a truthy one: `pushNewPipelineFile` mints deterministic ids, so
-  // asserting the precise version also catches a binding resolved to the wrong
-  // one, which a truthiness check would wave through.
-  const publishedSlug = publishName.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-  expect(bound?.pipelineVersionId).toBe(`plv_${publishedSlug}_1`);
+  /*
+   * Resolve-once stored a CONCRETE id — the version that was active at create
+   * time, not an "active" indirection the row would follow.
+   *
+   * Compared against the ACTIVE pointer read back from the API, not against an
+   * id derived from the committed file: an import MINTS a fresh version id
+   * (`pv_…`) rather than adopting the `plv_<slug>_1` the file carries, so a
+   * derived id is simply the wrong expectation. Reading the pointer keeps this
+   * stronger than a truthiness check — it fails if the binding resolves to any
+   * OTHER version — without asserting an identity the system does not promise.
+   */
+  const allPipelines = (await (await page.request.get('/api/pipelines')).json()) as
+    Array<{ id: string; name: string }> | { items: Array<{ id: string; name: string }> };
+  const rows = Array.isArray(allPipelines) ? allPipelines : allPipelines.items;
+  const publishedPipeline = rows.find((p) => p.name === publishName);
+  expect(publishedPipeline, `no pipeline named ${publishName}`).toBeDefined();
+  const activeNow = (await (
+    await page.request.get(`/api/pipelines/${encodeURIComponent(publishedPipeline!.id)}/active`)
+  ).json()) as { active: { versionId: string } | null };
+  expect(activeNow.active, 'the pipeline should have an active published version').not.toBeNull();
+  expect(bound?.pipelineVersionId).toBe(activeNow.active!.versionId);
 
   await openGitPage(page);
 
