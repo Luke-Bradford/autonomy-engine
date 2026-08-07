@@ -48,6 +48,7 @@ import {
   activeBindingAdvice,
   bindingCreateFields,
   bindingIsBound,
+  bindingPatchField,
   type BindingSelection,
   type PublishReading,
 } from './triggers/binding';
@@ -747,11 +748,17 @@ function TriggerForm({
      * schemas are the SAME objects the route parses, so neither can drift.
      */
     if (editing && form.id) {
-      // Bind-to-active is never offered while editing, so the selection here is
-      // always concrete or unbound.
+      // Bind-to-active is never OFFERED while editing, so this refusal is
+      // unreachable today — it exists so that the day it becomes reachable is a
+      // visible refusal rather than a silent unbind. See `bindingPatchField`.
+      const patchBinding = bindingPatchField(form.binding);
+      if (!patchBinding.ok) {
+        setError(patchBinding.reason);
+        return;
+      }
       const patchBody: TriggerWrite = {
         ...common,
-        pipelineVersionId: form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : null,
+        pipelineVersionId: patchBinding.pipelineVersionId,
       };
       const parsed = TriggerWriteSchema.safeParse(patchBody);
       if (!parsed.success) {

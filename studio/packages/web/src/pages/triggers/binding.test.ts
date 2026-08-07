@@ -3,6 +3,7 @@ import {
   activeBindingAdvice,
   bindingCreateFields,
   bindingIsBound,
+  bindingPatchField,
   type BindingSelection,
 } from './binding';
 
@@ -31,6 +32,34 @@ describe('bindingCreateFields — the wire shape of a create body', () => {
     expect(fields).toEqual({ bindToActive: { pipelineId: 'pl_1' } });
     expect('pipelineVersionId' in fields).toBe(false);
     expect(JSON.stringify(fields)).not.toContain('pipelineVersionId');
+  });
+});
+
+describe('bindingPatchField — a PATCH is concrete-only, and says so', () => {
+  it('passes a concrete binding through', () => {
+    expect(bindingPatchField({ kind: 'concrete', pipelineVersionId: 'plv_7' })).toEqual({
+      ok: true,
+      pipelineVersionId: 'plv_7',
+    });
+  });
+
+  it('sends an explicit null for a deliberately unbound trigger', () => {
+    expect(bindingPatchField({ kind: 'unbound' })).toEqual({ ok: true, pipelineVersionId: null });
+  });
+
+  it('REFUSES bind-to-active rather than coercing it to null', () => {
+    /*
+     * The whole point. `pipelineVersionId: null` is a legal write — a disabled
+     * trigger may be deliberately unbound — so a ternary falling through to
+     * `null` here would be ACCEPTED by the server and would silently drop the
+     * operator's binding. Unreachable today (the form does not offer
+     * bind-to-active while editing); this asserts that if it ever becomes
+     * reachable it is a refusal and not a silent unbind.
+     */
+    const result = bindingPatchField({ kind: 'active', pipelineId: 'pl_1' });
+    expect(result.ok).toBe(false);
+    expect(result).not.toHaveProperty('pipelineVersionId');
+    if (!result.ok) expect(result.reason).toMatch(/specific version/i);
   });
 });
 

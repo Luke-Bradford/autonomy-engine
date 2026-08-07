@@ -44,6 +44,47 @@ export function bindingCreateFields(selection: BindingSelection): BindingCreateF
 }
 
 /**
+ * The PATCH counterpart of `bindingCreateFields`, and the reason it is a
+ * RESULT rather than a value.
+ *
+ * A PATCH body is concrete-only by schema (`TriggerWriteBodySchema`), so that a
+ * patch can never silently re-resolve a pinned binding. The form does not offer
+ * bind-to-active while editing, so `'active'` is unreachable here today — but
+ * the obvious way to write that was a ternary falling through to `null`, which
+ * turns the day it BECOMES reachable into a silent unbind: `pipelineVersionId:
+ * null` is a legal write (a disabled trigger may be deliberately unbound), so
+ * the server would accept it and the operator would lose the binding with
+ * nothing said. That is the "absent fact manufactured as a benign default"
+ * failure, and it is worth the extra shape to make impossible.
+ *
+ * So the case is REFUSED rather than coerced, and the `never` default makes the
+ * exhaustiveness a compile-time obligation: a fourth `BindingSelection` kind
+ * cannot be added without this function being made to say what it means.
+ */
+export type BindingPatchField =
+  { ok: true; pipelineVersionId: string | null } | { ok: false; reason: string };
+
+export function bindingPatchField(selection: BindingSelection): BindingPatchField {
+  switch (selection.kind) {
+    case 'concrete':
+      return { ok: true, pipelineVersionId: selection.pipelineVersionId };
+    case 'unbound':
+      return { ok: true, pipelineVersionId: null };
+    case 'active':
+      return {
+        ok: false,
+        reason:
+          'An existing trigger cannot be re-bound to the active published version — ' +
+          'its binding is pinned. Pick a specific version, or unbind it.',
+      };
+    default: {
+      const unreachable: never = selection;
+      return unreachable;
+    }
+  }
+}
+
+/**
  * The client mirror of the server's `assertBindableIfEnabled` ("an unbound
  * trigger never fires").
  *
