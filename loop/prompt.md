@@ -95,7 +95,18 @@ page outrank the UI epic.
      `/monitor/ai` about studio and let the LOOP report in through an ingest seam; do not have
      studio scrape processes it did not launch. If that shape looks wrong from inside the code,
      raise an `[operator-decision]` rather than widening the product's scope alone.
-5. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+5. **`#992`** — hide the canvas edge labels; colour already carries routing, reveal on hover AND
+   keyboard focus (operator, 2026-08-07: *"the colour of the line does enough"*). **Amends `U19`** —
+   its palette stands, only the always-on label is withdrawn. Keep the routing key in the accessible
+   name: hidden visually is fine, hidden from assistive tech is a regression.
+6. **`#994`** — a `sqlite` connection kind + `sql_query` activity. The operator asked why there is no
+   SQL story; there is a connector seam (`server/src/connectors/`, six adapters + a registry) and
+   `better-sqlite3` is ALREADY a dependency, so this costs zero new deps and its test bench is
+   in-process. **Connection + activity only — do NOT build datasets or column mapping here**; that
+   is `#993`, still an open operator decision, and the spec's `Non-goals` line governs it until a
+   spec retracts it. Parameterised binding is non-negotiable: an expression must never be able to
+   inject SQL. Confine the DB path the way `fs` confines `config.roots`.
+7. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
 
 All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
 counts `[studio]` tickets only.
