@@ -3,6 +3,7 @@ import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { computedStyleOf, contrastRatio, fluentRootReady, isOpaque } from './support/theme';
 import { openCanvas } from './support/canvas';
 import { openRowMenu } from './support/authorPane';
+import { fireAndSettle, seedVersion } from './support/seedDoc';
 
 /**
  * Regression net for the browser-observable half of the first bug sweep:
@@ -282,6 +283,74 @@ test.describe('#720 the open canvas follows a rename', () => {
     await expect(page.getByRole('heading', { name: before })).toHaveCount(0);
     // The canvas did not navigate away or remount onto a different pipeline.
     await expect(page.locator('.react-flow')).toBeVisible();
+
+    await expectQuiet(page, problems);
+  });
+});
+
+/**
+ * ── Bug sweep 4 ──────────────────────────────────────────────────────────────
+ *
+ * #1008 — the run page's two "why is there no span" classifiers agreed on a
+ * routed-around node.
+ *
+ * Invisible to vitest for a DIFFERENT reason from the sweeps above: not the
+ * cascade, but the mock. The panel's unit test stubs `useRunStream`, so it can
+ * prove the panel renders the right sentence for a node it is TOLD is skipped,
+ * and cannot prove the engine calls that node skipped in the first place.
+ *
+ * `hold` is a one-second `wait` that SUCCEEDS, and the only edge out of it is a
+ * `failure` edge — so `stop` is routed around and the engine appends no event
+ * for it at all. That leaves `attempts === 0`, which is also what a node that
+ * has genuinely not started yet looks like; the panel used to read the count
+ * and say "has not started", while the timeline read the status and said
+ * "skipped". One page, one fact, two descriptions.
+ *
+ * The end-to-end half is the point. `RunDetailPage.test.tsx` mocks
+ * `useRunStream`, so it pins the panel's arm against a status the test itself
+ * supplies. Only a real run proves the reducer actually settles this node as
+ * `skipped` — if it ever produced something else, the unit test would stay
+ * green and the operator would be back to reading the wrong sentence.
+ */
+const ROUTED_AROUND_DOC = {
+  nodes: [
+    { id: 'hold', type: 'wait', config: { seconds: '${1}' }, position: { x: 0, y: 0 } },
+    { id: 'stop', type: 'fail', config: { message: 'unreachable' }, position: { x: 260, y: 0 } },
+  ],
+  // `hold` succeeds, so this edge is never taken and `stop` is skipped.
+  edges: [{ from: 'hold', to: 'stop', on: 'failure' as const }],
+};
+
+test.describe('#1008 the skipped node', () => {
+  test('the panel and the timeline agree that a routed-around node was skipped', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+
+    const { pipelineVersionId } = await seedVersion(page, '#1008 routed around', ROUTED_AROUND_DOC);
+    const runId = await fireAndSettle(page, pipelineVersionId, '#1008 sweep');
+
+    await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+    await fluentRootReady(page);
+
+    /* Keyed on the raw node id in the row's `<code>`, not the activity's display
+       name: #882 numbers names by kind, so keying on one would make this spec
+       fail on labelling work it is not about (`node-duration.spec.ts`'s rule). */
+    const stopRow = page.locator('tr', { has: page.locator('td code', { hasText: /^stop$/ }) });
+    await stopRow.locator('button.node-drill-in').click();
+
+    const panel = page.getByRole('complementary');
+    await expect(panel).toContainText('routed around, so it was never going to run');
+    /* The defect itself, asserted as the ABSENCE that has to hold. Without it
+       the spec would pass on a panel that printed both sentences. */
+    await expect(panel).not.toContainText('has not started');
+
+    /* The other surface, on the same page, describing the same node — this is
+       the agreement the ticket is about, so asserting only one side would miss
+       a fix that moved the disagreement rather than removing it. */
+    const untimed = page.locator('.timeline-untimed li', { hasText: 'skipped' });
+    await expect(untimed).toHaveCount(1);
+    await expect(untimed).toContainText('the engine appends no event for a node it routes around');
 
     await expectQuiet(page, problems);
   });

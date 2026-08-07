@@ -106,74 +106,172 @@ describe('usePolledResource', () => {
   });
 
   /**
-   * Polls OVERLAP — a tick fires whether or not the previous request came back.
-   * Applying results in resolution order would let a slow early request land on
-   * top of a fresh later one, and stamp `lastUpdatedAt` with the moment the
-   * STALE response arrived, making the page's "as of" text an understatement of
-   * how old the figures are. Latest-wins is what makes that claim honest.
+   * #1000 — AT MOST ONE REQUEST OUTSTANDING. Ticks used to fire whether or not
+   * the previous request had come back, so while the endpoint was slower than
+   * the interval, requests accumulated without bound: nothing capped them and
+   * nothing cancelled them (the `AbortController` is per-EFFECT, aborted only
+   * at teardown). These pin the guard that replaced the latest-wins token —
+   * with one load at a time, results can no longer arrive out of order at all.
    */
-  it('ignores a slow earlier response that resolves after a newer one', async () => {
-    const resolvers: Array<(value: string) => void> = [];
-    const fetcher = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
+  describe('#1000 — at most one load in flight', () => {
+    /** A fetcher whose every call stays pending until the test settles it. */
+    function pendingFetcher(): {
+      fetcher: (signal: AbortSignal) => Promise<string>;
+      settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }>;
+    } {
+      const settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }> = [];
+      const fetcher = vi.fn(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            settlers.push({ resolve, reject });
+          }),
+      );
+      return { fetcher, settlers };
+    }
 
-    const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
-    await waitFor(() => expect(resolvers).toHaveLength(1));
+    /**
+     * The mount load is NOT gated on visibility, and that is deliberate rather
+     * than an oversight — newly written into the docblock, so newly pinned.
+     * The interval-less callers (the quota panel, the triggers page) return
+     * before the visibility listener is even registered, so gating this would
+     * leave them with no data at all and no route to any but a manual refresh.
+     * Without this test a future "the docblock says it pauses while hidden"
+     * cleanup would break both pages and no suite would notice.
+     */
+    it('still loads once on mount when the tab is ALREADY hidden', async () => {
+      setVisibility('hidden');
+      const fetcher = vi.fn().mockResolvedValue('x');
 
-    // A second poll starts while the first is still in flight.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_100);
-    });
-    expect(resolvers).toHaveLength(2);
+      const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
 
-    // The NEWER request answers first…
-    await act(async () => {
-      resolvers[1]!('fresh');
-    });
-    await waitFor(() => expect(result.current.data).toBe('fresh'));
-    const stampAfterFresh = result.current.lastUpdatedAt;
+      await waitFor(() => expect(result.current.data).toBe('x'));
+      expect(fetcher).toHaveBeenCalledTimes(1);
 
-    // …and then the older one finally lands. It must be discarded outright.
-    await act(async () => {
-      resolvers[0]!('stale');
-    });
-
-    expect(result.current.data).toBe('fresh');
-    expect(result.current.lastUpdatedAt).toBe(stampAfterFresh);
-  });
-
-  it('does not let a stale rejection overwrite a newer success', async () => {
-    const settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }> = [];
-    const fetcher = vi.fn(
-      () =>
-        new Promise<string>((resolve, reject) => {
-          settlers.push({ resolve, reject });
-        }),
-    );
-
-    const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
-    await waitFor(() => expect(settlers).toHaveLength(1));
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_100);
-    });
-    expect(settlers).toHaveLength(2);
-
-    await act(async () => {
-      settlers[1]!.resolve('fresh');
-    });
-    await waitFor(() => expect(result.current.data).toBe('fresh'));
-
-    await act(async () => {
-      settlers[0]!.reject(new Error('stale failure'));
+      // …and the CADENCE is what the hidden tab suppresses.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
     });
 
-    expect(result.current.error).toBeNull();
-    expect(result.current.data).toBe('fresh');
+    it('skips every tick that lands while a load is still in flight', async () => {
+      const { fetcher, settlers } = pendingFetcher();
+
+      renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(settlers).toHaveLength(1));
+
+      // Twelve intervals' worth of ticks against one unanswered request.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(settlers).toHaveLength(1);
+    });
+
+    it('resumes the cadence once the in-flight load settles', async () => {
+      const { fetcher, settlers } = pendingFetcher();
+
+      renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(settlers).toHaveLength(1));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+      });
+      expect(settlers).toHaveLength(1);
+
+      await act(async () => {
+        settlers[0]!.resolve('first');
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+
+      expect(settlers).toHaveLength(2);
+    });
+
+    /**
+     * Guard hygiene. A rejected load must release the flag exactly as a
+     * resolved one does — otherwise the first failure parks the panel dead for
+     * the effect's whole lifetime, which is a worse bug than the pile-up.
+     */
+    it('releases the guard when a load REJECTS, not only when it resolves', async () => {
+      const { fetcher, settlers } = pendingFetcher();
+
+      const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(settlers).toHaveLength(1));
+
+      await act(async () => {
+        settlers[0]!.reject(new Error('boom'));
+      });
+      await waitFor(() => expect(result.current.error).toBe('boom'));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+
+      expect(settlers).toHaveLength(2);
+    });
+
+    /**
+     * THE HONESTY HALF, and the reason the guard alone was not enough.
+     *
+     * `lastUpdatedAt` is what the UI stamps "as of" with, so it must never
+     * overstate how current the figures are. Stamping at RESOLUTION would
+     * attribute a slow request's data to the moment it happened to land — and
+     * with a one-at-a-time guard that error is no longer bounded by the
+     * interval, because a request may now stay outstanding indefinitely.
+     */
+    it('stamps lastUpdatedAt with when the request was ISSUED, not when it resolved', async () => {
+      const { fetcher, settlers } = pendingFetcher();
+
+      const issuedAt = Date.now();
+      const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(settlers).toHaveLength(1));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await act(async () => {
+        settlers[0]!.resolve('slow');
+      });
+      await waitFor(() => expect(result.current.data).toBe('slow'));
+
+      expect(result.current.lastUpdatedAt).toBeLessThan(issuedAt + 5_000);
+    });
+
+    /**
+     * The hide→reveal case the guard would otherwise have made DISHONEST.
+     *
+     * `stop()` clears the interval but does not abort an in-flight request, so
+     * a load issued before the tab hid is still pending on reveal. The wake
+     * load is now skipped by the guard, and the pre-hide response is the one
+     * that lands — which is fine only because it is stamped with the moment it
+     * was ISSUED. Stamped at resolution it would present minutes-old figures
+     * as current, which is the single failure this surface cannot have.
+     */
+    it('does not present a pre-hide response as current after the tab is revealed', async () => {
+      const { fetcher, settlers } = pendingFetcher();
+
+      const issuedAt = Date.now();
+      const { result } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
+      await waitFor(() => expect(settlers).toHaveLength(1));
+
+      act(() => setVisibility('hidden'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      act(() => setVisibility('visible'));
+
+      // The wake refresh is skipped — that request is already outstanding.
+      expect(settlers).toHaveLength(1);
+
+      await act(async () => {
+        settlers[0]!.resolve('prehide');
+      });
+      await waitFor(() => expect(result.current.data).toBe('prehide'));
+
+      expect(result.current.lastUpdatedAt).toBeLessThan(issuedAt + 5_000);
+    });
   });
 
   it('surfaces a failure as an error and clears it on the next success', async () => {

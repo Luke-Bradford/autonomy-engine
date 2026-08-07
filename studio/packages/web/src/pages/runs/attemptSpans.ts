@@ -74,15 +74,31 @@ export function timelineWindow(nodes: NodeActivity[]): { from: number; to: numbe
  * attempt and a corrupt one each get their own sentence), while this asks why the
  * node contributed NO SPAN AT ALL to the chart (keyed on `spans.length === 0`).
  * A node can have several measured spans and still have no current duration, and
- * vice versa. They do disagree on one shared case today — the panel has no
- * `skipped` branch and calls a routed-around node "has not started" — which is a
- * defect in the panel rather than in the split, and is #1008.
+ * vice versa.
+ *
+ * They no longer disagree on the one shared case where they did (#1008): the
+ * panel had no `skipped` branch and called a routed-around node "has not
+ * started", which was a defect in the panel rather than in the split. It now
+ * carries its own `skipped` arm. The two chains share the FACT and never the
+ * string — this returns a fragment (`name — reason`), the panel's arms are
+ * standalone sentences — so there is nothing to extract, only a reason to keep
+ * both in step when either changes.
  */
 export function untimedReason(node: NodeActivity): string {
   if (node.copiedFromRunId !== undefined) {
     return 'copied from an earlier run — it did not run again here';
   }
-  if (node.status === 'skipped') {
+  /* `attempts === 0` is part of the test, not an implied consequence of the
+     status. `skipped` is NOT only the routed-around case: `abandonLiveChildren`
+     flips a LIVE child (dispatched, parked, retry-pending) straight to `skipped`
+     when its container times out — "abandoned mid-flight, not failed", as the
+     reducer puts it — and leaves `attempts` alone. Such a node did run, so
+     "the engine appends no event for it" is false about it, and it falls
+     through to the final answer below, which describes the LOG and is true of
+     it. Naming the abandonment as the cause is what this chain deliberately
+     will not do: the row carries no container, so that would be inventing a
+     reason (see the docblock above). */
+  if (node.status === 'skipped' && node.attempts === 0) {
     return 'skipped — the engine appends no event for a node it routes around';
   }
   if (node.attempts === 0) return 'has not started';

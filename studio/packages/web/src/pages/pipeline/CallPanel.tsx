@@ -59,12 +59,33 @@ import type { createCanvasStore } from './canvasStore';
  *
  * ## Known limitation (stated, not silently shipped)
  *
- * `validateRefs` walks `node.config`/`connectionId`/`connectionParams` and does
- * NOT scan `node.call`, so a `${}` written into a target or a param value gets
- * none of the save-time existence/type checking the rest of the config surface
- * gets — it fails at dispatch instead. `validateCallGraph`'s self-call and
- * depth guard (`maxCallDepth`, default 3) likewise only walks LITERAL targets.
- * The expression control says so on screen rather than implying parity.
+ * HALF OF THIS CLOSED IN #952, and the on-screen hint below moved with it — a
+ * mitigation that keeps telling the operator about a gap that no longer exists
+ * is worse than no mitigation, because they will route around a check that is
+ * now doing its job.
+ *
+ * `validateRefs` DOES now scan `node.call.pipelineVersionId` and every value in
+ * `node.call.params`, in the same scope it scans this node's `config` — so a
+ * `${}` here gets the same save-time existence/type checking as the rest of the
+ * config surface, and a bad ref is refused at save rather than at dispatch.
+ *
+ * What is STILL true, and is why the hint has not simply been deleted:
+ * `validateCallGraph`'s self-call and depth guard (`maxCallDepth`, default 3)
+ * only walks LITERAL targets (`literalCallTargets` drops a `${}` one), and
+ * `startChild` has no runtime depth guard — so recursion through a DYNAMIC
+ * target is bounded by nothing. That half is an engine-semantics change with
+ * its own decision to make, tracked separately.
+ *
+ * ## Why the ExpressionPicker is still not wired in here (#952 fix sketch, 2)
+ *
+ * The blocker was `availableRefs`' NO FALSE OFFER contract: it must not offer a
+ * ref that `validateRefs` never checks, and until #952 these sites were exactly
+ * that. That constraint is now SATISFIED and needs no code — `availableRefs` is
+ * node-scoped and derives the same `guaranteed`/`settled`/`reachable`/`soft`
+ * sets and `${item}` binding that the new call scan uses, so what it would
+ * offer at a call site is precisely what is now checked there. Wiring the
+ * picker into this panel is therefore unblocked, and is left as its own UI
+ * change rather than folded into a validator fix.
  */
 
 export function CallPanel({
@@ -306,8 +327,8 @@ function CallEditor({
             placeholder="${params.target}"
           />
           <span className="page-hint">
-            A <code>{'${}'}</code> target is resolved when the node dispatches. It is not checked
-            when you save, and the self-call and call-depth guards only see literal targets.
+            A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
+            checked when you save, but the self-call and call-depth guards only see literal targets.
           </span>
         </label>
       )}

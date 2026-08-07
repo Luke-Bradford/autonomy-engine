@@ -11,11 +11,21 @@ import { messageOf } from '../api/client';
  * panel is allowed to use (polling the provider on a timer is the contention the
  * one-sampler invariant forbids).
  *
- * PAUSES WHILE THE TAB IS HIDDEN. A monitoring page left open in a background
- * tab overnight would otherwise issue thousands of requests nobody is reading.
- * It refreshes IMMEDIATELY on becoming visible again, so the pause can never be
- * mistaken for stale data being presented as current — the returned
- * `lastUpdatedAt` is what the UI stamps so "as of" is always literally true.
+ * PAUSES THE CADENCE WHILE THE TAB IS HIDDEN. A monitoring page left open in a
+ * background tab overnight would otherwise issue thousands of requests nobody is
+ * reading. The pause governs the TIMER, not the initial load: the load on mount
+ * runs regardless of visibility, because the interval-less callers (the quota
+ * panel, the triggers page) return before the visibility listener is even
+ * registered, and gating it would leave them with no data at all and no route
+ * to any but a manual refresh.
+ *
+ * It asks for a refresh on becoming visible again — skipped, per the one-load
+ * rule below, if a request is already outstanding, which is not a loss because
+ * fresh data is by definition already on its way. The pause therefore cannot be
+ * mistaken for stale data presented as current, but that guarantee rests on
+ * `lastUpdatedAt` rather than on the wake refresh: it is stamped with the moment
+ * the request was ISSUED, so the UI's "as of" is literally true even for a
+ * response that was in flight across the whole hidden period.
  *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`). It is a dependency of the effect
  * below, which is what makes a fetcher that closes over changed state — a new
@@ -52,35 +62,59 @@ export function usePolledResource<T>(
     let cancelled = false;
 
     /*
-     * LATEST-WINS. Loads overlap: a tick fires every `intervalMs` regardless of
-     * whether the previous request has come back, and a visibility change can
-     * start one alongside. Without a guard the results apply in RESOLUTION order,
-     * so a slow first request landing after a fast second one overwrites fresh
-     * data with stale — and stamps `lastUpdatedAt` with the moment the STALE
-     * response arrived, which makes the "as of" text an understatement of how old
-     * the figures are. That is the one failure this surface cannot have: its
-     * entire claim is that it says how current it is.
+     * ONE LOAD AT A TIME (#1000). Ticks used to fire whether or not the previous
+     * request had come back, and nothing capped or cancelled the result: the
+     * `AbortController` here is per-EFFECT, so its abort means "tear down" and
+     * cannot be reused to cancel a single poll. Whenever the endpoint was slower
+     * than `intervalMs`, requests therefore accumulated WITHOUT BOUND for as long
+     * as that lasted.
      *
-     * A monotonic token rather than aborting the previous request, because the
-     * controller is per-EFFECT (its abort means "tear down"), and reusing it to
-     * cancel one poll would abort every later one too.
+     * A tick that lands while a load is outstanding is dropped rather than
+     * queued. The cadence degrades to the server's real speed, which is the
+     * honest behaviour: a page that cannot be refreshed every 5s should poll
+     * every 5s in name only. Known cost, accepted deliberately — a request that
+     * never returns now parks the panel until something remounts the effect (a
+     * new `fetcher`, `intervalMs` or `refresh()`, each of which aborts it via the
+     * dependency change), where before a later tick could still land. The
+     * alternative shape — a per-load controller cancelling the previous request —
+     * is bounded too, but on a consistently slow server every request would be
+     * cancelled before completing and the panel would render nothing at all.
+     *
+     * This REPLACES the monotonic latest-wins token that used to live here. With
+     * one load at a time, results cannot arrive out of order within an effect,
+     * and across effects `cancelled` already discards them — so the token had
+     * become unreachable, and unreachable defence behind tests that can no longer
+     * exercise it is its own defect.
+     *
+     * `lastUpdatedAt` is stamped at ISSUE, not at resolution. That is what keeps
+     * the UI's "as of" true rather than an understatement of how old the figures
+     * are, and it matters more under this guard than it did before: a response
+     * may now be outstanding for far longer than one interval — across an entire
+     * hidden-tab period, since pausing the timer does not abort a request already
+     * in flight.
      */
-    let latest = 0;
+    let inFlight = false;
 
     const load = async (): Promise<void> => {
-      const token = ++latest;
+      if (inFlight) return;
+      inFlight = true;
+      const issuedAt = Date.now();
       try {
         const next = await fetcher(controller.signal);
-        if (cancelled || token !== latest) return;
+        if (cancelled) return;
         setData(next);
         setError(null);
-        setLastUpdatedAt(Date.now());
+        setLastUpdatedAt(issuedAt);
       } catch (err) {
         // An abort is this effect tearing down, not a failure to report.
-        if (cancelled || controller.signal.aborted || token !== latest) return;
+        if (cancelled || controller.signal.aborted) return;
         setError(messageOf(err));
       } finally {
-        if (!cancelled && token === latest) setLoading(false);
+        // UNCONDITIONALLY, and on the rejection path too: a guard left set by a
+        // failed load would park the panel dead for this effect's whole life,
+        // which is a worse bug than the pile-up it exists to prevent.
+        inFlight = false;
+        if (!cancelled) setLoading(false);
       }
     };
 

@@ -156,6 +156,23 @@ describe('untimedReason', () => {
     );
   });
 
+  /**
+   * A node ABANDONED mid-flight is `skipped` too, and must not be described as
+   * routed around. `abandonLiveChildren` flips a live child straight to
+   * `skipped` on a container timeout ("abandoned mid-flight, not failed") and
+   * leaves `attempts` alone, so `skipped` alone cannot carry the routing claim.
+   *
+   * Asserted as the sentence it must NOT produce plus the one it must, because
+   * the failure this guards is a confident wrong explanation rather than a
+   * missing one — and the honest answer here is the LOG description, not a
+   * named cause the row has no container to support.
+   */
+  it('does not call an abandoned node routed around, though it too is skipped', () => {
+    const reason = untimedReason(node({ nodeId: 'a', status: 'skipped', attempts: 1 }));
+    expect(reason).not.toContain('routes around');
+    expect(reason).toContain('no start-and-terminal pair');
+  });
+
   it('describes the LOG for a node that ran but cannot be measured', () => {
     // `fail`, `filter`, `call_pipeline`, `if`, `switch` and a parallel foreach
     // body node all reach this, so naming any one of them would be a guess.
