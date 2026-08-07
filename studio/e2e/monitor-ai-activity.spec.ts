@@ -145,7 +145,7 @@ test.describe('#917 Monitor › AI activity', () => {
     await fluentRootReady(page);
 
     const panel = quotaPanel(page);
-    await expect(panel).toContainText('Quota UNREADABLE.');
+    await expect(panel).toContainText('Claude quota UNREADABLE.');
     // The REASON, in the operator's terms — a contended account is not a broken
     // reader, and the panel has to be able to tell them that.
     await expect(panel).toContainText(/rate-limiting/i);
@@ -175,7 +175,7 @@ test.describe('#917 Monitor › AI activity', () => {
 
     await page.goto('/#/monitor/ai');
     await fluentRootReady(page);
-    await expect(quotaPanel(page)).toContainText('Quota UNREADABLE.');
+    await expect(quotaPanel(page)).toContainText('Claude quota UNREADABLE.');
     const afterMount = quotaCalls;
 
     // Long enough for several activity polls (5s) to have gone out. The quota
@@ -225,7 +225,7 @@ test.describe('#917 Monitor › AI activity', () => {
       const panel = quotaPanel(page);
       // BOTH facts on screen at once: it is unreadable NOW, and this is what it
       // was. Neither displaces the other.
-      await expect(panel).toContainText('Quota UNREADABLE.');
+      await expect(panel).toContainText('Claude quota UNREADABLE.');
       await expect(panel).toContainText('Last known reading');
       await expect(panel).toContainText('12m 30s ago');
       await expect(panel).toContainText('not a current figure');
@@ -258,13 +258,95 @@ test.describe('#917 Monitor › AI activity', () => {
       await fluentRootReady(page);
 
       const panel = quotaPanel(page);
-      await expect(panel).toContainText('Quota UNREADABLE.');
+      await expect(panel).toContainText('Claude quota UNREADABLE.');
       // No last-known block, no manufactured percentage. "Nothing has been
       // read" is a real state and stays representable.
       await expect(panel).not.toContainText('Last known reading');
       await expect(panel).not.toContainText('%');
       await expect(panel.getByRole('table')).toHaveCount(0);
 
+      await expectQuiet(page, problems);
+    });
+  });
+
+  /**
+   * #990 — codex on the panel, through the real render path.
+   *
+   * The unit tests pin the derivation; these pin that a body carrying a second
+   * provider actually reaches the DOM, that an absent one leaves no trace, and
+   * that an unreadable one still puts no number on screen.
+   */
+  test.describe('codex quota (#990)', () => {
+    const CLAUDE = {
+      five_hour: { utilization: 0.08, resets_at: RESETS_AT_SECONDS },
+      seven_day: { utilization: 0.07, resets_at: RESETS_AT_SECONDS },
+    };
+
+    test('renders codex beside claude, with its reset instant and its scrape age', async ({
+      page,
+    }) => {
+      const problems = collectPageProblems(page);
+      const generatedAt = Math.floor(Date.now() / 1000);
+      await stubQuota(page, {
+        generated_at: generatedAt,
+        account: {
+          claude: CLAUDE,
+          codex: {
+            seven_day: { utilization: 0.64, resets_at: RESETS_AT_SECONDS },
+            read_at: generatedAt - 750,
+          },
+        },
+      });
+
+      await page.goto('/#/monitor/ai');
+      const panel = quotaPanel(page);
+
+      await expect(panel).toContainText('Codex');
+      await expect(panel).toContainText('64%');
+      // Both providers, not one displacing the other.
+      await expect(panel).toContainText('Claude');
+      await expect(panel).toContainText('7%');
+      // The reset INSTANT, which is the thing a bare percentage cannot say.
+      await expect(panel).toContainText('2099');
+      // And the age, because this figure is scraped rather than polled.
+      await expect(panel).toContainText('12m 30s ago');
+      await expectQuiet(page, problems);
+    });
+
+    test('says nothing whatsoever about codex when it is absent from the host', async ({
+      page,
+    }) => {
+      const problems = collectPageProblems(page);
+      await stubQuota(page, {
+        generated_at: Math.floor(Date.now() / 1000),
+        account: { claude: CLAUDE },
+      });
+
+      await page.goto('/#/monitor/ai');
+      const panel = quotaPanel(page);
+
+      await expect(panel).toContainText('Claude');
+      await expect(panel).not.toContainText('Codex');
+      await expect(panel).not.toContainText('UNREADABLE');
+      await expectQuiet(page, problems);
+    });
+
+    test('an unreadable codex names a reason and puts no number on the page', async ({ page }) => {
+      const problems = collectPageProblems(page);
+      await stubQuota(page, {
+        generated_at: Math.floor(Date.now() / 1000),
+        account: { claude: null, codex: null },
+        unavailable: { claude: 'rate_limited', codex: 'no_reading' },
+      });
+
+      await page.goto('/#/monitor/ai');
+      const panel = quotaPanel(page);
+
+      await expect(panel).toContainText('Codex quota UNREADABLE.');
+      await expect(panel).toContainText('has not run recently enough');
+      // Neither provider has a reading, and neither may show a percentage —
+      // "0%" would read as wide open, the opposite of "unknown".
+      await expect(panel).not.toContainText('%');
       await expectQuiet(page, problems);
     });
   });

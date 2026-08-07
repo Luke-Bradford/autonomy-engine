@@ -111,6 +111,67 @@ export const ClaudeAccountQuotaSchema = z
 export type ClaudeAccountQuota = z.infer<typeof ClaudeAccountQuotaSchema>;
 
 /**
+ * The providers this surface can report an account quota for (#990).
+ *
+ * A CLOSED set, not an open string: every provider needs a reader that knows
+ * where its reading comes from, and the display copy for an unobtainable one is
+ * exhaustive per provider on the web side. A new member is therefore a
+ * typecheck failure at each place that must say something about it, which is
+ * the point — an open string would let a provider reach the wire with no reader
+ * and no copy, and render as a blank row rather than as anything honest.
+ */
+export const ACCOUNT_QUOTA_PROVIDERS = ['claude', 'codex'] as const;
+
+export const AccountQuotaProviderSchema = z.enum(ACCOUNT_QUOTA_PROVIDERS);
+
+export type AccountQuotaProvider = z.infer<typeof AccountQuotaProviderSchema>;
+
+/**
+ * A codex account-quota reading (#990).
+ *
+ * Deliberately NOT `ClaudeAccountQuotaSchema`, for two measured reasons.
+ *
+ * **Windows are individually optional.** Measured against codex-cli's own
+ * session records on the operator's host (2026-08-07): a `plus` plan reports
+ * `primary` with `window_minutes: 10080` (the 7-day window) and `secondary:
+ * null` — ONE window, not two. Claude's all-or-nothing pair cannot represent
+ * that, and forcing it would turn a perfectly good 7-day reading into
+ * UNREADABLE. The `superRefine` below keeps the half that actually matters:
+ * ZERO windows is not an empty reading, it is no reading at all. That is the
+ * same fail-open shape `ClaudeAccountQuotaSchema` guards — an absent fact must
+ * never be manufactured as a benign one — applied at the granularity codex
+ * actually reports at.
+ *
+ * **It carries its own `read_at`.** Claude's reading is polled live and is at
+ * most one TTL old, so it has no freshness to interpret. Codex's is SCRAPED
+ * from the last session the CLI happened to write, so it is as old as the
+ * operator's last codex run — minutes or days. Rendering that in the same table
+ * as a live figure with no age is exactly the fail-open presentation #987 built
+ * the aged-reading machinery to prevent. The age is free (every session line
+ * carries its own ISO timestamp), so there is no case for omitting it.
+ *
+ * `read_at` is epoch SECONDS, matching every other timestamp on this surface.
+ */
+export const CodexAccountQuotaSchema = z
+  .object({
+    five_hour: AccountQuotaWindowSchema.optional(),
+    seven_day: AccountQuotaWindowSchema.optional(),
+    /** When the snapshot this reading came from was written, epoch SECONDS. */
+    read_at: z.number().int(),
+  })
+  .strict()
+  .superRefine((quota, ctx) => {
+    if (quota.five_hour === undefined && quota.seven_day === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'a reading with no windows is not a reading (#990)',
+      });
+    }
+  });
+
+export type CodexAccountQuota = z.infer<typeof CodexAccountQuotaSchema>;
+
+/**
  * WHY a reading could not be obtained (#825). Advisory attribution for a
  * `null`, never a substitute for a number.
  *
@@ -147,6 +208,17 @@ export const ACCOUNT_QUOTA_UNAVAILABLE_REASONS = [
   'disabled',
   /** No OAuth token — an absent credential, or a host with no Keychain at all. */
   'no_credential',
+  /**
+   * The source EXISTS but holds no usable reading yet (#990).
+   *
+   * Distinct from `no_credential`, which says there is nothing to read FROM,
+   * and from `unrecognized_payload`, which says something was read and did not
+   * parse. Codex's reading is scraped from the session records its CLI writes,
+   * so a host with codex installed but not recently run has a real source, a
+   * valid credential and simply nothing current in it. Collapsing that into
+   * either neighbour would tell the operator to fix the wrong thing.
+   */
+  'no_reading',
   /** The provider answered 429. Contended account, not a broken reader. */
   'rate_limited',
   /** The provider call failed for any other reason (transport, non-429 status). */
@@ -283,14 +355,96 @@ export type LastKnownAccountQuota = z.infer<typeof LastKnownAccountQuotaSchema>;
  * unrepresentable rather than merely discouraged, and one careless consumer away
  * from preferring the stale copy.
  */
+/**
+ * The #825 iff, per PROVIDER (#990).
+ *
+ * Three states, not two, and the third is the one #990 exists to make
+ * representable: a provider key that is ABSENT means "not on this host", which
+ * is a different fact from `null` ("here, but unreadable") and must not carry a
+ * reason — a reason for the absence of something that was never present would
+ * invite the panel to render a failure where there is none.
+ *
+ * Keyed per PROVIDER rather than on the `unavailable` container. The container
+ * test the guard body uses (`unavailable === undefined`) is correct only while
+ * there is one provider: with two, `{account:{claude:null}, unavailable:
+ * {codex:'…'}}` satisfies it while claude's `null` carries no reason at all —
+ * the unattributed UNREADABLE #825 was written to remove, re-entering through
+ * the door a second provider opens.
+ */
+function refineProviderUnavailableIff(
+  provider: AccountQuotaProvider,
+  value: unknown,
+  reason: AccountQuotaUnavailableReason | undefined,
+  ctx: z.RefinementCtx,
+): void {
+  if (value === undefined) {
+    if (reason !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailable', provider],
+        message: `a provider absent from this host must not carry a reason (#990)`,
+      });
+    }
+    return;
+  }
+  if (value === null) {
+    if (reason === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailable', provider],
+        message: `an UNREADABLE ${provider} reading must say why (#825)`,
+      });
+    }
+    return;
+  }
+  if (reason !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['unavailable', provider],
+      message: `a ${provider} reading cannot also carry a reason for its absence (#825)`,
+    });
+  }
+}
+
 export const AccountQuotaDisplayStateSchema = z
   .object({
-    ...accountQuotaStateShape,
+    generated_at: accountQuotaStateShape.generated_at,
+    /**
+     * `claude` is always present — the surface reports on it whether or not a
+     * credential exists, so the key is REQUIRED and `null` when unreadable.
+     * `codex` is optional because it is not on every host, and its absence is
+     * expressed by the key being missing rather than by a `null` that would
+     * claim a failed read (#990).
+     */
+    account: z
+      .object({
+        claude: ClaudeAccountQuotaSchema.nullable(),
+        codex: CodexAccountQuotaSchema.nullable().optional(),
+      })
+      .strict(),
+    unavailable: z
+      .object({
+        claude: AccountQuotaUnavailableReasonSchema.optional(),
+        codex: AccountQuotaUnavailableReasonSchema.optional(),
+      })
+      .strict()
+      .optional(),
     last_known: LastKnownAccountQuotaSchema.optional(),
   })
   .strict()
   .superRefine((state, ctx) => {
-    refineUnavailableIff(state, ctx);
+    refineProviderUnavailableIff('claude', state.account.claude, state.unavailable?.claude, ctx);
+    refineProviderUnavailableIff('codex', state.account.codex, state.unavailable?.codex, ctx);
+    // An `unavailable` with no keys says nothing while looking like it does.
+    // Every per-provider branch above is satisfied by it, so it needs its own
+    // refusal or the omit-when-empty rule is prose rather than contract.
+    if (state.unavailable !== undefined && Object.keys(state.unavailable).length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unavailable'],
+        message: 'an empty `unavailable` must be omitted, not sent (#825)',
+      });
+    }
     if (state.account.claude !== null && state.last_known !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -162,8 +162,79 @@ describe('AiActivityPage', () => {
     render(<AiActivityPage />);
 
     const panel = await screen.findByRole('region', { name: 'Account quota' });
-    await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
+    await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
     expect(panel.textContent ?? '').not.toContain('%');
+  });
+
+  /**
+   * #990 — codex beside claude, and the three states kept apart.
+   */
+  describe('codex quota (#990)', () => {
+    const CLAUDE = {
+      five_hour: { utilization: 0.08, resets_at: 1_786_003_600 },
+      seven_day: { utilization: 0.07, resets_at: 1_786_600_000 },
+    };
+
+    it('does not mention codex at all when it is ABSENT from the host', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: CLAUDE },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Claude'));
+      // Absent is SILENT. Naming a provider the operator has not installed and
+      // calling it unreadable is a fault they cannot act on.
+      expect(panel.textContent ?? '').not.toContain('Codex');
+      expect(panel.textContent ?? '').not.toContain('UNREADABLE');
+    });
+
+    it('renders a codex reading with its scrape age, beside claude', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: {
+          claude: CLAUDE,
+          codex: {
+            seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+            read_at: 1_786_000_000 - 750,
+          },
+        },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Codex'));
+      expect(panel).toHaveTextContent('64%');
+      // Claude's own figure is still there — one provider does not displace the other.
+      expect(panel).toHaveTextContent('7%');
+      // THE HONESTY BIT: a scraped number states how old it is. Without this it
+      // sits in the same table as a live figure and reads as equally current.
+      expect(panel).toHaveTextContent('12m 30s ago');
+    });
+
+    it('renders an UNREADABLE codex as a named reason and never a number', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: CLAUDE, codex: null },
+        unavailable: { codex: 'no_reading' },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Codex quota UNREADABLE.'));
+      // It says what to DO about it, rather than emitting the enum token.
+      expect(panel).toHaveTextContent('has not run recently enough');
+      expect(panel.textContent ?? '').not.toContain('no_reading');
+      // Claude's reading survives its neighbour's failure.
+      expect(panel).toHaveTextContent('7%');
+    });
   });
 
   /**
@@ -191,7 +262,7 @@ describe('AiActivityPage', () => {
       // The UNREADABLE statement STAYS. The number is an addition to it, never
       // a replacement for it — an old figure presented as live is the fail-open
       // failure this surface exists to prevent.
-      await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
+      await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
       expect(panel).toHaveTextContent('Last known reading');
       expect(panel).toHaveTextContent('58%');
       // 750s → the shared elapsed formatter's two most significant units.
@@ -239,7 +310,7 @@ describe('AiActivityPage', () => {
 
       render(<AiActivityPage />);
       const panel = await screen.findByRole('region', { name: 'Account quota' });
-      await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
+      await waitFor(() => expect(panel).toHaveTextContent('Claude quota UNREADABLE.'));
       expect(panel.textContent ?? '').not.toContain('Last known reading');
       expect(panel.textContent ?? '').not.toContain('%');
     });

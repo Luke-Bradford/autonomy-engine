@@ -51,6 +51,12 @@ export async function buildTestAppWithContext(
     // a real network call on any machine that has one. The quota suite passes
     // its own reader.
     claudeAccountQuotaReader: UNREADABLE_ACCOUNT_QUOTA_READER,
+    // #990 — and isolate it from the developer's own `~/.codex` too, for the
+    // same reason: the real codex reader walks a session tree on the host, so an
+    // un-stubbed test app's `/api/quota/display` body would differ between a
+    // machine that has codex and one that does not. `null` is ABSENT, which is
+    // the body every test saw before #990; the quota suite passes its own.
+    codexAccountQuotaReader: null,
     ...overrides,
   });
   await app.ready();

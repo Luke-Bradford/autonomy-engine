@@ -64,6 +64,12 @@ import {
   resolveQuotaSamplerEnabled,
   type QuotaSampler,
 } from './quota/quota-sampler.js';
+import {
+  type CodexAccountQuotaReader,
+  DISABLED_CODEX_QUOTA_READER,
+  codexQuotaSourcePresent,
+  createCodexAccountQuotaReader,
+} from './quota/codex-quota.js';
 import { createLastKnownQuotaRecorder } from './quota/last-known.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
@@ -272,6 +278,31 @@ export interface BuildAppOptions {
    */
   claudeAccountQuotaSamplerIntervalMs?: number;
   /**
+   * #990 — switches the codex half of the DISPLAY surface off.
+   *
+   * Overrides `process.env.CODEX_QUOTA_ENABLED` ('0' disables). Defaults ON,
+   * the same polarity as `claudeAccountQuotaEnabled` but NOT for the same
+   * reason — no spend guard reads codex, so nothing is disarmed by it being
+   * off. It defaults on because the panel is the only place an operator can see
+   * what a bound codex subscription is costing them, and a surface that
+   * defaults to silent is one nobody discovers.
+   *
+   * Disabled reports `disabled` rather than omitting the key: the operator
+   * turned it off, which is a fact worth showing, and is not the same as codex
+   * being ABSENT from the host.
+   */
+  codexAccountQuotaEnabled?: boolean;
+  /**
+   * #990 — test seam: a codex reader override.
+   *
+   * THREE-VALUED, unlike its claude counterpart. `undefined` means "decide from
+   * the flag and the host" (the production path); an explicit reader is used
+   * whichever way the flag is set; and explicit `null` forces codex ABSENT,
+   * which is the shared test app's default so that every existing test sees the
+   * body it saw before #990 and no fixture had to be rewritten.
+   */
+  codexAccountQuotaReader?: CodexAccountQuotaReader | null;
+  /**
    * #913 — test seam: a destination for the request/application log, so a test can
    * assert on what the logger actually WRITES (that a capability token carried in a
    * URL never reaches it). Left unset, the logger keeps writing to stdout at level
@@ -403,6 +434,32 @@ export async function buildApp(opts?: BuildAppOptions) {
     'claudeAccountQuotaLastKnown',
     () => quotaLastKnownRecorder?.lastKnown() ?? null,
   );
+
+  // #990 — codex. Three outcomes, and they are three different facts:
+  //   an explicit override        -> use it (`null` forces ABSENT)
+  //   switched off                -> a reader reporting `disabled`
+  //   on, but no codex on the host-> `null`, i.e. the key is omitted entirely
+  //
+  // The host probe runs ONCE, at boot, because the route needs to know whether
+  // to emit the key at all and re-probing per request would put a `stat` on
+  // every panel refresh to detect something that changes when software is
+  // installed. The cost is that a host which installs codex later needs a
+  // restart before the panel shows it, which is noted in the README.
+  //
+  // No last-known recorder wraps this one: a codex reading already carries its
+  // own `read_at` and is rendered aged, so retaining a previous one would be a
+  // second staleness mechanism stacked on a value that already states its age.
+  const codexAccountQuotaEnabled =
+    opts?.codexAccountQuotaEnabled ?? process.env.CODEX_QUOTA_ENABLED !== '0';
+  const codexAccountQuota: CodexAccountQuotaReader | null =
+    opts?.codexAccountQuotaReader !== undefined
+      ? opts.codexAccountQuotaReader
+      : !codexAccountQuotaEnabled
+        ? DISABLED_CODEX_QUOTA_READER
+        : (await codexQuotaSourcePresent())
+          ? createCodexAccountQuotaReader()
+          : null;
+  fastify.decorate('codexAccountQuota', codexAccountQuota);
 
   // #765 — the sampler's flag + cadence are resolved and VALIDATED here, before
   // any timer anywhere in this function is armed, so a mistyped value can only

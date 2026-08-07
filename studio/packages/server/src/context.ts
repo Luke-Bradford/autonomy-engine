@@ -6,6 +6,7 @@ import type { ExternalWaitCompleter } from './run/external-wait-service.js';
 import type { ReseedService } from './run/reseed.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 import type { ClaudeAccountQuotaReader } from './quota/claude-quota.js';
+import type { CodexAccountQuotaReader } from './quota/codex-quota.js';
 import type { LastKnownQuota } from './quota/last-known.js';
 
 /**
@@ -64,5 +65,13 @@ declare module 'fastify' {
      * after a failed read; see `quota/last-known.ts` for why the split is in the
      * contract rather than in the reader. Nothing may GATE on this. */
     claudeAccountQuotaLastKnown: () => LastKnownQuota | null;
+    /** #990 — this app instance's CODEX account-quota reader, backing the codex
+     * half of `GET /api/quota/display`. `null` when codex is ABSENT from this
+     * host, which is why the decoration is nullable rather than falling back to
+     * an always-UNREADABLE reader as claude's does: absent and unreadable are
+     * different facts on this surface, and only a `null` decoration can express
+     * "omit the key" rather than "report a failed read". DISPLAY ONLY — the
+     * guard's `GET /api/quota` never reads it. */
+    codexAccountQuota: CodexAccountQuotaReader | null;
   }
 }

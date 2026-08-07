@@ -12,9 +12,10 @@ import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilte
 import { formatElapsed, formatWhen } from '../runs/format';
 import {
   QUOTA_STALE_AFTER_MS,
-  QUOTA_UNAVAILABLE_TEXT,
   formatPct,
-  readAccountQuota,
+  quotaUnavailableText,
+  readAccountQuotas,
+  type ProviderQuotaReading,
   type QuotaWindowReading,
 } from './quotaReading';
 
@@ -124,43 +125,29 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
   );
 }
 
-function QuotaPanel() {
-  const fetcher = useCallback((signal: AbortSignal) => fetchAccountQuotaDisplay(signal), []);
-  // NO `intervalMs` — see the module docblock and `fetchAccountQuotaDisplay`.
-  const { data, error, loading, lastUpdatedAt, refresh } = usePolledResource(fetcher);
-  const now = useNow();
-
-  const reading = data === null ? null : readAccountQuota(data);
-
+/**
+ * One provider's quota, whatever is known about it (#990).
+ *
+ * Named by provider, because a panel that says "Account quota" over two tables
+ * and labels neither invites the reading it is not making. Absent providers
+ * never reach here — they are omitted from the list upstream, which is what
+ * keeps ABSENT distinct from UNREADABLE.
+ */
+function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: number }) {
+  const { label, provider, reading } = entry;
   return (
-    <section aria-labelledby="quota-heading" className="monitor-panel">
-      <div className="page-header">
-        <h3 id="quota-heading">Account quota</h3>
-        <button type="button" onClick={refresh}>
-          Refresh quota
-        </button>
-      </div>
-      <p className="page-hint">
-        The subscription windows every connected Claude call draws on. Read on demand rather than on
-        a timer — the provider allows one poller, so this asks only when you ask it to.
-      </p>
-
-      {error !== null && (
-        <p role="alert" className="error">
-          Could not reach the quota endpoint: {error}
-        </p>
-      )}
-
-      {loading && data === null && error === null && <p className="notice">Reading quota…</p>}
+    <div className="quota-provider">
+      <h4>{label}</h4>
 
       {/* An UNREADABLE quota says so, in words, and keeps saying so even when a
           last-known number is shown beneath it. It must never render as a
           CURRENT percentage: "0%" would mean "wide open", the opposite of
           "unknown". */}
-      {reading?.kind === 'unreadable' && (
+      {reading.kind === 'unreadable' && (
         <>
           <p role="status" className="notice quota-unreadable">
-            <strong>Quota UNREADABLE.</strong> {QUOTA_UNAVAILABLE_TEXT[reading.reason]}
+            <strong>{label} quota UNREADABLE.</strong>{' '}
+            {quotaUnavailableText(provider, reading.reason)}
           </p>
           {/* #987 — the provider 429s most of the time, so without this the panel
               said UNREADABLE most of the time while a real number had been read
@@ -186,7 +173,58 @@ function QuotaPanel() {
         </>
       )}
 
-      {reading?.kind === 'reading' && <QuotaWindowTable windows={reading.windows} now={now} />}
+      {reading.kind === 'reading' && (
+        <>
+          {/* #990 — a SCRAPED reading states its own age. Codex has no usage
+              endpoint, so its figure is whatever its CLI last wrote; shown
+              beside claude's live one with no age it would read as equally
+              current. A polled provider carries no `ageMs` and says nothing. */}
+          {reading.ageMs !== undefined && (
+            <p className="page-hint quota-scraped-age">
+              Read from {label}&apos;s own session records {formatElapsed(reading.ageMs)} ago — it
+              reports usage only when it runs, so this is as current as its last run.
+            </p>
+          )}
+          <QuotaWindowTable windows={reading.windows} now={now} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuotaPanel() {
+  const fetcher = useCallback((signal: AbortSignal) => fetchAccountQuotaDisplay(signal), []);
+  // NO `intervalMs` — see the module docblock and `fetchAccountQuotaDisplay`.
+  const { data, error, loading, lastUpdatedAt, refresh } = usePolledResource(fetcher);
+  const now = useNow();
+
+  const providers = data === null ? [] : readAccountQuotas(data);
+
+  return (
+    <section aria-labelledby="quota-heading" className="monitor-panel">
+      <div className="page-header">
+        <h3 id="quota-heading">Account quota</h3>
+        <button type="button" onClick={refresh}>
+          Refresh quota
+        </button>
+      </div>
+      <p className="page-hint">
+        The subscription windows the AI providers connected to this host draw on. Read on demand
+        rather than on a timer — the provider allows one poller, so this asks only when you ask it
+        to. A provider you have not connected is not listed at all.
+      </p>
+
+      {error !== null && (
+        <p role="alert" className="error">
+          Could not reach the quota endpoint: {error}
+        </p>
+      )}
+
+      {loading && data === null && error === null && <p className="notice">Reading quota…</p>}
+
+      {providers.map((entry) => (
+        <ProviderQuota key={entry.provider} entry={entry} now={now} />
+      ))}
 
       {/* "Last CHECKED", not "quota as of": this stamps when the browser asked,
           which is a different fact from how old the number is — and when a

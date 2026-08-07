@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { type AccountQuotaDisplayState, type AccountQuotaState } from '@autonomy-studio/shared';
 import type { AccountQuotaReading } from '../quota/claude-quota.js';
+import type { CodexAccountQuotaReading } from '../quota/codex-quota.js';
 
 /**
  * #440 (C1) — `GET /api/quota`, the machine-readable account-quota surface.
@@ -129,12 +130,55 @@ export const quotaRoutes: FastifyPluginAsync = async (fastify) => {
    */
   fastify.get('/api/quota/display', async (request): Promise<AccountQuotaDisplayState> => {
     const state = await liveState(request);
+
+    // #990 — codex, and ONLY on this route.
+    //
+    // Not on `/api/quota` for the reason #990 states outright: the spend guard
+    // reads claude and should keep doing so. The mechanical half matters more
+    // than the tidiness one — `liveState` is awaited, so a codex read on that
+    // route would spend the guard's `curl --max-time 8` budget walking a
+    // filesystem tree, and a timeout there does not degrade to a stale number,
+    // it spends one of a bounded allowance of BLIND fires. The guard's body
+    // (`AccountQuotaStateSchema`) is a documented compat contract; it gains
+    // nothing here.
+    //
+    // `null` means codex is ABSENT from this host — the key is then omitted
+    // from `account` entirely rather than sent as `null`, because `null` on
+    // this surface means "present but unreadable" and claiming a failed read
+    // for software that was never installed puts a fault on the operator's
+    // panel that they cannot act on.
+    const account: AccountQuotaDisplayState['account'] = { claude: state.account.claude };
+    const unavailable: NonNullable<AccountQuotaDisplayState['unavailable']> = {};
+    if (state.unavailable !== undefined) unavailable.claude = state.unavailable.claude;
+    if (fastify.codexAccountQuota !== null) {
+      let codex: CodexAccountQuotaReading = { value: null, unavailable: 'reader_error' };
+      try {
+        codex = await fastify.codexAccountQuota.read();
+      } catch (err) {
+        // Same totality as claude's: this route's whole value is that it
+        // answers, and one provider's failure must not take the other's
+        // reading off the operator's panel with it.
+        request.log.warn({ err }, 'codex account-quota read failed; reporting UNREADABLE');
+      }
+      account.codex = codex.value;
+      if (codex.value === null) unavailable.codex = codex.unavailable ?? 'reader_error';
+    }
+    // Omitted rather than sent empty — the schema refuses `{}`, for the same
+    // #825 reason `unavailable` is omitted rather than nulled on the guard body.
+    const withCodex: AccountQuotaDisplayState = {
+      generated_at: state.generated_at,
+      account,
+      ...(Object.keys(unavailable).length > 0 ? { unavailable } : {}),
+    };
+
     const retained = fastify.claudeAccountQuotaLastKnown();
     // Only when there is NO live reading — the schema refuses the other shape,
-    // and the reason it does is in its docblock.
-    if (state.account.claude !== null || retained === null) return state;
+    // and the reason it does is in its docblock. Keyed on CLAUDE specifically:
+    // `last_known` retains claude's reading only, and a codex reading present
+    // or absent says nothing about whether claude's needs an aged fallback.
+    if (withCodex.account.claude !== null || retained === null) return withCodex;
     return {
-      ...state,
+      ...withCodex,
       last_known: {
         claude: retained.value,
         // Floored at the response's own instant, because `Date.now()` is WALL

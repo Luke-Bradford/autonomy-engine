@@ -1,8 +1,10 @@
 import type {
   AccountQuotaDisplayState,
+  AccountQuotaProvider,
   AccountQuotaUnavailableReason,
   AccountQuotaWindow,
   ClaudeAccountQuota,
+  CodexAccountQuota,
 } from '@autonomy-studio/shared';
 
 /**
@@ -74,7 +76,23 @@ export interface LastKnownQuotaReading {
 }
 
 export type QuotaReading =
-  | { kind: 'reading'; windows: QuotaWindowReading[]; generatedAtMs: number }
+  | {
+      kind: 'reading';
+      windows: QuotaWindowReading[];
+      generatedAtMs: number;
+      /**
+       * How old the reading was when the server answered, when the provider's
+       * reading is a SCRAPE rather than a live poll (#990).
+       *
+       * Absent for a polled provider, whose reading is at most one TTL old and
+       * has no age worth stating. Present for codex, whose figure is whatever
+       * its CLI last wrote — possibly days ago. Rendering that beside a live
+       * one with no age is the fail-open presentation this module's docblock
+       * forbids, so the age travels WITH the reading rather than being an
+       * optional decoration the renderer may forget.
+       */
+      ageMs?: number;
+    }
   | {
       kind: 'unreadable';
       reason: AccountQuotaUnavailableReason;
@@ -153,6 +171,86 @@ function readWindows(claude: ClaudeAccountQuota): QuotaWindowReading[] {
 }
 
 /**
+ * Codex's windows — INDIVIDUALLY optional, unlike claude's pair (#990).
+ *
+ * Measured: a `plus` plan reports only the 7-day window. Emitting a placeholder
+ * row for the missing one would state a 5-hour figure nobody reported.
+ */
+function readCodexWindows(codex: CodexAccountQuota): QuotaWindowReading[] {
+  const windows: QuotaWindowReading[] = [];
+  if (codex.five_hour !== undefined) windows.push(readWindow('5-hour', codex.five_hour));
+  if (codex.seven_day !== undefined) windows.push(readWindow('7-day', codex.seven_day));
+  return windows;
+}
+
+/** One provider's row in the panel: who it is, and what is known about them. */
+export interface ProviderQuotaReading {
+  provider: AccountQuotaProvider;
+  /** The provider's name as the operator reads it. */
+  label: string;
+  reading: QuotaReading;
+}
+
+const PROVIDER_LABELS: Record<AccountQuotaProvider, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+};
+
+/**
+ * Every provider the body actually carries, in a fixed order (#990).
+ *
+ * Driven by the KEYS PRESENT, not by a hardcoded pair: a provider absent from
+ * the body is absent from the panel, and a provider added to the body later
+ * renders with no change here beyond a label. ABSENT is therefore expressed by
+ * omission — which is what keeps it distinct from UNREADABLE, the failure this
+ * ticket exists to stop conflating.
+ */
+export function readAccountQuotas(state: AccountQuotaDisplayState): ProviderQuotaReading[] {
+  const generatedAtMs = state.generated_at * 1000;
+  const providers: ProviderQuotaReading[] = [
+    { provider: 'claude', label: PROVIDER_LABELS.claude, reading: readAccountQuota(state) },
+  ];
+  const codex = state.account.codex;
+  if (codex !== undefined) {
+    providers.push({
+      provider: 'codex',
+      label: PROVIDER_LABELS.codex,
+      reading: readCodexQuota(codex, state.unavailable?.codex, generatedAtMs),
+    });
+  }
+  return providers;
+}
+
+function readCodexQuota(
+  codex: CodexAccountQuota | null,
+  reason: AccountQuotaUnavailableReason | undefined,
+  generatedAtMs: number,
+): QuotaReading {
+  if (codex === null) {
+    return { kind: 'unreadable', reason: reason ?? 'reader_error', generatedAtMs };
+  }
+  const windows = readCodexWindows(codex);
+  /*
+   * A reading whose windows all fell away is UNREADABLE, never an empty table.
+   * The wire schema already refuses this shape, so it is unreachable from the
+   * shipped server — but an empty `QuotaWindowTable` renders as a header with
+   * nothing under it, which reads as "nothing to report" rather than "not
+   * known", and that is the fail-open presentation on the one side of the
+   * contract the schema cannot reach.
+   */
+  if (windows.length === 0) {
+    return { kind: 'unreadable', reason: 'unrecognized_payload', generatedAtMs };
+  }
+  return {
+    kind: 'reading',
+    generatedAtMs,
+    windows,
+    // Floored for the same wall-clock reason the last-known age is.
+    ageMs: Math.max(0, generatedAtMs - codex.read_at * 1000),
+  };
+}
+
+/**
  * Why there is no reading, in the operator's terms.
  *
  * Every reason is spelled out rather than defaulted, so a newly-added member of
@@ -161,17 +259,50 @@ function readWindows(claude: ClaudeAccountQuota): QuotaWindowReading[] {
  * because the distinction that matters to an operator is "my setup is wrong"
  * versus "the account is busy and the reader is correctly backing off".
  */
-export const QUOTA_UNAVAILABLE_TEXT: Record<AccountQuotaUnavailableReason, string> = {
+const QUOTA_UNAVAILABLE_TEXT: Record<AccountQuotaUnavailableReason, string> = {
   disabled: 'Quota reading is switched off on this server.',
-  no_credential:
-    'No credential to read with — there is no subscription token on this host (quota readings are macOS-only).',
+  no_credential: 'No credential to read with on this host.',
   rate_limited:
     'The provider is rate-limiting the reading. The account is busy; the reader is backing off rather than making it worse.',
   provider_error: 'The provider call failed, so no reading could be taken.',
   unrecognized_payload: 'The provider answered in a shape this reader does not recognise.',
+  no_reading: 'The source is there, but holds no usable reading yet.',
   reader_error:
     'The quota reader itself failed. This should not happen; it is reported rather than hidden.',
 };
+
+/**
+ * Where a provider's cause differs from the generic one above (#990).
+ *
+ * Overrides rather than a second full table: the generic wording stays correct
+ * for every reason neither provider needs to specialise, and only the ones that
+ * would send an operator to fix the wrong thing are restated. The two readers
+ * fail in genuinely different places — claude has an OAuth token in a macOS
+ * Keychain, codex has a directory of session files — so "no credential" means
+ * two different repairs.
+ */
+const PROVIDER_UNAVAILABLE_TEXT: Record<
+  AccountQuotaProvider,
+  Partial<Record<AccountQuotaUnavailableReason, string>>
+> = {
+  claude: {
+    no_credential:
+      'No credential to read with — there is no subscription token on this host (quota readings are macOS-only).',
+  },
+  codex: {
+    no_credential: 'No codex session data on this host — is the codex CLI installed?',
+    no_reading:
+      'Codex is installed but has not run recently enough to have reported a quota. Its figure comes from its own session records, so running it once will produce one.',
+    unrecognized_payload: 'Codex wrote a usage record this reader could not read a window out of.',
+  },
+};
+
+export function quotaUnavailableText(
+  provider: AccountQuotaProvider,
+  reason: AccountQuotaUnavailableReason,
+): string {
+  return PROVIDER_UNAVAILABLE_TEXT[provider][reason] ?? QUOTA_UNAVAILABLE_TEXT[reason];
+}
 
 /** A percentage → at most one decimal place, without a trailing `.0`. */
 export function formatPct(pct: number): string {

@@ -63,7 +63,24 @@ the two consumers need opposite staleness contracts: a gate must never see a
 stale number (it would permit a fire the live figure refuses), while a person
 looking at a panel is better served by "58%, read 12 minutes ago" than by
 "unreadable". The last-known value is held outside the reader and is reachable
-only from the display route; `GET /api/quota` never carries it. Both routes are
+only from the display route; `GET /api/quota` never carries it.
+
+That display route is also the **only** one that reports a second provider.
+`account.codex` appears there when the host has codex session data, carrying the
+same per-window utilization and reset instants — but scraped from the records
+codex's own CLI writes under `$CODEX_HOME/sessions` (it has no usage endpoint to
+poll), so it additionally states `read_at`: the reading is as old as the last
+codex run, and the panel renders it with that age rather than beside a live
+figure as though it were equally current. Three states are kept distinct on this
+surface, and the distinction is enforced by the schema rather than by
+convention: the key **absent** means the provider is not on this host, `null`
+plus an `unavailable.<provider>` reason means present-but-UNREADABLE, and a
+value is a reading. Codex is deliberately **not** on `GET /api/quota`: the spend
+guard reads Claude and should keep doing so, and a filesystem walk inside that
+route would spend the guard's request budget — a timeout there does not degrade
+to a stale number, it spends one of a bounded allowance of blind fires. Set
+`CODEX_QUOTA_ENABLED=0` to switch the codex half off; the host is probed once at
+boot, so installing codex later needs a restart before the panel lists it. Both routes are
 **unauthenticated**
 like everything else here, so on an exposed instance that figure is readable by
 anyone who can reach the port. Set `CLAUDE_QUOTA_ENABLED=0` to switch it off
@@ -147,6 +164,7 @@ description notes the bare-process value.
 | `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                         |
 | `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`) — see below. macOS-only either way.                               |
 | `CLAUDE_QUOTA_SAMPLER`        | `0` (dormant)          | Set to `1` to keep the quota reading warm with a background sampler instead of polling on the request path. Any other value fails boot. |
+| `CODEX_QUOTA_ENABLED`         | `1` (enabled)          | Set to `0` to switch off the codex half of `GET /api/quota/display`. Absent codex session data omits it regardless.                     |
 
 An invalid numeric value (e.g. a non-integer `PORT`, or a retention count below
 `1`) fails fast at boot with a clear error rather than degrading silently.
