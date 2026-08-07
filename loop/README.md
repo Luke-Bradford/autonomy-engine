@@ -30,8 +30,10 @@ It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the
 
 ## The supervised studio server (#765 Defect 2)
 
-The quota guard's third source is studio's `/api/quota`, and after the engine is parked (#410) it
-is one of only two left — the other being the reader #764 relocated into `loop/`.
+The quota guard's PRIMARY source since C3 (#410) is studio's `/api/quota`, and once the engine is
+parked it is one of only two left — the other being the reader #764 relocated into `loop/`.
+This unit is also the ONE process holding a standing sample of the shared upstream
+(`CLAUDE_QUOTA_SAMPLER=1`), which is what lets the guard read studio first and read it freely.
 Nothing supervised a studio server until this unit existed — the only
 listeners were ad-hoc `pnpm dev` sessions that die with their terminal — so at 03:05 the endpoint
 was **connection-refused**, not merely rate-limited. Every "studio UNREADABLE" measured before this
@@ -121,10 +123,11 @@ Do not re-add it.
 ## Runtime state is NOT tracked
 
 `loop/logs/` (one multi-MB stream-json file per fire — ~546MB and growing), `loop/.last_quota` (the
-last-known 7-day reading), `loop/.last_quota_poll` (the source-2 poll memo, #777) and
-`loop/.last_quota_shadow` (the diagnostic probe's rate stamp, #765) and `loop/.driver_handoff`
-(the #811 self-adopt handoff) are gitignored.
-All four are per-machine and meaningless in another checkout. Nothing here should ever write into a
+last-known 7-day reading), `loop/.last_quota_poll` (the loop reader's poll memo, #777) and
+`loop/.driver_handoff` (the #811 self-adopt handoff) are gitignored.
+(`loop/.last_quota_shadow` was the #765 diagnostic probe's rate stamp; C3 (#410) removed the probe,
+so a leftover file is inert.)
+All of them are per-machine and meaningless in another checkout. Nothing here should ever write into a
 tracked path — and keep this list in step with `.gitignore`, because it is what a live-control-plane
 sync is checked against.
 
@@ -182,7 +185,8 @@ restart below is the remedy for every one of them — so it is still the thing t
 `driver code: STALE` persists across iterations. Measured 2026-07-31 (#808): the live `drive.sh` was byte-identical
 to `origin/main`, and PID 74021 — booted ~15h earlier — was still executing a 13KB-older inode.
 #765's quota shadow probe had been merged, synced, and had *never once run*; C3's evidence gate was
-therefore accumulating nothing while looking perfectly healthy. After any `loop/` sync:
+therefore accumulating nothing while looking perfectly healthy. (C3 has since removed that probe —
+but the lesson here is about the SYNC, not the probe.) After any `loop/` sync:
 
 ```sh
 launchctl kickstart -k gui/$(id -u)/com.autonomy.studio-build-driver   # -k: restart if running
@@ -203,7 +207,7 @@ cases where one of them reads healthy and another does not:
 | `plane drift: in sync \| <names> \| UNKNOWN` | does `~/Dev/studio-loop/` match `origin/main`? | fetches first, then compares git blob ids for every file tracked under `loop/` on main. |
 | `studio server: current \| STALE \| UNKNOWN` | is the **quota source** running merged code? | asks the running service itself (`GET /api/version`), then places that commit against `origin/main`. `current` = identical, **or behind only by commits that leave its `studio/` tree byte-identical to main's** (the trees are compared directly, not the commits between them). `STALE` ⇒ `--update`. |
 
-All three are **advisory** — they log and decide nothing, like `quota_shadow_probe`. Every failure
+All three are **advisory** — they log and decide nothing. Every failure
 path reads `UNKNOWN`, never a clean bill of health: a plane whose drift could not be measured must
 not be indistinguishable from one that is current. A plane *ahead* of main is normal mid-deploy, so
 `plane drift` naming files is information, not an alarm; `driver code: STALE` is the one that means
@@ -288,54 +292,61 @@ Three independent bounds, checked before every fire, each with its own test in
 - **Quota guard** — refuses at/above `QUOTA_STOP_PCT` (80) 7-day utilization. The 7-day window
   resets weekly, so exhausting it locks the operator out of their own sessions for days; stopping
   is the fail-safe direction.
-- **Three quota sources, in a deliberate order** — `DASH_URL` (the prototype dashboard,
-  `/api/state`) FIRST, then the loop's own usage reader (`LOOP_LIB/claude_usage.py`, relocated out
+- **Three quota sources, in a deliberate order — REORDERED by C3 (#410)** — `STUDIO_QUOTA_URL`
+  (studio's native `/api/quota`, #440 C1) **FIRST**, then `DASH_URL` (the prototype dashboard,
+  `/api/state`), then the loop's own usage reader (`LOOP_LIB/claude_usage.py`, relocated out
   of the engine by #764; #766 fixed the *call site* against the old engine module, which the port
-  cannot reproduce), then `STUDIO_QUOTA_URL` (studio's native `/api/quota`,
-  #440 C1) LAST. All three bottom out in the same
+  cannot reproduce) LAST. All three bottom out in the same
   upstream `GET /api/oauth/usage` on one shared rate-limit budget, and that endpoint 429s under
-  direct polling. Only the dashboard rides through it, because it samples in the background and
-  answers from a warm cache; the other two are direct polls from a cold start and both return ""
-  under a 429. Between those two the *proven* one goes first — #766 measured the loop reader
-  returning a real figure, while studio had not returned one *through this path* (#765). **Do not
-  read that as "the reader works and studio does not"**: re-measured 2026-07-29, the loop reader's
-  token read succeeded and the endpoint 429'd too — the same failure studio reports. Whichever
-  process holds the bucket answers, and that is currently the dashboard's 60s sampler, continuously.
-  The contrast is confounded; `drive.sh` spells this out at the `quota_pct` header. (Studio has
-  since answered for real: an attended probe on 2026-07-30 returned 0.16, matching the dashboard.)
-  Studio last is what keeps the SELECTION path free: it is reached only when both others failed, so
-  it cannot starve the sampler the primary depends on. Every read logs
-  `quota source: <dashboard|loop|loop-memo|studio>`. **Do not reorder** until the promotion evidence
-  exists.
-- **A once-per-hour DIAGNOSTIC probe of studio** (`quota_shadow_probe`, `QUOTA_SHADOW_MIN_INTERVAL`,
-  default 3600s; #765) — because the promotion evidence above was **unobtainable**. `quota source:
-  studio` can only be logged when sources 1 and 2 have BOTH failed, so while the dashboard is
-  healthy studio is never asked and C3 waits on an outage of the source it replaces. The probe asks
-  anyway and logs `quota shadow: studio <n>%` — a **second, non-interchangeable** evidence line:
-  `source` means the guard USED studio, `shadow` means studio COULD have answered. When it cannot,
-  the line names the CAUSE — `quota shadow: studio UNREADABLE (rate_limited)` (#825) — because a
-  bare UNREADABLE conflates a broken reader with a merely contended account, and only the first is
-  evidence about studio. **A shadow line is evidence about `main` only if the `studio server:` line
-  in the same iteration reads `current`** (#832) — the service is deployed separately and drifted 16
-  commits behind once already, voiding three readings that named no cause because they came from a
-  build predating the cause channel. Read the two interleaved and in order; a `sort | uniq -c` tally
-  destroys the pairing and mixes every build the service has ever run into one number. The cause is studio's own `unavailable.claude`, checked against the known
-  enum, except `unreachable`, which this driver derives from curl's exit status when nothing
-  answered at all. An unrecognised or absent cause degrades to the bare line. It decides
-  nothing (it parses a body it fetched itself, so there is no code path from it to the quota cache or
-  the source-2 memo; it writes nothing to stdout; the call site redirects anyway). **This does mean
-  studio is now polled in the common case** — a deliberate reversal, priced at one request per hour
-  per active driver, and not the standing ~1/min sampler #770 rejected. `QUOTA_SHADOW_MIN_INTERVAL=0`
-  turns it off. Its rate stamp is `.last_quota_shadow` (gitignored), written on the **attempt** so a
-  failing studio cannot un-throttle it; if that stamp cannot be written the probe **skips** rather
-  than polling un-throttled. `loop-memo` (#777) means source 2 answered from its
-  poll memo rather than polling — counted separately on purpose, because a throttle that logged the
-  same string either way would hide a source-2 death the way #766 hid for its whole life. **Anchor
-  the grep** when counting real source-2 polls: `'quota source: loop ('`, since a bare
-  `'quota source: loop'` also matches `loop-memo`. What changed with #765 is *availability*: studio is now
-  served by the supervised `com.autonomy.studio-server` unit on 8788 rather than by whatever
-  `pnpm dev` happened to be up, so an UNREADABLE from source 3 is finally a measurement of the
-  reader instead of a measurement of "no server".
+  direct polling. What decides the order is therefore **cache-backed vs direct**, not new vs proven:
+  a source is cheap to ask when asking it does not touch the upstream.
+  - Studio is first **because it is now sampler-backed** — `CLAUDE_QUOTA_SAMPLER=1` in the service
+    plist arms a background sampler, so `/api/quota` answers from that cache and the request path
+    never reaches the provider. #765 named this as the precondition in exactly these terms: *"a
+    sampler-backed studio can be polled freely … that is the state in which studio actually
+    deserves to be the primary source."* Before that it was a lazy reader, every read was the
+    direct poll that 429s, and it was correctly placed LAST.
+  - The dashboard rode through a 429 the same way (background sampler, warm cache) and was first
+    for that reason. C3 **retires it** — its sampler is stopped, because two standing samplers on
+    one budget is what #770 refuses. It is kept in the list, second, purely so that re-loading the
+    unit is a **complete rollback with no code revert**. Once the engine is parked it just fails
+    fast, costing one refused local connection and nothing upstream.
+  - The loop reader is last because it is the only remaining **direct** poll — the one source whose
+    failure mode is to add load to the very budget it is measuring.
+
+  **Do not read the old order's rationale as "the reader works and studio does not"**: re-measured
+  2026-07-29, the loop reader's token read succeeded and the endpoint 429'd too — the same failure
+  studio reported. Whichever process holds the bucket answers, and that was the dashboard's 60s
+  sampler, continuously. `drive.sh` spells this out at the `quota_pct` header. (Studio has also
+  answered for real: an attended probe on 2026-07-30 returned 0.16, matching the dashboard.)
+
+  **What is still unmeasured, and should be watched:** C3 does not make studio answer, it removes
+  the two reasons it could not (no sampler; a rival sampler holding the bucket). The evidence that
+  the cutover held is a run of scheduled fires logging `quota source: studio` — now the *ordinary*
+  line rather than a rare one. A run of `quota source: loop` instead means studio is failing for a
+  third reason: **that is a ticket, not a re-reorder.**
+
+  Every read logs `quota source: <studio|dashboard|loop|loop-memo>`. `loop-memo` (#777) means the
+  loop reader answered from its poll memo rather than polling — counted separately on purpose,
+  because a throttle that logged the same string either way would hide a death of that reader the
+  way #766 hid for its whole life (and post-C3 that matters *more*: it is the last source, so its
+  silent death is the guard's). **Anchor the grep** when counting real polls:
+  `'quota source: loop ('`, since a bare `'quota source: loop'` also matches `loop-memo`.
+  What changed with #765 is *availability*: studio is served by the supervised
+  `com.autonomy.studio-server` unit on 8788 rather than by whatever `pnpm dev` happened to be up,
+  so an UNREADABLE from it is a measurement of the reader rather than of "no server". **A studio
+  reading is evidence about `main` only if the `studio server:` line in the same iteration reads
+  `current`** (#832) — the service is deployed separately and drifted 16 commits behind once
+  already, voiding three readings. A superseded build may also predate the sampler itself.
+- **The once-per-hour DIAGNOSTIC probe of studio is GONE** (`quota_shadow_probe`,
+  `QUOTA_SHADOW_MIN_INTERVAL`, `.last_quota_shadow`; #765, removed by #410). It existed only because
+  the promotion evidence was otherwise unobtainable: `quota source: studio` could be logged only
+  when the two sources ahead of it BOTH failed, so while the dashboard was healthy studio was never
+  asked and C3 waited on an outage of the source it replaces. Studio is now source 1 and is polled
+  on the decision path of every read, so the probe's gate could never be true again — it was removed
+  rather than left dormant, because unreachable machinery inside a spend guard is a maintenance
+  hazard. Its cause-naming (`UNREADABLE (rate_limited)`, #825) lives on in the reader itself. A
+  leftover `loop/.last_quota_shadow` on a live control plane is inert.
 - **Source 2 is poll-throttled** (`QUOTA_POLL_MIN_INTERVAL`, 60s; #777) — it is a fresh `python3`
   process per call, so it cannot cache in memory and nothing gave it a cross-process throttle. With
   `quota_pct` running up to three times per iteration plus once per `AUTH_LONG_BLOCK` retry while
@@ -347,11 +358,8 @@ Three independent bounds, checked before every fire, each with its own test in
   do. `QUOTA_POLL_MIN_INTERVAL=0` disables it; anything over the **300s ceiling is clamped**, and an
   unparseable value falls back to the default with a `WARN` — same for `QUOTA_CACHE_MAX_AGE`, because
   an operand `test` cannot parse returns 2, which is *neither* branch, so the age comparison used to
-  fall through and make every stamped record look fresh. `QUOTA_SHADOW_MIN_INTERVAL` goes through the
-  same normaliser but has **no ceiling**, deliberately: a ceiling exists where an over-wide value is a
-  *fail-open* (it bounds how stale a reading may be when it **permits** a fire), and the shadow probe
-  never feeds the guard — a wide value buys less load and less evidence, which is useless but never
-  unsafe.
+  fall through and make every stamped record look fresh. (`QUOTA_SHADOW_MIN_INTERVAL` went through the
+  same normaliser, with no ceiling; it is gone with the probe, C3 #410.)
   It is a *ceiling* on the poll rate, not a measured reduction of it — in production those three
   reads are usually minutes apart (`ensure_auth` backs off 30→600s), so the memo mostly bites on
   adjacent reads, a restart mid-iteration, or a manual run racing the scheduled one.

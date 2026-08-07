@@ -50,7 +50,7 @@
       upstream at all.
       This key used to be deliberately ABSENT. The reason was that the one
       process polling that endpoint was the prototype dashboard's sampler, and
-      arming this one alongside it would have made two -- which #770 refuses.
+      arming this one alongside it would have made two, which #770 refuses.
       C3 retires the dashboard and sets this key in the SAME step, so the
       standing-sample slot is TRANSFERRED rather than duplicated: never a moment
       with two pollers, never a moment with none.
