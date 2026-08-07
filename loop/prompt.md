@@ -99,14 +99,26 @@ page outrank the UI epic.
    keyboard focus (operator, 2026-08-07: *"the colour of the line does enough"*). **Amends `U19`** —
    its palette stands, only the always-on label is withdrawn. Keep the routing key in the accessible
    name: hidden visually is fine, hidden from assistive tech is a regression.
-6. **`#994`** — a `sqlite` connection kind + `sql_query` activity. The operator asked why there is no
-   SQL story; there is a connector seam (`server/src/connectors/`, six adapters + a registry) and
-   `better-sqlite3` is ALREADY a dependency, so this costs zero new deps and its test bench is
-   in-process. **Connection + activity only — do NOT build datasets or column mapping here**; that
-   is `#993`, still an open operator decision, and the spec's `Non-goals` line governs it until a
-   spec retracts it. Parameterised binding is non-negotiable: an expression must never be able to
-   inject SQL. Confine the DB path the way `fs` confines `config.roots`.
-7. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+6. **`#996` — WRITE THE DATA-MOVEMENT SPEC.** `#993` is DECIDED (operator, 2026-08-07): **ADF-grade
+   data movement is the intent, at ADF's scale.** Source and sink are independent and heterogeneous
+   — CSV/Excel → database, database → CSV, any-to-any, with column mapping. This needs three layers
+   (linked services → **datasets as a new first-class resource** → `copy` with mapping), and the
+   dataset layer must integrate with the immutable-version, publish, trigger-binding, git and
+   portability models that already exist.
+
+   **Spec FIRST, in the built-block style of the other eight — do not start code from the queue
+   line.** Its ticket table then becomes queue items. Two things it must do explicitly: **strike the
+   activity-library spec's `Non-goals` line** (*"No dataset/linked-service data-movement
+   abstraction"*), which `#993` retracted and which otherwise sits in the tree contradicting the
+   work; and settle streaming/bounding, type coercion and schema drift rather than deferring them.
+
+   **`#994` (sqlite + `sql_query`) is BLOCKED and must NOT be built as a substitute** — a standalone
+   query node would become a second, parallel way to reach a database, which is what the dataset
+   abstraction exists to prevent. Its security constraints carry into `#996` verbatim:
+   parameterised binding only, path confinement mirroring `fs`'s `config.roots`, bounded output with
+   visible truncation.
+7. **The UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps. Expect
+   `#996`'s ticket table to land ahead of this once the spec exists — that is intended, not drift.
 
 All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
 counts `[studio]` tickets only.
