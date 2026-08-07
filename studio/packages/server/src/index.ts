@@ -50,6 +50,7 @@ import { runStreamRoutes } from './routes/run-stream.js';
 import { importRoutes } from './routes/import.js';
 import { workspaceGitRoutes } from './routes/workspace-git.js';
 import { workspaceAuditRoutes } from './routes/workspace-audit.js';
+import { monitorRoutes } from './routes/monitor.js';
 import { quotaRoutes } from './routes/quota.js';
 import { versionRoutes } from './routes/version.js';
 import {
@@ -781,6 +782,7 @@ export async function buildApp(opts?: BuildAppOptions) {
     hostClient: opts?.workspaceGitHostClient,
   });
   await fastify.register(workspaceAuditRoutes);
+  await fastify.register(monitorRoutes);
   await fastify.register(quotaRoutes);
   await fastify.register(versionRoutes);
 
