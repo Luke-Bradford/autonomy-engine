@@ -284,8 +284,13 @@ describe('usePolledResource teardown (#989)', () => {
     const baselineTimers = vi.getTimerCount();
 
     for (let visit = 0; visit < 5; visit += 1) {
+      // Wait for THIS mount's load, not for "the mock has ever been called" —
+      // the fetcher accumulates across the loop, so a bare `toHaveBeenCalled()`
+      // is already satisfied by visit 0 and every later iteration would unmount
+      // without waiting at all.
+      const before = fetcher.mock.calls.length;
       const { unmount } = renderHook(() => usePolledResource(fetcher, { intervalMs: 5_000 }));
-      await waitFor(() => expect(fetcher).toHaveBeenCalled());
+      await waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThan(before));
       unmount();
     }
 
