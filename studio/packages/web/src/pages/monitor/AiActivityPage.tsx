@@ -146,7 +146,8 @@ function ProviderQuota({ entry, now }: { entry: ProviderQuotaReading; now: numbe
       {reading.kind === 'unreadable' && (
         <>
           <p role="status" className="notice quota-unreadable">
-            <strong>{label} quota UNREADABLE.</strong> {quotaUnavailableText(provider, reading.reason)}
+            <strong>{label} quota UNREADABLE.</strong>{' '}
+            {quotaUnavailableText(provider, reading.reason)}
           </p>
           {/* #987 — the provider 429s most of the time, so without this the panel
               said UNREADABLE most of the time while a real number had been read

@@ -244,7 +244,10 @@ describe('readAccountQuotas', () => {
       generated_at: GENERATED_AT,
       account: {
         claude: CLAUDE,
-        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT - 600 },
+        codex: {
+          seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+          read_at: GENERATED_AT - 600,
+        },
       },
     });
     expect(providers.map((p) => p.provider)).toEqual(['claude', 'codex']);
@@ -258,7 +261,10 @@ describe('readAccountQuotas', () => {
       generated_at: GENERATED_AT,
       account: {
         claude: CLAUDE,
-        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT },
+        codex: {
+          seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+          read_at: GENERATED_AT,
+        },
       },
     });
     const codex = windowsOf(providers, 'codex');
@@ -274,7 +280,10 @@ describe('readAccountQuotas', () => {
       generated_at: GENERATED_AT,
       account: {
         claude: CLAUDE,
-        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT - 900 },
+        codex: {
+          seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+          read_at: GENERATED_AT - 900,
+        },
       },
     });
     // Claude is polled and at most one TTL old — it has no age to state.
@@ -287,7 +296,10 @@ describe('readAccountQuotas', () => {
       generated_at: GENERATED_AT,
       account: {
         claude: CLAUDE,
-        codex: { seven_day: { utilization: 0.64, resets_at: 1_786_283_144 }, read_at: GENERATED_AT + 60 },
+        codex: {
+          seven_day: { utilization: 0.64, resets_at: 1_786_283_144 },
+          read_at: GENERATED_AT + 60,
+        },
       },
     });
     expect(windowsOf(providers, 'codex').ageMs).toBe(0);

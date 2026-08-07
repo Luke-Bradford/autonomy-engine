@@ -35,10 +35,7 @@ async function makeSessionsRoot(): Promise<string> {
 }
 
 /** A `token_count` line exactly as codex-cli writes it. */
-function tokenCountLine(
-  timestamp: string,
-  rateLimits: unknown,
-): string {
+function tokenCountLine(timestamp: string, rateLimits: unknown): string {
   return `${JSON.stringify({
     timestamp,
     type: 'event_msg',
@@ -78,9 +75,9 @@ describe('mapCodexWindow', () => {
   it('converts a PERCENT to a fraction and passes epoch seconds through', () => {
     // Measured: codex sends `used_percent: 64.0` and `resets_at: 1786283144`
     // (epoch SECONDS, not the ISO string claude's reader parses).
-    expect(mapCodexWindow({ used_percent: 64, window_minutes: 10080, resets_at: 1786283144 })).toEqual(
-      { utilization: 0.64, resets_at: 1786283144 },
-    );
+    expect(
+      mapCodexWindow({ used_percent: 64, window_minutes: 10080, resets_at: 1786283144 }),
+    ).toEqual({ utilization: 0.64, resets_at: 1786283144 });
   });
 
   it('rejects a window with no reset instant rather than inventing one', () => {
@@ -163,7 +160,13 @@ describe('createCodexAccountQuotaReader', () => {
     // so "stop at the newest file" would read UNREADABLE with a good snapshot
     // sitting one file down.
     const sessionsRoot = await makeSessionsRoot();
-    await writeSession(sessionsRoot, '2026/08/07', 'newest-no-snapshot', '{"timestamp":"2026-08-07T12:59:00.000Z","type":"event_msg","payload":{"type":"agent_message"}}\n', NOW_S - 10);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'newest-no-snapshot',
+      '{"timestamp":"2026-08-07T12:59:00.000Z","type":"event_msg","payload":{"type":"agent_message"}}\n',
+      NOW_S - 10,
+    );
     await writeSession(
       sessionsRoot,
       '2026/08/07',
@@ -199,8 +202,20 @@ describe('createCodexAccountQuotaReader', () => {
 
   it('prefers the newer FILE over an older one', async () => {
     const sessionsRoot = await makeSessionsRoot();
-    await writeSession(sessionsRoot, '2026/08/06', 'older', tokenCountLine('2026-08-06T10:00:00.000Z', plusPlanLimits(30, 1786283144)), NOW_S - 90_000);
-    await writeSession(sessionsRoot, '2026/08/07', 'newer', tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)), NOW_S - 60);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/06',
+      'older',
+      tokenCountLine('2026-08-06T10:00:00.000Z', plusPlanLimits(30, 1786283144)),
+      NOW_S - 90_000,
+    );
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'newer',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
 
     const outcome = await createCodexAccountQuotaReader({ sessionsRoot, now: () => NOW_MS }).read();
     expect(outcome.value?.seven_day?.utilization).toBe(0.64);
@@ -212,7 +227,8 @@ describe('createCodexAccountQuotaReader', () => {
       sessionsRoot,
       '2026/08/07',
       'partly-corrupt',
-      '{"rate_limits": TRUNCATED\n' + tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      '{"rate_limits": TRUNCATED\n' +
+        tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
       NOW_S - 60,
     );
 
@@ -222,7 +238,13 @@ describe('createCodexAccountQuotaReader', () => {
 
   it('ignores sessions older than the cutoff — a reading must not outlive its own window', async () => {
     const sessionsRoot = await makeSessionsRoot();
-    await writeSession(sessionsRoot, '2026/07/20', 'stale', tokenCountLine('2026-07-20T10:00:00.000Z', plusPlanLimits(30, 1786283144)), NOW_S - 8 * 86_400);
+    await writeSession(
+      sessionsRoot,
+      '2026/07/20',
+      'stale',
+      tokenCountLine('2026-07-20T10:00:00.000Z', plusPlanLimits(30, 1786283144)),
+      NOW_S - 8 * 86_400,
+    );
 
     const outcome = await createCodexAccountQuotaReader({ sessionsRoot, now: () => NOW_MS }).read();
     expect(outcome.value).toBeNull();
@@ -252,7 +274,11 @@ describe('createCodexAccountQuotaReader', () => {
       sessionsRoot,
       '2026/08/07',
       'no-windows',
-      tokenCountLine('2026-08-07T12:56:25.719Z', { primary: null, secondary: null, plan_type: 'plus' }),
+      tokenCountLine('2026-08-07T12:56:25.719Z', {
+        primary: null,
+        secondary: null,
+        plan_type: 'plus',
+      }),
       NOW_S - 60,
     );
 
@@ -273,14 +299,26 @@ describe('createCodexAccountQuotaReader', () => {
 
   it('serves a cached outcome within the TTL and re-reads after it', async () => {
     const sessionsRoot = await makeSessionsRoot();
-    await writeSession(sessionsRoot, '2026/08/07', 'first', tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)), NOW_S - 60);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'first',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
 
     let clock = NOW_MS;
     const reader = createCodexAccountQuotaReader({ sessionsRoot, now: () => clock, ttlMs: 60_000 });
     expect((await reader.read()).value?.seven_day?.utilization).toBe(0.64);
 
     // A newer session appears, but the TTL has not expired.
-    await writeSession(sessionsRoot, '2026/08/07', 'second', tokenCountLine('2026-08-07T13:10:00.000Z', plusPlanLimits(70, 1786283144)), NOW_S + 10);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'second',
+      tokenCountLine('2026-08-07T13:10:00.000Z', plusPlanLimits(70, 1786283144)),
+      NOW_S + 10,
+    );
     clock = NOW_MS + 30_000;
     expect((await reader.read()).value?.seven_day?.utilization).toBe(0.64);
 
@@ -292,13 +330,25 @@ describe('createCodexAccountQuotaReader', () => {
     // Same fail-open hazard `claude-quota.ts` floors: a negative age is still
     // `< ttlMs`, so an NTP step-back would pin a stale reading indefinitely.
     const sessionsRoot = await makeSessionsRoot();
-    await writeSession(sessionsRoot, '2026/08/07', 'first', tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)), NOW_S - 60);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'first',
+      tokenCountLine('2026-08-07T12:56:25.719Z', plusPlanLimits(64, 1786283144)),
+      NOW_S - 60,
+    );
 
     let clock = NOW_MS;
     const reader = createCodexAccountQuotaReader({ sessionsRoot, now: () => clock, ttlMs: 60_000 });
     await reader.read();
 
-    await writeSession(sessionsRoot, '2026/08/07', 'second', tokenCountLine('2026-08-07T13:10:00.000Z', plusPlanLimits(70, 1786283144)), NOW_S + 10);
+    await writeSession(
+      sessionsRoot,
+      '2026/08/07',
+      'second',
+      tokenCountLine('2026-08-07T13:10:00.000Z', plusPlanLimits(70, 1786283144)),
+      NOW_S + 10,
+    );
     clock = NOW_MS - 5_000;
     expect((await reader.read()).value?.seven_day?.utilization).toBe(0.7);
   });

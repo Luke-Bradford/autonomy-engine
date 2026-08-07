@@ -444,7 +444,7 @@ describe('GET /api/quota/display — codex (#990)', () => {
     expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
   });
 
-  it('survives a throwing codex reader without losing claude\'s reading', async () => {
+  it("survives a throwing codex reader without losing claude's reading", async () => {
     const app = await appWithCodex({
       read: async () => {
         throw new Error('walk exploded');

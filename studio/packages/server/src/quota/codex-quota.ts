@@ -120,7 +120,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** `$CODEX_HOME/sessions`, or `~/.codex/sessions`. Never request-derived. */
 export function defaultCodexSessionsRoot(env: NodeJS.ProcessEnv = process.env): string {
-  const home = env.CODEX_HOME && env.CODEX_HOME.length > 0 ? env.CODEX_HOME : join(homedir(), '.codex');
+  const home =
+    env.CODEX_HOME && env.CODEX_HOME.length > 0 ? env.CODEX_HOME : join(homedir(), '.codex');
   return join(home, 'sessions');
 }
 
@@ -174,7 +175,9 @@ export function buildCodexQuota(rateLimits: unknown, readAt: number): CodexAccou
     if (!isRecord(raw)) continue;
     const declared = raw.window_minutes;
     const slot =
-      typeof declared === 'number' ? (CODEX_WINDOW_MINUTES[declared] ?? positionalSlot) : positionalSlot;
+      typeof declared === 'number'
+        ? (CODEX_WINDOW_MINUTES[declared] ?? positionalSlot)
+        : positionalSlot;
     // First writer wins: a declared slot already filled must not be overwritten
     // by a positional guess about a later entry.
     if (windows[slot] !== undefined) continue;

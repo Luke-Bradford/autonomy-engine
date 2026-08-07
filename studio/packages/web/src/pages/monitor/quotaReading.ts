@@ -293,8 +293,7 @@ const PROVIDER_UNAVAILABLE_TEXT: Record<
     no_credential: 'No codex session data on this host — is the codex CLI installed?',
     no_reading:
       'Codex is installed but has not run recently enough to have reported a quota. Its figure comes from its own session records, so running it once will produce one.',
-    unrecognized_payload:
-      'Codex wrote a usage record this reader could not read a window out of.',
+    unrecognized_payload: 'Codex wrote a usage record this reader could not read a window out of.',
   },
 };
 

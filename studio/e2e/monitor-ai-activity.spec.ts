@@ -350,5 +350,4 @@ test.describe('#917 Monitor › AI activity', () => {
       await expectQuiet(page, problems);
     });
   });
-
 });
