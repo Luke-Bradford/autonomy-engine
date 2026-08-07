@@ -118,8 +118,11 @@ test.describe('implicit-chain advisory (#788)', () => {
     await expect(advisory).toContainText('2 things start in parallel');
     // Both by their within-kind ordinal — `activityLabels` for the activity
     // (#878), `containerLabels` for the container. The arm used to mix a name
-    // with a raw doc id.
-    await expect(advisory).toContainText('HTTP Request 1, stage 1');
+    // with a raw doc id. #943 — and each is quoted (`namedList`), so the `, `
+    // between them is unambiguously the join and not part of a name; the
+    // sentence states a COUNT, so an ambiguous join makes the count and the
+    // list disagree.
+    await expect(advisory).toContainText('“HTTP Request 1”, “stage 1”');
     await expect(advisory).not.toContainText('run in one sequence');
     await expect(advisory).toContainText('Saving mints');
 

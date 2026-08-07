@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CallConfigSchema, type Output } from '../schemas/pipeline.js';
+import { CallConfigSchema, type Node, type Output } from '../schemas/pipeline.js';
 import { SecretRefSchema } from '../schemas/secret-ref.js';
 import type { ActivityCatalog, ActivityCatalogEntry } from './types.js';
 import {
@@ -282,8 +282,14 @@ const ENTRIES: ActivityCatalogEntry[] = [
     // mechanism: it SURFACES the pre-existing structural `call_pipeline` (P2c) as a
     // first-class catalog TYPE. The reducer routes a call node STRUCTURALLY by the
     // presence of `Node.call` (`reduce.ts`), NEVER by this `type` — so no reducer
-    // branch is added, and a legacy call node carrying any other `type` still
-    // routes unchanged (back-compat). It reaches the executor only as a `startChild`
+    // branch is added. Back-compat for a legacy call node carrying a DIFFERENT
+    // `type` holds with one exception worth stating precisely (#953), because the
+    // unqualified "any other type routes unchanged" this comment used to claim is
+    // false: `reduce.ts` reaches `if (node.call !== undefined)` only AFTER the
+    // `kind:'control'` forks (`controlBranchEvent`, then fail/filter/wait/webhook),
+    // so on those types the TYPE wins and the call blob is inert. `authorsCallBlob`
+    // is that rule, and it is what the authoring UI must consult.
+    // It reaches the executor only as a `startChild`
     // command (the real child spawn is P3b); the `kind:'control'` +
     // `CONTROL_NOT_DISPATCHABLE` guard only ever fires for a MIS-authored call-less
     // node, which `validateDoc` refuses to save.
@@ -434,4 +440,38 @@ export function getActivity(type: string): ActivityCatalogEntry | undefined {
  */
 export function isStructuralCallActivity(type: string): boolean {
   return type === EXECUTE_PIPELINE_ACTIVITY_TYPE;
+}
+
+/**
+ * #953 — whether a node's `Node.call` blob is the thing that DISPATCHES it, and
+ * therefore whether the authoring UI owes it the call editor rather than the
+ * generic `Node.config` form.
+ *
+ * `isStructuralCallActivity` alone is not that question. `Node.call` is an
+ * OPTIONAL DISCRIMINANT valid on a node of any type — the engine test suite and
+ * any imported/API-seeded doc use the literal `type: 'call_pipeline'`, which the
+ * catalog does not know — so keying the inspector on the type alone left such a
+ * node routed to a generic form that derives no fields, with its call blob
+ * neither visible nor editable.
+ *
+ * The `kind: 'control'` exclusion is the non-obvious half, and it is read off the
+ * reducer rather than guessed: `reduce.ts` evaluates the control forks
+ * (`controlBranchEvent`, then fail/filter/wait/webhook) BEFORE it tests
+ * `node.call`, so on those types the TYPE wins and a call blob is inert. Offering
+ * a call editor there would be a UI that contradicts what the run does.
+ * `execute_pipeline` is `kind:'control'` too but has no reducer fork of its own —
+ * it falls through to the `node.call` branch — which is why the structural test
+ * is a separate disjunct rather than an exception carved out of the exclusion.
+ *
+ * NOT the same predicate as `lower.ts`'s call-node skip, deliberately. That one is
+ * `node.call !== undefined || isStructuralCallActivity(node.type)` and is WIDER on
+ * purpose: it must not seed `config.outputs` into ANY call-bearing node, control
+ * type or not, because doing so would flip the absent→declared-empty contract and
+ * change the node's content form (and so its version-mint / git-import churn).
+ * "What lowering must not touch" and "what the reducer executes" are genuinely
+ * different questions; one name for both would be the disagreement, not the fix.
+ */
+export function authorsCallBlob(node: Pick<Node, 'type' | 'call'>): boolean {
+  if (isStructuralCallActivity(node.type)) return true;
+  return node.call !== undefined && getActivity(node.type)?.kind !== 'control';
 }

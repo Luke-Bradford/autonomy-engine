@@ -3,7 +3,7 @@ import {
   ContainerSchema,
   formatZodIssues,
   getActivity,
-  isStructuralCallActivity,
+  authorsCallBlob,
   lowerPipelineNodes,
   remapNodeRefs,
   type CallConfig,
@@ -1591,7 +1591,10 @@ export function createCanvasStore(): StoreApi<CanvasState> {
       updateNodeCall(id, call) {
         const node = get().nodes.find((n) => n.id === id);
         if (node === undefined) return;
-        if (!isStructuralCallActivity(node.type)) return;
+        // #953 — the same predicate the inspector routes on, so a node that gets
+        // the call editor can always write through it. Keying this on the type
+        // alone made a legacy `call_pipeline`-typed node's blob read-only.
+        if (!authorsCallBlob(node)) return;
         edit((s) => ({
           nodes: s.nodes.map((n) => {
             if (n.id !== id) return n;

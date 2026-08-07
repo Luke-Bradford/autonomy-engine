@@ -555,21 +555,55 @@ export function precheckDivergence(
  * - `renamed`: only the display name changed → the row's `name` was patched, no
  *   version minted.
  * - `unchanged`: a matching resource was identical → no write.
+ * - `superseded` (#963): the branch's version doc is one this workspace ALREADY
+ *   holds and has since authored PAST — the ordinary "commit, keep working, then
+ *   pull" loop. Nothing is written, because immutable versions are additive and
+ *   the named row is already present and byte-identical. Its own value rather
+ *   than `unchanged` because the preview truthfully said "content differs"
+ *   (the branch does differ from the HEAD), so reporting a bare `unchanged`
+ *   would leave the operator with two statements that contradict each other and
+ *   no way to tell which is wrong. Note this is NOT a revert: branch content
+ *   alone cannot distinguish "re-pull of an older commit" from "deliberate
+ *   revert to an older version", and going back is re-authoring, not importing.
  *
  * `action` and `versionMinted` are ORTHOGONAL: `action` is the row-level
  * disposition, `versionMinted` is whether a new immutable version was minted in
  * the SAME apply. They coincide for `updated` (a content change mints) but a
  * `restored` can carry EITHER value (#672 — un-archive alone, or un-archive + a
  * changed version doc), so the version signal is not derivable from `action`.
+ * `superseded` ranks BELOW every write-bearing action and above `unchanged`: a
+ * restore/rename/concurrency patch in the same apply is the louder fact and
+ * still wins, since those describe a write that happened and this describes one
+ * that was correctly not needed.
  */
 export const WorkspaceGitAppliedActionSchema = z.enum([
   'created',
   'restored',
   'updated',
   'renamed',
+  'superseded',
   'unchanged',
 ]);
 export type WorkspaceGitAppliedAction = z.infer<typeof WorkspaceGitAppliedActionSchema>;
+
+/**
+ * #963 — whether an `action` means NOTHING WAS WRITTEN for that resource.
+ *
+ * A predicate rather than the `action !== 'unchanged'` comparison its two callers
+ * used to spell out, because adding `superseded` proved that comparison is a
+ * silent trap: both readers ask "did anything change?" structurally, so neither
+ * failed to compile when a THIRD did-nothing value appeared, and both would have
+ * started counting a pure no-op as a change — the audit log emitting an
+ * `import.applied` for an import that wrote nothing, and the Git page's roll-up
+ * saying "N changed" about resources it did not touch.
+ *
+ * `versionMinted` is deliberately NOT folded in here: it is ORTHOGONAL to
+ * `action` (#672), so a caller that cares about mints must test it separately —
+ * as `buildImportAppliedEvent` does. This answers only the row-level question.
+ */
+export function appliedActionWroteNothing(action: WorkspaceGitAppliedAction): boolean {
+  return action === 'unchanged' || action === 'superseded';
+}
 
 /** #3 G5c — one resource the apply wrote (or confirmed unchanged), with the
  * concrete `action` taken. `resourceId` is the resource's stable identity after

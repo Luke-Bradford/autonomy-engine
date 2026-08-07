@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  appliedActionWroteNothing,
   formatZodIssues,
   type WorkspaceGitApplyResult,
   type WorkspaceGitCommitResult,
@@ -990,7 +991,10 @@ function ImportOutcomeReport({
     );
   }
 
-  const changed = result.applied.filter((applied) => applied.action !== 'unchanged');
+  // #963 — asked through the shared predicate, not a bare `!== 'unchanged'`:
+  // `superseded` is a did-nothing outcome too, and counting it here would claim
+  // this import changed resources it never touched.
+  const changed = result.applied.filter((applied) => !appliedActionWroteNothing(applied.action));
 
   return (
     <div>
@@ -1006,7 +1010,7 @@ function ImportOutcomeReport({
 
       {changed.length === 0 && result.archived.length === 0 && result.deferred.length === 0 ? (
         /* The commonest outcome, and the analogue of `committed: false`: every
-           resource came back `unchanged`, so "0 changed" is a success, not a
+           resource wrote nothing, so "0 changed" is a success, not a
            failure, and must not be phrased as one. `deferred` is part of the
            condition because "already matches" is a claim about the WHOLE
            branch: with anything deferred it is false, and would otherwise be

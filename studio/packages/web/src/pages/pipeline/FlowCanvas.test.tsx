@@ -818,9 +818,28 @@ describe('FlowCanvas implicit-chain advisory (#788)', () => {
     const { advisory } = withGraph(['a', 'b'], [], [{ id: 'c_1', kind: 'stage', children: ['b'] }]);
     expect(advisory!.textContent).toContain('2 things start in parallel');
     /* #878 — the ACTIVITY root is named the same way the container root already
-       was, so the sentence no longer mixes a name with a raw doc id. */
-    expect(advisory!.textContent).toContain('HTTP Request 1, stage 1');
+       was, so the sentence no longer mixes a name with a raw doc id. #943 — and
+       each is quoted, so the `, ` between them is unambiguously the join. */
+    expect(advisory!.textContent).toContain('“HTTP Request 1”, “stage 1”');
     expect(advisory!.textContent).not.toContain('c_1');
+  });
+
+  /**
+   * #943 — the sentence states a COUNT and then lists the things counted, so an
+   * unquoted `', '` join is worse here than at the `readableIssue` sites #909
+   * fixed: a comma-bearing name makes the count and the list disagree in front of
+   * the operator. Reachable only via an IMPORTED doc — `activityLabel` falls back
+   * to the raw `type`, and `NodeSchema.type` is an unconstrained
+   * `z.string().min(1)` — which is exactly what this fixture is.
+   */
+  it('quotes the parallel roots, so a comma-bearing name cannot read as two', () => {
+    const { advisory } = withGraph(
+      [{ id: 'a', type: 'weird, type' }, 'b'],
+      [],
+      [{ id: 'c_1', kind: 'stage', children: ['b'] }],
+    );
+    expect(advisory!.textContent).toContain('2 things start in parallel');
+    expect(advisory!.textContent).toContain('“weird, type 1”, “stage 1”');
   });
 
   /**

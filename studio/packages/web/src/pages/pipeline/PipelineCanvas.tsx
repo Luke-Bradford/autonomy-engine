@@ -8,7 +8,7 @@ import {
   availableRefs,
   formatZodIssues,
   getActivity,
-  isStructuralCallActivity,
+  authorsCallBlob,
   paramDefaultDefect,
   type RefSuggestion,
   type ActivePipelineVersion,
@@ -2343,14 +2343,23 @@ export function NodePanel({
     store.getState().updateNodeConfig(nodeId, assembled.config);
   }
 
-  // A structural-call activity (`execute_pipeline`) stores its settings in
-  // `node.call`, not `node.config`, so this generic `node.config` editor cannot
-  // author it — validating the edited blob against `entry.configSchema`
-  // (`CallConfigSchema`) would always fail (`pipelineVersionId` lives in
-  // `node.call`, unseen here). #425 replaced the read-only stub that used to
-  // stand here with `CallPanel`, the dedicated editor for that blob. (The hooks
-  // above run unconditionally — this early return only skips the editor JSX.)
-  if (isStructuralCallActivity(nodeType)) {
+  // A call node stores its settings in `node.call`, not `node.config`, so this
+  // generic `node.config` editor cannot author it — validating the edited blob
+  // against `entry.configSchema` (`CallConfigSchema`) would always fail
+  // (`pipelineVersionId` lives in `node.call`, unseen here). #425 replaced the
+  // read-only stub that used to stand here with `CallPanel`, the dedicated editor
+  // for that blob. (The hooks above run unconditionally — this early return only
+  // skips the editor JSX.)
+  //
+  // #953 — routed on `authorsCallBlob`, not on the type alone. `Node.call` is an
+  // optional discriminant valid on a node of any type, so a doc carrying the
+  // literal `type: 'call_pipeline'` (reachable by import or an API seed, and used
+  // throughout the engine test suite) used to land on the generic form instead —
+  // and since that type is not catalogued, the form derived no fields and the
+  // call blob was neither visible nor editable. `authorsCallBlob` is the shared
+  // reading of what actually dispatches the node, so this cannot drift from the
+  // reducer the way a local type check did.
+  if (authorsCallBlob({ type: nodeType, call })) {
     return (
       <aside className="property-panel" aria-label="Properties">
         <h3>{nodeName}</h3>

@@ -234,11 +234,47 @@ describe('canvasStore', () => {
     expect(s.getState().nodes[0]!.call).toBeUndefined();
     expect('call' in s.getState().nodes[0]!).toBe(false);
 
-    // A `call` on a non-call type is a field the reducer would act on while the
-    // node's own catalog entry knows nothing about it — refused, not written.
+    // Turning an ordinary activity INTO a call node is not this action's job: the
+    // blob would be a field the reducer acts on while the node's own catalog entry
+    // knows nothing about it — refused, not written.
     s.getState().updateNodeCall(httpNode.id, { pipelineVersionId: 'pv_1', params: {} });
     expect(s.getState().nodes[1]!.call).toBeUndefined();
     s.getState().updateNodeCall('n_missing', { pipelineVersionId: 'pv_1', params: {} });
+  });
+
+  // #953 — the guard is `authorsCallBlob`, the same predicate the inspector routes
+  // on, so a node that GETS the call editor can always write through it. Keying it
+  // on the type alone made a legacy `call_pipeline`-typed node's blob read-only.
+  it('updateNodeCall writes through for a legacy call_pipeline node and refuses a control type', () => {
+    const s = createCanvasStore();
+    s.getState().loadVersion(null);
+    s.setState({
+      nodes: [
+        {
+          id: 'n_legacy',
+          type: 'call_pipeline',
+          config: {},
+          position: { x: 0, y: 0 },
+          call: { pipelineVersionId: 'pv_old', params: {} },
+        },
+        {
+          // `reduce.ts` evaluates the control forks BEFORE it tests `node.call`, so
+          // here the TYPE wins and the blob is inert — editing it would be a UI that
+          // contradicts what the run does.
+          id: 'n_if',
+          type: 'if',
+          config: { condition: '${params.go}' },
+          position: { x: 0, y: 0 },
+          call: { pipelineVersionId: 'pv_old', params: {} },
+        },
+      ] as Node[],
+    });
+
+    s.getState().updateNodeCall('n_legacy', { pipelineVersionId: 'pv_new', params: { a: 1 } });
+    expect(s.getState().nodes[0]!.call).toEqual({ pipelineVersionId: 'pv_new', params: { a: 1 } });
+
+    s.getState().updateNodeCall('n_if', { pipelineVersionId: 'pv_new', params: {} });
+    expect(s.getState().nodes[1]!.call?.pipelineVersionId).toBe('pv_old');
   });
 
   // U5 — a node dropped from the toolbox lands where the pointer released it,

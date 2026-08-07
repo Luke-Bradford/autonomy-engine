@@ -159,4 +159,74 @@ test.describe('#425 — call-node authoring', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /**
+   * #953 — the LEGACY call node, which the canvas cannot author and so had to be
+   * seeded. `Node.call` is an optional discriminant valid on a node of any type,
+   * and the literal `type: 'call_pipeline'` stays valid at save for back-compat
+   * (`engine/params.ts`), so a doc from an import or an API seed can carry one.
+   *
+   * The inspector used to route on the TYPE alone, so such a node landed on the
+   * generic `node.config` form — which, since that type is not catalogued, derived
+   * no fields. The call blob was neither visible nor editable, while `toVersionBody`
+   * carried it through every save: a one-way door rather than a data loss.
+   *
+   * Seeded rather than authored is the point, not a shortcut: this is exactly the
+   * path such a doc takes into a real workspace, and no click sequence can reach it.
+   */
+  test('a legacy call_pipeline-typed node gets a working call editor, not a dead config form', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+
+    const { pipelineVersionId } = await seedVersion(page, 'e2e 953 child', {
+      nodes: [{ id: 'a', position: { x: 0, y: 0 } }],
+      params: [{ name: 'query', type: 'string', required: true }],
+    });
+
+    const parentId = await openSeededCanvas(page, 'e2e 953 legacy parent', {
+      nodes: [
+        {
+          id: 'legacy',
+          type: 'call_pipeline',
+          call: { pipelineVersionId, params: { query: 'seeded' } },
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+
+    await canvasNodes(page).first().click();
+
+    // The routing fix: the call editor, resolved from the stored id — not the
+    // generic config box, which is what this node used to get.
+    await expect(panel(page).getByRole('heading', { name: 'Call target' })).toBeVisible();
+    await expect(panel(page).getByRole('button', { name: 'Apply config' })).toHaveCount(0);
+    await expect(panel(page).getByRole('combobox', { name: 'Pipeline' })).toContainText(
+      'e2e 953 child',
+    );
+    await expect(panel(page).getByLabel('query')).toHaveValue('seeded');
+
+    // EDITABLE is the actual ticket — a panel that renders read-only would pass
+    // every assertion above. The write goes through `updateNodeCall`, whose guard
+    // was keyed on the same type check, so this arm is the one that proves both
+    // halves moved together.
+    await panel(page).getByLabel('query').fill('edited');
+    await panel(page).getByRole('button', { name: 'Apply call' }).click();
+    expect(await validationIssues(page)).toEqual([]);
+    await page.getByRole('button', { name: 'Save version' }).click();
+    await expect(page.locator('.notice')).toHaveText('Saved v2.');
+
+    // Read from the PERSISTED version: the edit reached an immutable version, and
+    // the node kept its legacy type rather than being silently normalised.
+    const persisted = await page.request.get(`/api/pipelines/${parentId}/versions`);
+    const versions = (await persisted.json()) as {
+      version: number;
+      nodes: { type: string; call?: { params?: Record<string, unknown> } }[];
+    }[];
+    const saved = versions.find((v) => v.version === 2)!;
+    const node = saved.nodes.find((n) => n.type === 'call_pipeline')!;
+    expect(node.call?.params).toMatchObject({ query: 'edited' });
+
+    await expectQuiet(page, problems);
+  });
 });
