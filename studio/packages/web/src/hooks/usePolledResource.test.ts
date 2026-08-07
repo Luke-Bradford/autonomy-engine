@@ -116,7 +116,7 @@ describe('usePolledResource', () => {
   describe('#1000 — at most one load in flight', () => {
     /** A fetcher whose every call stays pending until the test settles it. */
     function pendingFetcher(): {
-      fetcher: ReturnType<typeof vi.fn>;
+      fetcher: (signal: AbortSignal) => Promise<string>;
       settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }>;
     } {
       const settlers: Array<{ resolve: (v: string) => void; reject: (e: Error) => void }> = [];

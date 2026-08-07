@@ -1023,7 +1023,9 @@ describe('RunDetailPage — a rerun’s COPIED frontier is named as copied (#918
     expect(within(panel).queryByText(/reused its result from run/)).not.toBeInTheDocument();
     /* `never` is downstream of a failure edge the copied `greet` did not take,
        so the reseed leaves it SKIPPED rather than merely unstarted (#1008). */
-    expect(within(panel).getByText(/routed around, so it was never going to run/i)).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/routed around, so it was never going to run/i),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1219,7 +1221,9 @@ describe('RunDetailPage — how long a node took (#867)', () => {
     const skippedRow = (await screen.findByText('never')).closest('tr')!;
     await userEvent.click(within(skippedRow).getByRole('button'));
     const panel = screen.getByRole('complementary');
-    expect(within(panel).getByText(/routed around, so it was never going to run/i)).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/routed around, so it was never going to run/i),
+    ).toBeInTheDocument();
     expect(within(panel).queryByText(/has not started/i)).not.toBeInTheDocument();
   });
 

@@ -971,9 +971,7 @@ describe('#952 — a call node’s `call` refs at SAVE time', () => {
       node('b', {}),
       callNode('n', { ...literalCall, params: { sku: '${nodes.a.output.sku}' } }),
     ];
-    const errors = validateRefs(
-      doc(nodes, [edge('a', 'n', 'success'), edge('b', 'n', 'success')]),
-    );
+    const errors = validateRefs(doc(nodes, [edge('a', 'n', 'success'), edge('b', 'n', 'success')]));
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/call\.params/);
   });
@@ -994,9 +992,9 @@ describe('#952 — a call node’s `call` refs at SAVE time', () => {
       [],
       [{ id: 'fe', kind: 'foreach', children: ['n'], items: '${params.xs}' }],
     );
-    expect(validateRefs({ ...inBody, params: [{ name: 'xs', type: 'json', required: true }] })).toEqual(
-      [],
-    );
+    expect(
+      validateRefs({ ...inBody, params: [{ name: 'xs', type: 'json', required: true }] }),
+    ).toEqual([]);
 
     const outside = validateRefs(
       doc([callNode('n', { ...literalCall, params: { one: '${item}' } })], []),
