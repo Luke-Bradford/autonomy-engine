@@ -124,14 +124,14 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                     )}${
                       placed.width === null
                         ? ` · ${unmeasuredNote(placed.span)}`
-                        : ` · ${formatElapsed(placed.span.endedAtMs! - placed.span.startedAtMs)}`
+                        : ` · ${formatElapsed(placed.durationMs)}`
                     }`}
                   >
                     <span className="visually-hidden">
                       {spanLabel(placed.span)}
                       {placed.width === null
                         ? `, ${unmeasuredNote(placed.span)}`
-                        : `, ${formatElapsed(placed.span.endedAtMs! - placed.span.startedAtMs)}`}
+                        : `, ${formatElapsed(placed.durationMs)}`}
                     </span>
                   </span>
                 ))}

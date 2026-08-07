@@ -76,7 +76,7 @@ export function formatRunDuration(
  * different number on a different scope.
  */
 export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'endedAtMs'>): string {
-  return isMeasurableSpan(node) ? formatElapsed(node.endedAtMs! - node.startedAtMs!) : '—';
+  return isMeasurableSpan(node) ? formatElapsed(node.endedAtMs - node.startedAtMs) : '—';
 }
 
 /**
@@ -93,11 +93,18 @@ export function formatNodeDuration(node: Pick<NodeActivity, 'startedAtMs' | 'end
  * paragraphs above, and would hide the corruption behind a plausible number.
  * (`formatRunDuration` clamps because its inputs are two DB columns written by
  * different paths — a different question, deliberately left alone.)
+ *
+ * A TYPE PREDICATE rather than a `boolean`, and generic so it narrows whatever
+ * it was handed rather than widening it to the bare pair. Every caller subtracts
+ * the two fields immediately after asking, and while it returned `boolean` each
+ * one needed a `!` — an assertion that was only sound because the reader had
+ * gone and read this body. Now the checker proves it, and a future edit that
+ * stopped guaranteeing non-nullness here would fail at those call sites instead
+ * of silently licensing `undefined - undefined`, i.e. `NaN`.
  */
-export function isMeasurableSpan(span: {
-  startedAtMs: number | undefined;
-  endedAtMs: number | undefined;
-}): boolean {
+export function isMeasurableSpan<
+  T extends { startedAtMs: number | undefined; endedAtMs: number | undefined },
+>(span: T): span is T & { startedAtMs: number; endedAtMs: number } {
   if (span.startedAtMs === undefined || span.endedAtMs === undefined) return false;
   return span.endedAtMs >= span.startedAtMs;
 }

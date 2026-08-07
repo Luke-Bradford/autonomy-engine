@@ -21,24 +21,41 @@ import { isMeasurableSpan } from './format';
  * corrupt clock looks like. A span that fails it is drawn as a start marker with
  * its length withheld.
  */
-export const isMeasurable = (span: AttemptSpan): boolean => isMeasurableSpan(span);
+export const isMeasurable = (span: AttemptSpan): span is AttemptSpan & { endedAtMs: number } =>
+  isMeasurableSpan(span);
 
 /**
  * The instants the log actually stated. An OPEN span contributes its start and
  * NOT an end — the whole point of rule 1 above: were the open span allowed to
  * stretch the axis to some assumed present, every closed bar beside it would be
  * squeezed by a number nobody measured.
+ *
+ * Folded in ONE PASS rather than collected into an array and spread through
+ * `Math.min`/`Math.max`. The spread is the bug: it passes one ARGUMENT per
+ * instant, and V8 overflows the call stack somewhere above 100k of them
+ * (measured on this Node: 100,000 fine, 125,000 `RangeError`). A run is not
+ * remotely bounded below that — a `foreach` over a few thousand items, each
+ * body node retried, reaches it — and the throw would land in render, blanking
+ * the whole run-detail page rather than degrading to a rough axis. The fold has
+ * no such ceiling and allocates nothing.
  */
 export function timelineWindow(nodes: NodeActivity[]): { from: number; to: number } | null {
-  const instants: number[] = [];
+  let from = Infinity;
+  let to = -Infinity;
   for (const node of nodes) {
     for (const span of node.spans) {
-      instants.push(span.startedAtMs);
-      if (isMeasurable(span)) instants.push(span.endedAtMs!);
+      if (span.startedAtMs < from) from = span.startedAtMs;
+      // A start can set `to` on its own: an open span that begins after every
+      // recorded end is the right-hand edge, as the corrupt-clock case shows.
+      if (span.startedAtMs > to) to = span.startedAtMs;
+      // Only the end needs testing against `to` — `isMeasurable` has already
+      // established `endedAtMs >= startedAtMs`, and the start is folded above,
+      // so a measurable end can never move `from`.
+      if (isMeasurable(span) && span.endedAtMs > to) to = span.endedAtMs;
     }
   }
-  if (instants.length === 0) return null;
-  return { from: Math.min(...instants), to: Math.max(...instants) };
+  if (from === Infinity) return null;
+  return { from, to };
 }
 
 /**
@@ -72,13 +89,27 @@ export function untimedReason(node: NodeActivity): string {
   return 'ran, but the log holds no start-and-terminal pair to measure it by';
 }
 
-interface Placed {
+interface PlacedBase {
   span: AttemptSpan;
   /** Percent from the window's origin. */
   left: number;
-  /** Percent of the window, or `null` for a span with no stated length. */
-  width: number | null;
 }
+
+/**
+ * A span's geometry, as a DISCRIMINATED UNION on the measurable/not split.
+ *
+ * `width` and `durationMs` are the same fact in two units — a percentage for the
+ * bar, milliseconds for the label beside it — and the union is what stops them
+ * disagreeing. The caller already branches on `width === null` to decide between
+ * a hatched bar and a measured one; that same check now narrows `durationMs`, so
+ * the label reads a proven `number` instead of re-deriving the subtraction
+ * behind a `!`. Carrying the duration at all (rather than letting the component
+ * recompute `endedAtMs - startedAtMs`) keeps ONE place deciding what a
+ * measurable span is.
+ */
+export type Placed =
+  | (PlacedBase & { width: number; durationMs: number })
+  | (PlacedBase & { width: null; durationMs: null });
 
 /**
  * Place one node's spans on the axis.
@@ -90,9 +121,10 @@ interface Placed {
  */
 export function placeSpans(spans: AttemptSpan[], from: number, to: number): Placed[] {
   const extent = Math.max(1, to - from);
-  return spans.map((span) => ({
-    span,
-    left: ((span.startedAtMs - from) / extent) * 100,
-    width: isMeasurable(span) ? ((span.endedAtMs! - span.startedAtMs) / extent) * 100 : null,
-  }));
+  return spans.map((span) => {
+    const left = ((span.startedAtMs - from) / extent) * 100;
+    if (!isMeasurable(span)) return { span, left, width: null, durationMs: null };
+    const durationMs = span.endedAtMs - span.startedAtMs;
+    return { span, left, width: (durationMs / extent) * 100, durationMs };
+  });
 }

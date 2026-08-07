@@ -79,6 +79,30 @@ describe('timelineWindow', () => {
   it('is null when nothing has a span at all', () => {
     expect(timelineWindow([node({ nodeId: 'a' })])).toBeNull();
   });
+
+  it('survives more spans than a spread call can carry', () => {
+    /* The review finding on #1007. `Math.min(...instants)` passes one ARGUMENT
+       per instant and V8 overflows the stack above ~100k of them (measured on
+       this Node: 100,000 fine, 125,000 `RangeError`) — so a run with a large
+       `foreach`, or many retries, would throw inside render and blank the whole
+       run-detail page rather than degrade to a rough axis.
+
+       The two span objects are SHARED across the array rather than built per
+       index, which keeps this to one 130k-pointer array instead of 130k
+       objects. Sound because the only thing under test is the ARGUMENT COUNT
+       ceiling: `timelineWindow` reads fields and never identity, and the
+       arithmetic itself is what the three cases above cover. Alternating them
+       still makes the asserted window a real min and max rather than a
+       constant, so a fold that returned its first span would fail too.
+
+       MUTATION-CHECKED: restoring the spread turns exactly this test red with
+       `RangeError: Maximum call stack size exceeded` and leaves the other 16
+       green — none of them is anywhere near the limit. */
+    const early = span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' });
+    const late = span({ startedAtMs: 9_000, endedAtMs: 9_400, endedAs: 'success' });
+    const spans = Array.from({ length: 130_000 }, (_, i) => (i % 2 === 0 ? early : late));
+    expect(timelineWindow([node({ nodeId: 'a', spans })])).toEqual({ from: 1_000, to: 9_400 });
+  });
 });
 
 describe('placeSpans', () => {
