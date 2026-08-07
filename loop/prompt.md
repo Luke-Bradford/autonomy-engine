@@ -33,12 +33,13 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-**Why `#917` heads THE QUEUE below** — the monitoring section for connected AI/LLM activity, tokens and account
-quota (operator, 2026-08-05: *"take some of the nice visual monitoring and give it its own section
-in the monitoring pages so that you could see any active use of connected AI's and/or LLMs, the
-sorts of things you can't directly monitor"*). It is UI work, so it satisfies this epic AND it is
-the cutover prerequisite: it is the last thing the operator still uses the old prototype dashboard
-FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket.
+**Why the monitoring section still heads THE QUEUE.** `#917` shipped it (operator, 2026-08-05:
+*"take some of the nice visual monitoring and give it its own section in the monitoring pages so
+that you could see any active use of connected AI's and/or LLMs"*), and C3 then retired the old
+prototype dashboard behind it. On first real use, 2026-08-07, it could not show their quota, had no
+codex at all, showed zero while the loop was firing, and crashed the tab. **The old surface is gone,
+so this is the operator's only window and it is currently dark** — that is why four defects on one
+page outrank the UI epic.
 
 **THE QUEUE — THIS LIST IS THE ONLY ORDERING. No other section restates it; they point here.**
 
@@ -71,7 +72,30 @@ FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket
      would leave every future PR waiting forever on a check that never reports — unfixable
      without a branch-protection edit, which is categorically off-limits.
      Honest retirement needs those four lifted OUT of the parked tree first: that is **#977**.
-4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+4. **THE MONITORING SECTION IS THE OPERATOR'S ONLY WINDOW AND IT IS CURRENTLY DARK.** `#917`
+   shipped it, C3 then retired the old dashboard behind it, and on first real use (2026-08-07) it
+   failed the operator three ways at once. These are not polish and they outrank the UI epic:
+   - **`#987`** — the quota panel reads UNREADABLE while a good reading exists. Measured minutes
+     apart: the panel said UNREADABLE while `/api/quota` served `five_hour 15%, seven_day 63%` and
+     the guard logged `quota source: studio`. Cause is a correct rule on the wrong consumer —
+     no-last-good is right for the GUARD and wrong for a human panel. Split the contract: display
+     gets a last-known value WITH AN AGE, the guard's path is untouched and still refuses on a
+     failed read. **Do not weaken the no-last-good rule to do it**, and pin with a test that the
+     guard can never receive the display value.
+   - **`#990`** — no codex quota at all (`/api/quota` has one key, `claude`), though
+     `AGENT_CLI_CONNECTION_KIND` explicitly covers `codex exec` so a user can already bind a codex
+     subscription. Prior art for the window shapes is in the parked tree,
+     `engine/lib/dashboard_state.py:247`. Drive the panel off CONNECTED providers, not a hardcoded
+     pair. UNREADABLE stays distinct from `0` for every provider; ABSENT is distinct from both.
+   - **`#989`** — that page crashed the browser tab. First surface on `usePolledResource`; suspect
+     the poll lifecycle across remounts. Settle with evidence; **do NOT lengthen the poll interval**
+     to hide a leak.
+   - **`#988`** — it shows zero while the build loop is firing, because it meters studio's OWN runs
+     and the loop's `claude -p` fires launch outside studio. Build the recommended shape: keep
+     `/monitor/ai` about studio and let the LOOP report in through an ingest seam; do not have
+     studio scrape processes it did not launch. If that shape looks wrong from inside the code,
+     raise an `[operator-decision]` rather than widening the product's scope alone.
+5. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
 
 All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
 counts `[studio]` tickets only.
