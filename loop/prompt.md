@@ -33,12 +33,13 @@ Only ONE studio phase/PR in flight at a time. Two open studio PRs = a race → r
 
 ## CURRENT PRIORITY — the UI epic (operator, 2026-07-31)
 
-**Why `#917` heads THE QUEUE below** — the monitoring section for connected AI/LLM activity, tokens and account
-quota (operator, 2026-08-05: *"take some of the nice visual monitoring and give it its own section
-in the monitoring pages so that you could see any active use of connected AI's and/or LLMs, the
-sorts of things you can't directly monitor"*). It is UI work, so it satisfies this epic AND it is
-the cutover prerequisite: it is the last thing the operator still uses the old prototype dashboard
-FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket.
+**Why the monitoring section still heads THE QUEUE.** `#917` shipped it (operator, 2026-08-05:
+*"take some of the nice visual monitoring and give it its own section in the monitoring pages so
+that you could see any active use of connected AI's and/or LLMs"*), and C3 then retired the old
+prototype dashboard behind it. On first real use, 2026-08-07, it could not show their quota, had no
+codex at all, showed zero while the loop was firing, and crashed the tab. **The old surface is gone,
+so this is the operator's only window and it is currently dark** — that is why four defects on one
+page outrank the UI epic.
 
 **THE QUEUE — THIS LIST IS THE ONLY ORDERING. No other section restates it; they point here.**
 
@@ -71,7 +72,76 @@ FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket
      would leave every future PR waiting forever on a check that never reports — unfixable
      without a branch-protection edit, which is categorically off-limits.
      Honest retirement needs those four lifted OUT of the parked tree first: that is **#977**.
-4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
+4. **THE MONITORING SECTION IS THE OPERATOR'S ONLY WINDOW AND IT IS CURRENTLY DARK.** `#917`
+   shipped it, C3 then retired the old dashboard behind it, and on first real use (2026-08-07) it
+   failed the operator three ways at once. These are not polish and they outrank the UI epic:
+   - **`#987`** — the quota panel reads UNREADABLE while a good reading exists. Measured minutes
+     apart: the panel said UNREADABLE while `/api/quota` served `five_hour 15%, seven_day 63%` and
+     the guard logged `quota source: studio`. Cause is a correct rule on the wrong consumer —
+     no-last-good is right for the GUARD and wrong for a human panel. Split the contract: display
+     gets a last-known value WITH AN AGE, the guard's path is untouched and still refuses on a
+     failed read. **Do not weaken the no-last-good rule to do it**, and pin with a test that the
+     guard can never receive the display value.
+   - **`#990`** — no codex quota at all (`/api/quota` has one key, `claude`), though
+     `AGENT_CLI_CONNECTION_KIND` explicitly covers `codex exec` so a user can already bind a codex
+     subscription. Prior art for the window shapes is in the parked tree,
+     `engine/lib/dashboard_state.py:247`. Drive the panel off CONNECTED providers, not a hardcoded
+     pair. UNREADABLE stays distinct from `0` for every provider; ABSENT is distinct from both.
+   - **`#989`** — that page crashed the browser tab. First surface on `usePolledResource`; suspect
+     the poll lifecycle across remounts. Settle with evidence; **do NOT lengthen the poll interval**
+     to hide a leak.
+   - **`#988`** — it shows zero while the build loop is firing, because it meters studio's OWN runs
+     and the loop's `claude -p` fires launch outside studio. Build the recommended shape: keep
+     `/monitor/ai` about studio and let the LOOP report in through an ingest seam; do not have
+     studio scrape processes it did not launch. If that shape looks wrong from inside the code,
+     raise an `[operator-decision]` rather than widening the product's scope alone.
+5. **`#992` + `#997` — QUIETEN THE CANVAS. Land them TOGETHER**, or it ends up half-quiet: edge
+   labels hidden while four coloured dots still sit on every node. One operator intent (2026-08-07),
+   two surfaces:
+   - **`#992`** — hide edge labels; colour already carries routing (*"the colour of the line does
+     enough"*). **Amends `U19`**: its palette STANDS, only the always-on label is withdrawn.
+   - **`#997`** — source ports collapse to ONE point mid-edge at rest, fan out on hover so a
+     connection can be picked or re-pointed.
+
+   **`#997`'s load-bearing constraint: visual only, never structural.** Handles must stay MOUNTED
+   with unchanged `id`s — edges bind to `sourceHandle`, so conditional rendering would leave React
+   Flow unable to resolve endpoints and edges would snap to the node centre. Collapse with
+   positioning/opacity. Test that an edge's `sourceHandle` is identical before, during and after
+   hover, and that `U6b`'s typed connect-time validation still refuses invalid targets.
+
+   **The hover behaviour is SPECIFIED in `#997`, not left to you as a hazard** — it is the
+   flyout-menu problem (hover intent + buffer zone) and has a settled solution: ONE hover container
+   whose bounds already include the fan-out area (so there is no gap to cross and no safe-triangle
+   needed — these ports are adjacent, not across a gap), a ~120ms open delay so a passing cursor does
+   not set off a wave of fan-outs, a ~200ms close grace cancelled if the pointer returns, and
+   invisible hit-slop to reach a ≥24×24px target while the drawn dot stays small. **Noise is what is
+   DRAWN, not what is clickable.** The trap: that buffer must be `pointer-events: none` unless the
+   node's hover is active, or it swallows marquee-select and canvas panning — assert both still work
+   adjacent to a collapsed node.
+
+   Both carry the same accessibility clause: reveal on **keyboard focus** as well as hover, keep the
+   routing key / port name in the accessible name at all times, and honour `prefers-reduced-motion`.
+   Hidden visually is fine; unreachable without a mouse is a regression.
+6. **`#996` — WRITE THE DATA-MOVEMENT SPEC.** `#993` is DECIDED (operator, 2026-08-07): **ADF-grade
+   data movement is the intent, at ADF's scale.** Source and sink are independent and heterogeneous
+   — CSV/Excel → database, database → CSV, any-to-any, with column mapping. This needs three layers
+   (linked services → **datasets as a new first-class resource** → `copy` with mapping), and the
+   dataset layer must integrate with the immutable-version, publish, trigger-binding, git and
+   portability models that already exist.
+
+   **Spec FIRST, in the built-block style of the other eight — do not start code from the queue
+   line.** Its ticket table then becomes queue items. Two things it must do explicitly: **strike the
+   activity-library spec's `Non-goals` line** (*"No dataset/linked-service data-movement
+   abstraction"*), which `#993` retracted and which otherwise sits in the tree contradicting the
+   work; and settle streaming/bounding, type coercion and schema drift rather than deferring them.
+
+   **`#994` (sqlite + `sql_query`) is BLOCKED and must NOT be built as a substitute** — a standalone
+   query node would become a second, parallel way to reach a database, which is what the dataset
+   abstraction exists to prevent. Its security constraints carry into `#996` verbatim:
+   parameterised binding only, path confinement mirroring `fs`'s `config.roots`, bounded output with
+   visible truncation.
+7. **The UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps. Expect
+   `#996`'s ticket table to land ahead of this once the spec exists — that is intended, not drift.
 
 All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
 counts `[studio]` tickets only.
