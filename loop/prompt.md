@@ -42,15 +42,29 @@ FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket
 
 **THE QUEUE — THIS LIST IS THE ONLY ORDERING. No other section restates it; they point here.**
 
-1. **`#917`** — the monitoring section (above). Visible product AND the cutover prerequisite.
-2. **studio's quota sampler, flag OFF** — see the CUTOVER block for WHY and for the one-poller
-   constraint that makes the flag load-bearing. Do not skip it to get back to the UI epic: C3
-   cannot happen without it, and the operator is pushing for the cutover.
-3. **C3 `#410`** — retire the dashboard and enable that flag in the SAME step.
+1. ~~**`#917`** — the monitoring section~~ **DONE** (PR #968, merged `e515761d`; issue CLOSED).
+2. ~~**studio's quota sampler, flag OFF**~~ **DONE** (PR #971, merged `92e55231`). The sampler
+   module + app wiring landed DORMANT behind `CLAUDE_QUOTA_SAMPLER`, so no second poller existed.
+3. **C3 `#410`** — SPLIT INTO TWO HALVES, because they are independently verifiable and the quota
+   half must be able to roll back on its own:
+   - **3a. the QUOTA cutover — CODE DONE** (on `main`; `git log --oneline --grep '#410' loop/`
+     names the merge). Arms `CLAUDE_QUOTA_SAMPLER=1` in the service
+     plist, reorders `quota_pct` to **studio → dashboard → loop reader**, and removes the now
+     unreachable shadow probe. **The LIVE step may still be outstanding — CHECK BEFORE ASSUMING:**
+     ```sh
+     launchctl list | grep com.autonomy.dashboard        # loaded => live step NOT done
+     /usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:CLAUDE_QUOTA_SAMPLER' \
+       ~/Library/LaunchAgents/com.autonomy.studio-server.plist   # "1" => armed
+     ```
+     If not done, the runbook is in the CUTOVER block below. **Order matters and is not
+     interchangeable** — bootout the dashboard FIRST, then `--update` studio.
+   - **3b. PARK the old engine** — `bin/ lib/ tests/ templates/ start`, plus retiring the
+     engine-scoped `lint-and-test` job in `.github/workflows/ci.yml`. NOT started. `loop/` STAYS
+     (it is the control plane, not the engine) and so does the separate `loop` CI job.
 4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
 
-All four are ahead of the defect sweep, which as amended in the STANDING RULE section below counts
-`[studio]` tickets only.
+All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
+counts `[studio]` tickets only.
 
 **WHY THIS IS THE PRIORITY (operator, 2026-07-31).** In the preceding 24h the loop merged 19 PRs
 and **exactly one** of them altered anything a human can see in the app. The rest was `loop/`
@@ -60,10 +74,13 @@ and the loop exists to build it — not to build the loop.
 
 ### CUTOVER C1-C3 — UNBLOCKED 2026-08-05. It is buildable work, not an operator gate.
 - **C1 `#440`** native control room + machine-readable quota endpoint — **DONE** (issue CLOSED).
-- **C2** — **DONE** (2026-07-29). Studio is the **THIRD** source in `loop/drive.sh` `quota_pct()`,
-  behind the dashboard and behind the loop's own usage reader; `DASH_URL` was deliberately **not**
-  repointed, because studio's `/api/quota` returned `account.claude: null` on every probe and
-  promoting it would have disarmed the spend guard outright. See `#765`.
+- **C2** — **DONE** (2026-07-29), and **SUPERSEDED by C3a** (2026-08-07). C2 wired studio
+  in as the **THIRD** source in `loop/drive.sh` `quota_pct()`, deliberately behind the dashboard and
+  the loop's own reader, because studio's `/api/quota` returned `account.claude: null` on every
+  probe — it was a LAZY reader, so every read was the direct poll that 429s. C3a moved it to
+  **FIRST**, which is sound only because `#971` gave it a sampler: the request path now answers from
+  that cache and never reaches the provider. Read `quota_pct`'s header in `drive.sh` for the full
+  argument; do not re-derive it here.
 - **C3 `#410` (park the old engine) — NO LONGER AN OPERATOR GATE (measured 2026-08-05).** Operator:
   *"I'm not using the old system, so do what you want with it. I'm waiting to see how it all fits in
   with the new."* The cutover is wanted and the remaining work is yours to build.
@@ -93,11 +110,39 @@ and the loop exists to build it — not to build the loop.
   the first. Studio's is the SUCCESSOR, not an addition, and `#770`'s one-poller invariant survives
   with studio as that poller.
 
-  **That invariant sets the build shape, and it is why this is not a plain ordering.** Per `#765`'s
+  **That invariant set the build shape, and it is why this was not a plain ordering.** Per `#765`'s
   escape hatch the sampler is **gated on an env flag**, so:
-  - the sampler CODE may land any time, **flag OFF** — dormant, no second poller, `#770` satisfied;
+  - the sampler CODE landed **flag OFF** (`#971`) — dormant, no second poller, `#770` satisfied;
   - **C3 retires the dashboard and flips the flag in the SAME step**, so there is never a moment with
     two samplers and never a moment with zero readers.
+
+  **THE LIVE RUNBOOK (C3a), and the ORDER IS LOAD-BEARING — bootout FIRST, update SECOND:**
+
+  ```sh
+  launchctl bootout gui/$UID/com.autonomy.dashboard    # 1. stop sampler #1
+  loop/install_studio_server.sh --update --force       # 2. rebuild + re-render plist => sampler #2
+  curl -s http://127.0.0.1:8788/api/quota              # 3. watch until account.claude is non-null
+  ```
+
+  Why not the other order. Updating first would arm studio's sampler while the dashboard's is still
+  running — a real two-standing-sampler period, the one thing `#770` refuses outright. Worse, it
+  would not even work well: the dashboard's sampler **continuously holds the bucket**, so studio's
+  first samples would 429 and it would enter its geometric backoff (up to ~8 min) before the
+  dashboard ever stopped. Freeing the bucket first is what gives studio's sampler a clean first read.
+
+  **The cost of that order, stated so it is not a surprise:** `--update` is a full
+  `pnpm install` + build + bounce, i.e. **MINUTES during which NEITHER cache-backed source is up**.
+  The guard survives on the loop reader alone in that window, and if that reader is itself 429'd the
+  read is UNREADABLE and spends the bounded `QUOTA_UNKNOWN_FIRES` allowance. That is fail-SAFE
+  (it refuses, it never fires blind) but it can stop the run mid-cutover. Do the cutover when the
+  7-day figure has headroom, and re-check it after.
+
+  **ROLLBACK IS SYMMETRIC — this is the part that is easy to get wrong.** Re-loading the dashboard
+  while studio's sampler is still armed recreates exactly the contention the cutover removed, which
+  is worse than what it is rolling back. Disarm studio FIRST (remove `CLAUDE_QUOTA_SAMPLER` from
+  `loop/com.autonomy.studio-server.plist.tmpl`, then `--update --force`), THEN
+  `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.autonomy.dashboard.plist`. `drive.sh`
+  needs no revert: the dashboard is still source 2, so it is used again the moment it answers.
 
   Keep the 60s TTL and the **no-grace / no-last-good** property: a stale-but-low reading PERMITS a
   fire, and fail-open is the one polarity forbidden here (`drive.sh`'s cache holds the fail-SAFE
@@ -109,7 +154,7 @@ and the loop exists to build it — not to build the loop.
   review rounds on this file were all the same defect: the order written in two places, drifting
   apart. One list, one owner. This block owns WHY and the constraints; the queue owns WHEN.
 
-  **When you do C3:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
+  **When you do C3b:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
   it and the ticket says so). `loop/` is NOT part of the old engine — it is the control plane and it
   **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a SEPARATE
   `loop` job: retiring the engine retires the former and keeps the latter.

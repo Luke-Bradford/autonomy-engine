@@ -87,10 +87,10 @@ MAX_BUDGET_REGRANTS="${MAX_BUDGET_REGRANTS:-1}"  # how many times ONE driver run
 QUOTA_CACHE="${QUOTA_CACHE:-$INFRA/.last_quota}"  # "<epoch> <pct>" of the last READABLE reading
 QUOTA_CACHE_MAX_AGE="${QUOTA_CACHE_MAX_AGE:-86400}"  # seconds a cached reading stays evidence
 QUOTA_POLL_MEMO="${QUOTA_POLL_MEMO:-$INFRA/.last_quota_poll}"  # "<epoch> <pct|->" of the last
-                                  # source-2 POLL -- its OUTCOME, success or failure, not a reading
+                                  # loop-reader POLL -- its OUTCOME, success or failure, not a reading
                                   # to fall back on. See quota_poll_memo_read (#777).
 QUOTA_POLL_MIN_INTERVAL="${QUOTA_POLL_MIN_INTERVAL:-60}"  # min seconds between DIRECT polls of the
-                                  # shared rate-limited upstream by source 2. 60s to match what the
+                                  # shared rate-limited upstream by the loop reader. 60s to match what the
                                   # other two sources already do -- studio's `DEFAULT_TTL_MS`
                                   # (`claude-quota.ts`) and the prototype dashboard's sampler TTL
                                   # (engine `lib/claude_usage.py`) are both 60s. 0 disables.
@@ -141,11 +141,14 @@ if [ -z "${STUDIO_VERSION_URL:-}" ]; then
   STUDIO_VERSION_URL="${STUDIO_QUOTA_URL%/}"
   STUDIO_VERSION_URL="${STUDIO_VERSION_URL%/api/quota}/api/version"
 fi
-QUOTA_SHADOW_STAMP="${QUOTA_SHADOW_STAMP:-$INFRA/.last_quota_shadow}"  # "<epoch> probe" of the
-                                  # last SHADOW poll ATTEMPT. Its own file, its own age, its own
-                                  # contract -- see quota_shadow_probe (#765).
-QUOTA_SHADOW_MIN_INTERVAL="${QUOTA_SHADOW_MIN_INTERVAL:-3600}"  # min seconds between DIAGNOSTIC
-                                  # polls of studio. 0 disables the probe entirely.
+# QUOTA_SHADOW_STAMP / QUOTA_SHADOW_MIN_INTERVAL used to live here. Both are gone with C3
+# (#410): the diagnostic probe they throttled existed only to ask studio a question the
+# read order could not, back when studio was source 3 and could be reached only after two
+# other sources failed. Studio is source 1 now, so every fire polls it on the decision path
+# and `quota source: studio` is the ordinary log line -- the probe's gate could never be
+# true again. Removed rather than left dormant: unreachable machinery inside a spend guard
+# is a maintenance hazard, and `git log` keeps it. A leftover $INFRA/.last_quota_shadow on
+# a live control plane is inert.
 DRIFT_REPORT="${DRIFT_REPORT:-1}"  # set to exactly "0" to silence the #808 drift report. Any OTHER
                                   # value still reports: a monitor a typo can switch off without
                                   # saying so fails in the monitored direction, and `DRIFT_REPORT=no`
@@ -241,33 +244,64 @@ is_loop_ref() {
 # --- quota_pct: the 7-day subscription utilization as an INTEGER percent, or ""
 # when it cannot be read. Echoes to stdout; never fails the caller.
 #
-# THREE sources, and the ORDER is the load-bearing part (cutover C2, #440):
-#   1. the prototype dashboard (`$DASH_URL`)
-#   2. the loop's OWN usage reader (`$LOOP_LIB/claude_usage.py`; relocated out
+# THREE sources, and the ORDER is the load-bearing part. C3 (#410) REORDERED it;
+# what follows supersedes C2's (#440) order, which ran dashboard -> reader -> studio:
+#   1. studio's native endpoint (`$STUDIO_QUOTA_URL`, #440 C1) -- SAMPLER-BACKED since C3
+#   2. the prototype dashboard (`$DASH_URL`) -- retired, kept only as the rollback path
+#   3. the loop's OWN usage reader (`$LOOP_LIB/claude_usage.py`; relocated out
 #      of the engine by #764; #766 fixed this CALL SITE against the old module)
-#   3. studio's native endpoint (`$STUDIO_QUOTA_URL`, #440 C1)
 #
 # All three bottom out in the SAME upstream, `GET /api/oauth/usage`, with the
 # same OAuth token off the same account -- so they share ONE rate-limit budget.
 # That endpoint 429s under direct polling (observed 2026-07-25, re-confirmed
 # 2026-07-29: eight consecutive direct polls over 12s, all 429).
 #
-# What separates them is therefore not the data but the PATH to it:
+# What separates them is therefore not the data but the PATH to it, and that is
+# the whole reason the order changed. A source is cheap to ask when asking it does
+# not touch the upstream, and expensive when it does:
 #
-#   * the dashboard rides through a 429 because it samples on a background
-#     thread and answers from a warm cache. It is the only source that does, so
-#     it goes first -- and asking it costs the upstream nothing.
-#   * the loop reader (2) and studio (3) are both DIRECT polls, one per call,
-#     from a cold start. Under a 429 both return "" for the same reason.
+#   * studio (1) now samples on an `unref`'d interval inside the supervised server
+#     and answers `/api/quota` from that cache (`quota-sampler.ts`, armed by
+#     `CLAUDE_QUOTA_SAMPLER=1` in the service plist). Its REQUEST path no longer
+#     reaches the provider at all, so the guard may poll it as often as it likes.
+#     That -- not novelty -- is what earns it first place; #765 stated the
+#     condition in exactly those terms ("a sampler-backed studio can be polled
+#     freely ... that is the state in which studio actually deserves to be the
+#     primary source"), and C3 is the change that satisfies it.
+#   * the dashboard (2) rode through a 429 the same way, on a background thread
+#     behind a warm cache. It was source 1 for that reason and is now RETIRED --
+#     C3 stops its sampler, because two standing samplers on one budget is the one
+#     thing #770 refuses. It stays in the list, second, purely so that re-loading
+#     the unit is a COMPLETE rollback with no code revert (see the runbook note
+#     below). Once the engine is parked it will simply fail fast, which costs one
+#     refused local connection and nothing upstream.
+#   * the loop reader (3) is the only remaining DIRECT poll: a fresh process per
+#     call, from a cold start, throttled by the #777 poll memo. It is LAST on
+#     purpose -- it is the only source whose failure mode is to add load to the
+#     very budget it is measuring, so it is reached only when both cache-backed
+#     sources have already failed.
 #
-# Between the two direct pollers, the PROVEN one goes first: #766 measured this
+# WHAT THE OLD ORDER ARGUED, and why it no longer applies. Until C3 the rule was
+# "between the two direct pollers, the PROVEN one goes first": #766 measured this
 # reader -- then still in the engine's `lib/`, before #764 relocated it --
-# returning 10, matching the dashboard at that moment, whereas studio has never
+# returning 10, matching the dashboard at that moment, whereas studio had never
 # once returned a number here (`account.claude: null` on every probe -- its
-# reader is lazy, so every read is the direct poll that 429s;
-# `studio/packages/server/src/quota/claude-quota.ts`, and #765).
+# reader was LAZY, so every read was the direct poll that 429s;
+# `studio/packages/server/src/quota/claude-quota.ts`, and #765). That argument was
+# about two DIRECT pollers. It is void now because studio is no longer one of them:
+# the sampler moved its provider call off the request path entirely. The comparison
+# that decides the order today is cache-backed vs direct, not proven vs unproven.
 #
-# Do not read that contrast as "the loop reader works and studio does not". Both
+# BE HONEST ABOUT WHAT IS STILL UNMEASURED. Studio has not yet answered here, and
+# C3 does not make it answer -- it removes the two reasons it could not (no sampler,
+# and a rival sampler holding the bucket). Whether it now does is the measurement
+# this reorder exists to obtain, and the evidence is a run of scheduled fires
+# logging `quota source: studio`. If they instead log `quota source: loop`, studio
+# is failing for a THIRD reason and the finding belongs in a ticket, not in a
+# silent re-reorder. The guard stays fail-safe either way: nothing below can
+# manufacture a reading, and an unreadable source falls through to the next.
+#
+# Do not read the old contrast as "the loop reader works and studio does not". Both
 # were re-measured on 2026-07-29 while the dashboard was answering 14%: the loop
 # reader's token read succeeded (108 chars) and the endpoint returned 429, i.e.
 # the SAME failure studio reports. The honest reading is that whichever process
@@ -275,89 +309,65 @@ is_loop_ref() {
 # 60s sampler -- continuously, which is why the two direct pollers see a
 # permanently empty bucket. #766's success was measured in a gap between samples.
 #
-# There is a second-order effect on C3 too, pointing the other way. Post-C3 the
-# dashboard read fails on EVERY call, so every quota_pct invocation becomes a
-# Keychain read plus a direct poll -- and as the "Studio LAST" paragraph below
-# notes, that is tens of polls in one iteration during a long auth block. This
-# reader used to be the unthrottled one (a fresh process per call, so no in-memory
-# cache and nothing giving it a cross-process one), which made it able to self-
-# inflict the very 429 that then reads as UNREADABLE. FIXED by #777: it now answers
-# from a poll memo inside QUOTA_POLL_MIN_INTERVAL, memoises failures too, and drops
-# the memo after every fire -- see `quota_poll_memo_read` for the whole argument.
-# Both surviving sources are therefore rate-bounded now, but NOT symmetrically: studio
-# widens geometrically to ~8min once it sees a 429 (`claude-quota.ts`), whereas source
-# 2's bound is a FLAT 60s and does not widen, so under a sustained 429 it keeps
-# knocking once a minute where studio retreats. Deliberate for now -- 1/min is three
-# orders off the measured failure (eight polls in 12s) and the memo makes the rate
-# knowable -- but if the post-C3 logs show source 2 sitting in a 429, widening its
-# interval on a failed poll is the next move, not shortening it.
+# WHY THE READER IS LAST, not merely later. Once the dashboard is retired its read
+# fails on EVERY call, so any quota_pct invocation that reaches this reader becomes a
+# Keychain read plus a direct poll -- and quota_gate can call quota_pct three times
+# per iteration, plus once per AUTH_LONG_BLOCK retry while blocked, i.e. tens of polls
+# in one iteration during the 71h block this file documents. This reader used to be the
+# unthrottled one (a fresh process per call, so no in-memory cache and nothing giving
+# it a cross-process one), which made it able to self-inflict the very 429 that then
+# reads as UNREADABLE. FIXED by #777: it now answers from a poll memo inside
+# QUOTA_POLL_MIN_INTERVAL, memoises failures too, and drops the memo after every fire
+# -- see `quota_poll_memo_read` for the whole argument. That bound is what makes it
+# SAFE to keep; being reached only after two cache-backed sources have failed is what
+# makes it CHEAP. The two bounds are still not symmetric: studio widens geometrically
+# to ~8min once it sees a 429 (`claude-quota.ts`), whereas this reader's bound is a
+# FLAT 60s and does not widen, so under a sustained 429 it keeps knocking once a
+# minute where studio retreats. Deliberate -- 1/min is three orders off the measured
+# failure (eight polls in 12s) and the memo makes the rate knowable -- but if the
+# post-C3 logs show it sitting in a 429, widening its interval on a failed poll is the
+# next move, not shortening it.
 #
-# That has a consequence for C3 worth stating BEFORE anyone acts on it: removing
-# the dashboard does not merely remove the best source, it also stops the
-# polling that starves the other two. So the post-C3 pair may well start
-# answering precisely because source 1 is gone. That is a HYPOTHESIS, not a
-# measurement -- it predicts that a fire whose dashboard read fails will log
-# `quota source: loop`, which is exactly the evidence the log lines below collect.
-# Do not treat "studio has never answered" as settled while the confound stands.
+# A CONFOUND THE OLD ORDER LEFT BEHIND, now resolved in studio's favour: the
+# dashboard's sampler did not merely answer first, it CONTINUOUSLY held the shared
+# bucket, which is why the two direct pollers behind it saw a permanently empty one.
+# So retiring it does not only remove the best source -- it also stops the polling that
+# starved the others. C3 hands that standing-sample slot to studio rather than leaving
+# it vacant, which is the shape #770 permits (below) and the shape that keeps a warm
+# cache in front of the guard.
 #
-# What CHANGED with #765 is availability, not the order. Studio's endpoint used
-# to be connection-refused at fire time -- nothing supervised a studio server, so
-# the only listeners were ad-hoc `pnpm dev` sessions that die with their
-# terminal. A `com.autonomy.studio-server` LaunchAgent now holds 8788
-# (`install_studio_server.sh`), so source 3 is reachable rather than absent.
-# Every UNREADABLE it now logs is a real measurement of the READER, which is what
-# the promotion decision needs; before, it only measured "no server".
+# What CHANGED with #765 was availability. Studio's endpoint used to be
+# connection-refused at fire time -- nothing supervised a studio server, so the only
+# listeners were ad-hoc `pnpm dev` sessions that die with their terminal. A
+# `com.autonomy.studio-server` LaunchAgent now holds 8788 (`install_studio_server.sh`),
+# so studio is reachable rather than absent, and every UNREADABLE it logs is a real
+# measurement of the READER rather than of "no server". C3 adds the second half: that
+# service now also carries `CLAUDE_QUOTA_SAMPLER=1`, so the reader it exposes is
+# cache-backed rather than lazy.
 #
-# Studio LAST is what makes adding it free. It is reached only when both other
-# sources have already failed, so it adds no SELECTION-path load in the common
-# case, cannot starve the sampler that keeps source 1 warm, and still produces the
-# `quota source: studio` log line that is the evidence for promoting it. (Since
-# #765 studio IS asked in the common case, by the hourly diagnostic probe -- that
-# is a deliberate reversal of the "no load" claim, bought for the C3 evidence and
-# priced at one request per hour per active driver. It does not touch the order
-# below. See `quota_shadow_probe`.) Putting
-# it first would instead put a direct poll on EVERY read -- three per iteration
-# from quota_gate plus one per AUTH_LONG_BLOCK retries while blocked, i.e. tens
-# of polls in one iteration during the 71h block this file documents, unbounded
-# -- competing for the very budget the working source depends on.
-#
-# Studio is promoted (and source 1 retired with the engine, C3) once it has
-# DEMONSTRABLY answered here across scheduled fires -- and they only became
-# collectable at all once #765 Defect 2 gave studio a supervised server to answer
-# from. TWO log lines carry that evidence now, and they are NOT interchangeable:
-# `quota source: studio` means the guard USED studio, and can only appear when the
-# sources before it failed; `quota shadow: studio` means the probe asked studio on
-# a fire the dashboard was perfectly capable of answering. The second exists
-# because the first is unreachable while source 1 is healthy, which made the gate
-# a test of luck. Rationale lives in ONE place -- `quota_shadow_probe` -- and is
-# deliberately not restated here (#776 is about exactly this duplication).
-#
-# Note the promotion criterion is no longer "add a sampler": #770 measured a cold
-# poll returning 200 and rejected a sampler on the evidence -- it would add a
-# standing ~1/min draw on a budget already at its ceiling, contending with the
-# dashboard sampler on the same account. Studio instead backs off geometrically on a
-# 429. Until the evidence is in, this order is deliberate: DO NOT reorder it because
-# studio is "the new one". #765 is the gate.
-#
-# #765 stated that invariant as "exactly ONE process may poll `/api/oauth/usage`
-# directly", and #777 asked which way to reconcile it, because the post-C3 pair
-# structurally violates it -- source 2 polls directly and so does studio. The
-# EXCLUSIVITY reading is too strong and is not what #770 measured: it also outlaws
-# the prototype dashboard's own sampler, which is the sanctioned poller, and it would
-# make source 2 illegal for its entire life rather than merely unthrottled. What
+# THE INVARIANT THIS ORDER MUST NOT BREAK. #765 stated it as "exactly ONE process may
+# poll `/api/oauth/usage` directly", and #777 asked which way to reconcile it, because
+# a direct-polling reader alongside studio structurally violates that reading. The
+# EXCLUSIVITY reading is too strong and is not what #770 measured: it also outlaws the
+# prototype dashboard's own sampler, which was the sanctioned poller, and it would make
+# the loop reader illegal for its entire life rather than merely unthrottled. What
 # actually protects a shared rate-limited budget is a RATE bound. Not because N
 # on-demand pollers are always cheaper than one standing sampler -- two pollers at
 # 1/60s is 2 per window while the driver is active, i.e. MORE than the sampler they
 # replace; that only comes out ahead integrated over the idle time, which is most of
 # it. The reason is that a rate bound is what the 429 actually responds to: the
-# measured failure was eight polls in 12s, and an unconditional sampler cannot be
-# asked to poll less when it starts failing, whereas a bounded on-demand poller can.
-# So the invariant is narrower than stated, and reads:
+# measured failure was eight polls in 12s, and an unconditional sampler cannot be asked
+# to poll less when it starts failing, whereas a bounded on-demand poller can. So the
+# invariant is narrower than stated, and reads:
 # at most ONE process may hold a STANDING (unconditional, background) sample
-# -- today the dashboard, tomorrow nobody -- and every other direct poller must be
-# rate-bounded AND must throttle its FAILED reads too. Studio satisfies that via
-# `claude-quota.ts`; source 2 satisfies it via the #777 poll memo; a second standing
-# sampler is still refused. That is the property to hold anything new to.
+# -- and every other direct poller must be rate-bounded AND must throttle its FAILED
+# reads too. That slot was the dashboard's; C3 transfers it to studio, which is why
+# arming the sampler and stopping the dashboard are ONE step and not two. Studio's own
+# backoff still satisfies the rate bound (`claude-quota.ts`); the loop reader satisfies
+# it via the #777 poll memo; a SECOND standing sampler is still refused. That is the
+# property to hold anything new to -- including a rollback: re-loading the dashboard
+# means DISARMING studio's sampler in the same breath, or the rollback recreates
+# exactly the contention C3 removed.
 #
 # "" (unknown) is a distinct outcome from "0" and the caller must not conflate
 # them -- 0% means wide open, "" means blind.
@@ -488,8 +498,7 @@ except Exception:
 # IS the percent the guard reads, inside a command substitution. `log` appends to
 # $DLOG and returns nothing on stdout (checked), which is the only reason this
 # can be called from there at all; an `echo` here would be captured as part of
-# the reading and land in the fail-open path. Same structural reason
-# `quota_shadow_probe`'s stdout is redirected at its call site.
+# the reading and land in the fail-open path.
 quota_log_window() {
   qlw_epoch="$(printf '%s' "${1:-}" | quota_parse_reset)"
   [ -n "$qlw_epoch" ] || return 0
@@ -526,8 +535,10 @@ quota_body_pct() {
 
 quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   # TOTALITY GUARD, applied per-read at the boundary the value crosses -- and
-  # since #825 it lives in `quota_body_pct`, shared with the shadow probe, so
-  # the probe cannot log a percent the guard would have refused.
+  # since #825 it lives in `quota_body_pct`, which is where any future second
+  # consumer of a quota body must also go, so none can report a percent the guard
+  # would have refused. (It was factored out for #765's diagnostic probe, the one
+  # such consumer there has ever been; C3 #410 removed it.)
   #
   # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
   # with an operand `test` cannot parse returns 2 -- which is NEITHER branch, so
@@ -563,10 +574,10 @@ quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   qru_body="$(quota_fetch_url "$1")"
   qru_pct="$(printf '%s' "$qru_body" | quota_body_pct)"
   # GATED ON THE PERCENT, not merely on a parseable reset (#910 review WARNING).
-  # `quota_pct` may call this function TWICE in one guard evaluation -- dashboard
-  # first, studio on fallthrough -- so a reset that logged whenever it happened to
-  # parse would let a dashboard body with a readable `resets_at` but an UNREADABLE
-  # `utilization` print one window line, and studio's fallthrough print a second,
+  # `quota_pct` may call this function TWICE in one guard evaluation -- studio
+  # first, the dashboard on fallthrough -- so a reset that logged whenever it happened to
+  # parse would let a studio body with a readable `resets_at` but an UNREADABLE
+  # `utilization` print one window line, and the dashboard's fallthrough print a second,
   # differently-timed one for the same decision. That is precisely the cross-sample
   # mismatch the single-fetch design above exists to prevent, reintroduced one line
   # later. Gating on `qru_pct` means only the source that actually produced the
@@ -578,28 +589,41 @@ quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
 
 quota_pct() {
   qp_src=""
-  qp_memo_hit=0      # set -u: must exist before the source-2 branch reads it
-  qp_studio_polled=0 # did source 3 run LIVE this call? gates the shadow probe below
-  qp_out="$(quota_read_url "$DASH_URL")"
-  [ -n "$qp_out" ] && qp_src="dashboard"
-  # NOTE the single exit point below: BOTH sources must feed the cache. An early
+  qp_memo_hit=0      # set -u: must exist before the source-3 branch reads it
+  # FIRST since C3 (#410): studio, served from the supervised `com.autonomy.studio-server`
+  # unit on 8788 with `CLAUDE_QUOTA_SAMPLER=1`. Its request path reads the sampler's cache
+  # and does NOT touch the provider, which is the whole reason it can afford to be first
+  # and be asked on every call -- see the order argument in this function's header.
+  qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
+  [ -n "$qp_out" ] && qp_src="studio"
+  # NOTE the single exit point below: EVERY source must feed the cache. An early
   # `return` here silently skipped caching the primary (and commonest) reading,
   # leaving the cache empty exactly when it was working -- caught by a test.
   if [ -z "$qp_out" ]; then
-    # SECOND: the loop's own usage reader. Not a URL, so it is sanitised
+    # SECOND: the prototype dashboard. RETIRED by C3 -- its sampler is stopped and the
+    # engine that serves it is parked -- so in the normal post-cutover world this is a
+    # refused local connection costing nothing upstream. It is kept, and kept AHEAD of
+    # the direct-polling reader below, for exactly one reason: re-loading the unit is
+    # then a complete rollback of the cutover with no code revert. Delete it only when
+    # a rollback is no longer wanted.
+    qp_out="$(quota_read_url "$DASH_URL")"
+    [ -n "$qp_out" ] && qp_src="dashboard"
+  fi
+  if [ -z "$qp_out" ]; then
+    # THIRD: the loop's own usage reader. Not a URL, so it is sanitised
     # explicitly rather than via quota_read_url.
     #
     # ALREADY A PERCENT — do NOT multiply by 100 the way `quota_read_url` does,
     # and do NOT divide. That is the one trap in this function: the two HTTP
     # sources carry `utilization` as a FRACTION (hence the x100 there), this
     # reader prints the percent. A /100 slip reports every reading below 150% as
-    # 0 — "wide open" — which FIRES. The two calls sit ten lines apart and are
-    # the only survivors post-C3, so the difference is easy to "tidy" into a
-    # fail-open bug. Pinned from both sides by `test_quota_guard.sh` cases 23-24.
+    # 0 — "wide open" — which FIRES. The two shapes sit a few lines apart in one
+    # function, so the difference is easy to "tidy" into a fail-open bug. Pinned
+    # from both sides by `test_quota_guard.sh` cases 23-24.
     #
     # WHY A PURPOSE-BUILT PORT rather than a copy of the engine's old
     # `lib/claude_usage.py`: that module split a WRITER from a GETTER and this
-    # call site used only the writer, so source 2 returned "" for its entire life
+    # call site used only the writer, so this reader returned "" for its entire life
     # and the guard silently had ONE source (#766 — it also reframes 2026-07-26's
     # "both sources failed at once"; one outage was always enough). The port is a
     # single call that prints the percent or prints NOTHING and exits 1, so that
@@ -611,8 +635,10 @@ quota_pct() {
     # reader's own module docstring — do not re-argue it here.
     # THROTTLED (#777). Inside QUOTA_POLL_MIN_INTERVAL the memoised OUTCOME of the
     # last poll answers and the upstream is not touched -- including when that
-    # outcome was a FAILURE, which is served as "" so the fallthrough to studio
-    # below happens exactly as it would on a live failure. The full rationale, and
+    # outcome was a FAILURE, which is served as "" so the call ends exactly as it
+    # would on a live failure. Before C3 that "" also fed a fallthrough to studio;
+    # this reader is now LAST, so the "" is simply the final answer and the read is
+    # UNREADABLE -- fail-safe, and unchanged in polarity. The full rationale, and
     # why serving nothing in-window would be worse, is on quota_poll_memo_read.
     #
     # The disable check is explicit rather than left to the age comparison: with
@@ -632,10 +658,11 @@ quota_pct() {
     if [ -n "$qp_memo" ]; then
       [ "$qp_memo" = "-" ] && qp_memo=""
       qp_out="$qp_memo"
-      # Named DISTINCTLY from a live poll. `quota source: loop` is the evidence trail
-      # for the C3 promotion decision, and a throttle that made "the reader answered"
-      # indistinguishable from "the reader was not asked" would hide a source-2 death
-      # the way #766 hid for its entire life. Only the memo branch is relabelled --
+      # Named DISTINCTLY from a live poll. A throttle that made "the reader answered"
+      # indistinguishable from "the reader was not asked" would hide a death of this
+      # reader the way #766 hid for its entire life -- and post-C3 that matters MORE,
+      # not less: this is the last source, so its silent death is the guard's silent
+      # death. Only the memo branch is relabelled --
       # the fresh-poll string other cases assert on is untouched.
       qp_memo_hit=1
     else
@@ -649,39 +676,18 @@ quota_pct() {
       if [ "$qp_memo_hit" = "1" ]; then qp_src="loop-memo"; else qp_src="loop"; fi
     fi
   fi
-  # THIRD: studio (#440 C1), now served by the supervised `com.autonomy.studio-server`
-  # unit on 8788 (#765 Defect 2) rather than by whatever `pnpm dev` happened to be
-  # running. Last, deliberately. It is a DIRECT upstream poll of the same
-  # rate-limited endpoint the loop reader hits, and unlike that reader it has
-  # never once returned a number here (`account.claude: null` on every probe,
-  # 2026-07-29). Trying the proven source first maximises availability;
-  # studio is reached only when both others failed, so it adds no load in the
-  # common case while still producing the `quota source: studio` signal that
-  # decides when it can be promoted. See #765.
-  if [ -z "$qp_out" ]; then
-    qp_out="$(quota_read_url "$STUDIO_QUOTA_URL")"
-    qp_studio_polled=1
-    [ -n "$qp_out" ] && qp_src="studio"
-  fi
   if [ -n "$qp_out" ]; then
     quota_cache_write "$qp_out"
     # Attribution goes to the LOG, never to stdout: this function's stdout IS the
     # percent (it is read in a command substitution), so an echo here would be
     # captured as part of the reading and hit the fail-open path.
     #
-    # Logged on every read, deliberately -- how often studio answers, and whether
-    # it ever answers at all, is the measurement that decides when it can be
-    # promoted and when the dashboard can be retired (C3).
+    # Logged on every read, deliberately. Before C3 this line was the evidence for
+    # PROMOTING studio; it is now the evidence that the promotion HELD. A steady
+    # `quota source: studio` is the cutover working; a run of `quota source: loop`
+    # means the sampler is not delivering and the guard has fallen back to its last,
+    # directly-polling source -- which is a ticket, not a re-reorder.
     log "quota source: $qp_src (7-day utilization ${qp_out}%)"
-  fi
-  # DIAGNOSTIC-ONLY studio poll, for the C3 evidence the read order above cannot
-  # otherwise produce (#765). Placed here so `qp_out`/`qp_src` are already settled
-  # and cannot be touched, and SKIPPED when source 3 already ran live -- a live
-  # poll is real evidence and re-asking would just double the load. stdout is
-  # redirected because this function's stdout is the reading itself; see
-  # quota_shadow_probe for why that redirect is structural and not decoration.
-  if [ "$qp_studio_polled" = "0" ]; then
-    quota_shadow_probe "${qp_src:-none}" >/dev/null
   fi
   echo "$qp_out"
 }
@@ -778,8 +784,8 @@ quota_stamped_discard() {  # $1=file -> 0 the reader can no longer serve a recor
 }
 # --- quota_stamped_write: the ONE writer for the "<epoch> <value>" state files,
 # and `quota_stamped_read`'s counterpart (#806). Three sites hand-rolled this
-# format -- the cache, the source-2 poll memo and the #765 shadow stamp -- which
-# was two problems:
+# format -- the cache, the loop reader's poll memo and #765's shadow stamp (the
+# last removed by C3, #410, leaving two) -- which was two problems:
 #
 #   1. FORMAT DRIFT. The reader has accumulated real hardening (separator
 #      handling, leading zeros, a 64-bit length bound, future-stamp rejection)
@@ -812,19 +818,23 @@ quota_stamped_discard() {  # $1=file -> 0 the reader can no longer serve a recor
 #     `> DIR`). So the rename's own status is not sufficient evidence that the
 #     record landed, and a destination that is a directory is refused up front.
 #
-# Both are fail-safe for the cache and memo, which discard the status -- but NOT
-# for `quota_shadow_probe`, whose whole throttle rests on a successful write
-# meaning a readable stamp exists. A `return 0` over an unreadable record would
-# silently disarm it and poll studio on every call, which is the exact failure
-# case 29g exists to prevent, reached through a SUCCESS.
+# Both are fail-safe for the two CURRENT callers, the cache and the memo, which
+# discard the status entirely. The strictness is nevertheless kept, and is not
+# decoration: it was written for a third caller (#765's diagnostic probe, removed
+# by C3 #410) whose throttle rested on "a successful write means a readable stamp
+# exists", so a `return 0` over an unreadable record silently disarmed it. The
+# contract belongs to the WRITER, not to whoever happens to be calling it today --
+# a future caller that does read its status inherits a correct one instead of
+# discovering the loose version the hard way. Its guarantee is the useful, testable
+# thing: a 0 return means a record the shared reader will ACCEPT.
 #
 # The VALUE is checked for FORMAT ONLY (non-empty, no whitespace) -- a value
 # carrying a space or newline would split into a second token or a second line
 # and be mis-parsed by the reader. Its DOMAIN is still the caller's business, as
 # on the read side: the callers' domains differ (a percent; a percent-or-"-"
-# sentinel; the constant `probe`). No current caller can trip this check -- all
-# three pass a `quota_sane`-sanitised digit string or a literal -- it exists so a
-# future one cannot corrupt the format silently.
+# sentinel). No current caller can trip this check -- both pass a
+# `quota_sane`-sanitised digit string or a literal -- it exists so a future one
+# cannot corrupt the format silently.
 #
 # Two side effects of replacing rather than truncating, both harmless for private
 # state files under $INFRA but worth naming: the destination's MODE becomes the
@@ -877,12 +887,13 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
   # stated as code and closes the whole class, including the next member of it.
   #
   # Cheap, but not as cheap as an earlier comment here claimed ("one `head -1`,
-  # at most three times per iteration"): a single `quota_pct` can do all three
-  # stamped writes -- memo, cache and shadow stamp -- and `quota_pct` itself runs
-  # up to three times per iteration plus once per AUTH_LONG_BLOCK retry, so it is
-  # up to nine per iteration and unbounded during a long block. Each read-back is
-  # also a `head` PLUS a `date` fork inside `quota_stamped_read`. Still cheap
-  # against a fire; the conclusion survived the correction, the number did not.
+  # at most three times per iteration"): a single `quota_pct` can do BOTH stamped
+  # writes -- cache and memo -- and `quota_pct` itself runs up to three times per
+  # iteration plus once per AUTH_LONG_BLOCK retry, so it is up to six per iteration
+  # and unbounded during a long block. Each read-back is also a `head` PLUS a
+  # `date` fork inside `quota_stamped_read`. (It was up to NINE while #765's shadow
+  # stamp was a third writer; C3 #410 removed it.) Still cheap against a fire; the
+  # conclusion survived both corrections, the number did not.
   #
   # One false-negative this admits, and its direction: `quota_stamped_read`
   # returns nothing when the record's age is NEGATIVE, so a clock that steps
@@ -905,9 +916,9 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
   return 0
 }
 # --- quota_stamped_read: the ONE parser for this file's "<epoch> <value>" state
-# files -- the last-known-quota cache, the source-2 poll memo (#777) and the #765
-# shadow stamp. Echoes the VALUE token if the record is well-formed and no older
-# than $2 seconds; echoes nothing otherwise.
+# files -- the last-known-quota cache and the loop reader's poll memo (#777).
+# (#765's shadow stamp was a third; C3 #410 removed it.) Echoes the VALUE token if
+# the record is well-formed and no older than $2 seconds; echoes nothing otherwise.
 #
 # Shared rather than copied because every bug this shape has had lived in the EPOCH
 # handling, and each is now a test case (20: a line with no separator; 14: a
@@ -915,8 +926,8 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
 # and the copy that drifted would be the one guarding spend.
 #
 # The VALUE is returned UNVALIDATED: the callers have different value domains (a
-# percent here; a percent-or-"-" sentinel there; a constant on the shadow stamp),
-# so validating it belongs to them. What is shared is exactly what is identical.
+# percent here; a percent-or-"-" sentinel there), so validating it belongs to them.
+# What is shared is exactly what is identical.
 quota_stamped_read() {  # $1=file $2=max_age_seconds
   qsr_file="$1"; qsr_max="$2"
   [ -f "$qsr_file" ] || return 0
@@ -939,7 +950,7 @@ quota_stamped_read() {  # $1=file $2=max_age_seconds
   # fail-OPEN -- the one polarity this guard may not have. `$(( ))` wraps silently, so
   # an epoch of 2^64+now made `qsr_age` land inside the window and the memo's value was
   # served as though freshly polled (measured: `18446744075494925739 10` -> 10), which
-  # PERMITS a fire, suppresses the real poll and suppresses source 3. The identical
+  # PERMITS a fire, suppresses the real poll and suppresses the sources after it. The identical
   # line is merely fail-safe for `.last_quota` (a bogus low reading just falls through
   # to the blind allowance), which is why the polarity only flipped once the memo
   # started sharing this parser -- and why the review round that added `quota_sane`'s
@@ -975,18 +986,18 @@ quota_cache_read() {
   echo $(( 10#$qc_pct ))
 }
 
-# --- the SOURCE-2 POLL MEMO (#777). Source 2 is a fresh `python3` process per
+# --- the LOOP READER's POLL MEMO (#777). That reader is a fresh `python3` process per
 # call, so an in-memory cache is impossible and nothing gave it a cross-process
 # one -- it was the only unthrottled DIRECT poller of `GET /api/oauth/usage`, which
 # 429s under exactly that treatment (measured 2026-07-29: eight consecutive polls
 # over 12s, all 429). `quota_pct` runs up to three times per iteration plus once per
-# AUTH_LONG_BLOCK retry while blocked, and post-C3 (#410) source 1 is gone, so every
+# AUTH_LONG_BLOCK retry while blocked, and post-C3 (#410) the dashboard is gone, so every
 # one of those becomes a direct poll. The guard could exhaust the very budget it
 # reads and then be unable to read it -- a self-denial-of-service, fail-SAFE in
 # direction (UNREADABLE refuses) but it costs the loop its fires.
 #
 # So the memo records the OUTCOME of the last poll and, inside
-# QUOTA_POLL_MIN_INTERVAL, source 2 answers from it instead of polling again.
+# QUOTA_POLL_MIN_INTERVAL, the loop reader answers from it instead of polling again.
 #
 # WHY A FILE and not a shell variable, which would need no gitignore entry, no
 # sentinel and no parse: every read goes through `qg_pct="$(quota_pct)"` -- a COMMAND
@@ -1023,19 +1034,20 @@ quota_cache_read() {
 # perfectly readable. That is the same self-DoS moved one step. Cases 33-34 pin both
 # halves against each other.
 #
-# REVISIT TRIGGER, because the argument above leans on one measurement that is still
-# pending: "studio (which has never answered)". That is what makes the in-window read
-# BLIND and so makes #777's polarity unaffordable. If source 3 starts answering, the
-# premise is gone -- an in-window UNREADABLE from source 2 would simply fall through
-# to a throttled source 3, nothing would spend the blind allowance, and #777's
-# fail-safe "serve nothing in-window" becomes affordable. At that point this
-# both-directions memo is unnecessary exposure and should be narrowed to refuse-only.
-# The evidence to watch for is a scheduled fire logging `quota source: studio` -- or,
-# since #765, a `quota shadow: studio <n>%` line, which answers the same question
-# ("can source 3 serve a reading at fire time?") without needing source 1 to fail
-# first. A shadow line is the WEAKER trigger of the two for this particular
-# revisit, though: it says studio could have answered, not that the fallthrough
-# actually reached it.
+# REVISIT TRIGGER, still live but re-pointed by C3 (#410). The paragraph above leans on
+# "studio (which has never answered)", and C3 is the change meant to end that: studio is
+# now source 1, sampler-backed, so a healthy iteration should be answered by studio before
+# this reader is asked at all. If that holds across scheduled fires, the premise for a
+# both-directions memo is gone -- this reader becomes the LAST resort rather than the
+# fallthrough's floor, an in-window UNREADABLE from it would follow two sources that
+# already failed, and #777's fail-safe "serve nothing in-window" becomes affordable. At
+# that point this memo is unnecessary exposure and should be narrowed to refuse-only.
+# The evidence to watch for is a run of scheduled fires logging `quota source: studio`.
+# It is now the ORDINARY line rather than a rare one, which is the whole point of the
+# reorder -- and it is also why the diagnostic probe that used to manufacture that
+# evidence (#765's `quota_shadow_probe`) was removed with C3 rather than kept.
+# NOT actioned here: this fire arms the sampler and reorders; whether the sampler
+# actually holds is the measurement that licenses narrowing the memo. Tracked in #972.
 #
 # The staleness is bounded on TWO sides instead:
 #   * by age, to one minute -- the same contract the other two sources already have;
@@ -1057,177 +1069,10 @@ quota_poll_memo_write() {  # $1=pct, or "" for a poll that failed
   # The ""->"-" mapping stays HERE, not in `quota_stamped_write`: "a failed poll
   # is remembered as a sentinel" is this memo's semantics, not the format's. The
   # writer owns the record shape; the caller owns what the value means.
-  # Status discarded -- a lost memo just means source 2 is re-polled next call.
+  # Status discarded -- a lost memo just means the loop reader is re-polled next call.
   quota_stamped_write "$QUOTA_POLL_MEMO" "${1:--}" || true
 }
 quota_poll_memo_clear() { rm -f "$QUOTA_POLL_MEMO" 2>/dev/null || true; }
-
-# --- quota_shadow_probe: poll studio for the RECORD, never for the DECISION.
-#
-# THE PROBLEM IT SOLVES. Cutover C3 (#410) retires the engine and with it source
-# 1, leaving the loop reader and studio. Its gate is evidence that studio can
-# actually serve a reading at fire time, and #765 states that evidence as a
-# scheduled fire logging `quota source: studio`. But studio is source 3: that line
-# can only ever appear when source 1 FAILS. While the dashboard is healthy every
-# fire logs `quota source: dashboard` and studio is not polled at all, so the gate
-# is unreachable by construction -- not because studio is broken, but because
-# nothing ever asks it. The operator hit exactly this on 2026-07-30: an attended
-# manual probe returned a real 0.16 matching the dashboard, proving the whole path
-# (supervised server, reader, credential store, upstream, mapping) works end to
-# end, while `grep 'quota source: studio'` over the driver log stayed at zero.
-# A gate that can only be satisfied by an outage of the source it is replacing is
-# a test of luck, and C3 could sit blocked indefinitely on it.
-#
-# So the probe asks studio ANYWAY, once per window, and writes down what it said.
-#
-# WHY THIS IS NOT THE SAMPLER #770 REJECTED, which is the obvious objection since
-# both add load to the same rate-limited upstream. #770 measured a cold poll
-# returning 200 and refused a STANDING background sample at ~1/min against a
-# budget already at its ceiling. This is on-demand (it runs only when the driver
-# is already reading quota, never on a timer), rate-bounded at 1/hour by default
-# -- ~60x lighter, and only while the driver is active rather than around the
-# clock -- and it throttles FAILED reads too. That is precisely the property the
-# narrowed invariant above demands of every non-standing poller: at most ONE
-# process may hold a standing sample, and everything else must be rate-bounded and
-# must back off when it starts failing. A second standing sampler is still
-# refused. This is not one.
-#
-# WHAT IT CHANGES, stated plainly rather than buried: the read order's claim that
-# studio "adds no upstream load in the common case" is no longer strictly true --
-# the common case is now exactly when the probe runs. That is a deliberate
-# reversal, bought for the evidence, and priced at one request per hour per active
-# driver. The SELECTION order is untouched; studio is still last, still reached
-# live only when both other sources fail.
-#
-# WHAT IT MAY NEVER DO is influence a decision, and that is structural rather than
-# careful:
-#   * it parses a body it fetched itself (`quota_fetch_url` + `quota_body_pct`),
-#     never `quota_pct`. `quota_cache_write` and
-#     `quota_poll_memo_write` live only in `quota_pct`'s body, so the shadow cannot
-#     poison the refuse-only 24h cache or the source-2 throttle -- there is no code
-#     path from here to either. A shadow-written cache entry would be especially
-#     nasty: indistinguishable from a real reading, and trusted for a day.
-#   * it returns nothing on stdout, and the call site redirects stdout to
-#     /dev/null anyway. `quota_pct`'s stdout IS the percent (read in a command
-#     substitution), so a stray echo would be appended to the reading and
-#     `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]` would return 2 -- NEITHER branch -- and
-#     the gate would log "quota ok" and FIRE. Belt and braces on the one guard that
-#     may not fail open.
-#   * it logs a line that is DISTINCT from the live-source line. `quota source:
-#     studio` means the guard used studio and is the promotion evidence; `quota
-#     shadow: studio` means studio was asked and decided nothing. Collapsing the
-#     two would manufacture promotion evidence on every dashboard-healthy fire --
-#     forging the very signal this exists to collect honestly.
-#
-# THE STAMP IS WRITTEN ON THE ATTEMPT, not on success -- and this is the CANONICAL
-# statement of why; the two sites that depend on it (the write below, case 29d)
-# point here rather than restating it (#776). Stamping only a successful read
-# leaves the stamp un-advanced for exactly as long as studio is failing, so every
-# call re-attempts: up to 3 per `quota_gate` iteration plus one per
-# `AUTH_LONG_BLOCK` retry, i.e. unbounded during a long block. A throttle that
-# stops throttling in precisely the failure mode it was added for is the wrong
-# shape. `quota_poll_memo_write` records failures as `-` for the same reason, and
-# case 29d pins it here (it measured 4 polls where 1 was due).
-#
-# BE PRECISE ABOUT THE COST, because the obvious framing -- "#777's bug in a new
-# place" -- OVERSTATES it and would justify this line for a reason that is not
-# true. #777 was source 2 hitting the shared rate-limited upstream DIRECTLY with
-# no throttle. #777's own text says studio is NOT in that position, and the server
-# confirms it: `studio/packages/server/src/quota/claude-quota.ts` caches on a TTL,
-# stamps every sample including a rate-limited one, and widens geometrically to
-# ~8 min on a 429. So un-stamped retries land on a supervised localhost server and
-# are absorbed there; they do NOT reach the upstream budget. The real costs are
-# localhost request churn and one `quota shadow: ... UNREADABLE` line per call --
-# which floods the driver log at exactly the moment it is being read to diagnose
-# the failure. Smaller than a true poll storm, still worth the one line, and the
-# absorbing behaviour is a property of the CURRENT server rather than a contract
-# this file may lean on.
-#
-# The value token is a constant: unlike the memo, nothing here is ever READ BACK
-# as a reading, so the file carries a timestamp and nothing else. Reusing
-# `quota_stamped_read` gets the epoch handling -- separator, leading zero, 64-bit
-# length bound, future stamp -- that every bug in this shape has lived in.
-quota_shadow_probe() {  # $1 = the source the guard actually used, for the log line
-  # EXPLICIT disable check, not left to the age comparison. Via `quota_stamped_read
-  # $file 0` alone the first call finds no stamp at all, polls, and only then writes
-  # one -- so `=0` would still cost a poll per fire. Same trap the source-2 memo
-  # carries a `-gt 0` for (case 38b); case 29e pins the zero here.
-  [ "$QUOTA_SHADOW_MIN_INTERVAL" -gt 0 ] || return 0
-  [ -n "$(quota_stamped_read "$QUOTA_SHADOW_STAMP" "$QUOTA_SHADOW_MIN_INTERVAL")" ] && return 0
-  # STAMPED BEFORE THE POLL, so the window opens on the ATTEMPT and closes whatever
-  # the attempt does -- succeed, fail, or die mid-curl. Rationale is stated once, in
-  # the header block above; case 29d pins it.
-  #
-  # AND NO STAMP MEANS NO POLL. Every other writer in this file can afford `|| true`
-  # because a lost write fails SAFE: no cache entry means the guard takes the blind
-  # path, no memo means source 2 is re-read. Here it fails the wrong way -- an
-  # unwritable `$INFRA` (full disk, bad perms) leaves `quota_stamped_read` returning
-  # empty forever, so the throttle is silently gone and the probe polls on EVERY
-  # `quota_pct` call. A diagnostic that cannot record when it last ran has no
-  # business running: skip, say so, and let the next call try again. Case 29g pins
-  # it. Since #806 the write is atomic (temp + rename), so there is no truncation
-  # window that could leave a partial stamp behind for a racing reader -- and
-  # `quota_stamped_write`'s contract is that a 0 return means a record the shared
-  # reader will ACCEPT, which is what this branch actually needs to distinguish.
-  #
-  # NOTE the permission dependency this moved: a rename needs write on the
-  # DIRECTORY, where `>` needed write on the FILE. So a read-only $INFRA holding
-  # a writable stamp now SKIPS where it used to poll -- toward refusing, which is
-  # the safe direction; case 45o pins it. (Not a symmetric trade: an immutable
-  # destination fails under BOTH shapes -- `rename(2)` returns EPERM on a `uchg`
-  # target and BSD `mv` only falls back to copying on EXDEV -- so there is no
-  # matching case that newly succeeds.) The one direction that would have ended
-  # UNSAFE is a DIRECTORY at $QUOTA_SHADOW_STAMP, where `mv -f` succeeds into it
-  # and writes no record; `quota_stamped_write` refuses that, and case 45i pins it.
-  if ! quota_stamped_write "$QUOTA_SHADOW_STAMP" probe; then
-    # "could not be written", not "is unwritable": since #806 this branch also
-    # covers a rejected epoch (a broken `date`) and a destination the shared
-    # reader will not accept, neither of which is a permissions problem. A log
-    # line that names the wrong cause sends the operator to the wrong file.
-    log "quota shadow: skipped -- rate stamp $QUOTA_SHADOW_STAMP could not be written (#765)"
-    return 0
-  fi
-  # ONE fetch, parsed twice -- NOT two calls to `quota_read_url`. See
-  # `quota_fetch_url`: a second poll is a second sample, and a reason from a
-  # different sample than the reading it explains is worse than no reason.
-  qsp_body="$(quota_fetch_url "$STUDIO_QUOTA_URL")"
-  qsp_rc=$?  # curl's own status: 0 even for a 404, non-zero only if the REQUEST failed
-  # Through `quota_body_pct` -- the SAME parse+totality guard the decision path
-  # uses -- so the probe can never log a percent the guard would have refused.
-  # (One asymmetry, small and stated rather than hidden: the body crosses a shell
-  # variable here, and bash 3.2 command substitution silently drops NUL bytes, so
-  # a body that is only unparseable because of an embedded NUL would read as a
-  # percent in the probe and as UNREADABLE in the guard. The probe writes no
-  # cache, no memo and nothing to stdout, so it cannot move that difference
-  # anywhere that decides a fire.)
-  qsp_pct="$(printf '%s' "$qsp_body" | quota_body_pct)"
-  if [ -n "$qsp_pct" ]; then
-    log "quota shadow: studio ${qsp_pct}% (diagnostic only -- the guard used $1; #765 C3 evidence)"
-  else
-    # UNREADABLE is logged, never skipped: "studio was asked and could not answer"
-    # is the measurement, and a silent skip would be indistinguishable from the
-    # probe not running -- which is the blind spot the whole ticket is about.
-    #
-    # ...and WHY it could not answer (#825), because bare UNREADABLE conflates a
-    # broken reader with a contended account, and C3 is decided on a run of these
-    # lines. Measured 2026-07-31: studio sat rate-limited for ~7.8h while the old
-    # dashboard's sampler held the shared bucket, and the one probe taken in that
-    # window logged a bare UNREADABLE that reads as "studio is broken". The suffix
-    # is OPTIONAL by design -- an older studio, or any non-studio service on the
-    # port, simply yields no reason and the line degrades to what it always was.
-    qsp_reason="$(printf '%s' "$qsp_body" | quota_parse_reason)"
-    # `unreachable` is derived LOCALLY, from curl's exit status, and it is the
-    # bucket C3 most needs separated: "no studio server answered" says nothing
-    # about studio's reader, and #765 Defect 2 exists precisely because the probe
-    # used to be connection-refused at fire time. Only when the server gave us no
-    # usable reason of its own -- a served body always wins, since the server
-    # knows more than curl's status does.
-    [ -z "$qsp_reason" ] && [ "$qsp_rc" -ne 0 ] && qsp_reason="unreachable"
-    [ -n "$qsp_reason" ] && qsp_reason=" ($qsp_reason)"
-    log "quota shadow: studio UNREADABLE${qsp_reason} (diagnostic only -- the guard used $1; #765 C3 evidence)"
-  fi
-  return 0
-}
 
 # --- #808: is the code that MERGED actually the code that is RUNNING? ----------
 #
@@ -1252,8 +1097,7 @@ quota_shadow_probe() {  # $1 = the source the guard actually used, for the log l
 # have said "in sync") while PID 74021, booted ~15h earlier, still held a 13KB
 # older inode. #765's shadow probe had merged, been synced, and never once run.
 #
-# Both are ADVISORY. They log and they decide nothing -- same posture as
-# `quota_shadow_probe`. A stale driver is a real problem but it is the
+# Both are ADVISORY. They log and they decide nothing. A stale driver is a real problem but it is the
 # OPERATOR's to fix (see the deliberate non-goal below), and a plane that is
 # temporarily AHEAD of main is a normal state during a deploy, not a fault.
 #
@@ -1473,7 +1317,7 @@ except Exception:
 # --- drift_report_studio_server: is the QUOTA SOURCE running merged code?
 #
 # The third process in the same question. The two halves above ask it of this
-# driver's file and of this driver's process; the spend guard's source 3 is a
+# driver's file and of this driver's process; the spend guard's PRIMARY source is a
 # THIRD program -- the supervised `com.autonomy.studio-server` unit, running
 # from an isolated clone under its own state dir -- and nothing moved it forward
 # or said that it had not.
@@ -1485,7 +1329,7 @@ except Exception:
 # since the other ten could not change a byte it serves. The ticket body says
 # eleven; that number was wrong. It predated #825 and served no `unavailable` field at
 # all. Every layer below then behaved exactly as specified: `quota_parse_reason`
-# found no reason, and `quota_shadow_probe` logged a bare UNREADABLE. Three of
+# found no reason, and #765's diagnostic probe (since removed by C3) logged a bare UNREADABLE. Three of
 # those lines accumulated as C3 evidence -- and they were not weak evidence,
 # they were VOID, measuring a build from before the code they were supposed to
 # attest. Nothing anywhere said so, so the standing rule ("read an UNREADABLE by
@@ -1515,16 +1359,26 @@ except Exception:
 # `drift_report_plane` had to be rewritten out of.
 #
 # ONE THING THIS DELIBERATELY DOES NOT DO, deferred with a reason: stamp the
-# served build onto each `quota shadow: studio` line instead of emitting a
-# separate one (#833). Strictly better attribution -- it survives log rotation
-# and `DRIFT_REPORT=0` -- but it needs a freshness contract. Not because of
-# ordering WITHIN an iteration (`drift_report` runs first there, before
-# `quota_gate` and every later probe), but because the two run on different
-# clocks: this half reports every iteration, while `quota_shadow_probe` is
-# throttled to roughly one per hour. A stamp read from a drift measurement taken
-# an unknown number of iterations earlier is silently stale, and a stale
-# attribution is worse than none -- it is the same confident-but-unfounded
-# reading this whole ticket exists to stop.
+# served build onto each studio quota line instead of emitting a separate one
+# (#833). Strictly better attribution -- it survives log rotation and
+# `DRIFT_REPORT=0` -- but it needed a freshness contract. Not because of ordering
+# WITHIN an iteration (`drift_report` runs first there, before `quota_gate` and
+# every later read), but because the two ran on different clocks: this half
+# reports every iteration, while the line to be stamped was #765's hourly
+# diagnostic probe. A stamp read from a drift measurement taken an unknown number
+# of iterations earlier is silently stale, and a stale attribution is worse than
+# none -- it is the same confident-but-unfounded reading this whole ticket exists
+# to stop.
+#
+# C3 (#410) WEAKENED that objection rather than settling it, and #833 should be
+# re-read in this light rather than treated as decided. The probe is gone; the
+# line that now carries studio's answer is `quota source: studio`, emitted on the
+# DECISION path of the same iteration this half reports in. The clock mismatch
+# that blocked #833 is therefore largely gone. What is left is that `quota_pct`
+# can run several times per iteration while `drift_report` runs once, so the stamp
+# would be at most iteration-stale rather than hour-stale -- a much cheaper
+# contract to write, but still a contract. Deliberately NOT built here: C3 is
+# already the reorder plus the sampler, and #833 is a separate, now-easier ticket.
 #
 # (The other deferral, collapsing the per-iteration `origin/main` fetches into
 # one (#834), is STILL OPEN. `drift_fetch_origin` above gave the two halves one
@@ -1701,7 +1555,7 @@ drift_report_studio_server() {
           ds_studio_clause="$ds_behind_studio of them touching studio/"
           ;;
       esac
-      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's source 3 is answering from SUPERSEDED code -- treat the shadow readings it produced as evidence about that build, not about main. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
+      log "studio server: STALE -- the quota source at $STUDIO_VERSION_URL is serving $ds_commit, whose studio/ tree differs from origin/main's ($ds_short); it is $ds_behind commit(s) behind, $ds_studio_clause. So the spend guard's PRIMARY source is answering from SUPERSEDED code -- treat the readings it produced as evidence about that build, not about main. Since C3 (#410) this is the source the guard normally uses, and a superseded build may also predate the quota SAMPLER, in which case studio is answering from the request path and will 429. Remedy (a human act by design, #773): loop/install_studio_server.sh --update (#832)"
     fi
   fi
   return 0
@@ -2437,13 +2291,8 @@ prev_head=""
 # directory. Nothing reads a quota before the loop below, so this is in time.
 QUOTA_POLL_MIN_INTERVAL="$(quota_knob_secs QUOTA_POLL_MIN_INTERVAL "$QUOTA_POLL_MIN_INTERVAL" 60 300)"
 QUOTA_CACHE_MAX_AGE="$(quota_knob_secs QUOTA_CACHE_MAX_AGE "$QUOTA_CACHE_MAX_AGE" 86400 0)"
-# No CEILING for the shadow interval, and the reason is the opposite of the poll
-# memo's. That one bounds how stale a reading may be when it PERMITS a fire, so an
-# over-wide value is a fail-open and is clamped. The shadow never feeds the guard
-# at all: a wide value buys LESS load and LESS evidence, which is merely useless,
-# never unsafe. It is normalised anyway so an unparseable knob is announced rather
-# than silently making every stamp look fresh (i.e. the probe quietly never running).
-QUOTA_SHADOW_MIN_INTERVAL="$(quota_knob_secs QUOTA_SHADOW_MIN_INTERVAL "$QUOTA_SHADOW_MIN_INTERVAL" 3600 0)"
+# The shadow interval was normalised here too, until C3 (#410) removed the probe it
+# throttled. Only the two knobs above survive, and both feed the DECISION path.
 # Both #811 knobs go through the same normaliser, and for the same reason it was
 # written: each is fed straight to `test`, where an operand it cannot parse
 # returns 2 and takes NEITHER branch. An unparseable HANDOFF_MAX_AGE would make
@@ -2473,8 +2322,8 @@ drive_adopt_floor
 # Is the quota guard's fallback reader actually THERE? A missing reader and a
 # rate-limited one are indistinguishable downstream -- both yield "" and the fire
 # just logs a different winning source, or UNREADABLE. That silence is exactly
-# how #766 hid for its entire life: source 2 was dead from the day it was written
-# and nothing said so.
+# how #766 hid for its entire life: the loop reader (then source 2) was dead from the
+# day it was written and nothing said so.
 #
 # The realistic way it goes missing is a partial sync. `~/Dev/studio-loop/` is an
 # unversioned copy kept in step by hand, so copying `drive.sh` without
@@ -2563,7 +2412,7 @@ while true; do
   #
   # Post-C3 caveat, since this re-check exists to defeat staleness: a SHORT block
   # (one retry, ~30-40s at BACKOFF_BASE=30) fits inside QUOTA_POLL_MIN_INTERVAL, so
-  # source 2 answers it from the memo and it re-reads the same number it was meant to
+  # the loop reader answers it from the memo and it re-reads the same number it was meant to
   # replace. Inside the accepted 60s bound, and the case that matters is unaffected --
   # the re-grant path needs AUTH_LONG_BLOCK retries, always far more than 60s, so it
   # always re-polls for real. Worth knowing before trusting this line to have taken a
@@ -2706,7 +2555,7 @@ EOF
   bash "$INFRA/run.sh"
   rc=$?
   # A fire is the only thing that SPENDS, so a reading taken before it is not
-  # evidence about the window the NEXT one would land in. Dropping the source-2 poll
+  # evidence about the window the NEXT one would land in. Dropping the loop reader's poll
   # memo here (#777) makes that structural rather than an argument about staleness:
   # the memo can only ever serve reads about the fire it was taken for, and the next
   # gate polls for real. Costs at most one poll per fire -- the rate the retired

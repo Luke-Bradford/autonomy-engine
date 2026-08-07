@@ -269,6 +269,16 @@ check "AUTONOMY_DATA_DIR is not set (would orphan the master key)" "0" \
   "$(plist_get "$R" "int('AUTONOMY_DATA_DIR' in $ENVD)")"
 check "quota reader is left enabled" "0" \
   "$(plist_get "$R" "int('CLAUDE_QUOTA_ENABLED' in $ENVD)")"
+# (5) CLAUDE_QUOTA_SAMPLER must be exactly "1". This unit is the ONE process
+#   holding a standing sample of api/oauth/usage since C3 (#410) retired the
+#   prototype dashboard's sampler, and `drive.sh` now reads studio FIRST on the
+#   strength of it -- an unset or "0" key silently returns the reader to the lazy
+#   request-path poll that 429s, which reads as a permanently UNREADABLE guard
+#   while the plist still looks correct. Asserted as a VALUE, not merely as
+#   present: `resolveQuotaSamplerEnabled` treats '0' as dormant, so `in ENVD`
+#   would pass on exactly the misconfiguration this guards.
+check "quota sampler is ARMED (the one standing poller, #410)" "1" \
+  "$(plist_get "$R" "${ENVD}.get('CLAUDE_QUOTA_SAMPLER')")"
 
 echo "== rendering is deterministic =="
 sb2="$(new_sandbox)"
