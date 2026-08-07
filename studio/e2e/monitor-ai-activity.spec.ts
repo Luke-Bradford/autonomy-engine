@@ -38,17 +38,26 @@ async function stubQuota(page: Page, body: unknown): Promise<void> {
 }
 
 /**
+ * Counts every request the page makes to `glob`, passing each one through. Two
+ * different questions are asked with it: that an endpoint is NEVER called, and
+ * that one stops being called — so it counts rather than merely flagging.
+ */
+async function countEndpointCalls(page: Page, glob: string): Promise<() => number> {
+  let calls = 0;
+  await page.route(glob, (route) => {
+    calls += 1;
+    return route.continue();
+  });
+  return () => calls;
+}
+
+/**
  * Counts every request to the SPEND GUARD's endpoint. The browser has no reason
  * to call it and must not: it is the surface that carries no last-known value,
  * and the one whose consumer is `loop/drive.sh`.
  */
 async function countGuardEndpointCalls(page: Page): Promise<() => number> {
-  let calls = 0;
-  await page.route('**/api/quota', (route) => {
-    calls += 1;
-    return route.continue();
-  });
-  return () => calls;
+  return countEndpointCalls(page, '**/api/quota');
 }
 
 function quotaPanel(page: Page) {
@@ -218,8 +227,19 @@ test.describe('#917 Monitor › AI activity', () => {
    * INVOCATIONS rather than network traffic. Neither level subsumes the other,
    * and this comment is here so the next reader does not assume this one covers
    * the case it cannot see.
+   *
+   * The test has two halves, and the second is the one the ticket asked for: the
+   * freeze proves the poller STOPS, and the revisit loop proves coming back does
+   * not make it cost more. A leak that survives cleanup would pass the first and
+   * fail the second.
    */
-  test('stops polling activity once you navigate away from the page', async ({ page }) => {
+  test('stops polling activity once you navigate away, and revisits cost what one visit costs', async ({
+    page,
+  }) => {
+    // Three real 12s observation windows plus four route swaps. Well past the
+    // 30s default, and the default is what this would otherwise inherit.
+    test.setTimeout(150_000);
+
     const problems = collectPageProblems(page);
     await stubQuota(page, {
       generated_at: Math.floor(Date.now() / 1000),
@@ -227,24 +247,25 @@ test.describe('#917 Monitor › AI activity', () => {
       unavailable: { claude: 'no_credential' },
     });
 
-    let activityCalls = 0;
-    await page.route('**/api/monitor/ai-activity*', (route) => {
-      activityCalls += 1;
-      return route.continue();
-    });
+    const activityCalls = await countEndpointCalls(page, '**/api/monitor/ai-activity*');
+    const aiLink = page.getByRole('link', { name: 'AI activity', exact: true });
+    const runsLink = page.getByRole('link', { name: 'Runs', exact: true });
+    const onAiPage = async (): Promise<void> => {
+      await expect(page.getByRole('heading', { name: 'AI activity', exact: true })).toBeVisible();
+    };
 
     await page.goto('/#/monitor/ai');
     await fluentRootReady(page);
-    await expect(page.getByRole('heading', { name: 'AI activity', exact: true })).toBeVisible();
+    await onAiPage();
 
     // Long enough for several 5s polls. Asserting the count ROSE is what keeps
     // the freeze below non-vacuous: a page that never polled at all would also
     // "stop polling", and would pass an assertion that only checked for silence.
     await page.waitForTimeout(12_000);
-    const whileOpen = activityCalls;
+    const whileOpen = activityCalls();
     expect(whileOpen).toBeGreaterThan(1);
 
-    await page.getByRole('link', { name: 'Runs', exact: true }).click();
+    await runsLink.click();
     await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
 
     // Settle before reading the baseline. A tick issued just BEFORE the swap is
@@ -257,9 +278,45 @@ test.describe('#917 Monitor › AI activity', () => {
     await page.waitForTimeout(500);
 
     // The count is frozen from the moment the route swapped — not merely slower.
-    const atNavigation = activityCalls;
+    const atNavigation = activityCalls();
     await page.waitForTimeout(12_000);
-    expect(activityCalls).toBe(atNavigation);
+    expect(activityCalls()).toBe(atNavigation);
+
+    /*
+     * THE ARITHMETIC THE TICKET ACTUALLY ASKS FOR: "navigate away and back a few
+     * times, then count requests" — the rate must stay proportional to ELAPSED
+     * TIME, not to visit count. The freeze above cannot show this. A cleanup
+     * that ran but left something behind (a listener that re-registers, a timer
+     * the next mount does not replace) would still freeze while the page is
+     * unmounted and then poll at 2x, 3x, 4x once you come back, which is
+     * precisely the profile of a tab that dies only after a long session.
+     *
+     * Three more round trips, so the page has been mounted FOUR times, and then
+     * the same 12s window as the first visit. Comparing window-to-window rather
+     * than to a hardcoded number keeps this honest on a slow runner, where every
+     * window shifts together.
+     */
+    for (let revisit = 0; revisit < 3; revisit += 1) {
+      await aiLink.click();
+      await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/ai');
+      await onAiPage();
+      await runsLink.click();
+      await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
+    }
+
+    await aiLink.click();
+    await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/ai');
+    await onAiPage();
+
+    const beforeFinalWindow = activityCalls();
+    await page.waitForTimeout(12_000);
+    const fourthVisitCost = activityCalls() - beforeFinalWindow;
+
+    // `whileOpen` counted the same 12s window on visit one, including its
+    // load-on-mount. The fourth visit gets ONE tick of slack for where the
+    // window happens to fall against the interval — not four times the traffic.
+    expect(fourthVisitCost).toBeGreaterThan(1);
+    expect(fourthVisitCost).toBeLessThanOrEqual(whileOpen + 1);
 
     await expectQuiet(page, problems);
   });

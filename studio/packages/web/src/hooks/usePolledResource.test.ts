@@ -318,7 +318,8 @@ describe('usePolledResource teardown (#989)', () => {
       await vi.advanceTimersByTimeAsync(2_500);
     });
 
+    // `toBe` is identity, so this already excludes an accumulator: an appending
+    // setData would hold ['first','second','third'] here, not the string.
     await waitFor(() => expect(result.current.data).toBe('third'));
-    expect(Array.isArray(result.current.data)).toBe(false);
   });
 });
