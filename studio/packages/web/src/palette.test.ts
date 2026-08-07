@@ -186,6 +186,18 @@ describe('U6a edge variant hues', () => {
       );
     }
 
+    /* U12a (#1007) — the timeline is a THIRD tone surface, and it needs the same
+       correspondence for a sharper reason than the other two: its bars carry a
+       default `background` (the track has to be visible), so a missing rule does
+       not render as nothing, it renders as a plausible grey bar that misreports
+       a failure as neutral. */
+    for (const tone of nodeTones) {
+      expect(
+        ruleBody(css, `.timeline-span[data-tone='${tone}']`),
+        `no .timeline-span[data-tone='${tone}'] rule`,
+      ).not.toBe('');
+    }
+
     // …and nothing beyond them. A `.run-container-holding` rule survived the
     // first cut of U11 despite no container status mapping to `holding`.
     // `includes`, not `ruleBody`: the latter THROWS on an absent rule, which is

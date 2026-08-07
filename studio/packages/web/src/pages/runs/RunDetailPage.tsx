@@ -23,6 +23,7 @@ import { eventGloss, failureClass, formatClock, formatNodeDuration, formatWhen }
 import { activityLabels } from '../pipeline/activityLabel';
 import { nodeStatusLabel } from './nodeStatus';
 import { runStatusLabel } from './runStatus';
+import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunCostSummary } from './RunCostSummary';
 import { RunGraph } from './RunGraph.lazy';
@@ -618,6 +619,15 @@ export function RunDetailPage({ runId }: { runId: string }) {
           onClose={() => setOpenNodeId(null)}
         />
       )}
+
+      {/* U12a (#1007) — the same rows the table above lists, placed on a shared
+          time axis. It sits after the table deliberately: the table is the
+          per-node record and the timeline is the run's shape, so the reader
+          meets the nodes before the chart that arranges them. Rendered only once
+          there is a row to arrange, since an empty chart with an empty caveat
+          list beneath it says nothing the "No node activity yet." above has not
+          already said. */}
+      {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} />}
 
       <h3>Events</h3>
       {totalEvents === 0 ? (
