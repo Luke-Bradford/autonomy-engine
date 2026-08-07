@@ -1,6 +1,6 @@
 ---
 name: dashboard
-description: Use when changing, debugging, or verifying the control-room dashboard — bin/dashboard.py, lib/dashboard_state.py, lib/dashboard_control.py, lib/dashboard_page.html, lib/config_page.html, or lib/pipeline_page.html — or when a change needs browser-level verification.
+description: Use when changing, debugging, or verifying the control-room dashboard — engine/bin/dashboard.py, engine/lib/dashboard_state.py, engine/lib/dashboard_control.py, engine/lib/dashboard_page.html, engine/lib/config_page.html, or engine/lib/pipeline_page.html — or when a change needs browser-level verification.
 ---
 
 # dashboard — control-room architecture + browser verify loop
@@ -94,7 +94,7 @@ Run this before claiming any dashboard change done (pre-flight-review item J).
 
 1. **Launch against the fixture repo** (background):
    ```bash
-   python3 bin/dashboard.py --repo tests/fixtures/repo-alpha --port 8790
+   python3 engine/bin/dashboard.py --repo tests/fixtures/repo-alpha --port 8790
    ```
    Use a non-default port so a running operator dashboard is untouched.
 2. **Drive it** with the chrome-devtools MCP tools:

@@ -24,7 +24,7 @@ Empty-array expansion under `set -u`: `${arr[@]+"${arr[@]}"}`
 ## The gate
 
 ```bash
-shellcheck -S warning start bin/*.sh bin/agents/*.sh tests/*.sh templates/autonomy-pack/qa/*.sh
+shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 ```
 
 `tests/*.sh` is part of the gate — a common miss. CI (`lint-and-test`) runs the
@@ -78,5 +78,5 @@ Never file-level-disable in `bin/`.
 
 ## Pre-push
 
-Run the gate line above + `bash tests/run_all.sh` before every push — see
+Run the gate line above + `bash engine/tests/run_all.sh` before every push — see
 `pre-push-checklist.md`.

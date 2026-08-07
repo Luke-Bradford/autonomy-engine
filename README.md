@@ -8,8 +8,8 @@ against any target repo, from one operator's account.
 One command, from a fresh checkout:
 
 ```bash
-./start                      # detects: setup needed, or just run the app
-./start /path/to/target-repo # first time: guided setup for that repo, then the app
+engine/start                      # detects: setup needed, or just run the app
+engine/start /path/to/target-repo # first time: guided setup for that repo, then the app
 ```
 
 `./start` looks at `~/.config/autonomy/repos`: nothing registered → setup guidance
@@ -87,24 +87,24 @@ Two tiers of process, deliberately different lifetimes:
 - **The dashboard is a managed service too.** `./start` (with repos registered) loads
   `bin/dashboard.py` as a **launchd service** (`com.autonomy.dashboard`) and opens the
   browser — so it survives closing your terminal and restarts on crash/reboot, just like the
-  loops. Stop it with **`./start stop`** (booting the service out is the only thing that
-  actually stops it under `KeepAlive`); check it with `./start status`. Two opt-outs when you
-  don't want a service: **`./start --foreground`** runs it in this terminal (Ctrl-C stops it;
-  the loops are unaffected — they're separate services), and **`./start --no-launch`** just
+  loops. Stop it with **`engine/start stop`** (booting the service out is the only thing that
+  actually stops it under `KeepAlive`); check it with `engine/start status`. Two opt-outs when you
+  don't want a service: **`engine/start --foreground`** runs it in this terminal (Ctrl-C stops it;
+  the loops are unaffected — they're separate services), and **`engine/start --no-launch`** just
   prints the command without running anything. For a single terminal-native window onto the
-  live work log instead, **`./start console`** runs the engine as one foreground service.
+  live work log instead, **`engine/start console`** runs the engine as one foreground service.
 
 So the everyday model is: **loops run unattended under launchd; `./start` brings up the
-dashboard service and opens it; `./start stop` takes the dashboard back down.**
+dashboard service and opens it; `engine/start stop` takes the dashboard back down.**
 
 **Is it healthy?** Two read-only checks, no side effects:
 
 ```bash
-./start status        # one-screen OK/WARN report, then exits
+engine/start status        # one-screen OK/WARN report, then exits
 bin/control.sh list   # per-repo loop state: running / paused / stopped
 ```
 
-`./start status` reports the dashboard process (is one running?), `gh` auth, how many repos
+`engine/start status` reports the dashboard process (is one running?), `gh` auth, how many repos
 are registered, **each registered loop's running / paused / stopped state** (folded in from
 `bin/control.sh list` so you don't need a second command), any BYO-LLM local endpoint's
 reachability (see [BYO-LLM](docs/byo-llm.md)),
@@ -113,7 +113,7 @@ its loop is *not* running (a finished loop should leave a clean tree), or when a
 uninspectable or the registry unreadable (surfaced, never reported healthy — fail-safe). It
 binds no port and runs no `launchctl`; health lives in the text, not the exit code.
 
-> **Note — health signal.** `./start status` is the read-only health story today. A live
+> **Note — health signal.** `engine/start status` is the read-only health story today. A live
 > health strip *inside* the dashboard header (server up? loop stuck? worktree dirty? endpoint
 > down?) is still open on [#81](https://github.com/Luke-Bradford/autonomy-engine/issues/81),
 > pending a decision on where health-truth is owned (the shell `status` report vs. the Python
@@ -245,7 +245,7 @@ never treated as green; `ci_only` additionally refuses on zero configured checks
 
 | Script | Purpose |
 |---|---|
-| `../start [target-repo] [--port N] [--no-launch]` | THE entry point (repo root): setup-or-app detection — guided quickstart on first run, loop-state summary + dashboard after |
+| `.engine/start [target-repo] [--port N] [--no-launch]` | THE entry point (repo root): setup-or-app detection — guided quickstart on first run, loop-state summary + dashboard after |
 | `supervisor.sh --repo <path> [--agent-type] [--model] [--fallback-model] [--label]` | The main loop launchd runs |
 | `quickstart.sh <target-repo> [flags]` | Guided single-entry onboarding: onboard → minimum config → doctor → optional worktree → optional dashboard registration → printed go-live commands (never runs `launchctl`) |
 | `control.sh list \| register \| unregister \| start \| stop \| pause \| resume` | Multi-repo control unit over `~/.config/autonomy/repos`: loop states from the supervisor's own lock/sentinel, start/stop via `launchctl` against the installed plists, graceful pause/resume via the sentinel. `--all` fans out. Never provisions |
@@ -380,5 +380,5 @@ the supervisor's exponential backoff (fail-safe, never fail-open).
 ## Testing
 
 ```bash
-bash tests/run_all.sh
+bash engine/tests/run_all.sh
 ```

@@ -13,16 +13,24 @@ Design + build history: `docs/design.md`, `docs/implementation-plan.md`.
 
 `studio/` is a **ground-up re-platform** of this engine into an ADF-style,
 config-driven, open-source AI-automation harness (TypeScript: React + React Flow /
-Fastify / Drizzle+SQLite). The bash/python engine at the repo ROOT (`bin/`,
-`lib/`, `tests/`, `templates/`, `start`) is the PROTOTYPE + spec source and stays
-until `studio/` supersedes it. **The non-negotiables below (bash 3.2, python
-stdlib only, shellcheck, guard clauses) apply to the ENGINE only — NOT to
+Fastify / Drizzle+SQLite). **`studio/` is now the repo's front door.** The
+bash/python engine was PARKED under `engine/` by C3b (#410) — `engine/bin/`,
+`engine/lib/`, `engine/tests/`, `engine/templates/`, `engine/start`. Parked means
+moved, not deleted: it is preserved in history and still builds and tests, but it
+is no longer where work starts. It remains the PROTOTYPE + spec source.
+
+One part of it is NOT parked in practice: `engine/lib/ci_retry.sh`,
+`engine/lib/config_parser.py`, `engine/lib/review_prompt.py` and `is_doc_only`
+from `engine/bin/safe_merge.sh` are loaded by `claude-review.yml` on every PR, so
+they are live control-plane code that happens to live in the parked tree. Lifting
+them into a shared home is its own ticket. **The non-negotiables below (bash 3.2,
+python stdlib only, shellcheck, guard clauses) apply to the ENGINE only — NOT to
 `studio/`.** `studio/` has its own conventions: TypeScript strict + ESM, Zod
 schemas shared FE/BE, vitest, eslint (flat) + prettier, pnpm workspaces; gated by
 the `studio-ci` workflow. Target architecture + phased plan:
 `studio/docs/2026-07-12-target-architecture.md`, `studio/docs/BACKLOG.md`.
 
-## Non-negotiables (ENGINE ROOT only — the CI review bot enforces them; `studio/` exempt)
+## Non-negotiables (the PARKED ENGINE under `engine/` only — the CI review bot enforces them; `studio/` exempt)
 
 - **macOS `/bin/bash` 3.2.57 compatible.** NO `mapfile`/`readarray`, NO globstar/`**`, NO associative
   arrays (`declare -A`), NO `${var,,}`/`${var^^}`. This engine runs on the operator's Mac; bash 3.2
@@ -33,9 +41,9 @@ the `studio-ci` workflow. Target architecture + phased plan:
 - **Every script's executable body is guarded** by `[ "${BASH_SOURCE[0]}" = "${0}" ] || return 0`
   (or the `if [ "${BASH_SOURCE[0]}" = "${0}" ]; then … fi` form) so sourcing it for tests only
   defines functions. Adapter files that are functions-only (`bin/agents/*.sh`) need no guard.
-- **`shellcheck -S warning` clean** across `start bin/*.sh bin/agents/*.sh tests/*.sh
-  templates/autonomy-pack/qa/*.sh`. Test files too — not just `bin/`. (`.sh` under `tests/` is a
-  common miss.)
+- **`shellcheck -S warning` clean** across `engine/start engine/bin/*.sh engine/bin/agents/*.sh
+  engine/lib/ci_retry.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh`. Test files too —
+  not just `engine/bin/`. (`.sh` under `engine/tests/` is a common miss.)
 - **Tests are genuine.** They `source` the real script and call the real functions (mock only `gh`
   as a shell function where a network call is unavoidable). No assertions-on-mocks.
 
@@ -57,7 +65,7 @@ the `studio-ci` workflow. Target architecture + phased plan:
 ## Layout
 
 ```text
-bin/
+engine/bin/
   supervisor.sh          # main loop: --repo <path>, runs every enabled loop role round-robin (account-first auth), preflight, backoff
   quickstart.sh           # guided single-entry onboarding; chains the tools below (never launchctl)
   control.sh               # multi-repo registry/control unit: list/start/stop/pause/resume, --all
@@ -70,10 +78,10 @@ bin/
   unblock_dependents.sh         # post-merge "blocked by #X" notifier
   agents/claude.sh               # Claude Code adapter
   agents/codex.sh                 # Codex adapter (engine-level fallback retry; limit-shape #2-caveat)
-lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
-lib/pipeline.py                   # sequencer P1-P3a: docs+validator, SPEC_SHEETS SSOT, graph walk, journal/ledger (skill: engineering/pipelines)
-templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these; incl. pipelines/ starters)
-tests/                             # one per script; run_all.sh runs the whole suite
+engine/lib/config_parser.py             # restricted YAML-subset parser (stdlib only)
+engine/lib/pipeline.py                   # sequencer P1-P3a: docs+validator, SPEC_SHEETS SSOT, graph walk, journal/ledger (skill: engineering/pipelines)
+engine/templates/                        # supervisor.plist.tmpl + autonomy-pack/ (onboard scaffolds these; incl. pipelines/ starters)
+engine/tests/                             # one per script; run_all.sh runs the whole suite
 docs/                               # design.md, implementation-plan.md
 ```
 

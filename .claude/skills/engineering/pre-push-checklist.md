@@ -3,8 +3,8 @@
 Run before EVERY push — first push and every follow-up alike.
 
 ```bash
-bash tests/run_all.sh
-shellcheck -S warning start bin/*.sh bin/agents/*.sh tests/*.sh templates/autonomy-pack/qa/*.sh
+bash engine/tests/run_all.sh
+shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 ```
 
 Both must be completely clean (`ALL SUITES PASS`, zero shellcheck output).
@@ -22,8 +22,8 @@ Additionally:
    `.claude/skills/dashboard/SKILL.md`.
 4. If the diff touched `templates/autonomy-pack/`: mechanically re-validate the
    template (copy to a temp repo pack, uncomment the roles example, run
-   `python3 lib/roles.py <tmp-repo>` → exit 0) and run
-   `bash tests/test_onboard.sh`.
+   `python3 engine/lib/roles.py <tmp-repo>` → exit 0) and run
+   `bash engine/tests/test_onboard.sh`.
 
 Never `--no-verify`, never "CI will catch it" — every push resets the review
 gate, so a broken push costs a full review round, not just a red X.

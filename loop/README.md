@@ -5,7 +5,7 @@ repeatedly fires `run.sh` (one fresh `claude -p` per fire, driven entirely by `p
 the worktree at `~/Dev/studio-loop-repo` until a stop condition.
 
 It lives at the repo ROOT, not under `studio/`, for two reasons: it outlives the root engine
-(`bin/`, `lib/`) that is being ripped out, and it stays outside `studio/`'s pnpm workspace so
+(`engine/bin/`, `engine/lib/`) that C3b parked, and it stays outside `studio/`'s pnpm workspace so
 `studio-ci`'s TypeScript lint scope needs no bash exclusions. Its own CI is the `loop` job in
 `.github/workflows/ci.yml`, deliberately separate from `lint-and-test` for the same reason.
 
@@ -373,9 +373,9 @@ Three independent bounds, checked before every fire, each with its own test in
   `quota_poll_memo_read` in `drive.sh` and on #777 — deliberately not restated here, because a
   divergence rationale kept in two places is how the second copy goes stale.
 - **What cutover C3 does to that order** — C3 has two halves. **C3a** (done) armed studio's sampler
-  and moved it to the front; **C3b** parks `bin/ lib/ tests/ templates/ start` (#410), which removes
+  and moved it to the front; **C3b** parked `bin/ lib/ tests/ templates/ start` into `engine/` (#410), which removes
   the dashboard for good and leaves the surviving pair **(studio, loop reader)**. Before #764 it
-  would also have taken the reader with it, since that lived in the engine's `lib/`; #764 relocated
+  would also have taken the reader with it, since that lived in the engine's `lib/` (now `engine/lib/`); #764 relocated
   it to `loop/claude_usage.py`. `loop/claude_usage.py` ships **beside** `drive.sh` — `LOOP_LIB`
   defaults to `$INFRA`, so a sync of the live control plane must carry **both** files.
 
