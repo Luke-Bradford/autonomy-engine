@@ -93,6 +93,48 @@ describe('NodePanel (#4 A9 structural-call routing)', () => {
     expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
   });
 
+  // #953 — `Node.call` is an OPTIONAL DISCRIMINANT valid on a node of any type,
+  // so the literal `type: 'call_pipeline'` (used across the engine test suite and
+  // reachable by import or an API seed) is a call node too. It is not catalogued,
+  // so the generic form it used to get derived no fields and its call blob was
+  // neither visible nor editable.
+  it('renders the call editor for a legacy call_pipeline-typed node carrying a call blob', () => {
+    render(
+      <NodePanel
+        store={createCanvasStore()}
+        connections={[]}
+        nodeId="n_legacy"
+        nodeType="call_pipeline"
+        config={{}}
+        connectionId={undefined}
+        call={{ pipelineVersionId: 'pv_1', params: {} }}
+      />,
+    );
+    expect(isStructuralCallActivity('call_pipeline')).toBe(false);
+    expect(screen.getByRole('heading', { name: 'Call target' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Apply config' })).toBeNull();
+  });
+
+  // The exclusion half, and the reason `authorsCallBlob` is not simply
+  // "`node.call` is set": `reduce.ts` evaluates the `kind:'control'` forks BEFORE
+  // it tests `node.call`, so on an `if` the TYPE wins and the call blob is inert.
+  // Offering a call editor there would be a UI that contradicts what the run does.
+  it('does NOT route a control-typed node to the call editor, even with a call blob', () => {
+    render(
+      <NodePanel
+        store={createCanvasStore()}
+        connections={[]}
+        nodeId="n_if"
+        nodeType="if"
+        config={{ condition: '${params.go}' }}
+        connectionId={undefined}
+        call={{ pipelineVersionId: 'pv_1', params: {} }}
+      />,
+    );
+    expect(screen.queryByRole('heading', { name: 'Call target' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply config' })).toBeTruthy();
+  });
+
   it('still renders the generic config editor for a normal (non-call) activity', () => {
     render(
       <NodePanel

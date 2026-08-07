@@ -241,6 +241,12 @@ export function describeAppliedAction(action: WorkspaceGitAppliedAction): string
       return 'updated';
     case 'renamed':
       return 'renamed';
+    // #963 — the branch names a version this workspace already holds and has
+    // since authored past. Says what was true AND what to do about it, because
+    // the preview legitimately reported "content differs" a moment earlier and a
+    // bare "unchanged" here would read as a contradiction rather than an answer.
+    case 'superseded':
+      return 'already here — this workspace has authored past it';
     case 'unchanged':
       return 'unchanged';
   }
