@@ -95,10 +95,23 @@ page outrank the UI epic.
      `/monitor/ai` about studio and let the LOOP report in through an ingest seam; do not have
      studio scrape processes it did not launch. If that shape looks wrong from inside the code,
      raise an `[operator-decision]` rather than widening the product's scope alone.
-5. **`#992`** — hide the canvas edge labels; colour already carries routing, reveal on hover AND
-   keyboard focus (operator, 2026-08-07: *"the colour of the line does enough"*). **Amends `U19`** —
-   its palette stands, only the always-on label is withdrawn. Keep the routing key in the accessible
-   name: hidden visually is fine, hidden from assistive tech is a regression.
+5. **`#992` + `#997` — QUIETEN THE CANVAS. Land them TOGETHER**, or it ends up half-quiet: edge
+   labels hidden while four coloured dots still sit on every node. One operator intent (2026-08-07),
+   two surfaces:
+   - **`#992`** — hide edge labels; colour already carries routing (*"the colour of the line does
+     enough"*). **Amends `U19`**: its palette STANDS, only the always-on label is withdrawn.
+   - **`#997`** — source ports collapse to ONE point mid-edge at rest, fan out on hover so a
+     connection can be picked or re-pointed.
+
+   **`#997`'s load-bearing constraint: visual only, never structural.** Handles must stay MOUNTED
+   with unchanged `id`s — edges bind to `sourceHandle`, so conditional rendering would leave React
+   Flow unable to resolve endpoints and edges would snap to the node centre. Collapse with
+   positioning/opacity. Test that an edge's `sourceHandle` is identical before, during and after
+   hover, and that `U6b`'s typed connect-time validation still refuses invalid targets.
+
+   Both carry the same accessibility clause: reveal on **keyboard focus** as well as hover, keep the
+   routing key / port name in the accessible name at all times, and give a revealed port a real
+   ≥24×24px hit target. Hidden visually is fine; unreachable without a mouse is a regression.
 6. **`#996` — WRITE THE DATA-MOVEMENT SPEC.** `#993` is DECIDED (operator, 2026-08-07): **ADF-grade
    data movement is the intent, at ADF's scale.** Source and sink are independent and heterogeneous
    — CSV/Excel → database, database → CSV, any-to-any, with column mapping. This needs three layers
