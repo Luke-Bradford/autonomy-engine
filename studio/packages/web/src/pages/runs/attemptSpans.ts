@@ -1,4 +1,5 @@
 import type { NodeActivity, AttemptSpan } from './runSummary';
+import { isMeasurableSpan } from './format';
 
 /**
  * U12a (#1007) — the pure arithmetic and classification behind `AttemptTimeline`.
@@ -7,16 +8,20 @@ import type { NodeActivity, AttemptSpan } from './runSummary';
  * (correctly) refuses a module that exports both components and plain functions,
  * and these are the parts worth testing on their own anyway — a percentage, a
  * window, and a sentence are all checkable without rendering anything.
+ *
+ * Named for the SPANS rather than the timeline, because `attemptTimeline.ts`
+ * beside `AttemptTimeline.tsx` differs only in casing: this filesystem is
+ * case-insensitive, so TypeScript refuses the pair outright (TS1149/TS1261).
  */
 
 /**
- * A span whose end precedes its start, which `format.ts` and the drill-in panel
- * both already refuse to turn into a duration (a corrupt clock is not a
- * measurement, and clamping it to zero would launder the corruption into a
- * plausible number). Drawn as a start marker with its length withheld.
+ * Whether the span states a length. `format.ts` owns the rule — it is the same
+ * question `formatNodeDuration` answers for the row scalars, and a second copy
+ * here is how the table and the chart would come to disagree about what a
+ * corrupt clock looks like. A span that fails it is drawn as a start marker with
+ * its length withheld.
  */
-const isMeasurable = (span: AttemptSpan): boolean =>
-  span.endedAtMs !== undefined && span.endedAtMs >= span.startedAtMs;
+export const isMeasurable = (span: AttemptSpan): boolean => isMeasurableSpan(span);
 
 /**
  * The instants the log actually stated. An OPEN span contributes its start and
@@ -45,6 +50,16 @@ export function timelineWindow(nodes: NodeActivity[]): { from: number; to: numbe
  * at the activity: `fail`, `filter`, `call_pipeline`, `if` and `switch` all
  * reach it, as does a parallel `foreach` body node whose start and terminal came
  * from different items, and naming one of them would be inventing the reason.
+ *
+ * NOT the same question `NodeActivityPanel` answers with its own similar-looking
+ * chain, and they are kept apart deliberately rather than merged: the panel asks
+ * why the LATEST ATTEMPT has no duration (keyed on the row scalars, so an open
+ * attempt and a corrupt one each get their own sentence), while this asks why the
+ * node contributed NO SPAN AT ALL to the chart (keyed on `spans.length === 0`).
+ * A node can have several measured spans and still have no current duration, and
+ * vice versa. They do disagree on one shared case today — the panel has no
+ * `skipped` branch and calls a routed-around node "has not started" — which is a
+ * defect in the panel rather than in the split, and is #1008.
  */
 export function untimedReason(node: NodeActivity): string {
   if (node.copiedFromRunId !== undefined) {

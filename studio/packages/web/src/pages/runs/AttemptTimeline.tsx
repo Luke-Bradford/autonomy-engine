@@ -1,7 +1,7 @@
 import type { NodeActivity, AttemptSpan } from './runSummary';
 import { nodeStatusLabel, nodeStatusTone, type StatusTone } from './nodeStatus';
 import { formatClock, formatElapsed } from './format';
-import { placeSpans, timelineWindow, untimedReason } from './attemptTimeline';
+import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
 
 /**
  * U12a (#1007) — the run's spans drawn against one shared time axis, so an
@@ -44,6 +44,20 @@ const spanLabel = (span: AttemptSpan): string =>
   span.endedAs === undefined
     ? `${nodeStatusLabel(span.startedAs)}, still open`
     : nodeStatusLabel(span.endedAs);
+
+/**
+ * Why a bar states no length. THREE cases share the hatched rendering and must
+ * NOT share the sentence: a span that is genuinely open has no end yet, while a
+ * span whose recorded end PRECEDES its start has one that cannot be believed.
+ * Calling the second "no end on record" produced "success, no end on record" —
+ * a self-contradiction, in the `title` and in the screen-reader text both.
+ * `NodeActivityPanel` already gives the corrupt case its own sentence; this is
+ * that distinction, kept.
+ */
+const unmeasuredNote = (span: AttemptSpan): string =>
+  span.endedAtMs === undefined
+    ? 'no end on record'
+    : 'the recorded end precedes the start, so no length can be stated';
 
 export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.ReactElement {
   const timed = nodes.filter((n) => n.spans.length > 0);
@@ -111,14 +125,14 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                       placed.span.startedAtMs,
                     )}${
                       placed.width === null
-                        ? ' · no end on record'
+                        ? ` · ${unmeasuredNote(placed.span)}`
                         : ` · ${formatElapsed(placed.span.endedAtMs! - placed.span.startedAtMs)}`
                     }`}
                   >
                     <span className="visually-hidden">
                       {spanLabel(placed.span)}
                       {placed.width === null
-                        ? ', no end on record'
+                        ? `, ${unmeasuredNote(placed.span)}`
                         : `, ${formatElapsed(placed.span.endedAtMs! - placed.span.startedAtMs)}`}
                     </span>
                   </span>
@@ -147,13 +161,17 @@ function UntimedList({
       <ul>
         {nodes.map((node) => (
           <li key={node.nodeId}>
-            <span className="timeline-untimed-name">{nameOf(node.nodeId) ?? node.nodeId}</span>
-            {/* The id BESIDE the name, the same pairing #882 established for the
-                Nodes table row: `activityLabels` numbers by kind ("Wait 1"), so
-                the display name alone does not identify which authored node this
-                is. Suppressed when there is no name to sit beside, since then
-                the name IS the id. */}
-            {nameOf(node.nodeId) !== null && <code> {node.nodeId}</code>} — {untimedReason(node)}
+            {/* The id on `title`, exactly as the timeline row label carries it,
+                rather than as a visible `<code>`. `activityLabels` numbers by
+                kind ("Wait 1"), so the name alone does not identify the authored
+                node and the id has to be reachable — but rendering it here puts
+                a SECOND copy of every node id on a page whose Nodes table
+                already shows one, which makes `getByText(nodeId)` ambiguous for
+                every existing test of that table. One convention, one copy. */}
+            <span className="timeline-untimed-name" title={node.nodeId}>
+              {nameOf(node.nodeId) ?? node.nodeId}
+            </span>{' '}
+            — {untimedReason(node)}
           </li>
         ))}
       </ul>

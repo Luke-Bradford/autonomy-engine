@@ -2193,6 +2193,38 @@ describe('deriveNodeActivity — the span HISTORY behind U12a (#1007)', () => {
     expect(row.startedAtMs).toBeUndefined();
   });
 
+  it('retires a CLOSED span when a mismatched terminal drops the open one — the second divergence', () => {
+    /* The docblock's exception has TWO producers, and this is the one no test
+       reached: `closeSpan`'s instance-mismatch arm calls the same `dropSpan` as
+       `node.retryDue`. A foreach row that already holds one COMPLETED attempt,
+       opens a second, and then receives a terminal from a THIRD item ends with
+       the scalars retracted while the array still holds the completed one.
+
+       Both halves matter. Popping the closed span too would delete an attempt
+       that demonstrably ran; keeping the open one would draw a bar for an
+       attempt whose end will never arrive and which measured nothing. */
+    const events = [
+      dispatched('w@1', 0, 1_000),
+      succeeded('w@1', 0, 1_400),
+      dispatched('w@2', 0, 2_000),
+      succeeded('w@3', 0, 2_400),
+    ];
+
+    const row = rowFor(events, 'w');
+    expect(row.spans).toEqual([
+      {
+        startedAtMs: 1_000,
+        endedAtMs: 1_400,
+        startedAs: 'dispatched',
+        endedAs: 'success',
+        instanceId: 'w@1',
+      },
+    ]);
+    // …and the scalars say no span at all, which is the divergence itself.
+    expect(row.startedAtMs).toBeUndefined();
+    expect(row.endedAtMs).toBeUndefined();
+  });
+
   it('records NO span for a node whose only event is its terminal', () => {
     // A `fail`/`filter` node, and a `call_pipeline` node until #796 appends
     // `call.started`. There is no start to pair, so there is no measurement —

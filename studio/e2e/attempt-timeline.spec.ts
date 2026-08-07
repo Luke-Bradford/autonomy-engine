@@ -44,7 +44,11 @@ test('U12a — the timeline draws what was measured and names what was not', asy
   await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
   await fluentRootReady(page);
 
-  await expect(page.getByRole('heading', { name: 'Timeline' })).toBeVisible();
+  /* `exact`, because Playwright matches an accessible name by SUBSTRING and this
+     section deliberately renders a second heading — "Not on the timeline" — which
+     a bare 'Timeline' also matches, for a strict-mode violation rather than a
+     clean assertion. */
+  await expect(page.getByRole('heading', { name: 'Timeline', exact: true })).toBeVisible();
 
   /* Every assertion in ONE evaluate. A per-assertion round trip is what makes a
      browser-driven check expensive, and all of this is readable in one pass. */
@@ -75,9 +79,11 @@ test('U12a — the timeline draws what was measured and names what was not', asy
         width: bar.getBoundingClientRect().width,
         left: bar.getBoundingClientRect().left,
       })),
-      untimed: [...section.querySelectorAll('.timeline-untimed li')].map((el) =>
-        (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
-      ),
+      untimed: [...section.querySelectorAll('.timeline-untimed li')].map((el) => ({
+        // The id lives on `title`, the same convention as the row label above.
+        nodeId: el.querySelector('.timeline-untimed-name')?.getAttribute('title') ?? null,
+        text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      })),
       trackWidth: section.querySelector('.timeline-track')?.getBoundingClientRect().width ?? 0,
     };
   });
@@ -112,9 +118,8 @@ test('U12a — the timeline draws what was measured and names what was not', asy
      the ticket's "documented limits", on screen. Matched on the reason's
      substance, not its exact wording. */
   expect(seen!.untimed).toHaveLength(1);
-  // The id is rendered beside the display name for the same reason as above.
-  expect(seen!.untimed[0]).toContain('stop');
-  expect(seen!.untimed[0]).toMatch(/no start-and-terminal pair/);
+  expect(seen!.untimed[0]!.nodeId).toBe('stop');
+  expect(seen!.untimed[0]!.text).toMatch(/no start-and-terminal pair/);
 
   await expectQuiet(page, problems);
 });

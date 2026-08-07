@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { AttemptTimeline } from './AttemptTimeline';
-import { placeSpans, timelineWindow, untimedReason } from './attemptTimeline';
+import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
 import { emptyNodeCost, type AttemptSpan, type NodeActivity } from './runSummary';
 
 const span = (over: Partial<AttemptSpan> & { startedAtMs: number }): AttemptSpan => ({
@@ -206,7 +206,9 @@ describe('<AttemptTimeline>', () => {
       />,
     );
     expect(screen.getByText('Not on the timeline')).toBeTruthy();
-    expect(screen.getByText('Gate')).toBeTruthy();
+    // Named, and identifiable: the display name is visible and the authored id
+    // is on `title` (the row label's convention, and the only copy on the page).
+    expect(screen.getByText('Gate').getAttribute('title')).toBe('gate');
     expect(screen.getByText(/routes around/)).toBeTruthy();
   });
 

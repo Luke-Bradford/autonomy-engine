@@ -262,8 +262,12 @@ export interface NodeActivity {
    * attempt it retried. So a drop discards an OPEN span (nothing was measured)
    * and RETIRES a closed one into this array (something was).
    *
-   * `startedAtMs`/`endedAtMs` therefore equal the last entry here in every case
-   * except that one, and no reader should re-derive either from this array.
+   * The two therefore part company exactly when `dropSpan` retires a CLOSED
+   * span, which has TWO producers, not one: `node.retryDue`/`node.retryRequested`
+   * as described, and `closeSpan`'s instance-mismatch arm, which calls the same
+   * helper — so a parallel-`foreach` row holding one completed attempt can also
+   * end with scalars saying "no span" beside a last entry that has a real end.
+   * Otherwise they agree, and no reader should re-derive either from this array.
    *
    * An entry is one START event to its matching TERMINAL — the same pairing the
    * `startedAtMs` docblock above defines, with the same consequences: a node

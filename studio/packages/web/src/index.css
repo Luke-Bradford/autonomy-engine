@@ -2743,8 +2743,13 @@ td button + button {
   background-color: var(--error);
 }
 
+/* `--muted`, NOT `--border`: the track itself is `--border`, so a skipped bar in
+   that colour would be an INVISIBLE bar — the exact "falls through and says
+   nothing" failure the exhaustive tone set above exists to prevent, reintroduced
+   by a coincidence of two rules naming one token. `.run-node-skipped` sets the
+   same precedent (grey like neutral, distinguished by a non-colour cue). */
 .timeline-span[data-tone='skipped'] {
-  background-color: var(--border);
+  background-color: var(--muted);
 }
 
 .timeline-untimed {
