@@ -56,8 +56,14 @@ import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
   UNREADABLE_ACCOUNT_QUOTA_READER,
+  DEFAULT_QUOTA_SAMPLE_INTERVAL_MS,
   type ClaudeAccountQuotaReader,
 } from './quota/claude-quota.js';
+import {
+  startClaudeQuotaSampler,
+  resolveQuotaSamplerEnabled,
+  type QuotaSampler,
+} from './quota/quota-sampler.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -239,6 +245,32 @@ export interface BuildAppOptions {
    */
   claudeAccountQuotaReader?: ClaudeAccountQuotaReader;
   /**
+   * #765 — arms the background quota sampler, which keeps `GET /api/quota` warm
+   * instead of polling the provider on the request path.
+   *
+   * Overrides `process.env.CLAUDE_QUOTA_SAMPLER` ('1' arms it). Defaults to OFF
+   * — the OPPOSITE polarity to `claudeAccountQuotaEnabled`, and for the
+   * mirror-image reason. That flag fails towards ARMED because a typo that
+   * disarmed the spend guard is the worse outcome; this one fails towards
+   * DORMANT because a typo that armed a SECOND standing poller against the one
+   * measured-rate-limited upstream would breach #770's "exactly one process may
+   * poll `/api/oauth/usage` directly" — the invariant C3 preserves by retiring
+   * the prototype dashboard's sampler and arming this one in a single step.
+   *
+   * Unrecognised values THROW at boot rather than defaulting quietly. The
+   * failure this prevents is specific: at C3, `CLAUDE_QUOTA_SAMPLER=true` would
+   * mean the dashboard retired, this sampler unarmed, and ZERO pollers — with
+   * nothing said about it.
+   */
+  claudeAccountQuotaSamplerEnabled?: boolean;
+  /**
+   * #765 — the sampler's cadence. Defaults to half the reader's TTL; see
+   * `DEFAULT_QUOTA_SAMPLE_INTERVAL_MS` for why half. Call-time only (a test
+   * wanting to observe several ticks without also driving every other timer in
+   * the app passes something tiny).
+   */
+  claudeAccountQuotaSamplerIntervalMs?: number;
+  /**
    * #913 — test seam: a destination for the request/application log, so a test can
    * assert on what the logger actually WRITES (that a capability token carried in a
    * URL never reaches it). Left unset, the logger keeps writing to stdout at level
@@ -315,33 +347,59 @@ export async function buildApp(opts?: BuildAppOptions) {
 
   // #440 (C1) — the account-quota reader. Per-app so two instances in one
   // process never share a TTL cache. LAZY: constructing it does no I/O, so an
-  // install that never calls `GET /api/quota` never touches the credential
-  // store. Disabled resolves to a reader that always reports UNREADABLE rather
-  // than to an absent decoration, so the route stays uniform.
+  // install that neither calls `GET /api/quota` nor arms the #765 sampler below
+  // never touches the credential store. Disabled resolves to a reader that
+  // always reports UNREADABLE rather than to an absent decoration, so the route
+  // stays uniform.
   // Only the exact string '0' disables; anything else (including `false`/`off`)
   // leaves it ENABLED. Deliberate, and the safe direction for this particular
   // flag: a typo that silently DISARMED the spend guard would be far worse than
   // one that leaves it armed. Documented as `0` in the README for that reason.
   const claudeAccountQuotaEnabled =
     opts?.claudeAccountQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
-  fastify.decorate(
-    'claudeAccountQuota',
+  const claudeAccountQuota: ClaudeAccountQuotaReader =
     opts?.claudeAccountQuotaReader ??
-      (claudeAccountQuotaEnabled
-        ? createClaudeAccountQuotaReader({
-            // #765 — provider-availability TRANSITIONS only (entering and
-            // leaving the rate-limit backoff), never per read. Without this an
-            // UNREADABLE reading is undiagnosable from outside the process:
-            // a missing credential, a provider outage and a rate-limited
-            // account all present as the same `null`, which is what produced
-            // #765's original misdiagnosis. `warn`, not `info`, because every
-            // one of these events means the build loop's spend guard is
-            // currently blind. The payload is two scalars — no credential, no
-            // provider body — so it is safe at any log level.
-            log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
-          })
-        : UNREADABLE_ACCOUNT_QUOTA_READER),
+    (claudeAccountQuotaEnabled
+      ? createClaudeAccountQuotaReader({
+          // #765 — provider-availability TRANSITIONS only (entering and
+          // leaving the rate-limit backoff), never per read. Without this an
+          // UNREADABLE reading is undiagnosable from outside the process:
+          // a missing credential, a provider outage and a rate-limited
+          // account all present as the same `null`, which is what produced
+          // #765's original misdiagnosis. `warn`, not `info`, because every
+          // one of these events means the build loop's spend guard is
+          // currently blind. The payload is two scalars — no credential, no
+          // provider body — so it is safe at any log level.
+          log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
+        })
+      : UNREADABLE_ACCOUNT_QUOTA_READER);
+  fastify.decorate('claudeAccountQuota', claudeAccountQuota);
+
+  // #765 — the sampler's flag + cadence are resolved and VALIDATED here, before
+  // any timer anywhere in this function is armed, so a mistyped value can only
+  // ever fail boot cleanly. The sampler itself is armed at the very end (see
+  // `quotaSampler` below) — later than the retention sweeps, because this is the
+  // one timer that reaches an EXTERNAL rate-limited provider, and a boot that
+  // threw between arming and returning would leave it polling forever with no
+  // `app.close()` ever coming to stop it.
+  //
+  // `'1'` arms, `'0'`/empty/unset is dormant, ANYTHING ELSE THROWS — see
+  // `resolveQuotaSamplerEnabled` for why silence is the wrong default here.
+  const claudeAccountQuotaSamplerEnabled = resolveQuotaSamplerEnabled(
+    opts?.claudeAccountQuotaSamplerEnabled,
+    process.env.CLAUDE_QUOTA_SAMPLER,
   );
+  const claudeAccountQuotaSamplerIntervalMs =
+    opts?.claudeAccountQuotaSamplerIntervalMs ?? DEFAULT_QUOTA_SAMPLE_INTERVAL_MS;
+  if (
+    claudeAccountQuotaSamplerEnabled &&
+    (!Number.isFinite(claudeAccountQuotaSamplerIntervalMs) ||
+      claudeAccountQuotaSamplerIntervalMs <= 0)
+  ) {
+    throw new Error(
+      `Invalid claudeAccountQuotaSamplerIntervalMs ${claudeAccountQuotaSamplerIntervalMs} — must be a finite number > 0`,
+    );
+  }
 
   // Prove the DB round-trips on boot: upsert a "last_boot" row, then read it
   // straight back.
@@ -814,7 +872,17 @@ export async function buildApp(opts?: BuildAppOptions) {
   // SIGTERM/SIGINT-triggered one wired up in `main()` below) — this is that
   // wiring, so no in-flight `agent_cli` subprocess tree survives a graceful
   // restart/deploy.
+  // #765 — declared before the teardown hook that stops it, ASSIGNED after it
+  // (below). The hook closes over the binding, so registration order and arming
+  // order are independent.
+  let quotaSampler: QuotaSampler | undefined;
+
   fastify.addHook('onClose', async () => {
+    // #765 — stop the quota sampler first: it is the only timer here that talks
+    // to an external provider, and #770 caps the number of processes polling it
+    // at one, so a sampler outliving its app instance is the failure that matters
+    // most. `undefined` unless armed.
+    quotaSampler?.stop();
     // Stop the scheduler FIRST (no further cron ticks can call the launcher),
     // then the launcher (no new fires, drop the queue) so nothing new spawns
     // while we reap; in-flight background runs are left to settle or be
@@ -848,6 +916,47 @@ export async function buildApp(opts?: BuildAppOptions) {
     runLauncher.stop();
     await supervisor.reapAllSupervised();
   });
+
+  // #765 — arm the sampler LAST, after the `onClose` teardown above is
+  // registered and after every throw-point in this function's own body. That
+  // matters more here than for the other boot-time timers because, unlike the
+  // retention sweeps (which touch a local db), this one reaches the rate-limited
+  // provider #770 caps at ONE poller, so an armed-then-abandoned instance is a
+  // breach of that invariant rather than wasted housekeeping.
+  //
+  // It is NOT an absolute guarantee, and the distinction is worth stating rather
+  // than implying: Fastify defers plugin and route execution to `ready()`, which
+  // runs after this function returns, so a plugin that throws THERE would leave
+  // this armed with no `close()` ever coming. That exposure is shared by every
+  // timer armed in here and is not introduced by this one; in the real entry
+  // point `main()` exits the process on any post-`buildApp` failure, which takes
+  // the `unref`'d interval with it. What arming here does buy is that none of
+  // the four validation throws above can leak it.
+  //
+  // Armed against the DECORATED reader (injected or real), skipping the
+  // always-UNREADABLE one: sampling a constant is pure waste, and it is also
+  // how the disabled surface stays a true no-op without reading the flag twice.
+  if (claudeAccountQuotaSamplerEnabled) {
+    if (claudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER) {
+      // The zero-poller state, said out loud. Silence here is exactly how a
+      // cutover ends up with the old sampler retired and no replacement running.
+      fastify.log.warn(
+        'account-quota sampler requested but the quota surface is disabled — nothing will be sampled',
+      );
+    } else {
+      quotaSampler = startClaudeQuotaSampler(claudeAccountQuota, {
+        intervalMs: claudeAccountQuotaSamplerIntervalMs,
+        // `read()` never rejects by contract; anything arriving here is an
+        // injected reader breaking it, which is worth an error line rather than
+        // the process-ending unhandled rejection it would otherwise be.
+        onError: (err) => fastify.log.error({ err }, 'account-quota sample threw'),
+      });
+      fastify.log.info(
+        { intervalMs: claudeAccountQuotaSamplerIntervalMs },
+        'account-quota sampler armed',
+      );
+    }
+  }
 
   return fastify;
 }
