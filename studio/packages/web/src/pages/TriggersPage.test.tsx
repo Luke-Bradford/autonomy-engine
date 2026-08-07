@@ -1010,6 +1010,44 @@ describe('TriggersPage — binding to the active published version', () => {
   });
 
   /*
+   * `usePolledResource.loading` is true only on the FIRST load, so on every
+   * later switch it stays false while `data` still holds the PREVIOUS
+   * pipeline's reading. Rendering that against the newly-chosen pipeline states
+   * a fact about one pipeline under the name of another — here, "Other has no
+   * published version" when Other is in fact published and it was `My pipeline`
+   * that was not. The reading is therefore tagged with the pipeline it was read
+   * FOR, and only trusted when the tag matches.
+   *
+   * The second read is deliberately left PENDING: that in-flight window is the
+   * only moment the bug exists, and a test whose fetches all resolve
+   * immediately would pass with the guard removed.
+   */
+  it('does not describe a newly-chosen pipeline with the previous one’s reading', async () => {
+    const user = userEvent.setup();
+    const other: Pipeline = { ...pipeline, id: 'pl_2', name: 'Other', resourceId: 'res_pl2' };
+    listAllVersionsMock.mockResolvedValue([
+      { pipeline, version },
+      { pipeline: other, version: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+    ]);
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    // `My pipeline` reads as never-published; `Other`'s read never settles.
+    activeVersionMock.mockImplementation((pipelineId: string) =>
+      pipelineId === 'pl_1' ? Promise.resolve(null) : new Promise(() => {}),
+    );
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/My pipeline.*has no published version/i)).toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+
+    // The stale claim must be gone even though nothing has arrived to replace it.
+    await waitFor(() =>
+      expect(form.queryByText(/has no published version/i)).not.toBeInTheDocument(),
+    );
+    expect(form.getByText(/checking/i)).toBeInTheDocument();
+  });
+
+  /*
    * A failed reading must neither claim "nothing is published" (#979's
    * ActiveVersionState doctrine) nor refuse: the gate belongs to the server, and
    * refusing here would block a create it would have accepted.
