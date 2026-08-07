@@ -6,6 +6,7 @@ import type { ExternalWaitCompleter } from './run/external-wait-service.js';
 import type { ReseedService } from './run/reseed.js';
 import type { Scheduler } from './scheduler/scheduler.js';
 import type { ClaudeAccountQuotaReader } from './quota/claude-quota.js';
+import type { LastKnownQuota } from './quota/last-known.js';
 
 /**
  * Ambient `FastifyInstance` augmentation for the app-scoped state routes and
@@ -57,5 +58,11 @@ declare module 'fastify' {
      * instances in one process never share its TTL cache. Always decorated: when
      * the surface is disabled it is a reader that reports UNREADABLE. */
     claudeAccountQuota: ClaudeAccountQuotaReader;
+    /** #987 — the last account-quota reading that was actually OBTAINED, for the
+     * DISPLAY surface only (`GET /api/quota/display`). `null` until one has been.
+     * The reader above is untouched by this and still serves no last-good value
+     * after a failed read; see `quota/last-known.ts` for why the split is in the
+     * contract rather than in the reader. Nothing may GATE on this. */
+    claudeAccountQuotaLastKnown: () => LastKnownQuota | null;
   }
 }

@@ -64,6 +64,7 @@ import {
   resolveQuotaSamplerEnabled,
   type QuotaSampler,
 } from './quota/quota-sampler.js';
+import { createLastKnownQuotaRecorder } from './quota/last-known.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -357,7 +358,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // one that leaves it armed. Documented as `0` in the README for that reason.
   const claudeAccountQuotaEnabled =
     opts?.claudeAccountQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
-  const claudeAccountQuota: ClaudeAccountQuotaReader =
+  const baseClaudeAccountQuota: ClaudeAccountQuotaReader =
     opts?.claudeAccountQuotaReader ??
     (claudeAccountQuotaEnabled
       ? createClaudeAccountQuotaReader({
@@ -373,7 +374,17 @@ export async function buildApp(opts?: BuildAppOptions) {
           log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
         })
       : UNREADABLE_ACCOUNT_QUOTA_READER);
+  // #987 — everything in the app holds the WRAPPED reader, so both the request
+  // path and the background sampler's ticks keep the display's last-known value
+  // warm. The wrapper is transparent: it returns its inner reader's outcome
+  // unchanged, so `GET /api/quota` and the spend guard behind it are unaffected,
+  // and the reader still serves no last-good value after a failed read.
+  const claudeAccountQuotaLastKnown = createLastKnownQuotaRecorder(baseClaudeAccountQuota);
+  const claudeAccountQuota = claudeAccountQuotaLastKnown.reader;
   fastify.decorate('claudeAccountQuota', claudeAccountQuota);
+  // An arrow, not the bound method: Fastify rebinds `this` on a function-valued
+  // decoration, which would detach it from the recorder's closure.
+  fastify.decorate('claudeAccountQuotaLastKnown', () => claudeAccountQuotaLastKnown.lastKnown());
 
   // #765 — the sampler's flag + cadence are resolved and VALIDATED here, before
   // any timer anywhere in this function is armed, so a mistyped value can only
@@ -936,8 +947,14 @@ export async function buildApp(opts?: BuildAppOptions) {
   // Armed against the DECORATED reader (injected or real), skipping the
   // always-UNREADABLE one: sampling a constant is pure waste, and it is also
   // how the disabled surface stays a true no-op without reading the flag twice.
+  //
+  // The "is it the disabled reader" test is on the BASE reader, because the
+  // decorated one is the #987 wrapper and never identity-equals anything. The
+  // sampler itself is still armed with the WRAPPER — that is the load-bearing
+  // half: once the sampler is armed almost every successful read is a tick, so a
+  // wrapper the ticks bypassed would retain nearly nothing.
   if (claudeAccountQuotaSamplerEnabled) {
-    if (claudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER) {
+    if (baseClaudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER) {
       // The zero-poller state, said out loud. Silence here is exactly how a
       // cutover ends up with the old sampler retired and no replacement running.
       fastify.log.warn(
