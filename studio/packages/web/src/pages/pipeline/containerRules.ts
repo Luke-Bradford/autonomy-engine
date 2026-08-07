@@ -10,6 +10,7 @@ import {
 } from '@autonomy-studio/shared';
 import { activityLabels } from './activityLabel';
 import { validateCanvas } from './canvasDoc';
+import { namedList } from '../../lib/namedList';
 
 /**
  * U6d — what a CONTAINER-MEMBERSHIP edit does to the doc, decided before it is
@@ -319,39 +320,12 @@ export function containerLabels(containers: Container[]): Map<string, string> {
  * silently break every one of them.
  */
 /**
- * A list of resolved NAMES, rendered so a name cannot be mistaken for two (#909).
- *
- * `readableIssue` joins names with `', '` at two sites — the brace-wrapped shape
- * in pass 3 and the expression gloss in pass 5 — and a name containing `, `
- * split visually into what read as two names, with nothing marking which. One
- * name in, two names out.
- *
- * Reachable, though narrowly: a name is minted by `activityLabels` as
- * `` `${activityLabel(node)} ${n}` ``, and `activityLabel` falls back to the RAW
- * TYPE for a type the catalog does not know. `NodeSchema.type` is an
- * unconstrained `z.string().min(1)`, so an IMPORTED doc can carry a
- * comma-bearing one. No catalog title contains a comma — checked against
- * `catalog/registry.ts` rather than restated from the ticket — so no doc authored on
- * this canvas can produce it.
- *
- * Quotes ALWAYS, not only when a name needs it. Quoting on demand would be
- * quieter for the comma-free case that is effectively all of them, but it puts
- * two renderings of one list in front of a reader who cannot see which rule
- * produced either — and this app already answers this exact question one way:
- * `runs/externalWaits.ts`'s `nameList` quotes every name with the same
- * typographic pair. A second convention for the same problem is what #909 exists
- * to prevent, not something to add to.
- *
- * The CONTAINER half needs no such treatment, for a different reason worth
+ * The CONTAINER labels need no quoting treatment of their own, for a reason worth
  * writing down rather than leaving to be re-derived: `containerLabels` mints
  * `` `${c.kind} ${n}` `` from `kind`, which is a closed union rather than free
- * text, so it cannot carry a separator at all. It is covered here anyway because
- * both kinds of label flow through the same `label()` lookup.
+ * text, so it cannot carry a separator at all. They go through `namedList` anyway
+ * because both kinds of label flow through the same `label()` lookup.
  */
-function namedList(names: readonly string[]): string {
-  return names.map((n) => `“${n}”`).join(', ');
-}
-
 export function readableIssue(
   issue: string,
   nodes: Node[],

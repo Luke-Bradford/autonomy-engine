@@ -80,6 +80,7 @@ import {
   type CanvasState,
   type Selection,
 } from './canvasStore';
+import { namedList } from '../../lib/namedList';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
@@ -1711,7 +1712,7 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
                 ) : (
                   <>
                     {parallelRoots.length} things start in parallel:{' '}
-                    <strong>{parallelRoots.slice(0, IMPLICIT_CHAIN_PREVIEW).join(', ')}</strong>
+                    <strong>{namedList(parallelRoots.slice(0, IMPLICIT_CHAIN_PREVIEW))}</strong>
                     {parallelRoots.length > IMPLICIT_CHAIN_PREVIEW
                       ? ` +${parallelRoots.length - IMPLICIT_CHAIN_PREVIEW} more`
                       : ''}
