@@ -1050,6 +1050,37 @@ describe('TriggersPage — binding to the active published version', () => {
   });
 
   /*
+   * The same staleness, one field over. `usePolledResource` never clears
+   * `error` when a new fetch starts, so a read that FAILED for one pipeline
+   * would still be on screen — as "could not check" — while the next pipeline's
+   * read is in flight, i.e. a claim about a pipeline nothing has read yet. The
+   * failure is therefore carried as a tagged result, not as an untagged error.
+   *
+   * The second read is left PENDING on purpose: that in-flight window is the
+   * only moment the bug exists.
+   */
+  it('does not carry a failed reading over to the next pipeline', async () => {
+    const user = userEvent.setup();
+    const other: Pipeline = { ...pipeline, id: 'pl_2', name: 'Other', resourceId: 'res_pl2' };
+    listAllVersionsMock.mockResolvedValue([
+      { pipeline, version },
+      { pipeline: other, version: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+    ]);
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    activeVersionMock.mockImplementation((pipelineId: string) =>
+      pipelineId === 'pl_1' ? Promise.reject(new Error('network down')) : new Promise(() => {}),
+    );
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/could not check/i)).toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+
+    await waitFor(() => expect(form.queryByText(/could not check/i)).not.toBeInTheDocument());
+    expect(form.getByText(/checking/i)).toBeInTheDocument();
+  });
+
+  /*
    * A failed reading must neither claim "nothing is published" (#979's
    * ActiveVersionState doctrine) nor refuse: the gate belongs to the server, and
    * refusing here would block a create it would have accepted.

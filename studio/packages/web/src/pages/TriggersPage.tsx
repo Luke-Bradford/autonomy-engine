@@ -554,24 +554,39 @@ function TriggerForm({
    * only on the FIRST load — on every switch after that it stays false while
    * `data` still holds the previous pipeline's reading, and a stale reading
    * shown against a different pipeline is exactly the wrong claim.
+   *
+   * A FAILED read is returned as a tagged `state: null` rather than left to
+   * reject into `publish.error`, so that it carries the same pipeline tag every
+   * other reading does. `usePolledResource` never clears `error` when a new
+   * fetch starts, so an untagged error survives a pipeline switch and would say
+   * "could not check" about a pipeline whose read has not even returned — the
+   * identical staleness the `data` tag exists to prevent, one field over. An
+   * ABORT is rethrown: that is this effect tearing down, not a failure to
+   * report.
    */
   const activePipelineId = form.binding.kind === 'active' ? form.binding.pipelineId : null;
   const fetchPublishState = useCallback(
     async (signal: AbortSignal) => {
       if (activePipelineId === null) return null;
-      return {
-        pipelineId: activePipelineId,
-        state: await readPublishState(activePipelineId, signal),
-      };
+      try {
+        return {
+          pipelineId: activePipelineId,
+          state: await readPublishState(activePipelineId, signal),
+        };
+      } catch (err) {
+        if (signal.aborted) throw err;
+        return { pipelineId: activePipelineId, state: null };
+      }
     },
     [activePipelineId],
   );
   const publish = usePolledResource(fetchPublishState);
 
+  // ONE authority: the tagged reading. `publish.error` is deliberately unread —
+  // a failed read is already represented above, tagged with its pipeline.
   let reading: PublishReading = 'loading';
-  if (publish.error !== null) reading = 'unread';
-  else if (publish.data !== null && publish.data.pipelineId === activePipelineId) {
-    reading = publish.data.state;
+  if (publish.data !== null && publish.data.pipelineId === activePipelineId) {
+    reading = publish.data.state ?? 'unread';
   }
 
   const activePipeline =
