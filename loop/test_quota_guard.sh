@@ -282,7 +282,7 @@ EOS
   # That mirrors the care the previous stub took for the same reason -- a stub a
   # broken caller can still satisfy lets the break look correct (#766).
   # Both reader stubs APPEND one line to $READER_CALLS per invocation, which makes
-  # "how often was source 2 actually POLLED" an observable. It has to be, because
+  # "how often the LOOP READER was actually POLLED" an observable. It has to be, because
   # #777's whole subject is the POLL RATE: every source-2 property up to now was
   # about the VALUE, so the suite could not distinguish one poll from ten and the
   # throttle would have been untestable (and its absence, which is what #777
@@ -489,13 +489,13 @@ EOS
 fires_of()  { echo "${1%%|*}"; }
 logof()     { lo_r="${1#*|}"; echo "${lo_r%%|*}"; }
 tmpof()     { echo "${1##*|}"; }
-# How many times source 2 (the loop's own reader) was actually POLLED in that run.
+# How many times the LOOP READER (now the LAST source) was actually POLLED in that run.
 # $1 = the whole run_case result string (so the tmp dir is read, never inferred).
 readerpolls() {
   rp_f="$(tmpof "$1")/readercalls"
   if [ -f "$rp_f" ]; then wc -l <"$rp_f" | tr -d ' '; else echo 0; fi
 }
-# How many times studio (now source 1) was actually POLLED in that run. Same accessor
+# How many times studio (the PRIMARY source since C3) was actually POLLED. Same accessor
 # contract as readerpolls: the tmp dir is READ from the result string, never
 # inferred from the log path (that derivation reads 0 under FRESH_LOGDIR=1 and
 # passes vacuously).
@@ -823,7 +823,8 @@ check "a percent reading reaches the log unscaled" "0" \
 check "a PRESENT fallback reader logs no missing-reader WARN" "1" \
   "$(grep -q 'quota fallback reader MISSING' "$(logof "$r")" && echo 0 || echo 1)"
 
-# --- 25-30. STUDIO as the THIRD source, behind the fallback (cutover C2) ----
+# --- 25-30. STUDIO as the PRIMARY source (cutover C3a, #410; it was the THIRD,
+# behind the fallback, under C2 #440) -------------------------------------------
 # Cases 25-26 assert on the SOURCE LOG LINE rather than the fire count, because
 # for those two the fire count is NOT an observable: a 10% reading fires exactly
 # the same number of times whichever source produced it, so a fire-count
@@ -857,6 +858,24 @@ check "studio readable -> the loop reader is never consulted" "1" \
   "$(grep -q 'quota source: loop' "$(logof "$r")" && echo 0 || echo 1)"
 check "studio readable -> the loop reader is never POLLED (not merely outvoted)" "0" \
   "$(readerpolls "$r")"
+# ...and studio is polled ONCE per read, not repeatedly. This is the assertion the
+# STUDIO_POLL_COUNT plumbing exists for, and until C3 (#410) nothing made it: while
+# studio was the LAST source the interesting question was whether it was polled AT
+# ALL, so the marker's existence was enough. Now that it is polled on every read, the
+# count is what would catch a double-poll -- e.g. re-reading the body for the window
+# line instead of parsing the one fetch twice, which is the exact mistake
+# `quota_read_url`'s single-fetch design exists to prevent.
+#
+# Asserted as an IDENTITY against the log rather than as a magic number: every
+# successful read logs exactly one `quota source: studio` line, so polls == lines
+# iff studio was polled once per read. That holds however many times `quota_gate`
+# evaluates on this run, which a hardcoded count would not -- and a hardcoded count
+# would also have to be re-derived every time the gate's call pattern changed, which
+# is how a count-based assertion quietly becomes a test of the fixture instead of the
+# code. A double-poll makes the left side twice the right and goes red.
+check "studio is polled ONCE per read, never twice for one decision" \
+  "$(grep -c 'quota source: studio' "$(logof "$r")" | tr -d ' ')" \
+  "$(studiopolls "$r")"
 
 # 26. the dashboard AND the loop reader are down, studio answers -> the
 # reading is USED and the run is NOT blind. This is the state C3 creates
@@ -913,9 +932,9 @@ check "an out-of-range reading is treated as UNREADABLE, never as 'quota ok'" "1
 
 # --- 31. the POST-CUTOVER pair: a reader that is PRESENT but cannot read ------
 # Cutover C3 (#410) parks `bin/ lib/ tests/ templates/ start`, removing the
-# DASHBOARD (source 1) and -- until #764 relocated it into `loop/` -- the reader
-# (source 2) too, which would have left only studio, the source that has never yet
-# returned a number here. The surviving pair is (loop reader, studio).
+# DASHBOARD and -- until #764 relocated it into `loop/` -- the reader too, which
+# would have left only studio, the source that has never yet returned a number here.
+# The surviving pair is (studio, loop reader), in that order since C3a.
 #
 # The pair's other properties are pinned on the runs that already exercise them:
 # cases 23-24 ARE this topology (dashboard EMPTY, reader present) and carry the
@@ -940,18 +959,19 @@ r="$(run_case EMPTY QUOTA_STOP_PCT=80 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=
 check "a present-but-failing reader -> refuses to fire blind" "0" "$(fires_of "$r")"
 check "a present-but-failing reader is never read as a 0% reading" "1" \
   "$(grep -q 'utilization 0%' "$(logof "$r")" && echo 0 || echo 1)"
-# ...and a failing reader is reached only AFTER studio has been tried. Under the
-# C3 order studio is polled FIRST, so what this pins is that a failing LAST source
-# cannot suppress the reading the FIRST one would have produced: both are
-# unreadable here, and the run must end UNREADABLE rather than 0%. Asserted on the
-# poll marker, since with studio unreadable "studio was reached" is only observable
-# as the poll having happened. Free: same driver run as above.
+# ...and studio was actually asked on this run. Be precise about what this does and
+# does NOT pin, because the honest scope is narrower than it looks: studio is
+# unreadable here too, so both sources fail and BOTH are visited whichever order they
+# are tried in -- this cannot discriminate the order the way case 25 does. What it
+# does catch is studio's branch being deleted or short-circuited out of `quota_pct`
+# entirely, which would leave this whole topology resting on the reader alone. Kept
+# because it is free (same driver run) and that regression is real.
 check "a present-but-failing reader coexists with studio having been POLLED" "0" \
   "$([ -f "$(tmpof "$r")/studio_polled" ] && echo 0 || echo 1)"
 
-# --- 32. the SOURCE-2 boundary is sanitised, not just source 1 ----------------
+# --- 32. the LOOP READER's boundary is sanitised, not just the HTTP sources ----
 # Case 30 pins the totality guard for the DASHBOARD (`quota_read_url` calls
-# `quota_sane` internally). Source 2 is sanitised by a SEPARATE call --
+# `quota_sane` internally). The loop reader is sanitised by a SEPARATE call --
 # `qp_out="$(quota_sane "$qp_out")"` in `quota_pct` -- because the reader is a
 # python call, not a URL. Nothing pinned that one: deleting the line left the whole
 # suite GREEN, which is the vacuous-coverage shape this repo has shipped twice.
@@ -974,8 +994,8 @@ check "an out-of-range reading from the LOOP READER -> zero fires" "0" "$(fires_
 check "an out-of-range reader value is UNREADABLE, never 'quota ok'" "1" \
   "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
-# --- 33-34. the SOURCE-2 POLL THROTTLE (#777) --------------------------------
-# Source 2 is a fresh `python3` process per call, so it has no in-memory cache and
+# --- 33-34. the LOOP READER's POLL THROTTLE (#777) ---------------------------
+# The loop reader is a fresh `python3` process per call, so it has no in-memory cache and
 # nothing gave it a cross-process one. `quota_pct` is called up to three times per
 # iteration (pre-auth gate, post-block gate, post-gate-wait gate) plus once per
 # AUTH_LONG_BLOCK retry while blocked -- and post-cutover-C3 the dashboard is gone,
@@ -1068,9 +1088,11 @@ check "...and the fallback is ANNOUNCED for the poll interval too" "0" \
 # throttles failed reads for the same reason (#770). A memo written only on success
 # leaves the storm intact -- three polls here instead of one.
 #
-# The fallthrough must survive it: source 2 saying "unreadable from memory" has to
-# reach studio exactly as a live failure does, or the throttle would silently delete
-# source 3.
+# A memoised FAILURE must be served exactly as a live failure is -- as "" -- so the
+# read ends UNREADABLE rather than serving the "-" sentinel onward. Before C3 (#410)
+# that mattered because the reader was source 2 and "" was what let the fallthrough
+# reach studio; now the reader is LAST and "" is simply the final answer. The
+# polarity is unchanged and is the point: fail-SAFE, never a number.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UNREADABLE=1 \
       AUTH_TRIES=0 AUTHFAIL_N=6 AUTHFAIL_BLOCKS=1)"
 check "a FAILED poll is remembered -> one poll, not three" "1" "$(readerpolls "$r")"
@@ -1081,22 +1103,30 @@ check "a FAILED poll is remembered -> one poll, not three" "1" "$(readerpolls "$
 check "a memoised failure never surfaces as a 'quota ok' reading" "1" \
   "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 
-# ...and a memoised failure must be served as UNREADABLE, so source 3 still decides.
-# Its own run, seeded with a FRESH "-" memo, because asserting this on the run above
-# was vacuous: that run's FIRST read is a live failure which reaches studio anyway
-# (case 31's property), so the marker appeared whether or not the MEMOISED failure
-# fell through. Mutation-proved here instead.
+# ...and a memoised failure must be served as UNREADABLE, never as the "-" sentinel.
+# Serving "-" verbatim is a fail-OPEN: `[ - -ge 80 ]` returns 2 on bash 3.2 --
+# neither branch -- so `quota_gate` logs "quota ok" and FIRES, an UNCHARGED blind
+# fire that QUOTA_UNKNOWN_FIRES never sees. Correct behaviour is to refuse.
 #
-# Serving "-" verbatim is also a fail-OPEN, which is why the studio reading refuses:
-# `[ - -ge 80 ]` returns 2 on bash 3.2 -- neither branch -- so `quota_gate` logs
-# "quota ok" and FIRES. Correct behaviour STOPs on studio's 97%.
-r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=2 FALLBACK_UNREADABLE=1 \
-      STUDIO_UTIL=0.97 "SEED_POLL_MEMO=$(date +%s) -")"
-check "a memoised FAILURE is UNREADABLE, so studio still decides -> refuse" "0" \
+# EVERY source is unreadable on this run, and that is what makes the case mean
+# anything after C3 (#410). An earlier cut gave studio a refusing 97% and asserted
+# that studio decided -- which was true, but VACUOUSLY so once studio became the
+# FIRST source: it answered before the loop reader was reached, so the memo under
+# test was never consulted and deleting the whole memo path left the case green.
+# The reader is the LAST source now, so reaching it at all requires the two ahead of
+# it to fail. Mutation-proved: serving the memo verbatim (dropping the `"-"` -> ""
+# mapping in `quota_poll_memo_read`) turns the first two assertions red.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 MAX_LOOPS=1 QUOTA_UNKNOWN_FIRES=0 FALLBACK_UNREADABLE=1 \
+      "SEED_POLL_MEMO=$(date +%s) -")"
+check "a memoised FAILURE is UNREADABLE -> refuse, never a blind fire" "0" \
   "$(fires_of "$r")"
+check "a memoised FAILURE never surfaces as 'quota ok'" "1" \
+  "$(grep -q 'quota ok' "$(logof "$r")" && echo 0 || echo 1)"
 check "a memoised FAILURE costs no poll at all" "0" "$(readerpolls "$r")"
-check "...and studio is NAMED as the source, not the memo" "0" \
-  "$(grep -q 'quota source: studio (7-day utilization 97%)' "$(logof "$r")" && echo 0 || echo 1)"
+# ...and the guard SAYS it could not read, rather than falling silent. With the
+# reader last, its memoised failure IS the end of the road, so this line is the only
+# thing distinguishing "asked everything and got nothing" from "never asked".
+check "...and the read is reported UNREADABLE" "0" "$(guard_unreadable "$r")"
 
 # --- 39. the memo is DROPPED after a fire, so every fire is gated on a FRESH read
 # The one real cost of memoising a reading is that a stale LOW figure could permit a
@@ -1171,7 +1201,7 @@ check "a memo stamped in the FUTURE is not served (clock skew)" "1" "$(fires_of 
 # --- 37c. the EPOCH needs a length bound too, and on the memo path its absence was
 # a fail-OPEN. `$(( ))` wraps silently, so an epoch of 2^64+now computes an age
 # INSIDE the window and the memo's value is served as though freshly polled -- which
-# permits a fire, suppresses the real poll AND suppresses source 3. The same line is
+# permits a fire and suppresses the real poll. The same line is
 # merely fail-SAFE for `.last_quota` (a bogus reading falls through to the blind
 # allowance), so the polarity only flipped when the memo started sharing this parser.
 #
@@ -1253,7 +1283,7 @@ check "...and the clamp is ANNOUNCED" "0" \
 
 # 42. The CACHE's value needed `quota_sane`'s LENGTH bound, not just a digit class --
 # the third appearance of the same 64-bit lesson (`quota_read_url` documents it,
-# case 32 pins it for source 2, and the cache was still hand-rolling a char class).
+# case 32 pins it for the loop reader, and the cache was still hand-rolling a char class).
 # 18446744073709551696 is 2^64 + 80: all digits, so a char class passes it, and
 # `$(( 10# ))` WRAPS it to exactly 80 on /bin/bash 3.2.57 (verified). That fabricates
 # a last-known reading of precisely QUOTA_STOP_PCT out of a malformed line and refuses
