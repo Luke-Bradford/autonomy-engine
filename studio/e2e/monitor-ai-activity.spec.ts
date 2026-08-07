@@ -247,6 +247,15 @@ test.describe('#917 Monitor › AI activity', () => {
     await page.getByRole('link', { name: 'Runs', exact: true }).click();
     await expect.poll(() => new URL(page.url()).hash).toBe('#/monitor/runs');
 
+    // Settle before reading the baseline. A tick issued just BEFORE the swap is
+    // counted when its route handler runs, which is a CDP round trip after the
+    // browser issued it — so reading the count the instant the hash changes can
+    // attribute a pre-swap request to the post-swap window and fail spuriously.
+    // This cannot mask a real orphan: an orphan polls every 5s, so 500ms of
+    // grace at most moves ONE tick into the baseline, and the 12s below still
+    // catches two more.
+    await page.waitForTimeout(500);
+
     // The count is frozen from the moment the route swapped — not merely slower.
     const atNavigation = activityCalls;
     await page.waitForTimeout(12_000);
