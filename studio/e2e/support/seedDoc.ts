@@ -37,6 +37,15 @@ export interface SeedNode {
    * never at version save, so a seed may mint a version naming a connection and
    * only find out at fire time whether it resolves. */
   connectionId?: string;
+  /**
+   * The structural call blob (#953). A TOP-LEVEL field like `connectionId`, and
+   * an OPTIONAL DISCRIMINANT rather than a property of the type: a node carrying
+   * it is a call node whatever its `type` says, which is how a doc with the
+   * legacy literal `type: 'call_pipeline'` — valid at save for back-compat, and
+   * NOT authorable from the canvas — arrives from an import or an API seed.
+   * Seeding it is the only way to put that doc in front of the inspector.
+   */
+  call?: { pipelineVersionId: string; params?: Record<string, unknown>; wait?: boolean };
   position: { x: number; y: number };
 }
 
