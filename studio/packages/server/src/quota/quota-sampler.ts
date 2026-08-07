@@ -1,7 +1,4 @@
-import {
-  DEFAULT_QUOTA_SAMPLE_INTERVAL_MS,
-  type ClaudeAccountQuotaReader,
-} from './claude-quota.js';
+import { DEFAULT_QUOTA_SAMPLE_INTERVAL_MS, type ClaudeAccountQuotaReader } from './claude-quota.js';
 
 /**
  * #765 — the background sampler that keeps the account-quota reading WARM.
@@ -106,9 +103,7 @@ export function startClaudeQuotaSampler(
   // account-level limiter answers with a wall of 429s. A silently-corrected
   // value would hide the misconfiguration that caused it.
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
-    throw new Error(
-      `Invalid quota sampler intervalMs ${intervalMs} — must be a finite number > 0`,
-    );
+    throw new Error(`Invalid quota sampler intervalMs ${intervalMs} — must be a finite number > 0`);
   }
 
   /**

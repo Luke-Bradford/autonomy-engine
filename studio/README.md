@@ -123,21 +123,21 @@ you get in the Docker image; where the image explicitly overrides a
 bare-process default (`HOST`, `DB_PATH`, `AUTONOMY_DATA_DIR`, `WEB_ROOT`), the
 description notes the bare-process value.
 
-| Variable                      | Default                | Description                                                                                                                         |
-| ----------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                        | `8080`                 | HTTP port the server listens on.                                                                                                    |
-| `HOST`                        | `0.0.0.0`              | Bind address. Defaults to `127.0.0.1` for a bare process; the image binds all interfaces so the published port is reachable.        |
-| `DB_PATH`                     | `/app/data/app.sqlite` | SQLite database file. Bare-process default is `data/app.sqlite` (relative to the working directory).                                |
-| `AUTONOMY_DATA_DIR`           | `/app/data`            | Base directory for derived state — the master key is stored at `<dir>/secrets/master.key` when no explicit key/key-file is set.     |
-| `WEB_ROOT`                    | `/app/web`             | Directory of the built web bundle to serve. Unset for a bare process (dev serves the web via Vite); the image serves the built SPA. |
-| `AUTONOMY_MASTER_KEY`         | _(unset)_              | Pin the secret-encryption master key directly (base64 or hex). Takes precedence over the key file and generation.                   |
-| `AUTONOMY_MASTER_KEY_FILE`    | _(unset)_              | Absolute path to a mounted master-key file (`0600`). Used when `AUTONOMY_MASTER_KEY` is unset.                                      |
-| `GH_TOKEN` / `GITHUB_TOKEN`   | _(unset)_              | GitHub token used to auto-open pull requests for git-connected workspaces. Without one, PRs fall back to a guided-manual flow.      |
-| `WAKEUP_RETENTION_DAYS`       | `30`                   | Days to retain settled scheduled-wakeup rows before the housekeeping sweep prunes them. `0` disables the sweep.                     |
-| `WEBHOOK_RETENTION_DAYS`      | `30`                   | Days to retain delivered webhook rows before pruning. `0` disables the sweep.                                                       |
-| `RETENTION_BATCH_ROWS`        | `1000`                 | Rows deleted per bounded batch by the retention sweeps.                                                                             |
-| `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                     |
-| `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`) — see below. macOS-only either way.                           |
+| Variable                      | Default                | Description                                                                                                                             |
+| ----------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                        | `8080`                 | HTTP port the server listens on.                                                                                                        |
+| `HOST`                        | `0.0.0.0`              | Bind address. Defaults to `127.0.0.1` for a bare process; the image binds all interfaces so the published port is reachable.            |
+| `DB_PATH`                     | `/app/data/app.sqlite` | SQLite database file. Bare-process default is `data/app.sqlite` (relative to the working directory).                                    |
+| `AUTONOMY_DATA_DIR`           | `/app/data`            | Base directory for derived state — the master key is stored at `<dir>/secrets/master.key` when no explicit key/key-file is set.         |
+| `WEB_ROOT`                    | `/app/web`             | Directory of the built web bundle to serve. Unset for a bare process (dev serves the web via Vite); the image serves the built SPA.     |
+| `AUTONOMY_MASTER_KEY`         | _(unset)_              | Pin the secret-encryption master key directly (base64 or hex). Takes precedence over the key file and generation.                       |
+| `AUTONOMY_MASTER_KEY_FILE`    | _(unset)_              | Absolute path to a mounted master-key file (`0600`). Used when `AUTONOMY_MASTER_KEY` is unset.                                          |
+| `GH_TOKEN` / `GITHUB_TOKEN`   | _(unset)_              | GitHub token used to auto-open pull requests for git-connected workspaces. Without one, PRs fall back to a guided-manual flow.          |
+| `WAKEUP_RETENTION_DAYS`       | `30`                   | Days to retain settled scheduled-wakeup rows before the housekeeping sweep prunes them. `0` disables the sweep.                         |
+| `WEBHOOK_RETENTION_DAYS`      | `30`                   | Days to retain delivered webhook rows before pruning. `0` disables the sweep.                                                           |
+| `RETENTION_BATCH_ROWS`        | `1000`                 | Rows deleted per bounded batch by the retention sweeps.                                                                                 |
+| `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                         |
+| `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`) — see below. macOS-only either way.                               |
 | `CLAUDE_QUOTA_SAMPLER`        | `0` (dormant)          | Set to `1` to keep the quota reading warm with a background sampler instead of polling on the request path. Any other value fails boot. |
 
 An invalid numeric value (e.g. a non-integer `PORT`, or a retention count below

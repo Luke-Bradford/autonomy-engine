@@ -155,7 +155,10 @@ describe('startClaudeQuotaSampler — lifecycle safety', () => {
     // no-op, so asserting against a fake handle would pass with the `unref()`
     // call deleted. The interval is long enough that it never fires.
     const spy = vi.spyOn(globalThis, 'setInterval');
-    const sampler = startClaudeQuotaSampler({ read: async () => ({ value: null, unavailable: 'no_credential' }) }, { intervalMs: 600_000 });
+    const sampler = startClaudeQuotaSampler(
+      { read: async () => ({ value: null, unavailable: 'no_credential' }) },
+      { intervalMs: 600_000 },
+    );
     const handle = spy.mock.results[0]?.value as ReturnType<typeof setInterval>;
     expect(handle.hasRef()).toBe(false);
     sampler.stop();
@@ -172,10 +175,10 @@ describe('startClaudeQuotaSampler — lifecycle safety', () => {
     // this is reachable from outside this package. An unhandled rejection ends
     // the process by default in Node, which would be a strictly worse outcome
     // than the UNREADABLE reading the guard already knows how to handle.
-    const sampler = startClaudeQuotaSampler(
-      { read } as unknown as ClaudeAccountQuotaReader,
-      { intervalMs: 30_000, onError },
-    );
+    const sampler = startClaudeQuotaSampler({ read } as unknown as ClaudeAccountQuotaReader, {
+      intervalMs: 30_000,
+      onError,
+    });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(read).toHaveBeenCalledTimes(3);
     expect(onError).toHaveBeenCalledTimes(3);
@@ -187,26 +190,29 @@ describe('startClaudeQuotaSampler — lifecycle safety', () => {
     const read = vi.fn(async () => {
       throw new Error('boom');
     });
-    const sampler = startClaudeQuotaSampler(
-      { read } as unknown as ClaudeAccountQuotaReader,
-      {
-        intervalMs: 30_000,
-        onError: () => {
-          throw new Error('the sink is broken too');
-        },
+    const sampler = startClaudeQuotaSampler({ read } as unknown as ClaudeAccountQuotaReader, {
+      intervalMs: 30_000,
+      onError: () => {
+        throw new Error('the sink is broken too');
       },
-    );
+    });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(read).toHaveBeenCalledTimes(3);
     sampler.stop();
   });
 
   it('refuses a non-positive interval rather than arming a spin loop', () => {
-    expect(() => startClaudeQuotaSampler({ read: async () => ({ value: null, unavailable: 'no_credential' }) }, { intervalMs: 0 })).toThrow(
-      /interval/i,
-    );
     expect(() =>
-      startClaudeQuotaSampler({ read: async () => ({ value: null, unavailable: 'no_credential' }) }, { intervalMs: Number.NaN }),
+      startClaudeQuotaSampler(
+        { read: async () => ({ value: null, unavailable: 'no_credential' }) },
+        { intervalMs: 0 },
+      ),
+    ).toThrow(/interval/i);
+    expect(() =>
+      startClaudeQuotaSampler(
+        { read: async () => ({ value: null, unavailable: 'no_credential' }) },
+        { intervalMs: Number.NaN },
+      ),
     ).toThrow(/interval/i);
   });
 });

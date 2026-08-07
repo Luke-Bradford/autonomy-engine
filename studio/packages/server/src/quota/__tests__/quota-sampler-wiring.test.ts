@@ -28,9 +28,10 @@ afterEach(async () => {
 
 /** A reader that counts reads, so "was it sampled" is observable. */
 function countingReader() {
-  const read = vi.fn(
-    async (): Promise<AccountQuotaReading> => ({ value: null, unavailable: 'no_credential' }),
-  );
+  const read = vi.fn(async (): Promise<AccountQuotaReading> => ({
+    value: null,
+    unavailable: 'no_credential',
+  }));
   return { read };
 }
 
