@@ -41,6 +41,24 @@ export async function openCanvas(page: Page, name: string): Promise<void> {
   // the helper silently opened the WRONG pipeline and the spec passed anyway;
   // click late and Playwright's strict mode saw two matches and failed. Green on
   // main, red on the next PR, with nothing between them to explain it.
+  await openExistingCanvas(page, name);
+}
+
+/**
+ * Open the canvas of a pipeline that ALREADY exists.
+ *
+ * The other half of `openCanvas`, which creates one first. A caller whose
+ * pipeline arrived by some other route — a git import (#979), a copy, a seed —
+ * cannot use that helper, and hand-rolling the navigation is how the two `exact`
+ * lessons above get lost: both the Open link and the shared single-worker
+ * database are unchanged here, so the same substring races apply.
+ */
+export async function openExistingCanvas(page: Page, name: string): Promise<void> {
+  if (!page.url().includes('#/author/pipelines')) {
+    await page.goto('/#/author/pipelines');
+    await page.getByRole('heading', { name: 'Pipelines' }).waitFor();
+    await fluentRootReady(page);
+  }
   await page.getByRole('link', { name: `Open ${name}`, exact: true }).click();
   // The RF viewport, not just the wrapper — the chrome is its child.
   await page.locator('.react-flow__renderer').waitFor();

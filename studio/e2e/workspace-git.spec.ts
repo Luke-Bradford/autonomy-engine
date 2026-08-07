@@ -1,8 +1,9 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 import { seedVersion } from './support/seedDoc';
 
@@ -39,6 +40,58 @@ function makeBareRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'studio-git-e2e-'));
   execFileSync('git', ['init', '--bare', '--initial-branch=main', dir], { stdio: 'ignore' });
   return dir;
+}
+
+/**
+ * #979 — push a pipeline file the workspace has never seen, so importing it
+ * MINTS a version and stamps its git provenance (the precondition for Publish).
+ *
+ * Built by re-identifying the file already committed on `main` rather than by
+ * hand-authoring an envelope: the serializer owns that shape, and a hand-written
+ * copy would silently rot the day it changes. Every identity field is rewritten
+ * — the pipeline's `resourceId` decides create-vs-update, and a reused VERSION
+ * `resourceId` is refused outright as a duplicate immutable id.
+ */
+function pushNewPipelineFile(bareRepo: string, name: string): void {
+  const work = mkdtempSync(join(tmpdir(), 'studio-git-publish-'));
+  try {
+    execFileSync('git', ['clone', '--branch', 'main', bareRepo, work], { stdio: 'ignore' });
+    const dir = join(work, 'pipelines');
+    const source = readdirSync(dir).find((f) => f.endsWith('.json'));
+    if (source === undefined) throw new Error('no pipeline file on main to re-identify');
+
+    const doc = JSON.parse(readFileSync(join(dir, source), 'utf8')) as {
+      data: {
+        pipeline: { id: string; resourceId: string; name: string };
+        versions: { id: string; resourceId: string; pipelineId: string }[];
+      };
+    };
+    const slug = name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+    doc.data.pipeline.id = `pl_${slug}`;
+    doc.data.pipeline.resourceId = `res_pl_${slug}`;
+    doc.data.pipeline.name = name;
+    doc.data.versions.forEach((v, i) => {
+      v.id = `plv_${slug}_${String(i + 1)}`;
+      v.resourceId = `res_plv_${slug}_${String(i + 1)}`;
+      v.pipelineId = `pl_${slug}`;
+    });
+    writeFileSync(join(dir, `${slug}.json`), `${JSON.stringify(doc, null, 2)}\n`);
+
+    const git = (...args: string[]) =>
+      execFileSync(
+        'git',
+        ['-c', 'user.email=e2e@studio.test', '-c', 'user.name=studio e2e', ...args],
+        {
+          cwd: work,
+          stdio: 'ignore',
+        },
+      );
+    git('add', '.');
+    git('commit', '-m', `studio: add ${name}`);
+    git('push', 'origin', 'main');
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
 }
 
 /** The Git page, freshly loaded. */
@@ -225,6 +278,71 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   // ── and the workspace is now measurably up to date, not merely unchanged ───
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(incoming).toContainText('Up to date with main.');
+
+  /**
+   * ── publish (#979, U18 slice 3) ────────────────────────────────────────────
+   *
+   * Publish is CAS over a version whose git provenance is known
+   * (`routes/pipelines.ts`), and provenance is stamped ONLY on an import mint
+   * (`portability/workspace-apply.ts`). The round trip above minted nothing —
+   * it re-imported content identical to the database — so it cannot reach a
+   * publishable version, and the note above explains why forcing a mint by
+   * advancing the DB past the branch is blocked by #963.
+   *
+   * So the version is minted through the OTHER branch of the same apply: a
+   * pipeline whose `resourceId` the workspace has never seen is `created`
+   * outright, with no head comparison, and its version is stamped. The file is
+   * built by re-identifying the one just committed — same doc, new identity —
+   * which keeps the spec from hand-authoring an envelope that could drift from
+   * the serializer's.
+   */
+  const publishName = `${pipelineName}-published`;
+  pushNewPipelineFile(repoDir, publishName);
+
+  await incoming.getByRole('button', { name: 'Check for incoming' }).click();
+  await expect(
+    incoming.getByRole('table').getByRole('row').filter({ hasText: publishName }),
+  ).toContainText('created');
+  await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
+  await withConfirm(page, () => incoming.getByRole('button', { name: 'Import' }).click());
+  await expect(incoming.getByRole('status')).toContainText('Imported');
+
+  await openExistingCanvas(page, publishName);
+  await page.getByRole('button', { name: 'Version history' }).click();
+  const history = page.getByTestId('version-history');
+
+  // Nothing is published yet, so no row may claim to be active. This is the
+  // assertion that would catch an unread pointer being rendered as a fact.
+  await expect(history).not.toContainText('active');
+
+  await history.getByRole('button', { name: /^v1/ }).click();
+  const bar = page.getByTestId('version-preview-bar');
+  const publish = bar.getByRole('button', { name: 'Publish v1' });
+  await expect(publish).toBeEnabled();
+
+  const confirmText = await withConfirm(page, () => publish.click());
+  // The confirmation's load-bearing sentence: publishing moves what is created
+  // NEXT, and does not re-point the triggers that already exist.
+  expect(confirmText).toContain('Publish v1?');
+  expect(confirmText).toContain('do NOT move');
+
+  await expect(page.getByText('Published v1', { exact: false })).toBeVisible();
+  // The pointer reached the list, which is the whole visible outcome.
+  await expect(history.getByRole('button', { name: /^v1/ })).toContainText('active');
+
+  /**
+   * And it is DURABLE, not merely optimistic local state: a reload re-reads the
+   * pointer from `GET /api/pipelines/:id/active`. Without this the spec would
+   * pass on a UI that set a tag and posted nothing.
+   */
+  await page.reload();
+  await page.locator('.react-flow__renderer').waitFor();
+  await page.getByRole('button', { name: 'Version history' }).click();
+  await expect(
+    page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
+  ).toContainText('active');
+
+  await openGitPage(page);
 
   // ── disconnect ─────────────────────────────────────────────────────────────
   const message = await withConfirm(page, () =>
