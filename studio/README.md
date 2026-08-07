@@ -74,6 +74,20 @@ reading to fill the gap. Because the limit is per-account, anything else on the
 host polling the same endpoint — notably the prototype engine's dashboard sampler
 — contends for the same budget.
 
+By default the reader is **lazy**: it polls only when someone calls the route, so
+an install that never asks never touches the credential store. `CLAUDE_QUOTA_SAMPLER=1`
+instead arms a background sampler that keeps the reading warm (a poll every 30s,
+half the cache TTL), so a caller gets a cached answer rather than paying for a
+live provider call — and, when the provider is rate-limiting, gets one at all.
+Arming it does not increase provider calls per cache window, but it does make
+them standing (~60/hour, falling to ~7.5/hour once the backoff engages) and it
+puts one Keychain read on the boot path. **Leave it off unless nothing else on
+the host is sampling that endpoint** — the limit is per-account, so two samplers
+starve each other. It stays off unless the value is exactly `1`; any other value
+fails the boot with a clear error rather than guessing, because both wrong
+answers are bad here (a spurious sampler contends, a spurious dormant leaves
+nothing sampling at all).
+
 **It is macOS-only.** On any other host — including the Docker image above —
 the reading is always `null`, permanently, while the route still answers `200`.
 That is the fail-safe direction (the consumer treats `null` as "unknown" rather
@@ -124,6 +138,7 @@ description notes the bare-process value.
 | `RETENTION_BATCH_ROWS`        | `1000`                 | Rows deleted per bounded batch by the retention sweeps.                                                                             |
 | `RETENTION_SWEEP_MAX_BATCHES` | `50`                   | Max batches a recurring sweep tick prunes (the boot sweep always fully drains).                                                     |
 | `CLAUDE_QUOTA_ENABLED`        | `1` (enabled)          | Set to `0` to switch off the account-quota surface (`GET /api/quota`) — see below. macOS-only either way.                           |
+| `CLAUDE_QUOTA_SAMPLER`        | `0` (dormant)          | Set to `1` to keep the quota reading warm with a background sampler instead of polling on the request path. Any other value fails boot. |
 
 An invalid numeric value (e.g. a non-integer `PORT`, or a retention count below
 `1`) fails fast at boot with a clear error rather than degrading silently.

@@ -45,6 +45,13 @@
       sources fail, so this adds no standing poller to the one rate-limited
       upstream. #765's "exactly one process may poll /api/oauth/usage directly"
       invariant is preserved.
+    * CLAUDE_QUOTA_SAMPLER, which arms studio's background quota sampler and so
+      makes the sentence above stop being true. It is left UNSET on purpose: the
+      one process currently polling that endpoint is the prototype dashboard's
+      sampler, and arming this one before that one is retired would make two.
+      C3 (#410) retires the dashboard and sets this key to 1 in the SAME step,
+      so there is never a moment with two pollers and never one with none. The
+      key is absent rather than set to 0 because absence is the gate.
 -->
 <plist version="1.0">
 <dict>
