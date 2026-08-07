@@ -1,5 +1,10 @@
 import { useCallback, useState } from 'react';
-import { formatTokenCount, type AiActivitySnapshot, type RunSince } from '@autonomy-studio/shared';
+import {
+  formatTokenCount,
+  type AiActivitySnapshot,
+  type LiveRunCounts,
+  type RunSince,
+} from '@autonomy-studio/shared';
 import { fetchAccountQuota, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline } from '../runs/costReading';
@@ -26,6 +31,34 @@ import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaRead
 
 /** Local reads are cheap; this is fast enough to feel live without being busy. */
 const ACTIVITY_POLL_MS = 5_000;
+
+/**
+ * What each non-terminal status is CALLED, and the order the tiles read in.
+ *
+ * The wording carries the distinction the whole panel turns on: only `running`
+ * is work actually happening. `pending` has a row but no drive yet, `queued` has
+ * not started, and `waiting` is parked on an external wait having RELEASED its
+ * concurrency slot — so none of the other three is evidence of an AI doing
+ * anything, and summing them into one "live" number would claim otherwise.
+ *
+ * Typed as an exhaustive `Record<keyof LiveRunCounts, string>`: adding a status
+ * to `LIVE_RUN_STATUSES` fails the typecheck here rather than quietly producing
+ * a run the operator cannot see.
+ */
+const LIVE_RUN_LABEL: Record<keyof LiveRunCounts, string> = {
+  running: 'Runs executing',
+  pending: 'Pending',
+  queued: 'Queued',
+  waiting: 'Waiting',
+};
+
+/** Most-active first, so the number that means "something is happening" leads. */
+const LIVE_RUN_ORDER = [
+  'running',
+  'pending',
+  'queued',
+  'waiting',
+] as const satisfies readonly (keyof LiveRunCounts)[];
 
 function useNow(): number {
   // The relative "resets in …" text is derived against a clock captured per
@@ -122,21 +155,20 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
   return (
     <>
       <dl className="monitor-tiles">
-        <div>
-          <dt>Runs executing</dt>
-          {/* `running` ONLY. `queued` has not started and `waiting` has released
-              its slot — presenting them as one "live" number would report
-              activity that is not happening. */}
-          <dd>{runs.running}</dd>
-        </div>
-        <div>
-          <dt>Queued</dt>
-          <dd>{runs.queued}</dd>
-        </div>
-        <div>
-          <dt>Waiting</dt>
-          <dd>{runs.waiting}</dd>
-        </div>
+        {/* EVERY non-terminal status gets a tile, driven off the response's own
+            keys rather than a hand-picked three. The server already seeds all of
+            them from `LIVE_RUN_STATUSES` so a newly-added status cannot be
+            dropped on the way out; listing three by hand here re-opened exactly
+            that hole one layer up — `pending` was fetched and never shown, which
+            is the silent-omission shape this panel's per-status split exists to
+            refuse. `LIVE_RUN_LABEL` is an exhaustive Record, so a new member of
+            `LiveRunCounts` is a TYPECHECK failure here, not an invisible run. */}
+        {LIVE_RUN_ORDER.map((status) => (
+          <div key={status}>
+            <dt>{LIVE_RUN_LABEL[status]}</dt>
+            <dd>{runs[status]}</dd>
+          </div>
+        ))}
         <div>
           <dt>Billed exchanges</dt>
           <dd>{totals.responseCount}</dd>

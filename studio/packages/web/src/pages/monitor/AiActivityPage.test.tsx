@@ -119,6 +119,28 @@ describe('AiActivityPage', () => {
     expect(waiting).toHaveTextContent('7');
   });
 
+  /**
+   * EVERY non-terminal status must reach a tile. The server seeds all of them
+   * from `LIVE_RUN_STATUSES` precisely so none can be dropped; a hand-picked
+   * list in the component re-opened that hole one layer up and made `pending`
+   * runs — real, non-terminal, with a row but no drive yet — invisible.
+   */
+  it('shows a figure for every non-terminal status, including pending', async () => {
+    const runs = { pending: 3, queued: 4, running: 1, waiting: 7 };
+    activityMock.mockResolvedValue(snapshot({ runs }));
+
+    render(<AiActivityPage />);
+
+    await waitFor(() => expect(screen.getByText('Pending')).toBeInTheDocument());
+    expect(screen.getByText('Pending').parentElement).toHaveTextContent('3');
+
+    // Nothing the response carries about live runs may go unrendered.
+    for (const [status, n] of Object.entries(runs)) {
+      const tiles = screen.getAllByRole('definition').map((d) => d.textContent);
+      expect(tiles, `no tile rendered the ${status} count`).toContain(String(n));
+    }
+  });
+
   it('labels the window with the shared prose, not a raw enum token', async () => {
     activityMock.mockResolvedValue(snapshot());
 
