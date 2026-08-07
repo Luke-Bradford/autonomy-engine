@@ -7,6 +7,22 @@ on:
     branches: [main]
 
 jobs:
+  # C3b (#410) parked the engine under `engine/`, and this job deliberately did
+  # NOT retire with it, contrary to what the cutover plan originally assumed.
+  #
+  # The reason is not that the engine still needs testing -- it is that four of
+  # the files under `engine/` are NOT parked at all. `engine/lib/ci_retry.sh`,
+  # `engine/lib/config_parser.py`, `engine/lib/review_prompt.py` and
+  # `is_doc_only` from `engine/bin/safe_merge.sh` are loaded by
+  # claude-review.yml on EVERY pull request, so they are live production code
+  # sitting inside a parked tree. This job runs the only tests that cover them
+  # (test_ci_retry.sh, test_config_parser.py, test_review_prompt.py,
+  # test_safe_merge_*.sh). Retiring it would leave the merge gate's own
+  # machinery untested, which is a worse state than a slightly overscoped job.
+  #
+  # Narrowing this to just that surface needs the four files lifted OUT of the
+  # parked tree into a shared home first; that is a separate ticket, not this
+  # one. Until then the job stays whole and green.
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -16,14 +32,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: shellcheck all scripts
-        run: shellcheck -S warning start bin/*.sh bin/agents/*.sh lib/ci_retry.sh tests/*.sh templates/autonomy-pack/qa/*.sh
+        run: shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/lib/ci_retry.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 
       - name: Run the full test suite
-        run: bash tests/run_all.sh
+        run: bash engine/tests/run_all.sh
 
   # Deliberately a SEPARATE job from lint-and-test. `loop/` is the studio build
-  # loop's control plane and outlives the root engine that lint-and-test covers,
-  # so when bin/ and lib/ are ripped out this job survives untouched.
+  # loop's control plane and outlives the engine that lint-and-test covers, so
+  # when C3b (#410) parked bin/ and lib/ under engine/ this job was untouched.
   loop:
     runs-on: ubuntu-latest
     steps:
