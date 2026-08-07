@@ -363,8 +363,9 @@ describe('usePolledResource teardown (#989)', () => {
     expect(vi.getTimerCount()).toBe(withOneInterval);
 
     // And the cadence is unchanged, which is the consequence that matters: one
-    // interval over 12s is two ticks, two intervals would be four. The `+ 1`
-    // is the eager refresh the redundant event legitimately caused.
+    // interval over 12s is exactly two ticks, two intervals would be four. The
+    // baseline is taken AFTER the eager refresh the redundant event legitimately
+    // caused, so that refresh is excluded and this counts ticks alone.
     const beforeWindow = fetcher.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(12_000);
