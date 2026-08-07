@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { PipelineVersionSchema, type PipelineVersion } from '@autonomy-studio/shared';
 import { ApiError } from '../../api/client';
 import {
+  activeVersionLabel,
+  describePublishRefusal,
   describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
   historyEntries,
+  isPublishRefused,
   isStaleWrite,
+  publishConfirmMessage,
+  publishOutcomeMessage,
+  publishRefusal,
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
   saveAnywayLabel,
+  type PublishCheck,
 } from './versionHistory';
 
 function version(overrides: Partial<PipelineVersion> = {}): PipelineVersion {
@@ -42,6 +49,7 @@ describe('historyEntries', () => {
         version({ id: 'plv_2', version: 2, createdAt: 200 }),
       ],
       2,
+      null,
     );
 
     expect(entries.map((e) => e.version)).toEqual([3, 2, 1]);
@@ -61,6 +69,7 @@ describe('historyEntries', () => {
         }),
       ],
       null,
+      null,
     );
 
     expect(head).toMatchObject({
@@ -75,12 +84,234 @@ describe('historyEntries', () => {
   });
 
   it('has no head and no current for a pipeline with no versions', () => {
-    expect(historyEntries([], null)).toEqual([]);
+    expect(historyEntries([], null, null)).toEqual([]);
   });
 
   it('marks nothing current when the canvas is on no version (a new pipeline)', () => {
-    const entries = historyEntries([version({ version: 1 })], null);
+    const entries = historyEntries([version({ version: 1 })], null, null);
     expect(entries.map((e) => e.isCurrent)).toEqual([false]);
+  });
+
+  it('marks the ACTIVE version by id, independently of head and current (#979)', () => {
+    const entries = historyEntries(
+      [
+        version({ id: 'plv_1', version: 1 }),
+        version({ id: 'plv_2', version: 2 }),
+        version({ id: 'plv_3', version: 3 }),
+      ],
+      3,
+      'plv_1',
+    );
+
+    // All three marks part company here, which is the point of carrying them
+    // separately: the head is v3, the canvas is on v3, and what is DEPLOYED is v1.
+    expect(entries.map((e) => e.isActive)).toEqual([false, false, true]);
+    expect(entries.map((e) => e.isHead)).toEqual([true, false, false]);
+  });
+
+  it('marks nothing active when the pointer is unread, exactly as when nothing is published', () => {
+    const vs = [version({ id: 'plv_1', version: 1 })];
+    expect(historyEntries(vs, 1, undefined).map((e) => e.isActive)).toEqual([false]);
+    expect(historyEntries(vs, 1, null).map((e) => e.isActive)).toEqual([false]);
+  });
+});
+
+describe('publishRefusal', () => {
+  /** A version that WOULD publish — git-minted, not archived, not active. */
+  function publishable(overrides: Partial<PublishCheck> = {}): PublishCheck {
+    return {
+      selected: version({
+        id: 'plv_7',
+        version: 7,
+        sourceCommit: 'a'.repeat(40),
+        sourceBlobSha: 'b'.repeat(40),
+      }),
+      active: { versionId: 'plv_6', commit: 'c'.repeat(40), blob: 'd'.repeat(40) },
+      gitConnected: true,
+      archived: false,
+      ...overrides,
+    };
+  }
+
+  it('allows a git-minted version that is not already active', () => {
+    expect(publishRefusal(publishable())).toBeNull();
+  });
+
+  it('refuses while the publish state is unread, rather than guessing at it', () => {
+    // The rung that keeps the CAS honest: `expectedActiveVersionId: null` means
+    // "expected never-published", NOT "unknown", so an unread pointer must never
+    // reach the request.
+    expect(publishRefusal(publishable({ active: undefined }))).toMatch(/could not be read/i);
+    expect(publishRefusal(publishable({ gitConnected: undefined }))).toMatch(/could not be read/i);
+  });
+
+  it('refuses without a repo, and says where to connect one', () => {
+    const refusal = publishRefusal(publishable({ gitConnected: false, active: null }));
+    expect(refusal).toMatch(/git repo/i);
+    expect(refusal).toContain('Manage → Git');
+  });
+
+  it('refuses an archived pipeline', () => {
+    expect(publishRefusal(publishable({ archived: true }))).toMatch(/archived/i);
+  });
+
+  it('refuses a version with no git provenance, and names the way out', () => {
+    const authored = publishRefusal(
+      publishable({ selected: version({ id: 'plv_7', version: 7 }) }),
+    );
+    // The message an operator sees most often — nearly every version is authored
+    // on the canvas — so it has to name the ACT, not the missing column.
+    expect(authored).toContain('v7');
+    expect(authored).toMatch(/commit/i);
+    expect(authored).toMatch(/import/i);
+    expect(authored).toContain('Manage → Git');
+
+    // Both halves of the provenance pair are required, exactly as the server
+    // requires them (routes/pipelines.ts).
+    expect(
+      publishRefusal(
+        publishable({
+          selected: version({ id: 'plv_7', version: 7, sourceCommit: 'a'.repeat(40) }),
+        }),
+      ),
+    ).not.toBeNull();
+  });
+
+  it('refuses the version that is already active', () => {
+    const refusal = publishRefusal(
+      publishable({ active: { versionId: 'plv_7', commit: 'c'.repeat(40), blob: 'd'.repeat(40) } }),
+    );
+    expect(refusal).toContain('v7');
+    expect(refusal).toMatch(/already/i);
+  });
+
+  it('reports the workspace-wide blockers before the per-version ones', () => {
+    // Same order the route checks them in, so client and server never disagree
+    // about WHICH reason an operator is shown.
+    const everything = publishable({
+      gitConnected: false,
+      archived: true,
+      selected: version({ id: 'plv_7', version: 7 }),
+      active: null,
+    });
+    expect(publishRefusal(everything)).toMatch(/git repo/i);
+    expect(publishRefusal({ ...everything, gitConnected: true })).toMatch(/archived/i);
+  });
+});
+
+describe('activeVersionLabel', () => {
+  const vs = [version({ id: 'plv_1', version: 1 }), version({ id: 'plv_2', version: 2 })];
+  const pointer = (versionId: string) => ({
+    versionId,
+    commit: 'c'.repeat(40),
+    blob: 'd'.repeat(40),
+  });
+
+  it('names a version this page holds', () => {
+    expect(activeVersionLabel(pointer('plv_2'), vs)).toBe(2);
+  });
+
+  it('keeps "not read" and "nothing published" apart', () => {
+    expect(activeVersionLabel(undefined, vs)).toBeUndefined();
+    expect(activeVersionLabel(null, vs)).toBeNull();
+  });
+
+  /* The bug this resolver exists to kill. Another session publishes a version
+     minted after this page loaded: the pointer is real, the number is not
+     knowable here, and the obvious `?? null` reported it as NOTHING published —
+     the exact opposite of the truth. */
+  it('does not report an unnameable active version as “nothing published”', () => {
+    expect(activeVersionLabel(pointer('plv_minted_elsewhere'), vs)).toBe('unnamed');
+  });
+});
+
+describe('publishConfirmMessage', () => {
+  it('states what moves, what does NOT move, and that nothing is destroyed', () => {
+    const msg = publishConfirmMessage({ selectedVersion: 7, activeVersion: 6 });
+    expect(msg).toContain('v7');
+    expect(msg).toContain('v6');
+    // The trigger semantics are the part an operator cannot guess: a binding is
+    // resolved ONCE at creation (routes/triggers.ts `resolveBindToActive`), so
+    // publishing does not re-point the triggers that already exist.
+    expect(msg).toMatch(/new trigger/i);
+    expect(msg).toMatch(/do not move|does not move/i);
+    expect(msg).toMatch(/nothing is (changed|deleted)|no version is/i);
+  });
+
+  it('says so plainly when nothing has been published before', () => {
+    const msg = publishConfirmMessage({ selectedVersion: 1, activeVersion: null });
+    expect(msg).toMatch(/never been published|nothing is published/i);
+    expect(msg).not.toMatch(/vnull|undefined/i);
+  });
+
+  it('does not claim "nothing is published" when the active version is merely unnameable', () => {
+    const msg = publishConfirmMessage({ selectedVersion: 7, activeVersion: 'unnamed' });
+    expect(msg).toMatch(/replaces the version that is currently active/i);
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vunnamed/);
+  });
+});
+
+describe('publishOutcomeMessage', () => {
+  it('reports a real publish', () => {
+    expect(publishOutcomeMessage({ published: true, selectedVersion: 7 })).toMatch(/published v7/i);
+  });
+
+  it('does NOT claim a publish for the server’s idempotent no-op', () => {
+    // `published: false` means the audit log was not appended — reporting it as
+    // a publish would assert an effect that did not happen.
+    const msg = publishOutcomeMessage({ published: false, selectedVersion: 7 });
+    expect(msg).toMatch(/already/i);
+    expect(msg).not.toMatch(/^Published/i);
+  });
+});
+
+describe('isPublishRefused', () => {
+  it('is the route’s 409 conflict, and nothing else', () => {
+    expect(
+      isPublishRefused(new ApiError(409, 'nope', { error: 'conflict', message: 'nope' })),
+    ).toBe(true);
+    expect(
+      isPublishRefused(new ApiError(404, 'gone', { error: 'not_found', message: 'gone' })),
+    ).toBe(false);
+    expect(
+      isPublishRefused(new ApiError(409, 'stale', { error: 'stale_write', message: 'stale' })),
+    ).toBe(false);
+    expect(isPublishRefused(new Error('network'))).toBe(false);
+  });
+});
+
+describe('describePublishRefusal', () => {
+  it('re-states the pointer it just re-read, without echoing the server’s sentence', () => {
+    // The server's own message names internal DB ids (routes/pipelines.ts), and
+    // this file already refuses to print those for a refused restore.
+    const msg = describePublishRefusal(6);
+    expect(msg).toMatch(/not published/i);
+    expect(msg).toContain('v6');
+    expect(msg).toMatch(/nothing was changed/i);
+  });
+
+  it('does not invent a version when nothing is published', () => {
+    const msg = describePublishRefusal(null);
+    expect(msg).not.toMatch(/vnull|undefined/);
+    expect(msg).toMatch(/nothing is published/i);
+  });
+
+  it('names an unnameable active version without inventing a number', () => {
+    const msg = describePublishRefusal('unnamed');
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vunnamed/);
+    expect(msg).toMatch(/currently active/i);
+  });
+
+  it('does not report a FAILED re-read as “nothing is published”', () => {
+    // The two are opposite claims. `null` is a fact the re-read established;
+    // `undefined` is the absence of one, and printing it as the fact would be
+    // the manufactured-default shape this module exists to refuse.
+    const msg = describePublishRefusal(undefined);
+    expect(msg).toMatch(/unknown/i);
+    expect(msg).not.toMatch(/nothing is published/i);
+    expect(msg).not.toMatch(/vundefined/);
   });
 });
 

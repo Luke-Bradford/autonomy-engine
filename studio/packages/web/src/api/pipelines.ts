@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import {
+  ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
   NewPipelineSchema,
   PipelineSchema,
   PipelineVersionSchema,
+  PublishPipelineBodySchema,
+  PublishPipelineResultSchema,
   paginatedResponseSchema,
+  type ActivePipelineVersion,
   type Pipeline,
   type PipelineVersion,
+  type PublishPipelineBody,
+  type PublishPipelineResult,
 } from '@autonomy-studio/shared';
 import { ApiError, apiFetch, messageOf } from './client';
 import { fetchAllPages, pageQuery } from './pagination';
@@ -277,6 +283,49 @@ export async function duplicatePipeline(source: Pipeline, name: string): Promise
     if (copy) await deletePipeline(copy.id).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * #979 (#3 G6c-1) — the pipeline's ACTIVE published version, or `null` if it has
+ * never been published.
+ *
+ * Not git-gated: a DB-only workspace answers `{active: null}` rather than 404,
+ * so this is safe to call for any pipeline. The caller must keep "unread" and
+ * `null` apart — see `ActiveVersionState` in `pages/pipeline/versionHistory.ts`
+ * for why that distinction is load-bearing rather than tidy.
+ */
+export function getActivePipelineVersion(
+  pipelineId: string,
+  signal?: AbortSignal,
+): Promise<ActivePipelineVersion | null> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/active`, {
+    schema: ActivePipelineVersionResponseSchema,
+    signal,
+  }).then((res) => res.active);
+}
+
+/**
+ * #979 (#3 G6c) — make `toVersionId` the active published version.
+ *
+ * The body goes through the SAME shared schema the route parses, the convention
+ * the rest of this file follows: `expectedActiveVersionId` is required and
+ * undefaulted on purpose (a missing expectation would be a fail-open CAS), so a
+ * client that has not read the pointer cannot accidentally omit it here — it has
+ * to state `null`, which is the positive claim "expected never-published".
+ *
+ * A business-rule refusal (no repo / archived / no git provenance / stale CAS)
+ * arrives as one undifferentiated 409 `conflict`; `isPublishRefused` in
+ * `versionHistory.ts` is the predicate for it.
+ */
+export function publishPipeline(
+  pipelineId: string,
+  body: PublishPipelineBody,
+): Promise<PublishPipelineResult> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(pipelineId)}/publish`, {
+    method: 'POST',
+    body: PublishPipelineBodySchema.parse(body),
+    schema: PublishPipelineResultSchema,
+  });
 }
 
 /**

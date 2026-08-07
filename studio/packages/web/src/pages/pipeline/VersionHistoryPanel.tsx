@@ -89,6 +89,9 @@ export function VersionHistoryPanel({
               {/* Two different facts, and they part company the moment a
                   preview is open: `current` is what the EDITOR is based on. */}
               {e.isCurrent && <span className="version-history-tag">on the canvas</span>}
+              {/* #979 — a THIRD fact, and the only one that describes what is
+                  deployed: what a new `active`-bound trigger will resolve to. */}
+              {e.isActive && <span className="version-history-tag is-active">active</span>}
               <span className="version-history-when">{formatWhen(e.createdAt)}</span>
               <span className="version-history-shape">{shapeSummary(e)}</span>
             </button>
@@ -104,6 +107,15 @@ interface VersionPreviewBarProps {
   /** Why this version cannot be restored, or `null` if it can. */
   refusal: string | null;
   restoring: boolean;
+  /**
+   * #979 — why this version cannot be PUBLISHED, or `null` if it can. Its own
+   * prop rather than a shared `refusal`: the two acts are refused for entirely
+   * different reasons and are routinely available one at a time (the head can
+   * be published but not restored; an imported older version, the reverse).
+   */
+  publishRefusal: string | null;
+  publishing: boolean;
+  onPublish: () => void;
   onRestore: () => void;
   onBackToEditing: () => void;
 }
@@ -121,9 +133,16 @@ export function VersionPreviewBar({
   version,
   refusal,
   restoring,
+  publishRefusal,
+  publishing,
+  onPublish,
   onRestore,
   onBackToEditing,
 }: VersionPreviewBarProps) {
+  // Both in-flight acts make the bar's own controls inert; only the RESTORE
+  // rebases the canvas, which is why `previewLocked` upstream still keys on
+  // `restoring` alone (publishing moves a pointer and touches no editor state).
+  const busy = restoring || publishing;
   return (
     <div className="version-preview-bar" data-testid="version-preview-bar" role="status">
       <strong>Viewing v{version} — read-only.</strong>
@@ -136,21 +155,46 @@ export function VersionPreviewBar({
              that is only safe into an editor that is not mounted. Leaving here
              mid-flight remounts one, and anything typed into it would be
              overwritten by the arriving response. */
-          disabled={restoring}
-          title={restoring ? 'Restoring — wait for it to finish.' : undefined}
+          disabled={busy}
+          title={busy ? 'Wait for the action in flight to finish.' : undefined}
         >
           Back to editing
         </button>
         <button
           type="button"
           onClick={onRestore}
-          disabled={refusal !== null || restoring}
+          disabled={refusal !== null || busy}
           /* The reason is on screen already; naming it here too is what a
              screen reader gets instead of an unexplained disabled control. */
           title={refusal ?? undefined}
         >
           {restoring ? 'Restoring…' : `Restore v${version}`}
         </button>
+        <button
+          type="button"
+          onClick={onPublish}
+          disabled={publishRefusal !== null || busy}
+          /* Unlike the restore refusal, this one is NOT printed in the bar: it
+             is the ordinary state of nearly every version (git provenance is
+             stamped only on an import), so showing it standingly would read as
+             a permanent error banner.
+
+             But `title` alone is not an accessible substitute for the restore
+             refusal's on-screen sentence — a disabled control is skipped by
+             much AT, and a tooltip needs a hover nobody on a keyboard can
+             produce. So the reason is also carried in a visually-hidden element
+             the button DESCRIBES itself by: hidden from the layout, present in
+             the accessibility tree. */
+          title={publishRefusal ?? undefined}
+          aria-describedby={publishRefusal !== null ? 'publish-refusal' : undefined}
+        >
+          {publishing ? 'Publishing…' : `Publish v${version}`}
+        </button>
+        {publishRefusal !== null && (
+          <span id="publish-refusal" className="visually-hidden">
+            {publishRefusal}
+          </span>
+        )}
       </div>
     </div>
   );

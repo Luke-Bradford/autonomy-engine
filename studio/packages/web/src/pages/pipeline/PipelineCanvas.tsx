@@ -11,6 +11,7 @@ import {
   isStructuralCallActivity,
   paramDefaultDefect,
   type RefSuggestion,
+  type ActivePipelineVersion,
   type CallConfig,
   type Container,
   type ConnectionPublic,
@@ -33,10 +34,13 @@ import {
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
+  getActivePipelineVersion,
   latestVersion,
   listPipelineVersions,
+  publishPipeline,
   restorePipeline,
 } from '../../api/pipelines';
+import { getWorkspaceGit } from '../../api/workspaceGit';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -75,17 +79,48 @@ import { FlowCanvas } from './FlowCanvas';
 import { RunCanvas } from '../runs/RunCanvas';
 import { VersionHistoryPanel, VersionPreviewBar } from './VersionHistoryPanel';
 import {
+  activeVersionLabel,
+  describePublishRefusal,
   describeRestoreConflict,
   describeSaveConflict,
   docUnchanged,
   historyEntries,
+  isPublishRefused,
   isStaleWrite,
+  publishConfirmMessage,
+  publishOutcomeMessage,
+  publishRefusal,
   restoreBodyFrom,
   restoreConfirmMessage,
   restoreRefusal,
   saveAnywayLabel,
+  type ActiveVersionState,
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
+
+/**
+ * #979 — the two facts a Publish decision needs, read together.
+ *
+ * Together because they are meaningless apart: an active pointer without knowing
+ * whether a repo is connected cannot tell "never published" from "publishing is
+ * not available here". Either read failing rejects the pair, so the caller lands
+ * in one unread state rather than a half-known one.
+ *
+ * A module-level function, not a `useCallback`: it holds no component state, and
+ * calling a setState-bearing callback from an effect body is exactly what the
+ * `set-state-in-effect` rule forbids — the caller applies the result in a
+ * promise callback, the form the initial load beside it already uses.
+ */
+async function readPublishState(
+  pipelineId: string,
+  signal?: AbortSignal,
+): Promise<{ active: ActivePipelineVersion | null; gitConnected: boolean }> {
+  const [active, git] = await Promise.all([
+    getActivePipelineVersion(pipelineId, signal),
+    getWorkspaceGit(signal),
+  ]);
+  return { active, gitConnected: git !== null };
+}
 
 /**
  * How long a copy/paste/duplicate notice stays up.
@@ -177,6 +212,16 @@ export function PipelineCanvas({
   /** The version NUMBER being previewed read-only, or `null` while editing. */
   const [previewing, setPreviewing] = useState<number | null>(null);
   const [restoring, setRestoring] = useState(false);
+  /**
+   * #979 — the publish state: the active pointer, and whether a repo is
+   * connected at all. Both start `undefined` and STAY `undefined` if the read
+   * fails, which is what stops a publish from being attempted on a guess — see
+   * `ActiveVersionState`. They are one piece of state because they are read
+   * together and are meaningless apart.
+   */
+  const [active, setActive] = useState<ActiveVersionState>(undefined);
+  const [gitConnected, setGitConnected] = useState<boolean | undefined>(undefined);
+  const [publishing, setPublishing] = useState(false);
   /**
    * #904 — the head this canvas was refused against, or `null` when there is no
    * conflict outstanding.
@@ -325,6 +370,34 @@ export function PipelineCanvas({
     return () => ctrl.abort();
   }, [pipelineId, store]);
 
+  /**
+   * #979 — the publish state, read SEPARATELY from the load above and never
+   * folded into its `Promise.all`.
+   *
+   * That effect routes any rejection to `setLoadError`, which replaces the whole
+   * page with an error. Its two reads are load-bearing for authoring; these two
+   * are not — they decorate one panel. A workspace whose git read fails must
+   * still open its canvas, so a failure here degrades to `undefined` (publish
+   * held back, nothing claimed) rather than taking the editor down with it.
+   */
+  useEffect(() => {
+    const ctrl = new AbortController();
+    readPublishState(pipelineId, ctrl.signal)
+      .then((s) => {
+        setActive(s.active);
+        setGitConnected(s.gitConnected);
+      })
+      .catch(() => {
+        if (ctrl.signal.aborted) return;
+        // Back to unread, not to a default. A failed read that left a STALE
+        // pointer on screen would be worse than one showing none: the CAS would
+        // then be sent an expectation nothing currently supports.
+        setActive(undefined);
+        setGitConnected(undefined);
+      });
+    return () => ctrl.abort();
+  }, [pipelineId]);
+
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const containers = useStore(store, (s) => s.containers);
@@ -345,8 +418,8 @@ export function PipelineCanvas({
   const head = useMemo(() => latestVersion(versions), [versions]);
   const headVersion = head?.version ?? null;
   const entries = useMemo(
-    () => historyEntries(versions, loaded?.version ?? null),
-    [versions, loaded],
+    () => historyEntries(versions, loaded?.version ?? null, active?.versionId),
+    [versions, loaded, active],
   );
   const previewed = useMemo(
     () => versions.find((v) => v.version === previewing) ?? null,
@@ -630,6 +703,85 @@ export function PipelineCanvas({
     }
   }, [dirty, head, headVersion, pipelineId, previewed, store]);
 
+  /**
+   * #979 — make the previewed version the active published one.
+   *
+   * Publishing mints nothing and rebases nothing: it appends one pointer event.
+   * So unlike a restore this touches neither `versions` nor the canvas store,
+   * and it deliberately does NOT join `previewLocked` — the editor stays exactly
+   * as it was.
+   *
+   * The refusal is re-checked here and not merely relied on from the disabled
+   * button: the button's state is a render-time read, and the pointer can move
+   * between the render and the click.
+   */
+  const onPublish = useCallback(async () => {
+    if (previewed === null) return;
+    const check = { selected: previewed, active, gitConnected, archived };
+    const refusal = publishRefusal(check);
+    if (refusal !== null) {
+      setSaveMsg(refusal);
+      return;
+    }
+    // Narrowing for TypeScript AND a genuine guard: `publishRefusal` returns
+    // non-null for `undefined`, so this is unreachable — but the CAS argument is
+    // too important to rest on a function's return value alone.
+    if (active === undefined) return;
+    if (
+      !window.confirm(
+        publishConfirmMessage({
+          selectedVersion: previewed.version,
+          activeVersion: activeVersionLabel(active, versions),
+        }),
+      )
+    ) {
+      return;
+    }
+
+    setPublishing(true);
+    try {
+      const result = await publishPipeline(pipelineId, {
+        toVersionId: previewed.id,
+        // The pointer this page read, stated positively. `null` here is the
+        // claim "never published", which the refusal ladder above has already
+        // established is a fact and not an unread.
+        expectedActiveVersionId: active === null ? null : active.versionId,
+      });
+      // The response CARRIES the post-call pointer, so re-reading it would be a
+      // round trip for a fact already in hand (the same move the restore makes
+      // with the version it just minted).
+      setActive(result.active);
+      setSaveMsg(
+        publishOutcomeMessage({ published: result.published, selectedVersion: previewed.version }),
+      );
+    } catch (err) {
+      if (isPublishRefused(err)) {
+        // All four refusal causes share one 409 code, so this cannot say WHICH.
+        // Re-read the state — the page is otherwise left asserting a pointer the
+        // server has just contradicted — and describe what it now shows.
+        let fresh: ActivePipelineVersion | null | undefined;
+        try {
+          const s = await readPublishState(pipelineId);
+          setActive(s.active);
+          setGitConnected(s.gitConnected);
+          fresh = s.active;
+        } catch {
+          setActive(undefined);
+          setGitConnected(undefined);
+          fresh = undefined;
+        }
+        // Through the ONE resolver, so a failed re-read stays `undefined` and a
+        // version this page cannot name stays distinct from "nothing published".
+        // Both were collapsed to `null` here, and both read as a false fact.
+        setSaveMsg(describePublishRefusal(activeVersionLabel(fresh, versions)));
+        return;
+      }
+      setSaveMsg(`Publish failed: ${messageOf(err)}`);
+    } finally {
+      setPublishing(false);
+    }
+  }, [active, archived, gitConnected, pipelineId, previewed, versions]);
+
   return (
     <section aria-labelledby="canvas-heading" className="canvas-page">
       <div className="page-header">
@@ -851,6 +1003,9 @@ export function PipelineCanvas({
               headVersion,
             })}
             restoring={restoring}
+            publishRefusal={publishRefusal({ selected: previewed, active, gitConnected, archived })}
+            publishing={publishing}
+            onPublish={() => void onPublish()}
             onRestore={() => void onRestore()}
             onBackToEditing={() => {
               setPreviewing(null);
