@@ -4,7 +4,7 @@ Run before EVERY push — first push and every follow-up alike.
 
 ```bash
 bash engine/tests/run_all.sh
-shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
+shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/lib/ci_retry.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 ```
 
 Both must be completely clean (`ALL SUITES PASS`, zero shellcheck output).

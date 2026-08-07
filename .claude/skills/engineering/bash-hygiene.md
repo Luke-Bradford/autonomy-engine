@@ -24,10 +24,12 @@ Empty-array expansion under `set -u`: `${arr[@]+"${arr[@]}"}`
 ## The gate
 
 ```bash
-shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
+shellcheck -S warning engine/start engine/bin/*.sh engine/bin/agents/*.sh engine/lib/ci_retry.sh engine/tests/*.sh engine/templates/autonomy-pack/qa/*.sh
 ```
 
-`engine/tests/*.sh` is part of the gate — a common miss. CI (`lint-and-test`) runs the
+`engine/tests/*.sh` is part of the gate — a common miss. So is `engine/lib/ci_retry.sh`,
+the one shell file under `engine/lib/` (it is live control-plane code loaded by
+`claude-review.yml`; see #977). CI (`lint-and-test`) runs the
 same line; local and CI must agree.
 
 ## Structural rules
