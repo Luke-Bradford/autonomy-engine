@@ -555,18 +555,33 @@ export function precheckDivergence(
  * - `renamed`: only the display name changed → the row's `name` was patched, no
  *   version minted.
  * - `unchanged`: a matching resource was identical → no write.
+ * - `superseded` (#963): the branch's version doc is one this workspace ALREADY
+ *   holds and has since authored PAST — the ordinary "commit, keep working, then
+ *   pull" loop. Nothing is written, because immutable versions are additive and
+ *   the named row is already present and byte-identical. Its own value rather
+ *   than `unchanged` because the preview truthfully said "content differs"
+ *   (the branch does differ from the HEAD), so reporting a bare `unchanged`
+ *   would leave the operator with two statements that contradict each other and
+ *   no way to tell which is wrong. Note this is NOT a revert: branch content
+ *   alone cannot distinguish "re-pull of an older commit" from "deliberate
+ *   revert to an older version", and going back is re-authoring, not importing.
  *
  * `action` and `versionMinted` are ORTHOGONAL: `action` is the row-level
  * disposition, `versionMinted` is whether a new immutable version was minted in
  * the SAME apply. They coincide for `updated` (a content change mints) but a
  * `restored` can carry EITHER value (#672 — un-archive alone, or un-archive + a
  * changed version doc), so the version signal is not derivable from `action`.
+ * `superseded` ranks BELOW every write-bearing action and above `unchanged`: a
+ * restore/rename/concurrency patch in the same apply is the louder fact and
+ * still wins, since those describe a write that happened and this describes one
+ * that was correctly not needed.
  */
 export const WorkspaceGitAppliedActionSchema = z.enum([
   'created',
   'restored',
   'updated',
   'renamed',
+  'superseded',
   'unchanged',
 ]);
 export type WorkspaceGitAppliedAction = z.infer<typeof WorkspaceGitAppliedActionSchema>;

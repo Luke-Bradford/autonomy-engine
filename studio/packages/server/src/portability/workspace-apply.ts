@@ -536,11 +536,20 @@ export function applyWorkspace(
     const versionById = new Map<string, string>();
     const versionRidByDbId = new Map<string, string>();
     const existingVersionRids = new Set<string>();
+    // #963 — the stored row that OWNS each version resourceId. The immutability
+    // guard below has to compare the branch's version doc against the row its own
+    // id names; comparing against the pipeline's HEAD instead is what made the
+    // ordinary "commit, keep authoring, then pull" loop look like tampering. The
+    // rows are already materialised by the loop, so this map costs no extra query,
+    // and the content form is computed LAZILY at the one site that needs it rather
+    // than for every owned version on every import.
+    const versionRowByRid = new Map<string, PipelineVersion>();
     for (const pipeline of listPipelines(db, ownerId)) {
       for (const v of listPipelineVersions(db, pipeline.id)) {
         versionById.set(v.resourceId, v.id);
         versionRidByDbId.set(v.id, v.resourceId);
         existingVersionRids.add(v.resourceId);
+        versionRowByRid.set(v.resourceId, v);
       }
     }
 
@@ -595,17 +604,11 @@ export function applyWorkspace(
         if (row.concurrency !== existing.concurrency) rowPatch.concurrency = row.concurrency;
         if (Object.keys(rowPatch).length > 0) updatePipeline(db, existing.id, rowPatch);
 
-        // The version write is decided UNIFORMLY for a live OR an archived
-        // (restore) pipeline: compare the branch's latest version doc against the
-        // pipeline's ACTUAL latest DB version — which survives archive — in
-        // resourceId-space via the reverse maps. A branch whose latest doc
-        // DIFFERS but reuses an EXISTING immutable version `resourceId` is a
-        // contradiction (immutable rows can't be edited in place — a hand-edit
-        // that kept the id, or a git-revert to a superseded version): fail closed
-        // (#473, never silently skip a real edit), for archived and live alike.
-        // A benign no-op (identical doc) does NOT trip this — `versionChanged` is
-        // false. This is the ONE place `willMint` is decided, so the reported
-        // `action` can never disagree with what is written.
+        // Whether the branch's latest version doc differs from the pipeline's
+        // ACTUAL latest DB version — which survives archive — compared in
+        // resourceId-space via the reverse maps. Decided UNIFORMLY for a live OR
+        // an archived (restore) pipeline. This drives the MINT; it deliberately
+        // does NOT decide legality, which is the guard below's job.
         const dbLatest = getLatestPipelineVersion(db, existing.id);
         const dbLatestForm = dbLatest
           ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
@@ -613,12 +616,46 @@ export function applyWorkspace(
         const versionChanged =
           version !== undefined &&
           (dbLatestForm === undefined || pipelineVersionContentForm(version) !== dbLatestForm);
-        if (versionChanged && alreadyMaterialised) {
-          throw new WorkspaceApplyError(
-            `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
-          );
+
+        // #963 — a branch version that reuses an EXISTING immutable version
+        // `resourceId` is judged against the ROW THAT ID NAMES, never against the
+        // pipeline's head. Immutable rows cannot be edited in place, so the only
+        // legal reuse is a byte-identical re-pull of the row itself; anything else
+        // is a hand-edit that kept the id, or an id belonging to another pipeline.
+        // Fail closed on both (#473 — never silently skip a real edit), for
+        // archived and live alike.
+        //
+        // The predicate is deliberately NOT conditioned on `versionChanged`. That
+        // conjunct used to gate the whole guard, which left a hole: a branch file
+        // claiming ANOTHER pipeline's version id, with content that happens to
+        // match this pipeline's head, never reached the check at all — and the
+        // content form scrubs `resourceId`/`version`, so "same content, different
+        // owner" is reachable rather than theoretical.
+        let superseded = false;
+        if (version !== undefined && versionRid !== null && existingVersionRids.has(versionRid)) {
+          const owner = versionRowByRid.get(versionRid);
+          if (owner === undefined || owner.pipelineId !== existing.id) {
+            throw new WorkspaceApplyError(
+              `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses a version id owned by a different pipeline — version ids are unique per resource`,
+            );
+          }
+          if (
+            pipelineVersionContentForm(version) !==
+            dbVersionForm(owner, connRidByDbId, versionRidByDbId)
+          ) {
+            throw new WorkspaceApplyError(
+              `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
+            );
+          }
+          // Legal: the branch names a version we already hold, byte-identical.
+          // If the workspace has since authored past it, say so rather than
+          // reporting a bare `unchanged` the preview has already contradicted.
+          superseded = versionChanged;
         }
-        willMint = versionChanged; // alreadyMaterialised + changed already threw
+        // This is the ONE place `willMint` is decided, so the reported `action`
+        // can never disagree with what is written. An already-materialised version
+        // is never re-minted — the row exists and is immutable.
+        willMint = versionChanged && !alreadyMaterialised;
 
         if (existing.archived) {
           restorePipeline(db, existing.id);
@@ -627,6 +664,8 @@ export function applyWorkspace(
           action = 'updated';
         } else if (rowPatch.name !== undefined) {
           action = 'renamed';
+        } else if (superseded) {
+          action = 'superseded';
         } else {
           action = 'unchanged';
         }

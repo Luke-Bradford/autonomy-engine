@@ -415,6 +415,109 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     );
   });
 
+  // #963 — the ordinary collaborative loop: commit, keep authoring, then pull the
+  // branch back. The branch still names the version it was serialized from, which
+  // the workspace has since authored PAST. That version is untouched and
+  // byte-identical to what is on the branch, so it is not a tamper — the old guard
+  // compared against the pipeline's HEAD rather than against the row the branch's
+  // version id actually names, and accused the operator of editing an immutable
+  // row in place.
+  it('ACCEPTS a branch naming a SUPERSEDED version this workspace already holds (no throw, no mint)', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v1', type: 'string' }],
+    });
+    // The branch is serialized at V1 (what Commit pushed).
+    const incoming = snapshot(db);
+    // Then authoring continues: V2 becomes the head, V1 stays immutable.
+    const v2 = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v2', type: 'string' }],
+    });
+
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+
+    const applied = result.applied.find((a) => a.resourceId === pipe.resourceId)!;
+    expect(applied.action).toBe('superseded');
+    expect(applied.versionMinted).toBe(false);
+    expect(result.refused).toBe(false);
+    // Nothing written: V1 and V2 both stand, and the head has not moved.
+    expect(listPipelineVersions(db, pipe.id).map((v) => v.id)).toEqual([v1.id, v2.id]);
+    expect(getLatestPipelineVersion(db, pipe.id)!.id).toBe(v2.id);
+  });
+
+  // Unblocking the refusal above makes the rest of the apply reachable for the
+  // first time in this shape, so pin what it does to a dependent trigger rather
+  // than leaving it to be discovered. The branch owns trigger BINDINGS (they are
+  // mutable rows, unlike versions), so importing a branch whose trigger pins V1
+  // re-pins the DB trigger from V2 back to V1. That is the import doing what it
+  // says — the resulting "trigger pinned below head" state is ordinary and
+  // supported — but it is a real consequence of the #963 fix, not an accident.
+  it('re-pins a dependent trigger to the branch version even when the pipeline is superseded', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v1', type: 'string' }],
+    });
+    const trig = createTrigger(db, triggerOn(v1.id));
+    const incoming = snapshot(db);
+
+    const v2 = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v2', type: 'string' }],
+    });
+    updateTrigger(db, trig.id, { pipelineVersionId: v2.id });
+
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+
+    expect(result.applied.find((a) => a.resourceId === pipe.resourceId)!.action).toBe('superseded');
+    expect(getTrigger(db, trig.id)!.pipelineVersionId).toBe(v1.id);
+  });
+
+  // The benign case above must not become a hole for the tamper case it sits
+  // beside: same version resourceId, DIFFERENT content is still a hand-edit of an
+  // immutable row, whether or not the workspace has moved on since.
+  it('still REFUSES a superseded version id whose branch content diverges from the row it names', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, { ...baseVersion(pipe.id), outputs: [{ name: 'v1', type: 'string' }] });
+    const incoming = snapshot(db);
+    createPipelineVersion(db, { ...baseVersion(pipe.id), outputs: [{ name: 'v2', type: 'string' }] });
+    incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
+
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
+  });
+
+  // Version resourceIds are globally unique by construction, so a branch file for
+  // pipeline B claiming A's version id is corrupt however similar the content is.
+  // The content form scrubs `resourceId`/`version`, so "same content, different
+  // owner" is reachable — and the pre-#963 guard missed it entirely, because it
+  // only ever fired when the content differed from B's own head.
+  it('REFUSES a branch whose version id belongs to a DIFFERENT existing pipeline (identical content)', () => {
+    const db = freshDb().db;
+    const a = createPipeline(db, { ownerId: 'local', name: 'A' });
+    const aV = createPipelineVersion(db, baseVersion(a.id));
+    const b = createPipeline(db, { ownerId: 'local', name: 'B' });
+    createPipelineVersion(db, baseVersion(b.id));
+
+    const incoming = snapshot(db);
+    const bFile = incoming.pipelines.find((p) => p.resourceId === b.resourceId)!;
+    bFile.data.versions[0]!.resourceId = aV.resourceId;
+    // Drop A's own file so the intra-batch duplicate guard (two branch files
+    // claiming one version id) cannot fire first — the claim under test is B
+    // alone reusing an id owned by A in the DB.
+    incoming.pipelines = incoming.pipelines.filter((p) => p.resourceId !== a.resourceId);
+
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
+  });
+
   it('REFUSES a NEW pipeline whose version reuses an existing version id (create-path fail-open)', () => {
     const db = freshDb().db;
     const a = createPipeline(db, { ownerId: 'local', name: 'A' });
