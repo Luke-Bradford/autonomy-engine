@@ -21,7 +21,7 @@ On 2026-07-25 an unattended night ran the 7-day window to **97%**, which locks t
 
 ## STEP 1 — STATE TRIAGE (do this FIRST, every fire, before building)
 Run: `git log --oneline -15 origin/main` · `gh pr list --state open` (for each: `gh pr checks <n>`, `gh pr view <n> --comments`) · `git ls-remote --heads origin | grep -E 'feat/studio|fix/studio'`. Then, in priority order:
-0. **Not every open PR is YOURS to land.** The supervisor (a human-facing session) opens its OWN engine/tooling PRs on `main` — titled `fix(ci):`/`fix(review):`/`docs:`, on the **reserved `supervisor/**` prefix** (#823; it previously used `fix/<slug>-…`, which collided with your own `loop/` branches), touching `.github/`, `lib/`, `bin/`, `tests/`, `start`. **Your branches always carry the issue number** — `feat/studio-<n>-…`, `fix/studio-<n>-…`, `fix/loop-<n>-…` — and `drive.sh`'s `is_loop_ref` keys its progress signals on exactly that, so a branch of yours WITHOUT a number is invisible to the stall detector and the gate wait (it under-counts progress and can trip a false stall, which stops the run; that is the safe polarity, but avoid it). Do NOT ADOPT, merge, or build on those — the supervisor lands them. (This changes NOTHING about review: the required `review` check + the API review bot still run on every PR including those; they are simply the supervisor's to resolve, not yours.) They are not "an open studio PR" for rule 1 and never block you. Your scope is `studio/**` (the work order + its found-defect tickets); filter `gh pr list` to studio feature branches before applying the rules below. Your OWN studio PRs get the full treatment: every review finding resolved (FIXED/DEFERRED/REBUTTED), merge only on `review`=APPROVE — unchanged.
+0. **Not every open PR is YOURS to land.** The supervisor (a human-facing session) opens its OWN engine/tooling PRs on `main` — titled `fix(ci):`/`fix(review):`/`docs:`, on the **reserved `supervisor/**` prefix** (#823; it previously used `fix/<slug>-…`, which collided with your own `loop/` branches), touching `.github/`, `engine/lib/`, `engine/bin/`, `engine/tests/`, `engine/start`. **Your branches always carry the issue number** — `feat/studio-<n>-…`, `fix/studio-<n>-…`, `fix/loop-<n>-…` — and `drive.sh`'s `is_loop_ref` keys its progress signals on exactly that, so a branch of yours WITHOUT a number is invisible to the stall detector and the gate wait (it under-counts progress and can trip a false stall, which stops the run; that is the safe polarity, but avoid it). Do NOT ADOPT, merge, or build on those — the supervisor lands them. (This changes NOTHING about review: the required `review` check + the API review bot still run on every PR including those; they are simply the supervisor's to resolve, not yours.) They are not "an open studio PR" for rule 1 and never block you. Your scope is `studio/**` (the work order + its found-defect tickets); filter `gh pr list` to studio feature branches before applying the rules below. Your OWN studio PRs get the full treatment: every review finding resolved (FIXED/DEFERRED/REBUTTED), merge only on `review`=APPROVE — unchanged.
 1. **An open STUDIO PR exists** (a `feat/studio-…`/`fix/studio-…` branch) → finish it, don't start new work / don't duplicate. Green + `review`=APPROVE on the LATEST commit → squash-merge, delete branch. Red / unresolved findings → fix on that branch, push, wait for the gate.
 2. **No open studio PR, a studio feature branch ahead of main** → continue it to a PR.
 3. **Clean** (no open studio PR/branch) → start the next item in **THE QUEUE** under CURRENT PRIORITY. That list is the ordering; the `## WORK ORDER` section further down is the dependency BACKGROUND it draws from, not a second queue to read instead.
@@ -58,9 +58,19 @@ FOR, so C3 cannot retire that dashboard until this exists. Two goals, one ticket
      ```
      If not done, the runbook is in the CUTOVER block below. **Order matters and is not
      interchangeable** — bootout the dashboard FIRST, then `--update` studio.
-   - **3b. PARK the old engine** — `bin/ lib/ tests/ templates/ start`, plus retiring the
-     engine-scoped `lint-and-test` job in `.github/workflows/ci.yml`. NOT started. `loop/` STAYS
-     (it is the control plane, not the engine) and so does the separate `loop` CI job.
+   - **3b. PARK the old engine — DONE.** The tree moved to `engine/` (`engine/bin/ engine/lib/
+     engine/tests/ engine/templates/ engine/start`), preserved in history, plus the two root
+     launchers. `loop/` STAYED, and so did the separate `loop` CI job.
+
+     **The `lint-and-test` job did NOT retire with it, and that is deliberate — do not "finish
+     the job" by deleting it.** Four files in the parked tree are not parked at all:
+     `engine/lib/ci_retry.sh`, `engine/lib/config_parser.py`, `engine/lib/review_prompt.py` and
+     `is_doc_only` from `engine/bin/safe_merge.sh` are loaded by `claude-review.yml` on EVERY PR.
+     `lint-and-test` runs the only tests covering them, so retiring it would leave the merge
+     gate's own machinery untested. It is also a REQUIRED status check, and deleting the job
+     would leave every future PR waiting forever on a check that never reports — unfixable
+     without a branch-protection edit, which is categorically off-limits.
+     Honest retirement needs those four lifted OUT of the parked tree first: that is **#977**.
 4. **Then the UI epic proper (item 10), at U6d.** `#425`/`#429`/`#748` are the known canvas gaps.
 
 All of these are ahead of the defect sweep, which as amended in the STANDING RULE section below
@@ -144,6 +154,16 @@ and the loop exists to build it — not to build the loop.
   `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.autonomy.dashboard.plist`. `drive.sh`
   needs no revert: the dashboard is still source 2, so it is used again the moment it answers.
 
+  **C3b AMENDED THAT LAST STEP — the installed dashboard plist is now STALE.** It holds an absolute
+  `…/autonomy-engine/bin/dashboard.py`, and C3b moved that to `engine/bin/dashboard.py`. Bootstrapping
+  it as-is loads a unit that can never spawn, and launchd will still report it loaded — a rollback
+  that looks done and is not. Before bootstrapping, repoint the plist's `ProgramArguments` at
+  `engine/bin/dashboard.py` (or re-render it from `engine/templates/dashboard.plist.tmpl`, which
+  substitutes `__ENGINE_HOME__` at install time and therefore fixes itself). The same staleness
+  applies to `com.autonomy.autonomy-engine.supervisor` and `com.autonomy.ebull.supervisor`, whose
+  plists point into a SIBLING checkout of this repo — they break whenever that checkout next pulls
+  `main`. Those loops are PAUSED and stay that way, so this is a note, not a task.
+
   Keep the 60s TTL and the **no-grace / no-last-good** property: a stale-but-low reading PERMITS a
   fire, and fail-open is the one polarity forbidden here (`drive.sh`'s cache holds the fail-SAFE
   staleness logic and may only ever REFUSE). A sampler-backed studio can then be polled freely,
@@ -154,10 +174,12 @@ and the loop exists to build it — not to build the loop.
   review rounds on this file were all the same defect: the order written in two places, drifting
   apart. One list, one owner. This block owns WHY and the constraints; the queue owns WHEN.
 
-  **When you do C3b:** **PARK, NOT DELETE** `bin/ lib/ tests/ templates/ start` (git history preserves
-  it and the ticket says so). `loop/` is NOT part of the old engine — it is the control plane and it
-  **STAYS**. `.github/workflows/ci.yml` has an engine-scoped `lint-and-test` job and a SEPARATE
-  `loop` job: retiring the engine retires the former and keeps the latter.
+  **C3b IS DONE.** `bin/ lib/ tests/ templates/ start` were PARKED, NOT DELETED — they moved to
+  `engine/` with history preserved, along with the two root double-click launchers. `loop/` was
+  never part of the old engine (it is the control plane) and stayed, as did the separate `loop` CI
+  job. The one part of the plan that did NOT happen is retiring `lint-and-test`; the queue entry for
+  3b explains why that was the correct call and points at **#977**, which is what makes retiring it
+  honest. Do not delete that job in the meantime.
 
 ## WORK ORDER (overview's dependency order — load-bearing prerequisites FIRST)
 1. **#1 F0** — structured failure `kind` on `node.failed` (gates ALL retry/policy).

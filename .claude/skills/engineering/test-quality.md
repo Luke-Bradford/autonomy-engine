@@ -2,7 +2,7 @@
 
 ## When to use
 
-Writing or reviewing anything under `tests/`.
+Writing or reviewing anything under `engine/tests/`.
 
 ## Tests are genuine — the non-negotiable
 
@@ -11,9 +11,9 @@ functions. Stubs are allowed only at the established seams:
 
 | Seam | What it replaces |
 |---|---|
-| `AUTONOMY_CREDENTIALS_BIN` | `lib/credentials.py` (Keychain) |
-| `AUTONOMY_ACCOUNTS_BIN` | `lib/accounts.py resolve` (Keychain) |
-| `AUTONOMY_AGENTS_DIR` | `bin/agents/` (the real agent CLI) |
+| `AUTONOMY_CREDENTIALS_BIN` | `engine/lib/credentials.py` (Keychain) |
+| `AUTONOMY_ACCOUNTS_BIN` | `engine/lib/accounts.py resolve` (Keychain) |
+| `AUTONOMY_AGENTS_DIR` | `engine/bin/agents/` (the real agent CLI) |
 | `gh` as a shell function | network calls to GitHub |
 | `agent_invoke` / `preflight` / `log`+`SUPLOG=/dev/null` | the agent boundary / a real git repo / log noise |
 
@@ -21,12 +21,12 @@ A test that stubs the function under test is assertions-on-mocks — noise, not
 coverage.
 
 **What counts as a seam:** the boundary is the Keychain, the network, and the
-agent CLI — NOT our own code. Python helpers in `lib/` (`roles.py`,
+agent CLI — NOT our own code. Python helpers in `engine/lib/` (`roles.py`,
 `config_parser.py`) run FOR REAL against fixture files in `$tmp`; that
 integration is the point of the test. A new helper only earns a `_BIN`-style
 env seam if it touches the Keychain/network — same shape as the existing ones:
 an env-var override checked before the real binary (grep
-`AUTONOMY_CREDENTIALS_BIN` in `bin/supervisor.sh` for the pattern).
+`AUTONOMY_CREDENTIALS_BIN` in `engine/bin/supervisor.sh` for the pattern).
 
 ## TDD: see the failure first
 
@@ -36,9 +36,9 @@ about your change.
 
 ## Bash suite shape
 
-One `tests/test_<thing>.sh` per script; `tests/run_all.sh` auto-discovers via
+One `engine/tests/test_<thing>.sh` per script; `engine/tests/run_all.sh` auto-discovers via
 glob — no registration. Skeleton conventions (copy from
-`tests/test_headless_dispatch.sh`):
+`engine/tests/test_headless_dispatch.sh`):
 
 ```bash
 source "$ENGINE_HOME/bin/supervisor.sh"   # real script — guard makes this safe
@@ -51,15 +51,15 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 Fixture repos are built in `$tmp` with a real `.autonomy/` pack so python
 helpers (`roles.py`, `config_parser.py`) run for real. Test files are
-shellcheck-gated like `bin/`.
+shellcheck-gated like `engine/bin/`.
 
 ## Python suite shape
 
-`unittest`, one file per module, registered explicitly in `tests/run_all.sh`
+`unittest`, one file per module, registered explicitly in `engine/tests/run_all.sh`
 (python suites are NOT glob-discovered — bash ones are). Conventions:
-`sys.path.insert` to `lib/`, a `parse()` helper wrapping `config_parser.parse`,
+`sys.path.insert` to `engine/lib/`, a `parse()` helper wrapping `config_parser.parse`,
 `tempfile.mkdtemp` + `self.addCleanup(shutil.rmtree, …)`, injected fakes for
-Keychain/registry (see `tests/test_accounts.py`).
+Keychain/registry (see `engine/tests/test_accounts.py`).
 
 ## Mandatory boundary cases
 
@@ -101,7 +101,7 @@ check "key does NOT leak into supervisor env" "" "${ANTHROPIC_API_KEY:-}"
 
 ## Poll for readiness, never a fixed sleep
 
-A test that starts a server (e.g. `bin/dashboard.py`) and then does a fixed
+A test that starts a server (e.g. `engine/bin/dashboard.py`) and then does a fixed
 `sleep N` before its first request is racing the bind. Under load — a concurrent
 dashboard from another checkout, overlapping test runs — the server needs longer
 than `N` to come up, the early request hits nothing listening, `curl -s` returns

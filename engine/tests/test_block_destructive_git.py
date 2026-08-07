@@ -14,8 +14,8 @@ import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-HOOK = os.path.join(HERE, "..", ".claude", "hooks", "block_destructive_git.py")
-sys.path.insert(0, os.path.join(HERE, "..", ".claude", "hooks"))
+HOOK = os.path.join(HERE, "..", "..", ".claude", "hooks", "block_destructive_git.py")
+sys.path.insert(0, os.path.join(HERE, "..", "..", ".claude", "hooks"))
 import block_destructive_git as guard          # noqa: E402
 
 

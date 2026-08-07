@@ -20,7 +20,7 @@
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROMPT="$HERE/../loop/prompt.md"
+PROMPT="$HERE/../../loop/prompt.md"
 
 fails=0
 

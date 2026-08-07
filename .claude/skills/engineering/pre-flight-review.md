@@ -37,7 +37,7 @@ subscription auth) and log that it did.
   the sole writer of `.last_usage_reset`.
 - Best-effort scripts (`board.sh`, `unblock_dependents.sh`) still `exit 0` on
   every failure path.
-- Repo-agnostic `bin/`/`lib/` — grep your diff for GitHub owners, board
+- Repo-agnostic `engine/bin/`/`engine/lib/` — grep your diff for GitHub owners, board
   titles, issue numbers.
 - `merge_gate.strategy: manual` stays the default; misconfig hard-refuses.
 - Source-guards intact on any script you touched.
@@ -74,7 +74,7 @@ undocumented tech debt are review findings — open the issue yourself first.
   coded against. "I believe it works like…" in your own reasoning is the
   tell: stop and verify.
 - **Duplication sweep, post-plan.** Before adding a helper or a parsing
-  block, grep `lib/` and the script you are in for an existing one; a
+  block, grep `engine/lib/` and the script you are in for an existing one; a
   near-duplicate gets unified into one owner, or the duplication is
   justified in the PR (the review bot finds the rest — see #354's
   default_branch ×3 finding, tech-debt #356).
@@ -101,7 +101,7 @@ the diff avoids repeating them; if none, say so explicitly.
 
 ### J. Dashboard branch
 
-If the diff touches `bin/dashboard.py`, `lib/dashboard_*`, or `lib/*.html`,
+If the diff touches `engine/bin/dashboard.py`, `engine/lib/dashboard_*`, or `engine/lib/*.html`,
 read `.claude/skills/dashboard/SKILL.md` and run its browser verify loop
 before claiming done.
 

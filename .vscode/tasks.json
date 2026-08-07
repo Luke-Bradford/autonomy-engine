@@ -5,7 +5,7 @@
       "label": "Autonomy: console",
       "detail": "Foreground terminal control app — dashboard + live logs + commands (Ctrl-C to stop).",
       "type": "shell",
-      "command": "./start console",
+      "command": "engine/start console",
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
@@ -19,7 +19,7 @@
       "label": "Autonomy: status",
       "detail": "One-shot health report (dashboard, loops, quota) — read-only.",
       "type": "shell",
-      "command": "./start status",
+      "command": "engine/start status",
       "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
     },
@@ -27,7 +27,7 @@
       "label": "Autonomy: stop dashboard service",
       "detail": "Hard-stop the background launchd dashboard service.",
       "type": "shell",
-      "command": "./start stop",
+      "command": "engine/start stop",
       "presentation": { "reveal": "always", "panel": "shared" },
       "problemMatcher": []
     }

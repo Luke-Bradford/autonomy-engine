@@ -2,7 +2,7 @@
 
 ## When to use
 
-Touching `lib/pipeline.py`, `.autonomy/pipelines/`, the supervisor's
+Touching `engine/lib/pipeline.py`, `.autonomy/pipelines/`, the supervisor's
 dispatch path, the `/pipeline` canvas page, or anything the run journal /
 trust ledger feeds. **Functional spec (production, no process jargon):
 `docs/pipelines.md`** — read that first if the system is new to you.
@@ -52,7 +52,7 @@ Binding: `roles.<r>.pipeline: <name>`; unbound roles auto-wrap
   file) feed `${nodes.<id>.output.*}`; a brief whose node has a
   downstream consumer gains a `pipeline:outputs` footer.
 
-## Triggers (`lib/triggers.py`, Phase B #374 + Phase C #376)
+## Triggers (`engine/lib/triggers.py`, Phase B #374 + Phase C #376)
 
 The supervisor enumerates TRIGGERS, not roles: native
 `.autonomy/triggers/<name>.json` files (schema in `validate_trigger`;
@@ -206,7 +206,7 @@ cards + per-trigger tiers + rollup + REFUSED verbatim + `list_runs`)
 behind their own raw-bytes guard. Lifecycle: `/api/control` actions
 `trigger_fire`/`trigger_stop`/`trigger_resume` write the supervisor's
 lane-scoped `var/trigger-ctl/{fire,stop}/` markers (`marker_basename` in
-lib/triggers.py is the one basename rule both sides share;
+engine/lib/triggers.py is the one basename rule both sides share;
 `queued/`+`backoff/` stay supervisor-owned/read-only; fire covers
 manual/continuous/schedule modes (#392 — event refuses: an event run's
 identity is its event token), gated by `trigger_fire_ready` = the same
@@ -270,7 +270,7 @@ entries. Payload booleans `has_shadow`/`has_committed`/`shim_behind`
 drive the 🗑/⟲ card controls. Run-now on non-manual modes SHIPPED
 (#392, SD-47). The page treats node ids as
 UNTRUSTED (invalid docs render): delegated `data-*` listeners, full-coverage
-`esc()`. Fixture: `tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
+`esc()`. Fixture: `engine/tests/fixtures/repo-alpha` binds `coder → fixture-flow` and
 ships a walker-shaped `journal.jsonl`; tests needing an unbound role take tmp
 copies. **Editing (P3b, #365, SD-37)**: a BOUND pipeline is editable and
 `Save`s the whole doc to the var-shadow via `POST /api/control` action

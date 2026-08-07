@@ -47,13 +47,13 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           fetch_diff() { gh pr diff "$PR_NUMBER" > pr.diff; }
           retry 5 3 fetch_diff || { echo "::error::gh pr diff failed after retries (transient GitHub API?)"; exit 1; }
 
       - name: Check if diff is doc-only
         # #192: ONE doc-only definition for the whole gate. This step sources
-        # bin/safe_merge.sh (functions only, source-guarded) and calls the SAME
+        # engine/bin/safe_merge.sh (functions only, source-guarded) and calls the SAME
         # is_doc_only() the merge gate uses, fed by the SAME config keys
         # (merge_gate.doc_only_extensions / doc_only_paths /
         # doc_only_exclude_paths, defaults .md + docs/ + .autonomy/).
@@ -71,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           # #505: this failed as "origin/main not found" on 2026-07-16 even though
           # the checkout log shows origin/main WAS fetched -- a transient blip in
           # the same GitHub API window. If the ref is missing, re-fetch (retried)
@@ -89,21 +89,21 @@ jobs:
           fi
           files=$(git diff --name-only "origin/${BASE_REF}...HEAD")
           # #468: the changed-path list also picks the review CHARTER (engine vs
-          # studio vs both) in lib/review_prompt.py. Persist it here so both the
+          # studio vs both) in engine/lib/review_prompt.py. Persist it here so both the
           # doc-only predicate and the charter read the SAME list -- a second
           # `git diff` could drift.
           printf '%s\n' "$files" > pr_files.txt
-          exts="$( { python3 lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_extensions 2>/dev/null || true; } | paste -sd, -)"
+          exts="$( { python3 engine/lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_extensions 2>/dev/null || true; } | paste -sd, -)"
           exts="${exts:-.md}"
-          paths="$( { python3 lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_paths 2>/dev/null || true; } | paste -sd, -)"
+          paths="$( { python3 engine/lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_paths 2>/dev/null || true; } | paste -sd, -)"
           paths="${paths:-docs/}"
           # #805: same default as safe_merge.sh's read -- keep the two in step,
           # or a control-plane diff skips the bot here while the merge gate
           # (correctly) demands the review that never ran.
-          excludes="$( { python3 lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_exclude_paths 2>/dev/null || true; } | paste -sd, -)"
+          excludes="$( { python3 engine/lib/config_parser.py .autonomy/config.yaml merge_gate.doc_only_exclude_paths 2>/dev/null || true; } | paste -sd, -)"
           excludes="${excludes:-.autonomy/}"
           # shellcheck source=/dev/null
-          source bin/safe_merge.sh   # functions only (source-guard returns early)
+          source engine/bin/safe_merge.sh   # functions only (source-guard returns early)
           if [ -n "$files" ] && is_doc_only "$files" "$exts" "$paths" "$excludes"; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
           else
@@ -118,7 +118,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           printf '## Claude Code Review\n\nDoc-only diff — engineering review skipped to save tokens. If this PR needs a review (e.g. material claims in the docs that affect behaviour), request one manually.\n' > skip_notice.md
           post_skip() { gh pr comment "$PR_NUMBER" --body-file skip_notice.md; }
           retry 5 3 post_skip || { echo "::error::gh pr comment (skip notice) failed after retries"; exit 1; }
@@ -132,7 +132,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           # #505: live GitHub API call -- retry transient blips (fail-safe).
           get_comments() {
             gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
@@ -149,7 +149,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           # #505: live GitHub API call -- retry transient blips (fail-safe).
           get_desc() {
             gh pr view "$PR_NUMBER" --json title,body \
@@ -159,8 +159,8 @@ jobs:
           retry 5 3 get_desc || { echo "::error::gh pr view failed after retries"; exit 1; }
 
       - name: Build review prompt
-        # #468: the charter is SCOPE-AWARE and lives in lib/review_prompt.py
-        # (tested by tests/test_review_prompt.py), NOT inline here -- one charter
+        # #468: the charter is SCOPE-AWARE and lives in engine/lib/review_prompt.py
+        # (tested by engine/tests/test_review_prompt.py), NOT inline here -- one charter
         # cannot review both the bash/Python engine and the studio/ TypeScript,
         # and reviewing a studio diff against engine invariants made the bot emit
         # an ARBITRARY verdict a merge rail read as truth. An inline heredoc is
@@ -171,7 +171,7 @@ jobs:
         if: steps.docs_only.outputs.docs_only != 'true'
         run: |
           set -euo pipefail
-          python3 lib/review_prompt.py --prompt \
+          python3 engine/lib/review_prompt.py --prompt \
             pr_files.txt pr.diff pr_description.txt pr_comments.txt prompt.txt
 
       - name: Review on the subscription (claude -p)
@@ -205,7 +205,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           # Retry a TRANSIENT hiccup (network blip / auth glitch) so it self-heals
           # rather than redding the gate on the first try (#579 review). run_review
           # succeeds only on valid JSON with is_error=false, so a persistent
@@ -225,9 +225,9 @@ jobs:
             echo "::warning::claude -p review failed after retries" >&2
             [ -s claude-stderr.log ] && { echo "--- claude -p stderr ---"; cat claude-stderr.log; } >&2 || true
           fi
-          # TESTED extractor (lib/review_prompt.py) -- #504/#501 lifted these out
+          # TESTED extractor (engine/lib/review_prompt.py) -- #504/#501 lifted these out
           # of untestable heredocs. Exits non-zero on every unusable output.
-          python3 lib/review_prompt.py --extract-cli response.json review.txt stop_reason.txt
+          python3 engine/lib/review_prompt.py --extract-cli response.json review.txt stop_reason.txt
 
       - name: Post review comment
         if: steps.docs_only.outputs.docs_only != 'true'
@@ -237,7 +237,7 @@ jobs:
         run: |
           set -uo pipefail
           # shellcheck source=/dev/null
-          . lib/ci_retry.sh
+          . engine/lib/ci_retry.sh
           { echo "## Claude Code Review"; echo ""; cat review.txt; } > comment_body.txt
           # #505: a transient failure posting the comment would waste a whole
           # successful review (the diff+API cost is already spent). Retry it.
@@ -282,7 +282,7 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          VERDICT=$(python3 lib/review_prompt.py --verdict review.txt)
+          VERDICT=$(python3 engine/lib/review_prompt.py --verdict review.txt)
           STATUS=$?
           set -e
           if [ "$STATUS" -eq 1 ]; then
@@ -293,7 +293,7 @@ jobs:
             # Distinct from "no verdict": the extractor itself is broken (a
             # traceback is on stderr above). Same fail-closed outcome, but do
             # not send the operator hunting the model's output for our bug.
-            echo "::error::lib/review_prompt.py --verdict crashed (exit $STATUS) — the gate cannot certify this review. See the traceback above."
+            echo "::error::engine/lib/review_prompt.py --verdict crashed (exit $STATUS) — the gate cannot certify this review. See the traceback above."
             exit 1
           fi
           echo "verdict=$VERDICT"

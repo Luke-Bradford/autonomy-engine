@@ -23,7 +23,7 @@ its testing without the operator in the loop. Focus on:
    code (not mocks-asserting-mocks)? Would they fail if the change were
    reverted? Thin or tautological tests are a `regression`-class risk.
 4. **UX** — if the change touches an operator-facing surface (the dashboard,
-   `./start`/CLI output, a config knob, a log line an operator reads), is it
+   `engine/start`/CLI output, a config knob, a log line an operator reads), is it
    usable and clear? Confusing wording, a broken empty/error state, or a
    control that gives no feedback is a `ux` finding.
 5. **Docs** — is the change documented where it should be (README, the role's
