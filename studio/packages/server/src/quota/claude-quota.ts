@@ -209,7 +209,7 @@ const EXPLICIT_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/;
  * the field as seconds, so returning ms would be wrong by a factor of 1000
  * while still looking like a plausible number.
  */
-function isoToEpochSeconds(value: unknown): number | null {
+export function isoToEpochSeconds(value: unknown): number | null {
   if (typeof value !== 'string' || !EXPLICIT_OFFSET.test(value)) return null;
   const ms = Date.parse(value);
   if (Number.isNaN(ms)) return null;
