@@ -291,10 +291,14 @@ test.describe('#917 Monitor › AI activity', () => {
      * unmounted and then poll at 2x, 3x, 4x once you come back, which is
      * precisely the profile of a tab that dies only after a long session.
      *
-     * Three more round trips, so the page has been mounted FOUR times, and then
-     * the same 12s window as the first visit. Comparing window-to-window rather
-     * than to a hardcoded number keeps this honest on a slow runner, where every
-     * window shifts together.
+     * Three round trips take the mount count to FOUR (each `aiLink` click is a
+     * fresh mount), and the click after the loop makes the measured one the
+     * FIFTH. Counting matters here only because the numbers are the claim, so
+     * they are spelled out rather than left to the reader.
+     *
+     * The window is then the same 12s as the first visit. Comparing
+     * window-to-window rather than to a hardcoded number keeps this honest on a
+     * slow runner, where every window shifts together.
      */
     for (let revisit = 0; revisit < 3; revisit += 1) {
       await aiLink.click();
@@ -310,13 +314,13 @@ test.describe('#917 Monitor › AI activity', () => {
 
     const beforeFinalWindow = activityCalls();
     await page.waitForTimeout(12_000);
-    const fourthVisitCost = activityCalls() - beforeFinalWindow;
+    const fifthVisitCost = activityCalls() - beforeFinalWindow;
 
     // `whileOpen` counted the same 12s window on visit one, including its
-    // load-on-mount. The fourth visit gets ONE tick of slack for where the
-    // window happens to fall against the interval — not four times the traffic.
-    expect(fourthVisitCost).toBeGreaterThan(1);
-    expect(fourthVisitCost).toBeLessThanOrEqual(whileOpen + 1);
+    // load-on-mount. The fifth visit gets ONE tick of slack for where the window
+    // happens to fall against the interval — not five times the traffic.
+    expect(fifthVisitCost).toBeGreaterThan(1);
+    expect(fifthVisitCost).toBeLessThanOrEqual(whileOpen + 1);
 
     await expectQuiet(page, problems);
   });
