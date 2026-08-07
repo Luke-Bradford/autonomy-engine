@@ -214,7 +214,7 @@ not be indistinguishable from one that is current. A plane *ahead* of main is no
 a merged fix is inert. `DRIFT_REPORT=0` silences all three — and *only* the literal `0` does, so a
 typo such as `DRIFT_REPORT=no` leaves the monitor on rather than switching it off in silence.
 
-`studio server` is the third half because the spend guard's source 3 is a third *program*, and
+`studio server` is the third half because the spend guard's PRIMARY source is a third *program*, and
 nothing moved it forward or said that it had not (#832). Its verdict is about **`studio/`**, not
 about sha equality: this service is built from `studio/` alone, so a `loop/` or `docs/` merge cannot
 change a byte it serves, and calling it stale for one would make it red most of the day — a monitor
@@ -347,10 +347,11 @@ Three independent bounds, checked before every fire, each with its own test in
   rather than left dormant, because unreachable machinery inside a spend guard is a maintenance
   hazard. Its cause-naming (`UNREADABLE (rate_limited)`, #825) lives on in the reader itself. A
   leftover `loop/.last_quota_shadow` on a live control plane is inert.
-- **Source 2 is poll-throttled** (`QUOTA_POLL_MIN_INTERVAL`, 60s; #777) — it is a fresh `python3`
+- **The loop reader is poll-throttled** (`QUOTA_POLL_MIN_INTERVAL`, 60s; #777) — it is a fresh
+  `python3`
   process per call, so it cannot cache in memory and nothing gave it a cross-process throttle. With
   `quota_pct` running up to three times per iteration plus once per `AUTH_LONG_BLOCK` retry while
-  blocked, and source 1 gone after C3, it could self-inflict the very 429 that then reads as
+  blocked, and the dashboard gone after C3, it could self-inflict the very 429 that then reads as
   UNREADABLE. It now answers from a poll memo (`.last_quota_poll`, gitignored) inside that interval,
   **memoises failures too** (the correct response to a 429 is to poll *less* — the same reason
   studio throttles failed reads, #770), and **drops the memo after every fire**, so a memo can only
@@ -368,17 +369,28 @@ Three independent bounds, checked before every fire, each with its own test in
   refuse. #777 proposed serving nothing in-window for exactly that reason and **was overruled on
   evidence**; the exposure is bounded twice instead (≤60s, and dropped at every fire) rather than
   argued away. The argument, the flat-vs-geometric asymmetry with studio, and the **revisit trigger**
-  (source 3 answering makes the fail-safe polarity affordable again) are set out ONCE on
+  (studio answering makes the fail-safe polarity affordable again — #972) are set out ONCE on
   `quota_poll_memo_read` in `drive.sh` and on #777 — deliberately not restated here, because a
   divergence rationale kept in two places is how the second copy goes stale.
-- **What cutover C3 does to that order** — parking `bin/ lib/ tests/ templates/ start` (#410)
-  removes source 1 *and*, before #764, removed source 2 as well, because the reader lived in the
-  engine's `lib/`. #764 relocated it to `loop/claude_usage.py`, so the surviving pair is
-  (loop reader, studio). Be honest about what that pair is: two direct cold pollers of one shared
-  rate-limit budget. C3 also removes the warm-cache property that made source 1 reliable, so it is
-  a real reduction in the guard's strength, compensated only by the last-known cache below (which
-  can refuse but never permit). `loop/claude_usage.py` ships **beside** `drive.sh` — `LOOP_LIB`
+- **What cutover C3 does to that order** — C3 has two halves. **C3a** (done) armed studio's sampler
+  and moved it to the front; **C3b** parks `bin/ lib/ tests/ templates/ start` (#410), which removes
+  the dashboard for good and leaves the surviving pair **(studio, loop reader)**. Before #764 it
+  would also have taken the reader with it, since that lived in the engine's `lib/`; #764 relocated
+  it to `loop/claude_usage.py`. `loop/claude_usage.py` ships **beside** `drive.sh` — `LOOP_LIB`
   defaults to `$INFRA`, so a sync of the live control plane must carry **both** files.
+
+  Be honest about what that pair is, because the old version of this bullet was written when it was
+  the wrong shape and stayed that way: pre-C3a it would have been **two direct cold pollers** of one
+  shared rate-limit budget, and parking the dashboard would have removed the only warm cache in
+  front of the guard — a real reduction in strength. C3a is what changes that: studio is now
+  sampler-backed, so the pair is one cache-backed source plus one rate-bounded direct poller behind
+  it, and the standing-sample slot is transferred rather than lost. The last-known cache below still
+  backs both, and still may only ever refuse.
+
+  **The live cutover step is not free**, and its cost is written up once, in `loop/prompt.md`'s
+  CUTOVER block alongside the runbook: bootout the dashboard FIRST, then `--update` studio, which is
+  minutes during which neither cache-backed source is up. Rollback is symmetric — disarm studio's
+  sampler in the same breath as re-loading the dashboard, or two standing samplers contend.
 - **Blind-fire bound** — an UNREADABLE quota is not "fine". A fresh cached reading at/above the
   stop pct refuses outright (usage only rises within a window, so a recent high reading is still
   evidence); otherwise `QUOTA_UNKNOWN_FIRES` (2) blind fires are allowed, then it stops. The cache

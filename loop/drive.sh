@@ -535,8 +535,10 @@ quota_body_pct() {
 
 quota_read_url() {  # $1=url; echoes an integer percent, or "" for unreadable
   # TOTALITY GUARD, applied per-read at the boundary the value crosses -- and
-  # since #825 it lives in `quota_body_pct`, shared with the shadow probe, so
-  # the probe cannot log a percent the guard would have refused.
+  # since #825 it lives in `quota_body_pct`, which is where any future second
+  # consumer of a quota body must also go, so none can report a percent the guard
+  # would have refused. (It was factored out for #765's diagnostic probe, the one
+  # such consumer there has ever been; C3 #410 removed it.)
   #
   # Everything downstream is arithmetic, and `[ "$qg_pct" -ge "$QUOTA_STOP_PCT" ]`
   # with an operand `test` cannot parse returns 2 -- which is NEITHER branch, so
@@ -782,8 +784,8 @@ quota_stamped_discard() {  # $1=file -> 0 the reader can no longer serve a recor
 }
 # --- quota_stamped_write: the ONE writer for the "<epoch> <value>" state files,
 # and `quota_stamped_read`'s counterpart (#806). Three sites hand-rolled this
-# format -- the cache, the source-2 poll memo and the #765 shadow stamp -- which
-# was two problems:
+# format -- the cache, the loop reader's poll memo and #765's shadow stamp (the
+# last removed by C3, #410, leaving two) -- which was two problems:
 #
 #   1. FORMAT DRIFT. The reader has accumulated real hardening (separator
 #      handling, leading zeros, a 64-bit length bound, future-stamp rejection)
@@ -830,9 +832,9 @@ quota_stamped_discard() {  # $1=file -> 0 the reader can no longer serve a recor
 # carrying a space or newline would split into a second token or a second line
 # and be mis-parsed by the reader. Its DOMAIN is still the caller's business, as
 # on the read side: the callers' domains differ (a percent; a percent-or-"-"
-# sentinel; the constant `probe`). No current caller can trip this check -- all
-# three pass a `quota_sane`-sanitised digit string or a literal -- it exists so a
-# future one cannot corrupt the format silently.
+# sentinel). No current caller can trip this check -- both pass a
+# `quota_sane`-sanitised digit string or a literal -- it exists so a future one
+# cannot corrupt the format silently.
 #
 # Two side effects of replacing rather than truncating, both harmless for private
 # state files under $INFRA but worth naming: the destination's MODE becomes the
@@ -885,12 +887,13 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
   # stated as code and closes the whole class, including the next member of it.
   #
   # Cheap, but not as cheap as an earlier comment here claimed ("one `head -1`,
-  # at most three times per iteration"): a single `quota_pct` can do all three
-  # stamped writes -- memo, cache and shadow stamp -- and `quota_pct` itself runs
-  # up to three times per iteration plus once per AUTH_LONG_BLOCK retry, so it is
-  # up to nine per iteration and unbounded during a long block. Each read-back is
-  # also a `head` PLUS a `date` fork inside `quota_stamped_read`. Still cheap
-  # against a fire; the conclusion survived the correction, the number did not.
+  # at most three times per iteration"): a single `quota_pct` can do BOTH stamped
+  # writes -- cache and memo -- and `quota_pct` itself runs up to three times per
+  # iteration plus once per AUTH_LONG_BLOCK retry, so it is up to six per iteration
+  # and unbounded during a long block. Each read-back is also a `head` PLUS a
+  # `date` fork inside `quota_stamped_read`. (It was up to NINE while #765's shadow
+  # stamp was a third writer; C3 #410 removed it.) Still cheap against a fire; the
+  # conclusion survived both corrections, the number did not.
   #
   # One false-negative this admits, and its direction: `quota_stamped_read`
   # returns nothing when the record's age is NEGATIVE, so a clock that steps
@@ -913,9 +916,9 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
   return 0
 }
 # --- quota_stamped_read: the ONE parser for this file's "<epoch> <value>" state
-# files -- the last-known-quota cache, the source-2 poll memo (#777) and the #765
-# shadow stamp. Echoes the VALUE token if the record is well-formed and no older
-# than $2 seconds; echoes nothing otherwise.
+# files -- the last-known-quota cache and the loop reader's poll memo (#777).
+# (#765's shadow stamp was a third; C3 #410 removed it.) Echoes the VALUE token if
+# the record is well-formed and no older than $2 seconds; echoes nothing otherwise.
 #
 # Shared rather than copied because every bug this shape has had lived in the EPOCH
 # handling, and each is now a test case (20: a line with no separator; 14: a
@@ -923,8 +926,8 @@ quota_stamped_write() {  # $1=file $2=value -> 0 the shared reader accepts $1; n
 # and the copy that drifted would be the one guarding spend.
 #
 # The VALUE is returned UNVALIDATED: the callers have different value domains (a
-# percent here; a percent-or-"-" sentinel there; a constant on the shadow stamp),
-# so validating it belongs to them. What is shared is exactly what is identical.
+# percent here; a percent-or-"-" sentinel there), so validating it belongs to them.
+# What is shared is exactly what is identical.
 quota_stamped_read() {  # $1=file $2=max_age_seconds
   qsr_file="$1"; qsr_max="$2"
   [ -f "$qsr_file" ] || return 0
@@ -983,7 +986,7 @@ quota_cache_read() {
   echo $(( 10#$qc_pct ))
 }
 
-# --- the SOURCE-2 POLL MEMO (#777). Source 2 is a fresh `python3` process per
+# --- the LOOP READER's POLL MEMO (#777). That reader is a fresh `python3` process per
 # call, so an in-memory cache is impossible and nothing gave it a cross-process
 # one -- it was the only unthrottled DIRECT poller of `GET /api/oauth/usage`, which
 # 429s under exactly that treatment (measured 2026-07-29: eight consecutive polls
@@ -2319,8 +2322,8 @@ drive_adopt_floor
 # Is the quota guard's fallback reader actually THERE? A missing reader and a
 # rate-limited one are indistinguishable downstream -- both yield "" and the fire
 # just logs a different winning source, or UNREADABLE. That silence is exactly
-# how #766 hid for its entire life: source 2 was dead from the day it was written
-# and nothing said so.
+# how #766 hid for its entire life: the loop reader (then source 2) was dead from the
+# day it was written and nothing said so.
 #
 # The realistic way it goes missing is a partial sync. `~/Dev/studio-loop/` is an
 # unversioned copy kept in step by hand, so copying `drive.sh` without
@@ -2409,7 +2412,7 @@ while true; do
   #
   # Post-C3 caveat, since this re-check exists to defeat staleness: a SHORT block
   # (one retry, ~30-40s at BACKOFF_BASE=30) fits inside QUOTA_POLL_MIN_INTERVAL, so
-  # source 2 answers it from the memo and it re-reads the same number it was meant to
+  # the loop reader answers it from the memo and it re-reads the same number it was meant to
   # replace. Inside the accepted 60s bound, and the case that matters is unaffected --
   # the re-grant path needs AUTH_LONG_BLOCK retries, always far more than 60s, so it
   # always re-polls for real. Worth knowing before trusting this line to have taken a
@@ -2552,7 +2555,7 @@ EOF
   bash "$INFRA/run.sh"
   rc=$?
   # A fire is the only thing that SPENDS, so a reading taken before it is not
-  # evidence about the window the NEXT one would land in. Dropping the source-2 poll
+  # evidence about the window the NEXT one would land in. Dropping the loop reader's poll
   # memo here (#777) makes that structural rather than an argument about staleness:
   # the memo can only ever serve reads about the fire it was taken for, and the next
   # gate polls for real. Costs at most one poll per fire -- the rate the retired
