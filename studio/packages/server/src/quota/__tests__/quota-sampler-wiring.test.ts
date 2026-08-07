@@ -92,6 +92,33 @@ describe('buildApp — quota sampler flag', () => {
     expect(lines.some((l) => l.includes('account-quota sampler armed'))).toBe(false);
   });
 
+  /**
+   * #987 — the sampler must go through the last-known WRAPPER, not around it.
+   *
+   * This is the load-bearing half of that wiring: once the sampler is armed,
+   * almost every successful read is a tick rather than a request, so a recorder
+   * that only fronted the routes would retain nearly nothing and the display
+   * surface would be as empty as the bug it fixes. Nothing here calls a route.
+   */
+  it('a sampler tick alone populates the display surface last-known reading', async () => {
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaReader: {
+        read: async () => ({
+          value: {
+            five_hour: { utilization: 0.08, resets_at: 1_785_100_200 },
+            seven_day: { utilization: 0.58, resets_at: 1_785_636_000 },
+          },
+          unavailable: null,
+        }),
+      },
+      claudeAccountQuotaSamplerEnabled: true,
+      claudeAccountQuotaSamplerIntervalMs: 10,
+    });
+    apps.push(app);
+    await settle(50);
+    expect(app.claudeAccountQuotaLastKnown()?.value.seven_day.utilization).toBe(0.58);
+  });
+
   it('refuses a non-positive interval at boot rather than arming a spin loop', async () => {
     await expect(
       buildTestAppWithContext({

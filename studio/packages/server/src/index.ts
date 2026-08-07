@@ -379,12 +379,30 @@ export async function buildApp(opts?: BuildAppOptions) {
   // warm. The wrapper is transparent: it returns its inner reader's outcome
   // unchanged, so `GET /api/quota` and the spend guard behind it are unaffected,
   // and the reader still serves no last-good value after a failed read.
-  const claudeAccountQuotaLastKnown = createLastKnownQuotaRecorder(baseClaudeAccountQuota);
-  const claudeAccountQuota = claudeAccountQuotaLastKnown.reader;
+  //
+  // NOT wrapped when the surface is switched off. The always-UNREADABLE reader
+  // can never produce a reading, so it can never produce a last-known one
+  // either — the wrapper there is provably inert indirection, and leaving it off
+  // keeps the decoration IDENTITY-equal to that singleton, which is what pins
+  // "disabled" apart from "enabled but on a host with no credential" (both
+  // answer `null`, so the wiring is the only observable difference, and the
+  // alternative — calling `read()` to tell them apart — is a real Keychain and
+  // provider call from the unit suite). Same reasoning as the sampler's own
+  // skip-the-disabled-reader branch below.
+  const quotaLastKnownRecorder =
+    baseClaudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER
+      ? null
+      : createLastKnownQuotaRecorder(baseClaudeAccountQuota);
+  const claudeAccountQuota = quotaLastKnownRecorder?.reader ?? baseClaudeAccountQuota;
   fastify.decorate('claudeAccountQuota', claudeAccountQuota);
   // An arrow, not the bound method: Fastify rebinds `this` on a function-valued
-  // decoration, which would detach it from the recorder's closure.
-  fastify.decorate('claudeAccountQuotaLastKnown', () => claudeAccountQuotaLastKnown.lastKnown());
+  // decoration, which would detach it from the recorder's closure. Always
+  // decorated (never absent) so the display route is uniform, exactly as
+  // `claudeAccountQuota` itself is.
+  fastify.decorate(
+    'claudeAccountQuotaLastKnown',
+    () => quotaLastKnownRecorder?.lastKnown() ?? null,
+  );
 
   // #765 — the sampler's flag + cadence are resolved and VALIDATED here, before
   // any timer anywhere in this function is armed, so a mistyped value can only

@@ -4,6 +4,7 @@ import { buildTestAppWithContext } from '../../__tests__/build-test-app.js';
 import { UNREADABLE_ACCOUNT_QUOTA_READER } from '../../quota/claude-quota.js';
 import {
   ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
+  AccountQuotaDisplayStateSchema,
   AccountQuotaStateSchema,
   type AccountQuotaUnavailableReason,
   type ClaudeAccountQuota,
@@ -244,5 +245,131 @@ describe('GET /api/quota — UNREADABLE attribution', () => {
     // The distinction that matters for C3: a deployment that never asks looks
     // exactly like one whose provider is failing, unless this says otherwise.
     expect(body.unavailable.claude).toBe('disabled');
+  });
+});
+
+/**
+ * #987 — `GET /api/quota/display`, the HUMAN surface.
+ *
+ * The panel was showing "Quota UNREADABLE" while the build loop's guard had read
+ * 58% minutes earlier: the reader deliberately serves no last-good value, which
+ * is right for a gate and useless for a person. These tests pin the SPLIT — the
+ * display body gains the last obtained reading, and the guard's body provably
+ * cannot.
+ */
+describe('GET /api/quota/display', () => {
+  /** An app whose reader hands out one scripted outcome per read. */
+  async function appScripted(
+    outcomes: readonly (ClaudeAccountQuota | AccountQuotaUnavailableReason)[],
+  ): Promise<FastifyInstance> {
+    let i = 0;
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaReader: {
+        read: async () => {
+          const next = outcomes[Math.min(i, outcomes.length - 1)];
+          i += 1;
+          return typeof next === 'string'
+            ? ({ value: null, unavailable: next } as const)
+            : ({ value: next, unavailable: null } as const);
+        },
+      },
+    });
+    apps.push(app);
+    return app;
+  }
+
+  it('carries no last-known copy beside a live reading', async () => {
+    const app = await appReading(READING);
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+    expect(body.account.claude).toEqual(READING);
+    // The same number twice, one copy aged, is the incoherent pair the schema
+    // refuses — and one careless consumer away from preferring the stale copy.
+    expect(body).not.toHaveProperty('last_known');
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('serves the last obtained reading, with when it was taken, once the provider fails', async () => {
+    const app = await appScripted([READING, 'rate_limited']);
+    await app.inject({ method: 'GET', url: '/api/quota/display' });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+
+    expect(body.account.claude).toBeNull();
+    expect(body.unavailable.claude).toBe('rate_limited');
+    expect(body.last_known.claude).toEqual(READING);
+    // Epoch SECONDS, and no later than the response's own stamp — the age the
+    // client derives from the pair can therefore never be negative.
+    expect(Number.isInteger(body.last_known.read_at)).toBe(true);
+    expect(body.last_known.read_at).toBeLessThanOrEqual(body.generated_at);
+    expect(AccountQuotaDisplayStateSchema.safeParse(body).success).toBe(true);
+  });
+
+  it('retains nothing at all when the surface is switched off', async () => {
+    const { app } = await buildTestAppWithContext({
+      claudeAccountQuotaEnabled: false,
+      claudeAccountQuotaReader: undefined,
+    });
+    apps.push(app);
+    await app.inject({ method: 'GET', url: '/api/quota/display' });
+    // A reader that can never produce a reading can never produce a last-known
+    // one, and the decoration says so rather than being absent.
+    expect(app.claudeAccountQuotaLastKnown()).toBeNull();
+  });
+
+  it('says UNREADABLE with nothing beneath it when no reading has ever been obtained', async () => {
+    const app = await appReading(null, 'no_credential');
+    const body = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+    expect(body.unavailable.claude).toBe('no_credential');
+    // Never a manufactured number: "nothing has been read" is a real state and
+    // is represented, not stood in for.
+    expect(body).not.toHaveProperty('last_known');
+  });
+
+  /**
+   * THE LOAD-BEARING ASSERTION (#987's own acceptance criterion).
+   *
+   * A last-known display value existing must not change the guard's reading by
+   * one byte. A stale-but-low number reaching `loop/drive.sh` would PERMIT a
+   * fire the live figure would refuse — the one fail-open polarity this whole
+   * surface exists to prevent.
+   */
+  it('never lets the last-known value reach the guard, even when one exists', async () => {
+    const app = await appScripted([READING, 'rate_limited']);
+    // Read once so a last-known value definitely exists...
+    const seeded = (await app.inject({ method: 'GET', url: '/api/quota/display' })).json();
+    expect(seeded.account.claude).toEqual(READING);
+    // ...then ask as the guard does, while the provider is failing.
+    const guard = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+
+    expect(guard.account.claude).toBeNull();
+    expect(guard.unavailable.claude).toBe('rate_limited');
+    expect(guard).not.toHaveProperty('last_known');
+    // The consumer's own arithmetic, on the body it actually receives.
+    expect(consumerPercent(guard)).toBe('');
+    // And the retained number is nowhere in the bytes it parses.
+    expect(JSON.stringify(guard)).not.toContain('0.07');
+  });
+
+  it('the guard schema REJECTS a body carrying a last-known reading', () => {
+    // `.strict()`, pinned: the shape extraction that let the display body reuse
+    // this one must not have been a door the guard body can acquire a field
+    // through.
+    expect(
+      AccountQuotaStateSchema.safeParse({
+        generated_at: 1_785_495_913,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: READING, read_at: 1_785_495_000 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('the display schema REJECTS a last-known reading beside a live one', () => {
+    expect(
+      AccountQuotaDisplayStateSchema.safeParse({
+        generated_at: 1_785_495_913,
+        account: { claude: READING },
+        last_known: { claude: READING, read_at: 1_785_495_000 },
+      }).success,
+    ).toBe(false);
   });
 });

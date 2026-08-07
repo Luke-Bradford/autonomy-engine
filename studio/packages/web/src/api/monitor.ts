@@ -1,7 +1,7 @@
 import {
-  AccountQuotaStateSchema,
+  AccountQuotaDisplayStateSchema,
   AiActivitySnapshotSchema,
-  type AccountQuotaState,
+  type AccountQuotaDisplayState,
   type AiActivitySnapshot,
   type RunSince,
 } from '@autonomy-studio/shared';
@@ -17,8 +17,8 @@ import { apiFetch } from './client';
  *
  *  - `/api/monitor/ai-activity` is a LOCAL read (SQLite over the run-event log),
  *    owner-scoped, cheap enough to poll.
- *  - `/api/quota` reaches the PROVIDER. It is not cheap and must not be polled —
- *    see `fetchAccountQuota` below.
+ *  - `/api/quota/display` reaches the PROVIDER. It is not cheap and must not be
+ *    polled — see `fetchAccountQuotaDisplay` below.
  */
 
 /**
@@ -39,7 +39,15 @@ export function fetchAiActivity(
 }
 
 /**
- * The account's subscription quota.
+ * The account's subscription quota, in its HUMAN shape (#987).
+ *
+ * `/api/quota/display`, NOT `/api/quota`. The latter is the build loop's spend
+ * guard's endpoint and answers with a live reading or nothing at all — correct
+ * for a gate, useless for a person, because the provider 429s most of the time
+ * and the panel therefore said UNREADABLE most of the time. This one adds the
+ * last reading that was actually obtained, with the timestamp it was taken at,
+ * and only when there is no live one. The browser has NO reason to call
+ * `/api/quota` and does not.
  *
  * MUST NOT BE POLLED ON A TIMER, and this is a correctness constraint rather
  * than a performance preference. The server's reader has no background sampler:
@@ -57,6 +65,6 @@ export function fetchAiActivity(
  * `account.claude: null` plus a reason. A rejection here means the REQUEST
  * failed, which is a different fact and is rendered differently.
  */
-export function fetchAccountQuota(signal?: AbortSignal): Promise<AccountQuotaState> {
-  return apiFetch('/api/quota', { schema: AccountQuotaStateSchema, signal });
+export function fetchAccountQuotaDisplay(signal?: AbortSignal): Promise<AccountQuotaDisplayState> {
+  return apiFetch('/api/quota/display', { schema: AccountQuotaDisplayStateSchema, signal });
 }
