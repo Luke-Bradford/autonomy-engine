@@ -219,8 +219,13 @@ function UntimedList({
       <ul>
         {nodes.map((node) => (
           <li key={node.nodeId}>
-            <span className="timeline-untimed-name">{nameOf(node.nodeId) ?? node.nodeId}</span> —{' '}
-            {untimedReason(node)}
+            <span className="timeline-untimed-name">{nameOf(node.nodeId) ?? node.nodeId}</span>
+            {/* The id BESIDE the name, the same pairing #882 established for the
+                Nodes table row: `activityLabels` numbers by kind ("Wait 1"), so
+                the display name alone does not identify which authored node this
+                is. Suppressed when there is no name to sit beside, since then
+                the name IS the id. */}
+            {nameOf(node.nodeId) !== null && <code> {node.nodeId}</code>} — {untimedReason(node)}
           </li>
         ))}
       </ul>

@@ -53,7 +53,15 @@ test('U12a — the timeline draws what was measured and names what was not', asy
     if (section === null) return null;
     const bars = [...section.querySelectorAll<HTMLElement>('.timeline-span')];
     return {
-      rowLabels: [...section.querySelectorAll('.timeline-row-label')].map((el) =>
+      /* Keyed on the row label's `title`, which carries the raw node id. The
+         VISIBLE text is `activityLabels`' display name ("Wait 1") — numbered by
+         kind, so it identifies neither the authored node nor this spec's
+         fixture, and asserting on it would make the spec fail on labelling work
+         it is not about (#882's rule, as `node-duration.spec.ts` applies it). */
+      rowIds: [...section.querySelectorAll('.timeline-row-label')].map((el) =>
+        el.getAttribute('title'),
+      ),
+      rowNames: [...section.querySelectorAll('.timeline-row-label')].map((el) =>
         (el.textContent ?? '').trim(),
       ),
       bars: bars.map((bar) => ({
@@ -77,7 +85,12 @@ test('U12a — the timeline draws what was measured and names what was not', asy
   expect(seen).not.toBeNull();
 
   // The `wait` node measured a span, so it gets a row and exactly one bar.
-  expect(seen!.rowLabels).toEqual(['hold']);
+  expect(seen!.rowIds).toEqual(['hold']);
+  // …under its display name, not its raw id — the row is legible, not just
+  // identifiable. Asserted as "not the id" rather than as a literal, so the
+  // spec does not re-pin `activityLabels`' numbering scheme.
+  expect(seen!.rowNames[0]).not.toBe('hold');
+  expect(seen!.rowNames[0]).not.toBe('');
   expect(seen!.bars).toHaveLength(1);
 
   const [bar] = seen!.bars;
@@ -99,6 +112,7 @@ test('U12a — the timeline draws what was measured and names what was not', asy
      the ticket's "documented limits", on screen. Matched on the reason's
      substance, not its exact wording. */
   expect(seen!.untimed).toHaveLength(1);
+  // The id is rendered beside the display name for the same reason as above.
   expect(seen!.untimed[0]).toContain('stop');
   expect(seen!.untimed[0]).toMatch(/no start-and-terminal pair/);
 
