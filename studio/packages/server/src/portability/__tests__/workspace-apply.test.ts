@@ -483,9 +483,15 @@ describe('applyWorkspace (#3 G5c-1)', () => {
   it('still REFUSES a superseded version id whose branch content diverges from the row it names', () => {
     const db = freshDb().db;
     const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
-    createPipelineVersion(db, { ...baseVersion(pipe.id), outputs: [{ name: 'v1', type: 'string' }] });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v1', type: 'string' }],
+    });
     const incoming = snapshot(db);
-    createPipelineVersion(db, { ...baseVersion(pipe.id), outputs: [{ name: 'v2', type: 'string' }] });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'v2', type: 'string' }],
+    });
     incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
 
     expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
