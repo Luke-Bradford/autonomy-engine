@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  arrangeDisabledReason,
   clipboardCommandFor,
   historyCommandFor,
   isDeleteKeystroke,
@@ -214,5 +215,42 @@ describe('isDeleteKeystroke (U21)', () => {
   it('any other key is not ours', () => {
     expect(isDeleteKeystroke(key('d'))).toBe(false);
     expect(isDeleteKeystroke(key('Escape'))).toBe(false);
+  });
+});
+
+describe('arrangeDisabledReason', () => {
+  const live = { ready: true, available: true, previewing: null, busy: false };
+
+  it('is live on a loaded pipeline with activities', () => {
+    expect(arrangeDisabledReason(live)).toBeNull();
+  });
+
+  it('refuses while a save or restore is in flight', () => {
+    expect(arrangeDisabledReason({ ...live, busy: true })).toBe(
+      'Wait for the save or restore to finish.',
+    );
+  });
+
+  it('refuses while a version is previewed, naming the working graph', () => {
+    // The same hazard undo carries: the canvas is showing a version, but the
+    // store still holds the working graph — so arranging would rewrite a
+    // document the operator cannot see, and move `dirty` under the preview's
+    // own Restore button.
+    expect(arrangeDisabledReason({ ...live, previewing: 3 })).toBe(
+      'Leave the preview to arrange your working graph.',
+    );
+  });
+
+  it('says the pipeline is still loading rather than that it is empty', () => {
+    // A canvas that has not loaded also has no nodes. Answering "Nothing to
+    // arrange." there would tell an operator their pipeline is empty when it
+    // is merely not here yet.
+    expect(arrangeDisabledReason({ ...live, ready: false, available: false })).toBe(
+      'Wait for the pipeline to load.',
+    );
+  });
+
+  it('says there is nothing to arrange on a loaded, empty canvas', () => {
+    expect(arrangeDisabledReason({ ...live, available: false })).toBe('Nothing to arrange.');
   });
 });

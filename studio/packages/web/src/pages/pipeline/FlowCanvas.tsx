@@ -314,7 +314,23 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
  * of this line, which the spec above
  * pins.
  */
-export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
+export function FlowCanvas({
+  store,
+  fitSignal = 0,
+}: {
+  store: StoreApi<CanvasState>;
+  /**
+   * U9 (#1004) — INCREMENT to ask the canvas to fit its content.
+   *
+   * A counter rather than a boolean or a callback ref, because the request is an
+   * EVENT and two consecutive Arrange presses must both be honoured; a boolean
+   * would need clearing afterwards, which is a second render and a second piece
+   * of state that can disagree with the first. `0` is "never asked", so a mount
+   * does not fit twice — the `fitView` PROP already does the mount case, and
+   * this only ever fires on an explicit gesture.
+   */
+  fitSignal?: number;
+}) {
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
   const selected = useStore(store, (s) => s.selected);
@@ -557,9 +573,9 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
   }, []);
   // Converts a pointer position to flow coordinates under the live zoom/pan.
   // Requires the surrounding `ReactFlowProvider` (supplied by `PipelineCanvas`).
-  // `setViewport` is the reveal below; it is the only imperative viewport write
-  // on this canvas.
-  const { screenToFlowPosition, setViewport } = useReactFlow();
+  // `setViewport` is the reveal below; `fitView` is U9's Arrange. Between them
+  // they are the only imperative viewport writes on this canvas.
+  const { screenToFlowPosition, setViewport, fitView } = useReactFlow();
   /* React Flow's OWN store, read imperatively via `getState()` and never
      subscribed to. The reveal needs the live transform and the pane size, and a
      `useStore((s) => s.transform)` selector would re-render this component on
@@ -1013,6 +1029,32 @@ export function FlowCanvas({ store }: { store: StoreApi<CanvasState> }) {
     const next = revealTransform(boxes, transform, usable.width, usable.height);
     if (next !== null) void setViewport(next);
   }, [containerBoxes, paneWidth, paneHeight, reactFlowStore, setViewport]);
+
+  /**
+   * U9 (#1004) — fit the content when Arrange asks for it.
+   *
+   * Not a nicety. `onlyRenderVisibleElements` is on, so a node outside the
+   * viewport is not merely off-screen, it is REMOVED from the DOM — and a
+   * re-layout is precisely the operation that takes a graph the operator had
+   * fitted and makes it wider than the pane. Without this, pressing Arrange on
+   * the pile this feature exists to fix spreads the graph and leaves most of it
+   * both invisible and unrendered, which reads as "the button deleted my nodes".
+   * Measured: the first cut shipped without it and the e2e could not find a
+   * third node after arranging.
+   *
+   * Guarded twice: on `fitSignal > 0`, so a mount never fits on top of the
+   * `fitView` PROP already doing the mount case, and on the last signal actually
+   * honoured, so exactly one fit happens per gesture no matter how often the
+   * effect re-runs. The second guard is what lets `fitView` stay an honest
+   * dependency — re-fitting because an accessor's identity changed would move
+   * the operator's viewport under them for a reason they did not ask about.
+   */
+  const lastFittedSignal = useRef(0);
+  useEffect(() => {
+    if (fitSignal <= 0 || fitSignal === lastFittedSignal.current) return;
+    lastFittedSignal.current = fitSignal;
+    void fitView();
+  }, [fitSignal, fitView]);
 
   /** Containers FIRST, so they paint behind the activities they enclose. */
   const renderedNodes = useMemo(

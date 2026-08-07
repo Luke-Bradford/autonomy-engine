@@ -64,6 +64,45 @@ export function redoDisabledReason({
   return null;
 }
 
+/** What the canvas can be doing that takes the Arrange control away. */
+export interface ArrangeControlContext extends HistoryControlContext {
+  /** Has the canvas finished loading the pipeline it is showing? */
+  ready: boolean;
+}
+
+/**
+ * U9 — why the Arrange control is dead, or `null` when it is live.
+ *
+ * The same three refusals its neighbours carry, for the same reasons: a
+ * re-layout is a WRITE to the working graph, so it must not land inside a save's
+ * compare window (`busy`), and it must not silently rewrite a document the
+ * operator cannot see because a version is previewed.
+ *
+ * `ready` is separate from `available` rather than folded into it. A canvas
+ * still loading also has no nodes, so one flag would answer "Nothing to
+ * arrange." for a pipeline that may be full of them — a wrong reason on a dead
+ * control is worse than a blunt one, because it invites the operator to go and
+ * add an activity they already have.
+ *
+ * NOT refused for an ARCHIVED pipeline, matching Save: archiving is enforced by
+ * the server (409) and announced by the page's banner, and `canSave` takes no
+ * `archived` argument either. Arrange writes nothing to the server, and an
+ * operator reading an archived pipeline has as much use for a legible graph as
+ * anyone.
+ */
+export function arrangeDisabledReason({
+  ready,
+  available,
+  previewing,
+  busy,
+}: ArrangeControlContext): string | null {
+  if (busy) return 'Wait for the save or restore to finish.';
+  if (previewing !== null) return 'Leave the preview to arrange your working graph.';
+  if (!ready) return 'Wait for the pipeline to load.';
+  if (!available) return 'Nothing to arrange.';
+  return null;
+}
+
 /**
  * Is this event target a text-entry control, whose own undo the browser owns?
  *
