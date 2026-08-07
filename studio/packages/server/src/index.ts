@@ -64,6 +64,7 @@ import {
   resolveQuotaSamplerEnabled,
   type QuotaSampler,
 } from './quota/quota-sampler.js';
+import { createLastKnownQuotaRecorder } from './quota/last-known.js';
 import { registerStaticWeb } from './routes/static-web.js';
 import type { GitProvider } from './git/provider.js';
 import type { GitHostClient } from './git/github-host.js';
@@ -357,7 +358,7 @@ export async function buildApp(opts?: BuildAppOptions) {
   // one that leaves it armed. Documented as `0` in the README for that reason.
   const claudeAccountQuotaEnabled =
     opts?.claudeAccountQuotaEnabled ?? process.env.CLAUDE_QUOTA_ENABLED !== '0';
-  const claudeAccountQuota: ClaudeAccountQuotaReader =
+  const baseClaudeAccountQuota: ClaudeAccountQuotaReader =
     opts?.claudeAccountQuotaReader ??
     (claudeAccountQuotaEnabled
       ? createClaudeAccountQuotaReader({
@@ -373,7 +374,35 @@ export async function buildApp(opts?: BuildAppOptions) {
           log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
         })
       : UNREADABLE_ACCOUNT_QUOTA_READER);
+  // #987 — everything in the app holds the WRAPPED reader, so both the request
+  // path and the background sampler's ticks keep the display's last-known value
+  // warm. The wrapper is transparent: it returns its inner reader's outcome
+  // unchanged, so `GET /api/quota` and the spend guard behind it are unaffected,
+  // and the reader still serves no last-good value after a failed read.
+  //
+  // NOT wrapped when the surface is switched off. The always-UNREADABLE reader
+  // can never produce a reading, so it can never produce a last-known one
+  // either — the wrapper there is provably inert indirection, and leaving it off
+  // keeps the decoration IDENTITY-equal to that singleton, which is what pins
+  // "disabled" apart from "enabled but on a host with no credential" (both
+  // answer `null`, so the wiring is the only observable difference, and the
+  // alternative — calling `read()` to tell them apart — is a real Keychain and
+  // provider call from the unit suite). Same reasoning as the sampler's own
+  // skip-the-disabled-reader branch below.
+  const quotaLastKnownRecorder =
+    baseClaudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER
+      ? null
+      : createLastKnownQuotaRecorder(baseClaudeAccountQuota);
+  const claudeAccountQuota = quotaLastKnownRecorder?.reader ?? baseClaudeAccountQuota;
   fastify.decorate('claudeAccountQuota', claudeAccountQuota);
+  // An arrow, not the bound method: Fastify rebinds `this` on a function-valued
+  // decoration, which would detach it from the recorder's closure. Always
+  // decorated (never absent) so the display route is uniform, exactly as
+  // `claudeAccountQuota` itself is.
+  fastify.decorate(
+    'claudeAccountQuotaLastKnown',
+    () => quotaLastKnownRecorder?.lastKnown() ?? null,
+  );
 
   // #765 — the sampler's flag + cadence are resolved and VALIDATED here, before
   // any timer anywhere in this function is armed, so a mistyped value can only
@@ -936,8 +965,14 @@ export async function buildApp(opts?: BuildAppOptions) {
   // Armed against the DECORATED reader (injected or real), skipping the
   // always-UNREADABLE one: sampling a constant is pure waste, and it is also
   // how the disabled surface stays a true no-op without reading the flag twice.
+  //
+  // The "is it the disabled reader" test is on the BASE reader, because the
+  // decorated one is the #987 wrapper and never identity-equals anything. The
+  // sampler itself is still armed with the WRAPPER — that is the load-bearing
+  // half: once the sampler is armed almost every successful read is a tick, so a
+  // wrapper the ticks bypassed would retain nearly nothing.
   if (claudeAccountQuotaSamplerEnabled) {
-    if (claudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER) {
+    if (baseClaudeAccountQuota === UNREADABLE_ACCOUNT_QUOTA_READER) {
       // The zero-poller state, said out loud. Silence here is exactly how a
       // cutover ends up with the old sampler retired and no replacement running.
       fastify.log.warn(

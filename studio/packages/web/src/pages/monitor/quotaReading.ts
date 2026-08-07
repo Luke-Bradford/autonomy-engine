@@ -1,7 +1,8 @@
 import type {
-  AccountQuotaState,
+  AccountQuotaDisplayState,
   AccountQuotaUnavailableReason,
   AccountQuotaWindow,
+  ClaudeAccountQuota,
 } from '@autonomy-studio/shared';
 
 /**
@@ -19,11 +20,24 @@ import type {
  *    as a plausible-looking date rather than as an error.
  *
  * THE FAIL-OPEN RULE: an unreadable quota must render as UNREADABLE and never as
- * a number. "0%" is the single most dangerous thing this surface could say —
- * it means "wide open, spend freely", which is the exact opposite of "I do not
- * know". So the unreadable case is a distinct variant of the union below rather
- * than a zeroed reading, and there is deliberately no code path from an absent
- * reading to a percentage.
+ * a CURRENT number. "0%" is the single most dangerous thing this surface could
+ * say — it means "wide open, spend freely", which is the exact opposite of "I do
+ * not know". So the unreadable case is a distinct variant of the union below
+ * rather than a zeroed reading, and no absent reading is ever substituted for.
+ *
+ * #987 SPLIT THAT RULE PRECISELY, and this paragraph is the record of where the
+ * line now is. An `unreadable` reading MAY carry `lastKnown` — a number that was
+ * really obtained, with the age it was obtained at. It is not a fallback and not
+ * a default: it never replaces the UNREADABLE statement (which stays, with its
+ * reason), it renders only inside an explicitly-labelled stale block, and it
+ * always states its own age. What remains forbidden is exactly what was
+ * forbidden before — presenting an absent reading AS the current one, or
+ * manufacturing a percentage from nothing. A twelve-minute-old number an
+ * operator can see is old is useful; the same number presented as live is the
+ * fail-open failure.
+ *
+ * The GUARD's contract is untouched by any of this: `loop/drive.sh` reads
+ * `/api/quota`, which never carries a last-known value at all.
  */
 
 export interface QuotaWindowReading {
@@ -45,9 +59,42 @@ export interface QuotaWindowReading {
   resetsAtMs: number;
 }
 
+/**
+ * A reading that was really obtained, and how old it was when the server
+ * answered (#987).
+ *
+ * `ageMs` is computed SERVER-side in effect — from `generated_at - read_at`, two
+ * stamps from the same clock in the same response — so no browser clock skew
+ * enters it. It is fixed at response time rather than ticking, matching the rest
+ * of this panel, which is a point-in-time snapshot refreshed on demand.
+ */
+export interface LastKnownQuotaReading {
+  windows: QuotaWindowReading[];
+  ageMs: number;
+}
+
 export type QuotaReading =
   | { kind: 'reading'; windows: QuotaWindowReading[]; generatedAtMs: number }
-  | { kind: 'unreadable'; reason: AccountQuotaUnavailableReason; generatedAtMs: number };
+  | {
+      kind: 'unreadable';
+      reason: AccountQuotaUnavailableReason;
+      generatedAtMs: number;
+      /** The last reading obtained this server session, if there was one. */
+      lastKnown?: LastKnownQuotaReading;
+    };
+
+/**
+ * When a last-known reading stops being merely old and starts being EVIDENCE
+ * that the provider is refusing.
+ *
+ * Derived from the reader, not chosen: the server's TTL is 60s and the
+ * background sampler ticks at half of that, so anything past ~2 TTLs means
+ * several sample attempts in a row have failed. A threshold picked for how old
+ * a number "feels" (15 minutes, say) would show a quarter of an hour of stale
+ * data unmarked — and 900s is also, exactly, the prototype grace window this
+ * whole surface exists to have rejected, so it is the one number not to reuse.
+ */
+export const QUOTA_STALE_AFTER_MS = 2 * 60_000;
 
 /** The wire's per-window seconds/fraction shape → the rendered percent/ms shape. */
 function readWindow(label: string, window: AccountQuotaWindow): QuotaWindowReading {
@@ -66,10 +113,11 @@ function readWindow(label: string, window: AccountQuotaWindow): QuotaWindowReadi
  * windows are present or the reading is `null`, so there is no partial state to
  * represent and no half-reading to mistake for evidence.
  */
-export function readAccountQuota(state: AccountQuotaState): QuotaReading {
+export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading {
   const generatedAtMs = state.generated_at * 1000;
   const claude = state.account.claude;
   if (claude === null) {
+    const retained = state.last_known;
     /*
      * `unavailable` is guaranteed present alongside a null reading by the wire
      * schema's own refinement, so this fallback is unreachable from the shipped
@@ -81,13 +129,27 @@ export function readAccountQuota(state: AccountQuotaState): QuotaReading {
       kind: 'unreadable',
       reason: state.unavailable?.claude ?? 'reader_error',
       generatedAtMs,
+      ...(retained === undefined
+        ? {}
+        : {
+            lastKnown: {
+              windows: readWindows(retained.claude),
+              // Floored, because both stamps come from a WALL clock: a
+              // backwards step between the reading and the response would
+              // otherwise produce a negative age, which no wording can state
+              // honestly. The server floors it too; this is the second half of
+              // the same guard, on the side that does the rendering.
+              ageMs: Math.max(0, generatedAtMs - retained.read_at * 1000),
+            },
+          }),
     };
   }
-  return {
-    kind: 'reading',
-    generatedAtMs,
-    windows: [readWindow('5-hour', claude.five_hour), readWindow('7-day', claude.seven_day)],
-  };
+  return { kind: 'reading', generatedAtMs, windows: readWindows(claude) };
+}
+
+/** Both windows, in the order they read. One definition, two callers (#987). */
+function readWindows(claude: ClaudeAccountQuota): QuotaWindowReading[] {
+  return [readWindow('5-hour', claude.five_hour), readWindow('7-day', claude.seven_day)];
 }
 
 /**

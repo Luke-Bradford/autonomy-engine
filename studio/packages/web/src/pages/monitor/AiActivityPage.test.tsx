@@ -7,11 +7,11 @@ import { AiActivityPage } from './AiActivityPage';
 vi.mock('../../api/monitor', async (importActual) => ({
   ...(await importActual<typeof monitorApi>()),
   fetchAiActivity: vi.fn(),
-  fetchAccountQuota: vi.fn(),
+  fetchAccountQuotaDisplay: vi.fn(),
 }));
 
 const activityMock = vi.mocked(monitorApi.fetchAiActivity);
-const quotaMock = vi.mocked(monitorApi.fetchAccountQuota);
+const quotaMock = vi.mocked(monitorApi.fetchAccountQuotaDisplay);
 
 function cost(over: Partial<RunCost> = {}): RunCost {
   return {
@@ -164,5 +164,101 @@ describe('AiActivityPage', () => {
     const panel = await screen.findByRole('region', { name: 'Account quota' });
     await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
     expect(panel.textContent ?? '').not.toContain('%');
+  });
+
+  /**
+   * #987 — the panel said UNREADABLE most of the time, because the provider 429s
+   * most of the time, while a real number had been read minutes earlier.
+   */
+  describe('last-known quota reading (#987)', () => {
+    const LAST_KNOWN = {
+      five_hour: { utilization: 0.31, resets_at: 1_786_003_600 },
+      seven_day: { utilization: 0.58, resets_at: 1_786_600_000 },
+    };
+
+    it('shows the last known number, with its age, beneath the UNREADABLE statement', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_786_000_000 - 750 },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      // The UNREADABLE statement STAYS. The number is an addition to it, never
+      // a replacement for it — an old figure presented as live is the fail-open
+      // failure this surface exists to prevent.
+      await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
+      expect(panel).toHaveTextContent('Last known reading');
+      expect(panel).toHaveTextContent('58%');
+      // 750s → the shared elapsed formatter's two most significant units.
+      expect(panel).toHaveTextContent('12m 30s ago');
+      expect(panel).toHaveTextContent('not a current figure');
+    });
+
+    it('warns in words once the reading is older than the reader refreshes', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_786_000_000 - 750 },
+      });
+
+      render(<AiActivityPage />);
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('has been failing for a while'));
+    });
+
+    it('says nothing of the sort for a reading taken seconds ago', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_786_000_000 - 30 },
+      });
+
+      render(<AiActivityPage />);
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Last known reading'));
+      expect(panel).toHaveTextContent('30s ago');
+      expect(panel.textContent ?? '').not.toContain('has been failing for a while');
+    });
+
+    it('shows no number at all when nothing has ever been read', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: null },
+        unavailable: { claude: 'no_credential' },
+      });
+
+      render(<AiActivityPage />);
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Quota UNREADABLE.'));
+      expect(panel.textContent ?? '').not.toContain('Last known reading');
+      expect(panel.textContent ?? '').not.toContain('%');
+    });
+
+    it('stamps when the browser last CHECKED, which is not how old the number is', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_786_000_000 - 750 },
+      });
+
+      render(<AiActivityPage />);
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('Last checked'));
+      // Two freshness facts were on screen and the louder one was about the
+      // REQUEST, not the number — so it now names what it stamps.
+      expect(panel.textContent ?? '').not.toContain('Quota as of');
+    });
   });
 });

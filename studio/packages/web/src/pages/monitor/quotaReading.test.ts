@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { ACCOUNT_QUOTA_UNAVAILABLE_REASONS, type AccountQuotaState } from '@autonomy-studio/shared';
+import {
+  ACCOUNT_QUOTA_UNAVAILABLE_REASONS,
+  type AccountQuotaDisplayState,
+} from '@autonomy-studio/shared';
 import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
 
-function stateWith(claude: AccountQuotaState['account']['claude']): AccountQuotaState {
+function stateWith(
+  claude: AccountQuotaDisplayState['account']['claude'],
+): AccountQuotaDisplayState {
   return { generated_at: 1_785_100_000, account: { claude } };
 }
 
@@ -114,6 +119,61 @@ describe('readAccountQuota', () => {
     expect(reading.kind).toBe('unreadable');
     if (reading.kind !== 'unreadable') return;
     expect(reading.reason).toBe('reader_error');
+  });
+
+  /**
+   * #987 — an unreadable quota MAY carry the last reading that was really
+   * obtained. It never replaces the UNREADABLE statement; it is a second,
+   * explicitly-aged fact beside it.
+   */
+  describe('last-known reading (#987)', () => {
+    const LAST_KNOWN = {
+      five_hour: { utilization: 0.31, resets_at: 1_785_100_200 },
+      seven_day: { utilization: 0.58, resets_at: 1_785_636_000 },
+    };
+
+    it('carries the last-known windows and its age', () => {
+      const reading = readAccountQuota({
+        generated_at: 1_785_100_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_785_099_250 },
+      });
+
+      expect(reading.kind).toBe('unreadable');
+      if (reading.kind !== 'unreadable') return;
+      // Still UNREADABLE, and still says why. The number does not displace it.
+      expect(reading.reason).toBe('rate_limited');
+      expect(reading.lastKnown?.ageMs).toBe(750_000);
+      // Scaled exactly as a live reading is — same derivation, one definition.
+      expect(reading.lastKnown?.windows[1]?.usedPct).toBeCloseTo(58);
+      expect(reading.lastKnown?.windows[1]?.headroomPct).toBeCloseTo(42);
+      expect(reading.lastKnown?.windows[0]?.resetsAtMs).toBe(1_785_100_200_000);
+    });
+
+    it('has no last-known reading when none was ever obtained', () => {
+      const reading = readAccountQuota(stateWith(null));
+      expect(reading.kind).toBe('unreadable');
+      if (reading.kind !== 'unreadable') return;
+      expect(reading.lastKnown).toBeUndefined();
+    });
+
+    /**
+     * Both stamps come from a WALL clock, so a backwards step (NTP, a VM
+     * resume) can put the reading after the response. A negative age is a thing
+     * no wording can state honestly, so it floors at "just now".
+     */
+    it('floors the age at zero when the clock stepped backwards', () => {
+      const reading = readAccountQuota({
+        generated_at: 1_785_100_000,
+        account: { claude: null },
+        unavailable: { claude: 'provider_error' },
+        last_known: { claude: LAST_KNOWN, read_at: 1_785_100_600 },
+      });
+      expect(reading.kind).toBe('unreadable');
+      if (reading.kind !== 'unreadable') return;
+      expect(reading.lastKnown?.ageMs).toBe(0);
+    });
   });
 });
 

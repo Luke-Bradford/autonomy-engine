@@ -56,7 +56,15 @@ utilization fractions and two reset timestamps, plus — when there is no readin
 an `unavailable.claude` field naming WHY. That field is a fixed enum
 (`rate_limited`, `no_credential`, …) carrying no host detail, no path and no
 provider text; it is advisory, and is present only alongside a `null` reading.
-The route is **unauthenticated**
+A sibling route, `GET /api/quota/display`, serves the same reading to the
+Monitor › AI activity page, and — when there is no current reading — the last one
+that WAS obtained, with the timestamp it was taken at. That split exists because
+the two consumers need opposite staleness contracts: a gate must never see a
+stale number (it would permit a fire the live figure refuses), while a person
+looking at a panel is better served by "58%, read 12 minutes ago" than by
+"unreadable". The last-known value is held outside the reader and is reachable
+only from the display route; `GET /api/quota` never carries it. Both routes are
+**unauthenticated**
 like everything else here, so on an exposed instance that figure is readable by
 anyone who can reach the port. Set `CLAUDE_QUOTA_ENABLED=0` to switch it off
 entirely, after which it always reports `null` (with `unavailable.claude:

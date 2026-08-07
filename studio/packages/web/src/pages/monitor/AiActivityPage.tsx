@@ -5,12 +5,18 @@ import {
   type LiveRunCounts,
   type RunSince,
 } from '@autonomy-studio/shared';
-import { fetchAccountQuota, fetchAiActivity } from '../../api/monitor';
+import { fetchAccountQuotaDisplay, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
-import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaReading';
+import {
+  QUOTA_STALE_AFTER_MS,
+  QUOTA_UNAVAILABLE_TEXT,
+  formatPct,
+  readAccountQuota,
+  type QuotaWindowReading,
+} from './quotaReading';
 
 /**
  * #917 — Monitor → AI activity: what the connected AIs are doing, and how much
@@ -24,9 +30,15 @@ import { QUOTA_UNAVAILABLE_TEXT, formatPct, readAccountQuota } from './quotaRead
  * things to read. AI activity is a local SQLite read over the run-event log, so
  * it polls. Quota reaches the PROVIDER, and the standing one-sampler invariant
  * means an open tab must not poll it on a timer — so it loads on mount, refreshes
- * on an explicit click, and always states when it was read. The asymmetry is
- * visible in the UI rather than hidden: the quota panel says "as of <time>", so
- * a reading the operator has not refreshed can never pass for a live one.
+ * on an explicit click, and always states when it was last CHECKED. The asymmetry
+ * is visible in the UI rather than hidden: a reading the operator has not
+ * refreshed can never pass for a live one.
+ *
+ * #987 added the second freshness fact, and the two are deliberately different
+ * things: "last checked" is when the BROWSER asked; a last-known reading states
+ * how old the NUMBER is. When the provider is refusing they disagree by minutes,
+ * which is exactly why the panel used to be useless — it said UNREADABLE and
+ * stamped that with a reassuringly recent time.
  */
 
 /** Local reads are cheap; this is fast enough to feel live without being busy. */
@@ -67,9 +79,54 @@ function useNow(): number {
   return Date.now();
 }
 
+/**
+ * The per-window table. One definition, rendered for the live reading and for a
+ * last-known one (#987) — so a stale reading is presented in exactly the same
+ * terms as a live one and the ONLY difference between them is the labelling
+ * around it, which is where the difference belongs.
+ */
+function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now: number }) {
+  return (
+    <table className="quota-table">
+      <caption className="visually-hidden">Account quota by window</caption>
+      <thead>
+        <tr>
+          <th scope="col">Window</th>
+          <th scope="col">Used</th>
+          <th scope="col">Headroom</th>
+          <th scope="col">Resets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {windows.map((w) => (
+          <tr key={w.label}>
+            <th scope="row">{w.label}</th>
+            <td>
+              {formatPct(w.usedPct)}
+              {w.overage && <span className="badge quota-overage"> on overage credit</span>}
+            </td>
+            <td>{formatPct(w.headroomPct)}</td>
+            {/* The RESET INSTANT, not just a percentage: a bare "96%" is
+                what makes a correctly-working system look hung. */}
+            <td>
+              {formatWhen(w.resetsAtMs)}
+              {w.resetsAtMs > now && (
+                <span className="quota-reset-relative">
+                  {' '}
+                  (in {formatElapsed(w.resetsAtMs - now)})
+                </span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function QuotaPanel() {
-  const fetcher = useCallback((signal: AbortSignal) => fetchAccountQuota(signal), []);
-  // NO `intervalMs` — see the module docblock and `fetchAccountQuota`.
+  const fetcher = useCallback((signal: AbortSignal) => fetchAccountQuotaDisplay(signal), []);
+  // NO `intervalMs` — see the module docblock and `fetchAccountQuotaDisplay`.
   const { data, error, loading, lastUpdatedAt, refresh } = usePolledResource(fetcher);
   const now = useNow();
 
@@ -96,53 +153,47 @@ function QuotaPanel() {
 
       {loading && data === null && error === null && <p className="notice">Reading quota…</p>}
 
-      {/* An UNREADABLE quota says so, in words. It must never render as a
-          percentage: "0%" would mean "wide open", the opposite of "unknown". */}
+      {/* An UNREADABLE quota says so, in words, and keeps saying so even when a
+          last-known number is shown beneath it. It must never render as a
+          CURRENT percentage: "0%" would mean "wide open", the opposite of
+          "unknown". */}
       {reading?.kind === 'unreadable' && (
-        <p role="status" className="notice quota-unreadable">
-          <strong>Quota UNREADABLE.</strong> {QUOTA_UNAVAILABLE_TEXT[reading.reason]}
-        </p>
+        <>
+          <p role="status" className="notice quota-unreadable">
+            <strong>Quota UNREADABLE.</strong> {QUOTA_UNAVAILABLE_TEXT[reading.reason]}
+          </p>
+          {/* #987 — the provider 429s most of the time, so without this the panel
+              said UNREADABLE most of the time while a real number had been read
+              minutes earlier. Shown with its AGE and never in place of the
+              statement above; the spend guard's own endpoint carries none of
+              this and still sees UNREADABLE. */}
+          {reading.lastKnown !== undefined && (
+            <div className="quota-last-known">
+              <p className="page-hint">
+                <strong>Last known reading</strong>, taken {formatElapsed(reading.lastKnown.ageMs)}{' '}
+                ago — not a current figure.
+                {reading.lastKnown.ageMs > QUOTA_STALE_AFTER_MS && (
+                  <>
+                    {' '}
+                    The reader refreshes far more often than that, so it has been failing for a
+                    while and this number may have moved.
+                  </>
+                )}
+              </p>
+              <QuotaWindowTable windows={reading.lastKnown.windows} now={now} />
+            </div>
+          )}
+        </>
       )}
 
-      {reading?.kind === 'reading' && (
-        <table className="quota-table">
-          <caption className="visually-hidden">Account quota by window</caption>
-          <thead>
-            <tr>
-              <th scope="col">Window</th>
-              <th scope="col">Used</th>
-              <th scope="col">Headroom</th>
-              <th scope="col">Resets</th>
-            </tr>
-          </thead>
-          <tbody>
-            {reading.windows.map((w) => (
-              <tr key={w.label}>
-                <th scope="row">{w.label}</th>
-                <td>
-                  {formatPct(w.usedPct)}
-                  {w.overage && <span className="badge quota-overage"> on overage credit</span>}
-                </td>
-                <td>{formatPct(w.headroomPct)}</td>
-                {/* The RESET INSTANT, not just a percentage: a bare "96%" is
-                    what makes a correctly-working system look hung. */}
-                <td>
-                  {formatWhen(w.resetsAtMs)}
-                  {w.resetsAtMs > now && (
-                    <span className="quota-reset-relative">
-                      {' '}
-                      (in {formatElapsed(w.resetsAtMs - now)})
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {reading?.kind === 'reading' && <QuotaWindowTable windows={reading.windows} now={now} />}
 
+      {/* "Last CHECKED", not "quota as of": this stamps when the browser asked,
+          which is a different fact from how old the number is — and when a
+          last-known reading is on screen the two disagree by minutes. One
+          freshness claim about the number, and it is the one attached to it. */}
       {lastUpdatedAt !== null && (
-        <p className="page-hint quota-as-of">Quota as of {formatWhen(lastUpdatedAt)}.</p>
+        <p className="page-hint quota-as-of">Last checked {formatWhen(lastUpdatedAt)}.</p>
       )}
     </section>
   );

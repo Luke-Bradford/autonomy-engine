@@ -19,14 +19,36 @@ import { fluentRootReady } from './support/theme';
 /** A reading far enough in the future that the relative "in …" half is stable. */
 const RESETS_AT_SECONDS = Math.floor(Date.UTC(2099, 0, 1) / 1000);
 
+/**
+ * #987 — the panel reads `/api/quota/display`, NOT `/api/quota`.
+ *
+ * Playwright matches a route glob against the path EXACTLY, so stubbing the
+ * guard's endpoint here would intercept nothing and every assertion below would
+ * pass or fail for reasons unrelated to what it stubbed — the UNREADABLE ones
+ * vacuously, because CI's real endpoint genuinely answers `no_credential`.
+ */
 async function stubQuota(page: Page, body: unknown): Promise<void> {
-  await page.route('**/api/quota', (route) =>
+  await page.route('**/api/quota/display', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(body),
     }),
   );
+}
+
+/**
+ * Counts every request to the SPEND GUARD's endpoint. The browser has no reason
+ * to call it and must not: it is the surface that carries no last-known value,
+ * and the one whose consumer is `loop/drive.sh`.
+ */
+async function countGuardEndpointCalls(page: Page): Promise<() => number> {
+  let calls = 0;
+  await page.route('**/api/quota', (route) => {
+    calls += 1;
+    return route.continue();
+  });
+  return () => calls;
 }
 
 function quotaPanel(page: Page) {
@@ -138,7 +160,7 @@ test.describe('#917 Monitor › AI activity', () => {
   test('does not poll the provider on a timer while the page sits open', async ({ page }) => {
     const problems = collectPageProblems(page);
     let quotaCalls = 0;
-    await page.route('**/api/quota', (route) => {
+    await page.route('**/api/quota/display', (route) => {
       quotaCalls += 1;
       return route.fulfill({
         status: 200,
@@ -167,5 +189,83 @@ test.describe('#917 Monitor › AI activity', () => {
     await expect.poll(() => quotaCalls).toBe(afterMount + 1);
 
     await expectQuiet(page, problems);
+  });
+
+  /**
+   * #987 — the panel said "Quota UNREADABLE" while the build loop's spend guard
+   * had read 58% minutes earlier. The reader deliberately keeps no last-good
+   * value, which is right for a gate and useless for a person; the split is in
+   * the contract, and these walk both halves of it.
+   */
+  test.describe('#987 a last-known reading, with its age', () => {
+    const LAST_KNOWN_BODY = (ageSeconds: number) => {
+      const generatedAt = Math.floor(Date.now() / 1000);
+      return {
+        generated_at: generatedAt,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: {
+          claude: {
+            five_hour: { utilization: 0.31, resets_at: RESETS_AT_SECONDS },
+            seven_day: { utilization: 0.58, resets_at: RESETS_AT_SECONDS },
+          },
+          read_at: generatedAt - ageSeconds,
+        },
+      };
+    };
+
+    test('shows the number beneath the UNREADABLE statement, aged', async ({ page }) => {
+      const problems = collectPageProblems(page);
+      const guardCalls = await countGuardEndpointCalls(page);
+      await stubQuota(page, LAST_KNOWN_BODY(750));
+
+      await page.goto('/#/monitor/ai');
+      await fluentRootReady(page);
+
+      const panel = quotaPanel(page);
+      // BOTH facts on screen at once: it is unreadable NOW, and this is what it
+      // was. Neither displaces the other.
+      await expect(panel).toContainText('Quota UNREADABLE.');
+      await expect(panel).toContainText('Last known reading');
+      await expect(panel).toContainText('12m 30s ago');
+      await expect(panel).toContainText('not a current figure');
+      await expect(panel).toContainText('58%');
+      // Past the reader's own refresh cadence, so it says so in words rather
+      // than leaving the operator to judge from a duration.
+      await expect(panel).toContainText('has been failing for a while');
+      // The freshness claim attached to the NUMBER is the number's own age; the
+      // request stamp names what it stamps.
+      await expect(panel).toContainText('Last checked');
+      await expect(panel).not.toContainText('Quota as of');
+
+      // The guard's endpoint is not something a browser has any business
+      // calling — this is the honest replacement for the stub that used to
+      // sit on that path.
+      expect(guardCalls()).toBe(0);
+
+      await expectQuiet(page, problems);
+    });
+
+    test('still shows no number when nothing has ever been read', async ({ page }) => {
+      const problems = collectPageProblems(page);
+      await stubQuota(page, {
+        generated_at: Math.floor(Date.now() / 1000),
+        account: { claude: null },
+        unavailable: { claude: 'no_credential' },
+      });
+
+      await page.goto('/#/monitor/ai');
+      await fluentRootReady(page);
+
+      const panel = quotaPanel(page);
+      await expect(panel).toContainText('Quota UNREADABLE.');
+      // No last-known block, no manufactured percentage. "Nothing has been
+      // read" is a real state and stays representable.
+      await expect(panel).not.toContainText('Last known reading');
+      await expect(panel).not.toContainText('%');
+      await expect(panel.getByRole('table')).toHaveCount(0);
+
+      await expectQuiet(page, problems);
+    });
   });
 });

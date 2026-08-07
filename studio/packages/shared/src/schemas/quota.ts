@@ -94,6 +94,12 @@ export type AccountQuotaWindow = z.infer<typeof AccountQuotaWindowSchema>;
  * reader has neither (see `claude-quota.ts`), so every reading here is a fresh
  * live sample by construction. A field with exactly one possible value is an
  * inert wire surface that implies alternatives which do not exist.
+ *
+ * That still holds, and #987 is the reason to say so precisely rather than
+ * loosely: the DISPLAY body (`AccountQuotaDisplayStateSchema`) carries an
+ * explicitly-aged last-known reading, and this one still does not. The age lives
+ * on the envelope around the reading, never on the reading itself, so a
+ * `ClaudeAccountQuota` value remains a thing with no freshness to interpret.
  */
 export const ClaudeAccountQuotaSchema = z
   .object({
@@ -179,37 +185,119 @@ export type AccountQuotaUnavailableReason = z.infer<typeof AccountQuotaUnavailab
  * (`claudeAccountQuotaReader`), and a contract a schema does not check is one a
  * future implementation is free to break.
  */
+/**
+ * The fields both quota bodies share, factored out so the guard's body and the
+ * display body cannot drift.
+ *
+ * Extraction ONLY: `AccountQuotaStateSchema`'s exported type and runtime
+ * behaviour are identical to what they were before #987 — same keys, same
+ * `.strict()`, same refinement. That matters because this body is a documented
+ * COMPAT CONTRACT with `loop/drive.sh` (see the file header), so the refactor
+ * that lets a second body reuse the shape must not be a place the first one
+ * quietly acquires a field.
+ */
+const accountQuotaStateShape = {
+  generated_at: z.number().int(),
+  account: z
+    .object({
+      claude: ClaudeAccountQuotaSchema.nullable(),
+    })
+    .strict(),
+  unavailable: z
+    .object({
+      claude: AccountQuotaUnavailableReasonSchema,
+    })
+    .strict()
+    .optional(),
+} as const;
+
+/** The #825 iff, shared by both bodies for the same reason the shape is. */
+function refineUnavailableIff(
+  state: { account: { claude: unknown }; unavailable?: unknown },
+  ctx: z.RefinementCtx,
+): void {
+  if (state.account.claude === null && state.unavailable === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['unavailable'],
+      message: 'an UNREADABLE reading must say why (#825)',
+    });
+  }
+  if (state.account.claude !== null && state.unavailable !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['unavailable'],
+      message: 'a reading cannot also carry a reason for its absence (#825)',
+    });
+  }
+}
+
 export const AccountQuotaStateSchema = z
+  .object(accountQuotaStateShape)
+  .strict()
+  .superRefine(refineUnavailableIff);
+
+export type AccountQuotaState = z.infer<typeof AccountQuotaStateSchema>;
+
+/**
+ * The most recent reading that was actually OBTAINED, and when (#987).
+ *
+ * `read_at` is epoch SECONDS, matching every other timestamp on this surface.
+ * The AGE is deliberately NOT carried as a second field: `generated_at` stamps
+ * the same response from the same clock, so `generated_at - read_at` is an
+ * age computed entirely server-side with no client-clock skew in it — while a
+ * transmitted `age_seconds` would be a second encoding of one fact, free to
+ * disagree with the pair it was derived from (the reasoning `claude-quota.ts`
+ * applies to its own `SampleOutcome`).
+ */
+export const LastKnownAccountQuotaSchema = z
   .object({
-    generated_at: z.number().int(),
-    account: z
-      .object({
-        claude: ClaudeAccountQuotaSchema.nullable(),
-      })
-      .strict(),
-    unavailable: z
-      .object({
-        claude: AccountQuotaUnavailableReasonSchema,
-      })
-      .strict()
-      .optional(),
+    claude: ClaudeAccountQuotaSchema,
+    /** When this reading was taken, epoch SECONDS. */
+    read_at: z.number().int(),
+  })
+  .strict();
+
+export type LastKnownAccountQuota = z.infer<typeof LastKnownAccountQuotaSchema>;
+
+/**
+ * The `GET /api/quota/display` response body — the HUMAN surface (#987).
+ *
+ * A superset of `AccountQuotaState`: the same live reading, plus the last
+ * reading that was obtained, when there is no live one. It exists because the
+ * two consumers of an account-quota reading need OPPOSITE staleness contracts:
+ *
+ * | consumer | needs |
+ * |---|---|
+ * | `loop/drive.sh`'s spend guard | never a stale value — a miss must read UNREADABLE so the guard REFUSES |
+ * | the operator's Monitor panel  | "what is my quota?" — a 12-minute-old number is useful; "UNREADABLE" is not |
+ *
+ * The reader's no-grace / no-last-good rule is RIGHT and is untouched: a
+ * stale-but-low reading that PERMITS a fire is the one forbidden polarity, and
+ * the last-known value here is held OUTSIDE the reader, by a recorder that only
+ * this body can reach (`server/src/quota/last-known.ts`).
+ *
+ * `last_known` is present ONLY when `account.claude` is `null`, enforced below.
+ * Emitting it beside a live reading would put the same number on the wire twice,
+ * one copy carrying an age — an incoherent pair of the kind this file makes
+ * unrepresentable rather than merely discouraged, and one careless consumer away
+ * from preferring the stale copy.
+ */
+export const AccountQuotaDisplayStateSchema = z
+  .object({
+    ...accountQuotaStateShape,
+    last_known: LastKnownAccountQuotaSchema.optional(),
   })
   .strict()
   .superRefine((state, ctx) => {
-    if (state.account.claude === null && state.unavailable === undefined) {
+    refineUnavailableIff(state, ctx);
+    if (state.account.claude !== null && state.last_known !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['unavailable'],
-        message: 'an UNREADABLE reading must say why (#825)',
-      });
-    }
-    if (state.account.claude !== null && state.unavailable !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['unavailable'],
-        message: 'a reading cannot also carry a reason for its absence (#825)',
+        path: ['last_known'],
+        message: 'a live reading must not also carry a last-known copy of itself (#987)',
       });
     }
   });
 
-export type AccountQuotaState = z.infer<typeof AccountQuotaStateSchema>;
+export type AccountQuotaDisplayState = z.infer<typeof AccountQuotaDisplayStateSchema>;
