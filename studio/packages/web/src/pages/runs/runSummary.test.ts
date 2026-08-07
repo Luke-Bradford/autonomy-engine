@@ -2011,7 +2011,13 @@ describe('deriveNodeActivity — the span HISTORY behind U12a (#1007)', () => {
 
   const succeeded = (nodeId: string, attempt: number, ts: number): RunEvent =>
     envelope(
-      { type: 'node.succeeded', runId: 'r', nodeId, attemptId: `${nodeId}#${attempt}`, outputs: {} },
+      {
+        type: 'node.succeeded',
+        runId: 'r',
+        nodeId,
+        attemptId: `${nodeId}#${attempt}`,
+        outputs: {},
+      },
       ts,
     );
 

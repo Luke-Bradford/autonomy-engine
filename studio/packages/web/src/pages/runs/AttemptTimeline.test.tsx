@@ -37,8 +37,14 @@ const noNames = () => null;
 describe('timelineWindow', () => {
   it('spans the earliest start to the latest END the log stated', () => {
     const window = timelineWindow([
-      node({ nodeId: 'a', spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })] }),
-      node({ nodeId: 'b', spans: [span({ startedAtMs: 1_200, endedAtMs: 4_000, endedAs: 'success' })] }),
+      node({
+        nodeId: 'a',
+        spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })],
+      }),
+      node({
+        nodeId: 'b',
+        spans: [span({ startedAtMs: 1_200, endedAtMs: 4_000, endedAs: 'success' })],
+      }),
     ]);
     expect(window).toEqual({ from: 1_000, to: 4_000 });
   });
@@ -49,7 +55,10 @@ describe('timelineWindow', () => {
        be rescaled by a number nobody measured — and it would keep shrinking on
        every re-render, which is worse than a stale cell because it is moving. */
     const window = timelineWindow([
-      node({ nodeId: 'a', spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })] }),
+      node({
+        nodeId: 'a',
+        spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })],
+      }),
       node({ nodeId: 'b', status: 'dispatched', spans: [span({ startedAtMs: 1_300 })] }),
     ]);
     expect(window).toEqual({ from: 1_000, to: 1_400 });
@@ -59,7 +68,10 @@ describe('timelineWindow', () => {
     // `format.ts` and the drill-in panel both already refuse to turn a corrupt
     // clock into a duration; letting one set `to` would run the axis backwards.
     const window = timelineWindow([
-      node({ nodeId: 'a', spans: [span({ startedAtMs: 5_000, endedAtMs: 10, endedAs: 'success' })] }),
+      node({
+        nodeId: 'a',
+        spans: [span({ startedAtMs: 5_000, endedAtMs: 10, endedAs: 'success' })],
+      }),
     ]);
     expect(window).toEqual({ from: 5_000, to: 5_000 });
   });
@@ -89,7 +101,11 @@ describe('placeSpans', () => {
     /* A single instantaneous span, or a single open one. `NaN%` is dropped
        SILENTLY by CSS — every bar would collapse to the left edge with nothing
        logged anywhere, so this is the failure that would never be reported. */
-    const placed = placeSpans([span({ startedAtMs: 1_000, endedAtMs: 1_000, endedAs: 'success' })], 1_000, 1_000);
+    const placed = placeSpans(
+      [span({ startedAtMs: 1_000, endedAtMs: 1_000, endedAs: 'success' })],
+      1_000,
+      1_000,
+    );
     expect(placed[0]!.left).toBe(0);
     expect(placed[0]!.width).toBe(0);
     expect(Number.isNaN(placed[0]!.left)).toBe(false);
@@ -105,7 +121,9 @@ describe('untimedReason', () => {
   });
 
   it('names a skipped node, and says why there is no event for it', () => {
-    expect(untimedReason(node({ nodeId: 'a', status: 'skipped', attempts: 0 }))).toContain('skipped');
+    expect(untimedReason(node({ nodeId: 'a', status: 'skipped', attempts: 0 }))).toContain(
+      'skipped',
+    );
   });
 
   it('says a node has not started when nothing started it', () => {
@@ -135,7 +153,10 @@ describe('<AttemptTimeline>', () => {
               span({ startedAtMs: 3_000, endedAtMs: 3_500, endedAs: 'success' }),
             ],
           }),
-          node({ nodeId: 'a', spans: [span({ startedAtMs: 1_100, endedAtMs: 1_900, endedAs: 'success' })] }),
+          node({
+            nodeId: 'a',
+            spans: [span({ startedAtMs: 1_100, endedAtMs: 1_900, endedAs: 'success' })],
+          }),
         ]}
         nameOf={noNames}
       />,
@@ -174,7 +195,11 @@ describe('<AttemptTimeline>', () => {
     const { container } = render(
       <AttemptTimeline
         nodes={[
-          node({ nodeId: 'a', status: 'success', spans: [span({ startedAtMs: 1_000, endedAtMs: 1_500, endedAs: 'success' })] }),
+          node({
+            nodeId: 'a',
+            status: 'success',
+            spans: [span({ startedAtMs: 1_000, endedAtMs: 1_500, endedAs: 'success' })],
+          }),
           node({ nodeId: 'b', status: 'dispatched', spans: [span({ startedAtMs: 1_200 })] }),
         ]}
         nameOf={noNames}
@@ -199,7 +224,10 @@ describe('<AttemptTimeline>', () => {
     render(
       <AttemptTimeline
         nodes={[
-          node({ nodeId: 'a', spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })] }),
+          node({
+            nodeId: 'a',
+            spans: [span({ startedAtMs: 1_000, endedAtMs: 1_400, endedAs: 'success' })],
+          }),
           node({ nodeId: 'gate', status: 'skipped', attempts: 0 }),
         ]}
         nameOf={(id) => (id === 'gate' ? 'Gate' : null)}
@@ -213,7 +241,12 @@ describe('<AttemptTimeline>', () => {
   });
 
   it('says nothing is measurable yet rather than drawing an empty axis', () => {
-    render(<AttemptTimeline nodes={[node({ nodeId: 'a', status: 'pending', attempts: 0 })]} nameOf={noNames} />);
+    render(
+      <AttemptTimeline
+        nodes={[node({ nodeId: 'a', status: 'pending', attempts: 0 })]}
+        nameOf={noNames}
+      />,
+    );
     expect(screen.getByText(/Nothing measurable yet/)).toBeTruthy();
     expect(screen.getByText('Not on the timeline')).toBeTruthy();
   });

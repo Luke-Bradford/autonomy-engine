@@ -69,8 +69,8 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
       <section aria-labelledby="timeline-heading" className="attempt-timeline">
         <h3 id="timeline-heading">Timeline</h3>
         <p>
-          Nothing measurable yet — no node has both started and finished. Every node is listed
-          below with the reason it has no span.
+          Nothing measurable yet — no node has both started and finished. Every node is listed below
+          with the reason it has no span.
         </p>
         <UntimedList nodes={untimed} nameOf={nameOf} />
       </section>
@@ -117,9 +117,7 @@ export function AttemptTimeline({ nodes, nameOf }: AttemptTimelineProps): React.
                          reads as a missing node rather than a fast one, but
                          expressing it inline made the inline style unparseable
                          to jsdom and quietly voided the test asserting it. */
-                      ...(placed.width === null
-                        ? { right: '0' }
-                        : { width: `${placed.width}%` }),
+                      ...(placed.width === null ? { right: '0' } : { width: `${placed.width}%` }),
                     }}
                     title={`${name ?? node.nodeId} · ${spanLabel(placed.span)} · started ${formatClock(
                       placed.span.startedAtMs,
