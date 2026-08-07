@@ -34,13 +34,11 @@ import {
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
-  getActivePipelineVersion,
   latestVersion,
   listPipelineVersions,
   publishPipeline,
   restorePipeline,
 } from '../../api/pipelines';
-import { getWorkspaceGit } from '../../api/workspaceGit';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
 import {
@@ -97,30 +95,7 @@ import {
   type ActiveVersionState,
 } from './versionHistory';
 import { useTransientNotice } from './useTransientNotice';
-
-/**
- * #979 — the two facts a Publish decision needs, read together.
- *
- * Together because they are meaningless apart: an active pointer without knowing
- * whether a repo is connected cannot tell "never published" from "publishing is
- * not available here". Either read failing rejects the pair, so the caller lands
- * in one unread state rather than a half-known one.
- *
- * A module-level function, not a `useCallback`: it holds no component state, and
- * calling a setState-bearing callback from an effect body is exactly what the
- * `set-state-in-effect` rule forbids — the caller applies the result in a
- * promise callback, the form the initial load beside it already uses.
- */
-async function readPublishState(
-  pipelineId: string,
-  signal?: AbortSignal,
-): Promise<{ active: ActivePipelineVersion | null; gitConnected: boolean }> {
-  const [active, git] = await Promise.all([
-    getActivePipelineVersion(pipelineId, signal),
-    getWorkspaceGit(signal),
-  ]);
-  return { active, gitConnected: git !== null };
-}
+import { readPublishState } from './publishState';
 
 /**
  * How long a copy/paste/duplicate notice stays up.

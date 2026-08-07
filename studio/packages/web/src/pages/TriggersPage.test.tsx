@@ -3,10 +3,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../testing/renderWithRouter';
 import userEvent from '@testing-library/user-event';
-import type { Pipeline, PipelineVersion, TriggerPublic } from '@autonomy-studio/shared';
+import type {
+  Pipeline,
+  PipelineVersion,
+  TriggerPublic,
+  WorkspaceGitStatus,
+} from '@autonomy-studio/shared';
 import { TriggersPage } from './TriggersPage';
 import * as triggersApi from '../api/triggers';
 import * as pipelinesApi from '../api/pipelines';
+import * as workspaceGitApi from '../api/workspaceGit';
 import * as runsApi from '../api/runs';
 import * as downloadApi from '../api/download';
 import * as portabilityApi from '../api/portability';
@@ -35,7 +41,14 @@ vi.mock('../api/pipelines', () => ({
   listAllPipelineVersions: vi.fn(),
   listPipelines: vi.fn(),
   listPipelineVersions: vi.fn(),
+  // #981 — reached through `readPublishState` when a bind-to-active pipeline is
+  // selected. This factory has no `importActual` spread, so an export missing
+  // here throws the moment the page touches it.
+  getActivePipelineVersion: vi.fn(),
 }));
+// #981 — the other half of the publish pair. `null` = no repo connected, which
+// is the DB-only default every pre-existing test runs under.
+vi.mock('../api/workspaceGit', () => ({ getWorkspaceGit: vi.fn() }));
 // The navigation case below lands on the run detail page, which fetches the run
 // and opens a WebSocket; stub both so only the routing is under test.
 vi.mock('../api/runs', async (importActual) => ({
@@ -72,6 +85,8 @@ const deleteMock = vi.mocked(triggersApi.deleteTrigger);
 const fireMock = vi.mocked(triggersApi.fireTrigger);
 const provisionMock = vi.mocked(triggersApi.provisionWebhookSecret);
 const listAllVersionsMock = vi.mocked(pipelinesApi.listAllPipelineVersions);
+const activeVersionMock = vi.mocked(pipelinesApi.getActivePipelineVersion);
+const workspaceGitMock = vi.mocked(workspaceGitApi.getWorkspaceGit);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportTrigger);
 const importMock = vi.mocked(portabilityApi.importEnvelope);
@@ -137,6 +152,9 @@ beforeEach(() => {
   provisionMock.mockResolvedValue({ secret: 'sk_abc', deliveryUrl: '/api/webhooks/trg_1' });
   listAllVersionsMock.mockResolvedValue([{ pipeline, version }]);
   exportMock.mockResolvedValue('{"kind":"trigger"}');
+  // DB-only workspace, nothing published — the default this app ships in.
+  workspaceGitMock.mockResolvedValue(null);
+  activeVersionMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -873,5 +891,239 @@ describe('#959 portability — export and import on the triggers list', () => {
     expect(outcome).toHaveTextContent(/not bound to a pipeline version/);
     // …and the fact NO attention item carries: the importer forces it disabled.
     expect(outcome).toHaveTextContent(/arrive disabled/);
+  });
+});
+
+/**
+ * #981 — bind-to-active reaches the form.
+ *
+ * The ticket reported the option as ALREADY offered without its precondition.
+ * That was false: `bindToActive` had zero web callers, so the server's refusal
+ * was unreachable from the UI. These cover the affordance and its guidance
+ * together — including the two ways a courtesy check turns into a bug (refusing
+ * an enabled bind-to-active create, and refusing on a reading that failed).
+ */
+describe('TriggersPage — binding to the active published version', () => {
+  const CONNECTED: WorkspaceGitStatus = {
+    id: 'wg_1',
+    ownerId: 'local',
+    repoUrl: 'https://github.com/acme/flows.git',
+    collabBranch: 'main',
+    workingBranch: 'studio/local/work',
+    observedCollabHead: 'abcdef1234567890',
+    importedFromCommit: null,
+    lastFetchAt: 1_700_000_000_000,
+    lastFetchError: null,
+    createdAt: 1_699_000_000_000,
+    updatedAt: 1_700_000_000_000,
+    state: 'ready',
+    hasStoredToken: false,
+  };
+
+  /** Open the create form and switch the binding control to bind-to-active. */
+  async function chooseActive(user: ReturnType<typeof userEvent.setup>) {
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Nightly');
+    await user.click(form.getByRole('radio', { name: /active published version/i }));
+    return form;
+  }
+
+  it('offers bind-to-active when creating', async () => {
+    const user = userEvent.setup();
+    const form = await chooseActive(user);
+    expect(form.getByLabelText('Pipeline')).toBeInTheDocument();
+  });
+
+  /* Toggling a radio to look at the other option is not an instruction to
+     discard the choice already made. */
+  it('restores the version already picked when switching back off bind-to-active', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(<TriggersPage />);
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+
+    await user.selectOptions(form.getByLabelText('Pipeline version'), 'plv_1');
+    await user.click(form.getByRole('radio', { name: /active published version/i }));
+    await user.click(form.getByRole('radio', { name: /A specific version/i }));
+
+    expect(form.getByLabelText('Pipeline version')).toHaveValue('plv_1');
+  });
+
+  /* PATCH is concrete-only by design, so that a patch can never silently
+     re-resolve a pinned binding (`TriggerCreateBodySchema`). */
+  it('does NOT offer bind-to-active when editing an existing trigger', async () => {
+    const user = userEvent.setup();
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    renderWithRouter(<TriggersPage />);
+    const row = within(await screen.findByRole('row', { name: /Nightly/ }));
+    await user.click(row.getByRole('button', { name: 'Edit' }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    expect(
+      form.queryByRole('radio', { name: /active published version/i }),
+    ).not.toBeInTheDocument();
+    expect(form.getByLabelText('Pipeline version')).toBeInTheDocument();
+  });
+
+  it('sends bindToActive, with NO pipelineVersionId key, on a DB-only workspace', async () => {
+    const user = userEvent.setup();
+    const form = await chooseActive(user);
+    expect(await form.findByText(/latest saved version/i)).toBeInTheDocument();
+    /*
+     * #981 — no way-out link here. A DB-only workspace CANNOT publish (the app's
+     * own publish gate refuses without a connected repo), so offering "publish
+     * one" would send the operator at a door that does not open. The link belongs
+     * to the refusal state alone.
+     */
+    expect(form.queryByRole('link', { name: /^Open / })).not.toBeInTheDocument();
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+
+    const body = createMock.mock.calls[0]![0];
+    expect(body.bindToActive).toEqual({ pipelineId: 'pl_1' });
+    // The XOR keys on PRESENCE and `JSON.stringify` keeps `null`, so the key
+    // must be ABSENT — a nulled key would reach the server as "both supplied".
+    expect('pipelineVersionId' in body).toBe(false);
+  });
+
+  it('refuses the create, naming Publish, when a git workspace has published nothing', async () => {
+    const user = userEvent.setup();
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    activeVersionMock.mockResolvedValue(null);
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/has no published version/i)).toBeInTheDocument();
+    // This IS the state that needs a way out, so the link is here — and it goes
+    // to the canvas, which is where the Version history panel lives.
+    expect(form.getByRole('link', { name: /^Open / })).toHaveAttribute(
+      'href',
+      expect.stringContaining('pl_1'),
+    );
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(form.getByRole('alert')).toHaveTextContent(/publish/i));
+    // The whole point: no request is sent that is destined to 400.
+    expect(createMock).not.toHaveBeenCalled();
+    // The server's refusal names an internal DB id; this one must not echo it.
+    expect(form.getByRole('alert').textContent).not.toMatch(/pl_|plv_/);
+  });
+
+  it('names the version a git workspace will bind to, and creates', async () => {
+    const user = userEvent.setup();
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    activeVersionMock.mockResolvedValue({ versionId: 'plv_1', commit: 'abc1234', blob: 'b1' });
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/v3/)).toBeInTheDocument();
+    // Already published — nothing to clear, so no way-out link either.
+    expect(form.queryByRole('link', { name: /^Open / })).not.toBeInTheDocument();
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0]![0].bindToActive).toEqual({ pipelineId: 'pl_1' });
+  });
+
+  /*
+   * The client mirror of `assertBindableIfEnabled` keyed on "is there a concrete
+   * id here", which bind-to-active never has client-side — so it refused a
+   * create the server accepts (the route resolves the binding BEFORE running
+   * that assertion).
+   */
+  it('does not refuse an ENABLED bind-to-active create for want of a concrete id', async () => {
+    const user = userEvent.setup();
+    const form = await chooseActive(user);
+    await user.click(form.getByLabelText(/Enabled/i));
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
+    expect(createMock.mock.calls[0]![0].enabled).toBe(true);
+  });
+
+  /*
+   * `usePolledResource.loading` is true only on the FIRST load, so on every
+   * later switch it stays false while `data` still holds the PREVIOUS
+   * pipeline's reading. Rendering that against the newly-chosen pipeline states
+   * a fact about one pipeline under the name of another — here, "Other has no
+   * published version" when Other is in fact published and it was `My pipeline`
+   * that was not. The reading is therefore tagged with the pipeline it was read
+   * FOR, and only trusted when the tag matches.
+   *
+   * The second read is deliberately left PENDING: that in-flight window is the
+   * only moment the bug exists, and a test whose fetches all resolve
+   * immediately would pass with the guard removed.
+   */
+  it('does not describe a newly-chosen pipeline with the previous one’s reading', async () => {
+    const user = userEvent.setup();
+    const other: Pipeline = { ...pipeline, id: 'pl_2', name: 'Other', resourceId: 'res_pl2' };
+    listAllVersionsMock.mockResolvedValue([
+      { pipeline, version },
+      { pipeline: other, version: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+    ]);
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    // `My pipeline` reads as never-published; `Other`'s read never settles.
+    activeVersionMock.mockImplementation((pipelineId: string) =>
+      pipelineId === 'pl_1' ? Promise.resolve(null) : new Promise(() => {}),
+    );
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/My pipeline.*has no published version/i)).toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+
+    // The stale claim must be gone even though nothing has arrived to replace it.
+    await waitFor(() =>
+      expect(form.queryByText(/has no published version/i)).not.toBeInTheDocument(),
+    );
+    expect(form.getByText(/checking/i)).toBeInTheDocument();
+  });
+
+  /*
+   * The same staleness, one field over. `usePolledResource` never clears
+   * `error` when a new fetch starts, so a read that FAILED for one pipeline
+   * would still be on screen — as "could not check" — while the next pipeline's
+   * read is in flight, i.e. a claim about a pipeline nothing has read yet. The
+   * failure is therefore carried as a tagged result, not as an untagged error.
+   *
+   * The second read is left PENDING on purpose: that in-flight window is the
+   * only moment the bug exists.
+   */
+  it('does not carry a failed reading over to the next pipeline', async () => {
+    const user = userEvent.setup();
+    const other: Pipeline = { ...pipeline, id: 'pl_2', name: 'Other', resourceId: 'res_pl2' };
+    listAllVersionsMock.mockResolvedValue([
+      { pipeline, version },
+      { pipeline: other, version: { ...version, id: 'plv_2', pipelineId: 'pl_2', version: 1 } },
+    ]);
+    workspaceGitMock.mockResolvedValue(CONNECTED);
+    activeVersionMock.mockImplementation((pipelineId: string) =>
+      pipelineId === 'pl_1' ? Promise.reject(new Error('network down')) : new Promise(() => {}),
+    );
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/could not check/i)).toBeInTheDocument();
+
+    await user.selectOptions(form.getByLabelText('Pipeline'), 'pl_2');
+
+    await waitFor(() => expect(form.queryByText(/could not check/i)).not.toBeInTheDocument());
+    expect(form.getByText(/checking/i)).toBeInTheDocument();
+  });
+
+  /*
+   * A failed reading must neither claim "nothing is published" (#979's
+   * ActiveVersionState doctrine) nor refuse: the gate belongs to the server, and
+   * refusing here would block a create it would have accepted.
+   */
+  it('neither claims nor refuses when the publish reading fails', async () => {
+    const user = userEvent.setup();
+    workspaceGitMock.mockRejectedValue(new Error('network down'));
+    activeVersionMock.mockRejectedValue(new Error('network down'));
+
+    const form = await chooseActive(user);
+    expect(await form.findByText(/could not check/i)).toBeInTheDocument();
+
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    await waitFor(() => expect(createMock).toHaveBeenCalledTimes(1));
   });
 });

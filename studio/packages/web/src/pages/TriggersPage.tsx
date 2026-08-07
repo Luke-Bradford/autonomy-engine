@@ -8,9 +8,10 @@ import {
   type Recurrence,
   type TriggerMode,
   type WindowConfig,
+  type PipelineVersion,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { ApiError, messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportTrigger } from '../api/portability';
@@ -39,6 +40,18 @@ import {
 
 import { listAllPipelineVersions } from '../api/pipelines';
 import { runDetailPath } from './runs/runPath';
+import { pipelinePath } from './author/pipelinePath';
+import { usePolledResource } from '../hooks/usePolledResource';
+import { readPublishState } from './pipeline/publishState';
+import { activeVersionLabel } from './pipeline/versionHistory';
+import {
+  activeBindingAdvice,
+  bindingCreateFields,
+  bindingIsBound,
+  bindingPatchField,
+  type BindingSelection,
+  type PublishReading,
+} from './triggers/binding';
 import {
   createTrigger,
   deleteTrigger,
@@ -46,7 +59,9 @@ import {
   listTriggers,
   provisionWebhookSecret,
   updateTrigger,
+  TriggerCreateSchema,
   TriggerWriteSchema,
+  type TriggerCreateWrite,
   type TriggerWrite,
 } from '../api/triggers';
 
@@ -60,10 +75,27 @@ interface BindingOption {
   label: string; // `${pipeline.name} v${version}`
 }
 
+/**
+ * #981 — a pipeline that can be bind-to-active'd, for the second control.
+ *
+ * Derived from the same `listAllPipelineVersions` load, which means a pipeline
+ * with NO versions never appears. That is correct rather than incidental: it has
+ * nothing to publish and nothing to be latest, so both branches of
+ * `resolveBindToActive` would refuse it (the DB-only branch with its own "has no
+ * versions" 400). Excluding it is the honest analogue of not offering a binding
+ * that cannot exist.
+ */
+interface PipelineOption {
+  pipelineId: string;
+  name: string;
+  /** Every version of this pipeline this page knows about, for naming the active one. */
+  versions: PipelineVersion[];
+}
+
 type FormState = {
   id: string | null; // null = creating, otherwise editing this trigger
   name: string;
-  pipelineVersionId: string; // '' = unbound (maps to null)
+  binding: BindingSelection;
   mode: TriggerMode;
   /** #439 U14b — which of the two mutually-exclusive schedule authoring modes is
    * active. The server refuses a write carrying BOTH a `recurrence` and a raw
@@ -101,7 +133,7 @@ function blankForm(): FormState {
   return {
     id: null,
     name: '',
-    pipelineVersionId: '',
+    binding: { kind: 'unbound' },
     mode: 'manual',
     scheduleKind: 'recurrence',
     schedule: '',
@@ -142,7 +174,10 @@ function formForEdit(t: TriggerPublic): FormState {
     {
       id: t.id,
       name: t.name,
-      pipelineVersionId: t.pipelineVersionId ?? '',
+      binding:
+        t.pipelineVersionId === null
+          ? { kind: 'unbound' }
+          : { kind: 'concrete', pipelineVersionId: t.pipelineVersionId },
       mode: t.mode,
       scheduleKind: hasRecurrence ? 'recurrence' : 'cron',
       schedule: hasRecurrence ? '' : (t.schedule ?? ''),
@@ -170,6 +205,7 @@ export function TriggersPage() {
   const navigate = useNavigate();
   const [triggers, setTriggers] = useState<TriggerPublic[] | null>(null);
   const [bindings, setBindings] = useState<BindingOption[]>([]);
+  const [pipelines, setPipelines] = useState<PipelineOption[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -189,13 +225,33 @@ export function TriggersPage() {
   // Every pipeline's versions, as binding options. The LOAD is shared with the
   // canvas's call-node target picker (`listAllPipelineVersions`); only the
   // option label is this page's own.
-  const loadBindings = useCallback(async (signal?: AbortSignal): Promise<BindingOption[]> => {
-    const all = await listAllPipelineVersions(signal);
-    return all.map(({ pipeline, version }) => ({
-      value: version.id,
-      label: `${pipeline.name} v${version.version}`,
-    }));
-  }, []);
+  const loadBindings = useCallback(
+    async (
+      signal?: AbortSignal,
+    ): Promise<{ options: BindingOption[]; pipelines: PipelineOption[] }> => {
+      const all = await listAllPipelineVersions(signal);
+      const options = all.map(({ pipeline, version }) => ({
+        value: version.id,
+        label: `${pipeline.name} v${version.version}`,
+      }));
+      // #981 — the same rows, grouped, for the bind-to-active control. A Map
+      // keeps first-seen order (the order `listAllPipelineVersions` returns) so
+      // the two controls agree on how pipelines are ordered.
+      const byPipeline = new Map<string, PipelineOption>();
+      for (const { pipeline, version } of all) {
+        const existing = byPipeline.get(pipeline.id);
+        if (existing) existing.versions.push(version);
+        else
+          byPipeline.set(pipeline.id, {
+            pipelineId: pipeline.id,
+            name: pipeline.name,
+            versions: [version],
+          });
+      }
+      return { options, pipelines: [...byPipeline.values()] };
+    },
+    [],
+  );
 
   // Refetch after a mutation. Catches internally (rather than relying on a
   // caller's try/catch) so a refresh failure after e.g. a create — where the
@@ -216,7 +272,8 @@ export function TriggersPage() {
     Promise.all([listTriggers(controller.signal), loadBindings(controller.signal)])
       .then(([list, opts]) => {
         setTriggers(list);
-        setBindings(opts);
+        setBindings(opts.options);
+        setPipelines(opts.pipelines);
         setLoadError(null);
       })
       .catch((err: unknown) => {
@@ -440,6 +497,7 @@ export function TriggersPage() {
         <TriggerForm
           form={form}
           bindings={bindings}
+          pipelines={pipelines}
           onChange={setForm}
           onClose={() => setForm(null)}
           onSaved={async () => {
@@ -462,12 +520,14 @@ export function TriggersPage() {
 function TriggerForm({
   form,
   bindings,
+  pipelines,
   onChange,
   onClose,
   onSaved,
 }: {
   form: FormState;
   bindings: BindingOption[];
+  pipelines: PipelineOption[];
   onChange: (next: FormState) => void;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
@@ -475,7 +535,78 @@ function TriggerForm({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const scheduleKindId = useId();
+  const bindingKindId = useId();
   const editing = form.id !== null;
+  /* The version last chosen on the concrete side, so switching to bind-to-active
+     and back does not silently discard it. Local to the form: it is undo state
+     for a control, not part of what gets written. */
+  const [lastConcrete, setLastConcrete] = useState<string | null>(
+    form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : null,
+  );
+
+  /*
+   * #981 — the publish pair for the pipeline currently selected for
+   * bind-to-active, read LAZILY: one `/active` + `/workspace/git` pair when a
+   * pipeline is chosen, rather than one per pipeline up front (the N+1 shape
+   * `listAllPipelineVersions` already documents on this page's other load).
+   *
+   * `usePolledResource` with no interval is a one-shot fetch that re-runs when
+   * the memoized fetcher's identity changes and applies results latest-wins, so
+   * switching pipelines mid-flight cannot land the old answer on the new choice.
+   * The fetcher returns the pipelineId it read FOR, because `loading` is true
+   * only on the FIRST load — on every switch after that it stays false while
+   * `data` still holds the previous pipeline's reading, and a stale reading
+   * shown against a different pipeline is exactly the wrong claim.
+   *
+   * A FAILED read is returned as a tagged `state: null` rather than left to
+   * reject into `publish.error`, so that it carries the same pipeline tag every
+   * other reading does. `usePolledResource` never clears `error` when a new
+   * fetch starts, so an untagged error survives a pipeline switch and would say
+   * "could not check" about a pipeline whose read has not even returned — the
+   * identical staleness the `data` tag exists to prevent, one field over. An
+   * ABORT is rethrown: that is this effect tearing down, not a failure to
+   * report.
+   */
+  const activePipelineId = form.binding.kind === 'active' ? form.binding.pipelineId : null;
+  const fetchPublishState = useCallback(
+    async (signal: AbortSignal) => {
+      if (activePipelineId === null) return null;
+      try {
+        return {
+          pipelineId: activePipelineId,
+          state: await readPublishState(activePipelineId, signal),
+        };
+      } catch (err) {
+        if (signal.aborted) throw err;
+        return { pipelineId: activePipelineId, state: null };
+      }
+    },
+    [activePipelineId],
+  );
+  const publish = usePolledResource(fetchPublishState);
+
+  // ONE authority: the tagged reading. `publish.error` is deliberately unread —
+  // a failed read is already represented above, tagged with its pipeline.
+  let reading: PublishReading = 'loading';
+  if (publish.data !== null && publish.data.pipelineId === activePipelineId) {
+    reading = publish.data.state ?? 'unread';
+  }
+
+  const activePipeline =
+    activePipelineId === null
+      ? null
+      : (pipelines.find((p) => p.pipelineId === activePipelineId) ?? null);
+  const advice =
+    activePipeline === null
+      ? null
+      : activeBindingAdvice({
+          pipelineName: activePipeline.name,
+          reading,
+          activeVersion: activeVersionLabel(
+            reading === 'loading' || reading === 'unread' ? undefined : reading.active,
+            activePipeline.versions,
+          ),
+        });
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -553,12 +684,20 @@ function TriggerForm({
       windowConfig = converted.window;
     }
 
-    const pipelineVersionId = form.pipelineVersionId === '' ? null : form.pipelineVersionId;
-
     // Mirror the server's `assertBindableIfEnabled` for a friendlier message
-    // (the server still enforces it).
-    if (form.enabled && pipelineVersionId === null) {
+    // (the server still enforces it). Bind-to-active counts as bound: the route
+    // resolves it to a concrete id BEFORE running that assertion.
+    if (form.enabled && !bindingIsBound(form.binding)) {
       setError('An enabled trigger must be bound to a pipeline version (or disable it).');
+      return;
+    }
+
+    // #981 — the publish precondition, stated where it can still be acted on.
+    // Only ever set when the reading SUCCEEDED and said there is nothing to bind
+    // to; an unread pair never refuses, because the gate is the server's and
+    // refusing on a failed read would block a create it would have accepted.
+    if (advice?.refusal != null) {
+      setError(advice.refusal);
       return;
     }
 
@@ -587,9 +726,8 @@ function TriggerForm({
         ? { policy: 'parallel' as const, max: Number(form.concurrencyMax) }
         : { policy: form.concurrencyPolicy };
 
-    const fullBody: TriggerWrite = {
+    const common = {
       name: form.name,
-      pipelineVersionId,
       params,
       mode: form.mode,
       schedule,
@@ -602,15 +740,33 @@ function TriggerForm({
       enabled: form.enabled,
     };
 
-    const parsed = TriggerWriteSchema.safeParse(fullBody);
-    if (!parsed.success) {
-      setError(formatZodIssues(parsed.error.issues));
-      return;
-    }
-
-    setSaving(true);
-    try {
-      if (editing && form.id) {
+    /*
+     * #981 — CREATE and PATCH are different bodies validated by different
+     * schemas, and the split is deliberate rather than incidental. A create may
+     * carry `bindToActive`; a PATCH is concrete-only, so that a patch can never
+     * silently re-resolve a pinned binding (`TriggerCreateBodySchema`). Both
+     * schemas are the SAME objects the route parses, so neither can drift.
+     */
+    if (editing && form.id) {
+      // Bind-to-active is never OFFERED while editing, so this refusal is
+      // unreachable today — it exists so that the day it becomes reachable is a
+      // visible refusal rather than a silent unbind. See `bindingPatchField`.
+      const patchBinding = bindingPatchField(form.binding);
+      if (!patchBinding.ok) {
+        setError(patchBinding.reason);
+        return;
+      }
+      const patchBody: TriggerWrite = {
+        ...common,
+        pipelineVersionId: patchBinding.pipelineVersionId,
+      };
+      const parsed = TriggerWriteSchema.safeParse(patchBody);
+      if (!parsed.success) {
+        setError(formatZodIssues(parsed.error.issues));
+        return;
+      }
+      setSaving(true);
+      try {
         if (form.mode === 'webhook') {
           // Editing a trigger that stays a webhook: OMIT `webhook` so an
           // already-provisioned secret is preserved (PATCH is partial; sending
@@ -621,14 +777,28 @@ function TriggerForm({
           await updateTrigger(form.id, patch);
         } else {
           // Switching AWAY from webhook mode: send `webhook:null` (already set
-          // in fullBody) to actively clear any previously-provisioned secret,
+          // in the body) to actively clear any previously-provisioned secret,
           // so a stale secret can't persist on a non-webhook trigger or be
           // silently resurrected if the mode is later switched back.
           await updateTrigger(form.id, parsed.data);
         }
-      } else {
-        await createTrigger(parsed.data);
+        await onSaved();
+      } catch (err) {
+        setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
+        setSaving(false);
       }
+      return;
+    }
+
+    const createBody: TriggerCreateWrite = { ...common, ...bindingCreateFields(form.binding) };
+    const parsedCreate = TriggerCreateSchema.safeParse(createBody);
+    if (!parsedCreate.success) {
+      setError(formatZodIssues(parsedCreate.error.issues));
+      return;
+    }
+    setSaving(true);
+    try {
+      await createTrigger(parsedCreate.data);
       await onSaved();
     } catch (err) {
       setError(err instanceof ApiError || err instanceof Error ? err.message : String(err));
@@ -650,20 +820,121 @@ function TriggerForm({
         />
       </label>
 
-      <label>
-        Pipeline version
-        <select
-          value={form.pipelineVersionId}
-          onChange={(e) => onChange({ ...form, pipelineVersionId: e.target.value })}
-        >
-          <option value="">— unbound —</option>
-          {bindings.map((b) => (
-            <option key={b.value} value={b.value}>
-              {b.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* #981 — the binding, in the two shapes the CREATE endpoint accepts. The
+          choice is a radio pair rather than a third sentinel option inside the
+          version select, because the two branches pick different KINDS of thing
+          (a version vs a pipeline) and the create body differs structurally.
+          Editing shows only the version select: PATCH is concrete-only, so
+          bind-to-active has nothing to mean on an existing trigger — it was
+          resolved once, at creation, and the stored row is a concrete id. */}
+      {!editing && (
+        <fieldset className="binding-kind">
+          <legend>Binding</legend>
+          <label>
+            <input
+              type="radio"
+              name={bindingKindId}
+              checked={form.binding.kind !== 'active'}
+              // Switching back RESTORES the version that was picked before,
+              // rather than dropping to unbound. Toggling a radio to look at
+              // the other option is not an instruction to discard the choice
+              // already made, and the version select is long enough that
+              // re-finding an entry is real work.
+              onChange={() =>
+                onChange({
+                  ...form,
+                  binding:
+                    lastConcrete === null
+                      ? { kind: 'unbound' }
+                      : { kind: 'concrete', pipelineVersionId: lastConcrete },
+                })
+              }
+            />
+            A specific version
+          </label>
+          <label>
+            <input
+              type="radio"
+              name={bindingKindId}
+              checked={form.binding.kind === 'active'}
+              disabled={pipelines.length === 0}
+              onChange={() =>
+                onChange({
+                  ...form,
+                  binding: { kind: 'active', pipelineId: pipelines[0]?.pipelineId ?? '' },
+                })
+              }
+            />
+            The active published version
+          </label>
+        </fieldset>
+      )}
+
+      {form.binding.kind === 'active' ? (
+        <label>
+          Pipeline
+          <select
+            value={form.binding.pipelineId}
+            onChange={(e) =>
+              onChange({ ...form, binding: { kind: 'active', pipelineId: e.target.value } })
+            }
+          >
+            {pipelines.map((p) => (
+              <option key={p.pipelineId} value={p.pipelineId}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <label>
+          Pipeline version
+          <select
+            value={form.binding.kind === 'concrete' ? form.binding.pipelineVersionId : ''}
+            onChange={(e) => {
+              setLastConcrete(e.target.value === '' ? null : e.target.value);
+              onChange({
+                ...form,
+                binding:
+                  e.target.value === ''
+                    ? { kind: 'unbound' }
+                    : { kind: 'concrete', pipelineVersionId: e.target.value },
+              });
+            }}
+          >
+            <option value="">— unbound —</option>
+            {bindings.map((b) => (
+              <option key={b.value} value={b.value}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {advice && activePipeline && (
+        <p className="page-hint" role="status">
+          {advice.text}
+          {/* The way OUT is offered only by the state that needs one. Rendered
+              unconditionally it told a DB-only workspace to publish — which this
+              app's own gate refuses without a connected repo — and told anyone
+              mid-read to act on a reading that had not arrived. `refusal` is the
+              honest discriminator: it is non-null exactly when the read SUCCEEDED
+              and said there is nothing to bind to. */}
+          {advice.refusal !== null && (
+            <>
+              {' '}
+              <Link to={pipelinePath(activePipeline.pipelineId)}>
+                Open {activePipeline.name}
+              </Link>{' '}
+              {/* There is no route to the version-history panel — it is a toggle
+                  on the canvas — so the link goes to the canvas and the prose
+                  names the panel, rather than inventing URL state for a panel. */}
+              and use the Version history panel to publish.
+            </>
+          )}
+        </p>
+      )}
 
       <label>
         Mode

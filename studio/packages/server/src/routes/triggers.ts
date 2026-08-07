@@ -1,11 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
-import { z } from 'zod';
 import {
   FireRequestSchema,
-  NewTriggerSchema,
   SubstituteError,
+  TriggerCreateBodySchema,
   TriggerPublicSchema,
+  TriggerWriteBodySchema,
   canonicalStringify,
   windowBindingErrors,
   type ConcurrencyPolicy,
@@ -40,50 +40,13 @@ import { exportTrigger } from '../portability/index.js';
 import type { Principal } from '../auth/principal.js';
 import type { Db } from '../repo/types.js';
 
-/** `ownerId` is stamped from `request.principal`, never client-supplied. */
-const TriggerWriteBodySchema = NewTriggerSchema.omit({ ownerId: true });
-
-/**
- * #3 G6c-2 — the CREATE body only. A trigger always persists a CONCRETE
- * `pipelineVersionId` (#1 immutability; "unbound never fires"), so "bind to
- * active" is a creation-time CONVENIENCE that resolves ONCE server-side and
- * stores the resolved id — never a live-follow binding, never a stored "active"
- * indirection. The client supplies EXACTLY ONE of:
- *   - `pipelineVersionId` (a concrete id, or `null` for a deliberately unbound
- *     trigger — the pre-G6c-2 path, unchanged), or
- *   - `bindToActive: { pipelineId }` — resolve-once (git-mode → the `active`
- *     published version; DB-only → the latest immutable version).
- * The XOR keys on PRESENCE, not truthiness: `pipelineVersionId: null` is a
- * legitimate explicit "unbound" and counts as supplied (the same null-vs-absent
- * distinction `NewTriggerSchema` documents on its `.default(null)` fields). This
- * is a SEPARATE schema from `TriggerWriteBodySchema` on purpose: PATCH
- * (`.partial()` of the latter) stays concrete-only — bind-to-active is a
- * creation act, and leaking `bindToActive`/optional-`pipelineVersionId` into the
- * PATCH shape would let a patch silently re-resolve a pinned binding.
+/*
+ * `TriggerWriteBodySchema` (the write body, `ownerId` stamped server-side) and
+ * `TriggerCreateBodySchema` (#3 G6c-2, the create-only bind-to-active XOR) both
+ * moved to `@autonomy-studio/shared` for #981, so the web client validates the
+ * SAME cross-field rule this route enforces rather than a copy of it. Their
+ * reasoning travelled with them — see `schemas/trigger.ts`.
  */
-const TriggerCreateBodySchema = TriggerWriteBodySchema.extend({
-  pipelineVersionId: TriggerWriteBodySchema.shape.pipelineVersionId.optional(),
-  bindToActive: z.object({ pipelineId: z.string().min(1) }).optional(),
-}).superRefine((body, ctx) => {
-  const hasConcrete = body.pipelineVersionId !== undefined;
-  const hasBind = body.bindToActive !== undefined;
-  if (hasConcrete && hasBind) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        'supply EITHER pipelineVersionId (a concrete binding, or null for unbound) OR ' +
-        'bindToActive (resolve-once) — not both',
-    });
-  }
-  if (!hasConcrete && !hasBind) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message:
-        'a trigger create must supply pipelineVersionId (a concrete binding, or ' +
-        'null for unbound) or bindToActive (resolve-once)',
-    });
-  }
-});
 
 /**
  * #3 G6c-2 — resolve a `bindToActive: { pipelineId }` request to a concrete
@@ -101,6 +64,15 @@ const TriggerCreateBodySchema = TriggerWriteBodySchema.extend({
  * "no binding" posture as `assertBindableIfEnabled`. The read is deliberately
  * OUTSIDE any transaction: resolve-once needs no compare-and-set (unlike CAS
  * Publish), it just snapshots whatever is active/latest now.
+ *
+ * #981 — both refusals name the pipeline by NAME, never by id. `BadRequestError`
+ * is surfaced VERBATIM by contract ("no input echo, no internal detail"), and
+ * the client punts to this gate whenever its own publish read is still in flight
+ * or failed — so whatever these say is what an operator reads. The name is
+ * resolved and owner-checked here (`requireOwned` above), which is the same rule
+ * `PublishRefusedError` states: an error may name only what the server itself
+ * resolved, never request input. The id it used to interpolate was the internal
+ * DB id and told the operator nothing.
  */
 function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): string {
   const pipeline = requireOwned(getPipeline(db, pipelineId), principal, 'pipeline', pipelineId);
@@ -108,8 +80,8 @@ function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): 
     const active = getActivePublishedVersion(db, principal.ownerId, pipeline.resourceId);
     if (active === null) {
       throw new BadRequestError(
-        `cannot bind trigger to active: pipeline "${pipelineId}" has no active published ` +
-          `version — publish a version first, or bind a concrete pipelineVersionId`,
+        `cannot bind trigger to active: pipeline "${pipeline.name}" has no active published ` +
+          `version — publish a version first, or bind a specific version`,
       );
     }
     return active.to;
@@ -117,7 +89,7 @@ function resolveBindToActive(db: Db, principal: Principal, pipelineId: string): 
   const latest = getLatestPipelineVersion(db, pipeline.id);
   if (latest === null) {
     throw new BadRequestError(
-      `cannot bind trigger to latest: pipeline "${pipelineId}" has no versions`,
+      `cannot bind trigger to latest: pipeline "${pipeline.name}" has no versions`,
     );
   }
   return latest.id;

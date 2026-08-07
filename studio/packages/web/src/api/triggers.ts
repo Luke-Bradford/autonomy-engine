@@ -1,24 +1,37 @@
 import { z } from 'zod';
 import {
   FireResultSchema,
-  NewTriggerSchema,
+  TriggerCreateBodySchema,
   TriggerPublicSchema,
+  TriggerWriteBodySchema,
   type FireResult,
   type TriggerPublic,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
 
 /**
- * The client-facing write body, matching the server's local
- * `TriggerWriteBodySchema` (`packages/server/src/routes/triggers.ts`) EXACTLY:
- * `NewTriggerSchema` minus `ownerId` (stamped server-side from the principal).
- * Deriving it from the same shared `NewTriggerSchema` keeps the form's
- * client-side validation identical to the server's — one source of truth,
- * including the cross-field concurrency rule (`ConcurrencyWriteSchema`:
- * `parallel` requires `max`, single-slot policies forbid it).
+ * The client-facing write body. This is now the SAME OBJECT the route parses
+ * (`@autonomy-studio/shared`), not a client-side re-derivation that claims to
+ * match it: the form's validation cannot drift from the server's, including the
+ * cross-field concurrency rule (`ConcurrencyWriteSchema`: `parallel` requires
+ * `max`, single-slot policies forbid it).
  */
-export const TriggerWriteSchema = NewTriggerSchema.omit({ ownerId: true });
+export const TriggerWriteSchema = TriggerWriteBodySchema;
 export type TriggerWrite = z.input<typeof TriggerWriteSchema>;
+
+/**
+ * #981 — the CREATE body, which additionally admits `bindToActive` (#3 G6c-2)
+ * and is XOR-refined against `pipelineVersionId`. Shared for the same reason:
+ * a cross-field refinement copied client-side drifts silently, and the drift
+ * only surfaces as a 400 the client thought it had already excluded.
+ *
+ * Note the XOR keys on PRESENCE — a bind-to-active create must OMIT
+ * `pipelineVersionId` entirely. `JSON.stringify` drops `undefined` but KEEPS
+ * `null`, so building the body with an explicit `null` would violate the XOR
+ * on the wire even though it looks like the unbound request it isn't.
+ */
+export const TriggerCreateSchema = TriggerCreateBodySchema;
+export type TriggerCreateWrite = z.input<typeof TriggerCreateSchema>;
 
 const TriggerListSchema = z.array(TriggerPublicSchema);
 
@@ -38,7 +51,7 @@ export function listTriggers(signal?: AbortSignal): Promise<TriggerPublic[]> {
   return apiFetch('/api/triggers', { schema: TriggerListSchema, signal });
 }
 
-export function createTrigger(body: TriggerWrite): Promise<TriggerPublic> {
+export function createTrigger(body: TriggerCreateWrite): Promise<TriggerPublic> {
   return apiFetch('/api/triggers', {
     method: 'POST',
     body,

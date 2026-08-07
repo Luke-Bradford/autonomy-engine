@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { openExistingCanvas } from './support/canvas';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
+import { fluentRootReady } from './support/theme';
 import { seedVersion } from './support/seedDoc';
 
 /**
@@ -345,6 +346,78 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await expect(
     page.getByTestId('version-history').getByRole('button', { name: /^v1/ }),
   ).toContainText('active');
+
+  /**
+   * ── bind a trigger to the active version, in GIT mode (#981) ───────────────
+   *
+   * Here rather than in `trigger-bind-to-active.spec.ts` because this is the one
+   * file that owns a connected repo: connecting flips the WHOLE workspace, and
+   * the DB is shared, so a second file doing it would race this one. It also
+   * lands where the state is already exactly right — one pipeline published, one
+   * committed but never published — which is the pair the assertions need.
+   *
+   * `resolveBindToActive` refuses a git-mode bind when nothing is published, and
+   * refuses correctly. What #981 fixed is that the form never offered the
+   * binding at all, so the refusal was unreachable and the publish step was
+   * never named. Both halves are asserted: the refusal that names the act, and
+   * the success that resolves to the published version.
+   */
+  await page.goto('/#/manage/triggers');
+  await fluentRootReady(page);
+  await page.getByRole('button', { name: /New trigger/i }).click();
+  const triggerForm = page.getByRole('form', { name: 'Trigger form' });
+  await triggerForm.getByLabel('Name').fill('Bound to active');
+  await triggerForm.getByRole('radio', { name: /active published version/i }).check();
+
+  // `pipelineName` was committed and re-imported, but never published.
+  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: pipelineName });
+  await expect(triggerForm.getByText(/has no published version/i)).toBeVisible();
+  await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
+  // Refused HERE — the request that would 400 is never sent, and the message
+  // names the act that clears it rather than echoing the server's, which
+  // carries an internal id.
+  const refusal = triggerForm.getByRole('alert');
+  await expect(refusal).toContainText(/publish/i);
+  await expect(refusal).not.toContainText(/pl_|plv_/);
+  await expect(triggerForm).toBeVisible();
+
+  // `publishName` was published as v1 immediately above.
+  await triggerForm.getByLabel(/^Pipeline/).selectOption({ label: publishName });
+  /*
+   * The id is read off the SELECT rather than looked up in `GET /api/pipelines`:
+   * that list is keyset-paginated (`{items, nextCursor}`, #534) and the shared DB
+   * carries every other spec's pipelines, so a first-page scan finds this one only
+   * by luck — it did not, which is what this read replaces. The option value IS
+   * the pipeline id (`TriggersPage.tsx`), and it is the exact id the client sends
+   * as `bindToActive.pipelineId`, so the pointer below is read for the same
+   * pipeline the binding resolved against.
+   */
+  const publishedPipelineId = await triggerForm.getByLabel(/^Pipeline/).inputValue();
+  expect(publishedPipelineId, `no pipeline id selected for ${publishName}`).toBeTruthy();
+  await expect(triggerForm.getByText(/v1/)).toBeVisible();
+  await triggerForm.getByRole('button', { name: /Create trigger/i }).click();
+  await expect(triggerForm).toBeHidden();
+
+  const boundList = await (await page.request.get('/api/triggers')).json();
+  const bound = (boundList as Array<{ name: string; pipelineVersionId: string | null }>).find(
+    (t) => t.name === 'Bound to active',
+  );
+  /*
+   * Resolve-once stored a CONCRETE id — the version that was active at create
+   * time, not an "active" indirection the row would follow.
+   *
+   * Compared against the ACTIVE pointer read back from the API, not against an
+   * id derived from the committed file: an import MINTS a fresh version id
+   * (`pv_…`) rather than adopting the `plv_<slug>_1` the file carries, so a
+   * derived id is simply the wrong expectation. Reading the pointer keeps this
+   * stronger than a truthiness check — it fails if the binding resolves to any
+   * OTHER version — without asserting an identity the system does not promise.
+   */
+  const activeNow = (await (
+    await page.request.get(`/api/pipelines/${encodeURIComponent(publishedPipelineId)}/active`)
+  ).json()) as { active: { versionId: string } | null };
+  expect(activeNow.active, 'the pipeline should have an active published version').not.toBeNull();
+  expect(bound?.pipelineVersionId).toBe(activeNow.active!.versionId);
 
   await openGitPage(page);
 
