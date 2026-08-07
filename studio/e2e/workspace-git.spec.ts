@@ -302,10 +302,14 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   await incoming.getByRole('button', { name: 'Check for incoming' }).click();
   await expect(
     incoming.getByRole('table').getByRole('row').filter({ hasText: publishName }),
-  ).toContainText('created');
+  ).toContainText('new here');
   await expect(incoming.getByRole('heading', { name: 'Will be archived' })).toHaveCount(0);
   await withConfirm(page, () => incoming.getByRole('button', { name: 'Import' }).click());
-  await expect(incoming.getByRole('status')).toContainText('Imported');
+  // `(new version)` is the part that matters: it says a version was MINTED, and
+  // a minted version is the only kind that carries the git provenance publish
+  // requires. An import that changed only the pipeline row would not do.
+  await expect(incoming).toContainText('Imported');
+  await expect(incoming).toContainText('(new version)');
 
   await openExistingCanvas(page, publishName);
   await page.getByRole('button', { name: 'Version history' }).click();
