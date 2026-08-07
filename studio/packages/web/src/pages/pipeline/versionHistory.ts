@@ -313,7 +313,12 @@ export interface PublishCheck {
  * `portability/workspace-apply.ts`), so a disabled button explained in server
  * vocabulary would read as a broken feature rather than as a step not yet taken.
  */
-export function publishRefusal({ selected, active, gitConnected, archived }: PublishCheck): string | null {
+export function publishRefusal({
+  selected,
+  active,
+  gitConnected,
+  archived,
+}: PublishCheck): string | null {
   if (gitConnected === undefined || active === undefined) {
     return 'This pipeline’s publish state could not be read, so publishing is held back rather than guessed at — reload the page.';
   }

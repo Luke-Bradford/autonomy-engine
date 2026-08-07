@@ -119,7 +119,12 @@ describe('publishRefusal', () => {
   /** A version that WOULD publish — git-minted, not archived, not active. */
   function publishable(overrides: Partial<PublishCheck> = {}): PublishCheck {
     return {
-      selected: version({ id: 'plv_7', version: 7, sourceCommit: 'a'.repeat(40), sourceBlobSha: 'b'.repeat(40) }),
+      selected: version({
+        id: 'plv_7',
+        version: 7,
+        sourceCommit: 'a'.repeat(40),
+        sourceBlobSha: 'b'.repeat(40),
+      }),
       active: { versionId: 'plv_6', commit: 'c'.repeat(40), blob: 'd'.repeat(40) },
       gitConnected: true,
       archived: false,
@@ -215,9 +220,7 @@ describe('publishConfirmMessage', () => {
 
 describe('publishOutcomeMessage', () => {
   it('reports a real publish', () => {
-    expect(publishOutcomeMessage({ published: true, selectedVersion: 7 })).toMatch(
-      /published v7/i,
-    );
+    expect(publishOutcomeMessage({ published: true, selectedVersion: 7 })).toMatch(/published v7/i);
   });
 
   it('does NOT claim a publish for the server’s idempotent no-op', () => {
@@ -231,12 +234,12 @@ describe('publishOutcomeMessage', () => {
 
 describe('isPublishRefused', () => {
   it('is the route’s 409 conflict, and nothing else', () => {
-    expect(isPublishRefused(new ApiError(409, 'nope', { error: 'conflict', message: 'nope' }))).toBe(
-      true,
-    );
-    expect(isPublishRefused(new ApiError(404, 'gone', { error: 'not_found', message: 'gone' }))).toBe(
-      false,
-    );
+    expect(
+      isPublishRefused(new ApiError(409, 'nope', { error: 'conflict', message: 'nope' })),
+    ).toBe(true);
+    expect(
+      isPublishRefused(new ApiError(404, 'gone', { error: 'not_found', message: 'gone' })),
+    ).toBe(false);
     expect(
       isPublishRefused(new ApiError(409, 'stale', { error: 'stale_write', message: 'stale' })),
     ).toBe(false);

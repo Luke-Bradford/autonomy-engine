@@ -16,6 +16,7 @@ function entry(overrides: Partial<VersionEntry> = {}): VersionEntry {
     outputCount: 0,
     isHead: false,
     isCurrent: false,
+    isActive: false,
     ...overrides,
   };
 }
@@ -134,6 +135,38 @@ describe('VersionHistoryPanel', () => {
   });
 });
 
+describe('VersionHistoryPanel — the active tag (#979)', () => {
+  it('marks the active version, and only it, alongside the other two marks', () => {
+    render(
+      <VersionHistoryPanel
+        entries={[
+          entry({ id: 'plv_3', version: 3, isHead: true, isCurrent: true }),
+          entry({ id: 'plv_1', version: 1, isActive: true }),
+        ]}
+        previewing={null}
+        locked={false}
+        onPreview={vi.fn()}
+      />,
+    );
+    const rows = screen.getAllByRole('button');
+    expect(rows[0]!.textContent).not.toContain('active');
+    // The whole point of the tag: what is deployed is NOT what is on screen.
+    expect(rows[1]!.textContent).toContain('active');
+  });
+
+  it('marks nothing when no version is active', () => {
+    render(
+      <VersionHistoryPanel
+        entries={[entry({ id: 'plv_1', version: 1, isHead: true })]}
+        previewing={null}
+        locked={false}
+        onPreview={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('version-history').textContent).not.toContain('active');
+  });
+});
+
 describe('VersionPreviewBar', () => {
   it('says which version is on screen and that it cannot be edited', () => {
     render(
@@ -141,6 +174,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal={null}
         restoring={false}
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={vi.fn()}
         onBackToEditing={vi.fn()}
       />,
@@ -158,6 +194,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal="Save or discard your unsaved changes first."
         restoring={false}
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={vi.fn()}
         onBackToEditing={vi.fn()}
       />,
@@ -175,6 +214,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal={null}
         restoring={false}
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={onRestore}
         onBackToEditing={vi.fn()}
       />,
@@ -191,6 +233,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal={null}
         restoring
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={vi.fn()}
         onBackToEditing={vi.fn()}
       />,
@@ -205,6 +250,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal={null}
         restoring={false}
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={vi.fn()}
         onBackToEditing={onBackToEditing}
       />,
@@ -224,6 +272,9 @@ describe('VersionPreviewBar', () => {
         version={2}
         refusal={null}
         restoring
+        publishRefusal="not this test's concern"
+        publishing={false}
+        onPublish={vi.fn()}
         onRestore={vi.fn()}
         onBackToEditing={onBackToEditing}
       />,
@@ -232,5 +283,69 @@ describe('VersionPreviewBar', () => {
     expect(back).toBeDisabled();
     await userEvent.click(back);
     expect(onBackToEditing).not.toHaveBeenCalled();
+  });
+
+  /* #979 — Publish. The two acts are refused independently, so each test states
+     only its own refusal and leaves the other's alone. */
+  it('offers Publish when nothing refuses it', async () => {
+    const onPublish = vi.fn();
+    render(
+      <VersionPreviewBar
+        version={2}
+        refusal="restoring is refused here, and must not disable Publish"
+        restoring={false}
+        publishRefusal={null}
+        publishing={false}
+        onPublish={onPublish}
+        onRestore={vi.fn()}
+        onBackToEditing={vi.fn()}
+      />,
+    );
+    const publish = screen.getByRole('button', { name: /publish v2/i });
+    expect(publish).toBeEnabled();
+    await userEvent.click(publish);
+    expect(onPublish).toHaveBeenCalledOnce();
+  });
+
+  it('disables Publish and carries the reason on the control itself', () => {
+    render(
+      <VersionPreviewBar
+        version={2}
+        refusal={null}
+        restoring={false}
+        publishRefusal="v2 was authored here, not imported from a commit."
+        publishing={false}
+        onPublish={vi.fn()}
+        onRestore={vi.fn()}
+        onBackToEditing={vi.fn()}
+      />,
+    );
+    const publish = screen.getByRole('button', { name: /publish v2/i });
+    expect(publish).toBeDisabled();
+    expect(publish).toHaveAttribute('title', 'v2 was authored here, not imported from a commit.');
+    // Deliberately NOT in the bar's prose, unlike the restore refusal: this is
+    // the ordinary state of nearly every version, and standing text saying so
+    // would read as a permanent error.
+    expect(screen.getByTestId('version-preview-bar').textContent).not.toContain('authored here');
+  });
+
+  it('cannot be clicked twice while a publish is in flight, and locks the bar', () => {
+    render(
+      <VersionPreviewBar
+        version={2}
+        refusal={null}
+        restoring={false}
+        publishRefusal={null}
+        publishing
+        onPublish={vi.fn()}
+        onRestore={vi.fn()}
+        onBackToEditing={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /publishing/i })).toBeDisabled();
+    // The other two acts are held too: a restore mid-publish would rebase the
+    // canvas under a CAS whose result has not landed.
+    expect(screen.getByRole('button', { name: /restore v2/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /back to editing/i })).toBeDisabled();
   });
 });
