@@ -2,7 +2,6 @@ import {
   accumulateMetered,
   docNodeIdOf,
   emptyMeteredTotals,
-  EngineEventSchema,
   nodeCostFromTotals,
   parseInstanceKey,
   TERMINAL_NODE,
@@ -18,6 +17,8 @@ import {
   type RunState,
   type WaitingReason,
 } from '@autonomy-studio/shared';
+
+import { parseEngineEvent } from './parsedEvent';
 
 /**
  * PURE derivations the live-run view renders from a run's event log. They take
@@ -666,9 +667,8 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
   };
 
   for (const row of events) {
-    const parsed = EngineEventSchema.safeParse(row.payload);
-    if (!parsed.success) continue;
-    const e = parsed.data;
+    const e = parseEngineEvent(row);
+    if (e === null) continue;
     switch (e.type) {
       case 'node.dispatched': {
         dispatchesByRawNode.set(e.nodeId, (dispatchesByRawNode.get(e.nodeId) ?? 0) + 1);
@@ -1257,9 +1257,8 @@ export function deriveRunLifecycle(events: RunEvent[]): RunLifecycle | null {
   let status: RunLifecycleStatus | null = null;
   let waitingReason: WaitingReason | null = null;
   for (const row of events) {
-    const parsed = EngineEventSchema.safeParse(row.payload);
-    if (!parsed.success) continue;
-    const e = parsed.data;
+    const e = parseEngineEvent(row);
+    if (e === null) continue;
     const terminal = terminalStatusOf(e);
     if (terminal !== null) {
       status = terminal;
