@@ -12,7 +12,14 @@ import { parseEngineEvent } from './parsedEvent';
 let seq = 0;
 /** The durable envelope shape the log/stream carry — see `runSummary.test.ts`. */
 function envelope(event: EngineEvent): RunEvent {
-  return { id: `evt_${seq}`, runId: event.runId, seq: seq++, type: event.type, payload: event, ts: seq };
+  return {
+    id: `evt_${seq}`,
+    runId: event.runId,
+    seq: seq++,
+    type: event.type,
+    payload: event,
+    ts: seq,
+  };
 }
 
 const doc: EngineDoc = {

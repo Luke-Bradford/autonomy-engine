@@ -53,8 +53,7 @@ const toneOf = (span: AttemptSpan): StatusTone => nodeStatusTone(span.endedAs ??
  * That the word is the START's rather than the END's is therefore read off the
  * note, which is the same fact stated once instead of twice.
  */
-const spanLabel = (span: AttemptSpan): string =>
-  nodeStatusLabel(span.endedAs ?? span.startedAs);
+const spanLabel = (span: AttemptSpan): string => nodeStatusLabel(span.endedAs ?? span.startedAs);
 
 /**
  * Why a bar states no length. THREE cases share the hatched rendering and must

@@ -452,7 +452,6 @@ describe('RunDetailPage', () => {
       expect(await headerPill('waiting (callback)')).toHaveTextContent('waiting (callback)');
     });
 
-
     /**
      * The reason survives the loss of the doc. This is the case the doc-free
      * fold exists for, and the one where a parked run most needs reading — so
