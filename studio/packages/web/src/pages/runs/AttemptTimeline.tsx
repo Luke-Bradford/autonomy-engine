@@ -39,11 +39,21 @@ export interface AttemptTimelineProps {
 
 const toneOf = (span: AttemptSpan): StatusTone => nodeStatusTone(span.endedAs ?? span.startedAs);
 
-/** What the span's own bar says it was, which is the LOG's word — see `AttemptSpan`. */
-const spanLabel = (span: AttemptSpan): string =>
-  span.endedAs === undefined
-    ? `${nodeStatusLabel(span.startedAs)}, still open`
-    : nodeStatusLabel(span.endedAs);
+/**
+ * What the span's own bar says it was, which is the LOG's word — see `AttemptSpan`.
+ *
+ * #1010 — an open span used to append `, still open` here, which said the same
+ * thing the sentence beside it already says: an open span ALWAYS renders
+ * `unmeasuredNote`'s "no end on record", because `endedAs` and `endedAtMs` are
+ * written and cleared together (`AttemptSpan`), so an absent `endedAs` means an
+ * absent `endedAtMs` means `width === null`. A park said it a third time, since
+ * its own status word is already "waiting (…)" — `waiting (timer), still open …
+ * no end on record`. The note owns un-endedness; this owns the status word only.
+ *
+ * That the word is the START's rather than the END's is therefore read off the
+ * note, which is the same fact stated once instead of twice.
+ */
+const spanLabel = (span: AttemptSpan): string => nodeStatusLabel(span.endedAs ?? span.startedAs);
 
 /**
  * Why a bar states no length. THREE cases share the hatched rendering and must

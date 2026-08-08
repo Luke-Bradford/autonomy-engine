@@ -408,8 +408,31 @@ describe('RunDetailPage', () => {
     /* Scoped to the HEADER pill. The node table words its own parks through
        `nodeStatusLabel` and lands on the same string for the same alarm, so an
        unscoped `findByText('waiting (timer)')` matches both and throws — which
-       is itself a small proof that the two vocabularies now agree. */
-    const headerPill = () => screen.findByText(/./, { selector: '.page-hint .run-status' });
+       is itself a small proof that the two vocabularies now agree.
+
+       #894 — this awaits the pill SAYING `text`, and used to await `/./`: any
+       non-empty pill. That was the flake, and not the timeout it was filed as.
+       The pill renders unconditionally (there is no loading early-return), so on
+       the first synchronous frame it reads whatever the DOC-FREE fold makes of
+       the log — `running` for a stale-alarm park, `pending` for an empty log —
+       and testing-library runs its check callback synchronously before
+       installing any observer. So `/./` resolved on that first frame and the
+       `toHaveTextContent` after it ran ONCE, with no retry, racing
+       `getRunDetail`'s resolution through a single macrotask drain. Under suite
+       contention that drain lost.
+
+       The matcher is a substring test rather than an exact one so that it keeps
+       the semantics of the `toHaveTextContent` calls beside it — which STAY,
+       and are not folded into this query. The two have different jobs: the
+       query decides when to stop waiting, the assertion decides whether the
+       answer is right. Collapsing them reads tidier and is how the first draft
+       of this fix went vacuous — with the text checked only inside the query,
+       reinstating the old `/./` left NOTHING asserting the text, so the
+       regression test below passed against the very defect it pins. */
+    const headerPill = (text: string) =>
+      screen.findByText((content) => content.includes(text), {
+        selector: '.page-hint .run-status',
+      });
 
     const parked = (reason: 'waiting_timer' | 'waiting_external') => [
       envelope({ type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} }),
@@ -419,14 +442,14 @@ describe('RunDetailPage', () => {
     it('reads `waiting (timer)`, not a bare `waiting`', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill()).toHaveTextContent('waiting (timer)');
+      expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
       expect(screen.queryByText('waiting')).not.toBeInTheDocument();
     });
 
     it('reads `waiting (callback)` for an inbound external wait', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_external') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill()).toHaveTextContent('waiting (callback)');
+      expect(await headerPill('waiting (callback)')).toHaveTextContent('waiting (callback)');
     });
 
     /**
@@ -440,7 +463,7 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill()).toHaveTextContent('waiting (timer)');
+      expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
     });
 
     /**
@@ -457,7 +480,7 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: [] }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill()).toHaveTextContent('queued (slot)');
+      expect(await headerPill('queued (slot)')).toHaveTextContent('queued (slot)');
       expect(screen.queryByText('pending')).not.toBeInTheDocument();
     });
 
@@ -512,7 +535,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events: terminated }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(await headerPill()).toHaveTextContent('failure');
+        expect(await headerPill('failure')).toHaveTextContent('failure');
         // The projection this page holds for the same log is still parked.
         const projected = projectRun(waitDoc(), terminated);
         expect(projected.ok && projected.state.status).toBe('waiting');
@@ -542,12 +565,70 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(await headerPill()).toHaveTextContent('waiting (timer)');
+        expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
         // The doc-free fold, left to itself, would have said `running` here.
         expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
       });
 
-      /** A MATCHING alarm un-parks both, so the header advances. */
+      /**
+       * #894 — the regression pin for the flake, and for its whole class.
+       *
+       * The case above is the one that flaked, and the mechanism was never the
+       * timeout it was filed as: the pill renders unconditionally, so it is
+       * ALREADY on screen holding the fold's `running` before `getRunDetail`
+       * resolves. A query that waits for "a pill" rather than for "the pill
+       * saying X" therefore settles on that first frame, leaving the assertion
+       * after it a single macrotask in which to become right — which is what
+       * lost under four-worker contention.
+       *
+       * Here the detail is held open past that drain deliberately, so a query
+       * with that defect cannot pass by luck the way it did in isolation. The
+       * first frame is pinned as the fold's word precisely so that the wait
+       * after it is load-bearing rather than decorative.
+       */
+      it('waits for what the pill SAYS, not merely for a pill — the doc can land late', async () => {
+        const events = [
+          startEv(),
+          scheduleEv(),
+          parkEv(),
+          envelope({
+            type: 'timer.due',
+            runId: 'run_1',
+            nodeId: 'hold',
+            previousAttemptId: 'hold#99',
+          }),
+        ];
+        /* A TIMER, not a promise resolved inline. Resolving inline still lets
+           the microtask queue drain during the very `await` below, so the doc
+           lands in time even for a query that never really waited — which is
+           exactly how the flake hid in isolation and only surfaced under
+           contention. Landing it a macrotask out reproduces the losing side
+           deterministically, so this test can actually fail. */
+        getRunDetailMock.mockReturnValue(
+          new Promise<{ run: Run; pipelineVersion: PipelineVersion }>((resolve) =>
+            setTimeout(() => resolve({ run: run(), pipelineVersion: waitDoc() }), 50),
+          ),
+        );
+        useRunStreamMock.mockReturnValue(stream({ events }));
+
+        renderWithRouter(<RunDetailPage runId="run_1" />);
+
+        expect(document.querySelector('.page-hint .run-status')?.textContent).toBe('running');
+        expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
+      });
+
+      /**
+       * A MATCHING alarm un-parks both, so the header advances.
+       *
+       * #894 — the fold and the reducer AGREE on `running` here, which is the
+       * whole point of the case and also why the pill ALONE cannot witness it:
+       * `running` is what the doc-free first frame says too, so awaiting it
+       * would pass even if the detail never resolved. The wait on the version
+       * id is the gate — it renders only once `getRunDetail` has landed — so
+       * what is asserted is the doc-aware answer rather than the fold's. The
+       * STALE case above is where the two diverge, and is the discriminating
+       * half of the pair.
+       */
       it('un-parks on a matching timer.due', async () => {
         const events = [
           startEv(),
@@ -564,7 +645,8 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(await headerPill()).toHaveTextContent('running');
+        await screen.findByText('pv_1');
+        expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
   });

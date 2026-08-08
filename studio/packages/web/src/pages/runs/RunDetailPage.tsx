@@ -205,8 +205,21 @@ export function RunDetailPage({ runId }: { runId: string }) {
 
      A FIFTH walk of the log on this page (#849 — see `waitEpoch` above). It rides
      the same memoized `stream.events` and belongs in #849's consolidation, not
-     ahead of it. */
-  const runUsage = useMemo(() => computeRunUsage(stream.events), [stream.events]);
+     ahead of it.
+
+     It is the one walk that cannot share `parseEngineEvent`'s memo: `computeRunUsage`
+     lives in `shared` (the cost route folds through it too) and takes bare
+     `{ payload: unknown }` rows, not `RunEvent`s. So the rows are narrowed BEFORE
+     the call instead, which is the same saving by a different route — the fold
+     already discards every non-`activity.metered` row (`run-cost.ts`), and it is
+     sound to pre-filter on the envelope's `type` column because the append path
+     writes that column FROM the validated payload
+     (`appendEngineEvent`: `{ type: parsed.type, payload: parsed }`). `waitEpoch`
+     below already reads the log the same way. */
+  const runUsage = useMemo(
+    () => computeRunUsage(stream.events.filter((e) => e.type === 'activity.metered')),
+    [stream.events],
+  );
 
   /* #882 — the ONE name a node has in this view. The graph below reads the same
      `activityLabels` map off the same doc, so the table and the picture beside

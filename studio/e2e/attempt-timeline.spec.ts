@@ -71,6 +71,7 @@ test('U12a — the timeline draws what was measured and names what was not', asy
       bars: bars.map((bar) => ({
         tone: bar.getAttribute('data-tone'),
         open: bar.getAttribute('data-open'),
+        title: bar.getAttribute('title'),
         // The RESOLVED background, which is the thing a screenshot could not
         // prove: a missing tone rule leaves the default grey rather than nothing.
         background: getComputedStyle(bar).backgroundColor,
@@ -105,6 +106,20 @@ test('U12a — the timeline draws what was measured and names what was not', asy
   // `timer.due` flips a parked node straight to `success`, so the span's own
   // end status is what colours it.
   expect(bar!.tone).toBe('success');
+  /* #1010 — the bar's sentence, in a real browser. A CLOSED bar states the
+     END's word and a length, and says nothing about being unfinished; that is
+     the half of `spanLabel` this fixture can reach, since its run settles. The
+     OPEN half — where the redundant ", still open" was removed — is pinned by
+     `AttemptTimeline.test.tsx` instead, which can hold a span open by
+     construction rather than by racing a live run to assert mid-flight. A
+     `title` is a string, so jsdom reads it at the same fidelity a browser does;
+     what a browser adds here is that the attribute survives to the real DOM. */
+  /* The leading segment is the DISPLAY name, which this spec refuses to pin for
+     the same reason the row label above does — so the match starts at the
+     status word. */
+  expect(bar!.title).toMatch(/ · success · started .+ · .+$/);
+  expect(bar!.title).not.toContain('still open');
+  expect(bar!.title).not.toContain('no end on record');
   // A resolved colour, and specifically not the transparent one a missing rule
   // would leave. This is the check a screenshot cannot make.
   expect(bar!.background).not.toBe('rgba(0, 0, 0, 0)');

@@ -1,11 +1,12 @@
 import {
-  EngineEventSchema,
   createEngine,
   type EngineDoc,
   type EngineEvent,
   type RunEvent,
   type RunState,
 } from '@autonomy-studio/shared';
+
+import { parseEngineEvent } from './parsedEvent';
 
 /**
  * U11 — the run monitor's DOC-AWARE projection.
@@ -85,14 +86,14 @@ export function projectRun(doc: EngineDoc, events: RunEvent[]): RunProjection {
   // also what makes the abandon above a single early return.
   const parsed: EngineEvent[] = [];
   for (const envelope of events) {
-    const result = EngineEventSchema.safeParse(envelope.payload);
-    if (!result.success) {
+    const event = parseEngineEvent(envelope);
+    if (event === null) {
       return {
         ok: false,
         reason: `event ${envelope.seq} (${envelope.type}) is not a valid engine event, so the graph cannot be projected`,
       };
     }
-    parsed.push(result.data);
+    parsed.push(event);
   }
   return { ok: true, state: createEngine(doc).projectRunState(parsed) };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { AttemptTimeline } from './AttemptTimeline';
 import { placeSpans, timelineWindow, untimedReason } from './attemptSpans';
+import { formatClock } from './format';
 import { emptyNodeCost, type AttemptSpan, type NodeActivity } from './runSummary';
 
 const span = (over: Partial<AttemptSpan> & { startedAtMs: number }): AttemptSpan => ({
@@ -259,6 +260,58 @@ describe('<AttemptTimeline>', () => {
     const measured = container.querySelector<HTMLElement>('.timeline-span:not([data-open])');
     expect(measured!.style.width).not.toBe('');
     expect(measured!.style.right).toBe('');
+  });
+
+  /**
+   * #1010 — an open span states its un-endedness ONCE.
+   *
+   * Pinned as the whole `title`, not as an absence: asserting only that "still
+   * open" is gone would pass just as well if the bar stopped saying anything at
+   * all. Both open statuses are covered because a PARK is where the old wording
+   * read worst — "waiting (timer), still open · … · no end on record" said it
+   * three times, the status word included.
+   */
+  it('says an open span has not ended ONCE, for a dispatch and for a park alike', () => {
+    const { container } = render(
+      <AttemptTimeline
+        nodes={[
+          node({
+            nodeId: 'a',
+            status: 'dispatched',
+            spans: [span({ startedAtMs: 0, startedAs: 'dispatched' })],
+          }),
+          node({
+            nodeId: 'b',
+            status: 'wait_pending',
+            spans: [span({ startedAtMs: 0, startedAs: 'wait_pending' })],
+          }),
+          /* A measured bar, so the window has an extent and the two open bars
+             above are placed rather than short-circuited by `timelineWindow`. */
+          node({
+            nodeId: 'c',
+            status: 'success',
+            spans: [span({ startedAtMs: 0, endedAtMs: 4_000, endedAs: 'success' })],
+          }),
+        ]}
+        nameOf={(id) => id.toUpperCase()}
+      />,
+    );
+    /* Rows keep the order they were handed in, and `formatClock` is locale- and
+       timezone-dependent — so the expected clock is built with the same helper
+       the component uses rather than hardcoded. */
+    const titles = [...container.querySelectorAll('.timeline-row .timeline-span')].map((b) =>
+      b.getAttribute('title'),
+    );
+    const at0 = formatClock(0);
+
+    expect(titles[0]).toBe(`A · running · started ${at0} · no end on record`);
+    expect(titles[1]).toBe(`B · waiting (timer) · started ${at0} · no end on record`);
+
+    /* The closed bar keeps the END's word and a real length — the label change
+       must not have flattened the two cases into one. */
+    expect(titles[2]).toBe(`C · success · started ${at0} · 4s`);
+
+    expect(container.textContent).not.toContain('still open');
   });
 
   it('names every untimed node with its reason instead of dropping it', () => {
