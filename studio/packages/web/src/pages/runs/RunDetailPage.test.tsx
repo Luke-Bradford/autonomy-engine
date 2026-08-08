@@ -422,7 +422,13 @@ describe('RunDetailPage', () => {
        contention that drain lost.
 
        The matcher is a substring test rather than an exact one so that it keeps
-       the semantics of the `toHaveTextContent` calls it replaced. */
+       the semantics of the `toHaveTextContent` calls beside it — which STAY,
+       and are not folded into this query. The two have different jobs: the
+       query decides when to stop waiting, the assertion decides whether the
+       answer is right. Collapsing them reads tidier and is how the first draft
+       of this fix went vacuous — with the text checked only inside the query,
+       reinstating the old `/./` left NOTHING asserting the text, so the
+       regression test below passed against the very defect it pins. */
     const headerPill = (text: string) =>
       screen.findByText((content) => content.includes(text), {
         selector: '.page-hint .run-status',
@@ -436,14 +442,14 @@ describe('RunDetailPage', () => {
     it('reads `waiting (timer)`, not a bare `waiting`', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill('waiting (timer)')).toBeVisible();
+      expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
       expect(screen.queryByText('waiting')).not.toBeInTheDocument();
     });
 
     it('reads `waiting (callback)` for an inbound external wait', async () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_external') }));
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill('waiting (callback)')).toBeVisible();
+      expect(await headerPill('waiting (callback)')).toHaveTextContent('waiting (callback)');
     });
 
 
@@ -458,7 +464,7 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: parked('waiting_timer') }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill('waiting (timer)')).toBeVisible();
+      expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
     });
 
     /**
@@ -475,7 +481,7 @@ describe('RunDetailPage', () => {
       useRunStreamMock.mockReturnValue(stream({ events: [] }));
 
       renderWithRouter(<RunDetailPage runId="run_1" />);
-      expect(await headerPill('queued (slot)')).toBeVisible();
+      expect(await headerPill('queued (slot)')).toHaveTextContent('queued (slot)');
       expect(screen.queryByText('pending')).not.toBeInTheDocument();
     });
 
@@ -530,7 +536,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events: terminated }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(await headerPill('failure')).toBeVisible();
+        expect(await headerPill('failure')).toHaveTextContent('failure');
         // The projection this page holds for the same log is still parked.
         const projected = projectRun(waitDoc(), terminated);
         expect(projected.ok && projected.state.status).toBe('waiting');
@@ -560,7 +566,7 @@ describe('RunDetailPage', () => {
         useRunStreamMock.mockReturnValue(stream({ events }));
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
-        expect(await headerPill('waiting (timer)')).toBeVisible();
+        expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
         // The doc-free fold, left to itself, would have said `running` here.
         expect(deriveRunLifecycle(events)).toEqual({ status: 'running', waitingReason: null });
       });
@@ -593,20 +599,23 @@ describe('RunDetailPage', () => {
             previousAttemptId: 'hold#99',
           }),
         ];
-        let land = (_: { run: Run; pipelineVersion: PipelineVersion }): void => {};
+        /* A TIMER, not a promise resolved inline. Resolving inline still lets
+           the microtask queue drain during the very `await` below, so the doc
+           lands in time even for a query that never really waited — which is
+           exactly how the flake hid in isolation and only surfaced under
+           contention. Landing it a macrotask out reproduces the losing side
+           deterministically, so this test can actually fail. */
         getRunDetailMock.mockReturnValue(
-          new Promise<{ run: Run; pipelineVersion: PipelineVersion }>((resolve) => {
-            land = resolve;
-          }),
+          new Promise<{ run: Run; pipelineVersion: PipelineVersion }>((resolve) =>
+            setTimeout(() => resolve({ run: run(), pipelineVersion: waitDoc() }), 50),
+          ),
         );
         useRunStreamMock.mockReturnValue(stream({ events }));
 
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
         expect(document.querySelector('.page-hint .run-status')?.textContent).toBe('running');
-
-        land({ run: run(), pipelineVersion: waitDoc() });
-        expect(await headerPill('waiting (timer)')).toBeVisible();
+        expect(await headerPill('waiting (timer)')).toHaveTextContent('waiting (timer)');
       });
 
       /**
@@ -638,7 +647,7 @@ describe('RunDetailPage', () => {
         renderWithRouter(<RunDetailPage runId="run_1" />);
 
         await screen.findByText('pv_1');
-        expect(await headerPill('running')).toBeVisible();
+        expect(await headerPill('running')).toHaveTextContent('running');
       });
     });
   });
