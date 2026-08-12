@@ -93,6 +93,25 @@ export interface RunCost {
   inputTokens: number;
   outputTokens: number;
   /**
+   * #1025 — responses that REPORTED an input / an output token count, counted
+   * per side, because `inputTokens: 0` is ambiguous between "this really used no
+   * tokens" and "nobody counted" and the second is the COMMON case: `cliSpendFact`
+   * (`connectors/agent.ts`) mints a metered event with no token fields at all, so
+   * an `agent_task` node would otherwise render `0 in / 0 out` for a subprocess
+   * that may have driven dozens of model calls internally.
+   *
+   * PER SIDE, not one "reported at least one side" flag: a provider can report one
+   * side and omit the other, and a single counter would then call that response
+   * reported and print a manufactured zero on the very side nobody counted.
+   *
+   * These were on {@link NodeCost} only until #1025, so every SQL-aggregate
+   * surface — the run list, the per-pipeline rollup, the AI-activity model table
+   * — read that manufactured zero. Both projections carry them now, and
+   * `run-events.test.ts`'s SQL-vs-fold equivalence tests pin them agreeing.
+   */
+  inputReportedResponseCount: number;
+  outputReportedResponseCount: number;
+  /**
    * `true` iff every counted response had a resolvable cost
    * (`costUnknownResponseCount === 0`). A run with zero responses is complete
    * ($0 — nothing to price). NOTE: this is a completeness-of-PRICING flag, NOT a
@@ -132,6 +151,8 @@ export const RunCostSchema = z.object({
   costUnknownResponseCount: z.number().int().nonnegative(),
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
+  inputReportedResponseCount: z.number().int().nonnegative(),
+  outputReportedResponseCount: z.number().int().nonnegative(),
   complete: z.boolean(),
 }) satisfies z.ZodType<RunCost>;
 
@@ -179,6 +200,12 @@ export interface MeteredAggregates {
   /** Sum of the PRESENT `inputTokens` / `outputTokens` counts. */
   inputTokens: number;
   outputTokens: number;
+  /** #1025 — responses that REPORTED each side's count (present — a genuine `0`
+   * counts, an absent key does not), so the sums above cannot be read as measured
+   * zeros. Same `count(json_extract(...))` presence idiom as `pricedResponseCount`;
+   * see {@link RunCost.inputReportedResponseCount} for why it is per side. */
+  inputReportedResponseCount: number;
+  outputReportedResponseCount: number;
 }
 
 /**
@@ -232,6 +259,8 @@ export function runCostFromAggregates(agg: MeteredAggregates): RunCost {
     costUnknownResponseCount,
     inputTokens: agg.inputTokens,
     outputTokens: agg.outputTokens,
+    inputReportedResponseCount: agg.inputReportedResponseCount,
+    outputReportedResponseCount: agg.outputReportedResponseCount,
     complete: costUnknownResponseCount === 0,
   };
 }
@@ -369,6 +398,8 @@ export function runCostFromTotals(totals: MeteredTotals): RunCost {
     costUnknownResponseCount: totals.costUnknownResponseCount,
     inputTokens: totals.inputTokens,
     outputTokens: totals.outputTokens,
+    inputReportedResponseCount: totals.inputReportedResponseCount,
+    outputReportedResponseCount: totals.outputReportedResponseCount,
     complete: totals.costUnknownResponseCount === 0,
   };
 }
@@ -386,24 +417,21 @@ export function runCostFromTotals(totals: MeteredTotals): RunCost {
  *
  * AMENDED (#930). This shape was introduced by #866 as per-NODE only, and said so:
  * "the facts a per-node reading needs and a whole-run reading CANNOT use". That was
- * wrong, and U27's run-level surface is the counter-example:
+ * wrong, and U27's run-level surface is the counter-example: `providers` decides the
+ * floor-not-census caveat, and ONE `agent_cli` exchange anywhere in the run makes the
+ * run's `responseCount` a floor too. What IS node-only is the *weight* of the caveat,
+ * not its truth — so the shape is shared and {@link computeRunUsage} is the run-level
+ * producer.
  *
- *  - the per-side reported counts are what stop `inputTokens: 0` rendering as a
- *    measurement nobody took. That failure is identical at run level — a run of
- *    `agent_cli` nodes reports no token counts at all — so a run-level reading
- *    built on plain {@link RunCost} would print the exact manufactured zero this
- *    field exists to prevent;
- *  - `providers` still decides the floor-not-census caveat: ONE `agent_cli`
- *    exchange anywhere in the run makes the run's `responseCount` a floor too.
- *
- * What IS node-only is the *weight* of the caveats, not their truth. So the shape
- * is shared and {@link computeRunUsage} is the run-level producer; only the
- * bounded-SQL aggregate path ({@link PipelineCostAggregates}) stays on the
- * narrower {@link RunCost}, because it genuinely cannot count these in SQL today.
+ * AMENDED AGAIN (#1025). The per-side reported counts used to live here too, on the
+ * argument that "the bounded-SQL aggregate path genuinely cannot count these in SQL
+ * today". It can: the same `count(json_extract(...))` presence idiom
+ * `pricedResponseCount` had always used answers it, so they moved down onto
+ * {@link RunCost} and every SQL-aggregate surface stopped reading a manufactured
+ * zero. What remains here is what SQL still cannot supply — the distinct
+ * `providers`/`models` sets, which need an ordered fold rather than a scalar.
  */
 export interface NodeCost extends RunCost {
-  inputReportedResponseCount: number;
-  outputReportedResponseCount: number;
   providers: string[];
   models: string[];
 }
@@ -412,8 +440,6 @@ export interface NodeCost extends RunCost {
 export function nodeCostFromTotals(totals: MeteredTotals): NodeCost {
   return {
     ...runCostFromTotals(totals),
-    inputReportedResponseCount: totals.inputReportedResponseCount,
-    outputReportedResponseCount: totals.outputReportedResponseCount,
     providers: [...totals.providers],
     models: [...totals.models],
   };
@@ -449,16 +475,17 @@ export function computeRunCost(events: readonly { payload: unknown }[]): RunCost
 
 /**
  * #930 — fold one run's events into the RICHER {@link NodeCost} slice: everything
- * {@link computeRunCost} projects, plus the per-side reported counts and the
- * provider/model sets.
+ * {@link computeRunCost} projects, plus the provider/model sets.
  *
  * A rendered run-level figure needs those extras for the same reason the per-node
- * panel does (see {@link NodeCost}) — without them a run that measured no tokens
- * is indistinguishable from one that used none. `computeRunCost` keeps its narrower
- * shape because it is the twin of the bounded-SQL aggregate path
- * ({@link runCostFromAggregates}), and widening THAT would mean counting these in
- * SQL. #931 made that twinning real for the run LIST — `aggregateRunCosts` produces
- * exactly this shape per run — while `GET /api/runs/:id/cost` still folds
+ * panel does (see {@link NodeCost}). The per-side reported counts used to be part of
+ * that "extra" and are NOT any more: #1025 moved them down onto {@link RunCost},
+ * because the bounded-SQL aggregate path CAN count them after all (the presence
+ * idiom `pricedResponseCount` already used). So `computeRunCost` is still the twin
+ * of {@link runCostFromAggregates}, and the twinning is now WIDER than it was.
+ *
+ * #931 made that twinning real for the run LIST — `aggregateRunCosts` produces
+ * exactly the {@link RunCost} shape per run — while `GET /api/runs/:id/cost` still folds
  * `listRunEvents` in memory (`routes/runs.ts`), which the earlier wording named as
  * though the aggregate already backed it. That route COULD be moved onto the
  * bounded aggregate and retire the last unbounded cost loader; it is deliberately
@@ -494,6 +521,8 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
   let unpricedResponseCount = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let inputReportedResponseCount = 0;
+  let outputReportedResponseCount = 0;
   let incompleteRunCount = 0;
 
   for (const rc of runCosts) {
@@ -503,6 +532,8 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
     unpricedResponseCount += rc.unpricedResponseCount;
     inputTokens += rc.inputTokens;
     outputTokens += rc.outputTokens;
+    inputReportedResponseCount += rc.inputReportedResponseCount;
+    outputReportedResponseCount += rc.outputReportedResponseCount;
     if (!rc.complete) incompleteRunCount += 1;
   }
 
@@ -515,5 +546,7 @@ export function rollupPipelineCost(runCosts: readonly RunCost[]): PipelineCostRo
     totalCostEstimate,
     inputTokens,
     outputTokens,
+    inputReportedResponseCount,
+    outputReportedResponseCount,
   });
 }
