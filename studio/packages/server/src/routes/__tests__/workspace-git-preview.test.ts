@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
-import { createConnection, createPipeline, createPipelineVersion } from '../../repo/index.js';
+import {
+  createConnection,
+  createPipeline,
+  createPipelineVersion,
+  deleteConnection,
+} from '../../repo/index.js';
 import { fixtureGit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
@@ -60,6 +65,54 @@ describe('workspace-git import-preview route', () => {
     fixtureGit(work, ['merge', '--no-edit', `origin/${WORKING_BRANCH}`]);
     fixtureGit(work, ['push', 'origin', 'main']);
   }
+
+  it('#1043 — an uncomparable head is a diagnostic, not a manufactured `create`', async () => {
+    // The pipeline is committed to the branch FIRST, so its file is genuinely
+    // there; deleting the connection afterwards is what makes the DB side
+    // uncomparable. Without the fix the preview 500s; with only the DB side
+    // excluded it would report `create` for a pipeline that plainly exists.
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionId: conn.id,
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    expect((await commit('author')).json().commit.committed).toBe(true);
+    mergeWorkingIntoMain(work);
+    deleteConnection(app.db, conn.id);
+
+    const res = await preview();
+    expect(res.statusCode).toBe(200);
+    const { preview: result } = res.json();
+    expect(result.resources.filter((r: { kind: string }) => r.kind === 'pipeline')).toEqual([]);
+    expect(result.archive).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        path: 'pipelines/uses-conn.json',
+        code: 'unserializable_ref',
+        message: expect.stringContaining('n1'),
+      },
+    ]);
+    // The connection's own file is still on the branch and still compared — the
+    // blast radius is the one pipeline, not the workspace.
+    expect(result.resources.map((r: { kind: string }) => r.kind)).toEqual(['connection']);
+  });
 
   it('previews the resources committed on the collaboration branch', async () => {
     const { remote, work } = seedRemote(testApp.tmpDir);
