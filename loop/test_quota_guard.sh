@@ -592,11 +592,11 @@ check "1b-vi no reset field -> refusal still logged" "0" \
 # let the dashboard answer would satisfy "no window line" without studio's null
 # ever being parsed.
 r="$(run_case EMPTY QUOTA_STOP_PCT=80 STUDIO_UTIL=0.97 STUDIO_RESETS_AT=null)"
-check "1b-vi-a literal null reset -> studio is the source under test" "0" \
+check "1b-null-a literal null reset -> studio is the source under test" "0" \
   "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
-check "1b-vi-b literal null reset -> no window line, exactly as an absent one" "0" \
+check "1b-null-b literal null reset -> no window line, exactly as an absent one" "0" \
   "$(grep -q 'quota window:' "$(logof "$r")" && echo 1 || echo 0)"
-check "1b-vi-c literal null reset -> refusal still logged" "0" \
+check "1b-null-c literal null reset -> refusal still logged" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
 
 # A hostile reset must be dropped, not printed into a log an operator greps.

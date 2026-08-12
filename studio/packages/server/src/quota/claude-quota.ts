@@ -578,12 +578,10 @@ type SampleOutcome = AccountQuotaReading;
  *
  * The two travel together rather than `sample()` stashing the window state in a
  * closure variable, so every piece of reader state still moves through
- * `applyOutcome` — one function holding every transition — and `report` stays
- * OUTSIDE `sample()`'s catch-all. That last part is load-bearing: a sink that
- * escaped `report` inside that catch would turn a reading which was successfully
- * obtained into `reader_error`, the exact failure `report` exists to prevent.
- * It also fixes the ordering, since `rate_limit_cleared` and a window event
- * arising from the same sample are then emitted by the same function in a
+ * `applyOutcome` — one function holding every transition — and `report` keeps
+ * running outside `sample()`'s catch-all, for the reason `report`'s own docblock
+ * gives. It also fixes the ordering, since `rate_limit_cleared` and a window
+ * event arising from the same sample are then emitted by the same function in a
  * defined order rather than one from inside the sample and one from after it.
  *
  * Only `outcome` is stamped into the cache, so the extra field never reaches
