@@ -158,6 +158,12 @@ describe('buildQuota — the 7-day window IS the reading; the 5-hour one is opti
    * prototype turned that into UNREADABLE for the WHOLE reading — including the
    * 7-day figure the spend guard is the entire consumer of.
    */
+  // Two fixture shapes on purpose, because they are two BRANCHES. The first
+  // omits the key entirely — the shape the provider actually sends. The rest
+  // keep a complete payload and corrupt only the 5-hour window, i.e. the key is
+  // present and unusable. `buildQuota` reaches the same outcome by different
+  // routes (`mapWindow` returning null for a non-object, versus for a bad
+  // utilization), so both are worth walking.
   it.each([
     ['an absent five_hour', { seven_day: LIVE_PAYLOAD.seven_day }],
     ['an explicitly null five_hour', { ...LIVE_PAYLOAD, five_hour: null }],
