@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { CallConfig } from '@autonomy-studio/shared';
 // The depth the hint quotes is the ENGINE's bound, not a number this panel gets
 // to pick — restating it as a literal here is exactly the drift this whole
 // docblock is about. Same pattern as `edgeCondition.ts` deferring to
 // `MaxBouncesSchema` rather than repeating its constraint.
-import { MAX_CALL_DEPTH } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type CallConfig } from '@autonomy-studio/shared';
 import {
   buildParams,
   loadCallTargets,
@@ -343,10 +342,9 @@ function CallEditor({
           />
           <span className="page-hint">
             A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
-            checked when you save, but the self-call and call-depth guards that run at save time
-            only see literal targets. A dynamic target that recurses is caught at run time instead:
-            a call chain deeper than {MAX_CALL_DEPTH} nested runs is refused, and that call node
-            fails.
+            checked when you save, but the save-time self-call and depth guards only see literal
+            targets. Recursion through one is stopped only at run time, {MAX_CALL_DEPTH} nested runs
+            deep, where the next call is refused and that node fails.
           </span>
         </label>
       )}

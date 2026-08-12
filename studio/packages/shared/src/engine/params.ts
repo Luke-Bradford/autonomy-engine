@@ -3319,8 +3319,10 @@ function literalCallTargets(nodes: Pick<Node, 'call'>[]): string[] {
  * DFS below, and #796's run-time ancestor walk at the spawn seam. The save-time
  * check alone was never a bound — it only follows LITERAL targets
  * (`literalCallTargets`), so a `${}` target, a cross-owner callee or a missing
- * one is skipped entirely (#1011), which is exactly the shape that reaches the
- * spawn seam unbounded.
+ * one is skipped entirely (#1011) and arrives at the spawn seam bounded by
+ * nothing YET. That is why the seam's own walk is load-bearing rather than
+ * belt-and-braces — it is the whole of the bound for those shapes, not a second
+ * opinion on one the save-time DFS already formed.
  */
 export const MAX_CALL_DEPTH = 3;
 

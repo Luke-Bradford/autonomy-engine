@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Param, PipelineVersion } from '@autonomy-studio/shared';
-import { MAX_CALL_DEPTH } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type Param, type PipelineVersion } from '@autonomy-studio/shared';
 import { CallPanel } from './CallPanel';
 import { buildParams, parseJsonParams, seedCall, type CallTarget } from './callRules';
 import { createCanvasStore } from './canvasStore';

@@ -140,10 +140,13 @@ test.describe('#425 — call-node authoring', () => {
          - the SAVE-time self-call/depth guards still see literal targets only,
            which is permanent — the value is unknowable until dispatch;
          - RUN time bounds the chain (`child.ts` walks `parentRunId` against
-           `MAX_CALL_DEPTH`), and reaching that bound is a refusal, not a cap. */
+           `MAX_CALL_DEPTH`), and reaching that bound is a refusal, not a cap —
+           stated as "only at run time" because the nested runs up to the bound
+           DO execute, side effects included, before the next one is refused. */
     await expect(panel(page).getByText(/references are checked when you save/)).toBeVisible();
     await expect(panel(page).getByText(/only see literal targets/)).toBeVisible();
-    await expect(panel(page).getByText(/nested runs is refused/)).toBeVisible();
+    await expect(panel(page).getByText(/nested runs\s+deep/)).toBeVisible();
+    await expect(panel(page).getByText(/the next call is refused/)).toBeVisible();
     await expect(panel(page).getByText(/not checked when you save/)).toHaveCount(0);
 
     await panel(page).getByLabel('Version id or expression').fill('${params.target}');
