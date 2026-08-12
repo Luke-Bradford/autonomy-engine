@@ -189,9 +189,69 @@ const DEFAULT_MAX_THROTTLE_FACTOR = 8;
  */
 export const RATE_LIMITED = Object.freeze({ __quota: 'rate_limited' } as const);
 
-/** What the reader reports about the provider's availability. Never a secret. */
+/**
+ * What the reader reports about what it can currently SEE. Never a secret.
+ *
+ * Two subjects, both reported as TRANSITIONS — the reader latches each and emits
+ * only on a change — because a sink firing per sample would repeat itself every
+ * 30s forever on any host where the state is simply the new normal:
+ *
+ * - the PROVIDER's availability: entering and leaving the rate-limit backoff
+ *   (#765). Every one of these means the build loop's spend guard is blind.
+ * - a WINDOW's visibility: `five_hour` dropping out of an otherwise good reading,
+ *   and coming back (#1032). These do NOT blind the guard — they are only ever
+ *   computed from a reading that was successfully built, and the guard reads
+ *   `seven_day` alone.
+ *
+ * `reason` is a CATEGORY, never the provider's value. `absent` is the common case
+ * #1023 stopped vetoing on (no active session, so no window reported);
+ * `malformed` is the provider sending one this reader cannot map — a contract
+ * break, and the fact that used to surface, bluntly and wrongly for the common
+ * case, as a whole-reading UNREADABLE before #1023.
+ */
 export type QuotaReaderLogEvent =
-  { event: 'rate_limited'; throttleMs: number } | { event: 'rate_limit_cleared' };
+  | { event: 'rate_limited'; throttleMs: number }
+  | { event: 'rate_limit_cleared' }
+  | { event: 'window_dropped'; window: 'five_hour'; reason: 'absent' | 'malformed' }
+  | { event: 'window_restored'; window: 'five_hour' };
+
+/**
+ * How a sink should record an event: the level, and the line to record it under.
+ *
+ * Here rather than inline at the wiring site so the rule is ONE testable
+ * definition. `index.ts` holds the only sink in the app and had no coverage at
+ * all, so a level rule written there could not be pinned by anything.
+ *
+ * `warn` on this sink means ONE thing and keeps meaning it: the build loop's
+ * spend guard is currently blind (#765). The rate-limit pair qualifies for the
+ * whole of that state, the clearing line being what bounds it.
+ *
+ * So BOTH window events are `info`, including `malformed`. That is deliberate
+ * and it overrides the more obvious reading, which is that a contract break
+ * deserves the louder level. It does not, here: these events are only ever
+ * derived from a reading that WAS served, the guard reads `seven_day` alone, and
+ * nothing about a five-hour display row can blind it. Warning on them would
+ * spend an established signal — the one channel that currently means "the guard
+ * cannot see" — on a case that never does, and a signal that fires for two
+ * different conditions stops being actionable for either.
+ *
+ * The distinction #1032 exists to provide is not lost by that: it is carried in
+ * the event's `reason`, which is where a machine reads it anyway. The level says
+ * how urgent; the payload says what happened.
+ */
+export function describeQuotaLogEvent(event: QuotaReaderLogEvent): {
+  level: 'warn' | 'info';
+  msg: string;
+} {
+  switch (event.event) {
+    case 'rate_limited':
+    case 'rate_limit_cleared':
+      return { level: 'warn', msg: 'account-quota provider availability changed' };
+    case 'window_dropped':
+    case 'window_restored':
+      return { level: 'info', msg: 'account-quota window visibility changed' };
+  }
+}
 
 /**
  * A timestamp carrying an EXPLICIT UTC offset (`Z`, `+00:00`, `-0500`).
@@ -270,6 +330,33 @@ export function mapWindow(input: unknown): AccountQuotaWindow | null {
   // schema `literal(true)`. Everything else here degrades to null on anything
   // it does not recognise; this should too.
   return w.overage === true ? { ...mapped, overage: true } : mapped;
+}
+
+/** What the provider did with one window, as a category (#1032). */
+export type WindowVisibility = 'present' | 'absent' | 'malformed';
+
+/**
+ * Which of those three things the provider did with a window.
+ *
+ * `mapWindow` deliberately collapses "not reported" and "reported but
+ * unmappable" into the same `null`, and on the WIRE that is right: there is no
+ * window to serve either way, and #1023 established that neither may condemn the
+ * reading. They are not the same fact to an OPERATOR though — one is the common
+ * case and one is a contract break — and #1032 is that distinction being
+ * available nowhere.
+ *
+ * Delegates to `mapWindow` rather than re-testing the shape, so "mappable" keeps
+ * ONE definition. A second hand-written predicate here would be free to drift
+ * from the one that actually decides what gets served, and would then report a
+ * category contradicting the reading sitting beside it.
+ *
+ * An explicit `null` is `absent`, not `malformed`: sending `null` is a positive
+ * statement that there is no window, which is the same fact as omitting one —
+ * not a broken version of it.
+ */
+export function classifyWindow(input: unknown): WindowVisibility {
+  if (input === undefined || input === null) return 'absent';
+  return mapWindow(input) === null ? 'malformed' : 'present';
 }
 
 /**
@@ -427,9 +514,13 @@ export interface ClaudeAccountQuotaReaderOptions {
    */
   maxThrottleMs?: number;
   /**
-   * Optional observability sink for provider-availability TRANSITIONS. Without
-   * it an UNREADABLE reading is undiagnosable from outside — a missing
-   * credential, a provider outage and a rate-limited account all look the same.
+   * Optional observability sink. TRANSITIONS only, never per read — see
+   * `QuotaReaderLogEvent` for the two subjects and why each is latched.
+   *
+   * Without it an UNREADABLE reading is undiagnosable from outside (a missing
+   * credential, a provider outage and a rate-limited account all look the same),
+   * and since #1032 a `five_hour` the provider sent in an unmappable shape is
+   * indistinguishable from one it simply did not report.
    */
   log?: (event: QuotaReaderLogEvent) => void;
 }
@@ -482,6 +573,38 @@ export interface ClaudeAccountQuotaReader {
 type SampleOutcome = AccountQuotaReading;
 
 /**
+ * One sample's result: the outcome the caller gets, PLUS what that sample
+ * observed about the five-hour window.
+ *
+ * The two travel together rather than `sample()` stashing the window state in a
+ * closure variable, so every piece of reader state still moves through
+ * `applyOutcome` — one function holding every transition — and `report` keeps
+ * running outside `sample()`'s catch-all, for the reason `report`'s own docblock
+ * gives. It also fixes the ordering, since `rate_limit_cleared` and a window
+ * event arising from the same sample are then emitted by the same function in a
+ * defined order rather than one from inside the sample and one from after it.
+ *
+ * Only `outcome` is stamped into the cache, so the extra field never reaches
+ * `read()`'s callers.
+ *
+ * `fiveHour` is non-null ONLY on the success path. That is the rule, not an
+ * accident of construction: a sample that produced no reading observed nothing
+ * about the window and must not move the latch — the same reasoning
+ * `applyOutcome` already applies to the throttle window ("a transport error says
+ * nothing either way").
+ */
+type Sampled = { outcome: SampleOutcome; fiveHour: WindowVisibility | null };
+
+/**
+ * A sample that produced no reading, so its five construction sites in
+ * `sample()` state their cause and nothing else.
+ */
+const unread = (unavailable: AccountQuotaUnavailableReason): Sampled => ({
+  outcome: { value: null, unavailable },
+  fiveHour: null,
+});
+
+/**
  * Builds the reader. One per app instance so two apps in one process never
  * share a cache (matching how every other per-app service is scoped).
  */
@@ -523,6 +646,22 @@ export function createClaudeAccountQuotaReader(
    * would repeat per read while the recovery line never fired at all.
    */
   let rateLimited = false;
+  /**
+   * What the last SUCCESSFUL sample saw of the five-hour window, latched so the
+   * sink hears transitions rather than one line per read (#1032).
+   *
+   * Seeded `'present'`, NOT `null`. `null` would mean "no sample yet", and the
+   * first healthy sample would then read as a transition into presence — a
+   * `window_restored` for a drop that never happened, on every start of every
+   * healthy host. The healthy shape is the assumed prior, so only a departure
+   * from it is news; a host that never reports the window still gets exactly one
+   * `window_dropped` at its first sample, which is the signal wanted.
+   *
+   * A cache HIT does not move this, because it never runs `sample()`. Correct
+   * rather than incidental: this tracks what the PROVIDER last said, and a cache
+   * hit is not the provider saying anything.
+   */
+  let fiveHourVisibility: WindowVisibility = 'present';
   /** De-dupes concurrent reads so a burst is one subprocess + one request. */
   let inFlight: Promise<AccountQuotaReading> | null = null;
 
@@ -533,14 +672,14 @@ export function createClaudeAccountQuotaReader(
    * test would report `provider_error`, and the C3 evidence would say "studio
    * is broken" about a contended account. The value path is unchanged.
    */
-  async function sample(): Promise<SampleOutcome> {
+  async function sample(): Promise<Sampled> {
     try {
       const token = await tokenReader();
       // Covers a host with no credential store at all, indistinguishably —
       // `readKeychainToken` returns null off darwin without looking.
-      if (!token) return { value: null, unavailable: 'no_credential' };
+      if (!token) return unread('no_credential');
       const raw = await fetcher(token);
-      if (raw === RATE_LIMITED) return { value: null, unavailable: 'rate_limited' };
+      if (raw === RATE_LIMITED) return unread('rate_limited');
       // `fetchUsage` collapses every non-429 failure to null, so this is
       // "the call did not come back", distinct from the shape check below.
       // ONE ambiguity, accepted: a 200 whose body is the literal JSON `null`
@@ -548,17 +687,25 @@ export function createClaudeAccountQuotaReader(
       // than as an unusable payload. Distinguishing it would mean a second
       // sentinel through `fetchUsage` for a body no real provider sends, and
       // both labels lead an operator to the same place — the provider.
-      if (raw === null) return { value: null, unavailable: 'provider_error' };
+      if (raw === null) return unread('provider_error');
       const value = buildQuota(raw);
       // The provider IS serving us and we cannot use what it said: a contract
       // break to chase, not a bucket to wait out.
       return value === null
-        ? { value: null, unavailable: 'unrecognized_payload' }
-        : { value, unavailable: null };
+        ? unread('unrecognized_payload')
+        : {
+            outcome: { value, unavailable: null },
+            // Classified from the RAW payload, not from `value`: the distinction
+            // #1032 wants is precisely the one `buildQuota` erased on its way to
+            // the wire, so reading it back off the result is impossible by
+            // construction. Safe to index — a `raw` that is not an object cannot
+            // reach here, because `buildQuota` would have returned null.
+            fiveHour: classifyWindow((raw as Record<string, unknown>).five_hour),
+          };
     } catch {
       // Fail-safe: ANY unexpected error is UNREADABLE, never a raise (which
       // would 500 the guard's poll) and never a substituted value.
-      return { value: null, unavailable: 'reader_error' };
+      return unread('reader_error');
     }
   }
 
@@ -612,7 +759,8 @@ export function createClaudeAccountQuotaReader(
    * real cause changed. Diagnostic only — every read in that state is UNREADABLE
    * either way, and the cap bounds the retry latency at `maxThrottleMs`.
    */
-  function applyOutcome(outcome: SampleOutcome): void {
+  function applyOutcome(sampled: Sampled): void {
+    const { outcome } = sampled;
     if (outcome.unavailable === 'rate_limited') {
       const next = Math.min(throttleMs * 2, maxThrottleMs);
       // Report the window we ACTUALLY adopted, not `throttleMs * 2` — those
@@ -631,6 +779,24 @@ export function createClaudeAccountQuotaReader(
       report({ event: 'rate_limit_cleared' });
     }
     throttleMs = ttlMs;
+    // After the availability line, never before it: a sample that both ends a
+    // rate-limit and restores the window should read in the order the operator
+    // cares about, provider first.
+    noteWindow(sampled.fiveHour);
+  }
+
+  /**
+   * Folds a successful sample's window observation into the latch, reporting
+   * only a change. `null` means the sample observed nothing (see `Sampled`).
+   */
+  function noteWindow(seen: WindowVisibility | null): void {
+    if (seen === null || seen === fiveHourVisibility) return;
+    fiveHourVisibility = seen;
+    report(
+      seen === 'present'
+        ? { event: 'window_restored', window: 'five_hour' }
+        : { event: 'window_dropped', window: 'five_hour', reason: seen },
+    );
   }
 
   return {
@@ -649,7 +815,7 @@ export function createClaudeAccountQuotaReader(
       }
       if (inFlight) return inFlight;
       inFlight = sample()
-        .then((outcome) => {
+        .then((sampled) => {
           // Both outcomes stamp the cache: a failure is throttled just like a
           // success, but it REPLACES the previous value rather than letting it
           // survive — no last-good is ever served after a failed read. The
@@ -657,9 +823,9 @@ export function createClaudeAccountQuotaReader(
           // which is what makes the pair a single sample rather than two facts
           // that can drift (#825).
           cachedAt = at;
-          cached = outcome;
-          applyOutcome(outcome);
-          return outcome;
+          cached = sampled.outcome;
+          applyOutcome(sampled);
+          return sampled.outcome;
         })
         .finally(() => {
           inFlight = null;

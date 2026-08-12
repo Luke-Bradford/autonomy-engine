@@ -2,8 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { AccountQuotaWindowSchema } from '@autonomy-studio/shared';
 import {
   createClaudeAccountQuotaReader,
+  classifyWindow,
+  describeQuotaLogEvent,
   mapWindow,
   buildQuota,
+  type QuotaReaderLogEvent,
   readKeychainToken,
   fetchUsage,
   RATE_LIMITED,
@@ -764,6 +767,206 @@ describe('rate-limit backoff — a STICKY 429 must not be re-polled every TTL', 
  * and the symptom ("quota unreadable") is indistinguishable from a normal
  * provider outage, so nothing would point at the bug.
  */
+/**
+ * #1032 — the reading is unchanged; the DISTINCTION is what is new.
+ *
+ * #1023 stopped a missing `five_hour` condemning the whole reading, which was
+ * right and is not revisited here (the `buildQuota` cases above still pin that
+ * absent, null and malformed all produce the same wire shape). What it cost was
+ * the ability to tell the common case — no active session, so no window — from
+ * the provider sending one in a shape this reader cannot map, which is a
+ * contract break. These assertions are about that signal existing, being
+ * LATCHED so it cannot become per-read spam, and never being derived from a
+ * sample that saw nothing.
+ */
+describe('#1032 — a DROPPED five_hour is distinguishable from an unreported one', () => {
+  const NO_FIVE_HOUR = { seven_day: LIVE_PAYLOAD.seven_day };
+  const BAD_FIVE_HOUR = { ...LIVE_PAYLOAD, five_hour: { utilization: 'x' } };
+
+  /** A reader whose every `read()` lands past the TTL, so each one samples. */
+  function windowReader(initial: unknown) {
+    const log = vi.fn();
+    let clock = 0;
+    let payload: unknown = initial;
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => payload,
+      now: () => clock,
+      ttlMs: 60_000,
+      log,
+    });
+    return {
+      events: () => log.mock.calls.map((c) => c[0] as QuotaReaderLogEvent),
+      async read(next?: unknown) {
+        if (next !== undefined) payload = next;
+        // 120s: past the flat TTL, and past the first doubling of the
+        // rate-limit backoff, so the ordering case below still samples.
+        clock += 120_000;
+        return reader.read();
+      },
+    };
+  }
+
+  it('says NOTHING while the provider keeps reporting the window', async () => {
+    // The latch is seeded `present`, not "no sample yet". A `null` seed would
+    // make the first healthy sample look like a transition INTO presence and
+    // emit a recovery for a drop that never happened — on every start of every
+    // healthy host, and into the same sink the rate-limit tests assert on.
+    const r = windowReader(LIVE_PAYLOAD);
+    await r.read();
+    await r.read();
+    expect(r.events()).toEqual([]);
+  });
+
+  it('reports a window the provider stopped reporting, exactly ONCE', async () => {
+    const r = windowReader(NO_FIVE_HOUR);
+    await r.read();
+    await r.read();
+    await r.read();
+    expect(r.events()).toEqual([
+      { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+    ]);
+  });
+
+  it('distinguishes a MALFORMED window from an unreported one', async () => {
+    // The whole ticket. Before this both were one silent omission, so a renamed
+    // or retyped `utilization` degraded to a missing display row with no signal
+    // anywhere — and the categories are reported as categories, never as the
+    // provider's value.
+    const r = windowReader(NO_FIVE_HOUR);
+    await r.read();
+    await r.read(BAD_FIVE_HOUR);
+    expect(r.events()).toEqual([
+      { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+      { event: 'window_dropped', window: 'five_hour', reason: 'malformed' },
+    ]);
+  });
+
+  it('reports the window coming back', async () => {
+    const r = windowReader(NO_FIVE_HOUR);
+    await r.read();
+    await r.read(LIVE_PAYLOAD);
+    expect(r.events()).toEqual([
+      { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+      { event: 'window_restored', window: 'five_hour' },
+    ]);
+  });
+
+  it('a sample that produced NO READING does not move the latch', async () => {
+    // A transport failure observed nothing about the window, so it must neither
+    // report a drop nor leave the latch in a state that makes the next healthy
+    // sample look like a recovery. Same rule the throttle window already uses:
+    // an error says nothing either way.
+    const r = windowReader(LIVE_PAYLOAD);
+    await r.read();
+    await r.read(null); // provider_error
+    await r.read(null);
+    await r.read(LIVE_PAYLOAD);
+    expect(r.events()).toEqual([]);
+  });
+
+  it('reports the PROVIDER before the WINDOW when one sample carries both', async () => {
+    // Both transitions are folded by `applyOutcome`, in that order, rather than
+    // one being emitted from inside `sample()` and one from after it. An
+    // operator reading the log wants "the provider came back" before "and the
+    // window it came back with is missing".
+    const r = windowReader(RATE_LIMITED);
+    await r.read();
+    await r.read(NO_FIVE_HOUR);
+    expect(r.events().map((e) => e.event)).toEqual([
+      'rate_limited',
+      'rate_limit_cleared',
+      'window_dropped',
+    ]);
+  });
+
+  it('a throwing sink cannot turn a reading into a failure on the WINDOW path', async () => {
+    // The sibling assertion for the rate-limit path explains why: `report`
+    // absorbs, so a broken logger cannot alter what it observes. This path is
+    // new and reaches the sink from a different place in the fold, so it needs
+    // its own pin — if it ever ran inside `sample()`'s catch-all, an escaping
+    // sink would convert a reading that was successfully obtained into
+    // `reader_error` and spend one of the guard's bounded blind fires.
+    const reader = createClaudeAccountQuotaReader({
+      tokenReader: async () => 'tok',
+      fetcher: async () => NO_FIVE_HOUR,
+      log: () => {
+        throw new Error('sink down');
+      },
+    });
+    await expect(readValue(reader)).resolves.not.toBeNull();
+  });
+
+  describe('classifyWindow — the category, from the same predicate that serves', () => {
+    it.each([
+      ['an omitted window', undefined, 'absent'],
+      ['an explicit null', null, 'absent'],
+      ['a mappable window', { utilization: 8.0 }, 'present'],
+      ['a mappable window with no reset', { utilization: 8.0, resets_at: null }, 'present'],
+      ['a retyped utilization', { utilization: 'x' }, 'malformed'],
+      ['a renamed utilization', {}, 'malformed'],
+      ['a negative utilization', { utilization: -1 }, 'malformed'],
+      ['a window that is not an object', 'nope', 'malformed'],
+    ])('reads %s as %s', (_label, input, expected) => {
+      expect(classifyWindow(input)).toBe(expected);
+    });
+
+    it('agrees with mapWindow on what is mappable, by construction', () => {
+      // Not a tautology worth skipping: the alternative design re-tested the
+      // shape here, and a second predicate is free to drift from the one that
+      // actually decides what gets served — which would report a category
+      // contradicting the reading printed beside it.
+      for (const input of [{ utilization: 8.0 }, { utilization: 'x' }, {}, 'nope', 42]) {
+        expect(classifyWindow(input) === 'present').toBe(mapWindow(input) !== null);
+      }
+    });
+  });
+
+  describe('describeQuotaLogEvent — the level rule, where it can be tested', () => {
+    it.each([
+      [{ event: 'rate_limited', throttleMs: 120_000 }, 'warn'],
+      [{ event: 'rate_limit_cleared' }, 'warn'],
+      [{ event: 'window_dropped', window: 'five_hour', reason: 'malformed' }, 'info'],
+      [{ event: 'window_dropped', window: 'five_hour', reason: 'absent' }, 'info'],
+      [{ event: 'window_restored', window: 'five_hour' }, 'info'],
+    ] as [QuotaReaderLogEvent, 'warn' | 'info'][])('logs %o at %s', (event, level) => {
+      expect(describeQuotaLogEvent(event).level).toBe(level);
+    });
+
+    it('warns about NOTHING that leaves the guard able to see', () => {
+      // The property, rather than three separate level assertions: `warn` on
+      // this sink means "the spend guard is blind", and a window event is only
+      // ever derived from a reading that WAS served. A malformed window is a
+      // real contract break and it is still not a warning — that distinction
+      // rides on the event's `reason`, not on its level. Warning on both would
+      // spend the one channel that means "the guard cannot see" on a case that
+      // never does.
+      const windowEvents: QuotaReaderLogEvent[] = [
+        { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+        { event: 'window_dropped', window: 'five_hour', reason: 'malformed' },
+        { event: 'window_restored', window: 'five_hour' },
+      ];
+      for (const event of windowEvents) {
+        expect(describeQuotaLogEvent(event).level).not.toBe('warn');
+      }
+      // ...and the channel it protects still warns, or the rule above is
+      // vacuous — a `describeQuotaLogEvent` that returned `info` for everything
+      // would satisfy the loop and mean nothing.
+      expect(describeQuotaLogEvent({ event: 'rate_limited', throttleMs: 1 }).level).toBe('warn');
+    });
+
+    it('separates the two subjects by message, not only by payload', () => {
+      const availability = describeQuotaLogEvent({ event: 'rate_limit_cleared' }).msg;
+      const visibility = describeQuotaLogEvent({
+        event: 'window_restored',
+        window: 'five_hour',
+      }).msg;
+      expect(availability).not.toBe(visibility);
+      expect(availability).toContain('availability');
+    });
+  });
+});
+
 describe('readKeychainToken — the credential-store path', () => {
   const blob = (o: unknown) => async () => JSON.stringify(o);
 

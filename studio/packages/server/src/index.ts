@@ -56,6 +56,7 @@ import { quotaRoutes } from './routes/quota.js';
 import { versionRoutes } from './routes/version.js';
 import {
   createClaudeAccountQuotaReader,
+  describeQuotaLogEvent,
   UNREADABLE_ACCOUNT_QUOTA_READER,
   DEFAULT_QUOTA_SAMPLE_INTERVAL_MS,
   type ClaudeAccountQuotaReader,
@@ -394,16 +395,25 @@ export async function buildApp(opts?: BuildAppOptions) {
     opts?.claudeAccountQuotaReader ??
     (claudeAccountQuotaEnabled
       ? createClaudeAccountQuotaReader({
-          // #765 — provider-availability TRANSITIONS only (entering and
-          // leaving the rate-limit backoff), never per read. Without this an
-          // UNREADABLE reading is undiagnosable from outside the process:
-          // a missing credential, a provider outage and a rate-limited
-          // account all present as the same `null`, which is what produced
-          // #765's original misdiagnosis. `warn`, not `info`, because every
-          // one of these events means the build loop's spend guard is
-          // currently blind. The payload is two scalars — no credential, no
-          // provider body — so it is safe at any log level.
-          log: (event) => fastify.log.warn(event, 'account-quota provider availability changed'),
+          // TRANSITIONS only, never per read. Without this an UNREADABLE
+          // reading is undiagnosable from outside the process: a missing
+          // credential, a provider outage and a rate-limited account all
+          // present as the same `null`, which is what produced #765's original
+          // misdiagnosis.
+          //
+          // The level is no longer uniform, and the rule that decides it lives
+          // in `describeQuotaLogEvent` so it is one testable definition rather
+          // than a condition written inline here, where nothing covers it.
+          // `warn` still means exactly what it meant: the spend guard is blind.
+          // #1032's window events never are — they are derived from a reading
+          // that WAS served — so they log at `info`, and what happened is read
+          // off the event's `reason` rather than off its level. Every payload is
+          // scalars only, no credential and no provider body, so all of them are
+          // safe at any level.
+          log: (event) => {
+            const { level, msg } = describeQuotaLogEvent(event);
+            fastify.log[level](event, msg);
+          },
         })
       : UNREADABLE_ACCOUNT_QUOTA_READER);
   // #987 — everything in the app holds the WRAPPED reader, so both the request

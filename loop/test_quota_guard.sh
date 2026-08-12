@@ -123,12 +123,18 @@ case "$1" in
 esac
 EOS
   # curl now serves BOTH HTTP quota sources and dispatches on the URL, because
-  # the guard reads the dashboard first and studio last (the loop reader in
-  # between is a python call, not a URL, and is stubbed via FALLBACK_UTIL for a
-  # reading or FALLBACK_UNREADABLE for a present-but-failing one). The studio arm is written
+  # the guard reads both over HTTP (the loop reader between them is a python
+  # call, not a URL, and is stubbed via FALLBACK_UTIL for a reading or
+  # FALLBACK_UNREADABLE for a present-but-failing one). The studio arm is written
   # FIRST and returns early, so the dashboard arm below keeps its call counter
   # and knobs byte-for-byte -- the pre-existing cases are unaffected by studio
   # being added.
+  #
+  # This comment used to name the SOURCE ORDER as "dashboard first, studio last".
+  # C3 (#410) inverted that -- studio is source 1 (see `quota_pct`) -- and the
+  # stale version mattered: a case that means to exercise studio can be satisfied
+  # for free by a dashboard body that happens to lack the field under test. Order
+  # is `quota_pct`'s to state; this arm only needs to say it dispatches on URL.
   #
   # Studio defaults to UNREADABLE, and that default is load-bearing: it is the
   # dashboard-unreadable cases that reach studio at all, and a studio which
@@ -213,7 +219,13 @@ fi
 # identically (case 1b-v). Interpolated RAW on purpose: case 1b-vii feeds it a
 # hostile string to prove the parser drops what it cannot validate, rather than
 # the stub sanitising it first and testing nothing.
-# CURL_RESET_NO_UTIL=<epoch>: a readable `resets_at` with NO `utilization`. The
+# CURL_RESET_NO_UTIL=<epoch>: a readable resets_at with NO utilization. The
+# (Those two field names carried BACKTICKS until #1029's sweep, and this comment
+# lives inside an UNQUOTED <<EOS heredoc, so bash ran them as commands every time
+# the stub was written -- two "command not found" lines per run_case, 64 per
+# suite run, on stderr. Behaviourally inert: the substitutions only blanked two
+# words of a comment in the GENERATED stub. Plain words rather than escaped,
+# because nothing here needs them to be code.)
 # shape behind #910's WARNING -- the guard cannot read a percent from it, so it
 # falls through to the next source, and a window line logged off this body would
 # describe a sample that lost.
@@ -556,6 +568,35 @@ r="$(run_case 0.97 QUOTA_STOP_PCT=80)"
 check "1b-v  no reset field -> no window line, still refuses" "0" \
   "$(grep -q 'quota window:' "$(logof "$r")" && echo 1 || echo 0)"
 check "1b-vi no reset field -> refusal still logged" "0" \
+  "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
+
+# A LITERAL JSON `null` reset, which is a shape studio emits ROUTINELY rather
+# than a hostile one: #1023 made `mapWindow` pass an absent/unparseable
+# `resets_at` through as `resets_at: null` instead of condemning the window, so
+# every reading taken while the provider omits that instant now carries it. The
+# consumer must treat it exactly as it treats an absent field -- no window line,
+# refusal untouched -- and nothing pinned that.
+#
+# HONEST ABOUT WHAT THIS CANNOT CATCH: no single-line mutation kills it. Deleting
+# `quota_parse_reset`'s `isinstance(r, int)` guard leaves it green, because
+# `1400000000 <= None` then raises TypeError and the surrounding
+# `except Exception: print('')` refuses it a second time, independently; the same
+# goes for `quota_log_window`'s `[ -n "$qlw_epoch" ] || return 0`, since `int('')`
+# throws too. It pins the WIRE SHAPE and the null-means-absent equivalence, not a
+# guard line -- which is what would catch the rewrite that actually threatens
+# this: any coalescing (`r or 0`, `int(r or 0)`) or a move of the parse to `jq`,
+# where `null` stops behaving like absent and starts behaving like 1970.
+#
+# EMPTY, and studio named as the source, for the reason the stub comment above
+# now records: the dashboard body carries no `resets_at` at all, so a case that
+# let the dashboard answer would satisfy "no window line" without studio's null
+# ever being parsed.
+r="$(run_case EMPTY QUOTA_STOP_PCT=80 STUDIO_UTIL=0.97 STUDIO_RESETS_AT=null)"
+check "1b-null-a literal null reset -> studio is the source under test" "0" \
+  "$(grep -q 'quota source: studio' "$(logof "$r")" && echo 0 || echo 1)"
+check "1b-null-b literal null reset -> no window line, exactly as an absent one" "0" \
+  "$(grep -q 'quota window:' "$(logof "$r")" && echo 1 || echo 0)"
+check "1b-null-c literal null reset -> refusal still logged" "0" \
   "$(grep -q 'STOP: 7-day quota utilization 97%' "$(logof "$r")" && echo 0 || echo 1)"
 
 # A hostile reset must be dropped, not printed into a log an operator greps.

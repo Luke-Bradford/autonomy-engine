@@ -149,7 +149,6 @@ export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading 
   const generatedAtMs = state.generated_at * 1000;
   const claude = state.account.claude;
   if (claude === null) {
-    const retained = state.last_known;
     /*
      * `unavailable` is guaranteed present alongside a null reading by the wire
      * schema's own refinement, so this fallback is unreachable from the shipped
@@ -161,22 +160,51 @@ export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading 
       kind: 'unreadable',
       reason: state.unavailable?.claude ?? 'reader_error',
       generatedAtMs,
-      ...(retained === undefined
-        ? {}
-        : {
-            lastKnown: {
-              windows: readWindows(retained.claude),
-              // Floored, because both stamps come from a WALL clock: a
-              // backwards step between the reading and the response would
-              // otherwise produce a negative age, which no wording can state
-              // honestly. The server floors it too; this is the second half of
-              // the same guard, on the side that does the rendering.
-              ageMs: Math.max(0, generatedAtMs - retained.read_at * 1000),
-            },
-          }),
+      ...retainedLastKnown(state, generatedAtMs),
     };
   }
-  return { kind: 'reading', generatedAtMs, windows: readWindows(claude) };
+  const windows = readWindows(claude);
+  if (windows === null) {
+    return {
+      kind: 'unreadable',
+      reason: 'unrecognized_payload',
+      generatedAtMs,
+      ...retainedLastKnown(state, generatedAtMs),
+    };
+  }
+  return { kind: 'reading', generatedAtMs, windows };
+}
+
+/**
+ * The retained older reading to show beneath an UNREADABLE one, or nothing.
+ *
+ * Shared by both of `readAccountQuota`'s unreadable returns, for the same
+ * reason each time: an older reading is still the best thing known, and WHICH of
+ * the two ways the current reading failed does not change that.
+ *
+ * Nothing when the retained reading has no windows either. An empty last-known
+ * is not something known, and it would render as exactly the header-over-nothing
+ * table the emptiness fold exists to prevent — the same defect one surface down.
+ */
+function retainedLastKnown(
+  state: AccountQuotaDisplayState,
+  generatedAtMs: number,
+): { lastKnown?: LastKnownQuotaReading } {
+  const retained = state.last_known;
+  if (retained === undefined) return {};
+  const windows = readWindows(retained.claude);
+  if (windows === null) return {};
+  return {
+    lastKnown: {
+      windows,
+      // Floored, because both stamps come from a WALL clock: a backwards step
+      // between the reading and the response would otherwise produce a negative
+      // age, which no wording can state honestly. The server floors it too; this
+      // is the second half of the same guard, on the side that does the
+      // rendering.
+      ageMs: Math.max(0, generatedAtMs - retained.read_at * 1000),
+    },
+  };
 }
 
 /**
@@ -192,15 +220,29 @@ export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading 
  *
  * A window that is absent produces NO ROW. That is the whole contract: a row
  * with a blank or zeroed figure would be a claim, and there is nothing to claim.
+ *
+ * `null`, not an empty array, when NOTHING was reported (#1030). A reading whose
+ * windows all fell away is UNREADABLE, never an empty table: `QuotaWindowTable`
+ * renders its `<thead>` unconditionally, so an empty array draws four column
+ * headings over no rows, which reads as "nothing to report" rather than "not
+ * known" — the fail-open presentation this module exists to refuse.
+ *
+ * The rule lives HERE, in the one function every provider's windows pass
+ * through, rather than as a guard each caller remembers to write. It used to be
+ * the latter and only `readCodexQuota` had it; claude's path was missing it and
+ * stayed correct only because `ClaudeAccountQuotaSchema` makes `seven_day`
+ * required, i.e. because of a fact in a different package. Returning the
+ * emptiness as a value the type system makes callers handle is what stops the
+ * next widening (or a fourth provider) reaching the empty table.
  */
 function readWindows(quota: {
   five_hour?: AccountQuotaWindow;
   seven_day?: AccountQuotaWindow;
-}): QuotaWindowReading[] {
+}): QuotaWindowReading[] | null {
   const windows: QuotaWindowReading[] = [];
   if (quota.five_hour !== undefined) windows.push(readWindow('5-hour', quota.five_hour));
   if (quota.seven_day !== undefined) windows.push(readWindow('7-day', quota.seven_day));
-  return windows;
+  return windows.length === 0 ? null : windows;
 }
 
 /** One provider's row in the panel: who it is, and what is known about them. */
@@ -251,14 +293,17 @@ function readCodexQuota(
   }
   const windows = readWindows(codex);
   /*
-   * A reading whose windows all fell away is UNREADABLE, never an empty table.
-   * The wire schema already refuses this shape, so it is unreachable from the
-   * shipped server — but an empty `QuotaWindowTable` renders as a header with
-   * nothing under it, which reads as "nothing to report" rather than "not
-   * known", and that is the fail-open presentation on the one side of the
-   * contract the schema cannot reach.
+   * A reading whose windows all fell away is UNREADABLE, never an empty table —
+   * see `readWindows`, which now owns that rule for every provider rather than
+   * only this one. The wire schema already refuses this shape, so it is
+   * unreachable from the shipped server; it is handled because the side of the
+   * contract the schema cannot reach is exactly where a fail-open presentation
+   * would go unnoticed.
+   *
+   * No `lastKnown` here, unlike claude's path: the retained reading is claude's
+   * (`state.last_known.claude`), and codex's own figure carries its age instead.
    */
-  if (windows.length === 0) {
+  if (windows === null) {
     return { kind: 'unreadable', reason: 'unrecognized_payload', generatedAtMs };
   }
   return {
