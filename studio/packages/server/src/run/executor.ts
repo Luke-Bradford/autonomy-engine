@@ -949,6 +949,18 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // that terminalizes a child row without going through `kick` would
           // reopen #1038. `executor.test.ts` pins the half that lives here —
           // that the kick stays below the yield.
+          //
+          // #1041 ADDED exactly such a path — the boot sweep of orphaned
+          // `pending` children (`reconcile.ts`) terminalizes a child row that
+          // was never kicked — and it does NOT reopen #1038, for a reason
+          // outside this generator: the sweep fires only when the child's parent
+          // has already reached a terminal ROW status, and nothing re-drives a
+          // terminal parent (both `listParsedRuns` scans that resume a run —
+          // boot reconcile and the S7 lease reclaim — select `running` only). So
+          // `ensure` is never called again for that child and this branch is
+          // unreachable for it. If a future change did make it reachable,
+          // `result()` reads an empty log as `failure` (`child.ts`), which is
+          // the fail-safe direction rather than a silent success.
           const { outcome, outputs } = deps.childRuns.result(command.childRunId);
           yield {
             type: 'call.returned',

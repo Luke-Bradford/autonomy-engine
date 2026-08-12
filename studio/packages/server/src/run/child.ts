@@ -261,6 +261,20 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
         // and this function's catch would terminalize a perfectly healthy run.
         const events = loadEngineEvents(db, run.id);
         if (terminalFactFromLog(events) !== null) return 'settled';
+        // #1041 — the ROW can be terminal while the LOG is not, and only for a
+        // child that never started: `terminalizeInterrupted`'s no-events branch
+        // (the orphan sweep's primitive, and this function's own catch below)
+        // patches the row and appends nothing, so the log check above cannot see
+        // it. Without this, a kick already queued on this `pLimit(1)` when the
+        // sweep took the lock would fall into the empty-log branch and start a
+        // run that has been declared over — resurrecting it as `running` while
+        // still carrying the sweep's `finishedAt`, since `syncRunLifecycle` only
+        // ever carries an existing one forward. This is the SAME predicate
+        // `ensure` applies before it ever issues a kick, re-checked here under
+        // the lock; it narrows nothing, because `ensure` never hands a
+        // row-terminal child to `kick` in the first place.
+        const row = getRun(db, run.id);
+        if (row === null || TERMINAL_RUN_ROW_STATUS.has(row.status)) return 'settled';
         if (events.length === 0) {
           await startRun(deps, run);
           return 'settled';

@@ -4,10 +4,11 @@ import {
   type Engine,
   type EngineEvent,
   type PipelineVersion,
+  TERMINAL_RUN_ROW_STATUS,
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
-import { listParsedRuns } from '../repo/runs.js';
+import { getRun, listParsedRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -15,6 +16,7 @@ import {
   pump,
   retryArmInput,
   syncRunLifecycle,
+  terminalizeInterrupted,
   type DocResolver,
   type Executor,
   type RetryAlarms,
@@ -305,6 +307,21 @@ export interface ReconcileReport {
    * would hide it. This bucket in the boot log IS that attention signal.
    */
   corrupt: Array<{ runId: string; reason: string }>;
+  /**
+   * #1041 — `call_pipeline` CHILD rows terminalized because nothing could ever
+   * drive them: `status: 'pending'`, a non-null `parentRunId`, an EMPTY log, and
+   * a parent that has already reached a terminal ROW status. See
+   * `sweepOrphanedChildren` for how they arise and why the predicate is what it
+   * is.
+   *
+   * A SEPARATE bucket rather than a fourth producer of `interrupted`, because
+   * that bucket's contract is not just its count: its docblock rests on
+   * `run.interrupted.reason` telling an operator WHICH producer fired. A swept
+   * orphan has no `run.interrupted` event to carry a reason — it never started,
+   * so there is no log to record one in — and filing it there would leave an id
+   * whose reason is unreadable. The bucket name IS the reason here.
+   */
+  sweptOrphanChildren: string[];
 }
 
 /**
@@ -477,6 +494,7 @@ export function emptyReconcileReport(): ReconcileReport {
     rearmed: [],
     failed: [],
     corrupt: [],
+    sweptOrphanChildren: [],
   };
 }
 
@@ -551,7 +569,142 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
     }
   }
 
+  // AFTER the `running` loop, and the order is load-bearing in both directions.
+  // A parent this very boot terminalized (`interrupted`/`resynced`/`finalized`)
+  // makes its orphaned child eligible in the SAME boot rather than the next one;
+  // and a parent whose LOG was terminal while its row still said `running` has
+  // by now been resynced, so the row predicate below reads the repaired truth.
+  // It must also stay BEFORE `index.ts`'s `recoverQueued`: the sweep frees
+  // per-pipeline admission slots and publishes no event, so nothing else would
+  // turn them into admissions until the next boot.
+  await sweepOrphanedChildren(deps, report);
+
   return report;
+}
+
+/**
+ * #1041 — terminalize `call_pipeline` child rows that nothing can ever drive.
+ *
+ * HOW THEY ARISE. `ensure` creates the child `runs` row (`child.ts`) BEFORE the
+ * executor yields `call.started` — the arm-before-append handshake, so the log
+ * can never name a child that does not exist. If the parent then reaches a
+ * terminal fact on ANOTHER branch before that yield is folded, the pump's
+ * teardown resolves the queued event `dropped` and breaks the stream: the
+ * announcement is never appended and `kick` never runs. A crash between
+ * `createRun` and the append lands in the same place. What is left is a row with
+ * a non-null `parentRunId`, the `pending` default, an empty log, and a terminal
+ * parent that will never re-emit `startChild`.
+ *
+ * WHY IT IS NOT MERELY UNTIDY. `ACTIVE_RUN_STATUSES` includes `pending`
+ * (`repo/runs.ts`), so `countActiveRunsForPipeline` — the per-pipeline half of
+ * S6b admission, which its own docblock says covers "a trigger-less
+ * `call_pipeline` child" — counts every orphan forever. The leak is monotonic:
+ * enough of them and the CHILD pipeline can never be admitted again, with
+ * nothing on any surface saying why. (It does NOT leak a trigger slot;
+ * `countActiveRunsForTrigger` keys on `triggerId`, which is null for a child.)
+ *
+ * WHY THE PARENT'S ROW STATUS, when #443 makes the LOG authoritative. It is not
+ * a departure from that rule. Exactly two writers put a terminal status on a run
+ * row: `syncRunLifecycle`, always from a log fact or a projection of one, and
+ * `terminalizeInterrupted`'s `patchRow`, which fires ONLY on an empty log — and
+ * a run with an empty log never spawned a child. So for any run that HAS
+ * children, row-terminal and log-terminal are the same answer, and one `getRun`
+ * beats loading a whole log to re-derive it. The one asymmetric case (log
+ * terminal, row still `running`) is repaired by the `running` scan that runs
+ * before this one.
+ *
+ * WHY NO EVENT IS APPENDED. `terminalizeInterrupted`'s no-events branch patches
+ * the row and appends nothing, and that is the right primitive here rather than
+ * a near-copy of `terminalizeUnresolvable`: a run that never started has no
+ * event-sourced lifecycle to preserve, and minting a terminal fact into a log
+ * that never held one is manufacturing, not deriving (#443). The `run.interrupted`
+ * that `terminalizeUnresolvable` DOES append is for a run that had already
+ * started. The report bucket is this sweep's channel instead. A second reason
+ * not to append: a terminal event publishes into `subscribeChildReturns`, which
+ * would spawn a `returnToParent` microtask per swept child at boot, each one
+ * only to no-op against an already-terminal parent.
+ *
+ * DELIBERATE NON-GOALS, so the next reader does not assume wider cover:
+ *   - a `pending` child with a NON-EMPTY log (a crash between `startRun`'s
+ *     `run.started` append and its row sync) is stranded identically and leaks
+ *     the same slot. `terminalizeInterrupted` would in fact handle it (its
+ *     append-then-sync branch), so the empty-log guard is a SCOPE choice, not a
+ *     correctness one — that case is a resumable run, not a never-started one,
+ *     and deciding whether to resume or terminalize it is its own ticket (#1048).
+ *   - a top-level (`parentRunId === null`) `pending` orphan, same ticket.
+ *   - a child whose parent ROW is missing entirely: left alone. An absent parent
+ *     is unreadable state, not a terminal fact, and #646's posture for
+ *     unreadable state is to leave it for attention rather than mint a verdict.
+ */
+async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileReport): Promise<void> {
+  for (const child of listParsedRuns(deps.db, { status: 'pending' }, (id, err) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    report.corrupt.push({
+      runId: id,
+      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
+    });
+  })) {
+    const parentRunId = child.parentRunId;
+    // TYPE-NARROWING first, behaviour second, and worth saying which: removing
+    // this line does not change what the sweep does (a `null` id finds no row,
+    // so the `parent === null` skip below catches it anyway) — it is here so
+    // `sweepOne` can take a `string`, and it saves a pointless read per
+    // top-level `pending` row. The top-level case is a stated non-goal above.
+    if (parentRunId === null) continue;
+    // The same per-row fault boundary the `running` scan keeps, for the same
+    // reason: one bad row must degrade THAT row, not the sweep.
+    try {
+      await (deps.drives === undefined
+        ? sweepOne(deps, report, child, parentRunId)
+        : deps.drives.serialize(child.id, () => sweepOne(deps, report, child, parentRunId)));
+    } catch (err) {
+      if (err instanceof ReconcileInvariantError) throw err;
+      if (err instanceof RunLogUnparseableError) {
+        report.corrupt.push({ runId: child.id, reason: `run_log_unparseable:${err.message}` });
+        continue;
+      }
+      report.failed.push({
+        runId: child.id,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/**
+ * One orphan candidate, decided and terminalized UNDER the child's drive lock.
+ *
+ * The lock is what makes this safe against a concurrent `kick` — `child.ts`
+ * takes the same lock to decide whether to start a child, and the boot scan
+ * above can resume a parent that then drives and spawns children while this
+ * sweep is walking its (already-taken) snapshot. Under the lock, either the kick
+ * wins and the log is no longer empty, so this returns without touching it; or
+ * this wins and the row goes terminal, which `kick` now re-checks before
+ * starting anything (its log-only check could not see a row patch that appends
+ * no event).
+ */
+async function sweepOne(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  child: Run,
+  parentRunId: string,
+): Promise<void> {
+  if (loadEngineEvents(deps.db, child.id).length > 0) return;
+  const parent = getRun(deps.db, parentRunId);
+  if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
+
+  terminalizeInterrupted(deps, child.id);
+
+  // `terminalizeInterrupted` returns void and SWALLOWS a read fault (it logs and
+  // returns), and `ReconcileDeps` deliberately carries no logger — so a silent
+  // no-op would otherwise be reported here as a sweep that happened. Report what
+  // the row actually says, not what was attempted.
+  const swept = getRun(deps.db, child.id);
+  if (swept !== null && TERMINAL_RUN_ROW_STATUS.has(swept.status)) {
+    report.sweptOrphanChildren.push(child.id);
+  } else {
+    report.failed.push({ runId: child.id, reason: 'orphan_child_sweep_no_op' });
+  }
 }
 
 /**
