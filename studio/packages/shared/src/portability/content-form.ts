@@ -154,6 +154,15 @@ export function pipelineVersionContentForm(
  * row fields: whatever the row grows next is covered without anyone remembering
  * to come back here. Note `name` is already excluded (it is `RESOURCE_VOLATILE`)
  * — the reconcile carries the name difference as its own independent signal.
+ *
+ * This is WIDER than the apply's `rowPatch` (`name` + `concurrency`) by design,
+ * and one field makes that concrete today: `strippedConnectionRefs`, which this
+ * app's own commit path always writes as `[]` and the apply never reads. A
+ * hand-authored branch file carrying a non-empty one therefore previews as
+ * `update` where the apply would do nothing. That is the direction to be wrong
+ * in — the preview over-states a write rather than promising a no-op ahead of a
+ * real one — and it is the same fallback every future row field gets until
+ * someone decides otherwise here.
  */
 export function pipelineRowContentForm(data: PipelineExportData): string {
   return pipelineContentForm({ ...data, versions: [] });

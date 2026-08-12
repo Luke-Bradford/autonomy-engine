@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { connectionContentForm, pipelineContentForm, triggerContentForm } from '../content-form.js';
+import {
+  connectionContentForm,
+  pipelineContentForm,
+  pipelineRowContentForm,
+  triggerContentForm,
+} from '../content-form.js';
 import type {
   ConnectionExportData,
   NodeExport,
@@ -144,6 +149,34 @@ describe('pipelineContentForm', () => {
     const ordered = pipelineData();
     ordered.versions[0]!.nodes[0]!.config = { a: 2, z: 1 };
     expect(pipelineContentForm(reordered)).toBe(pipelineContentForm(ordered));
+  });
+});
+
+describe('pipelineRowContentForm', () => {
+  /**
+   * #983 — the contract is "the row WITHOUT its version trail", so the reconcile
+   * can ask whether a pull would patch the row even when the version doc it names
+   * is one this workspace already holds. Both halves are asserted, because either
+   * one alone would let a wrong implementation through: sensitivity alone passes
+   * for plain `pipelineContentForm`, and invariance alone passes for a constant.
+   */
+  it('is EQUAL when only the VERSION doc differs — the trail is not a row fact', () => {
+    const edited = pipelineData({ version: { nodes: [node({ config: { prompt: 'CHANGED' } })] } });
+    expect(pipelineRowContentForm(edited)).toBe(pipelineRowContentForm(pipelineData()));
+    // ...and this is exactly what distinguishes it from the whole-pipeline form.
+    expect(pipelineContentForm(edited)).not.toBe(pipelineContentForm(pipelineData()));
+  });
+
+  it('DIFFERS when a ROW field changes — `concurrency`, which the apply patches', () => {
+    expect(pipelineRowContentForm(pipelineData({ pipeline: { concurrency: 3 } }))).not.toBe(
+      pipelineRowContentForm(pipelineData()),
+    );
+  });
+
+  it('is EQUAL when only the display NAME differs — the reconcile carries that signal itself', () => {
+    expect(pipelineRowContentForm(pipelineData({ pipeline: { name: 'Renamed' } }))).toBe(
+      pipelineRowContentForm(pipelineData()),
+    );
   });
 });
 

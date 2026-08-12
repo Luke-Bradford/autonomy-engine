@@ -241,12 +241,12 @@ export function describeDisposition(disposition: WorkspaceGitDisposition): strin
  * The human label for a DRIFT change — what a commit would send OUT.
  *
  * #964 — deliberately NOT a re-export of `describeDisposition`, though the two
- * tables now share a row component and their enums line up one-for-one. Drift is
- * the commit-direction dual of the pull-direction disposition, so the same word
- * means opposite things: a drift `added` is a resource this workspace HAS and the
- * branch does not, where a disposition `create` ("new here") is the exact
- * reverse. Sharing the prose would silently invert the sentence in one of the two
- * tables.
+ * tables now share a row component and the enums nearly line up (drift has no
+ * counterpart to `superseded`, which is pull-direction only). Drift is the
+ * commit-direction dual of the pull-direction disposition, so the same word means
+ * opposite things: a drift `added` is a resource this workspace HAS and the branch
+ * does not, where a disposition `create` ("new here") is the exact reverse.
+ * Sharing the prose would silently invert the sentence in one of the two tables.
  */
 export function describeDriftChange(change: WorkspaceGitDriftChange): string {
   switch (change) {

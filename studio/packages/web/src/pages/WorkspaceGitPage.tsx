@@ -1080,15 +1080,18 @@ interface ResourceChangeRow {
 /**
  * #964 — the Resource / Kind / Change / Path table, shared by the OUTGOING drift
  * report and the INCOMING import preview, which had built the same four columns
- * twice. The same treatment `ParseDiagnostics` already gets in this file.
+ * twice. `ParseDiagnostics` below is this file's precedent for extracting a
+ * repeated block, but NOT for this signature: its two callers pass the same wire
+ * type unchanged, so it takes that type directly.
  *
- * Rows are prepared by the caller rather than the component reaching into a wire
- * type, because the two tables describe opposite comparisons (drift is
- * workspace-vs-branch, preview is branch-vs-workspace) over different enums with
- * their own prose. Sharing the MARKUP is the win; a shared vocabulary would
- * invert one of the two sentences (see `describeDriftChange`). The `key` comes
- * from the caller for the same reason: a preview row is unique by path, a drift
- * row needs the change too, since a rename puts one path in two rows.
+ * Here the rows are prepared by the caller instead, because the two tables
+ * describe opposite comparisons (drift is workspace-vs-branch, preview is
+ * branch-vs-workspace) over different enums with their own prose. Sharing the
+ * MARKUP is the win; a shared vocabulary would invert one of the two sentences
+ * (see `describeDriftChange`). The `key` comes from the caller for the same
+ * reason: a preview row is unique by path, while two different drift rows can
+ * carry one path — an `added` and a `removed` resource that happen to serialize
+ * to the same filename — so drift keys on the change as well.
  */
 function ResourceChangeTable({ rows }: { rows: ResourceChangeRow[] }) {
   return (
