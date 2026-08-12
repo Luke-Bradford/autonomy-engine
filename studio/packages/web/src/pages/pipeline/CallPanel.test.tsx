@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { Param, PipelineVersion } from '@autonomy-studio/shared';
+import { MAX_CALL_DEPTH, type Param, type PipelineVersion } from '@autonomy-studio/shared';
 import { CallPanel } from './CallPanel';
 import { buildParams, parseJsonParams, seedCall, type CallTarget } from './callRules';
 import { createCanvasStore } from './canvasStore';
@@ -256,12 +256,26 @@ describe('CallPanel (component)', () => {
    * a check that had started working. Nothing caught it, because no test read
    * the sentence.
    *
-   * Pinned as the two halves that must stay OPPOSITE, rather than as the exact
-   * wording: the refs ARE checked at save, and the depth guard still is not
-   * (`literalCallTargets` drops a `${}` target, and `startChild` has no runtime
-   * guard). A future rewording is free; flipping either claim is not.
+   * Pinned as the three claims that must stay in step with the code, rather
+   * than as the exact wording — a future rewording is free; flipping any claim
+   * is not:
+   *
+   *  1. the refs in a `${}` target ARE checked at save (`validateRefs` walks
+   *     `node.call`, since #952);
+   *  2. the SAVE-time self-call/depth guards still see LITERAL targets only
+   *     (`literalCallTargets` drops a `${}` one — unfixable by construction,
+   *     since the value is unknowable until dispatch);
+   *  3. run time DOES bound the chain (#796 `child.ts` refuses a spawn past
+   *     `MAX_CALL_DEPTH` hops of `parentRunId`), so the recursion the operator
+   *     is being warned about fails at dispatch rather than running away.
+   *
+   * Claim 3 is the one this test was rewritten for: the panel shipped saying
+   * "recursion through a DYNAMIC target is bounded by nothing" and kept saying
+   * it for the whole of #796, which is the failure mode the panel's own
+   * docblock names — an operator who is told a check is absent routes around
+   * one that is doing its job.
    */
-  it('tells the operator which call-node guards actually run at save time', async () => {
+  it('tells the operator which call-node guards run at save time, and which at run time', async () => {
     mount();
     await waitFor(() => expect(screen.getByLabelText(/Pipeline/)).toBeTruthy());
     fireEvent.click(screen.getByLabelText('Expression'));
@@ -269,8 +283,13 @@ describe('CallPanel (component)', () => {
     const hint = screen.getByText(/resolved when the node dispatches/);
     expect(hint.textContent).toMatch(/references are checked when you save/i);
     expect(hint.textContent).not.toMatch(/not checked when you save/i);
-    // The half that is still true, and the reason the hint survives at all.
-    expect(hint.textContent).toMatch(/call-depth guards only see literal targets/i);
+    // Claim 2 — still true, and the reason the hint survives at all.
+    expect(hint.textContent).toMatch(/only see literal targets/i);
+    // Claim 3 — the run-time bound, and that reaching it is a FAILURE rather
+    // than a quietly-capped success. The depth is read from the SSOT so the
+    // sentence cannot drift from the constant it is quoting.
+    expect(hint.textContent).toMatch(/refused/i);
+    expect(hint.textContent).toMatch(new RegExp(`${MAX_CALL_DEPTH}\\s+nested`, 'i'));
   });
 
   it('does not write anything to the store while the listing is still in flight', () => {

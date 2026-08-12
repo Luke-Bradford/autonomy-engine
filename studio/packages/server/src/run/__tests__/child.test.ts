@@ -392,9 +392,10 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
   });
 
   it('refuses past MAX_CALL_DEPTH hops, counted over the parentRunId chain', () => {
-    // The save-time DFS follows LITERAL targets only, so a `${}` target reaches
-    // this seam unbounded (#1011). Build a chain of ancestor rows by hand and
-    // check the boundary exactly: MAX_CALL_DEPTH hops are legal, one more is not.
+    // The save-time DFS follows LITERAL targets only, so a `${}` target arrives
+    // here having been bounded by nothing yet — the check below is the whole of
+    // its bound (#1011). Build a chain of ancestor rows by hand and check the
+    // boundary exactly: MAX_CALL_DEPTH hops are legal, one more is not.
     const { db } = freshDb();
     const childPv = seedVersion(db, [leaf('work')]);
     const parentPv = seedVersion(db, [callNode('caller', childPv)]);
