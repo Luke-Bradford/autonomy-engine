@@ -1,6 +1,12 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { contrastRatio, fluentRootReady, resolvedPaletteColor, setTheme } from './support/theme';
+import {
+  contrastRatio,
+  fluentRootReady,
+  resolvedPaletteColor,
+  setTheme,
+  surfaceBehind,
+} from './support/theme';
 
 /**
  * #967 — the token-flow chart on Monitor › AI activity.
@@ -220,38 +226,27 @@ test.describe('token-flow chart', () => {
       await setTheme(page, theme);
       await expect(page.locator(CHART)).toBeVisible();
 
-      const measured = await page.evaluate(() => {
+      const segments = await page.evaluate(() => {
         const seg = (cls: string) => {
           const el = document.querySelector(`.token-flow-seg--${cls}`);
           return el ? getComputedStyle(el).backgroundColor : '';
         };
-        /*
-         * THE SURFACE THE BARS ARE ACTUALLY PAINTED ON, found by walking up for
-         * the first ancestor that paints one — not a token named on the guess
-         * that it is the one behind. `--panel` was that guess and it is wrong
-         * twice over: nothing between the chart and `<body>` sets a background,
-         * and the thing that does is neither of those — it is the FluentProvider
-         * root, whose background comes from a Fluent token and not from this
-         * app's palette at all. Measured, not assumed, precisely because the
-         * answer was not the one the assumption produced; a ratio taken against
-         * a colour that is not behind the mark measures nothing and would keep
-         * reading fine straight through a real regression.
-         */
-        const opaque = (color: string) => color !== 'transparent' && !/,\s*0\)$/.test(color);
-        let node: Element | null = document.querySelector('.token-flow');
-        let surface = '';
-        let surfaceFrom = 'none';
-        while (node) {
-          const background = getComputedStyle(node).backgroundColor;
-          if (opaque(background)) {
-            surface = background;
-            surfaceFrom = `${node.tagName.toLowerCase()}.${node.className || '(no class)'}`;
-            break;
-          }
-          node = node.parentElement;
-        }
-        return { inColor: seg('in'), outColor: seg('out'), surface, surfaceFrom };
+        return { inColor: seg('in'), outColor: seg('out') };
       });
+      /*
+       * THE SURFACE THE BARS ARE ACTUALLY PAINTED ON, found by walking up for
+       * the first ancestor that paints one — not a token named on the guess
+       * that it is the one behind. `--panel` was that guess and it is wrong
+       * twice over: nothing between the chart and `<body>` sets a background,
+       * and the thing that does is neither of those — it is the FluentProvider
+       * root, whose background comes from a Fluent token and not from this
+       * app's palette at all. The walk is `surfaceBehind` in `support/theme.ts`;
+       * it lived here as the only copy until #1027 needed the same measurement
+       * for the status pills, and one definition with two callers is the rule
+       * that file's own docblock argues for.
+       */
+      const surface = await surfaceBehind(page, '.token-flow');
+      const measured = { ...segments, surface: surface.color, surfaceFrom: surface.from };
 
       // Each segment paints exactly the token it claims to, resolved through the
       // same engine so both sides are computed values.
@@ -265,14 +260,14 @@ test.describe('token-flow chart', () => {
 
       // A bar is a GRAPHICAL OBJECT, so WCAG 1.4.11 asks 3:1 against the surface
       // behind it — in BOTH themes, which is the point of running this twice.
-      // The walk above must have found a painted surface; an empty string here
-      // would silently make both ratios meaningless.
+      // No "the walk found something" assertion: `surfaceBehind` now THROWS
+      // naming the selector and the chain it climbed, which is strictly more
+      // than an `expect(...).not.toBe('')` could say.
       // Both readings carry the colours they were taken from: a bare ratio in a
       // failure tells you the palette is wrong but not which pair to change,
       // and the surface is FOUND rather than named, so it is the one value a
       // reader cannot look up in `index.css`.
       const on = `on ${measured.surface} (${measured.surfaceFrom})`;
-      expect(measured.surface).not.toBe('');
       expect(
         contrastRatio(measured.inColor, measured.surface),
         `tokens-in ${measured.inColor} ${on}`,

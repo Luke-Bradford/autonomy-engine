@@ -102,6 +102,69 @@ export function documentTheme(page: Page): Promise<string | undefined> {
 }
 
 /**
+ * The colour of the surface a mark is ACTUALLY painted on, found by walking up
+ * from `selector` to the first ancestor that paints an OPAQUE background.
+ *
+ * A contrast ratio taken against a colour that is not behind the mark measures
+ * nothing, and — this is the part that makes it dangerous rather than merely
+ * useless — it keeps reading green straight through a real regression. The
+ * temptation is to name the surface (`--panel`, `body`), and #967 is the record
+ * of how wrong that goes: `--panel` was the guess, and it was wrong twice over,
+ * because nothing between the chart and `<body>` sets a background and the
+ * thing that does is the FluentProvider root, whose colour comes from a Fluent
+ * token and not from this app's palette at all. So the surface is FOUND, never
+ * named.
+ *
+ * The walk collects the whole ancestor chain in the page and applies `isOpaque`
+ * HERE, rather than reimplementing an opacity test inside the `evaluate`. That
+ * is deliberate: the inline predicate this was lifted from asked only "not
+ * literal `transparent`, and alpha not exactly 0", which STOPS at a
+ * partial-alpha ancestor and reports a colour nothing is painted in. That is
+ * live, not hypothetical — `--container-fill` is `rgba(154, 163, 178, 0.1)` and
+ * is painted by `.flow-container`, so a walk starting inside a container would
+ * have taken a 10%-alpha fill as its answer. A partial-alpha ancestor means the
+ * true surface is a BLEND this cannot compute, so it is skipped and the walk
+ * keeps climbing to something that really is the backdrop.
+ *
+ * Throws rather than returning `''` when the selector matches nothing or
+ * nothing in the chain paints — `luminanceOf('')` would otherwise throw with no
+ * mention of what was being measured, which is the same "very convincing wrong
+ * answer" failure `FLUENT_ROOT`'s docblock above describes.
+ */
+export async function surfaceBehind(
+  page: Page,
+  selector: string,
+): Promise<{ color: string; from: string }> {
+  const chain = await page.evaluate((sel) => {
+    const start = document.querySelector(sel);
+    if (!start) throw new Error(`no element matched ${sel}`);
+    const describe = (el: Element) => {
+      const id = el.id ? `#${el.id}` : '';
+      // `className` is an `SVGAnimatedString` on SVG elements and renders as
+      // `[object SVGAnimatedString]`; `classList` is uniform across both.
+      const classes = Array.from(el.classList)
+        .map((c) => `.${c}`)
+        .join('');
+      return `${el.tagName.toLowerCase()}${id}${classes}`;
+    };
+    const chainOut: { color: string; from: string }[] = [];
+    for (let node: Element | null = start; node; node = node.parentElement) {
+      chainOut.push({ color: getComputedStyle(node).backgroundColor, from: describe(node) });
+    }
+    return chainOut;
+  }, selector);
+
+  const painted = chain.find((link) => isOpaque(link.color));
+  if (!painted) {
+    throw new Error(
+      `nothing behind ${selector} paints an opaque background: ` +
+        chain.map((link) => `${link.from} -> ${link.color}`).join(', '),
+    );
+  }
+  return painted;
+}
+
+/**
  * Put the app in `theme` THE WAY A USER DOES — through the toggle.
  *
  * Writing `document.documentElement.dataset.theme` instead drives only HALF the
@@ -112,10 +175,18 @@ export function documentTheme(page: Page): Promise<string | undefined> {
  * that calls itself light — which is fine for a spec that only reads a palette
  * custom property, and quietly wrong for any spec that measures a rendered
  * colour AGAINST the surface behind it. This drives both, and waits for it.
+ *
+ * Which state we are ALREADY in is read off the switch, not off `data-theme`.
+ * The attribute is a derived half-truth — that is the whole premise of #1027 —
+ * so a caller that had hand-written it would make a `data-theme`-keyed helper
+ * click the wrong way and end up in the theme it was asked to leave. The switch
+ * is the control the store actually backs. `data-theme` is still what we WAIT
+ * on, because it is written in the provider's layout effect and so is a barrier
+ * for the Fluent commit as well as the palette one.
  */
 export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
-  if ((await documentTheme(page)) === theme) return;
-  await page.getByRole('switch', { name: 'Dark mode' }).click();
+  const toggle = page.getByRole('switch', { name: 'Dark mode' });
+  if ((await toggle.isChecked()) !== (theme === 'dark')) await toggle.click();
   await expect.poll(() => documentTheme(page)).toBe(theme);
 }
 
