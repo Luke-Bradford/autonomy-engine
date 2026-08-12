@@ -21,8 +21,28 @@ import { isMeasurableSpan } from './format';
  * corrupt clock looks like. A span that fails it is drawn as a start marker with
  * its length withheld.
  */
-export const isMeasurable = (span: AttemptSpan): span is AttemptSpan & { endedAtMs: number } =>
+export const isMeasurable = <T extends SpanLike>(span: T): span is T & { endedAtMs: number } =>
   isMeasurableSpan(span);
+
+/**
+ * A start-and-maybe-end pair, which is ALL the geometry below needs to know.
+ *
+ * U29 (#1015) draws a second timeline — the runs list on one shared axis — and
+ * a run's `startedAt`/`finishedAt` is the same shape as an attempt's span. This
+ * type is what lets that surface reuse the arithmetic instead of growing a
+ * second copy of it, which is how the two charts would come to disagree about
+ * what a corrupt clock looks like or where the axis origin sits.
+ *
+ * `endedAtMs` is REQUIRED-but-`undefined`-able rather than optional, matching
+ * `isMeasurableSpan`'s own constraint (`format.ts`) and `AttemptSpan`'s
+ * declaration. An optional key is not assignable to a required one, so making
+ * it optional here would simply not compile against the predicate this delegates
+ * to — a caller with no end states `endedAtMs: undefined` explicitly.
+ */
+export interface SpanLike {
+  startedAtMs: number;
+  endedAtMs: number | undefined;
+}
 
 /**
  * The instants the log actually stated. An OPEN span contributes its start and
@@ -38,24 +58,39 @@ export const isMeasurable = (span: AttemptSpan): span is AttemptSpan & { endedAt
  * body node retried, reaches it — and the throw would land in render, blanking
  * the whole run-detail page rather than degrading to a rough axis. The fold has
  * no such ceiling and allocates nothing.
+ *
+ * Takes an `Iterable` so `timelineWindow` can feed it a GENERATOR over the
+ * nested spans and keep that property — flattening to an array first would
+ * allocate the very thing the fold exists to avoid. One consequence, and it is
+ * the reason `placeSpans` still takes an array: an iterable is ONE-SHOT, so a
+ * caller that needs both the window and the rows must hold the rows itself.
  */
-export function timelineWindow(nodes: NodeActivity[]): { from: number; to: number } | null {
+export function spanWindow<T extends SpanLike>(
+  spans: Iterable<T>,
+): { from: number; to: number } | null {
   let from = Infinity;
   let to = -Infinity;
-  for (const node of nodes) {
-    for (const span of node.spans) {
-      if (span.startedAtMs < from) from = span.startedAtMs;
-      // A start can set `to` on its own: an open span that begins after every
-      // recorded end is the right-hand edge, as the corrupt-clock case shows.
-      if (span.startedAtMs > to) to = span.startedAtMs;
-      // Only the end needs testing against `to` — `isMeasurable` has already
-      // established `endedAtMs >= startedAtMs`, and the start is folded above,
-      // so a measurable end can never move `from`.
-      if (isMeasurable(span) && span.endedAtMs > to) to = span.endedAtMs;
-    }
+  for (const span of spans) {
+    if (span.startedAtMs < from) from = span.startedAtMs;
+    // A start can set `to` on its own: an open span that begins after every
+    // recorded end is the right-hand edge, as the corrupt-clock case shows.
+    if (span.startedAtMs > to) to = span.startedAtMs;
+    // Only the end needs testing against `to` — `isMeasurable` has already
+    // established `endedAtMs >= startedAtMs`, and the start is folded above,
+    // so a measurable end can never move `from`.
+    if (isMeasurable(span) && span.endedAtMs > to) to = span.endedAtMs;
   }
   if (from === Infinity) return null;
   return { from, to };
+}
+
+/** The run-detail axis: every node's every span, as one flat window. */
+export function timelineWindow(nodes: NodeActivity[]): { from: number; to: number } | null {
+  return spanWindow(
+    (function* () {
+      for (const node of nodes) yield* node.spans;
+    })(),
+  );
 }
 
 /**
@@ -105,8 +140,8 @@ export function untimedReason(node: NodeActivity): string {
   return 'ran, but the log holds no start-and-terminal pair to measure it by';
 }
 
-interface PlacedBase {
-  span: AttemptSpan;
+interface PlacedBase<T> {
+  span: T;
   /** Percent from the window's origin. */
   left: number;
 }
@@ -123,9 +158,9 @@ interface PlacedBase {
  * recompute `endedAtMs - startedAtMs`) keeps ONE place deciding what a
  * measurable span is.
  */
-export type Placed =
-  | (PlacedBase & { width: number; durationMs: number })
-  | (PlacedBase & { width: null; durationMs: null });
+export type Placed<T extends SpanLike = AttemptSpan> =
+  | (PlacedBase<T> & { width: number; durationMs: number })
+  | (PlacedBase<T> & { width: null; durationMs: null });
 
 /**
  * Place one node's spans on the axis.
@@ -135,7 +170,11 @@ export type Placed =
  * producing `NaN%` — which CSS drops silently, collapsing every bar to the left
  * edge with no error anywhere.
  */
-export function placeSpans(spans: AttemptSpan[], from: number, to: number): Placed[] {
+export function placeSpans<T extends SpanLike>(
+  spans: readonly T[],
+  from: number,
+  to: number,
+): Placed<T>[] {
   const extent = Math.max(1, to - from);
   return spans.map((span) => {
     const left = ((span.startedAtMs - from) / extent) * 100;

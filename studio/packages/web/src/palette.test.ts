@@ -8,6 +8,7 @@ import {
 } from '@autonomy-studio/shared';
 import { EDGE_VARIANTS } from './pages/pipeline/edgeCondition';
 import { ALL_TONES, containerStatusTone, nodeStatusTone } from './pages/runs/nodeStatus';
+import { runStatusTone } from './pages/runs/runStatus';
 import { customProps, findColorLiterals, readCssSource, ruleBody } from './testing/cssSource';
 
 /**
@@ -191,7 +192,16 @@ describe('U6a edge variant hues', () => {
        default `background` (the track has to be visible), so a missing rule does
        not render as nothing, it renders as a plausible grey bar that misreports
        a failure as neutral. */
-    for (const tone of nodeTones) {
+    /* U29 (#1015) — the same loop over the RUN tones, which the node loop does
+       NOT cover: `runStatusTone` maps a different enum, so a run status whose
+       tone no node status shares (there is none today, and that is exactly the
+       kind of coincidence a test must not rely on) would reach the cross-run
+       timeline with no rule and the plausible-grey failure above. */
+    const timelineTones = new Set([
+      ...nodeTones,
+      ...RunStatusSchema.options.map(runStatusTone),
+    ]);
+    for (const tone of timelineTones) {
       expect(
         ruleBody(css, `.timeline-span[data-tone='${tone}']`),
         `no .timeline-span[data-tone='${tone}'] rule`,

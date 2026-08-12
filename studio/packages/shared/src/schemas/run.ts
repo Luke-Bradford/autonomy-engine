@@ -178,6 +178,18 @@ export type Run = z.infer<typeof RunSchema>;
  * between, which is the same "so far" the marker already declares.
  */
 export const RunSummarySchema = RunSchema.extend({
+  /**
+   * U29 (#1015) — the pipeline's IDENTITY, resolved server-side by the same join
+   * that already resolves its name.
+   *
+   * `pipelineName` cannot stand in for it. `pipelines` is unique on
+   * `(owner_id, resource_id)` and NOT on `(owner_id, name)`, so two distinct
+   * pipelines may legitimately share a name; anything that groups or filters runs
+   * by pipeline therefore has to key on this, or it silently merges them. Nor can
+   * `pipelineVersionId` stand in — that splits ONE pipeline across its versions,
+   * which is the opposite error.
+   */
+  pipelineId: z.string().min(1),
   pipelineName: z.string(),
   /** The version NUMBER (`pipeline_versions.version`), not its id — what an
    * operator reads as "v3". */
