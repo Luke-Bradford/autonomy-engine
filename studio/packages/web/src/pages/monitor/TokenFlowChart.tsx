@@ -3,7 +3,7 @@ import {
   type TokenSeries,
   type TokenSeriesBucket,
 } from '@autonomy-studio/shared';
-import { formatClock } from '../runs/format';
+import { formatWhen } from '../runs/format';
 
 /**
  * #967 — the time-SERIES half of the Tokens panel. The model table answers
@@ -71,7 +71,7 @@ function isUnmeasured(bucket: TokenSeriesBucket): boolean {
  * `RunTimeline`: a tooltip must never be the only way to reach a value.
  */
 function bucketSentence(bucket: TokenSeriesBucket): string {
-  const when = `${formatClock(bucket.bucketStart)}–${formatClock(bucket.bucketEnd)}`;
+  const when = `${formatWhen(bucket.bucketStart)}–${formatWhen(bucket.bucketEnd)}`;
   const partial = bucket.partial ? ' (period incomplete)' : '';
   if (bucket.cost.responseCount === 0) return `${when}${partial}: no billed exchanges`;
   const exchanges = `${bucket.cost.responseCount} exchange${bucket.cost.responseCount === 1 ? '' : 's'}`;
@@ -155,8 +155,8 @@ export function TokenFlowChart({
           "how far back", which these two instants state without implying the
           bars line up with local days. */}
       <div className="token-flow-axis">
-        <span>{formatClock(windowStart)}</span>
-        <span>{formatClock(generatedAt)}</span>
+        <span>{formatWhen(windowStart)}</span>
+        <span>{formatWhen(generatedAt)}</span>
       </div>
 
       <ul className="token-flow-legend">

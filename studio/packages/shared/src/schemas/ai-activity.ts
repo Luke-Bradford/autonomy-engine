@@ -160,7 +160,7 @@ export function maxBucketCount(since: RunSince): number {
  * They are deliberately NOT added to `meteredAggregateColumns()`, which would
  * give the per-run and per-pipeline cost surfaces the same honesty: that widens
  * `RunCost`'s wire shape and every surface reading it, which is a bigger change
- * than #967. Filed as a follow-up instead.
+ * than #967. Filed as #1025 instead.
  */
 export const TokenSeriesBucketSchema = z
   .object({
