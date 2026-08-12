@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { RunCostSchema } from '../pricing/run-cost.js';
-import { RunSinceSchema } from './run.js';
+import { RUN_SINCE_MS, RunSinceSchema, type RunSince } from './run.js';
 
 /**
  * #917 — the CROSS-RUN view of what the operator's connected AIs have been
@@ -101,6 +101,129 @@ export const LiveRunCountsSchema = z
 export type LiveRunCounts = z.infer<typeof LiveRunCountsSchema>;
 
 /**
+ * #967 — how wide one bucket of the token-flow series is, per window.
+ *
+ * Exhaustive `Record<RunSince, number>` for the reason `RUN_SINCE_MS` itself is
+ * one: a new member of `RUN_SINCE_WINDOWS` fails typecheck HERE rather than
+ * resolving to `undefined` and dividing by it. It lives beside the window
+ * vocabulary in `shared` — not server-side — because the web needs the same
+ * number to label the axis, and two spellings of it could disagree.
+ *
+ * The sizes are chosen so every window yields a similar, small number of bars
+ * (12/24/28/30 whole buckets). That is a RENDERING bound as much as a query
+ * one: past ~30 bars a bucket is thinner than the 2px gap between them.
+ */
+export const AI_ACTIVITY_BUCKET_MS: Record<RunSince, number> = {
+  '1h': 5 * 60_000,
+  '24h': 60 * 60_000,
+  '7d': 6 * 60 * 60_000,
+  '30d': 24 * 60 * 60_000,
+};
+
+/**
+ * The most buckets a window can produce — `windowMs / bucketMs`, PLUS ONE.
+ *
+ * The `+ 1` is not slack. Buckets are aligned to absolute epoch multiples (see
+ * `TokenSeriesBucketSchema`), and a window's two ends are arbitrary instants, so
+ * the range almost always straddles one extra boundary: a `24h` window opened at
+ * 09:30 covers part of the 09:00 bucket and part of the 09:00-next-day one, i.e.
+ * 25 buckets, not 24. Derived rather than written out per window so it cannot
+ * drift from `AI_ACTIVITY_BUCKET_MS`.
+ */
+export function maxBucketCount(since: RunSince): number {
+  return RUN_SINCE_MS[since] / AI_ACTIVITY_BUCKET_MS[since] + 1;
+}
+
+/**
+ * One time bucket of the token-flow series.
+ *
+ * ALIGNED TO ABSOLUTE EPOCH MULTIPLES of `bucketMs`, not to the window's start.
+ * Window-relative buckets would slide by the poll interval on every refresh, so
+ * two polls of identical data would render differently — the same reshuffling
+ * the model table's total ordering exists to prevent. The cost is that the
+ * boundaries are UTC, which is why nothing here or in the UI may label a bucket
+ * as a calendar day or clock hour: `RUN_SINCE_MS`'s own docblock already settles
+ * that the axis means "how far back", not "which day".
+ *
+ * WHY TOKEN PRESENCE IS COUNTED SEPARATELY FROM THE TOKENS. `RunCost` makes the
+ * COST side honest (`costUnknownResponseCount`, `complete`) but says nothing
+ * about the token side, because `inputTokens`/`outputTokens` are `.optional()`
+ * on `activity.metered` — a provider may omit `usage` entirely, and
+ * `cliSpendFact()` mints a metered event with no token fields at all. The SQL
+ * sums them with `coalesce(sum(...), 0)`, so "nobody counted" and "genuinely
+ * zero" arrive identically as `0`. On a table that is survivable; on a chart it
+ * is the plotted-zero failure the ticket names — a bucket of real, unmeasured
+ * agent-CLI work would draw as a confident zero-height bar. These two counters
+ * are what let the UI draw "unmeasured" instead, and they are the SQL twin of
+ * the counters `accumulateMetered` already keeps on the event-walk path.
+ *
+ * They are deliberately NOT added to `meteredAggregateColumns()`, which would
+ * give the per-run and per-pipeline cost surfaces the same honesty: that widens
+ * `RunCost`'s wire shape and every surface reading it, which is a bigger change
+ * than #967. Filed as #1025 instead.
+ */
+export const TokenSeriesBucketSchema = z
+  .object({
+    /** Inclusive lower bound, epoch MILLISECONDS. A multiple of `bucketMs`. */
+    bucketStart: z.number().int(),
+    /**
+     * Exclusive upper bound, epoch MILLISECONDS, CLAMPED to the window.
+     *
+     * So the first and last buckets report the span they actually cover rather
+     * than a full `bucketMs` the data was never collected over. A renderer that
+     * sized bars by `bucketMs` would draw the in-progress final bucket at full
+     * width and make every poll look like a cliff.
+     */
+    bucketEnd: z.number().int(),
+    /**
+     * Whether this bucket covers less than its full `bucketMs`.
+     *
+     * True for the leading bucket (clipped by the window's start) and the
+     * trailing one (still in progress). Carried as DATA rather than re-derived
+     * in the UI, so the "this period is not over" reading is the server's single
+     * answer — the same reason an open attempt span contributes its start and
+     * not an assumed end rather than being guessed at render time.
+     */
+    partial: z.boolean(),
+    /**
+     * The bucket's totals, derived by the SAME `runCostFromAggregates` every
+     * other cost surface uses. A second shape here would be a second fail-closed
+     * cost derivation, which is the one thing the money model refuses to have.
+     */
+    cost: RunCostSchema,
+    /** Billed exchanges in this bucket that actually REPORTED an input count. */
+    inputReportedResponseCount: z.number().int().nonnegative(),
+    /** Billed exchanges in this bucket that actually REPORTED an output count. */
+    outputReportedResponseCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export type TokenSeriesBucket = z.infer<typeof TokenSeriesBucketSchema>;
+
+/**
+ * The token-flow-over-time series (#967) — the half of the Tokens panel that
+ * answers "how did it move", where the model table answers "where did it go".
+ */
+export const TokenSeriesSchema = z
+  .object({
+    /** Bucket width for the requested window, from `AI_ACTIVITY_BUCKET_MS`. */
+    bucketMs: z.number().int().positive(),
+    /**
+     * Oldest first, CONTIGUOUS and zero-filled — a bucket in which nothing was
+     * billed is present with zeroes rather than absent.
+     *
+     * That is honest here in a way a zero COST would not be: the query counts
+     * events, and "no billed exchange occurred in these five minutes" is a
+     * measured fact, not an unmeasured one. Absent buckets would instead make a
+     * renderer infer the gap's width from its neighbours.
+     */
+    buckets: z.array(TokenSeriesBucketSchema),
+  })
+  .strict();
+
+export type TokenSeries = z.infer<typeof TokenSeriesSchema>;
+
+/**
  * The `GET /api/monitor/ai-activity` response body.
  *
  * IN-FLIGHT RUNS ARE INCLUDED, and that falls out of the design rather than
@@ -120,6 +243,16 @@ export const AiActivitySnapshotSchema = z
     runs: LiveRunCountsSchema,
     /** Newest-spend-first, total order (cost desc, then provider, then model). */
     models: z.array(AiModelActivitySchema),
+    /**
+     * #967 — the same billed exchanges as `models`, partitioned by TIME instead
+     * of by (provider, model). Both partition the identical row set, so
+     * `sum(series.buckets[].cost.inputTokens) === totals.inputTokens` holds by
+     * construction, and a repo test pins it.
+     *
+     * REQUIRED, not optional: an optional series would let the panel render
+     * nothing at all and look like a window with no activity.
+     */
+    series: TokenSeriesSchema,
     agentCli: AgentCliActivitySchema,
     /**
      * The window's totals across every group in `models`.

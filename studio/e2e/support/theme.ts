@@ -102,6 +102,24 @@ export function documentTheme(page: Page): Promise<string | undefined> {
 }
 
 /**
+ * Put the app in `theme` THE WAY A USER DOES — through the toggle.
+ *
+ * Writing `document.documentElement.dataset.theme` instead drives only HALF the
+ * app. The store value behind the switch feeds two surfaces: `<html data-theme>`
+ * (which the pre-Fluent MVP palette follows) and the `FluentProvider`'s theme
+ * prop (which is a React prop, so no DOM write can move it). Setting the dataset
+ * alone leaves the Fluent root still painting its DARK background under a page
+ * that calls itself light — which is fine for a spec that only reads a palette
+ * custom property, and quietly wrong for any spec that measures a rendered
+ * colour AGAINST the surface behind it. This drives both, and waits for it.
+ */
+export async function setTheme(page: Page, theme: 'dark' | 'light'): Promise<void> {
+  if ((await documentTheme(page)) === theme) return;
+  await page.getByRole('switch', { name: 'Dark mode' }).click();
+  await expect.poll(() => documentTheme(page)).toBe(theme);
+}
+
+/**
  * The provider root exists and Fluent has emitted its tokens ON it.
  *
  * Load-bearing for every assertion that reads a custom property: `page.goto`

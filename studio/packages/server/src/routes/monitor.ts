@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
+  AI_ACTIVITY_BUCKET_MS,
   RUN_SINCE_MS,
   RunSinceSchema,
   type AiActivitySnapshot,
@@ -57,6 +58,10 @@ export const monitorRoutes: FastifyPluginAsync = async (fastify) => {
     const aggregate = aggregateAiActivity(db, {
       sinceMs: windowStart,
       ownerId: request.principal.ownerId,
+      // The SAME instant the response is stamped with, so the series' trailing
+      // bucket cannot end after the `generatedAt` the client is given (#967).
+      nowMs: generatedAt,
+      bucketMs: AI_ACTIVITY_BUCKET_MS[window],
     });
     return { generatedAt, since: window, windowStart, ...aggregate };
   });
