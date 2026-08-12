@@ -117,20 +117,28 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
  *
  * `offenders` carries EVERY resource that failed, not just the first: a message
  * naming one of three broken pipelines sends the operator back round the loop
- * twice more. That completeness is BETWEEN resources, not within one — a node's
+ * twice more. The MESSAGE names at most `MAX_NAMED_OFFENDERS` of them and counts
+ * the rest — an unbounded list-into-one-string is the shape `capIssues` exists
+ * to avoid in `errors.ts`, and a sentence naming forty pipelines helps nobody.
+ * The full set stays on `offenders` for any caller that wants it. That completeness is BETWEEN resources, not within one — a node's
  * remap throws at the first bad ref, so a pipeline with two dangling refs
  * reports only the first, and the second surfaces once the first is fixed.
  * Pre-existing, and left alone deliberately: collecting per-ref would mean
  * restructuring the remap, for a second sentence about a pipeline the operator
  * is already being sent to edit.
  */
+const MAX_NAMED_OFFENDERS = 5;
+
 export class WorkspaceSerializeError extends Error {
   readonly offenders: UnserializableResource[];
 
   constructor(offenders: UnserializableResource[]) {
+    const named = offenders.slice(0, MAX_NAMED_OFFENDERS);
+    const rest = offenders.length - named.length;
     super(
       `${offenders.length} resource(s) cannot be committed: ` +
-        offenders.map((o) => `"${o.name}" ${describeUnserializable(o)}`).join('; '),
+        named.map((o) => `"${o.name}" ${describeUnserializable(o)}`).join('; ') +
+        (rest > 0 ? `; and ${rest} more` : ''),
     );
     this.name = 'WorkspaceSerializeError';
     this.offenders = offenders;

@@ -313,20 +313,13 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       return;
     }
 
-    // #3 G10 — a `git push` was rejected as a non-fast-forward: the working
-    // branch moved on the remote, a request-STATE conflict (fetch/import and
-    // re-commit), not an upstream outage — so 409 `conflict`, distinct from the
-    // 502 `git_error` below (the transport-level dual of `GitHostRequestError`'s
-    // 422→409). A deliberate SIBLING of `GitOperationError`, but its branch runs
-    // FIRST anyway (defensive against a future refactor to a subclass). The
-    // message is fixed and client-safe by construction (quotes no stderr/path).
     // #1043 — Commit cannot serialize a live resource whose head names something
     // that no longer exists (typically a node using a hard-deleted connection).
     // A 409 because it is an operator-fixable CONFLICT between two things they
     // did, not the internal fault the old opaque 500 implied: re-point or remove
-    // the node and Save, which mints a fresh head. The message names every
-    // offender (`error.offenders`) — the owner's own DB ids, never committed file
-    // bytes. NOTE this branch does NOT cover `serializeTrigger` called directly
+    // the node and Save, which mints a fresh head. The message names the
+    // offenders (capped, with a count of the rest; the full set is on
+    // `error.offenders`) — the owner's own DB ids, never committed file bytes. NOTE this branch does NOT cover `serializeTrigger` called directly
     // by the apply: that throws the module-private per-ref error, a SIBLING of
     // this class, so it falls through to the generic 500 rather than here. That
     // is the right outcome — it would mean a broken internal invariant, not an
@@ -339,6 +332,13 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
       return;
     }
 
+    // #3 G10 — a `git push` was rejected as a non-fast-forward: the working
+    // branch moved on the remote, a request-STATE conflict (fetch/import and
+    // re-commit), not an upstream outage — so 409 `conflict`, distinct from the
+    // 502 `git_error` below (the transport-level dual of `GitHostRequestError`'s
+    // 422→409). A deliberate SIBLING of `GitOperationError`, but its branch runs
+    // FIRST anyway (defensive against a future refactor to a subclass). The
+    // message is fixed and client-safe by construction (quotes no stderr/path).
     if (error instanceof GitPushRejectedError) {
       request.log.warn({ err: error }, 'git push rejected (non-fast-forward)');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);

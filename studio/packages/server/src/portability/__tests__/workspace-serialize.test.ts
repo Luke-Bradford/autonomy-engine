@@ -377,6 +377,29 @@ describe('serializeWorkspace', () => {
       expect(error.message).toContain('node "n1"');
     });
 
+    it('strict: the MESSAGE is capped, but `offenders` keeps every one', () => {
+      // An unbounded list-into-one-string is the shape `capIssues` exists to
+      // avoid in errors.ts, and this message goes straight into a 409 body.
+      const { db } = freshDb();
+      for (let i = 0; i < 8; i += 1) pipelineWithDeadConnection(db, `P${i}`);
+
+      let thrown: unknown;
+      try {
+        serializeWorkspace(db, 'local');
+      } catch (err) {
+        thrown = err;
+      }
+      const error = thrown as WorkspaceSerializeError;
+
+      expect(error.offenders).toHaveLength(8);
+      expect(error.message).toContain('8 resource(s) cannot be committed');
+      expect(error.message).toContain('and 3 more');
+      // Counted, not named — WHICH five get named is `listPipelines`' order,
+      // which is not insertion order, so asserting on a particular name here
+      // would be a flake rather than a check.
+      expect(error.message.match(/references connection/g)).toHaveLength(5);
+    });
+
     it('strict: a non-serialize error is NEVER reported as a dangling ref', () => {
       // The tolerant catch is narrowed to its own error type on purpose: a Zod
       // failure inside serialize is a different fault, and folding it into
