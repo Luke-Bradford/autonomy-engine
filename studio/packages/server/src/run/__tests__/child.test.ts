@@ -22,7 +22,7 @@ type Db = ReturnType<typeof freshDb>['db'];
 
 const noopSupervisor: Supervisor = {
   spawnSupervised: () => {
-    throw new Error('no adapter should run: the child pipeline\'s leaf is stubbed');
+    throw new Error("no adapter should run: the child pipeline's leaf is stubbed");
   },
   reapAllSupervised: () => Promise.resolve(),
 };
@@ -113,6 +113,9 @@ function boundary(db: Db, nodeOutputs: Record<string, Record<string, unknown>> =
       Object.entries(nodeOutputs).map(([id, outputs]) => [id, { outcome: 'success', outputs }]),
     ),
   });
+  // Assigned once, below — the lazy closure the executor holds resolves it long
+  // after this function returns, exactly as `index.ts`'s wiring does.
+  // eslint-disable-next-line prefer-const
   let childRuns: ChildRuns;
   const real = createExecutor({
     db,

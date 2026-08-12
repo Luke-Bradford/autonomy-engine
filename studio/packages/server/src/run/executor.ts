@@ -152,7 +152,6 @@ function callFailed(
   };
 }
 
-
 /**
  * Item 7 / S3 — scrub every held plaintext from an outbound adapter event before
  * it becomes durable. Only the value-bearing shapes can carry a leak: a

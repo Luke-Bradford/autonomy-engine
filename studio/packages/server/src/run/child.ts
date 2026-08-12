@@ -77,7 +77,10 @@ export interface ChildEnsured {
 }
 
 export interface ChildRuns {
-  ensure(command: StartChildCommand, parentRunId: string): ChildEnsured | { ok: false; reason: string };
+  ensure(
+    command: StartChildCommand,
+    parentRunId: string,
+  ): ChildEnsured | { ok: false; reason: string };
   /** Start (or resume) the child's drive in the BACKGROUND. Never awaited by the
    * parent — see the module doc. */
   kick(run: Run): void;
@@ -120,8 +123,10 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     // can learn WHY a call node failed. Losing it would make a refused spawn
     // indistinguishable from a child that ran and failed.
     const refuse = (reason: string): { ok: false; reason: string } => {
-      deps.log?.warn?.({ runId: parentRunId, childRunId: command.childRunId, reason },
-        'call_pipeline child refused');
+      deps.log?.warn?.(
+        { runId: parentRunId, childRunId: command.childRunId, reason },
+        'call_pipeline child refused',
+      );
       return { ok: false, reason };
     };
     const parent = getRun(db, parentRunId);
@@ -151,15 +156,13 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
       return refuse(`call_pipeline depth ${depth} exceeds the maximum ${MAX_CALL_DEPTH}`);
     }
 
-    // A9/#516 — a gone or unparseable child version is classified HERE.
-    let versionOk = false;
+    // A9/#516 — a gone or unparseable child version is classified HERE, as a
+    // typed refusal. Letting `resolveDoc`'s throw escape would surface on EVERY
+    // boot (the reconciler re-emits `startChild` for a `waiting` call node) and
+    // re-file the parent `failed` forever.
     try {
       deps.resolveDoc(command.pipelineVersionId);
-      versionOk = true;
     } catch {
-      versionOk = false;
-    }
-    if (!versionOk) {
       return refuse(`child pipeline version '${command.pipelineVersionId}' cannot be resolved`);
     }
 
