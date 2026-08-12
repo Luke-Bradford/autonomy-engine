@@ -185,7 +185,7 @@ test.describe('#483 held/parked node pills', () => {
    * for the reason the docblock above gives.
    */
   const SURFACE_DOC = {
-    nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${1}' }, position: { x: 0, y: 0 } }],
+    nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
     edges: [],
   };
 
@@ -238,9 +238,11 @@ test.describe('#483 held/parked node pills', () => {
     test(`both pills paint their own token in ${theme} mode`, async ({ page }) => {
       const problems = collectPageProblems(page);
 
-      const { pipelineVersionId } = await seedVersion(page, `#483 pill surface ${theme}`, {
-        ...SURFACE_DOC,
-      });
+      const { pipelineVersionId } = await seedVersion(
+        page,
+        `#483 pill surface ${theme}`,
+        SURFACE_DOC,
+      );
       const runId = await fireAndSettle(page, pipelineVersionId, '#483 sweep');
       await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
       await fluentRootReady(page);
@@ -249,7 +251,10 @@ test.describe('#483 held/parked node pills', () => {
          can move, so the old "light mode" run measured a light palette against a
          Fluent root still painting `rgb(41, 41, 41)`. It read green only because
          the SURFACE it measured was `body`, which the same write DID move — two
-         errors that cancelled, and fixing either one alone turns this red. */
+         errors that cancelled out. They are not symmetric, though: restoring the
+         write while keeping the real surfaces turns light mode RED at 2.3:1,
+         whereas fixing only the theme would have stayed green while still
+         measuring a surface no pill sits on. */
       await setTheme(page, theme);
 
       /* The pills render on TWO surfaces, and both are asserted because a
@@ -269,9 +274,11 @@ test.describe('#483 held/parked node pills', () => {
          an `<aside>`, whose `complementary` role is IMPLICIT, so no `role`
          attribute exists for a CSS selector to match. `getByRole` computes the
          ARIA role and finds it; `surfaceBehind` takes a CSS selector and cannot.
-         The pill also mounts asynchronously, so without the wait the walk races
-         it and reports "no element matched" — which reads like a markup change
-         rather than a timing one. */
+         The wait is for the click's re-render, not for an async mount: the panel
+         is local `useState` over nodes already fetched, so nothing is in flight.
+         Without it the walk can still run before that render commits, and
+         `surfaceBehind` then reports "no element matched" — which reads like a
+         markup change rather than a timing one. */
       await page.locator('.node-detail-panel .node-status').first().waitFor();
       const panelSurface = await surfaceBehind(page, '.node-detail-panel .node-status');
       /* Deduped by colour: in LIGHT mode `--panel` is `#ffffff` and so is

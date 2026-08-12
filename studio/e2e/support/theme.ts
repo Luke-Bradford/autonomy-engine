@@ -126,6 +126,12 @@ export function documentTheme(page: Page): Promise<string | undefined> {
  * true surface is a BLEND this cannot compute, so it is skipped and the walk
  * keeps climbing to something that really is the backdrop.
  *
+ * The walk starts AT the matched element, not at its parent, and that is the
+ * right end of the range for a contrast measurement: if the mark paints its own
+ * background, that background IS what is behind it. Nothing relies on it today
+ * (`.node-status` sets only `color` and its ring), but the alternative — always
+ * skipping to the parent — would silently measure through an opaque chip.
+ *
  * Throws rather than returning `''` when the selector matches nothing or
  * nothing in the chain paints — `luminanceOf('')` would otherwise throw with no
  * mention of what was being measured, which is the same "very convincing wrong
