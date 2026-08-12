@@ -14,6 +14,7 @@ import { RETENTION_BATCH, RETENTION_MAX_BATCHES_PER_SWEEP } from './repo/retenti
 import { reconcileOnBoot } from './run/reconcile.js';
 import { createExecutor } from './run/executor.js';
 import { createRunDrives } from './run/drives.js';
+import { createChildRuns, subscribeChildReturns } from './run/child.js';
 import { createRunLauncher } from './run/launcher.js';
 import { createRunEventBus } from './run/event-bus.js';
 import { createScheduler } from './scheduler/scheduler.js';
@@ -512,6 +513,16 @@ export async function buildApp(opts?: BuildAppOptions) {
     masterKey: masterKeyResolution.key,
     resolveDoc,
     adapters: createConnectorRegistry({ supervisor }),
+    // #796 (P3b) — the `call_pipeline` spawn seam, closed LAZILY over `childRuns`
+    // below for the same reason `alarms.arm` is closed over `alarmClock`: the
+    // wiring is genuinely mutually recursive (the executor spawns a child, which
+    // is driven by the driver, which calls the executor), and these closures only
+    // ever run long after this function body has returned.
+    childRuns: {
+      ensure: (command, parentRunId) => childRuns.ensure(command, parentRunId),
+      kick: (run) => childRuns.kick(run),
+      result: (childRunId) => childRuns.result(childRunId),
+    },
   });
 
   // #5 S1 + #1 F2c: the ALARM CLOCK, and its first consumer — node retries.
@@ -565,6 +576,19 @@ export async function buildApp(opts?: BuildAppOptions) {
     log: fastify.log,
     signExternalWaitToken,
   };
+  // #796 (P3b) — `call_pipeline` child execution: the spawn seam the executor's
+  // lazy closure above resolves to, plus the reactor that returns a finished
+  // child's result to its parent. Subscribed BEFORE the boot reconcile below,
+  // deliberately: reconciling a parent with a `waiting` call node re-spawns its
+  // child, and without the reactor already listening that child would terminalize
+  // with nobody to carry its result back.
+  const childRuns = createChildRuns(driverBoundary);
+  const unsubscribeChildReturns = subscribeChildReturns({
+    ...driverBoundary,
+    bus: runEventBus,
+    childRuns,
+  });
+
   // #5 S5 — the `schedule_tick` handler moves schedule triggers off in-memory
   // crons onto this same durable clock. Its only extra dependency is the launcher
   // (to SPAWN a run, which the clock's contract forbids inside a fire tx — so it
@@ -635,6 +659,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     resolveDoc,
     executor,
     alarms,
+    // #796 — boot reconcile takes the per-run drive lock now that reconciling a
+    // parent can spawn a child drive mid-scan (see `reconcile.ts`'s lock contract).
+    drives,
     bus: runEventBus,
     // #4 A13 — the reconciler RESUMES a `ready` webhook (a crash between the
     // predecessor event and `externalWait.created` left its `scheduleExternalWait`
@@ -979,6 +1006,9 @@ export async function buildApp(opts?: BuildAppOptions) {
     // shutdown neither writes nor keeps this instance reachable (the #629
     // launcher-tap discipline; idempotent).
     unsubscribeWindowTap();
+    // #796 — and the child-return tap, for the same reason: a child terminalizing
+    // after shutdown must not append to a parent this instance no longer drives.
+    unsubscribeChildReturns();
     // The alarm clock is stopped alongside the scheduler and for the identical
     // reason: it is the OTHER thing that can start work on a timer. Clearing the
     // interval stops future ticks; `stop()` stops firing.

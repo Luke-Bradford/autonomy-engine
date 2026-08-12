@@ -32,6 +32,7 @@ import { toEngineFailure } from '../connectors/error-kind.js';
 import { emptyTruncationWarning } from '../connectors/llm-shared.js';
 import type { ActivityContext, ConnectorAdapter, LlmUsage } from '../connectors/types.js';
 import type { DocResolver, Executor, ExecutorCommand } from './driver.js';
+import type { ChildRuns } from './child.js';
 
 /**
  * P3 — the REAL executor: the connector-facing half of the run engine's impure
@@ -84,6 +85,15 @@ export interface ExecutorDeps {
   resolveDoc: DocResolver;
   /** Connector adapters by Connection kind. */
   adapters: ConnectorRegistry;
+  /**
+   * #796 (P3b) — the `call_pipeline` child-spawn seam. OPTIONAL because the
+   * wiring is mutually recursive (executor → child spawn → driver → executor,
+   * closed lazily in `index.ts` the way the alarm clock already is) and because
+   * many driver tests construct an executor with no run engine behind it. Absent
+   * ⇒ a `startChild` is refused as a typed `call.returned{failure}`, never a
+   * throw and never a silent hang.
+   */
+  childRuns?: ChildRuns;
   /** Activity catalog (defaults to the shared MVP catalog). */
   catalog?: ActivityCatalog;
   /** Global worker-pool cap on concurrent ADAPTER runs. Default 4. */
@@ -118,6 +128,30 @@ function nodeFailed(
 ): EngineEvent {
   return { type: 'node.failed', runId, nodeId, attemptId, ...failure };
 }
+
+/**
+ * #796 — a typed `call.returned{failure}` for a child that could not be
+ * spawned. `childRunId` is echoed so the reducer's deterministic-child-id
+ * identity check passes and the call node actually terminalizes. The REASON is
+ * logged by the seam that refused (`child.ts`'s `ensure`) rather than carried
+ * here: `call.returned` has no error field, and inventing one is #796's own
+ * follow-up.
+ */
+function callFailed(
+  runId: string,
+  command: Extract<ExecutorCommand, { type: 'startChild' }>,
+): EngineEvent {
+  return {
+    type: 'call.returned',
+    runId,
+    callNodeId: command.callNodeId,
+    attemptId: command.attemptId,
+    childRunId: command.childRunId,
+    childOutcome: 'failure',
+    outputs: {},
+  };
+}
+
 
 /**
  * Item 7 / S3 — scrub every held plaintext from an outbound adapter event before
@@ -876,23 +910,61 @@ export function createExecutor(deps: ExecutorDeps): Executor {
   return {
     async *perform(command: ExecutorCommand, runId: string): AsyncGenerator<EngineEvent> {
       if (command.type === 'startChild') {
-        // P3a defers `call_pipeline` (sub-pipeline) EXECUTION to P3b. Yield a
-        // loud `call.returned{failure}` — NOT a throw and NOT a hang: throwing
-        // would leave the node `waiting`, and the boot reconciler re-emits
-        // `startChild` for a `waiting` call node, so a throwing executor would
-        // make boot reconcile itself throw on every restart. A failure result
-        // terminalizes the call node (its unhandled failure fails the run),
-        // leaving no `waiting` node behind. `childRunId` is echoed so the
-        // reducer's deterministic-child-id identity check passes.
-        yield {
-          type: 'call.returned',
-          runId,
-          callNodeId: command.callNodeId,
-          attemptId: command.attemptId,
-          childRunId: command.childRunId,
-          childOutcome: 'failure',
-          outputs: {},
-        };
+        // #796 (P3b) — real `call_pipeline` child execution. NOTE this branch
+        // returns BEFORE `performDispatch`, so it never takes a slot in the
+        // global adapter limiter: if it is ever moved under that limiter, N
+        // nested calls deadlock the whole server (each child's dispatches would
+        // queue behind an ancestor holding a slot while awaiting them).
+        //
+        // Still never a throw, for exactly the reason P3a's stub gave: the boot
+        // reconciler re-emits `startChild` for a `waiting` call node, so a
+        // throwing executor makes boot reconcile throw on every restart. Every
+        // refusal below is a typed `call.returned{failure}` instead (A9/#516).
+        if (deps.childRuns === undefined) {
+          yield callFailed(runId, command);
+          return;
+        }
+        const ensured = deps.childRuns.ensure(command, runId);
+        if (!ensured.ok) {
+          yield callFailed(runId, command);
+          return;
+        }
+        if (ensured.terminal) {
+          // Adopting a child that already finished — a crash between its
+          // terminalization and the parent's `call.returned`. Resolve the node
+          // straight away; there is nothing left to announce or to kick.
+          const { outcome, outputs } = deps.childRuns.result(command.childRunId);
+          yield {
+            type: 'call.returned',
+            runId,
+            callNodeId: command.callNodeId,
+            attemptId: command.attemptId,
+            childRunId: command.childRunId,
+            childOutcome: outcome,
+            outputs,
+          };
+          return;
+        }
+        if (!ensured.announced) {
+          // Arm-before-append, the same handshake `timer.waitScheduled` and
+          // `externalWait.created` keep: the child ROW exists by now, and the
+          // driver's per-yield backpressure means this event is durably
+          // appended before the kick below ever runs. So the log can hold a
+          // spawned child with no announcement (recoverable — boot re-emits
+          // `startChild`), but never an announcement with no child.
+          yield {
+            type: 'call.started',
+            runId,
+            callNodeId: command.callNodeId,
+            attemptId: command.attemptId,
+            childRunId: command.childRunId,
+          };
+        }
+        // No `call.returned` here, and no await: the call node stays `waiting`
+        // and the child-return reactor resolves it when the child terminalizes.
+        // Awaiting instead would strand a parent whose child PARKS, and would
+        // deadlock boot reconcile outright (see `child.ts`'s module doc).
+        deps.childRuns.kick(ensured.run);
         return;
       }
       yield* performDispatch(command, runId);
