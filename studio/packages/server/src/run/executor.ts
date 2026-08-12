@@ -931,7 +931,16 @@ export function createExecutor(deps: ExecutorDeps): Executor {
         if (ensured.terminal) {
           // Adopting a child that already finished — a crash between its
           // terminalization and the parent's `call.returned`. Resolve the node
-          // straight away; there is nothing left to announce or to kick.
+          // straight away; there is nothing left to kick, and nothing left to
+          // ANNOUNCE either.
+          //
+          // The second half is a consequence, not a choice, and #1038 read this
+          // early return as skipping an announcement that was owed. It cannot:
+          // `kick` is below the announcement yield and the driver only resumes
+          // this generator once that event is durably appended, so a child can
+          // only have RUN if it was announced first — and only a drive moves a
+          // run to a terminal row status. Hence terminal ⟹ kicked ⟹ announced,
+          // and `{terminal: true, announced: false}` has no producer.
           const { outcome, outputs } = deps.childRuns.result(command.childRunId);
           yield {
             type: 'call.returned',

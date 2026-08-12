@@ -69,7 +69,10 @@ export interface ChildEnsured {
   ok: true;
   run: Run;
   /** The child has already reached a terminal state — adopt its result now
-   * rather than announcing and kicking it again. */
+   * rather than announcing and kicking it again. "Again" is exact rather than
+   * loose: a child can only be terminal if it was kicked, and `kick` is only
+   * reachable past the executor's durable `call.started` append, so this flag
+   * never co-occurs with `announced: false` (#1038). */
   terminal: boolean;
   /** The parent's log already carries `call.started` for this child, so a
    * re-emitted `startChild` (a restart) must not announce it a second time. */
