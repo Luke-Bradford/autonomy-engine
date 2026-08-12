@@ -117,7 +117,12 @@ export function describeUnserializable(detail: UnserializableRefDetail): string 
  *
  * `offenders` carries EVERY resource that failed, not just the first: a message
  * naming one of three broken pipelines sends the operator back round the loop
- * twice more.
+ * twice more. That completeness is BETWEEN resources, not within one — a node's
+ * remap throws at the first bad ref, so a pipeline with two dangling refs
+ * reports only the first, and the second surfaces once the first is fixed.
+ * Pre-existing, and left alone deliberately: collecting per-ref would mean
+ * restructuring the remap, for a second sentence about a pipeline the operator
+ * is already being sent to edit.
  */
 export class WorkspaceSerializeError extends Error {
   readonly offenders: UnserializableResource[];
@@ -534,12 +539,8 @@ export function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEn
  * READ-ONLY callers (drift, import-preview, the apply's baseline) use this
  * directly and DISCLOSE what they could not compare; `serializeWorkspace`
  * (the Commit path) wraps it and refuses. See that wrapper for why the write
- * path cannot simply drop the resource.
- *
- * Only an `UnserializableRefError` is caught. Anything else — a Zod failure on
- * a row the current schema no longer validates, say — propagates: swallowing it
- * would report a dangling ref that was never the problem, which is the same
- * manufactured-fact defect this ticket exists to remove.
+ * path cannot simply drop the resource, and `collect` below for what is and is
+ * not caught.
  */
 export function serializeWorkspaceTolerant(
   db: Db,
@@ -575,6 +576,25 @@ export function serializeWorkspaceTolerant(
   const files: WorkspaceFile[] = [];
   const unserializable: UnserializableResource[] = [];
 
+  /** Serialize one resource into `files`, or record it as unserializable.
+   *
+   * Only an `UnserializableRefError` is caught. Anything else — a Zod failure on
+   * a row the current schema no longer validates, say — propagates: swallowing
+   * it would report a dangling ref that was never the problem, which is the same
+   * manufactured-fact defect this ticket exists to remove. */
+  const collect = (
+    identity: Pick<UnserializableResource, 'kind' | 'resourceId' | 'name'>,
+    path: string,
+    serialize: () => ExportEnvelope,
+  ) => {
+    try {
+      files.push({ path, contents: canonicalStringify(serialize()) });
+    } catch (err) {
+      if (!(err instanceof UnserializableRefError)) throw err;
+      unserializable.push({ ...err.detail, ...identity, path });
+    }
+  };
+
   // #1043 — paths are assigned over the FULL live set, deliberately BEFORE any
   // offender is dropped. `resourceFilePaths` suffixes a colliding slug with the
   // resourceId, counted over the set it is given: computing it over the kept
@@ -588,19 +608,11 @@ export function serializeWorkspaceTolerant(
   for (const pipeline of livePipelines) {
     const latest = getLatestPipelineVersion(db, pipeline.id);
     if (!latest) continue;
-    const path = pipelinePaths.get(pipeline.resourceId)!;
-    try {
-      files.push({ path, contents: canonicalStringify(serializePipeline(pipeline, latest, maps)) });
-    } catch (err) {
-      if (!(err instanceof UnserializableRefError)) throw err;
-      unserializable.push({
-        ...err.detail,
-        kind: 'pipeline',
-        resourceId: pipeline.resourceId,
-        name: pipeline.name,
-        path,
-      });
-    }
+    collect(
+      { kind: 'pipeline', resourceId: pipeline.resourceId, name: pipeline.name },
+      pipelinePaths.get(pipeline.resourceId)!,
+      () => serializePipeline(pipeline, latest, maps),
+    );
   }
 
   const connectionPaths = resourceFilePaths(
@@ -619,25 +631,17 @@ export function serializeWorkspaceTolerant(
     liveTriggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
   );
   for (const trigger of liveTriggers) {
-    const path = triggerPaths.get(trigger.resourceId)!;
     // A trigger's binding has no producer for this state — `triggers.
     // pipeline_version_id` is `onDelete: 'cascade'` (db/schema.ts), so deleting
-    // the pipeline takes the trigger with it. The wrapper is here for uniformity
-    // and to keep the write path fail-closed if that FK ever changes; there is
-    // deliberately no test asserting a dangling binding, because nothing can
-    // produce one.
-    try {
-      files.push({ path, contents: canonicalStringify(serializeTrigger(trigger, maps)) });
-    } catch (err) {
-      if (!(err instanceof UnserializableRefError)) throw err;
-      unserializable.push({
-        ...err.detail,
-        kind: 'trigger',
-        resourceId: trigger.resourceId,
-        name: trigger.name,
-        path,
-      });
-    }
+    // the pipeline takes the trigger with it. It goes through the same seam for
+    // uniformity, and to keep the write path fail-closed if that FK ever
+    // changes; there is deliberately no test asserting a dangling binding,
+    // because nothing can produce one.
+    collect(
+      { kind: 'trigger', resourceId: trigger.resourceId, name: trigger.name },
+      triggerPaths.get(trigger.resourceId)!,
+      () => serializeTrigger(trigger, maps),
+    );
   }
 
   return { files, unserializable };

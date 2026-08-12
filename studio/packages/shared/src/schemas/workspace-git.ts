@@ -312,11 +312,13 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
 /**
  * #3 G4 — one resource this workspace could not COMPARE, and why. Reported from
  * the import-preview, the drift report and the apply so it is VISIBLE, never
- * silently dropped (#473 shape). The `message` is a fixed, categorical string
- * keyed by `code` — deliberately NOT the raw JSON/Zod error text, which could
- * echo arbitrary committed file content into an API response.
+ * silently dropped (#473 shape).
  *
- * The first five are BRANCH-side (a committed file):
+ * The first five are BRANCH-side (a committed file), and for those the `message`
+ * is a fixed, categorical string keyed by `code` — deliberately NOT the raw
+ * JSON/Zod error text, which could echo arbitrary committed file content into an
+ * API response. The sixth is composed per instance; see its entry for why that
+ * does not cross the same rule.
  * - `unparseable`: not valid JSON / failed envelope upgrade+validation.
  * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
  * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.

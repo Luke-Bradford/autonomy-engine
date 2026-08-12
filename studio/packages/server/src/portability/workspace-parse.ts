@@ -107,6 +107,11 @@ const DIAGNOSTIC_MESSAGE: Record<WorkspaceParseDiagnostic['code'], string> = {
   duplicate_resource_id: 'resourceId is claimed by more than one file of this kind',
   unknown_dir: 'file is not under a managed resource directory',
   unreadable: 'file could not be read from the repository',
+  // UNREACHABLE by construction, and present only to keep this `Record`
+  // exhaustive: a DB-side diagnostic is never built by `diagnostic()` below —
+  // `unserializableDiagnostic` composes its own message, because the categorical
+  // half alone cannot say WHICH node to fix. Editing this string changes nothing
+  // the operator sees.
   unserializable_ref: 'this workspace cannot express the resource in portable form',
 };
 
@@ -154,6 +159,10 @@ export function unserializableDiagnostic(
  * counterpart classifies as `removed` (a claim the next Commit contradicts — it
  * refuses rather than dropping it), and the branch file with no DB counterpart
  * classifies as `create` for a resource that plainly exists.
+ *
+ * All three kinds are filtered for uniformity, though only pipelines and
+ * triggers can currently be named: a connection has no refs to remap, so it can
+ * never be unserializable.
  */
 export function withoutResources(
   workspace: ParsedWorkspace,

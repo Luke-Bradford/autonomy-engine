@@ -782,7 +782,10 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         if (rid != null) branchVersionRids.add(rid);
       }
       const plan = classifyWorkspace(
-        withoutResources(dbSnapshot, uncomparable),
+        // Only `incoming` is filtered: `dbSnapshot` is built from the tolerant
+        // serialize's own files, which never contained the offenders — filtering
+        // it too would be a no-op that reads as if it might not be.
+        dbSnapshot,
         withoutResources(incoming, uncomparable),
         listVersionResourceIds(db, ownerId),
         readyVersionResourceIds(db, ownerId),

@@ -326,10 +326,13 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // did, not the internal fault the old opaque 500 implied: re-point or remove
     // the node and Save, which mints a fresh head. The message names every
     // offender (`error.offenders`) — the owner's own DB ids, never committed file
-    // bytes. NOTE this branch also covers `serializeTrigger` inside the apply,
-    // where the same error WOULD mean a broken internal invariant rather than a
-    // conflict; that path has no producer (the trigger→version FK cascades), and
-    // if one ever appears it deserves its own classification, not this label.
+    // bytes. NOTE this branch does NOT cover `serializeTrigger` called directly
+    // by the apply: that throws the module-private per-ref error, a SIBLING of
+    // this class, so it falls through to the generic 500 rather than here. That
+    // is the right outcome — it would mean a broken internal invariant, not an
+    // operator-fixable conflict — and it has no producer anyway (the
+    // trigger→version FK cascades). If one ever appears it deserves its own
+    // classification, not this label.
     if (error instanceof WorkspaceSerializeError) {
       request.log.warn({ err: error }, 'workspace cannot be serialized for commit');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
