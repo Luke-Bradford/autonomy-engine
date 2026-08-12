@@ -178,9 +178,14 @@ const DEFAULT_MAX_THROTTLE_FACTOR = 8;
  * a public test seam typed `Promise<unknown>`, and widening it to a
  * discriminated union would churn every injection site for no gain.
  *
- * It is safe to miss. `buildQuota(RATE_LIMITED)` is `null` (no `five_hour`), so
+ * It is safe to miss. `buildQuota(RATE_LIMITED)` is `null` (no `seven_day`), so
  * a reader that failed to recognise it would lose the backoff and behave
  * exactly as it did before this existed — never invent a reading.
+ *
+ * That parenthetical used to say `five_hour`, and it was the reason rather than
+ * the conclusion that #1023 invalidated: a missing `five_hour` no longer
+ * condemns anything. `seven_day` is now the field whose absence makes this
+ * sentinel unreadable, which is the property the claim actually rests on.
  */
 export const RATE_LIMITED = Object.freeze({ __quota: 'rate_limited' } as const);
 
