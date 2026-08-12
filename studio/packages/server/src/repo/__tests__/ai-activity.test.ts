@@ -500,6 +500,69 @@ describe('aggregateAiActivity — the token-flow series (#967)', () => {
     expect(bucket?.cost.outputTokens).toBe(0);
   });
 
+  /**
+   * `run_events.ts` has no upper bound, so clock skew or a fixture can date an
+   * event after `nowMs`. An earlier draft widened the fill range to cover
+   * whatever came back — which kept the sum honest and destroyed the bound: one
+   * row a year out turned a 13-bucket window into ~105,000 buckets, each of
+   * which the chart renders as a list item.
+   */
+  it('folds a FUTURE-DATED event into the last bucket instead of growing the series', () => {
+    const { db } = freshDb();
+    const run = mkRun(db);
+    const now = 1_800_000;
+    insertMetered(db, run.id, { ts: 1_350_000, inputTokens: 5, outputTokens: 1, cost: 1 });
+    // One year past `nowMs`.
+    insertMetered(db, run.id, {
+      ts: now + 365 * 24 * 60 * 60 * 1000,
+      inputTokens: 70,
+      outputTokens: 7,
+      cost: 2,
+    });
+
+    const snapshot = callAggregate(db, {
+      sinceMs: 1_200_000,
+      nowMs: now,
+      bucketMs: BUCKET,
+      ownerId: 'local',
+    });
+    const { buckets } = snapshot.series;
+
+    // Bounded by the WINDOW, not by the data.
+    expect(buckets).toHaveLength(3);
+    expect(buckets[buckets.length - 1]?.bucketStart).toBe(1_800_000);
+    // Folded, not dropped — the stray row's tokens are still counted, so the
+    // bars still add up to the totals tile beside them.
+    const summed = buckets.reduce((n, b) => n + b.cost.inputTokens, 0);
+    expect(summed).toBe(snapshot.totals.inputTokens);
+    expect(summed).toBe(75);
+    expect(buckets[buckets.length - 1]?.cost.inputTokens).toBe(70);
+    // A bucket never claims to end before it began.
+    for (const b of buckets) expect(b.bucketEnd).toBeGreaterThanOrEqual(b.bucketStart);
+  });
+
+  it('merges TWO future-dated events into the last bucket rather than keeping one', () => {
+    const { db } = freshDb();
+    const run = mkRun(db);
+    const now = 1_800_000;
+    // Far enough apart to land in different raw buckets before clamping, which
+    // is what a keyed-by-bucket map would silently collapse to just the last.
+    insertMetered(db, run.id, { ts: now + 400_000, inputTokens: 10, cost: 1 });
+    insertMetered(db, run.id, { ts: now + 900_000, inputTokens: 3, cost: 1 });
+
+    const snapshot = callAggregate(db, {
+      sinceMs: 1_200_000,
+      nowMs: now,
+      bucketMs: BUCKET,
+      ownerId: 'local',
+    });
+
+    const last = snapshot.series.buckets[snapshot.series.buckets.length - 1];
+    expect(last?.cost.inputTokens).toBe(13);
+    expect(last?.cost.responseCount).toBe(2);
+    expect(snapshot.totals.inputTokens).toBe(13);
+  });
+
   it('scopes the series to the owner', () => {
     const { db } = freshDb();
     const mine = mkRun(db, 'local');

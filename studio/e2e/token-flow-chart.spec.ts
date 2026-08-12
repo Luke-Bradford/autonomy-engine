@@ -126,10 +126,17 @@ test.describe('token-flow chart', () => {
     await expect(chart).toBeVisible();
     await expect(chart.locator('.token-flow-bucket')).toHaveCount(4);
 
-    // The unmeasured bucket draws a marker, NOT a zero-height bar — the whole
-    // reason the server carries token-presence counts.
+    const buckets = chart.locator('.token-flow-bucket');
+    // The unmeasured bucket (index 2) draws a marker, NOT a zero-height bar —
+    // the whole reason the server carries token-presence counts.
+    await expect(buckets.nth(2).locator('.token-flow-unmeasured')).toHaveCount(1);
+    // The EMPTY one (index 1) does not, because "no exchanges" is a measured
+    // zero — asserted on that bucket specifically, since a whole-chart count of
+    // 1 would also pass if the marker had landed on the wrong bar.
+    await expect(buckets.nth(1).locator('.token-flow-unmeasured')).toHaveCount(0);
     await expect(chart.locator('.token-flow-unmeasured')).toHaveCount(1);
-    // ...and the empty one does not, because "no exchanges" is a measured zero.
+    // Only the in-progress bucket (index 3) is marked partial.
+    await expect(buckets.nth(3).locator('.token-flow-stack[data-partial="true"]')).toHaveCount(1);
     await expect(chart.locator('.token-flow-stack[data-partial="true"]')).toHaveCount(1);
 
     // Every value is reachable as TEXT, not only as a tooltip.

@@ -16,9 +16,12 @@ import type { Db } from './types.js';
 /**
  * #917 — the CROSS-RUN AI-activity aggregate behind `GET /api/monitor/ai-activity`.
  *
- * BOUNDED, in the same sense `aggregatePipelineCost` (#599) is: three queries
- * whose result sets are O(distinct provider/model pairs) + O(1) + O(4), never a
- * load of every metered event into memory. The window makes it cheaper still.
+ * BOUNDED, in the same sense `aggregatePipelineCost` (#599) is: four queries
+ * whose result sets are O(distinct provider/model pairs) + O(1) + O(4) +
+ * O(buckets in the window), never a load of every metered event into memory. The
+ * window makes it cheaper still. The bucket count is bounded by `maxBucketCount`
+ * REGARDLESS of the data — see `buildSeries`, where a future-dated row is folded
+ * into the last bucket rather than allowed to extend the series.
  *
  * WHY NOT A LIST OF UNFINISHED RUNS — the shape this deliberately is not. Run
  * liveness is not evidence of AI use in either direction: `LIVE_RUN_STATUSES`
@@ -257,19 +260,43 @@ type BucketRow = MeteredAggregates & {
  * means the bucket holds only in-window events — which is exactly what `partial`
  * then declares.
  *
- * The end is `max(bucket containing nowMs, the newest bucket actually returned)`.
- * The second term looks redundant and is not: `run_events.ts` is not bounded
- * above by anything, so clock skew or a fixture can produce an event dated after
- * `nowMs`. Extending the range to cover it keeps `sum(buckets) === totals` true
- * unconditionally, rather than true-unless-the-clock-moved.
+ * IT ENDS AT THE BUCKET CONTAINING `nowMs`, AND A FUTURE-DATED ROW IS FOLDED
+ * INTO IT RATHER THAN EXTENDING IT. `run_events.ts` is not bounded above by
+ * anything — clock skew or a fixture can date an event after `nowMs` — and an
+ * earlier draft simply widened the range to cover whatever came back, to keep
+ * `sum(buckets) === totals` true unconditionally. That bought the invariant at
+ * the price of the bound: ONE row dated a year out turns a 13-bucket `1h`
+ * window into ~105,000 buckets, every one of which the chart then renders as a
+ * list item. Folding keeps BOTH properties — the row is still counted, so the
+ * bars still add up to the tile above them, and the series can never exceed
+ * `maxBucketCount`.
+ *
+ * Folding is also the more honest of the two readings: the series is a picture
+ * of the window the caller asked for, and an event stamped in the future did not
+ * happen in a future the operator can be shown. Attributing it to the most
+ * recent bucket says "this is in your window, at the latest instant we can
+ * defend", where a bucket drawn beyond `nowMs` would assert a period that has
+ * not happened yet.
  */
 function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
   const { bucketMs, sinceMs, nowMs } = filter;
   const alignDown = (ms: number) => Math.floor(ms / bucketMs) * bucketMs;
 
-  const byStart = new Map(rows.map((row) => [row.bucketStart, row]));
   const first = alignDown(sinceMs);
-  const last = rows.reduce((acc, row) => Math.max(acc, row.bucketStart), alignDown(nowMs));
+  const last = alignDown(nowMs);
+
+  /*
+   * Keyed by CLAMPED bucket, so two rows that clamp to the same bucket merge
+   * rather than one silently replacing the other — the merge is what keeps the
+   * fold lossless, and a plain `new Map(rows.map(...))` would have dropped all
+   * but the last future-dated row.
+   */
+  const byStart = new Map<number, BucketRow>();
+  for (const row of rows) {
+    const key = Math.min(row.bucketStart, last);
+    const prior = byStart.get(key);
+    byStart.set(key, prior === undefined ? { ...row, bucketStart: key } : mergeRows(prior, row));
+  }
 
   const buckets = [];
   for (let start = first; start <= last; start += bucketMs) {
@@ -279,7 +306,7 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
     // collected over. The trailing bucket is the one that matters visually — an
     // in-progress period drawn at full width reads as a collapse in AI use
     // rather than as a period that has only just begun.
-    const bucketEnd = Math.min(fullEnd, Math.max(nowMs, start));
+    const bucketEnd = Math.min(fullEnd, nowMs);
     buckets.push({
       bucketStart: start,
       bucketEnd,
@@ -291,6 +318,29 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
   }
 
   return { bucketMs, buckets };
+}
+
+/**
+ * Adds two bucket rows together, keeping the FIRST one's `bucketStart`.
+ *
+ * Only reachable via the future-dated fold above, where the destination bucket
+ * is the one being kept. Every field is a count or a sum, so addition is the
+ * whole merge — the derived `RunCost` is computed after, from the merged
+ * aggregates, rather than by combining two already-derived `RunCost`s (which
+ * would have to re-derive `complete` from figures that no longer carry it).
+ */
+function mergeRows(a: BucketRow, b: BucketRow): BucketRow {
+  return {
+    bucketStart: a.bucketStart,
+    responseCount: a.responseCount + b.responseCount,
+    pricedResponseCount: a.pricedResponseCount + b.pricedResponseCount,
+    unpricedResponseCount: a.unpricedResponseCount + b.unpricedResponseCount,
+    totalCostEstimate: a.totalCostEstimate + b.totalCostEstimate,
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    inputReportedResponseCount: a.inputReportedResponseCount + b.inputReportedResponseCount,
+    outputReportedResponseCount: a.outputReportedResponseCount + b.outputReportedResponseCount,
+  };
 }
 
 const EMPTY_BUCKET_AGGREGATES: MeteredAggregates = {

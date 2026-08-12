@@ -76,7 +76,21 @@ function bucketSentence(bucket: TokenSeriesBucket): string {
   if (bucket.cost.responseCount === 0) return `${when}${partial}: no billed exchanges`;
   const exchanges = `${bucket.cost.responseCount} exchange${bucket.cost.responseCount === 1 ? '' : 's'}`;
   if (isUnmeasured(bucket)) return `${when}${partial}: ${exchanges}, tokens not reported`;
-  const counts = `${formatTokenCount(bucket.cost.inputTokens)} in / ${formatTokenCount(bucket.cost.outputTokens)} out`;
+  /*
+   * EACH SIDE STATES ITS OWN MEASUREDNESS. A gateway can report one side and
+   * omit the other, and `coalesce(sum(…), 0)` hands the omitted one over as `0`
+   * — so "0 out" would assert a measurement nobody made, which is the same
+   * plotted-zero failure the hatched marker exists to prevent, just at half
+   * scale. The bar for that side is genuinely zero-height either way; what this
+   * fixes is the SENTENCE claiming the zero was observed.
+   */
+  const side = (tokens: number, reported: number, label: string) =>
+    reported === 0 ? `${label} not reported` : `${formatTokenCount(tokens)} ${label}`;
+  const counts = `${side(bucket.cost.inputTokens, bucket.inputReportedResponseCount, 'in')} / ${side(
+    bucket.cost.outputTokens,
+    bucket.outputReportedResponseCount,
+    'out',
+  )}`;
   return `${when}${partial}: ${exchanges}, ${counts}`;
 }
 
