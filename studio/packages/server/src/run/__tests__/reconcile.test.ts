@@ -2013,6 +2013,27 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(report.failed).toEqual([]);
   });
 
+  it('files a corrupt PARENT row under `corrupt` — keyed on the parent, the row needing repair', async () => {
+    const { db, sqlite } = freshDb();
+    const { parent, child } = seedOrphanChild(db);
+    // `listParsedRuns` never parses this row (it selects `pending`, and the
+    // parent is terminal), so `sweepOne`'s direct `getRun` is the ONLY reader —
+    // and it throws. Left to the fault boundary that lands in `failed`, whose
+    // contract is transient-only; stored-row corruption is permanent and would
+    // re-`failed` on every boot forever.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', parent.id);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.corrupt).toEqual([
+      { runId: parent.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    expect(report.sweptOrphanChildren).toEqual([]);
+    // Left for repair, not terminalized on an unreadable premise.
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
   it('files an unreadable child LOG under `corrupt`, never `failed`', async () => {
     const { db, sqlite } = freshDb();
     const { child } = seedOrphanChild(db);

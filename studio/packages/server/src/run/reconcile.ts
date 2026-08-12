@@ -513,12 +513,18 @@ export function emptyReconcileReport(): ReconcileReport {
  */
 function reportUnparseableRow(report: ReconcileReport): (id: string, err: unknown) => void {
   return (id, err) => {
-    const detail = err instanceof Error ? err.message : String(err);
-    report.corrupt.push({
-      runId: id,
-      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
-    });
+    report.corrupt.push({ runId: id, reason: unparseableRowReason(err) });
   };
+}
+
+/**
+ * The `corrupt` reason for a row that will not parse. Shared with the DIRECT
+ * `getRun` reads in `sweepOne`, which sit outside `listParsedRuns`'s lenient
+ * scan and so must classify the same fault the same way — see that function.
+ */
+function unparseableRowReason(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`;
 }
 
 /**
@@ -701,7 +707,27 @@ async function sweepOne(
   parentRunId: string,
 ): Promise<void> {
   if (loadEngineEvents(deps.db, child.id).length > 0) return;
-  const parent = getRun(deps.db, parentRunId);
+
+  // `getRun` re-parses the row and THROWS on one that no longer validates, and
+  // these two reads sit outside `listParsedRuns`'s lenient scan, so nothing else
+  // classifies them. Left to the fault boundary a `ZodError` here would land in
+  // `failed` — breaking that bucket's stated transient-only contract, and
+  // re-`failed`ing the same run on every boot forever, which is the exact
+  // misfiling #646's `corrupt` bucket exists to close. A corrupt row is
+  // PERMANENT: it parses the same way on every boot.
+  //
+  // The PARENT read is the reachable one (its row is arbitrary stored state this
+  // scan never parsed), and it is reported against the PARENT's id — that is the
+  // row an operator has to repair. The child re-read is guarded for the same
+  // reason rather than on the same odds: it parsed at the top of this scan and
+  // has since only been touched by a schema-restricted lifecycle patch.
+  let parent: Run | null;
+  try {
+    parent = getRun(deps.db, parentRunId);
+  } catch (err) {
+    report.corrupt.push({ runId: parentRunId, reason: unparseableRowReason(err) });
+    return;
+  }
   if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
 
   terminalizeInterrupted(deps, child.id);
@@ -710,7 +736,13 @@ async function sweepOne(
   // returns), and `ReconcileDeps` deliberately carries no logger — so a silent
   // no-op would otherwise be reported here as a sweep that happened. Report what
   // the row actually says, not what was attempted.
-  const swept = getRun(deps.db, child.id);
+  let swept: Run | null;
+  try {
+    swept = getRun(deps.db, child.id);
+  } catch (err) {
+    report.corrupt.push({ runId: child.id, reason: unparseableRowReason(err) });
+    return;
+  }
   if (swept !== null && TERMINAL_RUN_ROW_STATUS.has(swept.status)) {
     report.sweptOrphanChildren.push(child.id);
   } else {
