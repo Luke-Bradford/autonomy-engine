@@ -1,13 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import {
-  computedStyleOf,
-  contrastRatio,
-  fluentRootReady,
-  isOpaque,
-  setTheme,
-  surfaceBehind,
-} from './support/theme';
+import { contrastRatio, fluentRootReady, isOpaque, setTheme, surfaceBehind } from './support/theme';
 import { openCanvas } from './support/canvas';
 import { openRowMenu } from './support/authorPane';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
@@ -266,12 +259,21 @@ test.describe('#483 held/parked node pills', () => {
          it. Found by walking up from a REAL pill in each, never named — the
          answer for the table is not a colour this app's palette contains at
          all, which is precisely why naming it was wrong. */
+      await page.locator('table .node-status').first().waitFor();
       const tableSurface = await surfaceBehind(page, 'table .node-status');
       await page
         .locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) })
         .locator('button.node-drill-in')
         .click();
-      const panelSurface = await surfaceBehind(page, '[role="complementary"] .node-status');
+      /* Keyed on the panel's CLASS, not `[role="complementary"]`: the panel is
+         an `<aside>`, whose `complementary` role is IMPLICIT, so no `role`
+         attribute exists for a CSS selector to match. `getByRole` computes the
+         ARIA role and finds it; `surfaceBehind` takes a CSS selector and cannot.
+         The pill also mounts asynchronously, so without the wait the walk races
+         it and reports "no element matched" — which reads like a markup change
+         rather than a timing one. */
+      await page.locator('.node-detail-panel .node-status').first().waitFor();
+      const panelSurface = await surfaceBehind(page, '.node-detail-panel .node-status');
       /* Deduped by colour: in LIGHT mode `--panel` is `#ffffff` and so is
          Fluent's `colorNeutralBackground1`, so the two walks legitimately land
          on the same value and asserting it twice would say nothing new. */
