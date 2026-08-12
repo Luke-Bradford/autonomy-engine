@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
-import { createPipeline, createPipelineVersion, deletePipeline } from '../../repo/index.js';
+import {
+  createConnection,
+  createPipeline,
+  createPipelineVersion,
+  deleteConnection,
+  deletePipeline,
+} from '../../repo/index.js';
 import { fixtureGit, seedRemote } from '../../git/__tests__/fixtures.js';
 import { buildTestAppWithContext, type TestApp } from '../../__tests__/build-test-app.js';
 
@@ -244,6 +250,45 @@ describe('workspace-git commit route', () => {
     expect(log).toContain('add beta');
     // The non-managed file the other actor added is untouched by studio.
     expect(() => readFileSync(join(verify, 'external.txt'), 'utf8')).not.toThrow();
+  });
+
+  it('#1043 — refuses with 409, naming the pipeline and the node to fix', async () => {
+    // Commit MUST refuse rather than drop the offender: the managed-dir reconcile
+    // stages the removal of every previously committed managed file and re-adds
+    // only what serialize returns, so a quiet omission would commit this pipeline
+    // as a DELETION from the branch. What changed in #1043 is that the refusal is
+    // a 409 naming what to fix, not an opaque 500.
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(p.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    deleteConnection(app.db, conn.id);
+
+    const res = await commit('try to commit a dangling ref');
+    expect(res.statusCode).toBe(409);
+    const body = res.json();
+    expect(body.error).toBe('conflict');
+    expect(body.message).toContain('Uses Conn');
+    expect(body.message).toContain('n1');
+    expect(body.message).toContain(conn.id);
+
+    // Nothing was written: the working branch does not exist on the remote.
+    const verify = mkdtempSync(join(tmpdir(), 'verify-'));
+    execFileSync('git', ['clone', remote, verify], { encoding: 'utf8' });
+    const branches = execFileSync('git', ['-C', verify, 'branch', '-r'], { encoding: 'utf8' });
+    expect(branches).not.toContain(WORKING_BRANCH);
   });
 
   it('returns 404 when committing before any repo is connected', async () => {

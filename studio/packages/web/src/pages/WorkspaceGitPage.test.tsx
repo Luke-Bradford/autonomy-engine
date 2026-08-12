@@ -437,6 +437,34 @@ describe('WorkspaceGitPage', () => {
     });
 
     /**
+     * #1043 — the DB-SIDE diagnostic. A live head naming a hard-deleted
+     * connection has no comparable content form, so it is excluded from
+     * `changes` for the same reason an unparseable committed file is. If the
+     * page did not render it, the drift panel would say changes are pending
+     * over an empty table with nothing to explain it.
+     */
+    it('shows a resource it could not compare, and why', async () => {
+      await renderConnected();
+      driftMock.mockResolvedValue(
+        drift({
+          diagnostics: [
+            {
+              path: 'pipelines/uses-conn.json',
+              code: 'unserializable_ref',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+            },
+          ],
+        }),
+      );
+
+      await userEvent.click(screen.getByRole('button', { name: 'Check for changes' }));
+
+      expect(await screen.findByText('pipelines/uses-conn.json')).toBeInTheDocument();
+      expect(screen.getByText(/node "n1"/)).toBeInTheDocument();
+    });
+
+    /**
      * The server re-observes the remote BEFORE doing the work, so a failed
      * check has still rewritten `state`/`lastFetchAt`/`lastFetchError` — and
      * that is precisely when the recorded reason is worth showing. Re-reading
@@ -710,6 +738,38 @@ describe('WorkspaceGitPage', () => {
     });
 
     /**
+     * #1043 — the counterpart, and the one that matters most. A DB-side
+     * diagnostic does NOT make the apply refuse, and importing a branch version
+     * that re-points the offending node is one of the two ways out of that
+     * state. Blocking the button here would withhold the repair on the strength
+     * of the very problem it repairs, and the refusal sentence would be a plain
+     * falsehood about what the click is about to do.
+     */
+    it('does NOT block the import for a resource it merely could not compare', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [previewResource()],
+          diagnostics: [
+            {
+              path: 'pipelines/uses-conn.json',
+              code: 'unserializable_ref',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+            },
+          ],
+        }),
+      );
+
+      await checkForIncoming();
+
+      expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
+      expect(incoming()).not.toHaveTextContent(/an import refuses outright/);
+      expect(screen.getByText(/node "n1"/)).toBeInTheDocument();
+    });
+
+    /**
      * The branch moving between the preview and the import is a gap no control
      * can close — `/import` takes no expected-head token. So the UI's job is to
      * stop offering a reading it can already see is stale.
@@ -896,6 +956,35 @@ describe('WorkspaceGitPage', () => {
       // an accurate account of the branch. Discarding it would cost the
       // operator a second check to see the very same thing.
       expect(screen.queryByLabelText('Incoming changes')).not.toBeNull();
+    });
+
+    /** #1043 — a NOT-refused import can carry diagnostics too. They are the only
+     * record that a resource was left out of the comparison, so a page that
+     * rendered them only on the refusal path would drop them silently. */
+    it('shows a diagnostic on an import that was NOT refused', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          diagnostics: [
+            {
+              path: 'pipelines/uses-conn.json',
+              code: 'unserializable_ref',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByText(/node "n1"/)).toBeInTheDocument();
+      // Still an import, not a refusal — the two must not be conflated.
+      expect(screen.queryByText(/Import refused/)).toBeNull();
     });
 
     /**

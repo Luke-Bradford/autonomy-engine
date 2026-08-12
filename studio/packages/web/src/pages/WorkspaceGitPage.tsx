@@ -858,10 +858,17 @@ function describeImportBlock({
   // applied AND without moving the import base, so the click would report a
   // success that did nothing at all.
   if (preview.head === null) return 'There is nothing on the branch to import.';
-  // A parse diagnostic makes the apply refuse, by construction and before any
-  // write. Leaving the button live to earn that refusal wastes the operator's
-  // time and teaches them to ignore the warning.
-  if (preview.diagnostics.length > 0)
+  // A BRANCH-side parse diagnostic makes the apply refuse, by construction and
+  // before any write. Leaving the button live to earn that refusal wastes the
+  // operator's time and teaches them to ignore the warning.
+  //
+  // #1043 — asked through `refusesImport` rather than over the whole array,
+  // because a DB-side `unserializable_ref` does NOT refuse. Blocking on it would
+  // be worse than cosmetic: importing a branch version that re-points the
+  // offending node is one of the two ways out of that state, so a disabled
+  // button would withhold the repair on the strength of the very problem it
+  // repairs.
+  if (preview.diagnostics.some(refusesImport))
     return 'The import would be refused while any file on the branch cannot be read.';
   return null;
 }
@@ -951,7 +958,11 @@ function ImportPreviewReport({
 
       <ParseDiagnostics
         diagnostics={preview.diagnostics}
-        note="While any of these cannot be read, an import refuses outright and changes nothing."
+        note={
+          preview.diagnostics.some(refusesImport)
+            ? 'While any file on the branch cannot be read, an import refuses outright and changes nothing.'
+            : null
+        }
       />
     </>
   );
@@ -1011,6 +1022,12 @@ function ImportOutcomeReport({
           shown, {shortSha(result.head)} was applied. What landed is below.
         </p>
       )}
+
+      {/* #1043 — a NOT-refused import can carry diagnostics too (DB-side
+          resources it could not compare). They are the only record that
+          something was left out of the comparison, so dropping them here would
+          be the silent omission the whole diagnostic channel exists to prevent. */}
+      <ParseDiagnostics diagnostics={result.diagnostics} note={null} />
 
       {changed.length === 0 && result.archived.length === 0 && result.deferred.length === 0 ? (
         /* The commonest outcome, and the analogue of `committed: false`: every
@@ -1149,7 +1166,25 @@ function ResourceChangeTable({ rows }: { rows: ResourceChangeRow[] }) {
   );
 }
 
-/** The files git served that this workspace could not parse. Shared by preview and outcome. */
+/** #1043 — does this diagnostic make an import REFUSE? Only the branch-side
+ * codes do. A DB-side `unserializable_ref` is a resource the comparison left
+ * out; the import still runs, so telling the operator it refuses would be a
+ * plain falsehood about what is about to happen. */
+function refusesImport(diagnostic: WorkspaceParseDiagnostic): boolean {
+  return diagnostic.code !== 'unserializable_ref';
+}
+
+/**
+ * The resources this workspace could not compare. Shared by preview, drift and
+ * outcome.
+ *
+ * #1043 widened it past its original "files git served that would not parse":
+ * a diagnostic can now also be DB-side (`unserializable_ref` — a live head that
+ * names something no longer present, so it has no portable form). Both are the
+ * same fact to the reader — "this could not be compared, here is which one" —
+ * so they share one surface; what differs is the CONSEQUENCE, which is why the
+ * `note` is the caller's to supply and why `refusesImport` exists below.
+ */
 function ParseDiagnostics({
   diagnostics,
   note,
@@ -1160,11 +1195,14 @@ function ParseDiagnostics({
   if (diagnostics.length === 0) return null;
   return (
     <>
-      <h4>Files that could not be read</h4>
+      <h4>Resources that could not be read or compared</h4>
       {note !== null && <p>{note}</p>}
       <ul>
         {diagnostics.map((diagnostic) => (
-          <li key={diagnostic.path}>
+          /* A branch-side and a DB-side diagnostic can name the SAME path (the
+             committed file and the resource it holds), so the path alone is no
+             longer a unique key. */
+          <li key={`${diagnostic.code}:${diagnostic.path}`}>
             <code>{diagnostic.path}</code> — {diagnostic.message}
           </li>
         ))}
@@ -1231,7 +1269,7 @@ function DriftReport({ drift }: { drift: WorkspaceGitDrift }) {
       {!drift.hasUncommittedChanges && <p>No uncommitted changes.</p>}
 
       {drift.hasUncommittedChanges && drift.changes.length === 0 && (
-        <p>Changes are pending, but no resource differs — see the unreadable files below.</p>
+        <p>Changes are pending, but no resource differs — see the resources listed below.</p>
       )}
 
       {drift.changes.length > 0 && (
@@ -1246,8 +1284,9 @@ function DriftReport({ drift }: { drift: WorkspaceGitDrift }) {
         />
       )}
 
-      {/* A committed file that would not parse could not be compared, so it is
-          excluded from `changes` rather than manufactured as a match — which
+      {/* A resource that could not be compared — a committed file that would not
+          parse, or (#1043) a live head that names something no longer present —
+          is excluded from `changes` rather than manufactured as a match, which
           makes showing it here the only thing standing between the operator and
           a silent omission. */}
       <ParseDiagnostics diagnostics={drift.diagnostics} note={null} />

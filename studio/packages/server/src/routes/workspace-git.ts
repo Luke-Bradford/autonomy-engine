@@ -46,6 +46,9 @@ import {
   ownedVersionForms,
   parseWorkspaceFiles,
   serializeWorkspace,
+  serializeWorkspaceTolerant,
+  unserializableDiagnostic,
+  withoutResources,
 } from '../portability/index.js';
 import { checkoutDirFor, removeCheckoutDir } from '../git/checkout.js';
 import { readWorkspaceFilesAtRef } from '../git/workspace-read.js';
@@ -416,15 +419,15 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
    * NOT byte/blob equality: a re-mint that only bumps a volatile field (a new
    * immutable version id/number, a `node.position` drag) is NOT drift. A git
    * failure surfaces as the existing `git_error` 502 (fail-safe — never a silent
-   * `clean`); a DB reference that cannot be put in resourceId-space makes
-   * `serializeWorkspace` throw `WorkspaceSerializeError` → 500 (internal), also
-   * never `clean`. That is NOT necessarily corruption, and #1018 corrected the
-   * word: a live pipeline's head can name a hard-deleted connection after two
-   * ordinary acts (versions are immutable; the delete has no FK to stop it).
-   * Throwing is the right POLARITY here and wrong in blast radius — a read-only
-   * drift report 500ing over it is #1043, which owns the fix. A committed
-   * file that would not parse becomes a VISIBLE `diagnostic` (never dropped,
-   * never manufactured as a match — #473/#664 shape).
+   * `clean`). A committed file that would not parse becomes a VISIBLE
+   * `diagnostic` (never dropped, never manufactured as a match — #473/#664
+   * shape), and #1043 gave a DB reference that cannot be put in resourceId-space
+   * the SAME treatment: a live pipeline's head can name a hard-deleted
+   * connection after two ordinary acts (versions are immutable; the delete has
+   * no FK to stop it), which used to throw out of `serializeWorkspace` and 500
+   * this whole read-only report. Refusing is the right polarity for a COMMIT and
+   * wrong for a read, so the read reports what it could not compare and stays
+   * fail-safe on the flag.
    */
   fastify.post('/api/workspace/git/drift', async (request) => {
     const ownerId = request.principal.ownerId;
@@ -448,9 +451,14 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
 
       // The DB working copy through the SAME serialize+parse path import-preview
       // uses, so both sides get identical volatile treatment (#666 archived
-      // omission included). serializeWorkspace throws on a corrupt DB ref rather
-      // than papering it over — that 500s, never reads as `clean`.
-      const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
+      // omission included). #1043 — TOLERANT: a resource whose head cannot be put
+      // in resourceId-space has no comparable content form, so it is reported
+      // rather than 500ing this whole read-only report.
+      const serialized = serializeWorkspaceTolerant(db, ownerId);
+      const dbSnapshot = parseWorkspaceFiles(serialized.files);
+      const uncomparable = new Set(
+        serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`),
+      );
 
       // The committed snapshot at the base (empty when nothing is committed yet).
       // An unreadable committed blob (#664) becomes a per-file `diagnostic`, not
@@ -461,16 +469,31 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
           : await readWorkspaceFilesAtRef(provider, checkout, base, MANAGED_DIRS);
       const committed = parseWorkspaceFiles(committedFiles.files, committedFiles.unreadable);
 
+      // #1043 — the tolerant serialize already left the offenders out of the DB
+      // side; drop them from the COMMITTED side too, so an uncomparable resource
+      // is absent from BOTH. Leaving the committed file in would classify it
+      // `removed` — a claim the next Commit contradicts, since it refuses
+      // outright rather than dropping the resource from the branch.
+      const changes = computeDrift(dbSnapshot, withoutResources(committed, uncomparable));
+
       // A committed file that would not parse yields no `change` (its content is
       // uncomparable), but the next Commit's managed-dir reconcile WOULD drop it
       // — so a diagnostic is itself uncommitted drift. Fold it into the flag
       // (fail-safe: an uncomparable committed file is never a silent `clean`).
-      const changes = computeDrift(dbSnapshot, committed);
+      // #1043 — the DB-side diagnostics fold in for the SAME reason and it is
+      // load-bearing: an offender alone yields no `change` and no committed
+      // diagnostic, so reading the flag off those two would answer "no
+      // uncommitted changes" while the next Commit refuses. Fail-safe means the
+      // flag is computed over everything reported, never over a subset of it.
+      const diagnostics = [
+        ...committed.diagnostics,
+        ...serialized.unserializable.map(unserializableDiagnostic),
+      ];
       return WorkspaceGitDriftSchema.parse({
         base,
-        hasUncommittedChanges: changes.length > 0 || committed.diagnostics.length > 0,
+        hasUncommittedChanges: changes.length > 0 || diagnostics.length > 0,
         changes,
-        diagnostics: committed.diagnostics,
+        diagnostics,
       });
     });
 
@@ -721,7 +744,19 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // Diff against the DB working copy run through the IDENTICAL serialize+parse
       // path, so both sides get the same volatile treatment and #666's
       // archived-omission flows into the baseline for free.
-      const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
+      // #1043 — TOLERANT, and the offenders are dropped from `incoming` too.
+      // Excluding them from the DB side alone would classify the branch's file
+      // for such a pipeline as `create`, for a resource that plainly exists. The
+      // ARCHIVE proposals need no equivalent care: they iterate the DB side,
+      // which the tolerant serialize has already emptied of offenders — so an
+      // offender absent from the branch is not proposed for archive here, and
+      // the apply does not archive it either (same reason, same snapshot). That
+      // parity is the point; see the apply for why neither of them refuses.
+      const serialized = serializeWorkspaceTolerant(db, ownerId);
+      const dbSnapshot = parseWorkspaceFiles(serialized.files);
+      const uncomparable = new Set(
+        serialized.unserializable.map((o) => `${o.kind}:${o.resourceId}`),
+      );
       // #3 G7 — the trigger-binding resolution domain (all owned versions incl.
       // archived; not derivable from the latest-only serialized snapshot), so the
       // preview normalizes a dangling binding identically to the apply. #3 G8b-3 —
@@ -747,8 +782,11 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         if (rid != null) branchVersionRids.add(rid);
       }
       const plan = classifyWorkspace(
+        // Only `incoming` is filtered: `dbSnapshot` is built from the tolerant
+        // serialize's own files, which never contained the offenders — filtering
+        // it too would be a no-op that reads as if it might not be.
         dbSnapshot,
-        incoming,
+        withoutResources(incoming, uncomparable),
         listVersionResourceIds(db, ownerId),
         readyVersionResourceIds(db, ownerId),
         ownedVersionForms(db, ownerId, branchVersionRids),
@@ -758,7 +796,16 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
         head,
         resources: plan.resources,
         archive: plan.archive,
-        diagnostics: incoming.diagnostics,
+        // #1043 — appended to the RESPONSE, deliberately not folded into
+        // `incoming.diagnostics`: that array is the branch-corrupt signal the
+        // apply refuses on (`workspace-apply.ts`), and this is not that. A
+        // DB-side gap under-reports (one resource is not compared and not
+        // archived); it never destroys anything, so it must not acquire a
+        // branch-corrupt refusal's teeth by sharing its channel.
+        diagnostics: [
+          ...incoming.diagnostics,
+          ...serialized.unserializable.map(unserializableDiagnostic),
+        ],
       });
     });
 

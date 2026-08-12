@@ -5,8 +5,10 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
 import {
+  createConnection,
   createPipeline,
   createPipelineVersion,
+  deleteConnection,
   deletePipeline,
   updatePipeline,
 } from '../../repo/index.js';
@@ -192,6 +194,83 @@ describe('workspace-git drift route', () => {
     expect(result.diagnostics).toEqual([
       { path: 'pipelines/broken.json', code: 'unparseable', message: expect.any(String) },
     ]);
+  });
+
+  it('#1043 — a head that names a hard-deleted connection is a diagnostic, not a 500', async () => {
+    // Two ordinary acts: author a node using connection C (which mints an
+    // IMMUTABLE version holding C's db id), then delete C (a hard delete — there
+    // is no FK from versions). The head can no longer be put in resourceId-space,
+    // which used to throw out of `serializeWorkspace` and 500 the whole report.
+    // A read-only drift report has no business failing over it: it reports what
+    // it could not compare, by NAME, and stays fail-safe (never a silent clean).
+    const { remote } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed Conn',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(p.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    await commit('author');
+    deleteConnection(app.db, conn.id);
+
+    const res = await drift();
+    expect(res.statusCode).toBe(200);
+    const { drift: result } = res.json();
+    // The pipeline could not be compared, so it is NOT reported as `removed`:
+    // the next Commit would refuse outright, not drop it from the branch.
+    expect(result.changes.filter((c: { kind: string }) => c.kind === 'pipeline')).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        path: 'pipelines/uses-conn.json',
+        code: 'unserializable_ref',
+        message: expect.stringContaining('n1'),
+      },
+    ]);
+    // (`hasUncommittedChanges` is true here too, but the deleted connection is
+    // itself a `removed` change — so this scenario cannot prove the flag folds
+    // the DB-side diagnostic in. The next test is the one that can.)
+  });
+
+  it('#1043 — an uncomparable resource ALONE still reports uncommitted changes', async () => {
+    // The flag must be computed over everything REPORTED, not over a subset of
+    // it. Here the offender is the only finding there is: nothing was ever
+    // committed (base is null), the connection is gone, and the one pipeline is
+    // excluded from the comparison — so `changes` is empty and there is no
+    // committed-side diagnostic either. Reading the flag off those two alone
+    // answers "no uncommitted changes" while the next Commit refuses outright.
+    const remote = join(testApp.tmpDir, 'empty-for-1043.git');
+    execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed Conn',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const p = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(p.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    deleteConnection(app.db, conn.id);
+
+    const { drift: result } = (await drift()).json();
+    expect(result.base).toBeNull();
+    expect(result.changes).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.hasUncommittedChanges).toBe(true);
   });
 
   it('reports a deleted resource as removed', async () => {

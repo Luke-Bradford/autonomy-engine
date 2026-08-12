@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CATALOG_VERSION, type NewPipelineVersion } from '@autonomy-studio/shared';
 import {
   archivePipeline,
@@ -7,12 +7,14 @@ import {
   createPipelineVersion,
   createSecret,
   createTrigger,
+  deletePipeline,
 } from '../../repo/index.js';
 import { deleteConnection } from '../../repo/connections.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import {
   ownedVersionForms,
   serializeWorkspace,
+  serializeWorkspaceTolerant,
   WorkspaceSerializeError,
 } from '../workspace-serialize.js';
 import { parseWorkspaceFiles } from '../workspace-parse.js';
@@ -238,6 +240,181 @@ describe('serializeWorkspace', () => {
     });
 
     expect(() => serializeWorkspace(db, 'local')).toThrow(WorkspaceSerializeError);
+  });
+
+  describe('#1043 — a head that cannot be put in resourceId-space', () => {
+    /** A pipeline whose head node uses `conn`, which is then hard-deleted — the
+     * two ordinary acts that produce a dangling ref (versions are immutable and
+     * the delete has no FK to stop it). */
+    function pipelineWithDeadConnection(db: ReturnType<typeof freshDb>['db'], name = 'Uses Conn') {
+      const conn = createConnection(db, {
+        ownerId: 'local',
+        name: 'Doomed',
+        kind: 'http',
+        config: {},
+        secretRef: null,
+      });
+      const pipeline = createPipeline(db, { ownerId: 'local', name });
+      createPipelineVersion(db, {
+        ...baseVersion(pipeline.id),
+        nodes: [
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            connectionId: conn.id,
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      deleteConnection(db, conn.id);
+      return { conn, pipeline };
+    }
+
+    it('tolerant: names the offender and omits its file, instead of throwing', () => {
+      const { db } = freshDb();
+      const { conn, pipeline } = pipelineWithDeadConnection(db);
+
+      const { files, unserializable } = serializeWorkspaceTolerant(db, 'local');
+
+      expect(files.map((f) => f.path)).toEqual([]);
+      expect(unserializable).toEqual([
+        {
+          kind: 'pipeline',
+          resourceId: pipeline.resourceId,
+          name: 'Uses Conn',
+          path: 'pipelines/uses-conn.json',
+          ref: 'connection',
+          nodeId: 'n1',
+          danglingId: conn.id,
+        },
+      ]);
+    });
+
+    it('tolerant: a healthy resource alongside an offender still serializes', () => {
+      const { db } = freshDb();
+      pipelineWithDeadConnection(db);
+      const healthy = createPipeline(db, { ownerId: 'local', name: 'Fine' });
+      createPipelineVersion(db, baseVersion(healthy.id));
+
+      const { files, unserializable } = serializeWorkspaceTolerant(db, 'local');
+
+      // Blast radius is exactly one resource — the whole point of the ticket.
+      expect(files.map((f) => f.path)).toEqual(['pipelines/fine.json']);
+      expect(unserializable).toHaveLength(1);
+    });
+
+    it('tolerant: a call_pipeline ref to a HARD-DELETED pipeline dangles the same way', () => {
+      // The second producer: `deletePipeline` hard-deletes and cascades its
+      // versions, so an unrelated live pipeline's call node is left naming a
+      // version id that no longer exists.
+      const { db } = freshDb();
+      const callee = createPipeline(db, { ownerId: 'local', name: 'Callee' });
+      const calleeVersion = createPipelineVersion(db, baseVersion(callee.id));
+      const caller = createPipeline(db, { ownerId: 'local', name: 'Caller' });
+      createPipelineVersion(db, {
+        ...baseVersion(caller.id),
+        nodes: [
+          {
+            id: 'c1',
+            type: 'call_pipeline',
+            config: {},
+            call: { pipelineVersionId: calleeVersion.id, params: {} },
+            position: { x: 0, y: 0 },
+          },
+        ],
+      });
+      deletePipeline(db, callee.id);
+
+      const { files, unserializable } = serializeWorkspaceTolerant(db, 'local');
+
+      expect(files.map((f) => f.path)).toEqual([]);
+      expect(unserializable).toMatchObject([
+        {
+          kind: 'pipeline',
+          name: 'Caller',
+          ref: 'call',
+          nodeId: 'c1',
+          danglingId: calleeVersion.id,
+        },
+      ]);
+    });
+
+    it('tolerant: dropping an offender does NOT move a same-named survivor path', () => {
+      // `resourceFilePaths` suffixes a colliding slug with the resourceId,
+      // counted over the set it is given. If paths were computed AFTER the
+      // offender was dropped, the survivor would lose its suffix and drift would
+      // report a rename nobody performed.
+      const { db } = freshDb();
+      pipelineWithDeadConnection(db, 'Report');
+      const survivor = createPipeline(db, { ownerId: 'local', name: 'Report' });
+      createPipelineVersion(db, baseVersion(survivor.id));
+
+      const { files } = serializeWorkspaceTolerant(db, 'local');
+
+      expect(files.map((f) => f.path)).toEqual([`pipelines/report-${survivor.resourceId}.json`]);
+    });
+
+    it('strict: refuses the commit, naming EVERY offender and the node to fix', () => {
+      const { db } = freshDb();
+      pipelineWithDeadConnection(db, 'First');
+      pipelineWithDeadConnection(db, 'Second');
+
+      let thrown: unknown;
+      try {
+        serializeWorkspace(db, 'local');
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(WorkspaceSerializeError);
+      const error = thrown as WorkspaceSerializeError;
+      // Both, not just the first — one at a time sends the operator round the
+      // loop once per broken pipeline.
+      expect(error.offenders.map((o) => o.name).sort()).toEqual(['First', 'Second']);
+      expect(error.message).toContain('"First"');
+      expect(error.message).toContain('"Second"');
+      expect(error.message).toContain('node "n1"');
+    });
+
+    it('strict: the MESSAGE is capped, but `offenders` keeps every one', () => {
+      // An unbounded list-into-one-string is the shape `capIssues` exists to
+      // avoid in errors.ts, and this message goes straight into a 409 body.
+      const { db } = freshDb();
+      for (let i = 0; i < 8; i += 1) pipelineWithDeadConnection(db, `P${i}`);
+
+      let thrown: unknown;
+      try {
+        serializeWorkspace(db, 'local');
+      } catch (err) {
+        thrown = err;
+      }
+      const error = thrown as WorkspaceSerializeError;
+
+      expect(error.offenders).toHaveLength(8);
+      expect(error.message).toContain('8 resource(s) cannot be committed');
+      expect(error.message).toContain('and 3 more');
+      // Counted, not named — WHICH five get named is `listPipelines`' order,
+      // which is not insertion order, so asserting on a particular name here
+      // would be a flake rather than a check.
+      expect(error.message.match(/references connection/g)).toHaveLength(5);
+    });
+
+    it('strict: a non-serialize error is NEVER reported as a dangling ref', () => {
+      // The tolerant catch is narrowed to its own error type on purpose: a Zod
+      // failure inside serialize is a different fault, and folding it into
+      // `unserializable` would name a node and a ref that were never the problem.
+      const { db } = freshDb();
+      const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+      createPipelineVersion(db, baseVersion(pipeline.id));
+      const boom = new Error('not a ref problem');
+      const spy = vi.spyOn(JSON, 'stringify').mockImplementationOnce(() => {
+        throw boom;
+      });
+
+      expect(() => serializeWorkspaceTolerant(db, 'local')).toThrow(boom);
+      spy.mockRestore();
+    });
   });
 
   it('excludes another owner and returns [] for an empty workspace', () => {

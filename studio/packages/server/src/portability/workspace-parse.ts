@@ -9,7 +9,11 @@ import {
   type TriggerExportData,
   type WorkspaceParseDiagnostic,
 } from '@autonomy-studio/shared';
-import type { WorkspaceFile } from './workspace-serialize.js';
+import {
+  describeUnserializable,
+  type UnserializableResource,
+  type WorkspaceFile,
+} from './workspace-serialize.js';
 
 /**
  * #3 G4 — the workspace-git import PARSER: the READ inverse of
@@ -103,6 +107,12 @@ const DIAGNOSTIC_MESSAGE: Record<WorkspaceParseDiagnostic['code'], string> = {
   duplicate_resource_id: 'resourceId is claimed by more than one file of this kind',
   unknown_dir: 'file is not under a managed resource directory',
   unreadable: 'file could not be read from the repository',
+  // UNREACHABLE by construction, and present only to keep this `Record`
+  // exhaustive: a DB-side diagnostic is never built by `diagnostic()` below —
+  // `unserializableDiagnostic` composes its own message, because the categorical
+  // half alone cannot say WHICH node to fix. Editing this string changes nothing
+  // the operator sees.
+  unserializable_ref: 'this workspace cannot express the resource in portable form',
 };
 
 function diagnostic(
@@ -110,6 +120,63 @@ function diagnostic(
   code: WorkspaceParseDiagnostic['code'],
 ): WorkspaceParseDiagnostic {
   return { path, code, message: DIAGNOSTIC_MESSAGE[code] };
+}
+
+/**
+ * #1043 — the DB-SIDE diagnostic: a live resource whose head cannot be put in
+ * `resourceId`-space, so this workspace has no comparable content form for it.
+ * Composed rather than looked up, because the categorical half alone would not
+ * tell the operator WHICH node to fix — which is the whole complaint the ticket
+ * was filed about. The specifics come from `describeUnserializable`, over the
+ * owner's own DB values (see the note there on why that does not cross the
+ * never-echo-committed-content rule).
+ *
+ * The closing clause is not decoration. A read path excludes the resource from
+ * its comparison, but the APPLY still writes it from the branch's own file (it
+ * reads real DB rows, not this snapshot) — so an import genuinely may change it,
+ * and a bare "could not be compared" would read as "nothing will happen here".
+ */
+export function unserializableDiagnostic(
+  offender: UnserializableResource,
+): WorkspaceParseDiagnostic {
+  return {
+    path: offender.path,
+    code: 'unserializable_ref',
+    message:
+      `"${offender.name}" ${describeUnserializable(offender)} — it cannot be committed or ` +
+      `compared until the node is re-pointed or removed and the pipeline saved. ` +
+      `An import may still change it.`,
+  };
+}
+
+/**
+ * #1043 — drop the named resources from a parsed workspace, keyed
+ * `${kind}:${resourceId}`.
+ *
+ * Used on the side the tolerant serialize did NOT already empty, so that an
+ * uncomparable resource is absent from BOTH sides of a diff. Excluding it from
+ * one side only is what manufactures a fact: the committed file with no DB
+ * counterpart classifies as `removed` (a claim the next Commit contradicts — it
+ * refuses rather than dropping it), and the branch file with no DB counterpart
+ * classifies as `create` for a resource that plainly exists.
+ *
+ * All three kinds are filtered for uniformity, though only pipelines and
+ * triggers can currently be named: a connection has no refs to remap, so it can
+ * never be unserializable.
+ */
+export function withoutResources(
+  workspace: ParsedWorkspace,
+  keys: ReadonlySet<string>,
+): ParsedWorkspace {
+  if (keys.size === 0) return workspace;
+  const keep = <T extends { resourceId: string | null }>(kind: ResourceKind, items: T[]): T[] =>
+    items.filter((item) => item.resourceId === null || !keys.has(`${kind}:${item.resourceId}`));
+  return {
+    pipelines: keep('pipeline', workspace.pipelines),
+    connections: keep('connection', workspace.connections),
+    triggers: keep('trigger', workspace.triggers),
+    diagnostics: workspace.diagnostics,
+  };
 }
 
 /** The stable identity of a resource envelope: for a pipeline it is the

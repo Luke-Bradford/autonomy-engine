@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   createPipeline,
   createPipelineVersion,
   createTrigger,
+  deleteConnection,
   getConnectionByResourceId,
   getLatestPipelineVersion,
   getPipelineByResourceId,
@@ -57,6 +58,116 @@ describe('workspace-git import route', () => {
   const commit = (message: string) =>
     app.inject({ method: 'POST', url: '/api/workspace/git/commit', payload: { message } });
   const importBranch = () => app.inject({ method: 'POST', url: '/api/workspace/git/import' });
+
+  it('#1043 — a DB-side uncomparable resource is DISCLOSED, and the import still repairs it', async () => {
+    // The case that decides whether a DB-side gap should refuse. It must not:
+    // importing the branch is one of the two ways OUT of this state, so refusing
+    // would block the repair while claiming to be the safe option.
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    expect((await commit('author')).json().commit.committed).toBe(true);
+    mergeWorkingIntoMain(work);
+    // Hard-delete the connection AFTER committing: the branch still holds both
+    // files, the DB head now names a row that is gone.
+    deleteConnection(app.db, conn.id);
+
+    const res = await importBranch();
+    expect(res.statusCode).toBe(200);
+    const result = res.json().import;
+
+    // NOT refused — a DB-side gap can only make the apply archive LESS, never
+    // perform the destructive act the branch-side refusal exists to prevent.
+    expect(result.refused).toBe(false);
+    expect(result.archived).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      {
+        path: 'pipelines/uses-conn.json',
+        code: 'unserializable_ref',
+        message: expect.stringContaining('n1'),
+      },
+    ]);
+
+    // The connection file recreated the row under its original resourceId — but
+    // under a NEW db id, so the head's stored ref is NOT repaired by that alone.
+    // The branch carries the same version the DB already holds, so #1018's
+    // ref-tolerant compare reads it as superseded and nothing is written.
+    const restored = getConnectionByResourceId(app.db, 'local', conn.resourceId);
+    expect(restored).not.toBeNull();
+    expect(restored!.id).not.toBe(conn.id);
+    const head = getLatestPipelineVersion(app.db, pipeline.id)!;
+    expect(head.nodes[0]!.connectionId).toBe(conn.id);
+  });
+
+  it('#1043 — and when the branch carries a NEWER version, the import repairs the head', async () => {
+    // This is what makes refusing the wrong call: the import is a repair path,
+    // and a refusal would block it. A collaborator re-points the node on the
+    // branch; pulling that is how the operator gets a serializable head back
+    // without re-authoring by hand.
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+    const conn = createConnection(app.db, {
+      ownerId: 'local',
+      name: 'Doomed',
+      kind: 'http',
+      config: {},
+      secretRef: null,
+    });
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Uses Conn' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    expect((await commit('author')).json().commit.committed).toBe(true);
+    mergeWorkingIntoMain(work);
+
+    // The collaborator's edit on `main`: a NEW version whose node uses no
+    // connection at all.
+    const file = join(work, 'pipelines/uses-conn.json');
+    const envelope = JSON.parse(readFileSync(file, 'utf8'));
+    const previous = envelope.data.versions[envelope.data.versions.length - 1];
+    envelope.data.versions.push({
+      ...previous,
+      resourceId: 'res_repaired_version',
+      versionNumber: previous.versionNumber + 1,
+      nodes: [{ ...previous.nodes[0], connectionId: null }],
+    });
+    writeFileSync(file, JSON.stringify(envelope));
+    fixtureGit(work, ['add', '.']);
+    fixtureGit(work, ['commit', '-m', 're-point the node']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+
+    deleteConnection(app.db, conn.id);
+
+    const res = await importBranch();
+    expect(res.statusCode).toBe(200);
+    const result = res.json().import;
+    expect(result.refused).toBe(false);
+
+    // Repaired: the head no longer names the deleted connection, so the
+    // workspace serializes again.
+    const head = getLatestPipelineVersion(app.db, pipeline.id)!;
+    expect(head.resourceId).toBe('res_repaired_version');
+    expect(head.nodes[0]!.connectionId).toBeUndefined();
+    const drift = await app.inject({ method: 'POST', url: '/api/workspace/git/drift' });
+    expect(drift.statusCode).toBe(200);
+    expect(drift.json().drift.diagnostics).toEqual([]);
+  });
 
   /** Fast-forward the studio working branch into `main` on the remote. */
   function mergeWorkingIntoMain(work: string) {

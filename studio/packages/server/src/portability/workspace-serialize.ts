@@ -61,15 +61,101 @@ import type { Db } from '../repo/types.js';
  */
 
 /**
- * A resource references (via a NON-null, LITERAL id) another resource that
- * isn't in this owner's workspace — a corrupt/cross-owner id the serializer
- * refuses to paper over with a `null`. Surfaced by the Commit route as an
- * internal error (it means a broken DB reference, not user input).
+ * #1043 — WHICH ref of a resource could not be put in resourceId-space, and what
+ * it names. Structured rather than a formatted string because four callers need
+ * to say it in their own voice: a drift/preview diagnostic, an apply disclosure,
+ * and the Commit refusal.
+ *
+ * `danglingId` is the raw stored DB id, never a name: the row it named is GONE,
+ * so there is no name left to look up and inventing one would assert a fact
+ * nobody measured. `nodeId` is `null` for a resource-level ref (a trigger's
+ * binding), which has no node to blame.
  */
+export interface UnserializableRefDetail {
+  ref: 'connection' | 'call' | 'binding';
+  nodeId: string | null;
+  danglingId: string;
+}
+
+/**
+ * #1043 — a whole RESOURCE that cannot be serialized, i.e. its detail plus the
+ * identity a caller needs to name it. `path` is the path this resource WOULD
+ * have occupied, so a diagnostic can key on it exactly as a branch-side one does.
+ */
+export interface UnserializableResource extends UnserializableRefDetail {
+  kind: 'pipeline' | 'trigger';
+  resourceId: string;
+  name: string;
+  path: string;
+}
+
+/** #1043 — the human sentence for one unserializable ref. The ids in it are the
+ * OWNER'S OWN DB data (an authored node id, a stored row id), never bytes read
+ * from a committed file — so this does not cross the rule that keeps arbitrary
+ * branch content out of API responses (`workspace-parse.ts`'s DIAGNOSTIC_MESSAGE). */
+export function describeUnserializable(detail: UnserializableRefDetail): string {
+  const what =
+    detail.ref === 'connection'
+      ? `connection "${detail.danglingId}"`
+      : `pipeline version "${detail.danglingId}"`;
+  return detail.nodeId === null
+    ? `binds ${what}, which no longer exists`
+    : `node "${detail.nodeId}" references ${what}, which no longer exists`;
+}
+
+/**
+ * A resource references (via a NON-null, LITERAL id) another resource that is no
+ * longer in this owner's workspace — a ref the serializer refuses to paper over
+ * with a `null` (#473: an absent fact is not a benign default).
+ *
+ * #1043 corrected what this MEANS. It was documented as "a corrupt/cross-owner
+ * id … not user input", surfaced as an internal 500. It is reachable by two
+ * ORDINARY acts: author a node using a connection (which mints an IMMUTABLE
+ * version holding that connection's db id), then delete the connection — a hard
+ * delete, deliberately, since there is no FK from versions. So it is a state the
+ * operator can produce and must be told how to fix, not an internal fault.
+ *
+ * `offenders` carries EVERY resource that failed, not just the first: a message
+ * naming one of three broken pipelines sends the operator back round the loop
+ * twice more. The MESSAGE names at most `MAX_NAMED_OFFENDERS` of them and counts
+ * the rest — an unbounded list-into-one-string is the shape `capIssues` exists
+ * to avoid in `errors.ts`, and a sentence naming forty pipelines helps nobody.
+ * The full set stays on `offenders` for any caller that wants it. That completeness is BETWEEN resources, not within one — a node's
+ * remap throws at the first bad ref, so a pipeline with two dangling refs
+ * reports only the first, and the second surfaces once the first is fixed.
+ * Pre-existing, and left alone deliberately: collecting per-ref would mean
+ * restructuring the remap, for a second sentence about a pipeline the operator
+ * is already being sent to edit.
+ */
+const MAX_NAMED_OFFENDERS = 5;
+
 export class WorkspaceSerializeError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly offenders: UnserializableResource[];
+
+  constructor(offenders: UnserializableResource[]) {
+    const named = offenders.slice(0, MAX_NAMED_OFFENDERS);
+    const rest = offenders.length - named.length;
+    super(
+      `${offenders.length} resource(s) cannot be committed: ` +
+        named.map((o) => `"${o.name}" ${describeUnserializable(o)}`).join('; ') +
+        (rest > 0 ? `; and ${rest} more` : ''),
+    );
     this.name = 'WorkspaceSerializeError';
+    this.offenders = offenders;
+  }
+}
+
+/** #1043 — thrown by `remapRef` for ONE ref; the per-resource catch in
+ * `serializeWorkspaceTolerant` is what turns it into an `UnserializableResource`
+ * by adding the identity of the resource being serialized. Never escapes this
+ * module. */
+class UnserializableRefError extends Error {
+  readonly detail: UnserializableRefDetail;
+
+  constructor(detail: UnserializableRefDetail) {
+    super(describeUnserializable(detail));
+    this.name = 'UnserializableRefError';
+    this.detail = detail;
   }
 }
 
@@ -345,22 +431,22 @@ export function ownedVersionForms(
 function remapRef(
   value: string | null | undefined,
   map: Map<string, string>,
-  describe: () => string,
+  describe: () => UnserializableRefDetail,
 ): string | null {
   if (value == null) return null;
   if (interpolationMode(value).mode !== 'literal') return value; // dynamic — preserve verbatim
   const resourceId = map.get(value);
-  if (resourceId === undefined) throw new WorkspaceSerializeError(describe());
+  if (resourceId === undefined) throw new UnserializableRefError(describe());
   return resourceId;
 }
 
 function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
   const { connectionId, call, ...rest } = node;
-  const mappedConnectionId = remapRef(
-    connectionId,
-    maps.connectionResourceId,
-    () => `node "${node.id}" references a connection not owned by this workspace`,
-  );
+  const mappedConnectionId = remapRef(connectionId, maps.connectionResourceId, () => ({
+    ref: 'connection',
+    nodeId: node.id,
+    danglingId: connectionId!,
+  }));
 
   const exported: NodeExport = { ...rest, connectionId: mappedConnectionId };
   if (call) {
@@ -368,11 +454,11 @@ function remapNode(node: Node, maps: OwnerRefMaps): NodeExport {
     // non-null literal input (it either maps it or throws), so the `!` is sound.
     exported.call = {
       ...call,
-      pipelineVersionId: remapRef(
-        call.pipelineVersionId,
-        maps.versionResourceId,
-        () => `node "${node.id}" call references a pipeline version not owned by this workspace`,
-      )!,
+      pipelineVersionId: remapRef(call.pipelineVersionId, maps.versionResourceId, () => ({
+        ref: 'call',
+        nodeId: node.id,
+        danglingId: call.pipelineVersionId,
+      }))!,
     };
   }
   return exported;
@@ -424,11 +510,11 @@ function serializeConnection(connection: Connection): ExportEnvelope {
  */
 export function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEnvelope {
   const webhook = trigger.webhook ? WebhookPublicConfigSchema.parse(trigger.webhook) : null;
-  const pipelineVersionId = remapRef(
-    trigger.pipelineVersionId,
-    maps.versionResourceId,
-    () => `trigger "${trigger.id}" binds a pipeline version not owned by this workspace`,
-  );
+  const pipelineVersionId = remapRef(trigger.pipelineVersionId, maps.versionResourceId, () => ({
+    ref: 'binding',
+    nodeId: null,
+    danglingId: trigger.pipelineVersionId!,
+  }));
   return ExportEnvelopeSchema.parse({
     schemaVersion: SCHEMA_VERSION,
     catalogVersion: CATALOG_VERSION,
@@ -455,8 +541,19 @@ export function serializeTrigger(trigger: Trigger, maps: OwnerRefMaps): ExportEn
  * still remaps faithfully to that version's (real) `resourceId` — the resulting
  * dangling reference on import is G7's "absent → disabled" charter, not a
  * serialize-time drop.
+ *
+ * #1043 — a resource whose refs cannot be put in resourceId-space is OMITTED
+ * from `files` and returned in `unserializable` instead of throwing. The
+ * READ-ONLY callers (drift, import-preview, the apply's baseline) use this
+ * directly and DISCLOSE what they could not compare; `serializeWorkspace`
+ * (the Commit path) wraps it and refuses. See that wrapper for why the write
+ * path cannot simply drop the resource, and `collect` below for what is and is
+ * not caught.
  */
-export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
+export function serializeWorkspaceTolerant(
+  db: Db,
+  ownerId: string,
+): { files: WorkspaceFile[]; unserializable: UnserializableResource[] } {
   const allPipelines = listPipelines(db, ownerId);
   const connections = listConnections(db, ownerId);
   const triggers = listTriggers(db, { ownerId });
@@ -485,7 +582,33 @@ export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
   );
 
   const files: WorkspaceFile[] = [];
+  const unserializable: UnserializableResource[] = [];
 
+  /** Serialize one resource into `files`, or record it as unserializable.
+   *
+   * Only an `UnserializableRefError` is caught. Anything else — a Zod failure on
+   * a row the current schema no longer validates, say — propagates: swallowing
+   * it would report a dangling ref that was never the problem, which is the same
+   * manufactured-fact defect this ticket exists to remove. */
+  const collect = (
+    identity: Pick<UnserializableResource, 'kind' | 'resourceId' | 'name'>,
+    path: string,
+    serialize: () => ExportEnvelope,
+  ) => {
+    try {
+      files.push({ path, contents: canonicalStringify(serialize()) });
+    } catch (err) {
+      if (!(err instanceof UnserializableRefError)) throw err;
+      unserializable.push({ ...err.detail, ...identity, path });
+    }
+  };
+
+  // #1043 — paths are assigned over the FULL live set, deliberately BEFORE any
+  // offender is dropped. `resourceFilePaths` suffixes a colliding slug with the
+  // resourceId, counted over the set it is given: computing it over the kept
+  // subset would let one pipeline's dangling ref silently move an UNRELATED
+  // same-named pipeline from `report-<rid>.json` back to `report.json`, which
+  // drift would then report as a rename nobody performed.
   const pipelinePaths = resourceFilePaths(
     'pipeline',
     livePipelines.map((p) => ({ resourceId: p.resourceId, name: p.name })),
@@ -493,10 +616,11 @@ export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
   for (const pipeline of livePipelines) {
     const latest = getLatestPipelineVersion(db, pipeline.id);
     if (!latest) continue;
-    files.push({
-      path: pipelinePaths.get(pipeline.resourceId)!,
-      contents: canonicalStringify(serializePipeline(pipeline, latest, maps)),
-    });
+    collect(
+      { kind: 'pipeline', resourceId: pipeline.resourceId, name: pipeline.name },
+      pipelinePaths.get(pipeline.resourceId)!,
+      () => serializePipeline(pipeline, latest, maps),
+    );
   }
 
   const connectionPaths = resourceFilePaths(
@@ -515,11 +639,37 @@ export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
     liveTriggers.map((t) => ({ resourceId: t.resourceId, name: t.name })),
   );
   for (const trigger of liveTriggers) {
-    files.push({
-      path: triggerPaths.get(trigger.resourceId)!,
-      contents: canonicalStringify(serializeTrigger(trigger, maps)),
-    });
+    // A trigger's binding has no producer for this state — `triggers.
+    // pipeline_version_id` is `onDelete: 'cascade'` (db/schema.ts), so deleting
+    // the pipeline takes the trigger with it. It goes through the same seam for
+    // uniformity, and to keep the write path fail-closed if that FK ever
+    // changes; there is deliberately no test asserting a dangling binding,
+    // because nothing can produce one.
+    collect(
+      { kind: 'trigger', resourceId: trigger.resourceId, name: trigger.name },
+      triggerPaths.get(trigger.resourceId)!,
+      () => serializeTrigger(trigger, maps),
+    );
   }
 
+  return { files, unserializable };
+}
+
+/**
+ * The COMMIT-path serialize: every file, or a refusal naming every resource that
+ * could not be put in resourceId-space.
+ *
+ * #1043 — refusing is the right polarity here and it is NOT merely "safer than
+ * dropping". Commit's managed-dir reconcile stages the removal of every
+ * previously committed managed file and re-adds only what this returns
+ * (`routes/workspace-git.ts`), so quietly omitting an offender would commit it
+ * as a DELETION of that pipeline from the branch — losing it from git over a
+ * dangling ref in one node. Writing it is not an option either (a commit must
+ * not emit a dangling ref). So the whole Commit refuses, by name, with the
+ * remedy: re-point or remove the node and Save, which mints a fresh head.
+ */
+export function serializeWorkspace(db: Db, ownerId: string): WorkspaceFile[] {
+  const { files, unserializable } = serializeWorkspaceTolerant(db, ownerId);
+  if (unserializable.length > 0) throw new WorkspaceSerializeError(unserializable);
   return files;
 }
