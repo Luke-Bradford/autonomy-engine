@@ -181,3 +181,121 @@ test('#931 — the run list states what each run cost, and never invents a figur
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #932 — a run's total EXCLUDES what its sub-pipelines spent, and now says so.
+ *
+ * The first spec in the repo to run a `call_pipeline` to completion. Everything
+ * before it either authored a call node without firing it
+ * (`call-node-authoring.spec.ts`) or stubbed the seam, because until #796 landed
+ * P3b there was no real child to run — which is precisely how this defect went
+ * live unnoticed: the boundary was documented as "latent", the seam landed, and
+ * the run monitor kept printing a total that had quietly started omitting money.
+ *
+ * WHAT IT PROVES THAT A UNIT TEST CANNOT. The unit tests pin the fold and the
+ * sentence; only this can show the two runs are genuinely separate ledgers on the
+ * real server — that the parent's `/cost` counts ONE exchange while the child's
+ * counts its own, so the exclusion the UI claims is a measured fact rather than a
+ * sentence someone typed. If a future change rolled child spend into the parent,
+ * the caveat would become a lie and this is what catches it.
+ *
+ * EGRESS-FREE by the same trick as the specs above, applied on BOTH sides: an
+ * `agent_cli` connection running `/bin/echo` mints a real `activity.metered` for
+ * a subprocess that ran, with no network and no credential. The parent gets one
+ * such node of its own so that its total is non-empty and therefore capable of
+ * being wrong in the interesting direction.
+ */
+test('#932 — the run total says which child runs it leaves out, and links them', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const created = await page.request.post('/api/connections', {
+    data: { name: 'e2e echo cli child-spend', kind: 'agent_cli', config: { command: '/bin/echo' } },
+  });
+  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
+  const { id: connectionId } = (await created.json()) as { id: string };
+
+  /* The CHILD: one node that really spends, under its own run id. */
+  const childDoc: SeedDoc = {
+    nodes: [
+      {
+        id: 'childWork',
+        type: 'agent_task',
+        config: { task: 'e2e child spend' },
+        connectionId,
+        position: { x: 0, y: 0 },
+      },
+    ],
+  };
+  const { pipelineVersionId: childPv } = await seedVersion(page, '#932 child', childDoc);
+
+  /* The PARENT: its OWN spend, then a call node targeting that child version. */
+  const parentDoc: SeedDoc = {
+    nodes: [
+      {
+        id: 'parentWork',
+        type: 'agent_task',
+        config: { task: 'e2e parent spend' },
+        connectionId,
+        position: { x: 0, y: 0 },
+      },
+      {
+        id: 'callChild',
+        type: 'call_pipeline',
+        config: {},
+        call: { pipelineVersionId: childPv, params: {} },
+        position: { x: 240, y: 0 },
+      },
+    ],
+    edges: [{ id: 'e1', from: 'parentWork', to: 'callChild', on: 'success' }],
+  };
+  const { pipelineVersionId: parentPv } = await seedVersion(page, '#932 parent', parentDoc);
+  const runId = await fireAndSettle(page, parentPv, '#932 parent run');
+
+  /* PREMISE, asserted before any UI: the child REALLY ran as its own run. Without
+     this the assertions below could pass against a parent that refused the spawn
+     — `callFailed` answers a refusal with a `call.returned` carrying the id of a
+     run that was never created, which is exactly the case the fold declines to
+     report. */
+  const childrenRes = await page.request.get(
+    `/api/runs?parentRunId=${encodeURIComponent(runId)}`,
+  );
+  expect(childrenRes.status()).toBe(200);
+  const childrenBody = (await childrenRes.json()) as { items: { id: string; status: string }[] };
+  expect(childrenBody.items).toHaveLength(1);
+  const childRunId = childrenBody.items[0]!.id;
+  expect(childrenBody.items[0]!.status).toBe('success');
+
+  /* THE LOAD-BEARING ASSERTION: two separate ledgers. Each run billed exactly one
+     CLI exchange, and the parent's total counts ONLY its own — if a change ever
+     rolled descendants in, the parent would read 2 here and the caveat beside the
+     figure would have become false. */
+  const costOf = async (id: string) => {
+    const res = await page.request.get(`/api/runs/${encodeURIComponent(id)}/cost`);
+    expect(res.status()).toBe(200);
+    return (await res.json()) as { responseCount: number };
+  };
+  expect((await costOf(runId)).responseCount).toBe(1);
+  expect((await costOf(childRunId)).responseCount).toBe(1);
+
+  await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
+  await fluentRootReady(page);
+
+  const section = page.getByRole('region', { name: 'Cost & usage' });
+  await expect(section.getByText(/called 1 sub-pipeline,/)).toBeVisible();
+  // Not a census: the linked child may have called others in turn.
+  await expect(section.getByText(/anything it called in turn/)).toBeVisible();
+
+  /* The link is the half that makes the understatement usable — an operator told
+     money is missing and given no route to it is barely better off. Followed for
+     real rather than asserted on its href, so a route that 404s fails here. */
+  await section.getByRole('link', { name: childRunId }).click();
+  await expect(page).toHaveURL(new RegExp(`/monitor/runs/${childRunId}$`));
+  const childSection = page.getByRole('region', { name: 'Cost & usage' });
+  await expect(childSection.getByRole('heading', { name: 'Cost & usage' })).toBeVisible();
+  // The child's own page makes no exclusion claim: it called nothing.
+  await expect(childSection.getByText(/sub-pipeline/)).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});
