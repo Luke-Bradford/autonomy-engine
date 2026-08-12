@@ -222,16 +222,22 @@ export type QuotaReaderLogEvent =
  * definition. `index.ts` holds the only sink in the app and had no coverage at
  * all, so a level rule written there could not be pinned by anything.
  *
- * `warn` for the rate-limit pair is unchanged (#765): the guard is blind for the
- * whole of that state, and the clearing line is what bounds it.
+ * `warn` on this sink means ONE thing and keeps meaning it: the build loop's
+ * spend guard is currently blind (#765). The rate-limit pair qualifies for the
+ * whole of that state, the clearing line being what bounds it.
  *
- * `warn` for `malformed` rests on a DIFFERENT ground, stated because the old one
- * is false here — nothing is blind, the reading was served. It warns because a
- * provider sending a field in a shape this reader cannot map is an unannounced
- * contract change on a field we parse; it is actionable, and the latch means it
- * can be said at most once per transition. `absent` gets `info` for the exact
- * opposite reason: it is the NORMAL state of a host with no active session, and
- * #1023 exists precisely because treating it as a fault was the bug.
+ * So BOTH window events are `info`, including `malformed`. That is deliberate
+ * and it overrides the more obvious reading, which is that a contract break
+ * deserves the louder level. It does not, here: these events are only ever
+ * derived from a reading that WAS served, the guard reads `seven_day` alone, and
+ * nothing about a five-hour display row can blind it. Warning on them would
+ * spend an established signal — the one channel that currently means "the guard
+ * cannot see" — on a case that never does, and a signal that fires for two
+ * different conditions stops being actionable for either.
+ *
+ * The distinction #1032 exists to provide is not lost by that: it is carried in
+ * the event's `reason`, which is where a machine reads it anyway. The level says
+ * how urgent; the payload says what happened.
  */
 export function describeQuotaLogEvent(event: QuotaReaderLogEvent): {
   level: 'warn' | 'info';
@@ -242,10 +248,6 @@ export function describeQuotaLogEvent(event: QuotaReaderLogEvent): {
     case 'rate_limit_cleared':
       return { level: 'warn', msg: 'account-quota provider availability changed' };
     case 'window_dropped':
-      return {
-        level: event.reason === 'malformed' ? 'warn' : 'info',
-        msg: 'account-quota window visibility changed',
-      };
     case 'window_restored':
       return { level: 'info', msg: 'account-quota window visibility changed' };
   }
@@ -596,8 +598,8 @@ type SampleOutcome = AccountQuotaReading;
 type Sampled = { outcome: SampleOutcome; fiveHour: WindowVisibility | null };
 
 /**
- * A sample that produced no reading, so its six construction sites in `sample()`
- * state their cause and nothing else.
+ * A sample that produced no reading, so its five construction sites in
+ * `sample()` state their cause and nothing else.
  */
 const unread = (unavailable: AccountQuotaUnavailableReason): Sampled => ({
   outcome: { value: null, unavailable },

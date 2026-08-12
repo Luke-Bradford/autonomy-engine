@@ -401,14 +401,15 @@ export async function buildApp(opts?: BuildAppOptions) {
           // present as the same `null`, which is what produced #765's original
           // misdiagnosis.
           //
-          // The level is NOT uniform any more. It was `warn` for everything on
-          // the grounds that "every one of these events means the spend guard
-          // is currently blind" — true of the rate-limit pair, false of #1032's
-          // window events, which are only ever derived from a reading that WAS
-          // served. `describeQuotaLogEvent` owns that rule so it is one
-          // testable definition rather than a condition written inline here,
-          // where nothing covers it. Every payload is scalars only — no
-          // credential, no provider body — so all of them are safe at any level.
+          // The level is no longer uniform, and the rule that decides it lives
+          // in `describeQuotaLogEvent` so it is one testable definition rather
+          // than a condition written inline here, where nothing covers it.
+          // `warn` still means exactly what it meant: the spend guard is blind.
+          // #1032's window events never are — they are derived from a reading
+          // that WAS served — so they log at `info`, and what happened is read
+          // off the event's `reason` rather than off its level. Every payload is
+          // scalars only, no credential and no provider body, so all of them are
+          // safe at any level.
           log: (event) => {
             const { level, msg } = describeQuotaLogEvent(event);
             fastify.log[level](event, msg);

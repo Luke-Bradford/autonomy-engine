@@ -926,24 +926,33 @@ describe('#1032 — a DROPPED five_hour is distinguishable from an unreported on
     it.each([
       [{ event: 'rate_limited', throttleMs: 120_000 }, 'warn'],
       [{ event: 'rate_limit_cleared' }, 'warn'],
-      [{ event: 'window_dropped', window: 'five_hour', reason: 'malformed' }, 'warn'],
+      [{ event: 'window_dropped', window: 'five_hour', reason: 'malformed' }, 'info'],
       [{ event: 'window_dropped', window: 'five_hour', reason: 'absent' }, 'info'],
       [{ event: 'window_restored', window: 'five_hour' }, 'info'],
     ] as [QuotaReaderLogEvent, 'warn' | 'info'][])('logs %o at %s', (event, level) => {
       expect(describeQuotaLogEvent(event).level).toBe(level);
     });
 
-    it('does not warn about a window the provider merely did not report', () => {
-      // The one level that would be actively misleading. `warn` on this surface
-      // has always meant "the spend guard is blind"; an absent 5-hour window is
-      // the NORMAL state of a host with no active session, and #1023 exists
-      // because treating it as a fault was the bug.
-      const absent: QuotaReaderLogEvent = {
-        event: 'window_dropped',
-        window: 'five_hour',
-        reason: 'absent',
-      };
-      expect(describeQuotaLogEvent(absent).level).not.toBe('warn');
+    it('warns about NOTHING that leaves the guard able to see', () => {
+      // The property, rather than three separate level assertions: `warn` on
+      // this sink means "the spend guard is blind", and a window event is only
+      // ever derived from a reading that WAS served. A malformed window is a
+      // real contract break and it is still not a warning — that distinction
+      // rides on the event's `reason`, not on its level. Warning on both would
+      // spend the one channel that means "the guard cannot see" on a case that
+      // never does.
+      const windowEvents: QuotaReaderLogEvent[] = [
+        { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+        { event: 'window_dropped', window: 'five_hour', reason: 'malformed' },
+        { event: 'window_restored', window: 'five_hour' },
+      ];
+      for (const event of windowEvents) {
+        expect(describeQuotaLogEvent(event).level).not.toBe('warn');
+      }
+      // ...and the channel it protects still warns, or the rule above is
+      // vacuous — a `describeQuotaLogEvent` that returned `info` for everything
+      // would satisfy the loop and mean nothing.
+      expect(describeQuotaLogEvent({ event: 'rate_limited', throttleMs: 1 }).level).toBe('warn');
     });
 
     it('separates the two subjects by message, not only by payload', () => {
