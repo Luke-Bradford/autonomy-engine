@@ -1997,6 +1997,28 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(getRun(db, child.id)!.status).toBe('interrupted');
   });
 
+  it('reports a sweep that silently did NOT happen as `failed`, not as swept', async () => {
+    const { db, sqlite } = freshDb();
+    const { child } = seedOrphanChild(db);
+    // `terminalizeInterrupted` returns `void` and swallows a read fault (it logs
+    // and returns), so "it was called" is not evidence the row moved — which is
+    // why `sweepOne` re-reads instead of reporting the attempt. `RAISE(IGNORE)`
+    // in a BEFORE trigger skips the row operation SILENTLY, with no error to
+    // reach the fault boundary: the exact shape of a no-op the caller cannot
+    // otherwise detect.
+    sqlite.exec(`
+      CREATE TRIGGER swallow_child_patch BEFORE UPDATE ON runs
+      WHEN NEW.id = '${child.id}'
+      BEGIN SELECT RAISE(IGNORE); END;
+    `);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.failed).toEqual([{ runId: child.id, reason: 'orphan_child_sweep_no_op' }]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
   it('files a corrupt `pending` ROW under `corrupt` and still sweeps its healthy sibling', async () => {
     const { db, sqlite } = freshDb();
     const healthy = seedOrphanChild(db);
