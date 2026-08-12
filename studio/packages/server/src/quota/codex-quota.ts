@@ -275,6 +275,16 @@ export async function codexQuotaSourcePresent(
  * Every rejection returns `null` rather than substituting a default, for the
  * reason the whole surface exists: an unparsable window is the ABSENCE of a
  * reading, and a manufactured benign value for it reads as headroom.
+ *
+ * DELIBERATELY NOT RELAXED by #1023, which made the same field nullable for
+ * claude so that a missing reset instant stops condemning the utilization
+ * beside it. Two reasons this mapper keeps the stricter rule: codex's reading
+ * is SCRAPED from records its CLI wrote, so a window without a reset is
+ * evidence the record is malformed rather than evidence the provider had
+ * nothing to say; and there is no measured codex payload that omits one, so
+ * relaxing it would widen an accept-set on speculation. The shared
+ * `AccountQuotaWindow` now PERMITS `resets_at: null` and this mapper simply
+ * never produces one — an asymmetry that is a decision, not an oversight.
  */
 export function mapCodexWindow(input: unknown): AccountQuotaWindow | null {
   if (!isRecord(input)) return null;

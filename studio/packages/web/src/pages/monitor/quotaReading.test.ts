@@ -37,6 +37,41 @@ describe('readAccountQuota', () => {
   });
 
   /**
+   * #1023 — the provider stops reporting `five_hour` when there is no active
+   * session, and the reading now carries the 7-day window alone rather than
+   * being discarded. The panel must not fill the gap back in.
+   */
+  it('renders a claude reading with no five_hour without inventing the missing window', () => {
+    const reading = readAccountQuota(
+      stateWith({ seven_day: { utilization: 0.07, resets_at: 1_785_636_000 } }),
+    );
+
+    expect(reading.kind).toBe('reading');
+    if (reading.kind !== 'reading') return;
+    expect(reading.windows.map((w) => w.label)).toEqual(['7-day']);
+    expect(reading.windows[0]?.usedPct).toBeCloseTo(7);
+  });
+
+  /**
+   * #1023 — a window whose reset instant the provider did not report.
+   *
+   * The failure this pins is the REPAIR, not the read: coalescing the absent
+   * instant to `0` typechecks and renders "1/1/1970", a plausible date with no
+   * relative suffix. An absent instant has to stay absent all the way to the
+   * cell that renders it as an em-dash.
+   */
+  it('carries an unreported reset instant through as null, never as epoch 0', () => {
+    const reading = readAccountQuota(
+      stateWith({ seven_day: { utilization: 0.07, resets_at: null } }),
+    );
+
+    expect(reading.kind).toBe('reading');
+    if (reading.kind !== 'reading') return;
+    expect(reading.windows[0]?.resetsAtMs).toBeNull();
+    expect(reading.windows[0]?.usedPct).toBeCloseTo(7);
+  });
+
+  /**
    * The seconds/ms trap. Missing the ×1000 dates the reset to January 1970 —
    * a plausible-looking date rather than a visible error.
    */
@@ -51,7 +86,12 @@ describe('readAccountQuota', () => {
     if (reading.kind !== 'reading') throw new Error('expected a reading');
     expect(reading.windows[0]?.resetsAtMs).toBe(1_785_100_200_000);
     expect(reading.windows[1]?.resetsAtMs).toBe(1_785_636_000_000);
-    expect(new Date(reading.windows[0]!.resetsAtMs).getUTCFullYear()).toBeGreaterThan(2020);
+    // Non-null asserted deliberately: this case reports a reset instant, and
+    // #1023's nullable `resetsAtMs` must not quietly turn "the ×1000 is
+    // missing" into "there was nothing to scale".
+    const resetsAtMs = reading.windows[0]!.resetsAtMs;
+    expect(resetsAtMs).not.toBeNull();
+    expect(new Date(resetsAtMs!).getUTCFullYear()).toBeGreaterThan(2020);
   });
 
   it('stamps the response instant in milliseconds too', () => {

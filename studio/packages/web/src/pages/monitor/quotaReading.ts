@@ -3,7 +3,6 @@ import type {
   AccountQuotaProvider,
   AccountQuotaUnavailableReason,
   AccountQuotaWindow,
-  ClaudeAccountQuota,
   CodexAccountQuota,
 } from '@autonomy-studio/shared';
 
@@ -57,8 +56,17 @@ export interface QuotaWindowReading {
   headroomPct: number;
   /** True when the account is drawing on overage credit. */
   overage: boolean;
-  /** When this window resets, epoch MILLISECONDS (converted from the wire's seconds). */
-  resetsAtMs: number;
+  /**
+   * When this window resets, epoch MILLISECONDS (converted from the wire's
+   * seconds) — or `null` when the provider did not report an instant (#1023).
+   *
+   * Nullable rather than coalesced, and that is the whole point of the type. A
+   * `?? 0` here typechecks and renders as `1/1/1970`: a plausible date, with no
+   * relative suffix to mark it odd, for a fact nobody reported. The renderer
+   * already speaks this language — `formatWhen` takes `number | null` and gives
+   * an em-dash — so the honest value survives to the cell unaided.
+   */
+  resetsAtMs: number | null;
 }
 
 /**
@@ -122,14 +130,20 @@ function readWindow(label: string, window: AccountQuotaWindow): QuotaWindowReadi
     usedPct,
     headroomPct: Math.max(0, 100 - usedPct),
     overage: window.overage === true,
-    resetsAtMs: window.resets_at * 1000,
+    resetsAtMs: window.resets_at === null ? null : window.resets_at * 1000,
   };
 }
 
 /**
- * The whole reading. ALL-OR-NOTHING, inherited from the wire contract: both
- * windows are present or the reading is `null`, so there is no partial state to
- * represent and no half-reading to mistake for evidence.
+ * The whole reading.
+ *
+ * The wire contract used to be all-or-nothing — both windows present or the
+ * reading `null` — and this said so. #1023 removed that: `five_hour` is now
+ * absent whenever the provider did not report one, so a reading may carry one
+ * window or two. What did NOT change is the part that matters here: a reading
+ * is still either obtained or `null`, so there is still no half-reading to
+ * mistake for evidence. The partial-ness is in WHICH WINDOWS were reported, not
+ * in how sure we are of them.
  */
 export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading {
   const generatedAtMs = state.generated_at * 1000;
@@ -165,21 +179,27 @@ export function readAccountQuota(state: AccountQuotaDisplayState): QuotaReading 
   return { kind: 'reading', generatedAtMs, windows: readWindows(claude) };
 }
 
-/** Both windows, in the order they read. One definition, two callers (#987). */
-function readWindows(claude: ClaudeAccountQuota): QuotaWindowReading[] {
-  return [readWindow('5-hour', claude.five_hour), readWindow('7-day', claude.seven_day)];
-}
-
 /**
- * Codex's windows — INDIVIDUALLY optional, unlike claude's pair (#990).
+ * The windows a reading actually carries, in the order they read.
  *
- * Measured: a `plus` plan reports only the 7-day window. Emitting a placeholder
- * row for the missing one would state a 5-hour figure nobody reported.
+ * ONE definition for both providers (#1023). It used to be two: claude's pair
+ * was mandatory and codex's windows were individually optional, because a
+ * `plus` plan reports only the 7-day one (#990) and emitting a placeholder row
+ * for the other would state a figure nobody reported. #1023 measured the
+ * provider doing the same thing on claude's side — no `five_hour` while there
+ * is no active session — so the two shapes converged, and the reason codex's
+ * version was written is now the reason for both.
+ *
+ * A window that is absent produces NO ROW. That is the whole contract: a row
+ * with a blank or zeroed figure would be a claim, and there is nothing to claim.
  */
-function readCodexWindows(codex: CodexAccountQuota): QuotaWindowReading[] {
+function readWindows(quota: {
+  five_hour?: AccountQuotaWindow;
+  seven_day?: AccountQuotaWindow;
+}): QuotaWindowReading[] {
   const windows: QuotaWindowReading[] = [];
-  if (codex.five_hour !== undefined) windows.push(readWindow('5-hour', codex.five_hour));
-  if (codex.seven_day !== undefined) windows.push(readWindow('7-day', codex.seven_day));
+  if (quota.five_hour !== undefined) windows.push(readWindow('5-hour', quota.five_hour));
+  if (quota.seven_day !== undefined) windows.push(readWindow('7-day', quota.seven_day));
   return windows;
 }
 
@@ -229,7 +249,7 @@ function readCodexQuota(
   if (codex === null) {
     return { kind: 'unreadable', reason: reason ?? 'reader_error', generatedAtMs };
   }
-  const windows = readCodexWindows(codex);
+  const windows = readWindows(codex);
   /*
    * A reading whose windows all fell away is UNREADABLE, never an empty table.
    * The wire schema already refuses this shape, so it is unreachable from the

@@ -54,6 +54,30 @@ describe('createLastKnownQuotaRecorder', () => {
   });
 
   /**
+   * #1023 — a reading with only the 7-day window is a reading, so it is
+   * retainable like any other.
+   *
+   * Worth pinning rather than assuming: the recorder keys on `value !== null`,
+   * and a partial reading is not null. If it were ever narrowed to "a complete
+   * reading", the operator's panel would lose its stale fallback exactly on the
+   * shape the provider sends most of the day — the failure this ticket removed,
+   * reappearing one module over.
+   */
+  it('retains a reading that carries only the 7-day window', async () => {
+    const partial = { seven_day: { utilization: 0.41, resets_at: null } };
+    const recorder = createLastKnownQuotaRecorder(
+      scriptedReader([
+        { value: partial, unavailable: null },
+        { value: null, unavailable: 'rate_limited' },
+      ]),
+      () => 9_000,
+    );
+    await recorder.reader.read();
+    await recorder.reader.read();
+    expect(recorder.lastKnown()).toEqual({ value: partial, readAtMs: 9_000 });
+  });
+
+  /**
    * THE POINT OF THE MODULE. This is the state the operator was in: a good
    * reading minutes ago, the provider 429ing now.
    */

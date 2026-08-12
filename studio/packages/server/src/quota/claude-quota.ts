@@ -178,9 +178,14 @@ const DEFAULT_MAX_THROTTLE_FACTOR = 8;
  * a public test seam typed `Promise<unknown>`, and widening it to a
  * discriminated union would churn every injection site for no gain.
  *
- * It is safe to miss. `buildQuota(RATE_LIMITED)` is `null` (no `five_hour`), so
+ * It is safe to miss. `buildQuota(RATE_LIMITED)` is `null` (no `seven_day`), so
  * a reader that failed to recognise it would lose the backoff and behave
  * exactly as it did before this existed — never invent a reading.
+ *
+ * That parenthetical used to say `five_hour`, and it was the reason rather than
+ * the conclusion that #1023 invalidated: a missing `five_hour` no longer
+ * condemns anything. `seven_day` is now the field whose absence makes this
+ * sentinel unreadable, which is the property the claim actually rests on.
  */
 export const RATE_LIMITED = Object.freeze({ __quota: 'rate_limited' } as const);
 
@@ -222,6 +227,25 @@ export function isoToEpochSeconds(value: unknown): number | null {
  * Every rejection path returns `null` rather than substituting a default: an
  * unparsable window is an ABSENCE of a reading, and manufacturing a benign
  * value for it is the exact fail-open this surface exists to prevent.
+ *
+ * ## What can and cannot condemn a window (#1023)
+ *
+ * ONLY `utilization` can. It is the measurement; without a usable one there is
+ * nothing here. `resets_at` cannot: an instant that is absent, null or
+ * unparseable degrades to `resets_at: null` and the window survives with its
+ * measurement intact.
+ *
+ * That is a narrowing, and the thing it narrows is a real defect. `resets_at` is
+ * a DISPLAY field — `loop/drive.sh` reads it only to log a "window reopens at"
+ * line and already prints nothing when it cannot — so rejecting the whole window
+ * over it discarded a good utilization to protect a sentence. Measured: 31
+ * readings lost that way in three days.
+ *
+ * The original refusal is intact where it belongs. An offset-less or loose
+ * timestamp is still never PARSED into an instant (see `isoToEpochSeconds` —
+ * `Date.parse` would read it as local time and be wrong by up to 14 hours), so
+ * this reader still never emits a guessed reset. It now says it does not know,
+ * instead of saying it has no reading.
  */
 export function mapWindow(input: unknown): AccountQuotaWindow | null {
   if (typeof input !== 'object' || input === null) return null;
@@ -234,9 +258,12 @@ export function mapWindow(input: unknown): AccountQuotaWindow | null {
   // is `Infinity`), and it would then fail `ClaudeAccountQuotaSchema` — turning a
   // reading the reader considered valid into a 400 for the whole TTL.
   if (typeof util !== 'number' || !Number.isFinite(util) || util < 0) return null;
-  const resetsAt = isoToEpochSeconds(w.resets_at);
-  if (resetsAt === null) return null;
-  const mapped: AccountQuotaWindow = { utilization: util / 100, resets_at: resetsAt };
+  // `isoToEpochSeconds` is already total and already returns `null` for both
+  // "absent" and "unparseable", so this is a pass-through, NOT a rejection.
+  const mapped: AccountQuotaWindow = {
+    utilization: util / 100,
+    resets_at: isoToEpochSeconds(w.resets_at),
+  };
   // `=== true`, not truthiness. The prototype used a truthy test, but this is
   // the one place in the module that would MANUFACTURE a value rather than
   // reject one: a wire `"false"`, `"no"` or `1` is truthy and would become a
@@ -246,18 +273,26 @@ export function mapWindow(input: unknown): AccountQuotaWindow | null {
 }
 
 /**
- * Provider payload → a complete reading, or `null`.
+ * Provider payload → a reading, or `null`.
  *
- * ALL-OR-NOTHING (inherited from the prototype's `_build`): both windows must
- * map, or the whole reading is UNREADABLE. Half a reading is not evidence, and
- * a partial object would let a caller read a window that was never validated.
+ * The 7-day window IS the reading: it is the one `loop/drive.sh` consumes and
+ * the only fact this surface exists to carry, so if it does not map the reading
+ * is UNREADABLE. The 5-hour window is reported when it maps and OMITTED when it
+ * does not — the provider stops sending it when there is no active session, and
+ * treating that as a failed read is what #1023 measured (31 discarded 7-day
+ * figures in three days). See `ClaudeAccountQuotaSchema` for why the inherited
+ * all-or-nothing rule did not survive contact with the real payload.
+ *
+ * Omitted, never `null`: on this surface a `null` claims a read was attempted
+ * and failed, which is not what an unreported window is. Same encoding, and the
+ * same reason, as `CodexAccountQuotaSchema`'s optional windows.
  */
 export function buildQuota(payload: unknown): ClaudeAccountQuota | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
   const fiveHour = mapWindow(p.five_hour);
   const sevenDay = mapWindow(p.seven_day);
-  if (fiveHour === null || sevenDay === null) return null;
+  if (sevenDay === null) return null;
   // The SCHEMA is the single definition of a valid reading, and this is the ONE
   // place it is enforced at runtime — the route trusts what it gets from here.
   // It matters because these are untrusted provider bytes and because
@@ -266,7 +301,7 @@ export function buildQuota(payload: unknown): ClaudeAccountQuota | null {
   // makes it an honest UNREADABLE, and means a future tightening of the schema
   // can only ever make readings null — never make the endpoint fail.
   const parsed = ClaudeAccountQuotaSchema.safeParse({
-    five_hour: fiveHour,
+    ...(fiveHour === null ? {} : { five_hour: fiveHour }),
     seven_day: sevenDay,
   });
   return parsed.success ? parsed.data : null;

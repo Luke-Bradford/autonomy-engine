@@ -181,6 +181,53 @@ describe('AiActivityPage', () => {
   });
 
   /**
+   * #1023 — what the panel shows once a partial reading is a reading.
+   */
+  describe('a reading the provider only partly reported (#1023)', () => {
+    it('shows the 7-day row alone, and does not invent a 5-hour figure', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: { seven_day: { utilization: 0.07, resets_at: 1_786_600_000 } } },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('7-day'));
+      // The row is absent, not blank. A row with an empty or zeroed cell is a
+      // claim about a window nobody reported — and "0% used" is the single most
+      // dangerous thing this surface can say.
+      expect(panel.textContent ?? '').not.toContain('5-hour');
+      // The reading is still a READING: no UNREADABLE banner over a good figure.
+      expect(panel.textContent ?? '').not.toContain('UNREADABLE');
+      expect(panel).toHaveTextContent('7%');
+    });
+
+    it('renders an unreported reset instant as an em-dash, never as 1970', async () => {
+      activityMock.mockResolvedValue(snapshot());
+      quotaMock.mockResolvedValue({
+        generated_at: 1_786_000_000,
+        account: { claude: { seven_day: { utilization: 0.07, resets_at: null } } },
+      });
+
+      render(<AiActivityPage />);
+
+      const panel = await screen.findByRole('region', { name: 'Account quota' });
+      await waitFor(() => expect(panel).toHaveTextContent('7-day'));
+      const text = panel.textContent ?? '';
+      expect(text).toContain('—');
+      // The failure this guards is the plausible one, not the visible one:
+      // epoch 0 renders as a real-looking date with no relative suffix.
+      expect(text).not.toContain('1970');
+      // And no "(in …)" countdown computed against it.
+      expect(text).not.toContain('(in ');
+      // The measurement beside it is untouched — that is the whole point.
+      expect(panel).toHaveTextContent('7%');
+    });
+  });
+
+  /**
    * #990 — codex beside claude, and the three states kept apart.
    */
   describe('codex quota (#990)', () => {
