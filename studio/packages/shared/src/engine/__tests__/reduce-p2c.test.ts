@@ -1227,6 +1227,34 @@ describe('call_pipeline', () => {
     expect(resumed.state).toEqual(r0.state); // resume emits commands; state unchanged
   });
 
+  it('#796 — call.started folds INERT: the waiting node is untouched and nothing is emitted', () => {
+    // The executor announces a spawned child in the parent's log. The state
+    // change already happened when `startChild` was emitted, so this fold must
+    // be a no-op — including on the SECOND one, which a restart produces.
+    const eng = engine([callNode('caller', 'pv_child')]);
+    const r0 = eng.reduce(eng.seedState(), started());
+    const childRunId = (r0.commands.find((c) => c.type === 'startChild') as { childRunId: string })
+      .childRunId;
+    const announce: EngineEvent = {
+      type: 'call.started',
+      runId: RUN,
+      callNodeId: 'caller',
+      attemptId: 'caller#0',
+      childRunId,
+    };
+
+    const r1 = eng.reduce(r0.state, announce);
+    expect(r1.state).toEqual(r0.state);
+    expect(r1.commands).toEqual([]);
+    expect(r1.diagnostics).toEqual([]);
+    const r2 = eng.reduce(r1.state, announce); // a restart re-announces
+    expect(r2.state).toEqual(r0.state);
+
+    // …and the child still resolves the node afterwards.
+    const done = eng.reduce(r2.state, returned('caller', 'caller#0', 'success', {}, childRunId));
+    expect(done.state.nodes.caller!.status).toBe('success');
+  });
+
   it('ignores a STALE call.returned (an attemptId that is not the node current attempt)', () => {
     // A loop container re-dispatches the call node, minting a fresh attempt; a
     // late return for the PRIOR attempt must not fold.

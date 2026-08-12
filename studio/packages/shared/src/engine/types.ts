@@ -865,6 +865,34 @@ export const EngineEventSchema = z.discriminatedUnion('type', [
     branch: z.string(),
   }),
   z.object({
+    /**
+     * #796 (P3b, carrying #735) — a `call_pipeline` child run has been SPAWNED
+     * and is in flight. The durable half of the `startChild` handshake, appended
+     * by the executor AFTER the child's `runs` row exists and BEFORE the child is
+     * driven — the same arm-before-append discipline `timer.waitScheduled` and
+     * `externalWait.created` keep, so a crash can leave a spawned child with no
+     * announcement but never an announcement with no child.
+     *
+     * INERT in the fold (like `node.retryScheduled`): the call node was already
+     * moved to `waiting` by the `startChild` emission, and this event adds no
+     * state the walk reads. Its consumer is the MONITOR — before it existed a
+     * call node's only event was `call.returned`, so the node had no row at all
+     * for the entire time its child was running (#735's blind spot). It carries
+     * `childRunId` so the parent's log names the child while that child is still
+     * in flight, which is also what lets the child-return reactor find the call
+     * node a terminal child belongs to.
+     *
+     * NOT once-per-child: a restart re-emits `startChild` for a still-`waiting`
+     * call node, and the executor re-announces only when the parent's log does
+     * not already carry this event for the same `childRunId`.
+     */
+    type: z.literal('call.started'),
+    runId: z.string(),
+    callNodeId: z.string(),
+    attemptId: z.string(),
+    childRunId: z.string(),
+  }),
+  z.object({
     // A spawned `call_pipeline` child returned. `childOutcome` may be `failure`
     // and STILL carry projected `outputs` (the findings loop). Stale-rejected
     // like any attempt-bearing result: an `attemptId` that is not the call

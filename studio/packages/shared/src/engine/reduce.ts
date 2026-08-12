@@ -4090,6 +4090,16 @@ export function createEngine(doc: EngineDoc): Engine {
         return onControlBranchEvaluated(state, event, diagnostics);
       case 'node.failed':
         return onFailed(state, event, diagnostics);
+      case 'call.started':
+        // #796 — inert BY DESIGN, for the same reason `node.retryScheduled` is:
+        // the state change already happened when the reducer emitted
+        // `startChild` (the node is `waiting`), and this is the durable record
+        // that the child row now exists. Folding it must stay a no-op — a
+        // restart re-emits `startChild`, so this event can legitimately appear
+        // more than once for one child and anything it mutated would be applied
+        // again. Its readers are the monitor projection and the child-return
+        // reactor, both of which read the LOG, not `RunState`.
+        return { state, commands: [], diagnostics };
       case 'call.returned':
         return onCallReturned(state, event, diagnostics);
       case 'node.retryScheduled':
