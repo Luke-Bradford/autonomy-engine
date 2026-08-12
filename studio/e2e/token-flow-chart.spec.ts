@@ -90,10 +90,19 @@ function seriesSnapshot() {
           inputReportedResponseCount: 0,
           outputReportedResponseCount: 0,
         },
-        // still in progress
+        // ONE side counted, the other not — a stack, but a half-honest one
         {
           bucketStart: 1_785_997_200_000,
-          bucketEnd: 1_785_997_300_000,
+          bucketEnd: 1_785_997_500_000,
+          partial: false,
+          cost: { ...measured, inputTokens: 400, outputTokens: 0 },
+          inputReportedResponseCount: 2,
+          outputReportedResponseCount: 0,
+        },
+        // still in progress
+        {
+          bucketStart: 1_785_997_500_000,
+          bucketEnd: 1_785_997_600_000,
           partial: true,
           cost: { ...measured, inputTokens: 100, outputTokens: 50 },
           inputReportedResponseCount: 2,
@@ -124,7 +133,7 @@ test.describe('token-flow chart', () => {
 
     const chart = page.locator(CHART);
     await expect(chart).toBeVisible();
-    await expect(chart.locator('.token-flow-bucket')).toHaveCount(4);
+    await expect(chart.locator('.token-flow-bucket')).toHaveCount(5);
 
     const buckets = chart.locator('.token-flow-bucket');
     // The unmeasured bucket (index 2) draws a marker, NOT a zero-height bar —
@@ -135,9 +144,22 @@ test.describe('token-flow chart', () => {
     // 1 would also pass if the marker had landed on the wrong bar.
     await expect(buckets.nth(1).locator('.token-flow-unmeasured')).toHaveCount(0);
     await expect(chart.locator('.token-flow-unmeasured')).toHaveCount(1);
-    // Only the in-progress bucket (index 3) is marked partial.
-    await expect(buckets.nth(3).locator('.token-flow-stack[data-partial="true"]')).toHaveCount(1);
+    // Only the in-progress bucket (index 4) is marked partial.
+    await expect(buckets.nth(4).locator('.token-flow-stack[data-partial="true"]')).toHaveCount(1);
     await expect(chart.locator('.token-flow-stack[data-partial="true"]')).toHaveCount(1);
+
+    // The half case (index 3): input was counted, output was not. The counted
+    // side is a bar; the omitted side is hatched, because `coalesce(sum(…), 0)`
+    // would otherwise draw a measurement nobody made as a flat zero.
+    const halfHonest = buckets.nth(3);
+    await expect(halfHonest.locator('.token-flow-seg--out.token-flow-seg--unreported')).toHaveCount(
+      1,
+    );
+    await expect(halfHonest.locator('.token-flow-seg--in.token-flow-seg--unreported')).toHaveCount(
+      0,
+    );
+    await expect(chart.locator('.token-flow-seg--unreported')).toHaveCount(1);
+    await expect(chart.getByText(/out not reported/)).toBeAttached();
 
     // Every value is reachable as TEXT, not only as a tooltip.
     await expect(chart.getByText(/3 exchanges, tokens not reported/)).toBeAttached();
@@ -146,6 +168,35 @@ test.describe('token-flow chart', () => {
     // The legend names both series, so identity is never colour-alone.
     await expect(chart.getByText('Tokens in')).toBeVisible();
     await expect(chart.getByText('Tokens out')).toBeVisible();
+
+    /*
+     * GEOMETRY, MEASURED RATHER THAN REASONED ABOUT. The stack is a column flex
+     * box whose two segments can sum to 100% of it, and it also carries a row
+     * gap — so the laid-out content of the tallest bar asks for slightly more
+     * room than the plot has. This asserts what the browser actually does with
+     * that (shrink, not overflow), and that the fixed sliver is exempt: a marker
+     * that shrinks under pressure would start encoding the magnitude it exists
+     * to say nobody measured. One `evaluate`, every reading at once.
+     */
+    const geometry = await page.evaluate(() => {
+      const bars = document.querySelector('.token-flow-bars');
+      const stacks = Array.from(document.querySelectorAll('.token-flow-stack'));
+      const laidOut = (stack: Element) => {
+        const marks = Array.from(stack.querySelectorAll('.token-flow-seg, .token-flow-unmeasured'));
+        const gap = parseFloat(getComputedStyle(stack).rowGap) || 0;
+        const total = marks.reduce((n, m) => n + m.getBoundingClientRect().height, 0);
+        return total + Math.max(0, marks.length - 1) * gap;
+      };
+      const sliver = document.querySelector('.token-flow-seg--unreported');
+      return {
+        plot: bars?.getBoundingClientRect().height ?? 0,
+        tallest: Math.max(...stacks.map(laidOut)),
+        sliver: sliver?.getBoundingClientRect().height ?? 0,
+      };
+    });
+    expect(geometry.plot).toBeGreaterThan(0);
+    expect(geometry.tallest).toBeLessThanOrEqual(geometry.plot);
+    expect(geometry.sliver).toBeCloseTo(6, 1);
 
     await expectQuiet(page, problems);
   });
@@ -167,12 +218,27 @@ test.describe('token-flow chart', () => {
           const el = document.querySelector(`.token-flow-seg--${cls}`);
           return el ? getComputedStyle(el).backgroundColor : '';
         };
-        const panel = document.createElement('div');
-        panel.style.color = 'var(--panel)';
-        document.body.append(panel);
-        const panelColor = getComputedStyle(panel).color;
-        panel.remove();
-        return { inColor: seg('in'), outColor: seg('out'), panelColor };
+        /*
+         * THE SURFACE THE BARS ARE ACTUALLY PAINTED ON, found by walking up for
+         * the first ancestor that paints one — not a token named on the guess
+         * that it is the one behind. `--panel` was that guess and it is wrong:
+         * nothing between the chart and `<body>` sets a background, so the
+         * chart sits on `--bg`. A ratio measured against a colour that is not
+         * behind the mark measures nothing, and would keep reading fine after a
+         * real regression.
+         */
+        const opaque = (color: string) => color !== 'transparent' && !/,\s*0\)$/.test(color);
+        let node: Element | null = document.querySelector('.token-flow');
+        let surface = '';
+        while (node) {
+          const background = getComputedStyle(node).backgroundColor;
+          if (opaque(background)) {
+            surface = background;
+            break;
+          }
+          node = node.parentElement;
+        }
+        return { inColor: seg('in'), outColor: seg('out'), surface };
       });
 
       // Each segment paints exactly the token it claims to, resolved through the
@@ -187,8 +253,11 @@ test.describe('token-flow chart', () => {
 
       // A bar is a GRAPHICAL OBJECT, so WCAG 1.4.11 asks 3:1 against the surface
       // behind it — in BOTH themes, which is the point of running this twice.
-      expect(contrastRatio(measured.inColor, measured.panelColor)).toBeGreaterThanOrEqual(3);
-      expect(contrastRatio(measured.outColor, measured.panelColor)).toBeGreaterThanOrEqual(3);
+      // The walk above must have found a painted surface; an empty string here
+      // would silently make both ratios meaningless.
+      expect(measured.surface).not.toBe('');
+      expect(contrastRatio(measured.inColor, measured.surface)).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(measured.outColor, measured.surface)).toBeGreaterThanOrEqual(3);
       /*
        * NO MUTUAL-CONTRAST ASSERTION BETWEEN THE TWO SERIES, deliberately.
        * WCAG contrast is a LUMINANCE ratio, and two categorical hues are

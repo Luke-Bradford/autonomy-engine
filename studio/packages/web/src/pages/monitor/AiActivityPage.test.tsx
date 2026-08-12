@@ -418,6 +418,53 @@ describe('AiActivityPage', () => {
       expect(screen.getByTitle(/3 exchanges, tokens not reported/)).toBeTruthy();
     });
 
+    /**
+     * THE SAME FAILURE AT HALF SCALE. A gateway can report one side of an
+     * exchange and omit the other, so the bucket is not wholly unmeasured and
+     * the marker above does not apply — but `coalesce(sum(…), 0)` still hands
+     * the omitted side over as a confident `0`, and a zero-height segment draws
+     * that as an observed zero. The sentence already says "not reported"; if the
+     * bar does not, the picture contradicts the text and the picture is what
+     * gets read.
+     */
+    it('draws the side NOBODY reported as unreported, not as a zero-height segment', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0 }),
+          inputReportedResponseCount: 2,
+          outputReportedResponseCount: 0,
+        }),
+      ]);
+
+      // One side WAS counted, so this is a stack, not the whole-bucket marker.
+      expect(container.querySelector('.token-flow-unmeasured')).toBeNull();
+      const inSeg = container.querySelector<HTMLElement>('.token-flow-seg--in');
+      const outSeg = container.querySelector<HTMLElement>('.token-flow-seg--out');
+      expect(inSeg?.style.height).toBe('100%');
+      expect(inSeg?.className).not.toContain('token-flow-seg--unreported');
+      // The unreported side carries NO inline height: its size is a fixed CSS
+      // sliver, because there is no magnitude to encode.
+      expect(outSeg?.className).toContain('token-flow-seg--unreported');
+      expect(outSeg?.style.height).toBe('');
+    });
+
+    /** The converse, so the marker cannot creep onto a real measurement. */
+    it('leaves a MEASURED zero as a zero-height segment', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0 }),
+          inputReportedResponseCount: 2,
+          outputReportedResponseCount: 2,
+        }),
+      ]);
+
+      const outSeg = container.querySelector<HTMLElement>('.token-flow-seg--out');
+      expect(outSeg?.className).not.toContain('token-flow-seg--unreported');
+      expect(outSeg?.style.height).toBe('0%');
+    });
+
     it('distinguishes a genuinely empty bucket from an unmeasured one', async () => {
       const container = await renderBars([
         bucket({ bucketStart: 1, cost: cost({ responseCount: 0 }) }),

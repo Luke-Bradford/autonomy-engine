@@ -44,7 +44,10 @@ import { formatWhen } from '../runs/format';
  * AI work arrives here as a confident `0`. A zero-height bar would state that
  * nothing happened. `inputReportedResponseCount`/`outputReportedResponseCount`
  * are what distinguish the two, and an unmeasured bucket is drawn as a hatched
- * marker that says so, never as a bar of height zero.
+ * marker that says so, never as a bar of height zero. The same applies per SIDE:
+ * a bucket whose input was counted and whose output was not is not wholly
+ * unmeasured, so it keeps its stack — but the uncounted half is hatched rather
+ * than drawn flat, because a gap and a zero must not look alike at either scale.
  */
 
 export interface TokenFlowChartProps {
@@ -81,8 +84,8 @@ function bucketSentence(bucket: TokenSeriesBucket): string {
    * omit the other, and `coalesce(sum(…), 0)` hands the omitted one over as `0`
    * — so "0 out" would assert a measurement nobody made, which is the same
    * plotted-zero failure the hatched marker exists to prevent, just at half
-   * scale. The bar for that side is genuinely zero-height either way; what this
-   * fixes is the SENTENCE claiming the zero was observed.
+   * scale. `segment` draws that side as a hatched sliver for the same reason,
+   * so the sentence and the mark make the same claim.
    */
   const side = (tokens: number, reported: number, label: string) =>
     reported === 0 ? `${label} not reported` : `${formatTokenCount(tokens)} ${label}`;
@@ -109,6 +112,34 @@ export function TokenFlowChart({
    */
   const max = buckets.reduce((n, b) => Math.max(n, b.cost.inputTokens + b.cost.outputTokens), 0);
   const pct = (tokens: number) => (max === 0 ? 0 : (tokens / max) * 100);
+
+  /*
+   * ONE half of a stack. The `unreported` case is the whole-bucket marker at
+   * half scale: the bucket had exchanges and this side of them carried no token
+   * count, which `coalesce(sum(…), 0)` delivers as a confident `0`. Given an
+   * inline `height: 0%` that reads as a measurement of nothing, so instead the
+   * side gets no inline height at all and wears a hatched sliver whose size is
+   * fixed in CSS — the same "encodes no magnitude" property the marker has.
+   *
+   * The `responseCount > 0` guard is what keeps a genuinely EMPTY bucket out of
+   * this branch: no exchanges means no reports either, and nothing happening is
+   * a measured zero that should draw as one. (A bucket where BOTH sides are
+   * unreported never reaches here — `isUnmeasured` claims it first.)
+   */
+  const segment = (bucket: TokenSeriesBucket, side: 'in' | 'out') => {
+    const tokens = side === 'in' ? bucket.cost.inputTokens : bucket.cost.outputTokens;
+    const reported =
+      side === 'in' ? bucket.inputReportedResponseCount : bucket.outputReportedResponseCount;
+    const unreported = reported === 0 && bucket.cost.responseCount > 0;
+    return (
+      <span
+        className={`token-flow-seg token-flow-seg--${side}${
+          unreported ? ' token-flow-seg--unreported' : ''
+        }`}
+        {...(unreported ? {} : { style: { height: `${pct(tokens)}%` } })}
+      />
+    );
+  };
 
   return (
     <figure className="token-flow">
@@ -146,14 +177,8 @@ export function TokenFlowChart({
                   <span className="token-flow-unmeasured" />
                 ) : (
                   <>
-                    <span
-                      className="token-flow-seg token-flow-seg--out"
-                      style={{ height: `${pct(bucket.cost.outputTokens)}%` }}
-                    />
-                    <span
-                      className="token-flow-seg token-flow-seg--in"
-                      style={{ height: `${pct(bucket.cost.inputTokens)}%` }}
-                    />
+                    {segment(bucket, 'out')}
+                    {segment(bucket, 'in')}
                   </>
                 )}
                 <span className="visually-hidden">{sentence}</span>

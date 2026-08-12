@@ -2918,6 +2918,31 @@ td button + button {
   background: var(--chart-tokens-out);
 }
 
+/* ONE side of the exchanges reported, the other not. `coalesce(sum(…), 0)` hands
+   the omitted side over as a confident 0, so a zero-height segment would draw a
+   measurement nobody made — the plotted-zero failure the whole-bucket hatch
+   prevents, at half scale. It keeps its series hue (identity survives) and wears
+   the hatch at a fixed sliver height that encodes no magnitude.
+
+   TWO classes in the selector, deliberately: `.token-flow-seg--in/out` set the
+   `background` SHORTHAND, which resets `background-image` to `none`. Equal
+   specificity would leave this rule's stripes hostage to declaration order. */
+.token-flow-seg.token-flow-seg--unreported {
+  /* `flex: none` so the sliver holds its height rather than being shrunk along
+     with the percentage segments when a full-height stack plus the row gap asks
+     for more room than the plot has — a marker that shrinks starts encoding the
+     magnitude it exists to say it does not have. */
+  flex: none;
+  height: 6px;
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel) 0,
+    var(--panel) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}
+
 /* An incomplete period makes a weaker claim than a finished one, so it is drawn
    weaker. The reading is also restated in the bar's title and hidden text, so
    this is never the only encoding. */
