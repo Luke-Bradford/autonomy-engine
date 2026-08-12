@@ -111,8 +111,14 @@ function QuotaWindowTable({ windows, now }: { windows: QuotaWindowReading[]; now
             {/* The RESET INSTANT, not just a percentage: a bare "96%" is
                 what makes a correctly-working system look hung. */}
             <td>
+              {/* `formatWhen` renders a null as an em-dash, which is the whole
+                  handling an unreported reset instant needs (#1023). The guard
+                  below has to test for null EXPLICITLY: `null > now` is `false`
+                  at runtime, so the relative suffix would be correctly hidden
+                  by accident — and a later refactor that coalesced the null to
+                  a number would silently restore it against 1970. */}
               {formatWhen(w.resetsAtMs)}
-              {w.resetsAtMs > now && (
+              {w.resetsAtMs !== null && w.resetsAtMs > now && (
                 <span className="quota-reset-relative">
                   {' '}
                   (in {formatElapsed(w.resetsAtMs - now)})
