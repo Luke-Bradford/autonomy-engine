@@ -103,7 +103,9 @@ function bucketSentence(bucket: TokenSeriesBucket): string {
    * so the sentence and the mark make the same claim.
    */
   const side = (tokens: number, label: 'in' | 'out') =>
-    isSideUnreported(bucket, label) ? `${label} not reported` : `${formatTokenCount(tokens)} ${label}`;
+    isSideUnreported(bucket, label)
+      ? `${label} not reported`
+      : `${formatTokenCount(tokens)} ${label}`;
   const counts = `${side(bucket.cost.inputTokens, 'in')} / ${side(bucket.cost.outputTokens, 'out')}`;
   return `${when}${partial}: ${exchanges}, ${counts}`;
 }

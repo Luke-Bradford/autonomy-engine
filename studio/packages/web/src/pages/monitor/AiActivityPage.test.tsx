@@ -424,11 +424,23 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 1, inputTokens: 50, outputTokens: 50, inputReportedResponseCount: 1, outputReportedResponseCount: 1 }),
+          cost: cost({
+            responseCount: 1,
+            inputTokens: 50,
+            outputTokens: 50,
+            inputReportedResponseCount: 1,
+            outputReportedResponseCount: 1,
+          }),
         }),
         bucket({
           bucketStart: 2,
-          cost: cost({ responseCount: 1, inputTokens: 25, outputTokens: 25, inputReportedResponseCount: 1, outputReportedResponseCount: 1 }),
+          cost: cost({
+            responseCount: 1,
+            inputTokens: 25,
+            outputTokens: 25,
+            inputReportedResponseCount: 1,
+            outputReportedResponseCount: 1,
+          }),
         }),
       ]);
 
@@ -450,7 +462,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 3, inputTokens: 0, outputTokens: 0, inputReportedResponseCount: 0, outputReportedResponseCount: 0 }),
+          cost: cost({
+            responseCount: 3,
+            inputTokens: 0,
+            outputTokens: 0,
+            inputReportedResponseCount: 0,
+            outputReportedResponseCount: 0,
+          }),
         }),
       ]);
 
@@ -472,7 +490,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0, inputReportedResponseCount: 2, outputReportedResponseCount: 0 }),
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 900,
+            outputTokens: 0,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 0,
+          }),
         }),
       ]);
 
@@ -493,7 +517,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0, inputReportedResponseCount: 2, outputReportedResponseCount: 2 }),
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 900,
+            outputTokens: 0,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 2,
+          }),
         }),
       ]);
 
@@ -531,7 +561,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 10, outputTokens: 4, inputReportedResponseCount: 2, outputReportedResponseCount: 2 }),
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 10,
+            outputTokens: 4,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 2,
+          }),
         }),
       ]);
 

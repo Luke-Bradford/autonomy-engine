@@ -139,8 +139,7 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
         totalCostEstimate: acc.totalCostEstimate + row.totalCostEstimate,
         inputTokens: acc.inputTokens + row.inputTokens,
         outputTokens: acc.outputTokens + row.outputTokens,
-        inputReportedResponseCount:
-          acc.inputReportedResponseCount + row.inputReportedResponseCount,
+        inputReportedResponseCount: acc.inputReportedResponseCount + row.inputReportedResponseCount,
         outputReportedResponseCount:
           acc.outputReportedResponseCount + row.outputReportedResponseCount,
       }),

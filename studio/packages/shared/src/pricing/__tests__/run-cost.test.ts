@@ -667,7 +667,9 @@ describe('per-side token presence (#1025 — absent is not a measured zero)', ()
   });
 
   it('the pipeline rollup SUMS the pair across runs, per side', () => {
-    const runA = computeRunCost([metered({ inputTokens: 100, outputTokens: 50, costEstimate: 0.01 })]);
+    const runA = computeRunCost([
+      metered({ inputTokens: 100, outputTokens: 50, costEstimate: 0.01 }),
+    ]);
     const runB = computeRunCost([metered({ meteringStatus: 'unpriced', provider: 'agent_cli' })]);
     const rollup = rollupPipelineCost([runA, runB]);
     expect(rollup.inputReportedResponseCount).toBe(1);
