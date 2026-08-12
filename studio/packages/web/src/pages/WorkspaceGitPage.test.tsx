@@ -1089,6 +1089,82 @@ describe('WorkspaceGitPage', () => {
       expect(row).toHaveTextContent('a ref names a deleted resource, so it was not compared');
     });
 
+    /**
+     * The compound case, and the one that fell between the two render sites
+     * above: the import archives a pipeline (so the "already matches" sentence
+     * is false and correctly not shown) while ALSO leaving a resource whose
+     * comparison was excused (so it wrote nothing and has no row of its own).
+     * Neither disclosure site fires, and the caveat would vanish — the same
+     * "drop the weaker fact" failure this ticket exists to close.
+     */
+    it('carries the caveat on the summary when the import ALSO archived something', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ disposition: 'superseded', versionContentUnverified: true }),
+          ],
+        }),
+      );
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'superseded',
+              versionMinted: false,
+              versionContentUnverified: true,
+            },
+          ],
+          archived: [{ resourceId: 'res_2', name: 'retired', disabledTriggerIds: [] }],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        /Imported .* 0 resources changed \(a ref names a deleted resource, so it was not compared\)\./,
+      );
+    });
+
+    /**
+     * The other half of "disclosed exactly once": a resource that DID write
+     * carries the caveat on its own row, so repeating it on the summary would
+     * report one excused comparison as two.
+     */
+    it('does not repeat the caveat on the summary when the changed row already carries it', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'updated',
+              versionMinted: false,
+              versionContentUnverified: true,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        /Imported .* 1 resource changed\.$/,
+      );
+    });
+
     /** ...and an ordinary comparison claims nothing of the sort. */
     it('does not qualify a change whose comparison WAS fully made', async () => {
       await renderConnected();

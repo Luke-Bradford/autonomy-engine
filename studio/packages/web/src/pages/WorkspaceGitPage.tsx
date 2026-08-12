@@ -988,12 +988,16 @@ function ImportOutcomeReport({
   // this import changed resources it never touched.
   const changed = result.applied.filter((applied) => !appliedActionWroteNothing(applied.action));
   // #1018 — did any resource's version comparison have to EXCUSE a ref it could
-  // not express in resourceId-space (one naming a since-deleted resource)? Read
-  // over `result.applied`, NOT over `changed`: the case this exists for is
-  // precisely a version that wrote nothing, so filtering to the changed rows
-  // would drop the caveat on every import that most needs it.
-  const versionContentUnverified = result.applied.some(
-    (applied) => applied.versionContentUnverified,
+  // not express in resourceId-space (one naming a since-deleted resource)?
+  //
+  // The property this holds up: every excused comparison is disclosed EXACTLY
+  // ONCE. A resource in `changed` gets a row below and carries its own suffix
+  // there; a resource whose version wrote nothing gets no row at all, so its
+  // caveat has nowhere to go but the summary sentence. Hence the complement of
+  // `changed` rather than a `some` over all of `result.applied` — the latter
+  // would double up whenever the excused resource is also a changed one.
+  const unlistedUnverified = result.applied.some(
+    (applied) => applied.versionContentUnverified && appliedActionWroteNothing(applied.action),
   );
 
   return (
@@ -1021,12 +1025,21 @@ function ImportOutcomeReport({
           {/* "already matches" is exactly the claim the excused ref left
               unchecked, so the caveat belongs on this sentence above all others
               — it is the one an operator reads as "verified identical". */}
-          {versionContentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
+          {unlistedUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
         </p>
       ) : (
         <p role="status">
           Imported {shortSha(result.head)} from {collabBranch} — {countResources(changed.length)}{' '}
-          changed.
+          changed
+          {/* The compound case the no-op sentence above cannot cover: an import
+              that archives (or defers) something AND leaves a resource whose
+              comparison was excused. That resource wrote nothing, so it is
+              absent from the list below, and this branch is the only sentence
+              on screen — without the suffix here the disclosure is silently
+              dropped in exactly the shape #1018 exists to prevent. The count
+              itself rests on those comparisons, so qualifying it is honest:
+              a resource read as `superseded` may differ in the excused ref. */}
+          {unlistedUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
         </p>
       )}
 
