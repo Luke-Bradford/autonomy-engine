@@ -1,4 +1,9 @@
-import { AGENT_CLI_CONNECTION_KIND, formatTokenCount, formatUsd } from '@autonomy-studio/shared';
+import {
+  AGENT_CLI_CONNECTION_KIND,
+  formatTokenCount,
+  formatUsd,
+  tokenSideReported,
+} from '@autonomy-studio/shared';
 import type { NodeCost, RunCost } from '@autonomy-studio/shared';
 
 /**
@@ -67,20 +72,12 @@ export interface CostReading extends CostHeadline {
    * run's count a floor too.
    */
   exchangesAreFloor: boolean;
-  /**
-   * Whether any exchange reported an input / an output token count, answered
-   * SEPARATELY per side.
-   *
-   * `false` means that side's sum is a zero nobody measured, and must render as
-   * unreported rather than as `0`. Per side rather than combined because
-   * `meterUsage` stamps whichever side a provider sent and leaves the other
-   * absent: a response reporting 4,000 input tokens and no output count is
-   * REPORTED on one side and UNMEASURED on the other, and a single flag would
-   * have to call it one or the other — printing `4,000 in · 0 out` if it chose
-   * "reported", which is the manufactured zero this whole reading exists to stop.
-   */
-  inputTokensReported: boolean;
-  outputTokensReported: boolean;
+  /* The per-side "was this reported at all" booleans used to live here. They are
+     gone: `tokenSummary` is their only consumer and it takes a plain `RunCost`
+     since #1025, asking `tokenSideReported` directly. Keeping them would have
+     left two spellings of one fact — and they had already diverged, since
+     `tokenSideReported` treats a scope with NO billed exchanges as reported (a
+     measured zero) where a bare `count > 0` cannot. */
   /** True when only SOME exchanges reported that side, so its sum is partial. */
   inputTokensPartial: boolean;
   outputTokensPartial: boolean;
@@ -147,8 +144,6 @@ export function readCost(cost: NodeCost): CostReading {
     coveredCount: cost.unpricedResponseCount,
     exchangeCount: cost.responseCount,
     exchangesAreFloor: cost.providers.includes(AGENT_CLI_CONNECTION_KIND),
-    inputTokensReported: cost.inputReportedResponseCount > 0,
-    outputTokensReported: cost.outputReportedResponseCount > 0,
     inputTokensPartial:
       cost.inputReportedResponseCount > 0 && cost.inputReportedResponseCount < cost.responseCount,
     outputTokensPartial:
@@ -179,9 +174,8 @@ export function readCost(cost: NodeCost): CostReading {
  * same distinction with its own `responseCount > 0` guard.
  */
 export function tokenSummary(cost: RunCost): string {
-  const measured = (reported: number) => cost.responseCount === 0 || reported > 0;
-  const inputMeasured = measured(cost.inputReportedResponseCount);
-  const outputMeasured = measured(cost.outputReportedResponseCount);
+  const inputMeasured = tokenSideReported(cost, 'input');
+  const outputMeasured = tokenSideReported(cost, 'output');
   if (!inputMeasured && !outputMeasured) return 'not reported';
   const input = inputMeasured ? `${formatTokenCount(cost.inputTokens)} in` : 'input not reported';
   const output = outputMeasured

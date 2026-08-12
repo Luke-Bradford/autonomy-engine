@@ -156,6 +156,27 @@ export const RunCostSchema = z.object({
   complete: z.boolean(),
 }) satisfies z.ZodType<RunCost>;
 
+/**
+ * Whether ONE side's token count was actually REPORTED for this scope — the
+ * single derivation of the question the presence counts exist to answer.
+ *
+ * Exported because two surfaces ask it independently and their answers must not
+ * drift: the token-flow chart draws a hatched sliver for an unreported side, and
+ * the token LINE (`tokenSummary` in the web package) words it. They were written
+ * as exact logical negations of each other by hand; this is the one predicate
+ * both now negate.
+ *
+ * ZERO BILLED EXCHANGES ANSWERS TRUE, and that is the subtle half. Nothing was
+ * billed, so nothing used tokens — a real measurement of nothing, not a missing
+ * one. Only a scope that HAD exchanges can have a side nobody counted.
+ */
+export function tokenSideReported(cost: RunCost, side: 'input' | 'output'): boolean {
+  if (cost.responseCount === 0) return true;
+  const reported =
+    side === 'input' ? cost.inputReportedResponseCount : cost.outputReportedResponseCount;
+  return reported > 0;
+}
+
 /** A per-pipeline rollup: the same money/count fields summed across the
  * pipeline's runs, plus run-level counts. */
 export interface PipelineCostRollup extends RunCost {

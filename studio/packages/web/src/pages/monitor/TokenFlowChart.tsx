@@ -1,5 +1,6 @@
 import {
   formatTokenCount,
+  tokenSideReported,
   type TokenSeries,
   type TokenSeriesBucket,
 } from '@autonomy-studio/shared';
@@ -70,11 +71,7 @@ export interface TokenFlowChartProps {
  * it for every cost surface now, not just this query.
  */
 function isSideUnreported(bucket: TokenSeriesBucket, side: 'in' | 'out'): boolean {
-  const reported =
-    side === 'in'
-      ? bucket.cost.inputReportedResponseCount
-      : bucket.cost.outputReportedResponseCount;
-  return reported === 0 && bucket.cost.responseCount > 0;
+  return !tokenSideReported(bucket.cost, side === 'in' ? 'input' : 'output');
 }
 
 /** A bucket in which exchanges were billed but NOBODY reported a token count. */
@@ -225,10 +222,17 @@ export function TokenFlowChart({
             arriving one step later.
 
             ONE entry covers BOTH hatched marks (the half-scale sliver and the
-            whole-bucket marker), because they make the same claim in the same
-            visual language and differ only in how much of the stack is unreported.
-            Two near-identical hatched swatches would ask the reader to tell apart a
-            distinction the sentence in each bar's title already states precisely.
+            whole-bucket marker), because THE HATCH is what they share and what
+            needs explaining — they differ only in how much of the stack went
+            unreported, a distinction each bar's own title already states in words.
+            Two near-identical hatched swatches would ask the reader to tell those
+            apart by texture alone.
+
+            The swatch is neutral, and cannot match both marks anyway: the sliver
+            deliberately KEEPS its per-side series hue (identity survives), so it
+            is blue for "in" and orange for "out", while the whole-bucket marker is
+            grey. Colour is already taught by the two entries above; this entry
+            teaches the one signal all three share.
 
             Rendered only when the series actually contains such a mark, and from
             the SAME predicate the marks are drawn from — a legend explaining

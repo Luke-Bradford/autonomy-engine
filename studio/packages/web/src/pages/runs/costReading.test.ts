@@ -87,16 +87,16 @@ describe('readCost (#866)', () => {
     ).toBe(false);
   });
 
-  it('says tokens were NOT reported, so a zero sum is never read as a measurement', () => {
-    const r = readCost(cost({ responseCount: 1, unpricedResponseCount: 1 }));
-    expect(r.inputTokensReported).toBe(false);
-    expect(r.outputTokensReported).toBe(false);
-  });
-
-  it('answers PER SIDE — a one-sided count never lends credibility to the other', () => {
+  /* The "was this side reported at all" assertions that used to live here moved
+     to the `tokenSummary` describe below, with the booleans they read: since
+     #1025 that question is answered by the shared `tokenSideReported` over a
+     plain `RunCost`, and `readCost`'s job here is the PARTIAL-ness that only a
+     per-side count can express. */
+  it('says how PARTIAL each side is — reported on some exchanges but not all', () => {
     /* The documented `meterUsage` case: a gateway sends `prompt_eval_count` and
-       no `eval_count`. A single combined flag would call this response "reported"
-       and render `4,000 in · 0 out` — a measurement nobody took. */
+       no `eval_count`. Input was reported on every exchange there was, so its sum
+       is complete, not partial — "partial" must not become a synonym for
+       "something is missing somewhere in this reading". */
     const r = readCost(
       cost({
         responseCount: 1,
@@ -107,10 +107,12 @@ describe('readCost (#866)', () => {
         outputReportedResponseCount: 0,
       }),
     );
-    expect(r.inputTokensReported).toBe(true);
-    expect(r.outputTokensReported).toBe(false);
-    // And neither side is "partial": input reported on every exchange there was.
     expect(r.inputTokensPartial).toBe(false);
+    expect(r.inputReportedCount).toBe(1);
+    // The UNREPORTED side is not "partial" either — there is no partial sum to
+    // qualify, which is why `tokenSummary` refuses to print it as a number.
+    expect(r.outputTokensPartial).toBe(false);
+    expect(r.outputReportedCount).toBe(0);
   });
 
   it('says a side is PARTIAL when only some exchanges reported it', () => {
