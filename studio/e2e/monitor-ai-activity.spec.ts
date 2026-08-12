@@ -139,6 +139,51 @@ test.describe('#917 Monitor › AI activity', () => {
   });
 
   /**
+   * #1023 — the shape the provider actually sends for most of the day.
+   *
+   * There is no 5-hour window while there is no active session, and the reset
+   * instant of a window with no active period comes back as a literal `null`.
+   * Both used to make the entire reading UNREADABLE, which is what left the
+   * spend guard's primary source on `unrecognized_payload` for 31 reads in
+   * three days.
+   *
+   * The two failures this pins are the quiet ones. A 5-hour row rendered with a
+   * blank or zeroed cell would state a figure nobody reported, and "0%" here
+   * means "wide open, spend freely". A null reset coalesced to `0` renders as a
+   * perfectly plausible 1970 date — which is why the year is asserted rather
+   * than the mere presence of text.
+   */
+  test('renders a partly-reported reading: the window that came, and no fiction for the one that did not', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await stubQuota(page, {
+      generated_at: Math.floor(Date.now() / 1000),
+      account: { claude: { seven_day: { utilization: 0.96, resets_at: null } } },
+    });
+    await page.goto('/#/monitor/ai');
+    await fluentRootReady(page);
+
+    const panel = quotaPanel(page);
+    // The window that WAS reported reads exactly as it would in a full reading.
+    await expect(panel.getByRole('row', { name: /7-day/ })).toContainText('96%');
+    // The one that was not is ABSENT — not a blank row, not a zero.
+    await expect(panel.getByRole('row', { name: /5-hour/ })).toHaveCount(0);
+    // An unknown reset instant is an em-dash, and never epoch 0. `1970` is the
+    // canary: the sibling test above asserts `2099` for a real instant, so these
+    // two together pin both directions of the seconds/ms conversion.
+    const sevenDay = panel.getByRole('row', { name: /7-day/ });
+    await expect(sevenDay).toContainText('—');
+    await expect(sevenDay).not.toContainText('1970');
+    // No relative countdown computed against an instant we do not have.
+    await expect(sevenDay).not.toContainText('(in ');
+    // Still a reading. The whole defect was this saying UNREADABLE.
+    await expect(panel).not.toContainText('UNREADABLE');
+
+    await expectQuiet(page, problems);
+  });
+
+  /**
    * The one that matters most. "0%" on this panel means "wide open, spend
    * freely" — the exact opposite of "I could not read it" — so an unreadable
    * quota must reach NO percentage at all.
