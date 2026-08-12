@@ -310,11 +310,13 @@ export const WorkspaceGitCommitResultSchema = z.object({
 export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSchema>;
 
 /**
- * #3 G4 — one problem the workspace parser found in a committed file. Reported
- * from the import-preview so a malformed branch is VISIBLE, never silently
- * dropped (#473 shape). The `message` is a fixed, categorical string keyed by
- * `code` — deliberately NOT the raw JSON/Zod error text, which could echo
- * arbitrary committed file content into an API response.
+ * #3 G4 — one resource this workspace could not COMPARE, and why. Reported from
+ * the import-preview, the drift report and the apply so it is VISIBLE, never
+ * silently dropped (#473 shape). The `message` is a fixed, categorical string
+ * keyed by `code` — deliberately NOT the raw JSON/Zod error text, which could
+ * echo arbitrary committed file content into an API response.
+ *
+ * The first five are BRANCH-side (a committed file):
  * - `unparseable`: not valid JSON / failed envelope upgrade+validation.
  * - `kind_mismatch`: a valid envelope whose `kind` disagrees with its directory.
  * - `duplicate_resource_id`: a non-null `resourceId` claimed by 2+ files of a kind.
@@ -325,6 +327,16 @@ export type WorkspaceGitCommitResult = z.infer<typeof WorkspaceGitCommitResultSc
  *   VISIBLE (never a whole-workspace 502, #664) and REFUSES an apply fail-closed
  *   (an incomplete snapshot must not archive a pipeline whose file merely failed
  *   to read).
+ *
+ * #1043 added the sixth, which is DB-side — the one case where the thing that
+ * cannot be compared is ours, not git's:
+ * - `unserializable_ref`: a live resource's head names something that no longer
+ *   exists (a node using a hard-deleted connection; a `call_pipeline` node
+ *   naming a hard-deleted pipeline's version), so it cannot be expressed in
+ *   `resourceId`-space and has no comparable content form. Its `message` names
+ *   the node and the dangling id — the OWNER'S OWN DB values, not committed file
+ *   bytes, so the echo rule above is not crossed. Unlike the branch-side codes
+ *   it does NOT refuse an apply: see `WorkspaceGitApplyResultSchema`.
  */
 export const WorkspaceParseDiagnosticCodeSchema = z.enum([
   'unparseable',
@@ -332,6 +344,7 @@ export const WorkspaceParseDiagnosticCodeSchema = z.enum([
   'duplicate_resource_id',
   'unknown_dir',
   'unreadable',
+  'unserializable_ref',
 ]);
 export type WorkspaceParseDiagnosticCode = z.infer<typeof WorkspaceParseDiagnosticCodeSchema>;
 
@@ -707,10 +720,19 @@ export type WorkspaceGitArchivedResult = z.infer<typeof WorkspaceGitArchivedResu
 
 /**
  * #3 G5c — the `POST /api/workspace/git/import` result. The apply is ATOMIC: on
- * any parse diagnostic the whole import is REFUSED (`refused: true`, everything
- * empty) rather than partially applying a known-corrupt branch — fail-closed,
- * the merge-gate "a `gh` failure is never CI-green" posture. When not refused,
- * `diagnostics` is empty and `applied`/`archived` describe every write
+ * any BRANCH-side parse diagnostic the whole import is REFUSED (`refused: true`,
+ * everything empty) rather than partially applying a known-corrupt branch —
+ * fail-closed, the merge-gate "a `gh` failure is never CI-green" posture.
+ *
+ * #1043 — a NOT-refused result may nonetheless carry `diagnostics`, and only of
+ * code `unserializable_ref`: DB-side resources this import could not compare
+ * (and so did not consider for archive). They do not refuse, because a DB-side
+ * gap can only make the apply archive LESS — it cannot cause the destructive act
+ * the branch-side refusal exists to prevent — and refusing would block the
+ * import that repairs the dangling ref. So: `refused` ⇒ every diagnostic is
+ * branch-side; a diagnostic does NOT imply `refused`.
+ *
+ * When not refused, `applied`/`archived` describe every write
  * (connections, pipelines, AND triggers as of G5c-2 #670); `deferred` now has no
  * producers (see `WorkspaceGitDeferredResourceSchema`). `head` is the
  * collab-branch commit the snapshot was taken at (`null` for an empty repo,

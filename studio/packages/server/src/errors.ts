@@ -9,6 +9,7 @@ import {
 } from './repo/index.js';
 import { GitOperationError, GitPushRejectedError, GitUnavailableError } from './git/provider.js';
 import { GitHostApiError, GitHostRequestError } from './git/github-host.js';
+import { WorkspaceSerializeError } from './portability/workspace-serialize.js';
 import { ArchivedPipelineError } from './run/launcher.js';
 import { DocUnresolvableError } from './run/driver.js';
 import { RerunNotEligibleError } from './run/reseed.js';
@@ -319,6 +320,22 @@ export function registerErrorHandler(fastify: FastifyInstance): void {
     // 422→409). A deliberate SIBLING of `GitOperationError`, but its branch runs
     // FIRST anyway (defensive against a future refactor to a subclass). The
     // message is fixed and client-safe by construction (quotes no stderr/path).
+    // #1043 — Commit cannot serialize a live resource whose head names something
+    // that no longer exists (typically a node using a hard-deleted connection).
+    // A 409 because it is an operator-fixable CONFLICT between two things they
+    // did, not the internal fault the old opaque 500 implied: re-point or remove
+    // the node and Save, which mints a fresh head. The message names every
+    // offender (`error.offenders`) — the owner's own DB ids, never committed file
+    // bytes. NOTE this branch also covers `serializeTrigger` inside the apply,
+    // where the same error WOULD mean a broken internal invariant rather than a
+    // conflict; that path has no producer (the trigger→version FK cascades), and
+    // if one ever appears it deserves its own classification, not this label.
+    if (error instanceof WorkspaceSerializeError) {
+      request.log.warn({ err: error }, 'workspace cannot be serialized for commit');
+      reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);
+      return;
+    }
+
     if (error instanceof GitPushRejectedError) {
       request.log.warn({ err: error }, 'git push rejected (non-fast-forward)');
       reply.status(409).send({ error: 'conflict', message: error.message } satisfies ApiErrorBody);

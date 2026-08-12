@@ -48,12 +48,17 @@ import { createTrigger, getTriggerByResourceId, updateTrigger } from '../repo/tr
 import type { Db } from '../repo/types.js';
 import { enabledForReadiness, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
-import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
+import {
+  latestVersion,
+  parseWorkspaceFiles,
+  unserializableDiagnostic,
+  type ParsedWorkspace,
+} from './workspace-parse.js';
 import {
   compareStoredVersion,
   dbVersionForm,
   serializeTrigger,
-  serializeWorkspace,
+  serializeWorkspaceTolerant,
   type OwnerRefMaps,
 } from './workspace-serialize.js';
 
@@ -429,7 +434,23 @@ export function applyWorkspace(
     // branch files took, so both sides of every content diff get the same
     // volatile treatment (and archived pipelines are omitted, #666) — this is
     // the classifier's baseline too.
-    const dbSnapshot = parseWorkspaceFiles(serializeWorkspace(db, ownerId));
+    //
+    // #1043 — TOLERANT, and DELIBERATELY not a refusal, which is the opposite
+    // call to the corrupt-branch refusal above. That refusal exists to stop a
+    // DESTRUCTIVE act: an incomplete branch snapshot would read a pipeline's
+    // file as absent and ARCHIVE it. A DB-side gap cannot do that. This snapshot
+    // is read in exactly two places — the connection content forms just below
+    // (connections carry no refs, so it is complete for them) and `plan.archive`
+    // — so an offender's absence can only make the apply archive LESS, never
+    // more. The pipeline loop reads real DB rows via `getPipelineByResourceId`
+    // and compares through #1018's ref-tolerant `compareStoredVersion`, so an
+    // offender IS still applied from the branch's own file.
+    //
+    // That last point is why refusing would be actively harmful rather than
+    // merely cautious: importing a branch version that re-points the node is one
+    // of the two ways out of this state, so a refusal would block the repair.
+    const serialized = serializeWorkspaceTolerant(db, ownerId);
+    const dbSnapshot = parseWorkspaceFiles(serialized.files);
     const dbConnFormByRid = new Map<string, string>();
     for (const c of dbSnapshot.connections) {
       if (c.resourceId !== null) dbConnFormByRid.set(c.resourceId, connectionContentForm(c.data));
@@ -895,6 +916,18 @@ export function applyWorkspace(
       });
     }
 
-    return { head, refused: false, applied, deferred, archived, diagnostics: [] };
+    // #1043 — a non-refused apply can now carry diagnostics: the DB-side
+    // resources this import could not compare (and therefore did not consider
+    // for archive). Disclosed rather than dropped, on the same principle the
+    // branch-side diagnostics follow — the difference is only that these do not
+    // refuse.
+    return {
+      head,
+      refused: false,
+      applied,
+      deferred,
+      archived,
+      diagnostics: serialized.unserializable.map(unserializableDiagnostic),
+    };
   });
 }
