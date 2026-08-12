@@ -78,15 +78,16 @@ export function runStreamUrl(
  * why `reconcileNodeActivity` exists: `pending`/`ready` (no event is appended
  * for a node that has not started) and `skipped` (routing-around emits nothing
  * at all — the reducer computes it), plus the engine's `waiting`, which means a
- * `call_pipeline`'s child run is in flight. A call node is the one park this
- * fold structurally cannot see: the engine parks it via a `startChild` COMMAND
- * and appends no event until `call.returned`, so there is nothing in the log to
- * fold (#796 — it needs a new engine event, not a projection change). That
- * window is one synchronous step TODAY, not a real blind spot: `call_pipeline`
- * does not execute yet (the executor's `startChild` branch yields an immediate
- * `call.returned{failure}` — P3b), so there is no child run to be blind to.
- * #796 owns the spawn seam AND the `call.started` append it then owes; #735,
- * which reported the blind spot alone, closed into it.
+ * `call_pipeline`'s child run is in flight. A call node USED to be the one park
+ * this fold structurally could not see: the engine parks it via a `startChild`
+ * COMMAND, and while `call.returned` was its only event there was nothing in the
+ * log to fold for the entire time a child ran (#735's blind spot). #796 closed
+ * that with `call.started` — a new engine event, as the diagnosis said it needed
+ * rather than a projection change — and the same ticket landed real child
+ * execution, so the earlier note here that `call_pipeline` "does not execute yet"
+ * and that there was therefore "no child run to be blind to" is now false twice
+ * over. The residual park this fold still cannot see is the window between the
+ * command and that append, which a crash can freeze.
  *
  * The holds are healthy, in-progress states, and deliberately distinct from
  * `dispatched`: dispatched means the node is executing, and a held/parked node
@@ -301,6 +302,47 @@ export interface NodeActivity {
    */
   spans: AttemptSpan[];
   /**
+   * #932 — the `call_pipeline` CHILD RUNS this node spawned, in log order.
+   *
+   * A child runs under its OWN run id, so its `activity.metered` events land in
+   * the child's log and never in this one. Every per-run total is therefore an
+   * understatement, and until this field existed the parent's log named the
+   * children nowhere the operator could see: `childRunId` arrived on the events
+   * below and was dropped by the fold, so a run that spent money in a sub-pipeline
+   * showed a total excluding it with nothing saying so, and no route to the run
+   * that holds the rest. `RunCostSummary` is what says so.
+   *
+   * ACCUMULATED FROM `call.started` ONLY, and that is load-bearing rather than a
+   * choice of convenience. `call.returned` also carries a `childRunId`, but the
+   * executor mints one for a spawn it REFUSED — `callFailed` (`executor.ts`)
+   * answers a missing child-run seam, a `MAX_CALL_DEPTH` breach, a cross-owner
+   * target, an archived pipeline and every other `ensure` refusal with a typed
+   * `call.returned{failure}` carrying the id of a run that was never created.
+   * Folding that arm would claim an exclusion that never happened and link the
+   * operator to a 404. `call.started` is appended only AFTER the child's row
+   * exists (its schema: the log "can hold a spawned child with no announcement,
+   * but never an announcement with no child"), so every id here names a real run.
+   *
+   * The residual, stated rather than fixed: adopting an already-TERMINAL child
+   * after a crash resolves the node straight from `call.returned` with no
+   * announcement, so that child is missed. An under-count is the safe direction
+   * for a caveat whose whole job is to say the total is too low.
+   *
+   * APPEND-ONLY and never cleared, unlike the result fields `clearResult` drops.
+   * A back-edge loop re-opens a call node with a fresh `attemptId` and so a fresh
+   * deterministic child id, and a parallel foreach folds its item instances onto
+   * this one row — several real children, each of which really spent. Deduped
+   * defensively: the producer already re-announces only when the parent's log
+   * lacks that `childRunId`, and `useRunStream` dedupes by `seq`, so a duplicate
+   * should not reach here at all.
+   *
+   * READ-ONLY to every caller, on the same terms as `spans` above: the array is
+   * handed out by reference through the fold's shallow spread, so mutating it
+   * mutates the projection. Anything that wants to reorder or filter must copy
+   * first.
+   */
+  childRunIds: string[];
+  /**
    * #866 — what this node SPENT: the `activity.metered` responses billed under
    * it, folded through the shared fail-closed accumulator so the per-node and
    * per-run readings cannot drift (`pricing/run-cost.ts` owns the rule).
@@ -494,6 +536,7 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         startedAtMs: undefined,
         endedAtMs: undefined,
         spans: [],
+        childRunIds: [],
       };
       byNode.set(nodeId, n);
     }
@@ -514,6 +557,14 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
    * producer today re-dispatches one. The field moves with the result so that a
    * later producer which does cannot leave a copy claim standing over a result
    * this run actually computed.
+   *
+   * `childRunIds` is deliberately NOT in this set, which is the one exception
+   * worth naming since everything else about a re-opened node's last result goes.
+   * A spawned child is not a result the node can retract: it ran under its own
+   * run id and spent real money there, and a re-opened call node (a back-edge
+   * loop round) spawns an ADDITIONAL child rather than replacing the last one.
+   * Dropping it would make the cost caveat understate an exclusion it had already
+   * measured — the failure #932 is about, reintroduced one layer down.
    *
    * Called at the three RE-OPEN sites (dispatch, the retry re-open, the park)
    * and at the head of EVERY terminal branch. The terminal calls are what keep a
@@ -857,6 +908,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.status = 'waiting';
         n.instanceId = instanceOf(e.callNodeId);
         countIfUnstarted(n);
+        /* #932 — the ONE arm that may record a child. See `childRunIds`: this
+           event is appended only after the child's row exists, while
+           `call.returned` carries the same field for a REFUSED spawn that
+           created no run. The guard is defensive, not a producer we know of. */
+        if (!n.childRunIds.includes(e.childRunId)) n.childRunIds.push(e.childRunId);
         // Deliberately NOT `openSpan`. A restart re-emits `startChild` for a
         // still-`waiting` call node, so this event can legitimately appear more
         // than once for one child, and a second `openSpan` would draw a second
@@ -1164,10 +1220,11 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
          the node reaches this branch precisely BECAUSE the engine started it
          and told no one. Zero there would render "waiting (child run) · 0
          attempts" over a child run that is genuinely on its first attempt.
-         Barely reachable today — the executor answers `startChild` with an
-         immediate `call.returned{failure}` (P3b) — but it is the state a live
-         tail passes through, it FREEZES there if the server dies between the
-         command and the append, and #796 makes it routine. */
+         ROUTINE since #796 landed real child execution — the claim this comment
+         used to make, that the executor answers `startChild` with an immediate
+         `call.returned{failure}`, was true only of the P3a stub and is now
+         false. It is also the state a live tail passes through, and it FREEZES
+         there if the server dies between the command and the append. */
       attempts: engine.status === 'waiting' ? engine.attempts : 0,
       outputs: 0,
       lastOutputName: undefined,
@@ -1188,6 +1245,13 @@ export function reconcileNodeActivity(rows: NodeActivity[], state: RunState): No
       startedAtMs: undefined,
       endedAtMs: undefined,
       spans: [],
+      /* #932 — empty for the same reason, and it is a REFUSAL rather than an
+         omission. This row exists because no event named the node, so no
+         `call.started` announced a child; the id could technically be re-derived
+         (`deterministicChildRunId` is pure), and must not be. Naming a child run
+         the log never announced would assert a run exists — the same invented
+         provenance the `copiedFromRunId` refusal above declines to make. */
+      childRunIds: [],
       /* #866 — likewise. A row reached here because NO event named this node, so
          nothing billed under it and no tool ran: an empty cost and an empty list
          are the MEASURED answer here, not a placeholder standing in for one. */

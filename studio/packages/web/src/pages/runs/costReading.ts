@@ -311,3 +311,52 @@ export function reusedSpend(
   if (sourceRunId === undefined) return null;
   return { reusedNodeCount, sourceRunId };
 }
+
+/**
+ * #932 — the CHILD RUNS this run spawned, and therefore the other thing its money
+ * figure does not include.
+ *
+ * The sibling of {@link reusedSpend}, and the same argument: a `call_pipeline`
+ * child executes under its OWN run id, so its `activity.metered` events are in the
+ * child's log and never in this one. Every per-run total — this surface and
+ * `GET /api/runs/:id/cost` alike — therefore excludes child spend. That is a
+ * property of the run model rather than of either projection, so the honest fix is
+ * to make the exclusion legible rather than to fold someone else's log into this
+ * one: an understatement is acceptable once it is stated, and silently wrong is not.
+ *
+ * NOT a census, and the caller's wording must not imply otherwise. Children nest
+ * (`MAX_CALL_DEPTH` allows a chain), so a listed child may have spawned its own,
+ * and a RERUN that copied a succeeded call node re-executes nothing and so
+ * announces no child at all while the original's children still hold spend. This
+ * answers "which child runs did THIS run announce", which is the set the operator
+ * can actually navigate to from here.
+ *
+ * Structurally typed on the one field it reads, exactly as `reusedSpend` is, so it
+ * needs no import from the fold module and is testable with object literals.
+ */
+export interface ChildSpend {
+  /**
+   * The child runs this run announced. Always non-empty.
+   *
+   * Ordered by NODE first (the fold's first-seen order) and by log order within a
+   * node — deliberately not claimed as global log order, which it is not: a second
+   * child of an early node precedes the first child of a later one regardless of
+   * their seq. It decides the order of the links in one sentence and nothing else.
+   */
+  childRunIds: readonly string[];
+}
+
+export function childSpend(
+  nodes: readonly { childRunIds?: readonly string[] | undefined }[],
+): ChildSpend | null {
+  const childRunIds: string[] = [];
+  for (const n of nodes) {
+    for (const id of n.childRunIds ?? []) {
+      /* The fold already dedupes per NODE; this catches the cross-node case,
+         which no producer emits either (a child belongs to one call node) but
+         which would otherwise let one run be counted twice in one sentence. */
+      if (!childRunIds.includes(id)) childRunIds.push(id);
+    }
+  }
+  return childRunIds.length === 0 ? null : { childRunIds };
+}

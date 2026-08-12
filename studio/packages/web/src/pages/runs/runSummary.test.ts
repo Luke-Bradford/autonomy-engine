@@ -21,6 +21,10 @@ const NO_LLM_ACTIVITY = {
   cost: emptyNodeCost(),
   costSpansInstances: false,
   toolCalls: [],
+  /* #932 — not LLM activity despite the constant's name, but the same role: the
+     value every row carries when nothing of this sort happened. An ordinary node
+     spawns no child run, and a row that claimed one would be the bug. */
+  childRunIds: [],
 };
 
 let seq = 0;
@@ -258,6 +262,9 @@ describe('deriveNodeActivity', () => {
         // Deliberately NO span: a restart re-announces one child, and a second
         // `openSpan` would draw a second bar for a single attempt.
         spans: [],
+        // #932 — and the child is NAMED, so the cost surface can say what its
+        // total leaves out and link the run that holds the rest.
+        childRunIds: ['child_abc'],
       },
     ]);
 
@@ -279,6 +286,96 @@ describe('deriveNodeActivity', () => {
       attempts: 1,
       outputValues: { answer: 42 },
       spans: [],
+      // Still exactly one: the return names the same child, not a second.
+      childRunIds: ['child_abc'],
+    });
+  });
+
+  describe('#932 — the child runs a total excludes', () => {
+    const started = (childRunId: string, attemptId = 'c#0', callNodeId = 'c') =>
+      envelope({ type: 'call.started', runId: 'r', callNodeId, attemptId, childRunId });
+
+    it('records NOTHING for a call.returned that no call.started announced', () => {
+      /* THE load-bearing case, and the reason accumulation is `call.started`-only.
+         `callFailed` in `executor.ts` answers a REFUSED spawn — no child-run seam
+         wired, `MAX_CALL_DEPTH` breached, a cross-owner or archived target, params
+         that are not replay-safe — with a typed `call.returned{failure}` carrying
+         the `childRunId` of a run that was never created. Folding that arm would
+         make the cost surface claim an exclusion that never happened and link the
+         operator to a 404. */
+      const rows = deriveNodeActivity([
+        envelope({
+          type: 'call.returned',
+          runId: 'r',
+          callNodeId: 'c',
+          attemptId: 'c#0',
+          childRunId: 'child_never_created',
+          childOutcome: 'failure',
+          outputs: {},
+        }),
+      ]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.status).toBe('failure');
+      expect(rows[0]?.childRunIds).toEqual([]);
+    });
+
+    it('APPENDS a second child when a back-edge loop re-opens the call node', () => {
+      /* A reachable producer of two children on one row: the loop reset returns
+         the node to `pending` with no attempt, so the next round mints a new
+         `attemptId` and therefore a new deterministic child id. Both children RAN
+         and both spent, so the caveat has to name both. */
+      const rows = deriveNodeActivity([
+        started('child_round1', 'c#0'),
+        envelope({
+          type: 'call.returned',
+          runId: 'r',
+          callNodeId: 'c',
+          attemptId: 'c#0',
+          childRunId: 'child_round1',
+          childOutcome: 'success',
+          outputs: {},
+        }),
+        started('child_round2', 'c#1'),
+      ]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.childRunIds).toEqual(['child_round1', 'child_round2']);
+    });
+
+    it('does not drop a spawned child when the node RE-OPENS', () => {
+      /* `clearResult` drops the node's last result at every re-open site, and
+         `childRunIds` is the one field deliberately outside that set: a child is
+         not a result the node can retract — it ran under its own id and spent real
+         money there. Dropping it would understate an exclusion the fold had
+         already measured.
+
+         `node.dispatched` is the re-open site with the widest blast radius, so it
+         is the one pinned here; the call-node-reachable form of the same contract
+         (`call.returned` calls `clearResult` at the head of its branch) is covered
+         by the #796 case above. `idempotent` is REQUIRED by the payload schema —
+         omitting it makes the fold skip the event silently and the assertion pass
+         over a re-open that never happened. */
+      const rows = deriveNodeActivity([
+        started('child_abc'),
+        envelope({
+          type: 'node.dispatched',
+          runId: 'r',
+          nodeId: 'c',
+          attemptId: 'c#1',
+          idempotent: true,
+        }),
+      ]);
+      expect(rows[0]?.status).toBe('dispatched');
+      expect(rows[0]?.childRunIds).toEqual(['child_abc']);
+    });
+
+    it('dedupes a re-announced child rather than counting it twice', () => {
+      /* Defensive only, and labelled as such: the executor re-announces a child
+         only when the parent's log does not already carry `call.started` for that
+         id, and `useRunStream` dedupes by `seq`, so no producer emits this. It
+         costs one `includes` and stops a forged or replayed log from inflating a
+         money caveat. */
+      const rows = deriveNodeActivity([started('child_abc'), started('child_abc')]);
+      expect(rows[0]?.childRunIds).toEqual(['child_abc']);
     });
   });
 
@@ -1544,6 +1641,7 @@ describe('reconcileNodeActivity', () => {
       startedAtMs: undefined,
       endedAtMs: undefined,
       spans: [],
+      childRunIds: [],
       ...over,
     };
   }

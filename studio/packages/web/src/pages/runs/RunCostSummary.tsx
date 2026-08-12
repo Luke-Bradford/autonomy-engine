@@ -1,5 +1,7 @@
+import { Link } from 'react-router';
 import type { NodeCost } from '@autonomy-studio/shared';
 import {
+  childSpend,
   costFigure,
   costSentence,
   readCost,
@@ -7,6 +9,7 @@ import {
   tokenSummary,
   unsettledSentence,
 } from './costReading';
+import { runDetailPath } from './runPath';
 
 /**
  * U27 slice 1 (#930) — what the WHOLE RUN spent.
@@ -43,12 +46,21 @@ import {
  * all-copied rerun, where `responseCount` is 0 and the reuse caveat is the entire
  * point, is exactly the case a `responseCount > 0` gate would have hidden.
  *
- * KNOWN SCOPE BOUNDARY, stated here because a total that quietly excludes
- * something is the failure this file is about: a `call_pipeline` child runs under
- * its OWN run id, so its spend is in the child's log and not the parent's. This
- * total therefore excludes child-run spend — as does `GET /api/runs/:id/cost`,
- * so it is a property of the run model rather than of this projection. Latent
- * today (P3b has not landed the child-spawn seam) and routine once it does.
+ * KNOWN SCOPE BOUNDARY, and #932 is the ticket that stopped it being a silent
+ * one: a `call_pipeline` child runs under its OWN run id, so its spend is in the
+ * child's log and not the parent's. This total therefore excludes child-run
+ * spend — as does `GET /api/runs/:id/cost` — so it is a property of the run model
+ * rather than of this projection, and folding the child's log in here would fix
+ * one surface while leaving the other wrong.
+ *
+ * This docblock previously called that LATENT, "P3b has not landed the
+ * child-spawn seam". #796 landed it, and the boundary went live without a word
+ * changing on screen: the total quietly began omitting real money. So the
+ * exclusion is now RENDERED (`childSpend`), with every child linked — the same
+ * refusal as the three above, applied to a figure whose missing part the operator
+ * otherwise has no way to find. The sentence is deliberately not a census:
+ * children nest, and a rerun that copied a succeeded call node announces none of
+ * its own while the original's children still hold spend.
  */
 export function RunCostSummary({
   usage,
@@ -59,8 +71,12 @@ export function RunCostSummary({
 }: {
   /** The whole run's folded usage — `computeRunUsage(stream.events)`. */
   usage: NodeCost;
-  /** The reconciled node rows, read ONLY for what the run reused. */
-  nodes: readonly { copiedFromRunId?: string | undefined }[];
+  /** The reconciled node rows, read ONLY for what this total leaves out: the
+   * nodes the run reused rather than re-executed, and the child runs it spawned. */
+  nodes: readonly {
+    copiedFromRunId?: string | undefined;
+    childRunIds?: readonly string[] | undefined;
+  }[];
   /** Whether the run has reached a terminal status. */
   settled: boolean;
   /** Whether the stream finished replaying the durable log. */
@@ -69,12 +85,25 @@ export function RunCostSummary({
   logTruncated: boolean;
 }) {
   const reused = reusedSpend(nodes);
+  const children = childSpend(nodes);
 
   return (
     <section aria-labelledby="run-cost-heading">
       <h3 id="run-cost-heading">Cost &amp; usage</h3>
       {replayComplete ? (
-        <SettledFigure usage={usage} settled={settled} />
+        <>
+          <SettledFigure usage={usage} settled={settled} />
+          {/* INSIDE the replay gate, unlike the reuse caveat below, and the
+              difference is not stylistic. `run.reseeded` is written into a new
+              run's empty log in one transaction, so it is present from the first
+              replay frame and a partial log cannot hide it. `call.started` lands
+              arbitrarily late, so on a truncated replay this list under-counts or
+              is absent — which would read as "no children". There is no figure to
+              qualify when the gate is closed anyway: the branch below says the
+              total cannot be computed at all, and qualifying a number that is not
+              on screen is the thing `showsAnAmount` exists to stop. */}
+          {children !== null && <ExcludedChildren childRunIds={children.childRunIds} />}
+        </>
       ) : (
         <p className="page-hint">
           {logTruncated
@@ -92,12 +121,51 @@ export function RunCostSummary({
       {reused !== null && (
         <p className="page-hint">
           {reused.reusedNodeCount} node{reused.reusedNodeCount === 1 ? ' was' : 's were'} REUSED
-          from run <code>{reused.sourceRunId}</code> rather than re-executed, and a copied node
-          bills nothing. So this is what the rerun spent, not what the result cost — the original
-          spend stays on that run.
+          from run{' '}
+          <Link to={runDetailPath(reused.sourceRunId)} title={reused.sourceRunId}>
+            <code>{reused.sourceRunId}</code>
+          </Link>{' '}
+          rather than re-executed, and a copied node bills nothing. So this is what the rerun spent,
+          not what the result cost — the original spend stays on that run{' '}
+          {/* #932 — the trailing "and on any sub-pipelines it called" is not
+              padding. A succeeded call node is copied by `reseedFrontier` like
+              any other, and a copied node re-executes nothing, so THIS run
+              announces no child and the caveat above says nothing at all. The
+              spend those children hold is real and sits two hops away. */}
+          and on any sub-pipelines it called.
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * #932 — the child runs this total leaves out, and how to reach them.
+ *
+ * "and anything they called in turn" is doing real work in this sentence, not
+ * hedging. A listed child may have spawned children of its own (`MAX_CALL_DEPTH`
+ * allows a chain), so the money missing from this figure is the sum of a whole
+ * SUBTREE, not of the runs named here. Ending the sentence at the links would send
+ * an operator to two pages, add them up, and let them believe they had the total.
+ */
+function ExcludedChildren({ childRunIds }: { childRunIds: readonly string[] }) {
+  const many = childRunIds.length > 1;
+  return (
+    <p className="page-hint">
+      This run called {childRunIds.length} sub-pipeline{many ? 's' : ''}, and{' '}
+      {many ? 'each one ran' : 'it ran'} as its own run that billed its own spend. So this figure is
+      what THIS run spent — it excludes {many ? 'those runs' : 'that run'}, and anything{' '}
+      {many ? 'they' : 'it'} called in turn:{' '}
+      {childRunIds.map((id, i) => (
+        <span key={id}>
+          {i > 0 && ', '}
+          <Link to={runDetailPath(id)} title={id}>
+            <code>{id}</code>
+          </Link>
+        </span>
+      ))}
+      .
+    </p>
   );
 }
 
