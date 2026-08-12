@@ -4,7 +4,7 @@ import type { NewPipelineVersion, Node } from '@autonomy-studio/shared';
 import { CATALOG_VERSION, MAX_CALL_DEPTH } from '@autonomy-studio/shared';
 import { archivePipelineRow, createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createRun, getRun, listRuns } from '../../repo/runs.js';
+import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
 
 import { createConnectorRegistry } from '../../connectors/registry.js';
 import { createChildRuns, subscribeChildReturns, type ChildRuns } from '../child.js';
@@ -425,3 +425,38 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
 function types(db: Db, runId: string): string[] {
   return loadEngineEvents(db, runId).map((e) => e.type);
 }
+
+describe('#1041 — a kick queued behind the orphan sweep does not resurrect the child', () => {
+  /**
+   * The sweep terminalizes an empty-log orphan by ROW PATCH — `terminalizeInterrupted`'s
+   * no-events branch appends nothing — so `terminalFactFromLog` still answers `null`
+   * for it. `kick`'s locked decision was log-only, so a kick already queued on the
+   * child's `pLimit(1)` when the sweep took the lock would fall into the empty-log
+   * branch and `startRun` the swept child back to `running`, carrying the sweep's
+   * `finishedAt` with it (`syncRunLifecycle` only ever carries an existing one
+   * forward). The row check closes it, with the SAME predicate `ensure` already
+   * applies before it ever issues a kick.
+   */
+  it('returns settled for a row-terminal child, appending nothing', async () => {
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: childPv,
+      triggerId: null,
+      parentRunId: seedRun(db, seedVersion(db, [leaf('a')])).id,
+      params: {},
+    });
+    const b = boundary(db);
+    updateRun(db, child.id, { status: 'interrupted', finishedAt: 1_700_000_000_000 });
+
+    b.childRuns.kick(child);
+    await settle(b.drives);
+
+    expect(loadEngineEvents(db, child.id)).toEqual([]);
+    const row = getRun(db, child.id)!;
+    expect(row.status).toBe('interrupted');
+    expect(row.finishedAt).toBe(1_700_000_000_000);
+    b.unsubscribe();
+  });
+});
