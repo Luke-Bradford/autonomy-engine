@@ -142,11 +142,11 @@ export function RunCostSummary({
 /**
  * #932 — the child runs this total leaves out, and how to reach them.
  *
- * "AT LEAST" is doing real work in this sentence, not hedging. A listed child may
- * have spawned children of its own (`MAX_CALL_DEPTH` allows a chain), so the money
- * missing from this figure is the sum of a whole subtree, not of the runs named
- * here. Saying "excludes 2 child runs" flat would send an operator to two pages,
- * add them up, and believe they had the total.
+ * "and anything they called in turn" is doing real work in this sentence, not
+ * hedging. A listed child may have spawned children of its own (`MAX_CALL_DEPTH`
+ * allows a chain), so the money missing from this figure is the sum of a whole
+ * SUBTREE, not of the runs named here. Ending the sentence at the links would send
+ * an operator to two pages, add them up, and let them believe they had the total.
  */
 function ExcludedChildren({ childRunIds }: { childRunIds: readonly string[] }) {
   const many = childRunIds.length > 1;

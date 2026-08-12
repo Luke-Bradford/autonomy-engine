@@ -335,6 +335,11 @@ export interface NodeActivity {
    * defensively: the producer already re-announces only when the parent's log
    * lacks that `childRunId`, and `useRunStream` dedupes by `seq`, so a duplicate
    * should not reach here at all.
+   *
+   * READ-ONLY to every caller, on the same terms as `spans` above: the array is
+   * handed out by reference through the fold's shallow spread, so mutating it
+   * mutates the projection. Anything that wants to reorder or filter must copy
+   * first.
    */
   childRunIds: string[];
   /**

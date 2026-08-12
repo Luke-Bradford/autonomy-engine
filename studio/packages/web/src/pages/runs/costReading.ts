@@ -318,7 +318,14 @@ export interface ReusedSpend {
  * needs no import from the fold module and is testable with object literals.
  */
 export interface ChildSpend {
-  /** The child runs this run announced, in log order. Always non-empty. */
+  /**
+   * The child runs this run announced. Always non-empty.
+   *
+   * Ordered by NODE first (the fold's first-seen order) and by log order within a
+   * node — deliberately not claimed as global log order, which it is not: a second
+   * child of an early node precedes the first child of a later one regardless of
+   * their seq. It decides the order of the links in one sentence and nothing else.
+   */
   childRunIds: readonly string[];
 }
 
