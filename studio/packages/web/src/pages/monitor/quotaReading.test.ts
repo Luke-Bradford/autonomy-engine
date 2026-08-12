@@ -52,6 +52,26 @@ describe('readAccountQuota', () => {
     expect(reading.windows[0]?.usedPct).toBeCloseTo(7);
   });
 
+  it('treats a CLAUDE reading with NO windows as UNREADABLE, not an empty table', () => {
+    /*
+     * #1030 — the twin of the codex case in `readAccountQuotas`, and the reason
+     * the fold moved into `readWindows`. It lived on the codex path alone;
+     * claude's path was correct only because `ClaudeAccountQuotaSchema` makes
+     * `seven_day` required — a fact in a different package, which the next
+     * widening (or a fourth provider) would quietly invalidate. Unreachable
+     * today, and pinned so that stays a property of the code rather than a
+     * coincidence.
+     */
+    const reading = readAccountQuota(
+      // Cast: the schema makes this unrepresentable, which is the point.
+      stateWith({} as unknown as NonNullable<AccountQuotaDisplayState['account']['claude']>),
+    );
+
+    expect(reading.kind).toBe('unreadable');
+    if (reading.kind !== 'unreadable') return;
+    expect(reading.reason).toBe('unrecognized_payload');
+  });
+
   /**
    * #1023 — a window whose reset instant the provider did not report.
    *
@@ -199,6 +219,44 @@ describe('readAccountQuota', () => {
       expect(reading.lastKnown?.windows[1]?.usedPct).toBeCloseTo(58);
       expect(reading.lastKnown?.windows[1]?.headroomPct).toBeCloseTo(42);
       expect(reading.lastKnown?.windows[0]?.resetsAtMs).toBe(1_785_100_200_000);
+    });
+
+    it('still offers the last-known reading when the LIVE one has no windows', () => {
+      // #1030's empty fold is a second way for the current reading to fail, not
+      // a different KIND of failure — an older reading is still the best thing
+      // known, exactly as on the `claude === null` path beside it.
+      const reading = readAccountQuota({
+        generated_at: 1_785_100_000,
+        account: {
+          claude: {} as unknown as NonNullable<AccountQuotaDisplayState['account']['claude']>,
+        },
+        last_known: { claude: LAST_KNOWN, read_at: 1_785_099_250 },
+      });
+
+      expect(reading.kind).toBe('unreadable');
+      if (reading.kind !== 'unreadable') return;
+      expect(reading.reason).toBe('unrecognized_payload');
+      expect(reading.lastKnown?.ageMs).toBe(750_000);
+    });
+
+    it('offers NO last-known block when the RETAINED reading has no windows either', () => {
+      // An empty last-known is not something known. Without this it renders the
+      // same header-over-nothing table the fold exists to prevent, one surface
+      // down and captioned with an age — which reads as MORE authoritative.
+      const reading = readAccountQuota({
+        generated_at: 1_785_100_000,
+        account: { claude: null },
+        unavailable: { claude: 'rate_limited' },
+        last_known: {
+          claude: {} as unknown as NonNullable<AccountQuotaDisplayState['account']['claude']>,
+          read_at: 1_785_099_250,
+        },
+      });
+
+      expect(reading.kind).toBe('unreadable');
+      if (reading.kind !== 'unreadable') return;
+      expect(reading.reason).toBe('rate_limited');
+      expect(reading.lastKnown).toBeUndefined();
     });
 
     it('has no last-known reading when none was ever obtained', () => {
