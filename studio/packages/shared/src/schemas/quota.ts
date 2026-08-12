@@ -180,13 +180,22 @@ export type AccountQuotaProvider = z.infer<typeof AccountQuotaProviderSchema>;
  * **Windows are individually optional.** Measured against codex-cli's own
  * session records on the operator's host (2026-08-07): a `plus` plan reports
  * `primary` with `window_minutes: 10080` (the 7-day window) and `secondary:
- * null` — ONE window, not two. Claude's all-or-nothing pair cannot represent
- * that, and forcing it would turn a perfectly good 7-day reading into
- * UNREADABLE. The `superRefine` below keeps the half that actually matters:
- * ZERO windows is not an empty reading, it is no reading at all. That is the
- * same fail-open shape `ClaudeAccountQuotaSchema` guards — an absent fact must
- * never be manufactured as a benign one — applied at the granularity codex
+ * null` — ONE window, not two. Claude's pair was mandatory at the time and
+ * could not represent that; forcing it would have turned a perfectly good 7-day
+ * reading into UNREADABLE. The `superRefine` below keeps the half that actually
+ * matters: ZERO windows is not an empty reading, it is no reading at all. That
+ * is the same fail-open shape `ClaudeAccountQuotaSchema` guards — an absent fact
+ * must never be manufactured as a benign one — applied at the granularity codex
  * actually reports at.
+ *
+ * **#1023 proved that argument general.** The claude endpoint turned out to do
+ * exactly what codex does — it stops reporting `five_hour` when there is no
+ * active session — so `ClaudeAccountQuotaSchema` adopted the optional window
+ * too, and the sentence above is now history rather than a contrast. What still
+ * separates the two schemas is the RULE about which windows may be missing:
+ * codex accepts any one of them, because either may be the only one its plan
+ * reports; claude requires `seven_day`, because that is the field its consumer
+ * parses. This schema also keeps `read_at`, below, which claude has no use for.
  *
  * **It carries its own `read_at`.** Claude's reading is polled live and is at
  * most one TTL old, so it has no freshness to interpret. Codex's is SCRAPED

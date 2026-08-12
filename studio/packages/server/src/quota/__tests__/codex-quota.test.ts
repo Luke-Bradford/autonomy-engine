@@ -113,7 +113,11 @@ describe('buildCodexQuota', () => {
   });
 
   it('keeps a single-window reading — `primary` alone is the measured plus-plan shape', () => {
-    // The whole reason codex does not reuse claude's all-or-nothing pair.
+    // The measured plus-plan shape, and the reason codex's windows were
+    // individually optional from the start. Claude's pair has since become
+    // optional too (#1023, same provider behaviour), so what now separates them
+    // is the RULE, not the capability: codex accepts any one window, claude
+    // requires `seven_day` because that is the field its consumer parses.
     const quota = buildCodexQuota(plusPlanLimits(64, 1786283144), 1786106974);
     expect(quota).toEqual({
       seven_day: { utilization: 0.64, resets_at: 1786283144 },
