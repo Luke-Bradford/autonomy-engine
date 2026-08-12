@@ -858,10 +858,17 @@ function describeImportBlock({
   // applied AND without moving the import base, so the click would report a
   // success that did nothing at all.
   if (preview.head === null) return 'There is nothing on the branch to import.';
-  // A parse diagnostic makes the apply refuse, by construction and before any
-  // write. Leaving the button live to earn that refusal wastes the operator's
-  // time and teaches them to ignore the warning.
-  if (preview.diagnostics.length > 0)
+  // A BRANCH-side parse diagnostic makes the apply refuse, by construction and
+  // before any write. Leaving the button live to earn that refusal wastes the
+  // operator's time and teaches them to ignore the warning.
+  //
+  // #1043 — asked through `refusesImport` rather than over the whole array,
+  // because a DB-side `unserializable_ref` does NOT refuse. Blocking on it would
+  // be worse than cosmetic: importing a branch version that re-points the
+  // offending node is one of the two ways out of that state, so a disabled
+  // button would withhold the repair on the strength of the very problem it
+  // repairs.
+  if (preview.diagnostics.some(refusesImport))
     return 'The import would be refused while any file on the branch cannot be read.';
   return null;
 }
