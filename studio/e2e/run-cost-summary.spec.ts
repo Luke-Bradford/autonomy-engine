@@ -262,10 +262,14 @@ test('#932 — the run total says which child runs it leaves out, and links them
     `/api/runs?parentRunId=${encodeURIComponent(runId)}`,
   );
   expect(childrenRes.status()).toBe(200);
-  const childrenBody = (await childrenRes.json()) as { items: { id: string; status: string }[] };
-  expect(childrenBody.items).toHaveLength(1);
-  const childRunId = childrenBody.items[0]!.id;
-  expect(childrenBody.items[0]!.status).toBe('success');
+  /* A BARE array — `GET /api/runs` returns `RunSummary[]`, not a paginated
+     envelope (`listRunSummaries`). Reading `.items` off it yields `undefined`,
+     which `toHaveLength` reports as a length mismatch rather than as the shape
+     error it is. */
+  const children = (await childrenRes.json()) as { id: string; status: string }[];
+  expect(children).toHaveLength(1);
+  const childRunId = children[0]!.id;
+  expect(children[0]!.status).toBe('success');
 
   /* THE LOAD-BEARING ASSERTION: two separate ledgers. Each run billed exactly one
      CLI exchange, and the parent's total counts ONLY its own — if a change ever
