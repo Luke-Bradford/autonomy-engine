@@ -102,6 +102,18 @@ test('U29 — two pipelines, two lanes, one axis', async ({ page }) => {
           // The measurement in WORDS, which is what carries the value when a
           // wide axis floors the bar at its 2px minimum.
           length: (group.querySelector('.run-timeline-length')?.textContent ?? '').trim(),
+          /* …and that it has a COLUMN to sit in. The row inherits a two-track
+             grid from `.timeline-row`, so without `.run-timeline-row`'s override
+             the length is a third child of a two-column grid — present in the
+             DOM, and therefore invisible to any query that only reads its text.
+             This nearly shipped: the stylesheet edit was silently skipped and
+             every DOM-level assertion still passed. A computed track count is
+             the only thing that can tell the difference. */
+          rowTracks: (() => {
+            const row = group.querySelector('.run-timeline-row');
+            if (row === null) return 0;
+            return getComputedStyle(row).gridTemplateColumns.split(/\s+/).filter(Boolean).length;
+          })(),
           trackLeft: group.querySelector('.timeline-track')?.getBoundingClientRect().left ?? 0,
         };
       };
@@ -142,6 +154,8 @@ test('U29 — two pipelines, two lanes, one axis', async ({ page }) => {
     // The length as text, which is the row's statement of the value.
     expect(lane!.length, `${name}: a measured length in words`).not.toBe('');
     expect(lane!.length, `${name}: a measured length in words`).not.toBe('—');
+    // …in its own grid column, not overflowing a two-track row.
+    expect(lane!.rowTracks, `${name}: label · track · length`).toBe(3);
   }
 
   /* THE cross-run claim. The two lanes are laid out in separate `<ol>`s, so the

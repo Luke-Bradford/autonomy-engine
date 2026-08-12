@@ -153,6 +153,21 @@ describe('U29 groupRunsByPipeline', () => {
   });
 
   /**
+   * The unplottable list is a PASS-THROUGH, not a sort. Pinned because the
+   * rendered list reads newest-first and it would be easy to record that as a
+   * guarantee of this function — it is the caller's (`listRunSummaries` orders
+   * `desc(startedAt)`), and a caller with another order must get its own back
+   * rather than a silently re-ordered one.
+   */
+  it('returns unplottable rows in the order they were given', () => {
+    const { unplottable } = groupRunsByPipeline([
+      run({ id: 'oldest', status: 'queued', startedAt: 100, finishedAt: null }),
+      run({ id: 'newest', status: 'queued', startedAt: 900, finishedAt: null }),
+    ]);
+    expect(unplottable.map((u) => u.run.id)).toEqual(['oldest', 'newest']);
+  });
+
+  /**
    * THE claim U29 exists to support: every group shares ONE axis, so a bar's
    * position is comparable across lanes. A per-group window — an easy and
    * plausible implementation slip — would pass every other test in this file

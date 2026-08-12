@@ -107,7 +107,18 @@ export function toRunBar(run: RunSummary): RunBar {
 export interface GroupedRuns {
   /** Lanes, in the order the workspace got busy. */
   groups: RunGroup[];
-  /** Every row the chart would not draw, with its reason, newest first. */
+  /**
+   * Every row the chart would not draw, with its reason, in the order they were
+   * handed in — this does not sort them.
+   *
+   * Stated as a pass-through rather than as "newest first", which is what it
+   * LOOKS like on screen and would be a claim this function cannot keep:
+   * `listRunSummaries` orders `desc(startedAt)` and `filterRunsByTab` preserves
+   * order, so the rows arrive newest-first and the list renders newest-first —
+   * but nothing here enforces that, and a caller passing rows in another order,
+   * or a change to the server's `ORDER BY`, would quietly falsify it. The
+   * precondition is the caller's; `groupRunsByPipeline`'s docblock repeats it.
+   */
   unplottable: UnplottableRun[];
   /**
    * The ONE axis every lane is drawn against, or `null` when nothing is
@@ -118,6 +129,13 @@ export interface GroupedRuns {
   window: { from: number; to: number } | null;
 }
 
+/**
+ * Lanes, refusals and the shared window, from one pass over the rows.
+ *
+ * The GROUPS are sorted here and their ordering is guaranteed. The `unplottable`
+ * list is NOT: it comes back in the order `runs` was given, so the caller owns
+ * how it reads. `RunsPage` hands over `visible`, which is newest-first.
+ */
 export function groupRunsByPipeline(runs: readonly RunSummary[]): GroupedRuns {
   const unplottable: UnplottableRun[] = [];
   const lanes = new Map<string, RunGroup>();

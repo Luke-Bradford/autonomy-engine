@@ -2771,3 +2771,42 @@ td button + button {
 .timeline-untimed-name {
   color: var(--text);
 }
+
+/* U29 (#1015) — the cross-run timeline. Its own container class rather than
+   `.attempt-timeline`, whose name and e2e scope belong to the per-run chart;
+   everything inside reuses U12a's `.timeline-*` rules unchanged, so the two
+   charts cannot drift apart on what a bar or an open span looks like. */
+.run-timeline {
+  margin-top: 0.5rem;
+}
+
+.run-timeline-group + .run-timeline-group {
+  margin-top: 1.25rem;
+}
+
+.run-timeline-group-name {
+  margin: 0 0 0.4rem;
+  font-size: 0.95rem;
+}
+
+/* A third column for the measured length. The bar owns POSITION on the axis and
+   the label owns the VALUE, because the runs list has no bounded window: on a
+   month-wide axis every short run sits at `.timeline-span`'s 2px floor, and a
+   row of identical dots would assert they were all the same length. */
+.run-timeline-row {
+  grid-template-columns: minmax(6rem, 12rem) 1fr minmax(3.5rem, auto);
+}
+
+.run-timeline-length {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Spaced like every other grouped control on this page (`.run-filters`), rather
+   than leaving the two toggles flush against each other. */
+.run-view-toggle {
+  display: flex;
+  gap: 0.5rem;
+}

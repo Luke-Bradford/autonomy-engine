@@ -89,13 +89,13 @@ export function RunTimeline({ runs }: RunTimelineProps): React.ReactElement {
                 merely placed above it: a screen reader landing on a bar has no
                 other way to learn which pipeline's lane it is in. */}
             <ol className="timeline-rows" aria-labelledby={headingId}>
-              {group.bars.map((bar) => {
-                const [placed] = placeSpans([bar], window.from, window.to);
-                /* `placeSpans` returns one entry per input and it was given
-                   exactly one, so this cannot be absent. Narrowed rather than
-                   asserted — `noUncheckedIndexedAccess` is on, and a `!` here
-                   would be the only unchecked claim in the file. */
-                if (placed === undefined) return null;
+              {/* ONE `placeSpans` call for the lane, not one per row — it maps
+                  an array to an array, and calling it per bar allocated a
+                  single-element array and destructured it again for every row.
+                  `placed.span` is the bar it was built from, so nothing has to
+                  be zipped back together. */}
+              {placeSpans(group.bars, window.from, window.to).map((placed) => {
+                const bar = placed.span;
                 const sentence = barSentence(bar, placed.durationMs);
                 return (
                   <li key={bar.run.id} className="timeline-row run-timeline-row">
