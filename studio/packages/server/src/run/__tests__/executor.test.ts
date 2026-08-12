@@ -1666,12 +1666,12 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
     await it.return();
     expect(kick).not.toHaveBeenCalled();
 
-    // What survives is a `pending` orphan — a child row that never ran and
-    // spent nothing. That is the residual `childRunIds` is RIGHT to omit, and
-    // the reason `GET /api/runs?parentRunId=` is not simply a better source:
-    // naming this row under a caveat about missing spend would assert money
-    // that was never spent.
-    expect(getRun(db, 'child-1')!.status).toBe('pending');
+    // What survives in production is a `pending` orphan — a child row that
+    // never ran and spent nothing, which is the residual `childRunIds` is RIGHT
+    // to omit (#1041). Deliberately NOT asserted here: `kick` is stubbed, so
+    // nothing in this test can move the row either way and a status assertion
+    // would pass just as readily for a broken executor. The spy above is the
+    // whole signal.
   });
 
   it('an adopted TERMINAL child is resolved without a second announcement or a kick', async () => {

@@ -938,9 +938,17 @@ export function createExecutor(deps: ExecutorDeps): Executor {
           // early return as skipping an announcement that was owed. It cannot:
           // `kick` is below the announcement yield and the driver only resumes
           // this generator once that event is durably appended, so a child can
-          // only have RUN if it was announced first — and only a drive moves a
-          // run to a terminal row status. Hence terminal ⟹ kicked ⟹ announced,
-          // and `{terminal: true, announced: false}` has no producer.
+          // only have RUN if it was announced first. And a row only reaches a
+          // terminal status once it has STARTED — every terminal writer needs an
+          // already-`running` row, an armed alarm or an open wait, none of which
+          // a child has before `kick` calls `startRun` (its only child caller).
+          // Hence terminal ⟹ kicked ⟹ announced, and `{terminal: true,
+          // announced: false}` has no producer.
+          //
+          // That is a WHOLE-CODEBASE claim, not a local guarantee: a future path
+          // that terminalizes a child row without going through `kick` would
+          // reopen #1038. `executor.test.ts` pins the half that lives here —
+          // that the kick stays below the yield.
           const { outcome, outputs } = deps.childRuns.result(command.childRunId);
           yield {
             type: 'call.returned',

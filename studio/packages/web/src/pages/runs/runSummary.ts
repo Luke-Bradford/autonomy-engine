@@ -327,13 +327,10 @@ export interface NodeActivity {
    * of `executor.ts` invites the reading that there is one (#1038 read it that
    * way): that branch resolves the node from `call.returned` and returns BEFORE
    * the announcement block, so it looks like a child that ran unannounced. It
-   * cannot be. `kick` sits past the `call.started` yield, and the pump resumes a
-   * generator past a yield only once that event is durably appended — a dropped
-   * event `break`s the stream instead (`driver.ts` per-stream backpressure). So
-   * kick ⟹ announced; and only a drive moves a run to a terminal row status,
-   * with `kick` the only entry that drives a child, so terminal ⟹ kicked.
-   * `ensure` returning `{terminal: true, announced: false}` has no producer.
-   * Pinned in `executor.test.ts` ("the announcement is what unlocks the kick").
+   * cannot be — `ensure` returning `{terminal: true, announced: false}` has no
+   * producer. The argument is deliberately NOT re-derived here: it lives with
+   * the code it is about, in `executor.ts`'s `ensured.terminal` branch, and is
+   * pinned by `executor.test.ts` ("the announcement is what unlocks the kick").
    *
    * The residual that DOES exist runs the other way, and this field is right to
    * omit it. If the announcement is DROPPED — the parent terminalized on another
