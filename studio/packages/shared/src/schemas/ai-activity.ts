@@ -145,22 +145,22 @@ export function maxBucketCount(since: RunSince): number {
  * as a calendar day or clock hour: `RUN_SINCE_MS`'s own docblock already settles
  * that the axis means "how far back", not "which day".
  *
- * WHY TOKEN PRESENCE IS COUNTED SEPARATELY FROM THE TOKENS. `RunCost` makes the
- * COST side honest (`costUnknownResponseCount`, `complete`) but says nothing
- * about the token side, because `inputTokens`/`outputTokens` are `.optional()`
- * on `activity.metered` — a provider may omit `usage` entirely, and
- * `cliSpendFact()` mints a metered event with no token fields at all. The SQL
- * sums them with `coalesce(sum(...), 0)`, so "nobody counted" and "genuinely
- * zero" arrive identically as `0`. On a table that is survivable; on a chart it
- * is the plotted-zero failure the ticket names — a bucket of real, unmeasured
- * agent-CLI work would draw as a confident zero-height bar. These two counters
- * are what let the UI draw "unmeasured" instead, and they are the SQL twin of
- * the counters `accumulateMetered` already keeps on the event-walk path.
+ * WHY TOKEN PRESENCE IS COUNTED SEPARATELY FROM THE TOKENS. `inputTokens` /
+ * `outputTokens` are `.optional()` on `activity.metered` — a provider may omit
+ * `usage` entirely, and `cliSpendFact()` mints a metered event with no token
+ * fields at all — while the SQL sums them with `coalesce(sum(...), 0)`, so
+ * "nobody counted" and "genuinely zero" would otherwise arrive identically as
+ * `0`. On a table that is survivable; on a chart it is the plotted-zero failure
+ * #967 names — a bucket of real, unmeasured agent-CLI work drawn as a confident
+ * zero-height bar. The per-side PRESENCE counts are what let the UI draw
+ * "unmeasured" instead.
  *
- * They are deliberately NOT added to `meteredAggregateColumns()`, which would
- * give the per-run and per-pipeline cost surfaces the same honesty: that widens
- * `RunCost`'s wire shape and every surface reading it, which is a bigger change
- * than #967. Filed as #1025 instead.
+ * #967 counted them in THIS query only, and said so: adding them to
+ * `meteredAggregateColumns()` would widen `RunCost`'s wire shape and every
+ * surface reading it, which was bigger than that ticket. #1025 did exactly that,
+ * so they now arrive INSIDE `cost` like every other figure here, and the run
+ * list, the per-pipeline rollup and the AI-activity model table gained the same
+ * honesty. This schema carries no bespoke pair any more.
  */
 export const TokenSeriesBucketSchema = z
   .object({
@@ -191,10 +191,6 @@ export const TokenSeriesBucketSchema = z
      * cost derivation, which is the one thing the money model refuses to have.
      */
     cost: RunCostSchema,
-    /** Billed exchanges in this bucket that actually REPORTED an input count. */
-    inputReportedResponseCount: z.number().int().nonnegative(),
-    /** Billed exchanges in this bucket that actually REPORTED an output count. */
-    outputReportedResponseCount: z.number().int().nonnegative(),
   })
   .strict();
 

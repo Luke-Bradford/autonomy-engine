@@ -41,6 +41,11 @@ function seriesSnapshot() {
     costUnknownResponseCount: 0,
     inputTokens: 0,
     outputTokens: 0,
+    // #1025 — the per-side presence counts now arrive INSIDE `cost`, and
+    // `RunCostSchema` is the live parser for this stubbed body, so a bucket
+    // missing them fails the client's own parse rather than the assertion.
+    inputReportedResponseCount: 0,
+    outputReportedResponseCount: 0,
     complete: true,
   };
   const measured = {
@@ -50,6 +55,8 @@ function seriesSnapshot() {
     totalCostEstimate: 1.5,
     inputTokens: 800,
     outputTokens: 200,
+    inputReportedResponseCount: 2,
+    outputReportedResponseCount: 2,
   };
   return {
     generatedAt: 1_786_000_000_000,
@@ -75,8 +82,6 @@ function seriesSnapshot() {
           bucketEnd: 1_785_996_600_000,
           partial: false,
           cost: measured,
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 2,
         },
         // genuinely empty: no exchanges at all, a MEASURED zero
         {
@@ -84,8 +89,6 @@ function seriesSnapshot() {
           bucketEnd: 1_785_996_900_000,
           partial: false,
           cost: zeroCost,
-          inputReportedResponseCount: 0,
-          outputReportedResponseCount: 0,
         },
         // exchanges happened, NOBODY counted the tokens
         {
@@ -93,8 +96,6 @@ function seriesSnapshot() {
           bucketEnd: 1_785_997_200_000,
           partial: false,
           cost: { ...zeroCost, responseCount: 3, unpricedResponseCount: 3 },
-          inputReportedResponseCount: 0,
-          outputReportedResponseCount: 0,
         },
         /*
          * ONE side counted, the other not — a stack, but a half-honest one.
@@ -110,9 +111,7 @@ function seriesSnapshot() {
           bucketStart: 1_785_997_200_000,
           bucketEnd: 1_785_997_500_000,
           partial: false,
-          cost: { ...measured, inputTokens: 1000, outputTokens: 0 },
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 0,
+          cost: { ...measured, inputTokens: 1000, outputTokens: 0, outputReportedResponseCount: 0 },
         },
         // still in progress
         {
@@ -120,8 +119,6 @@ function seriesSnapshot() {
           bucketEnd: 1_785_997_600_000,
           partial: true,
           cost: { ...measured, inputTokens: 100, outputTokens: 50 },
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 2,
         },
       ],
     },
@@ -183,6 +180,36 @@ test.describe('token-flow chart', () => {
     // The legend names both series, so identity is never colour-alone.
     await expect(chart.getByText('Tokens in')).toBeVisible();
     await expect(chart.getByText('Tokens out')).toBeVisible();
+
+    /*
+     * #1035 — and it names the HATCH, the one mark whose meaning is not
+     * self-evident and, until now, the only one with nothing explaining it. A
+     * reader saw a hatched stub and could not learn it meant "nobody reported
+     * this" rather than "almost zero".
+     *
+     * The stripes are ASSERTED, not assumed. The chart's own hatch rules are
+     * two-class selectors (`.token-flow-seg.token-flow-seg--unreported`), so a
+     * swatch that borrowed one of those class names would match nothing and
+     * render as a plain grey square — a legend entry that explains a texture it
+     * does not show. Its own single-class rule is what makes this pass.
+     */
+    const legend = chart.locator('.token-flow-legend');
+    await expect(legend).toContainText('Not reported');
+    const swatch = legend.locator('.token-flow-swatch--unreported');
+    await expect(swatch).toHaveCount(1);
+    const swatchPaint = await swatch.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return {
+        image: cs.backgroundImage,
+        color: cs.backgroundColor,
+        box: el.getBoundingClientRect().width,
+      };
+    });
+    expect(swatchPaint.image).toContain('repeating-linear-gradient');
+    expect(swatchPaint.color).not.toBe('rgba(0, 0, 0, 0)');
+    // The swatch keeps the 10px legend box — it must not inherit the marks' own
+    // `height: 6px` / `flex: none`, which encode "no magnitude" inside a stack.
+    expect(swatchPaint.box).toBeCloseTo(10, 0);
 
     /*
      * GEOMETRY, MEASURED RATHER THAN REASONED ABOUT. The stack is a column flex

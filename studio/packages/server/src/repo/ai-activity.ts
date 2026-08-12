@@ -139,6 +139,9 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
         totalCostEstimate: acc.totalCostEstimate + row.totalCostEstimate,
         inputTokens: acc.inputTokens + row.inputTokens,
         outputTokens: acc.outputTokens + row.outputTokens,
+        inputReportedResponseCount: acc.inputReportedResponseCount + row.inputReportedResponseCount,
+        outputReportedResponseCount:
+          acc.outputReportedResponseCount + row.outputReportedResponseCount,
       }),
       { ...EMPTY_METERED_AGGREGATES },
     );
@@ -196,11 +199,6 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
       .select({
         bucketStart: bucketStartExpr(filter.bucketMs, lastBucketStart(filter)),
         ...meteredAggregateColumns(),
-        // The token-presence twin of `accumulateMetered`'s counters. `count(x)`
-        // counts NON-NULL x, so this is "how many of these exchanges actually
-        // reported a count" — the fact `coalesce(sum(...), 0)` destroys.
-        inputReportedResponseCount: sql<number>`count(json_extract(${runEvents.payload}, '$.inputTokens'))`,
-        outputReportedResponseCount: sql<number>`count(json_extract(${runEvents.payload}, '$.outputTokens'))`,
       })
       .from(runEvents)
       .innerJoin(runs, eq(runEvents.runId, runs.id))
@@ -268,11 +266,7 @@ function lastBucketStart(filter: AiActivityFilter): number {
   return Math.floor(filter.nowMs / filter.bucketMs) * filter.bucketMs;
 }
 
-type BucketRow = MeteredAggregates & {
-  bucketStart: number;
-  inputReportedResponseCount: number;
-  outputReportedResponseCount: number;
-};
+type BucketRow = MeteredAggregates & { bucketStart: number };
 
 /**
  * Zero-fills the sparse `GROUP BY` result into a contiguous, oldest-first series.
@@ -337,8 +331,6 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
       bucketEnd,
       partial: start < sinceMs || fullEnd > nowMs,
       cost: runCostFromAggregates(row ?? EMPTY_METERED_AGGREGATES),
-      inputReportedResponseCount: row?.inputReportedResponseCount ?? 0,
-      outputReportedResponseCount: row?.outputReportedResponseCount ?? 0,
     });
   }
 
@@ -360,4 +352,6 @@ const EMPTY_METERED_AGGREGATES: MeteredAggregates = {
   totalCostEstimate: 0,
   inputTokens: 0,
   outputTokens: 0,
+  inputReportedResponseCount: 0,
+  outputReportedResponseCount: 0,
 };

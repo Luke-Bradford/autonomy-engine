@@ -23,6 +23,8 @@ function cost(over: Partial<RunCost> = {}): RunCost {
     costUnknownResponseCount: 0,
     inputTokens: 0,
     outputTokens: 0,
+    inputReportedResponseCount: 0,
+    outputReportedResponseCount: 0,
     complete: true,
     ...over,
   };
@@ -49,8 +51,6 @@ function bucket(over: Partial<TokenSeriesBucket> = {}): TokenSeriesBucket {
     bucketEnd: 1_785_996_700_000,
     partial: false,
     cost: cost(),
-    inputReportedResponseCount: 0,
-    outputReportedResponseCount: 0,
     ...over,
   };
 }
@@ -424,15 +424,23 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 1, inputTokens: 50, outputTokens: 50 }),
-          inputReportedResponseCount: 1,
-          outputReportedResponseCount: 1,
+          cost: cost({
+            responseCount: 1,
+            inputTokens: 50,
+            outputTokens: 50,
+            inputReportedResponseCount: 1,
+            outputReportedResponseCount: 1,
+          }),
         }),
         bucket({
           bucketStart: 2,
-          cost: cost({ responseCount: 1, inputTokens: 25, outputTokens: 25 }),
-          inputReportedResponseCount: 1,
-          outputReportedResponseCount: 1,
+          cost: cost({
+            responseCount: 1,
+            inputTokens: 25,
+            outputTokens: 25,
+            inputReportedResponseCount: 1,
+            outputReportedResponseCount: 1,
+          }),
         }),
       ]);
 
@@ -454,9 +462,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 3, inputTokens: 0, outputTokens: 0 }),
-          inputReportedResponseCount: 0,
-          outputReportedResponseCount: 0,
+          cost: cost({
+            responseCount: 3,
+            inputTokens: 0,
+            outputTokens: 0,
+            inputReportedResponseCount: 0,
+            outputReportedResponseCount: 0,
+          }),
         }),
       ]);
 
@@ -478,9 +490,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0 }),
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 0,
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 900,
+            outputTokens: 0,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 0,
+          }),
         }),
       ]);
 
@@ -501,9 +517,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 900, outputTokens: 0 }),
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 2,
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 900,
+            outputTokens: 0,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 2,
+          }),
         }),
       ]);
 
@@ -528,8 +548,7 @@ describe('AiActivityPage', () => {
         bucket({
           bucketStart: 1,
           partial: true,
-          cost: cost({ responseCount: 1, inputTokens: 10 }),
-          inputReportedResponseCount: 1,
+          cost: cost({ responseCount: 1, inputTokens: 10, inputReportedResponseCount: 1 }),
         }),
       ]);
 
@@ -542,9 +561,13 @@ describe('AiActivityPage', () => {
       const container = await renderBars([
         bucket({
           bucketStart: 1,
-          cost: cost({ responseCount: 2, inputTokens: 10, outputTokens: 4 }),
-          inputReportedResponseCount: 2,
-          outputReportedResponseCount: 2,
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 10,
+            outputTokens: 4,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 2,
+          }),
         }),
       ]);
 
@@ -563,6 +586,67 @@ describe('AiActivityPage', () => {
      * back on its own and state "no tokens" where the notice states "nothing
      * happened".
      */
+    /**
+     * #1035 — the legend's key to the hatch.
+     *
+     * The mark whose meaning is least self-evident was the only one with nothing
+     * explaining it: a reader saw a hatched stub and had no way to learn it meant
+     * "nobody reported this side" rather than "almost zero" — the very misreading
+     * the hatch was introduced to prevent.
+     */
+    it('explains the hatch in the legend WHEN the series draws one', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({
+            responseCount: 2,
+            inputTokens: 900,
+            inputReportedResponseCount: 2,
+            outputReportedResponseCount: 0,
+          }),
+        }),
+      ]);
+
+      const legend = container.querySelector('.token-flow-legend');
+      expect(legend?.textContent).toContain('Not reported');
+      expect(legend?.querySelector('.token-flow-swatch--unreported')).not.toBeNull();
+      // The legend's swatch must not join the chart's own marks: `.token-flow-seg`
+      // is what the bar assertions count.
+      expect(container.querySelectorAll('.token-flow-seg--unreported')).toHaveLength(1);
+    });
+
+    it('omits it when every side of every bucket WAS reported', async () => {
+      /* A legend explaining a mark that is not on screen is noise, and the entry
+         is derived from the same predicate the marks are drawn from, so the two
+         cannot disagree. */
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({
+            responseCount: 1,
+            inputTokens: 10,
+            outputTokens: 4,
+            inputReportedResponseCount: 1,
+            outputReportedResponseCount: 1,
+          }),
+        }),
+      ]);
+
+      const legend = container.querySelector('.token-flow-legend');
+      expect(legend?.textContent).toContain('Tokens in');
+      expect(legend?.textContent).not.toContain('Not reported');
+      expect(legend?.querySelector('.token-flow-swatch--unreported')).toBeNull();
+    });
+
+    it('explains it for the WHOLE-BUCKET marker too — one key, both hatched marks', async () => {
+      const container = await renderBars([
+        bucket({ bucketStart: 1, cost: cost({ responseCount: 3 }) }),
+      ]);
+
+      expect(container.querySelector('.token-flow-unmeasured')).not.toBeNull();
+      expect(container.querySelector('.token-flow-legend')?.textContent).toContain('Not reported');
+    });
+
     it('is hidden by the same empty-window guard as the model table', async () => {
       activityMock.mockResolvedValue(
         snapshot({
@@ -576,6 +660,74 @@ describe('AiActivityPage', () => {
       );
       expect(container.querySelector('.token-flow')).toBeNull();
       expect(container.querySelector('.ai-model-table')).toBeNull();
+    });
+  });
+
+  /**
+   * #1025 — the honesty the chart already had, on the two surfaces beside it.
+   *
+   * `meteredAggregateColumns()` now counts, per side, how many billed exchanges
+   * actually REPORTED a token count, so these two can tell "nobody counted" from
+   * "genuinely zero". Before, both read `coalesce(sum(…), 0)` and printed a
+   * confident `0` for either.
+   */
+  describe('the token figures beside the chart (#1025)', () => {
+    /** The `<dd>` of the tile labelled `Tokens` — the `dt`, not the table header. */
+    function tokensTile(container: HTMLElement): string {
+      const dt = [...container.querySelectorAll('.monitor-tiles dt')].find(
+        (el) => el.textContent === 'Tokens',
+      );
+      return dt?.nextElementSibling?.textContent ?? '';
+    }
+
+    it('the window totals say NOT REPORTED for agent-CLI-only work, not 0 in / 0 out', async () => {
+      /* `cliSpendFact` carries no token fields at all, so this window is 4 real
+         billed exchanges whose token use nobody measured. A `0` here reads as a
+         subprocess that did nothing. */
+      activityMock.mockResolvedValue(
+        snapshot({
+          agentCli: { invocations: 4, completed: 4, notCompleted: 0, lastAt: 1_785_996_500_000 },
+          totals: cost({ responseCount: 4, unpricedResponseCount: 4 }),
+        }),
+      );
+      const { container } = render(<AiActivityPage />);
+      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
+      expect(tokensTile(container)).toBe('not reported');
+    });
+
+    it('an IDLE window still reads 0 in · 0 out — nothing billed is a measured zero', async () => {
+      /* The tiles render above the empty-window guard, so this case is reachable
+         only here. "not reported" would claim a missing measurement where the
+         answer is genuinely nothing. */
+      activityMock.mockResolvedValue(snapshot({ totals: cost({ responseCount: 0 }) }));
+      const { container } = render(<AiActivityPage />);
+      await waitFor(() => expect(tokensTile(container)).not.toBe(''));
+      expect(tokensTile(container)).toBe('0 in · 0 out');
+    });
+
+    it('a model row whose provider omitted usage says so, per side', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          models: [
+            {
+              provider: 'openai_api',
+              model: 'gpt-5',
+              lastAt: 1_785_996_500_000,
+              cost: cost({
+                responseCount: 2,
+                inputTokens: 4000,
+                inputReportedResponseCount: 2,
+                outputReportedResponseCount: 0,
+              }),
+            },
+          ],
+          totals: cost({ responseCount: 2, inputTokens: 4000, inputReportedResponseCount: 2 }),
+        }),
+      );
+      render(<AiActivityPage />);
+      await waitFor(() => expect(screen.getByText('gpt-5')).toBeTruthy());
+      const row = screen.getByText('gpt-5').closest('tr');
+      expect(row?.textContent).toContain('4,000 in · output not reported');
     });
   });
 });

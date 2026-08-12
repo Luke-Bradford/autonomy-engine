@@ -1,5 +1,6 @@
 import {
   formatTokenCount,
+  tokenSideReported,
   type TokenSeries,
   type TokenSeriesBucket,
 } from '@autonomy-studio/shared';
@@ -58,13 +59,24 @@ export interface TokenFlowChartProps {
   generatedAt: number;
 }
 
+/**
+ * Whether ONE side of a bucket carried no token count at all — the fact
+ * `coalesce(sum(…), 0)` destroys, which is why the presence counts exist.
+ *
+ * The SINGLE source of that question: `segment` draws the hatched sliver from it,
+ * `bucketSentence` words it from it, and the legend decides whether to explain the
+ * hatch from it, so a mark can never appear that the legend does not cover.
+ *
+ * Since #1025 the pair arrives INSIDE `cost` — `meteredAggregateColumns()` counts
+ * it for every cost surface now, not just this query.
+ */
+function isSideUnreported(bucket: TokenSeriesBucket, side: 'in' | 'out'): boolean {
+  return !tokenSideReported(bucket.cost, side === 'in' ? 'input' : 'output');
+}
+
 /** A bucket in which exchanges were billed but NOBODY reported a token count. */
 function isUnmeasured(bucket: TokenSeriesBucket): boolean {
-  return (
-    bucket.cost.responseCount > 0 &&
-    bucket.inputReportedResponseCount === 0 &&
-    bucket.outputReportedResponseCount === 0
-  );
+  return isSideUnreported(bucket, 'in') && isSideUnreported(bucket, 'out');
 }
 
 /**
@@ -87,13 +99,11 @@ function bucketSentence(bucket: TokenSeriesBucket): string {
    * scale. `segment` draws that side as a hatched sliver for the same reason,
    * so the sentence and the mark make the same claim.
    */
-  const side = (tokens: number, reported: number, label: string) =>
-    reported === 0 ? `${label} not reported` : `${formatTokenCount(tokens)} ${label}`;
-  const counts = `${side(bucket.cost.inputTokens, bucket.inputReportedResponseCount, 'in')} / ${side(
-    bucket.cost.outputTokens,
-    bucket.outputReportedResponseCount,
-    'out',
-  )}`;
+  const side = (tokens: number, label: 'in' | 'out') =>
+    isSideUnreported(bucket, label)
+      ? `${label} not reported`
+      : `${formatTokenCount(tokens)} ${label}`;
+  const counts = `${side(bucket.cost.inputTokens, 'in')} / ${side(bucket.cost.outputTokens, 'out')}`;
   return `${when}${partial}: ${exchanges}, ${counts}`;
 }
 
@@ -128,9 +138,7 @@ export function TokenFlowChart({
    */
   const segment = (bucket: TokenSeriesBucket, side: 'in' | 'out') => {
     const tokens = side === 'in' ? bucket.cost.inputTokens : bucket.cost.outputTokens;
-    const reported =
-      side === 'in' ? bucket.inputReportedResponseCount : bucket.outputReportedResponseCount;
-    const unreported = reported === 0 && bucket.cost.responseCount > 0;
+    const unreported = isSideUnreported(bucket, side);
     return (
       <span
         className={`token-flow-seg token-flow-seg--${side}${
@@ -207,6 +215,35 @@ export function TokenFlowChart({
           <span className="token-flow-swatch token-flow-seg--out" aria-hidden="true" />
           Tokens out
         </li>
+        {/* #1035 — the ONE mark on this chart whose meaning is not self-evident was
+            the only one with nothing explaining it. A reader saw a hatched stub and
+            had no way to learn it meant "nobody reported this" rather than "almost
+            zero" — precisely the misreading the hatch was introduced to prevent,
+            arriving one step later.
+
+            ONE entry covers BOTH hatched marks (the half-scale sliver and the
+            whole-bucket marker), because THE HATCH is what they share and what
+            needs explaining — they differ only in how much of the stack went
+            unreported, a distinction each bar's own title already states in words.
+            Two near-identical hatched swatches would ask the reader to tell those
+            apart by texture alone.
+
+            The swatch is neutral, and cannot match both marks anyway: the sliver
+            deliberately KEEPS its per-side series hue (identity survives), so it
+            is blue for "in" and orange for "out", while the whole-bucket marker is
+            grey. Colour is already taught by the two entries above; this entry
+            teaches the one signal all three share.
+
+            Rendered only when the series actually contains such a mark, and from
+            the SAME predicate the marks are drawn from — a legend explaining
+            something that is not on screen is noise, and one derived independently
+            could disagree with the chart. */}
+        {buckets.some((b) => isSideUnreported(b, 'in') || isSideUnreported(b, 'out')) ? (
+          <li>
+            <span className="token-flow-swatch token-flow-swatch--unreported" aria-hidden="true" />
+            Not reported
+          </li>
+        ) : null}
       </ul>
     </figure>
   );

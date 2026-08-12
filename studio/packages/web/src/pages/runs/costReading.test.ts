@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeCost } from '@autonomy-studio/shared';
-import { childSpend, costSentence, readCost, reusedSpend, unsettledSentence } from './costReading';
+import {
+  childSpend,
+  costSentence,
+  readCost,
+  reusedSpend,
+  tokenSummary,
+  unsettledSentence,
+} from './costReading';
 
 /** A folded node cost, defaulted to "nothing billed" and overridden per case. */
 function cost(fields: Partial<NodeCost> = {}): NodeCost {
@@ -80,16 +87,16 @@ describe('readCost (#866)', () => {
     ).toBe(false);
   });
 
-  it('says tokens were NOT reported, so a zero sum is never read as a measurement', () => {
-    const r = readCost(cost({ responseCount: 1, unpricedResponseCount: 1 }));
-    expect(r.inputTokensReported).toBe(false);
-    expect(r.outputTokensReported).toBe(false);
-  });
-
-  it('answers PER SIDE — a one-sided count never lends credibility to the other', () => {
+  /* The "was this side reported at all" assertions that used to live here moved
+     to the `tokenSummary` describe below, with the booleans they read: since
+     #1025 that question is answered by the shared `tokenSideReported` over a
+     plain `RunCost`, and `readCost`'s job here is the PARTIAL-ness that only a
+     per-side count can express. */
+  it('says how PARTIAL each side is — reported on some exchanges but not all', () => {
     /* The documented `meterUsage` case: a gateway sends `prompt_eval_count` and
-       no `eval_count`. A single combined flag would call this response "reported"
-       and render `4,000 in · 0 out` — a measurement nobody took. */
+       no `eval_count`. Input was reported on every exchange there was, so its sum
+       is complete, not partial — "partial" must not become a synonym for
+       "something is missing somewhere in this reading". */
     const r = readCost(
       cost({
         responseCount: 1,
@@ -100,10 +107,12 @@ describe('readCost (#866)', () => {
         outputReportedResponseCount: 0,
       }),
     );
-    expect(r.inputTokensReported).toBe(true);
-    expect(r.outputTokensReported).toBe(false);
-    // And neither side is "partial": input reported on every exchange there was.
     expect(r.inputTokensPartial).toBe(false);
+    expect(r.inputReportedCount).toBe(1);
+    // The UNREPORTED side is not "partial" either — there is no partial sum to
+    // qualify, which is why `tokenSummary` refuses to print it as a number.
+    expect(r.outputTokensPartial).toBe(false);
+    expect(r.outputReportedCount).toBe(0);
   });
 
   it('says a side is PARTIAL when only some exchanges reported it', () => {
@@ -245,5 +254,56 @@ describe('childSpend (#932 — a total excludes its child runs)', () => {
     expect(childSpend([{ childRunIds: ['run_c1'] }, { childRunIds: ['run_c1'] }])).toEqual({
       childRunIds: ['run_c1'],
     });
+  });
+});
+
+/**
+ * #1025 — the token line, now over a plain `RunCost`.
+ *
+ * It reads the per-side presence counts directly since they landed on every cost
+ * surface, so the AI-activity window totals and per-model rows get the same
+ * reading the run and node panels have had since #866.
+ */
+describe('tokenSummary (#1025 — over a plain RunCost)', () => {
+  it('states each side by name when both were counted', () => {
+    expect(
+      tokenSummary(
+        cost({
+          responseCount: 2,
+          inputTokens: 4000,
+          outputTokens: 120,
+          inputReportedResponseCount: 2,
+          outputReportedResponseCount: 2,
+        }),
+      ),
+    ).toBe('4,000 in · 120 out');
+  });
+
+  it('an UNCOUNTED side says so — one measured side never lends its credibility', () => {
+    /* The `prompt_eval_count`-only gateway: a real 4,000 input and an output
+       nobody counted. `coalesce(sum(…), 0)` hands the second over as `0`, and
+       "0 out" would assert a measurement that was never taken. */
+    expect(
+      tokenSummary(
+        cost({
+          responseCount: 1,
+          inputTokens: 4000,
+          inputReportedResponseCount: 1,
+          outputReportedResponseCount: 0,
+        }),
+      ),
+    ).toBe('4,000 in · output not reported');
+  });
+
+  it('the agent-CLI shape — exchanges billed, NEITHER side counted', () => {
+    expect(tokenSummary(cost({ responseCount: 3 }))).toBe('not reported');
+  });
+
+  it('ZERO billed exchanges is a MEASURED zero, not a missing measurement', () => {
+    /* The case only the AI-activity tiles can reach: they render unconditionally,
+       where the run and node panels gate their token line behind having models.
+       An idle window used no tokens — that is a real measurement of nothing, and
+       "not reported" would claim a gap where there is none. */
+    expect(tokenSummary(cost({ responseCount: 0 }))).toBe('0 in · 0 out');
   });
 });

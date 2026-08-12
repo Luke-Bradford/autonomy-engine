@@ -100,6 +100,20 @@ export const meteredCostEstimate = sql`json_extract(${runEvents.payload}, '$.cos
 export const meteredUnpricedCount = sql`sum(case when ${meteredCostEstimate} is null and json_extract(${runEvents.payload}, '$.meteringStatus') = 'unpriced' then 1 else 0 end)`;
 
 /**
+ * #1025 — the per-side token counts, extracted ONCE so the SUM and the PRESENCE
+ * count below read the same expression and cannot drift apart.
+ *
+ * Presence works here for exactly the reason it works for `costEstimate`:
+ * `inputTokens`/`outputTokens` are `.optional()` on `activity.metered` (never
+ * `.nullable()`), and JSON serialization drops an `undefined` key, so absent ⟺
+ * `json_extract` NULL ⟺ nobody counted. Were a JSON null ever to reach the column
+ * anyway, `count()` would skip it and the side would read as UNreported — the
+ * fail-closed direction.
+ */
+export const meteredInputTokens = sql`json_extract(${runEvents.payload}, '$.inputTokens')`;
+export const meteredOutputTokens = sql`json_extract(${runEvents.payload}, '$.outputTokens')`;
+
+/**
  * The `MeteredAggregates` selection, valid both UNGROUPED (one row for the whole
  * filtered set) and GROUPED (one row per `run_id`).
  *
@@ -117,8 +131,10 @@ export function meteredAggregateColumns() {
     pricedResponseCount: count(meteredCostEstimate),
     unpricedResponseCount: sql<number>`coalesce(${meteredUnpricedCount}, 0)`,
     totalCostEstimate: sql<number>`coalesce(sum(${meteredCostEstimate}), 0)`,
-    inputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.inputTokens')), 0)`,
-    outputTokens: sql<number>`coalesce(sum(json_extract(${runEvents.payload}, '$.outputTokens')), 0)`,
+    inputTokens: sql<number>`coalesce(sum(${meteredInputTokens}), 0)`,
+    outputTokens: sql<number>`coalesce(sum(${meteredOutputTokens}), 0)`,
+    inputReportedResponseCount: count(meteredInputTokens),
+    outputReportedResponseCount: count(meteredOutputTokens),
   };
 }
 
@@ -307,6 +323,8 @@ export function aggregatePipelineCost(
       totalCostEstimate: sums?.totalCostEstimate ?? 0,
       inputTokens: sums?.inputTokens ?? 0,
       outputTokens: sums?.outputTokens ?? 0,
+      inputReportedResponseCount: sums?.inputReportedResponseCount ?? 0,
+      outputReportedResponseCount: sums?.outputReportedResponseCount ?? 0,
     };
   });
 }

@@ -265,6 +265,8 @@ describe('rollupPipelineCost', () => {
         totalCostEstimate: 0.015,
         inputTokens: 160,
         outputTokens: 160,
+        inputReportedResponseCount: 3,
+        outputReportedResponseCount: 3,
       }),
     );
   });
@@ -281,6 +283,8 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       totalCostEstimate: 1.25,
       inputTokens: 500,
       outputTokens: 900,
+      inputReportedResponseCount: 10,
+      outputReportedResponseCount: 10,
     });
     expect(rollup.currency).toBe('USD');
     expect(rollup.responseCount).toBe(10);
@@ -304,6 +308,8 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       totalCostEstimate: 0.5,
       inputTokens: 10,
       outputTokens: 20,
+      inputReportedResponseCount: 5,
+      outputReportedResponseCount: 5,
     });
     expect(rollup.costUnknownResponseCount).toBe(0);
     expect(rollup.complete).toBe(true);
@@ -319,6 +325,8 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       totalCostEstimate: 0,
       inputTokens: 0,
       outputTokens: 0,
+      inputReportedResponseCount: 0,
+      outputReportedResponseCount: 0,
     });
     expect(rollup.runCount).toBe(3);
     expect(rollup.responseCount).toBe(0);
@@ -336,6 +344,8 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       totalCostEstimate: 2,
       inputTokens: 100,
       outputTokens: 200,
+      inputReportedResponseCount: 8,
+      outputReportedResponseCount: 8,
     });
     // 8 - 5 - 3 = 0 genuine gaps → complete, even though only 5 carry a dollar cost.
     expect(rollup.costUnknownResponseCount).toBe(0);
@@ -353,6 +363,8 @@ describe('rollupFromAggregates (#599 — the single fail-closed derivation site)
       totalCostEstimate: 0.9,
       inputTokens: 10,
       outputTokens: 10,
+      inputReportedResponseCount: 6,
+      outputReportedResponseCount: 6,
     });
     // 6 - 3 - 2 = 1 genuine cost-unknown response → incomplete.
     expect(rollup.costUnknownResponseCount).toBe(1);
@@ -533,6 +545,8 @@ describe('runCostFromAggregates (#931 — the run-level aggregate derivation)', 
     totalCostEstimate: 1.25,
     inputTokens: 500,
     outputTokens: 900,
+    inputReportedResponseCount: 10,
+    outputReportedResponseCount: 10,
   };
 
   it('DERIVES the cost gap as responseCount - priced - unpriced, never as a summed 0', () => {
@@ -551,6 +565,9 @@ describe('runCostFromAggregates (#931 — the run-level aggregate derivation)', 
       totalCostEstimate: 0,
       inputTokens: 0,
       outputTokens: 0,
+      // the `agent_cli` shape: 4 billed exchanges, no token count on either side
+      inputReportedResponseCount: 0,
+      outputReportedResponseCount: 0,
     });
     expect(cost.costUnknownResponseCount).toBe(0);
     expect(cost.complete).toBe(true);
@@ -564,7 +581,9 @@ describe('runCostFromAggregates (#931 — the run-level aggregate derivation)', 
       'complete',
       'costUnknownResponseCount',
       'currency',
+      'inputReportedResponseCount',
       'inputTokens',
+      'outputReportedResponseCount',
       'outputTokens',
       'pricedResponseCount',
       'responseCount',
@@ -587,6 +606,79 @@ describe('runCostFromAggregates (#931 — the run-level aggregate derivation)', 
 });
 
 /**
+ * #1025 — the per-side token PRESENCE counts, on `RunCost` itself.
+ *
+ * `inputTokens: 0` is ambiguous between "this really used no tokens" and "nobody
+ * counted", and the second is the common case (`cliSpendFact` mints a metered
+ * event with no token fields at all). The fold path has answered that question
+ * since #866; until now it answered it only into `NodeCost`, so every surface
+ * built on the SQL aggregate — the run list, the per-pipeline rollup, the
+ * AI-activity model table — read a manufactured zero. These pin the pair onto
+ * both projections, and pin them AGREEING.
+ */
+describe('per-side token presence (#1025 — absent is not a measured zero)', () => {
+  it('the aggregate path carries the pair — a side nobody counted is 0 REPORTED, not 0 tokens', () => {
+    const cost = runCostFromAggregates({
+      responseCount: 3,
+      pricedResponseCount: 0,
+      unpricedResponseCount: 3,
+      totalCostEstimate: 0,
+      inputTokens: 400,
+      outputTokens: 0,
+      inputReportedResponseCount: 1,
+      outputReportedResponseCount: 0,
+    });
+    expect(cost.inputReportedResponseCount).toBe(1);
+    expect(cost.outputReportedResponseCount).toBe(0);
+  });
+
+  it('the FOLD path projects the same pair onto RunCost, not just NodeCost', () => {
+    /* The `agent_cli` shape: a metered event carrying neither token field. Before
+       #1025 `runCostFromTotals` dropped both counters, so `computeRunCost` said
+       `0 in / 0 out` for a subprocess that may have driven dozens of model calls. */
+    const cost = computeRunCost([
+      metered({ inputTokens: 400, costEstimate: 0.01 }),
+      metered({ meteringStatus: 'unpriced', provider: 'agent_cli' }),
+    ]);
+    expect(cost.inputTokens).toBe(400);
+    expect(cost.outputTokens).toBe(0);
+    expect(cost.inputReportedResponseCount).toBe(1);
+    expect(cost.outputReportedResponseCount).toBe(0);
+  });
+
+  it('SQL and fold AGREE over the same rows — one shape, two producers', () => {
+    const events = [
+      metered({ inputTokens: 100, outputTokens: 50, costEstimate: 0.01 }),
+      metered({ meteringStatus: 'unpriced', provider: 'agent_cli' }),
+      metered({ inputTokens: 10 }),
+    ];
+    expect(computeRunCost(events)).toEqual(
+      runCostFromAggregates({
+        responseCount: 3,
+        pricedResponseCount: 1,
+        unpricedResponseCount: 1,
+        totalCostEstimate: 0.01,
+        inputTokens: 110,
+        outputTokens: 50,
+        inputReportedResponseCount: 2,
+        outputReportedResponseCount: 1,
+      }),
+    );
+  });
+
+  it('the pipeline rollup SUMS the pair across runs, per side', () => {
+    const runA = computeRunCost([
+      metered({ inputTokens: 100, outputTokens: 50, costEstimate: 0.01 }),
+    ]);
+    const runB = computeRunCost([metered({ meteringStatus: 'unpriced', provider: 'agent_cli' })]);
+    const rollup = rollupPipelineCost([runA, runB]);
+    expect(rollup.inputReportedResponseCount).toBe(1);
+    expect(rollup.outputReportedResponseCount).toBe(1);
+    expect(rollup.responseCount).toBe(2);
+  });
+});
+
+/**
  * #931 — `RunCostSchema` is the wire shape `RunSummary.cost` is parsed through,
  * so it has to stay EXACTLY the `RunCost` interface. `satisfies z.ZodType<RunCost>`
  * pins one direction at compile time; this pins the other (an extra key), plus the
@@ -600,6 +692,8 @@ describe('RunCostSchema (#931 — the Zod twin of RunCost)', () => {
     totalCostEstimate: 0.75,
     inputTokens: 120,
     outputTokens: 340,
+    inputReportedResponseCount: 3,
+    outputReportedResponseCount: 2,
   });
 
   it('has EXACTLY the keys RunCost declares — no more, no fewer', () => {

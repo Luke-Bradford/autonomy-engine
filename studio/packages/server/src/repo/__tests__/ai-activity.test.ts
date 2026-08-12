@@ -495,8 +495,8 @@ describe('aggregateAiActivity — the token-flow series (#967)', () => {
     expect(bucket?.cost.responseCount).toBe(2);
     // Two exchanges, but only one reported an input count and NONE an output —
     // so a 0 in `outputTokens` means "nobody counted", not "no output".
-    expect(bucket?.inputReportedResponseCount).toBe(1);
-    expect(bucket?.outputReportedResponseCount).toBe(0);
+    expect(bucket?.cost.inputReportedResponseCount).toBe(1);
+    expect(bucket?.cost.outputReportedResponseCount).toBe(0);
     expect(bucket?.cost.outputTokens).toBe(0);
   });
 

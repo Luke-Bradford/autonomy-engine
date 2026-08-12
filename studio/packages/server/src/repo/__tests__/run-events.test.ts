@@ -55,8 +55,14 @@ function setupRun(db: ReturnType<typeof freshDb>['db']) {
 function metered(
   runId: string,
   fields: {
-    inputTokens: number;
-    outputTokens: number;
+    /* #1025 — OPTIONAL, because `cliSpendFact` mints a metered event with no
+       token fields at all and that absence is the fact under test. Assigned
+       conditionally below rather than defaulted or set to `undefined`: the SQL
+       reads KEY ABSENCE (`json_extract` → NULL), which an explicit `undefined`
+       reproduces only because JSON.stringify drops it — too indirect to rest a
+       presence test on. */
+    inputTokens?: number;
+    outputTokens?: number;
     cost?: number;
     meteringStatus?: 'metered' | 'unknown' | 'unpriced';
   },
@@ -69,9 +75,9 @@ function metered(
     provider: 'anthropic_api',
     model: 'claude-opus-4-8',
     meteringStatus: fields.meteringStatus ?? 'metered',
-    inputTokens: fields.inputTokens,
-    outputTokens: fields.outputTokens,
   };
+  if (fields.inputTokens !== undefined) base['inputTokens'] = fields.inputTokens;
+  if (fields.outputTokens !== undefined) base['outputTokens'] = fields.outputTokens;
   if (fields.cost !== undefined) {
     base['inUnitPrice'] = 5;
     base['outUnitPrice'] = 25;
@@ -429,6 +435,8 @@ describe('run-events repo', () => {
         totalCostEstimate: 0,
         inputTokens: 0,
         outputTokens: 0,
+        inputReportedResponseCount: 0,
+        outputReportedResponseCount: 0,
       });
       expect(rollupFromAggregates(agg).complete).toBe(true);
     });
@@ -444,6 +452,8 @@ describe('run-events repo', () => {
         totalCostEstimate: 0,
         inputTokens: 0,
         outputTokens: 0,
+        inputReportedResponseCount: 0,
+        outputReportedResponseCount: 0,
       });
     });
   });
@@ -599,14 +609,61 @@ describe('aggregateRunCosts (#931 — bounded per-run SQL aggregate)', () => {
       metered(run.id, { inputTokens: 5, outputTokens: 6, meteringStatus: 'unpriced' }),
       metered(run.id, { inputTokens: 9, outputTokens: 9 }),
       metered(run.id, { inputTokens: 2, outputTokens: 3, meteringStatus: 'unknown' }),
+      /* #1025 — the `cliSpendFact` shape: a billed exchange carrying NEITHER
+         token count, plus a half-reported one. They belong in the anti-drift
+         fixture rather than only in a test of their own, because the presence
+         counts are the newest place the two derivations could disagree. */
+      metered(run.id, { meteringStatus: 'unpriced' }),
+      metered(run.id, { inputTokens: 4 }),
     ];
     for (const payload of payloads) {
       appendRunEvent(db, { runId: run.id, type: 'activity.metered', payload });
     }
 
-    expect(costOf(aggregateRunCosts(db, [run.id], 'local'), run.id)).toEqual(
-      computeRunCost(listRunEvents(db, run.id)),
-    );
+    const sql = costOf(aggregateRunCosts(db, [run.id], 'local'), run.id);
+    expect(sql).toEqual(computeRunCost(listRunEvents(db, run.id)));
+    /* Stated as well as compared: an equality of two shapes that both got the
+       count wrong the same way would pass. 7 exchanges, 6 reporting input and 5
+       output — so the `outputTokens` sum is over 5 of 7, not a census. */
+    expect(sql?.responseCount).toBe(7);
+    expect(sql?.inputReportedResponseCount).toBe(6);
+    expect(sql?.outputReportedResponseCount).toBe(5);
+  });
+
+  it('#1025: a token count SQL never saw is 0 REPORTED, never a measured 0 tokens', () => {
+    /* The failure this exists to stop: `coalesce(sum(…), 0)` hands an absent
+       count over as a confident zero, so a run whose only AI use was an
+       agent-CLI subprocess read as "0 tokens" — indistinguishable from a run
+       that genuinely used none. `count(json_extract(…))` counts NON-NULL, and
+       an `.optional()` field that JSON serialization dropped IS NULL here. */
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v = mkVersion(db, pipeline.id);
+    const cliRun = mkRun(db, v.id);
+    const realRun = mkRun(db, v.id);
+    appendRunEvent(db, {
+      runId: cliRun.id,
+      type: 'activity.metered',
+      payload: metered(cliRun.id, { meteringStatus: 'unpriced' }),
+    });
+    appendRunEvent(db, {
+      runId: realRun.id,
+      type: 'activity.metered',
+      payload: metered(realRun.id, { inputTokens: 0, outputTokens: 0, cost: 0 }),
+    });
+
+    const costs = aggregateRunCosts(db, [cliRun.id, realRun.id], 'local');
+    const cli = costOf(costs, cliRun.id);
+    const real = costOf(costs, realRun.id);
+
+    // Same `inputTokens: 0` on both — and now distinguishable.
+    expect(cli?.inputTokens).toBe(0);
+    expect(real?.inputTokens).toBe(0);
+    expect(cli?.inputReportedResponseCount).toBe(0);
+    expect(cli?.outputReportedResponseCount).toBe(0);
+    // A genuine, MEASURED zero: someone counted, and the count was 0.
+    expect(real?.inputReportedResponseCount).toBe(1);
+    expect(real?.outputReportedResponseCount).toBe(1);
   });
 
   it('chunks past the bind limit — 600 ids in one call all come back', () => {
