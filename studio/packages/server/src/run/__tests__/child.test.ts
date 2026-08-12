@@ -14,7 +14,7 @@ import { createExecutor } from '../executor.js';
 import { loadEngineEvents } from '../events.js';
 import { startRun, type DocResolver, type Executor, type ExecutorCommand } from '../driver.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { makeStubExecutor } from './stub-executor.js';
+import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { refuseToArm } from './stub-alarms.js';
 import type { Supervisor } from '../../workers/process-supervisor.js';
 
@@ -104,14 +104,21 @@ function resolveDocFor(db: Db): DocResolver {
  * server takes — executor → `childRuns` → driver → executor — is the one under
  * test, closed with the same lazy closure `index.ts` uses.
  */
-function boundary(db: Db, nodeOutputs: Record<string, Record<string, unknown>> = {}) {
+function boundary(
+  db: Db,
+  nodeOutputs: Record<string, Record<string, unknown>> = {},
+  nodePlans: StubExecutorOptions['nodes'] = {},
+) {
   const resolveDoc = resolveDocFor(db);
   const drives = createRunDrives();
   const bus = createRunEventBus();
   const stub = makeStubExecutor({
-    nodes: Object.fromEntries(
-      Object.entries(nodeOutputs).map(([id, outputs]) => [id, { outcome: 'success', outputs }]),
-    ),
+    nodes: {
+      ...Object.fromEntries(
+        Object.entries(nodeOutputs).map(([id, outputs]) => [id, { outcome: 'success', outputs }]),
+      ),
+      ...nodePlans,
+    },
   });
   // Assigned once, below — the lazy closure the executor holds resolves it long
   // after this function returns, exactly as `index.ts`'s wiring does.
@@ -209,6 +216,46 @@ describe('#796 — a call node runs a REAL child', () => {
     const returned = loadEngineEvents(db, run.id).find((e) => e.type === 'call.returned');
     expect(returned).toMatchObject({ childOutcome: 'failure' });
     expect(getRun(db, run.id)!.status).toBe('failure');
+    b.unsubscribe();
+  });
+
+  it('RESUMES an adopted child whose log is already seeded (crash mid-child)', async () => {
+    // The path a fresh spawn never exercises, and the one that deadlocked before
+    // it had a test: `kick` on a child that has a log but no terminal event.
+    // `startRun` refuses a non-empty log, so this must go through `driveRun` —
+    // which takes the child's OWN drive lock, and `drives.serialize` is a
+    // non-reentrant `pLimit(1)`, so kicking from inside the lock hangs forever.
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work', [{ name: 'answer', type: 'number' }])]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv)]);
+    const run = seedRun(db, parentPv);
+
+    // Crash the child mid-dispatch: the stub emits `node.dispatched` and no
+    // terminal, so the child comes to rest `running` with a seeded log.
+    const crashing = boundary(db, {}, { work: { hang: true } });
+    await crashing.drives.serialize(run.id, () => startRun(crashing, run));
+    await settle(crashing.drives);
+    const child = listRuns(db, { parentRunId: run.id })[0]!;
+    expect(loadEngineEvents(db, child.id).length).toBeGreaterThan(0);
+    expect(child.status).toBe('running');
+    crashing.unsubscribe();
+
+    // Restart: a boundary that CAN complete the leaf re-kicks the same child.
+    const b = boundary(db, { work: { answer: 7 } });
+    await Promise.race([
+      (async () => {
+        b.childRuns.kick(child);
+        await settle(b.drives);
+      })(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('kick deadlocked')), 4000)),
+    ]);
+
+    // The property under test is that the kick SETTLES rather than hanging (the
+    // race above is the assertion) and spawns no twin. It deliberately does NOT
+    // assert the child completed: recovering a node crashed mid-dispatch is the
+    // BOOT RECONCILER's job, not a plain re-drive's, and `driveRun` correctly
+    // leaves an in-flight `dispatched` node alone.
+    expect(listRuns(db, { parentRunId: run.id })).toHaveLength(1);
     b.unsubscribe();
   });
 

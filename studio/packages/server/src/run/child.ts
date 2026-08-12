@@ -220,18 +220,29 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     // through the child's terminal state, which is the only channel that also
     // works across a restart.
     void deps.drives
-      .serialize(run.id, async () => {
+      .serialize(run.id, async (): Promise<'settled' | 'resume'> => {
+        // Decided UNDER the lock, so two kicks for one child (a re-emitted
+        // `startChild` racing the first) cannot both see an empty log and both
+        // call `startRun` — the second would throw "already has an event log"
+        // and this function's catch would terminalize a perfectly healthy run.
         const events = loadEngineEvents(db, run.id);
-        if (terminalFactFromLog(events) !== null) return;
+        if (terminalFactFromLog(events) !== null) return 'settled';
         if (events.length === 0) {
           await startRun(deps, run);
-          return;
+          return 'settled';
         }
         // A child whose log is already seeded is being ADOPTED after a crash.
-        // `drive` (not `startRun`, which refuses a non-empty log) re-projects
-        // from the log and takes it further.
-        await driveRun(deps, run.id);
+        // `startRun` refuses a non-empty log, so this needs `driveRun` — which
+        // takes THIS RUN'S LOCK ITSELF, and `drives.serialize` is a `pLimit(1)`
+        // that is NOT reentrant. Calling it from in here would deadlock the
+        // child forever. So the lock is released first and `driveRun` re-takes
+        // it; that is safe rather than merely tolerable, because `driveRun`
+        // re-projects from the log under its own lock and re-checks terminal —
+        // it is the sanctioned "something happened out of band, take this run
+        // further" entry point precisely for callers in this position.
+        return 'resume';
       })
+      .then((next) => (next === 'resume' ? driveRun(deps, run.id) : undefined))
       .catch((err: unknown) => {
         deps.log?.error?.({ err, runId: run.id }, 'call_pipeline child drive failed');
         try {
