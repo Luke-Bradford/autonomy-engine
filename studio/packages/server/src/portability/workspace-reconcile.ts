@@ -1,11 +1,14 @@
 import {
   connectionContentForm,
   pipelineContentForm,
+  pipelineRowContentForm,
+  pipelineVersionContentForm,
   triggerContentForm,
   type WorkspaceGitArchiveProposal,
   type WorkspaceGitDisposition,
   type WorkspaceGitPreviewResource,
 } from '@autonomy-studio/shared';
+import type { OwnedVersionForm } from './workspace-serialize.js';
 import { normalizedTriggerContentForm } from './trigger-content.js';
 import {
   latestVersion,
@@ -18,11 +21,20 @@ import {
 /**
  * #3 G5b — the workspace-git reconcile CLASSIFIER: diff the resources committed
  * on a branch against the DB working copy and label each with a reconcile
- * DISPOSITION (create / unchanged / update / rename), plus the pipelines a pull
- * would ARCHIVE. It is PURE: it takes two already-parsed `ParsedWorkspace`s (the
- * incoming branch snapshot, and the DB re-run through the SAME serialize+parse
- * path) and reads/writes nothing — the transactional APPLY of these dispositions
- * is the next slice (G5c).
+ * DISPOSITION (create / unchanged / update / rename / superseded), plus the
+ * pipelines a pull would ARCHIVE. It is PURE: it takes two already-parsed
+ * `ParsedWorkspace`s (the incoming branch snapshot, and the DB re-run through the
+ * SAME serialize+parse path) and reads/writes nothing — the transactional APPLY
+ * of these dispositions is the next slice (G5c).
+ *
+ * #983 — the one fact a `ParsedWorkspace` pair cannot carry is the version
+ * HISTORY: the DB side is `serializeWorkspace`, which emits each pipeline's
+ * LATEST version only, so a branch pinned to a version this workspace has since
+ * authored past looks like an ordinary content edit. The caller therefore passes
+ * `ownedVersions` — the stored form of the versions the branch names, read once
+ * by the route. It stays an argument rather than a DB read so this file keeps
+ * reading nothing, and it is OPTIONAL so a caller that wants only the archive
+ * proposals (the apply) pays nothing for it.
  *
  * Matching is by stable `resourceId` (identity; the file PATH is cosmetic, G1),
  * so a resource that moved paths (a rename) is still recognised as the same
@@ -81,9 +93,25 @@ interface DbEntry {
   contentForm: string;
 }
 
-function disposition(nameChanged: boolean, contentChanged: boolean): WorkspaceGitDisposition {
-  if (contentChanged) return 'update';
+/**
+ * The label for one resource's diff. `supersedes` (#983, pipelines only) means
+ * the content difference is one a pull would NOT write — the branch names a
+ * version this workspace already holds — so it is folded out before the label is
+ * chosen, leaving any name difference to speak for itself.
+ *
+ * The precedence mirrors the apply's action ladder exactly (`updated` >
+ * `renamed` > `superseded` > `unchanged`, `workspace-apply.ts`): a superseded
+ * pipeline that ALSO renames is a `rename`, because the apply really does patch
+ * the row's name — the version being a no-op does not make the whole import one.
+ */
+function disposition(
+  nameChanged: boolean,
+  contentChanged: boolean,
+  supersedes: boolean,
+): WorkspaceGitDisposition {
+  if (contentChanged && !supersedes) return 'update';
   if (nameChanged) return 'rename';
+  if (contentChanged) return 'superseded';
   return 'unchanged';
 }
 
@@ -101,6 +129,7 @@ function classifyResource(
   name: string,
   contentForm: string,
   dbByResourceId: Map<string, DbEntry>,
+  supersedes = false,
 ): WorkspaceGitPreviewResource {
   const db = resourceId === null ? undefined : dbByResourceId.get(resourceId);
   if (db === undefined) {
@@ -121,7 +150,11 @@ function classifyResource(
     kind,
     resourceId,
     name,
-    disposition: disposition(nameChanged, contentChanged),
+    // `contentChanged` stays TRUE for a superseded pipeline: the branch's form
+    // really does differ from the head. Only the LABEL summarises write-intent —
+    // the two signals answer different questions and neither is derived from the
+    // other (see `WorkspaceGitPreviewResourceSchema`).
+    disposition: disposition(nameChanged, contentChanged, supersedes),
     nameChanged,
     contentChanged,
   };
@@ -162,6 +195,7 @@ export function classifyWorkspace(
   incoming: ParsedWorkspace,
   ownedVersionRids: ReadonlySet<string>,
   readyVersionRids?: ReadonlySet<string>,
+  ownedVersions?: ReadonlyMap<string, OwnedVersionForm>,
 ): WorkspaceReconcilePlan {
   // #3 G7 — the resolution domain for an incoming trigger binding: every owned
   // version (`ownedVersionRids`) PLUS the version this very branch would mint,
@@ -207,6 +241,49 @@ export function classifyWorkspace(
     (t) => triggerContentForm(t.data),
   );
 
+  // #983 — the DB side's pipeline ROW form (versions excluded; `name` is already
+  // excluded as volatile), so `supersedes` can ask "is the version trail the ONLY
+  // thing that differs". Its own map rather than a field on `DbEntry` because only
+  // pipelines have a version trail for a difference to be attributable to.
+  const dbPipelineRowForms = new Map<string, string>();
+  for (const p of db.pipelines) {
+    if (p.resourceId === null) continue;
+    dbPipelineRowForms.set(p.resourceId, pipelineRowContentForm(p.data));
+  }
+
+  /**
+   * #983 — would a pull write NOTHING for this pipeline's content difference?
+   * True only when the branch's latest version is one this workspace ALREADY
+   * HOLDS, byte-identical, under the pipeline that owns it — the "commit, keep
+   * authoring, then pull" loop, where the DB moved on and the branch did not.
+   *
+   * Every other reason the forms could differ answers FALSE, deliberately. A
+   * version id owned by ANOTHER pipeline, and an owned id whose content was
+   * hand-edited, are the two cases the apply REFUSES outright
+   * (`WorkspaceApplyError`); a row field such as `concurrency` differing is a
+   * real patch the apply performs. Falling back to `update` overstates what
+   * happens in the two refusal cases — but the alternative is a preview that says
+   * "nothing to do" ahead of an import that either writes or refuses, and of the
+   * two errors, promising a write that never comes is the one an operator can see
+   * and correct. (A preview-visible REFUSAL is a larger question than #983 and is
+   * filed separately.)
+   *
+   * Without `ownedVersions` — the apply's own call, which reads only
+   * `plan.archive` — this is always false, preserving the pre-#983 labels exactly.
+   */
+  const supersedes = (p: ParsedPipeline): boolean => {
+    if (ownedVersions === undefined || p.resourceId === null) return false;
+    const version = latestVersion(p);
+    const versionRid = version?.resourceId;
+    if (version === undefined || versionRid == null) return false;
+    const owned = ownedVersions.get(versionRid);
+    if (owned === undefined) return false;
+    if (owned.pipelineResourceId !== p.resourceId) return false;
+    if (owned.contentForm !== pipelineVersionContentForm(version)) return false;
+    const dbRowForm = dbPipelineRowForms.get(p.resourceId);
+    return dbRowForm !== undefined && dbRowForm === pipelineRowContentForm(p.data);
+  };
+
   const resources: WorkspaceGitPreviewResource[] = [
     ...incoming.pipelines.map((p) =>
       classifyResource(
@@ -216,6 +293,7 @@ export function classifyWorkspace(
         pipelineName(p),
         pipelineContentForm(p.data),
         dbPipelines,
+        supersedes(p),
       ),
     ),
     ...incoming.connections.map((c) =>

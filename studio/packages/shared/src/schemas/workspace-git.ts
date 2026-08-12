@@ -351,14 +351,48 @@ export type WorkspaceParseDiagnostic = z.infer<typeof WorkspaceParseDiagnosticSc
  *   differs — a pull would be a no-op for it.
  * - `update`: a DB resource matches but its canonical CONTENT differs (a pull
  *   would mint a new immutable version / upsert). May ALSO be a rename — see the
- *   independent `nameChanged` flag (a content edit supersedes it in the label).
+ *   independent `nameChanged` flag (a content edit outranks it in the label).
  * - `rename`: a DB resource matches, content is identical, only the display
  *   name (hence the cosmetic file path) differs.
+ * - `superseded` (#983): PIPELINES ONLY — the branch's version doc is one this
+ *   workspace ALREADY HOLDS and has since authored PAST (the ordinary "commit,
+ *   keep working, then pull" loop). The content really does differ from the
+ *   pipeline's head, so `contentChanged` stays `true`; what the label adds is
+ *   that a pull would write NOTHING for it, because immutable versions are
+ *   additive and the version the branch names is already present and
+ *   byte-identical. Its own value rather than `unchanged` for the same reason
+ *   `WorkspaceGitAppliedAction.superseded` gives on the apply side: a bare
+ *   `unchanged` beside a `contentChanged: true` is two statements that
+ *   contradict each other, with no way to tell which is wrong. The two enums are
+ *   deliberately kept in step so the preview and the outcome name one fact one
+ *   way — before #983 the preview said `update` here and the apply then reported
+ *   `superseded`, which read as the import having quietly declined to do what
+ *   the preview promised.
  * The apply of these dispositions (the transactional write-path) is G5c; this
  * preview is read-only.
  */
-export const WorkspaceGitDispositionSchema = z.enum(['create', 'unchanged', 'update', 'rename']);
+export const WorkspaceGitDispositionSchema = z.enum([
+  'create',
+  'unchanged',
+  'update',
+  'rename',
+  'superseded',
+]);
 export type WorkspaceGitDisposition = z.infer<typeof WorkspaceGitDispositionSchema>;
+
+/**
+ * #983 — whether a previewed `disposition` means a pull would WRITE NOTHING for
+ * that resource. The pull-direction twin of `appliedActionWroteNothing`, and it
+ * exists for the same reason that one does: every reader of this enum is really
+ * asking "will anything change?", and each spells it `disposition !== 'unchanged'`
+ * — a comparison that keeps compiling when a SECOND did-nothing value appears
+ * and silently starts counting a no-op as a pending change. That is exactly what
+ * adding `superseded` would have done to the Git page's import confirmation,
+ * which counts the resources an import will touch.
+ */
+export function dispositionWritesNothing(disposition: WorkspaceGitDisposition): boolean {
+  return disposition === 'unchanged' || disposition === 'superseded';
+}
 
 /**
  * #3 G4/G5b — a resource the parser recognised on the branch, as a PREVIEW

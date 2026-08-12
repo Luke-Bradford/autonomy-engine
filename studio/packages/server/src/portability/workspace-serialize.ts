@@ -8,6 +8,7 @@ import {
   WebhookPublicConfigSchema,
   canonicalStringify,
   interpolationMode,
+  pipelineVersionContentForm,
   resourceFilePaths,
   type Connection,
   type ExportEnvelope,
@@ -105,6 +106,114 @@ function buildOwnerRefMaps(db: Db, pipelines: Pipeline[], connections: Connectio
     connectionResourceId.set(connection.id, connection.resourceId);
   }
   return { versionResourceId, connectionResourceId };
+}
+
+/**
+ * Remap a STORED DB node's concrete ids back to stable `resourceId`s (the
+ * forward direction serialize uses), so a stored version can be compared to a
+ * branch version in the SAME resourceId-space. `${}` dynamic refs stay verbatim;
+ * an absent `connectionId` becomes `null` (the export shape). An id absent from
+ * the owner-scoped reverse map is kept as-is (defensive — an owned row's refs
+ * always map; a mismatch just makes the content forms differ, never a false
+ * "unchanged"). Reads no DB — pure over the passed maps.
+ *
+ * That defensiveness is load-bearing rather than belt-and-braces, and it is why
+ * this lives here rather than being re-derived from `serializePipeline`: a
+ * HISTORIC version can name a connection that has since been hard-deleted, and
+ * `remapRef` (the commit-direction path) THROWS on an unmapped literal. Throwing
+ * is right when writing a branch — a commit must not emit a dangling ref — and
+ * wrong when merely comparing two versions, where the honest answer is "these
+ * forms differ".
+ */
+function forwardRemapNode(
+  node: Node,
+  connRidByDbId: Map<string, string>,
+  versionRidByDbId: Map<string, string>,
+): NodeExport {
+  const { connectionId, call, ...rest } = node;
+  let connExport: string | null;
+  if (connectionId === undefined) connExport = null;
+  else if (interpolationMode(connectionId).mode !== 'literal') connExport = connectionId;
+  else connExport = connRidByDbId.get(connectionId) ?? connectionId;
+
+  const exported: NodeExport = { ...rest, connectionId: connExport };
+  if (call) {
+    const ref = call.pipelineVersionId;
+    const refExport =
+      interpolationMode(ref).mode !== 'literal' ? ref : (versionRidByDbId.get(ref) ?? ref);
+    exported.call = { ...call, pipelineVersionId: refExport };
+  }
+  return exported;
+}
+
+/** The content form of a STORED DB version, in resourceId-space — the baseline
+ * the branch's incoming version is compared against to decide "mint a new
+ * version vs no-op vs a divergent-content contradiction". Uses the reverse maps
+ * so archived pipelines' versions (omitted from the serialize snapshot) are
+ * comparable too.
+ *
+ * #983 — lives here, beside the export direction it inverts, because the reconcile
+ * PREVIEW and the reconcile APPLY both have to answer "is the branch's version
+ * byte-identical to the row its id names", and two implementations of that
+ * question could disagree about the one comparison the whole `superseded`
+ * decision turns on. Exported for the same reason `serializeTrigger` is.
+ */
+export function dbVersionForm(
+  version: PipelineVersion,
+  connRidByDbId: Map<string, string>,
+  versionRidByDbId: Map<string, string>,
+): string {
+  const exportForm = {
+    ...version,
+    nodes: version.nodes.map((n) => forwardRemapNode(n, connRidByDbId, versionRidByDbId)),
+  } as PipelineVersionExport;
+  return pipelineVersionContentForm(exportForm);
+}
+
+/** #983 — one owned pipeline version, as the reconcile preview needs to see it:
+ * which pipeline owns it, and its stored content form in resourceId-space. */
+export interface OwnedVersionForm {
+  pipelineResourceId: string;
+  contentForm: string;
+}
+
+/**
+ * #983 — the owned pipeline VERSIONS named by `versionResourceIds`, keyed by
+ * `resourceId`. This is the lookup the reconcile APPLY does inline
+ * (`versionRowByRid`), lifted so the read-only PREVIEW can reach the same facts
+ * and stop reporting `update` for a version this workspace already holds.
+ *
+ * Scoped to the ids the caller asks for — in practice the handful the incoming
+ * BRANCH names — rather than every version ever authored: the identity walk is
+ * the same one `buildOwnerRefMaps` already does, but a content form per owned
+ * version would make the cost of previewing grow with a workspace's whole
+ * history, for rows no preview will look at. The apply keeps that cost lazy for
+ * the same reason.
+ *
+ * Covers ARCHIVED pipelines' versions too (`listPipelines` is unfiltered), so a
+ * version is judged against the row that owns it even when the serialize
+ * snapshot omits that row.
+ */
+export function ownedVersionForms(
+  db: Db,
+  ownerId: string,
+  versionResourceIds: ReadonlySet<string>,
+): Map<string, OwnedVersionForm> {
+  const forms = new Map<string, OwnedVersionForm>();
+  if (versionResourceIds.size === 0) return forms;
+
+  const pipelines = listPipelines(db, ownerId);
+  const maps = buildOwnerRefMaps(db, pipelines, listConnections(db, ownerId));
+  for (const pipeline of pipelines) {
+    for (const version of listPipelineVersions(db, pipeline.id)) {
+      if (!versionResourceIds.has(version.resourceId)) continue;
+      forms.set(version.resourceId, {
+        pipelineResourceId: pipeline.resourceId,
+        contentForm: dbVersionForm(version, maps.connectionResourceId, maps.versionResourceId),
+      });
+    }
+  }
+  return forms;
 }
 
 /**
