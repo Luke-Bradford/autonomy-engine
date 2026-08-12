@@ -1544,6 +1544,7 @@ describe('reconcileNodeActivity', () => {
       startedAtMs: undefined,
       endedAtMs: undefined,
       spans: [],
+      childRunIds: [],
       ...over,
     };
   }

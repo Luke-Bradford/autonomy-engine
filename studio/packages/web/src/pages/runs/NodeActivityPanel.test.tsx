@@ -34,6 +34,7 @@ function row(over: Partial<NodeActivity> & { nodeId: string }): NodeActivity {
     startedAtMs: undefined,
     endedAtMs: undefined,
     spans: [],
+    childRunIds: [],
     ...over,
   };
 }

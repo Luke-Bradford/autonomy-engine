@@ -27,6 +27,7 @@ const node = (over: Partial<NodeActivity> & { nodeId: string }): NodeActivity =>
   startedAtMs: undefined,
   endedAtMs: undefined,
   spans: [],
+  childRunIds: [],
   cost: emptyNodeCost(),
   costSpansInstances: false,
   toolCalls: [],
