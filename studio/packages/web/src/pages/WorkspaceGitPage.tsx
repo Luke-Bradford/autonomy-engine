@@ -19,6 +19,7 @@ import {
   commitWorkspace,
   connectWorkspaceGit,
   describeAppliedAction,
+  UNVERIFIED_CONTENT_SUFFIX,
   describeDisposition,
   describeDriftChange,
   disconnectWorkspaceGit,
@@ -920,7 +921,9 @@ function ImportPreviewReport({
             key: resource.path,
             name: resource.name,
             kind: resource.kind,
-            change: describeDisposition(resource.disposition),
+            change:
+              describeDisposition(resource.disposition) +
+              (resource.contentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''),
             path: resource.path,
           }))}
         />
@@ -984,6 +987,12 @@ function ImportOutcomeReport({
   // `superseded` is a did-nothing outcome too, and counting it here would claim
   // this import changed resources it never touched.
   const changed = result.applied.filter((applied) => !appliedActionWroteNothing(applied.action));
+  // #1018 — did any resource's version comparison have to EXCUSE a ref it could
+  // not express in resourceId-space (one naming a since-deleted resource)? Read
+  // over `result.applied`, NOT over `changed`: the case this exists for is
+  // precisely a version that wrote nothing, so filtering to the changed rows
+  // would drop the caveat on every import that most needs it.
+  const contentUnverified = result.applied.some((applied) => applied.versionContentUnverified);
 
   return (
     <div>
@@ -1006,7 +1015,11 @@ function ImportOutcomeReport({
            asserted a few lines above the alert that contradicts it. */
         <p role="status">
           Nothing to import — this workspace already matches {collabBranch} at{' '}
-          {shortSha(result.head)}.
+          {shortSha(result.head)}
+          {/* "already matches" is exactly the claim the excused ref left
+              unchecked, so the caveat belongs on this sentence above all others
+              — it is the one an operator reads as "verified identical". */}
+          {contentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
         </p>
       ) : (
         <p role="status">
@@ -1021,6 +1034,7 @@ function ImportOutcomeReport({
             <li key={applied.path}>
               {applied.path} — {describeAppliedAction(applied.action)}
               {applied.versionMinted && ' (new version)'}
+              {applied.versionContentUnverified && UNVERIFIED_CONTENT_SUFFIX}
             </li>
           ))}
         </ul>

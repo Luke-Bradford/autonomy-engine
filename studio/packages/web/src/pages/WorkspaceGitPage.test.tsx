@@ -1003,6 +1003,102 @@ describe('WorkspaceGitPage', () => {
       expect(await screen.findByRole('status')).toHaveTextContent(/Nothing to import/);
     });
 
+    /**
+     * #1018 — the operator deleted a connection an older, immutable version still
+     * references. That ref cannot be put in resourceId-space, so it is excused
+     * from the comparison — and BOTH tables have to say so, because "already
+     * here" on its own asserts a byte-identity the import could not check. The
+     * suffix is one shared constant for the same reason `superseded` is worded
+     * identically in both: two phrasings read as two different findings.
+     */
+    it('says a ref could not be compared, in the preview AND in the outcome', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [previewResource({ disposition: 'superseded', contentUnverified: true })],
+        }),
+      );
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'superseded',
+              versionMinted: false,
+              versionContentUnverified: true,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      expect(screen.getByRole('table')).toHaveTextContent(
+        'already here — this workspace has authored past it (one ref names a deleted resource, so it was not compared)',
+      );
+
+      // The outcome for THIS case is the no-op sentence, because a superseded
+      // resource wrote nothing and so never reaches the changed list. That
+      // sentence claims the workspace "already matches" the branch — the very
+      // thing the excused ref left unchecked — so it is where the caveat has to
+      // land.
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        /already matches .* \(one ref names a deleted resource, so it was not compared\)\./,
+      );
+    });
+
+    /**
+     * The other render site: when the same import ALSO writes something, the
+     * resource appears in the changed list, and the caveat has to travel with the
+     * row rather than only with the no-op sentence (which is not shown at all in
+     * that case). Reachable via a row-field patch — the version comparison passes
+     * with an excused ref while `concurrency` differs, so the action is `updated`.
+     */
+    it('carries the caveat on the changed ROW when the import also wrote something', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(preview({ resources: [previewResource()] }));
+      importMock.mockResolvedValue(
+        applyResult({
+          applied: [
+            {
+              path: 'pipelines/nightly.json',
+              kind: 'pipeline',
+              resourceId: 'res_1',
+              action: 'updated',
+              versionMinted: false,
+              versionContentUnverified: true,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      const row = (await screen.findAllByRole('listitem')).find((li) =>
+        li.textContent?.includes('pipelines/nightly.json'),
+      );
+      expect(row).toHaveTextContent('one ref names a deleted resource, so it was not compared');
+    });
+
+    /** ...and an ordinary comparison claims nothing of the sort. */
+    it('does not qualify a change whose comparison WAS fully made', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({ resources: [previewResource({ disposition: 'superseded' })] }),
+      );
+
+      await checkForIncoming();
+      expect(screen.getByRole('table')).not.toHaveTextContent(/was not compared/);
+    });
+
     /** The commonest outcome, and the analogue of `committed: false`. */
     it('does NOT phrase an all-unchanged import as a failure', async () => {
       await renderConnected();
