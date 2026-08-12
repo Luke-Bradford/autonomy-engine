@@ -168,6 +168,7 @@ describe('#796 — a call node runs a REAL child', () => {
     // own `driveRun` can interleave with the parent's first pump.
     const state = await b.drives.serialize(run.id, () => startRun(b, run));
     expect(state.nodes.caller!.status).toBe('waiting');
+
     // The announcement precedes the result, always: the child row exists before
     // `call.started` is appended, and the result cannot be folded before it.
     const early = types(db, run.id);
@@ -352,6 +353,42 @@ describe('#796 — the spawn seam REFUSES rather than throwing', () => {
     const out = ensureAgainst(db, 'pv_gone', run.id);
     expect(out.ok).toBe(false);
     expect(out.ok === false && out.reason).toMatch(/cannot be resolved/);
+  });
+
+  it('refuses rather than THROWING when a call inside the seam throws (A9/#516)', () => {
+    // The contract is that a child which cannot be spawned fails that ONE call
+    // node. A throw escaping `ensure` reaches the pump's stream-error path, which
+    // terminalizes the WHOLE PARENT RUN as `interrupted` — and repeats on every
+    // boot, because the reconciler re-emits `startChild` for a `waiting` call
+    // node. Guarding only the calls that obviously throw made the contract true
+    // just for the failures already thought of, so this pins totality itself:
+    // an unparseable stored `params` blob makes `createRun`'s `NewRunSchema.parse`
+    // throw a `ZodError`, which is NOT one of the hand-guarded calls.
+    const { db } = freshDb();
+    const childPv = seedVersion(db, [leaf('work')]);
+    const parentPv = seedVersion(db, [callNode('caller', childPv)]);
+    const run = seedRun(db, parentPv);
+    const b = boundary(db);
+    let out: ReturnType<ChildRuns['ensure']> | undefined;
+    expect(() => {
+      out = b.childRuns.ensure(
+        {
+          type: 'startChild',
+          callNodeId: 'caller',
+          attemptId: 'caller#0',
+          childRunId: 'child_throws',
+          pipelineVersionId: childPv,
+          // `NewRunSchema` requires a record; a non-object reaches `createRun`
+          // past `assertJsonReplaySafe` (which objects to cycles/functions, not
+          // to a bare string) and throws there.
+          params: 'not-a-record' as unknown as Record<string, unknown>,
+        },
+        run.id,
+      );
+    }).not.toThrow();
+    expect(out?.ok).toBe(false);
+    expect(listRuns(db, { parentRunId: run.id })).toHaveLength(0);
+    b.unsubscribe();
   });
 
   it('refuses past MAX_CALL_DEPTH hops, counted over the parentRunId chain', () => {

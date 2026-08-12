@@ -113,7 +113,38 @@ function callDepth(db: Db, runId: string, limit: number): number {
 export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
   const { db } = deps;
 
+  /**
+   * TOTAL by construction: the seam's whole contract (A9/#516) is that a child
+   * that cannot be spawned becomes a typed `call.returned{failure}` for that ONE
+   * call node, never a throw. A throw here would escape the executor's
+   * `startChild` generator into the pump's stream-error path, which terminalizes
+   * the WHOLE PARENT RUN as `interrupted` — a strictly bigger blast radius than
+   * the design intends, and one that repeats on every boot because the
+   * reconciler re-emits `startChild` for a `waiting` call node.
+   *
+   * Guarding the two obviously-throwing calls (`resolveDoc`, `assertJsonReplaySafe`)
+   * and leaving `getPipeline`/`isPipelineArchived`/`createRun` bare made the
+   * contract true only for the failures that had been thought of: `createRun`
+   * runs `NewRunSchema.parse` and throws a `ZodError`, and any of the row reads
+   * can throw on a corrupt row. So the catch is around the WHOLE body.
+   */
   function ensure(
+    command: StartChildCommand,
+    parentRunId: string,
+  ): ChildEnsured | { ok: false; reason: string } {
+    try {
+      return ensureOrThrow(command, parentRunId);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      deps.log?.error?.(
+        { err, runId: parentRunId, childRunId: command.childRunId },
+        'call_pipeline child spawn threw — refusing the call node rather than the run',
+      );
+      return { ok: false, reason };
+    }
+  }
+
+  function ensureOrThrow(
     command: StartChildCommand,
     parentRunId: string,
   ): ChildEnsured | { ok: false; reason: string } {
@@ -253,8 +284,24 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
       });
   }
 
+  /**
+   * TOTAL for the same reason `ensure` is — the executor calls this on the
+   * adopt-an-already-terminal-child path, inside the same generator. A corrupt
+   * child log must fail the call node, not interrupt the parent run.
+   *
+   * `failure` is the fail-safe answer when the log cannot be read at all: an
+   * unreadable child must never resolve as success.
+   */
   function result(childRunId: string): { outcome: RunOutcome; outputs: Record<string, unknown> } {
-    const events = loadEngineEvents(db, childRunId);
+    let events;
+    let run;
+    try {
+      events = loadEngineEvents(db, childRunId);
+      run = getRun(db, childRunId);
+    } catch (err) {
+      deps.log?.error?.({ err, runId: childRunId }, 'child log unreadable — reporting failure');
+      return { outcome: 'failure', outputs: {} };
+    }
     // The LOG decides what a run ended as (#443), never a re-fold — so the
     // OUTCOME comes from `terminalFactFromLog`, and only the OUTPUTS come from a
     // projection. `RunOutcome` is `success | failure`: an `interrupted` or
@@ -263,8 +310,7 @@ export function createChildRuns(deps: ChildRunsDeps): ChildRuns {
     // child's own row carrying the more precise status for the operator.
     const fact = terminalFactFromLog(events);
     const outcome: RunOutcome = fact === 'success' ? 'success' : 'failure';
-    const run = getRun(db, childRunId);
-    if (run === null) return { outcome, outputs: {} };
+    if (run === null || run === undefined) return { outcome, outputs: {} };
     let outputs: Record<string, unknown> = {};
     try {
       const doc = deps.resolveDoc(run.pipelineVersionId);
@@ -307,6 +353,17 @@ export interface ChildReturnReactorDeps extends ChildRunsDeps {
  * a child terminalizing and the parent's `call.returned`, boot reconcile
  * re-emits `startChild` for the still-`waiting` call node, `ensure` adopts the
  * terminal child, and the executor yields `call.returned` directly.
+ *
+ * And if `returnToParent` merely THROWS — a transient DB fault inside its
+ * transaction — the parent is not stranded until the next restart either. A
+ * parent whose only in-flight node is a `waiting` call node is NOT a durable
+ * park (`reconcile.ts`'s `hasDurableParkNode` excludes it): its row stays
+ * `running` with a stamped `leaseUntil` (measured, not assumed —
+ * `child.test.ts` probed `{status:'running', lease: non-null}` with a child
+ * genuinely in flight). Once its drive ends, nothing refreshes that lease, so
+ * it expires and S7's lease-expiry reclaim sweeps it like any other run whose
+ * worker went away. The `waiting`-row/`leaseUntil: null` case that reclaim
+ * skips is a different state this one never enters.
  */
 export function subscribeChildReturns(deps: ChildReturnReactorDeps): () => void {
   let stopped = false;
