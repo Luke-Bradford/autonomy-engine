@@ -1147,6 +1147,101 @@ export function FlowCanvas({
     st.setSelection(nextSelection(st.selected, target, selected));
   }
 
+  /**
+   * #949 — the elements a MODIFIER-held pane click must NOT deselect, keyed
+   * `<kind>:<id>` and consumed exactly once each.
+   *
+   * A modified pane click is "no change" in every other canvas tool, and it is
+   * newly reachable: #947 made ⌘ a live multi-select modifier on every platform
+   * rather than only where the user agent claimed "Mac", so an operator building
+   * a selection is far more likely to have it held when a click misses a node.
+   * The place that bites hardest is the empty space INSIDE a container — the box
+   * body is `pointer-events: none`, so a click there is a pane click — which is
+   * exactly where a group is assembled.
+   *
+   * WHY THIS NEEDS STATE AT ALL, rather than a branch in `onPaneClick`. There
+   * are TWO clears on that one click, and only the first is ours. React Flow's
+   * `Pane.onClick` runs `onPaneClick?.(event)` and then
+   * `store.getState().resetSelectedElements()` UNCONDITIONALLY, in one
+   * synchronous stack (`@xyflow/react@12.11.2` dist/esm/index.mjs:1446-1447).
+   * That reset emits a `select:false` per selected node/edge through
+   * `triggerNodeChanges`/`triggerEdgeChanges`, which call our `onNodesChange`/
+   * `onEdgesChange` synchronously (dist:3511-3523). So refusing `select(null)`
+   * suppresses half the clear and RF does the rest.
+   *
+   * WHY A KEYED SET AND NOT A BOOLEAN FLAG. There is no callback guaranteed to
+   * run last, in which a flag could be cleared: `triggerNodeChanges` and
+   * `triggerEdgeChanges` each early-return when their change list is empty
+   * (dist:3513, 3526), so an all-node or all-edge selection invokes only ONE of
+   * the two. A key consumed on use is self-limiting without needing to know
+   * which callback comes last — and without a `queueMicrotask`, whose flush
+   * point differs between a real browser (end of the event task) and a
+   * synchronous jsdom test body (not until the test function yields), which
+   * would make the guard behave differently under test than in production.
+   *
+   * WHY IT CANNOT GO STALE. Seeding reads the STORE selection; consumption is
+   * driven by the VIEW (`resetSelectedElements` walks `get().nodes`/`get().edges`
+   * for `.selected === true`). The two agree by construction, because the view is
+   * re-derived from the store — nodes at the `setFlowNodes` effect above, edges
+   * in `flowEdges` — and the store prunes its selection on delete and undo.
+   * Seeding also happens strictly AFTER RF's own early-return guard (dist:1441),
+   * so a seed always has its reset coming. The ONE precondition: RF's reset
+   * early-returns on `!elementsSelectable` (dist:3602). That prop is never
+   * passed, so it is `true`; a future read-only canvas mode setting it `false`
+   * would strand every seeded key, so it must clear this set if it lands.
+   *
+   * WHY NOT THE SMALLER DIFF. Stopping the click in a capture-phase handler on
+   * RF's wrapper kills both clears with no state at all, and was rejected on the
+   * merits: `Pane.onClick` is the ONLY reset point for RF's
+   * `connectionEndedOnPane` ref (set on `onPointerUp` over the pane,
+   * dist:1598). Suppress that handler and a ⌘-held connection-drag released on
+   * empty pane strands the ref `true`, so the NEXT unmodified pane click hits
+   * RF's guard and returns without deselecting. Self-healing after one click,
+   * but it is a latch — the exact class of defect this Set exists to avoid, and
+   * reachable here because `onConnectStart`/`onConnectEnd` are live.
+   *
+   * The key carries the KIND because nodes and containers share one id
+   * namespace (see `containerIds`), so a bare id could collide.
+   */
+  const pendingPaneClear = useRef(new Set<string>());
+
+  /**
+   * Is this change a deselect that a modified pane click is holding back?
+   *
+   * `Set.delete` reports membership AND consumes in one call, which is what
+   * makes each key good for exactly one change.
+   */
+  function isHeldBack(kind: 'node' | 'edge', change: NodeChange | EdgeChange): boolean {
+    if (change.type !== 'select' || change.selected) return false;
+    return pendingPaneClear.current.delete(`${kind}:${change.id}`);
+  }
+
+  /**
+   * The pane click itself — #949's decision point.
+   *
+   * The predicate is the EVENT's modifier flags rather than React Flow's
+   * `multiSelectionActive`: it is what the operator physically did, it is
+   * user-agent-free in the same way `MULTI_SELECT_KEYS` is, and it does not
+   * depend on `useKeyPress` bookkeeping that a swallowed `keyup` can desync.
+   *
+   * Shift is deliberately NOT a modifier here. It is RF's `selectionKeyCode`
+   * (the marquee), a different gesture that #947 settled — and with it held RF
+   * passes the pane no `onClick` prop at all (dist:1630), so the ordinary path
+   * is already inert.
+   */
+  function onPaneClick(event: ReactMouseEvent) {
+    const st = store.getState();
+    if (event.metaKey || event.ctrlKey) {
+      for (const s of st.selected) {
+        if (s.kind === 'node' || s.kind === 'edge') {
+          pendingPaneClear.current.add(`${s.kind}:${s.id}`);
+        }
+      }
+      return;
+    }
+    st.select(null);
+  }
+
   function onNodesChange(changes: NodeChange[]) {
     /* Container changes are dropped before anything sees them (U6c). Container
        nodes are DERIVED, so they are in the `nodes` prop but not in the view
@@ -1159,7 +1254,23 @@ export function FlowCanvas({
        latent — but it is a live footgun for U23's drag-membership.
        Filtered at the SEAM rather than in each branch below, so a change type
        added later cannot miss the guard. */
-    const own = changes.filter((c) => !('id' in c) || !containerIds.has(c.id));
+    /* #949 — a held-back deselect is dropped HERE, ahead of `onNodesChangeRaw`,
+       and that placement is required rather than tidy. The view array's
+       `selected` flag is re-derived from the store only inside the
+       `setFlowNodes` effect above, which is keyed on the store's `selected` and
+       deliberately not on `flowNodes`. Suppressing only the store fold below
+       would therefore write `selected:false` into the view and leave nothing to
+       trigger a re-derivation — the view/store disagreement the #737 block above
+       calls a dead end, where a node paints its ring, reports nothing to the
+       property panel, and cannot be re-selected by clicking it. */
+    const own = changes.filter(
+      (c) => (!('id' in c) || !containerIds.has(c.id)) && !isHeldBack('node', c),
+    );
+    /* Nothing survived the filters, so there is no view change, no move, no
+       removal and no selection to fold. Returning skips a `setNodes` that would
+       re-render for an empty change list — which a fully-held-back pane clear
+       produces every time. */
+    if (own.length === 0) return;
     // Apply every change to the view first (this is where React Flow records
     // measured dimensions, the in-progress drag position, and its own node
     // selection).
@@ -1195,10 +1306,15 @@ export function FlowCanvas({
   }
 
   function onEdgesChange(changes: EdgeChange[]) {
+    /* #949 — same drop as the node seam, but note the asymmetry rather than
+       assuming one: edges have no raw view handler at all (`flowEdges` is
+       mapped from the store on every render), so for them this is simply the
+       only seam, not a placement chosen over another. */
+    const own = changes.filter((c) => !isHeldBack('edge', c));
     const st = store.getState();
-    const removed = changes.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
+    const removed = own.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
     if (removed.length > 0) st.deleteNodesAndEdges([], removed);
-    for (const c of changes) {
+    for (const c of own) {
       if (c.type === 'select') applySelectChange({ kind: 'edge', id: c.id }, c.selected);
     }
   }
@@ -1651,13 +1767,24 @@ export function FlowCanvas({
            harness fix, `test:e2e` runs on ubuntu in CI and macOS locally, so
            only a UA-independent prop lets ONE spec pass in both places.
 
-           Knowingly left, and FILED as #950 rather than deferred in this
-           comment: `zoomActivationKeyCode` carries the identical `isMacOs()`
-           guess. It gates scroll-zoom, where the wrong modifier degrades the
-           gesture instead of removing it — a wheel event meets no
-           `contextmenu`-instead-of-`click` substitution — so it is a separate
-           question. That difference is reasoned, not measured, which is
-           precisely why it needs a ticket and not a paragraph here. */
+           `zoomActivationKeyCode` carries the identical `isMacOs()` guess, and
+           was filed as #950 to be MEASURED rather than reasoned about. It has
+           been, and the answer is that it cannot be observed from here: under
+           this canvas's config the flag it produces is inert at every one of its
+           three consumers in `@xyflow/system@0.0.79`.
+             - `zoomScroll = zoomActivationKeyPressed || zoomOnScroll` (dist:2840)
+             - `panOnScroll && isWheelEvent && !zoomActivationKeyPressed` (dist:2866)
+             - `panOnScroll && !zoomActivationKeyPressed && !userSelectionActive`
+               (dist:2958, which picks the pan-on-scroll handler over the
+               zoom-on-scroll one)
+           THE PROOF IS CONDITIONAL, so the condition is named here rather than
+           left in a closed ticket: it holds only while this element passes
+           NEITHER `zoomOnScroll` (RF default `true`, so the first disjunction is
+           already satisfied) NOR `panOnScroll` (RF default `false`, so the other
+           two are already short-circuited). Pass `panOnScroll`, and the
+           `isMacOs()` guess is re-armed with #950 closed — so re-measure if you
+           do. (The 10x Ctrl+wheel zoom-speed factor on macOS is a SEPARATE
+           `isMacOs()` check in `wheelDelta`, not reachable through any prop.) */
         multiSelectionKeyCode={MULTI_SELECT_KEYS}
         /* U23 — the ONLY way a container selection can be cleared by clicking
            away. Every other kind clears through React Flow: it emits a
@@ -1667,10 +1794,18 @@ export function FlowCanvas({
            node is `selectable: false`), so RF has nothing to deselect and the
            config panel would otherwise stay open forever.
 
-           Harmless for the other kinds rather than merely tolerable: clicking
-           the pane already clears them, so setting `null` here is idempotent
-           with the change RF is about to emit. */
-        onPaneClick={() => store.getState().select(null)}
+           On an UNMODIFIED click that stays harmless rather than merely
+           tolerable: clicking the pane already clears the other kinds, so
+           `select(null)` is idempotent with the change RF is about to emit.
+
+           #949 NARROWED both of those to the unmodified click, which is a
+           behaviour change worth stating and not just testing: with a
+           multi-select modifier held the handler seeds `pendingPaneClear` and
+           returns, so a selected CONTAINER now survives the click too. That is
+           the consistent reading of "a modified pane click changes nothing" —
+           the container is the one kind whose survival depends on this handler
+           alone, since RF never had a deselect to hold back for it. */
+        onPaneClick={onPaneClick}
         onConnectStart={onConnectStart}
         onConnectEnd={onConnectEnd}
         onClickConnectStart={onClickConnectStart}

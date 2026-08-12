@@ -274,6 +274,11 @@ test.describe('U23 — container config editing', () => {
    * The selection half, which only exists because a container is NOT in React
    * Flow's selection: RF can never emit the deselect that closes every other
    * panel, so `onPaneClick` is the only way out.
+   *
+   * Since #949 this pins the NARROWED invariant, and the word "pane click" in
+   * the title now means an UNMODIFIED one: a click carrying a multi-select
+   * modifier is a no-op for every kind, container included. The modified case is
+   * covered in `multi-select.spec.ts`.
    */
   test('the panel opens on the right box and closes on a pane click', async ({ page }) => {
     const problems = collectPageProblems(page);
