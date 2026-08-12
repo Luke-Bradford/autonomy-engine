@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { computedStyleOf, contrastRatio, fluentRootReady, isOpaque } from './support/theme';
+import { contrastRatio, fluentRootReady, isOpaque, setTheme, surfaceBehind } from './support/theme';
 import { openCanvas } from './support/canvas';
 import { openRowMenu } from './support/authorPane';
 import { fireAndSettle, seedVersion } from './support/seedDoc';
@@ -177,6 +177,33 @@ test.describe('#483 held/parked node pills', () => {
     { cls: 'node-status-skipped', token: '--muted' },
   ] as const;
 
+  /**
+   * A real run, seeded ONLY so the spec can find the surfaces a pill is
+   * actually painted on. Which status the run produces does not matter — a
+   * surface is geometry, not colour — so this is the cheapest doc that settles
+   * without egress. The seven statuses the COLOUR half covers stay synthetic,
+   * for the reason the docblock above gives.
+   */
+  const SURFACE_DOC = {
+    nodes: [{ id: 'hold', type: 'wait', config: { seconds: '${0}' }, position: { x: 0, y: 0 } }],
+    edges: [],
+  };
+
+  /**
+   * The probe host stays on `document.body`, OUTSIDE the FluentProvider root,
+   * and that is sound for what it measures. A pill's `color` is
+   * `var(--muted)` / `var(--warning)`, resolved from the custom properties
+   * `:root[data-theme]` declares — so it is the same colour wherever in the
+   * document the probe hangs, and mounting it inside the React tree to make it
+   * "more realistic" would buy nothing while breaking the rule
+   * `resolvedPaletteColor`'s docblock states (React reconciles its own
+   * children; a foreign node among them is a hazard for no gain).
+   *
+   * What the position CANNOT tell you is the surface, and that is exactly the
+   * #1027 defect: this host is a child of `body`, so a walk up from it finds
+   * `body` and reports it as the backdrop — a surface no real pill sits on.
+   * The surfaces are therefore taken from REAL pills, separately, below.
+   */
   async function pillColours(page: import('@playwright/test').Page) {
     return page.evaluate((pills) => {
       const host = document.createElement('div');
@@ -211,14 +238,55 @@ test.describe('#483 held/parked node pills', () => {
     test(`both pills paint their own token in ${theme} mode`, async ({ page }) => {
       const problems = collectPageProblems(page);
 
-      await page.goto('/#/runs');
+      const { pipelineVersionId } = await seedVersion(
+        page,
+        `#483 pill surface ${theme}`,
+        SURFACE_DOC,
+      );
+      const runId = await fireAndSettle(page, pipelineVersionId, '#483 sweep');
+      await page.goto(`/#/monitor/runs/${encodeURIComponent(runId)}`);
       await fluentRootReady(page);
-      await page.evaluate((t) => {
-        document.documentElement.dataset['theme'] = t;
-      }, theme);
+      /* THROUGH THE TOGGLE, not by writing `data-theme`. That write drives only
+         the MVP palette; the FluentProvider's theme is a React prop no DOM write
+         can move, so the old "light mode" run measured a light palette against a
+         Fluent root still painting `rgb(41, 41, 41)`. It read green only because
+         the SURFACE it measured was `body`, which the same write DID move — two
+         errors that cancelled out. They are not symmetric, though: restoring the
+         write while keeping the real surfaces turns light mode RED at 2.3:1,
+         whereas fixing only the theme would have stayed green while still
+         measuring a surface no pill sits on. */
+      await setTheme(page, theme);
 
-      const surface = await computedStyleOf(page, 'body', 'background-color');
-      expect(isOpaque(surface), `body background is not opaque in ${theme}`).toBe(true);
+      /* The pills render on TWO surfaces, and both are asserted because a
+         regression in either is a real one. In the Nodes table nothing between
+         the pill and the FluentProvider root paints, so the Fluent token is the
+         backdrop; in the drill-in panel `.property-panel` paints `--panel` over
+         it. Found by walking up from a REAL pill in each, never named — the
+         answer for the table is not a colour this app's palette contains at
+         all, which is precisely why naming it was wrong. */
+      await page.locator('table .node-status').first().waitFor();
+      const tableSurface = await surfaceBehind(page, 'table .node-status');
+      await page
+        .locator('tr', { has: page.locator('td code', { hasText: /^hold$/ }) })
+        .locator('button.node-drill-in')
+        .click();
+      /* Keyed on the panel's CLASS, not `[role="complementary"]`: the panel is
+         an `<aside>`, whose `complementary` role is IMPLICIT, so no `role`
+         attribute exists for a CSS selector to match. `getByRole` computes the
+         ARIA role and finds it; `surfaceBehind` takes a CSS selector and cannot.
+         The wait is for the click's re-render, not for an async mount: the panel
+         is local `useState` over nodes already fetched, so nothing is in flight.
+         Without it the walk can still run before that render commits, and
+         `surfaceBehind` then reports "no element matched" — which reads like a
+         markup change rather than a timing one. */
+      await page.locator('.node-detail-panel .node-status').first().waitFor();
+      const panelSurface = await surfaceBehind(page, '.node-detail-panel .node-status');
+      /* Deduped by colour: in LIGHT mode `--panel` is `#ffffff` and so is
+         Fluent's `colorNeutralBackground1`, so the two walks legitimately land
+         on the same value and asserting it twice would say nothing new. */
+      const surfaces = [tableSurface, panelSurface].filter(
+        (s, i, all) => all.findIndex((o) => o.color === s.color) === i,
+      );
 
       const measured = await pillColours(page);
       for (const { cls, token, color, borderColor, expected } of measured) {
@@ -230,13 +298,18 @@ test.describe('#483 held/parked node pills', () => {
         //    the first time in #483.
         expect(borderColor, `${cls} ring does not match its text colour`).toBe(expected);
         expect(isOpaque(color), `${cls} paints a transparent colour`).toBe(true);
-        // 3. The pills are 0.72rem — small text, so WCAG AA asks 4.5:1. This is
-        //    what catches a light override that is merely a DIFFERENT wrong hue
-        //    rather than an absent one.
-        expect(
-          contrastRatio(color, surface),
-          `${cls} on the ${theme} surface is below AA for small text (${color} on ${surface})`,
-        ).toBeGreaterThanOrEqual(4.5);
+        // 3. The pills are 0.72rem — small text, so WCAG AA asks 4.5:1, on
+        //    every surface the pill actually appears on. This is what catches a
+        //    light override that is merely a DIFFERENT wrong hue rather than an
+        //    absent one. No "the surface is opaque" assertion: `surfaceBehind`
+        //    picks the first OPAQUE ancestor by construction and throws naming
+        //    the chain if there is none, so the old check could not fail.
+        for (const s of surfaces) {
+          expect(
+            contrastRatio(color, s.color),
+            `${cls} is below AA for small text in ${theme}: ${color} on ${s.color} (${s.from})`,
+          ).toBeGreaterThanOrEqual(4.5);
+        }
       }
 
       // ...and the two states are visually TELLABLE APART, which is the whole
