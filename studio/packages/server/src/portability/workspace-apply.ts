@@ -869,4 +869,3 @@ export function applyWorkspace(
     return { head, refused: false, applied, deferred, archived, diagnostics: [] };
   });
 }
-

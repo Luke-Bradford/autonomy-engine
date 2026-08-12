@@ -191,7 +191,9 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * matters is that the pipeline just created is in it, as an addition.
    */
   const driftRows = page.getByRole('table').last().getByRole('row');
-  await expect(driftRows.filter({ hasText: pipelineName })).toContainText('added');
+  // #964 — the cell reads prose, not the wire enum `added`, and the prose is
+  // COMMIT-direction: this pipeline is here and not yet on the branch.
+  await expect(driftRows.filter({ hasText: pipelineName })).toContainText('not on the branch yet');
 
   // ── commit ─────────────────────────────────────────────────────────────────
   await page
@@ -231,13 +233,17 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
    * thing this slice exists to unblock for Publish, is not exercised here.
    *
    * The obvious way to force a mint — advance the database past the branch,
-   * then re-import the branch — is blocked by a SERVER defect (#963): the apply
-   * compares the branch's version against the pipeline's CURRENT HEAD rather
-   * than against the stored row that owns that version's `resourceId`, so
-   * re-importing a commit you have since edited past is refused as if you had
-   * tampered with an immutable row. Asserting the minted-version path here
-   * would mean asserting a behaviour the server does not have. It belongs in
-   * this spec once #963 lands.
+   * then re-import the branch — does NOT produce one either, which is a settled
+   * outcome rather than the defect this paragraph used to describe. #963 fixed
+   * the apply (it judges the branch's version against the stored row that owns
+   * that version's `resourceId`, not against the pipeline's current head), and
+   * #983 taught the preview the same thing. Re-importing a commit you have since
+   * authored past is now correctly a no-op reported as `superseded` — nothing to
+   * mint, because the version is already held. Forcing a real mint needs a
+   * version this workspace has NEVER held, i.e. a second writer on the branch;
+   * that is covered at the route level (`workspace-git-preview.test.ts`) and is
+   * left out of this spec deliberately, since faking a collaborator by hand-
+   * editing committed JSON is a fixture, not a user path.
    */
   execFileSync('git', ['update-ref', 'refs/heads/main', 'refs/heads/studio/local/work'], {
     cwd: repoDir,
