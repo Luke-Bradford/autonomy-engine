@@ -49,7 +49,12 @@ import type { Db } from '../repo/types.js';
 import { enabledForReadiness, normalizedTriggerContentForm } from './trigger-content.js';
 import { classifyWorkspace } from './workspace-reconcile.js';
 import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
-import { serializeTrigger, serializeWorkspace, type OwnerRefMaps } from './workspace-serialize.js';
+import {
+  dbVersionForm,
+  serializeTrigger,
+  serializeWorkspace,
+  type OwnerRefMaps,
+} from './workspace-serialize.js';
 
 /**
  * #3 G5c-1 — the transactional reconcile APPLY write-path: the WRITE inverse of
@@ -863,51 +868,4 @@ export function applyWorkspace(
 
     return { head, refused: false, applied, deferred, archived, diagnostics: [] };
   });
-}
-
-/**
- * Remap a STORED DB node's concrete ids back to stable `resourceId`s (the
- * forward direction serialize uses), so a stored version can be compared to a
- * branch version in the SAME resourceId-space. `${}` dynamic refs stay verbatim;
- * an absent `connectionId` becomes `null` (the export shape). An id absent from
- * the owner-scoped reverse map is kept as-is (defensive — an owned row's refs
- * always map; a mismatch just makes the content forms differ, never a false
- * "unchanged"). Reads no DB — pure over the passed maps.
- */
-function forwardRemapNode(
-  node: Node,
-  connRidByDbId: Map<string, string>,
-  versionRidByDbId: Map<string, string>,
-): NodeExport {
-  const { connectionId, call, ...rest } = node;
-  let connExport: string | null;
-  if (connectionId === undefined) connExport = null;
-  else if (interpolationMode(connectionId).mode !== 'literal') connExport = connectionId;
-  else connExport = connRidByDbId.get(connectionId) ?? connectionId;
-
-  const exported: NodeExport = { ...rest, connectionId: connExport };
-  if (call) {
-    const ref = call.pipelineVersionId;
-    const refExport =
-      interpolationMode(ref).mode !== 'literal' ? ref : (versionRidByDbId.get(ref) ?? ref);
-    exported.call = { ...call, pipelineVersionId: refExport };
-  }
-  return exported;
-}
-
-/** The content form of a STORED DB version, in resourceId-space — the baseline
- * the branch's incoming version is compared against to decide "mint a new
- * version vs no-op vs a divergent-content contradiction". Uses the reverse maps
- * so archived pipelines' versions (omitted from the serialize snapshot) are
- * comparable too. */
-function dbVersionForm(
-  version: PipelineVersion,
-  connRidByDbId: Map<string, string>,
-  versionRidByDbId: Map<string, string>,
-): string {
-  const exportForm = {
-    ...version,
-    nodes: version.nodes.map((n) => forwardRemapNode(n, connRidByDbId, versionRidByDbId)),
-  } as PipelineVersionExport;
-  return pipelineVersionContentForm(exportForm);
 }

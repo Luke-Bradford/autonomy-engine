@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -104,7 +104,7 @@ describe('workspace-git import-preview route', () => {
     });
   });
 
-  it('classifies a locally-edited pipeline as update and a DB-only pipeline as a proposed archive', async () => {
+  it('classifies a pipeline the workspace has authored PAST as superseded, and a DB-only pipeline as a proposed archive', async () => {
     const { remote, work } = seedRemote(testApp.tmpDir);
     await connect(remote);
 
@@ -116,8 +116,9 @@ describe('workspace-git import-preview route', () => {
     expect((await commit('author v1')).json().commit.committed).toBe(true);
     mergeWorkingIntoMain(work);
 
-    // After the commit: author a NEW version of the committed pipeline (a real
-    // content edit) AND a brand-new pipeline that was never committed.
+    // After the commit: author a NEW version of the committed pipeline — the
+    // ordinary "commit, keep working" loop — AND a brand-new pipeline that was
+    // never committed.
     createPipelineVersion(app.db, {
       ...baseVersion(pipeline.id),
       outputs: [{ name: 'after', type: 'string' }],
@@ -129,7 +130,13 @@ describe('workspace-git import-preview route', () => {
     const edited = result.resources.find(
       (r: { resourceId: string }) => r.resourceId === pipeline.resourceId,
     );
-    expect(edited).toMatchObject({ disposition: 'update', contentChanged: true });
+    // #983 — the branch is pinned to v1, which this workspace still holds
+    // byte-identically; importing it writes nothing (the apply reports
+    // `superseded`). `contentChanged` remains true — the branch DOES differ from
+    // the head — but the label no longer promises a write. This route wiring is
+    // the only thing that reads the owned versions, so it is the only thing that
+    // can tell `superseded` from `update`.
+    expect(edited).toMatchObject({ disposition: 'superseded', contentChanged: true });
     // The DB-only pipeline is not on the branch, so a pull would archive it.
     expect(result.archive).toEqual([
       {
@@ -139,6 +146,39 @@ describe('workspace-git import-preview route', () => {
         name: 'Local Only',
       },
     ]);
+  });
+
+  it('still classifies a version the workspace does NOT hold as an update', async () => {
+    // #983 — the other side of the same route wiring: a version authored
+    // ELSEWHERE and merged into the collaboration branch is a real incoming
+    // change, and must keep saying so. Without this, "report superseded" and
+    // "report nothing ever changes" look identical from the superseded test.
+    const { remote, work } = seedRemote(testApp.tmpDir);
+    await connect(remote);
+
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Shared' });
+    createPipelineVersion(app.db, {
+      ...baseVersion(pipeline.id),
+      outputs: [{ name: 'ours', type: 'string' }],
+    });
+    expect((await commit('author v1')).json().commit.committed).toBe(true);
+    mergeWorkingIntoMain(work);
+
+    // A collaborator authors a genuinely new version on `main` — a version id
+    // this workspace has never held.
+    const file = join(work, 'pipelines/shared.json');
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    doc.data.versions[0].resourceId = 'pvr_authored_elsewhere';
+    doc.data.versions[0].outputs = [{ name: 'theirs', type: 'string' }];
+    writeFileSync(file, JSON.stringify(doc, null, 2));
+    fixtureGit(work, ['add', '-A']);
+    fixtureGit(work, ['commit', '-m', 'a collaborator edits the pipeline']);
+    fixtureGit(work, ['push', 'origin', 'main']);
+
+    const { preview: result } = (await preview()).json();
+    expect(
+      result.resources.find((r: { resourceId: string }) => r.resourceId === pipeline.resourceId),
+    ).toMatchObject({ disposition: 'update', contentChanged: true });
   });
 
   it('returns an empty preview when the collaboration branch does not exist yet', async () => {

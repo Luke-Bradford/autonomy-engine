@@ -42,6 +42,8 @@ import {
   buildImportAppliedEvent,
   classifyWorkspace,
   computeDrift,
+  latestVersion,
+  ownedVersionForms,
   parseWorkspaceFiles,
   serializeWorkspace,
 } from '../portability/index.js';
@@ -720,12 +722,31 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
       // preview normalizes a dangling binding identically to the apply. #3 G8b-3 —
       // plus the readiness domain (owned versions whose connections are all ready),
       // so the preview folds a bound-but-unready trigger's `enabled`→false exactly
-      // as the apply's forward gate would, keeping preview↔apply parity.
+      // as the apply's forward gate would. #983 — plus the stored form of the
+      // versions the branch NAMES, so a pipeline pinned to a version this
+      // workspace has authored past previews as `superseded` rather than as an
+      // `update` that will not happen.
+      //
+      // These three keep the preview in step with the apply on the domains they
+      // cover; they do not make the two identical, and the exceptions are worth
+      // naming rather than leaving a flat parity claim to be believed:
+      //   - an ARCHIVED pipeline whose file is on the branch previews as `create`
+      //     (the serialize baseline omits archived rows, #666) where the apply
+      //     reports `restored`. Superseded is likewise unreachable for one.
+      //   - the two version-id contradictions the apply REFUSES (an id owned by
+      //     another pipeline; an owned id whose content was hand-edited) preview
+      //     as `update` — see `supersedes` in `workspace-reconcile.ts`.
+      const branchVersionRids = new Set<string>();
+      for (const pipeline of incoming.pipelines) {
+        const rid = latestVersion(pipeline)?.resourceId;
+        if (rid != null) branchVersionRids.add(rid);
+      }
       const plan = classifyWorkspace(
         dbSnapshot,
         incoming,
         listVersionResourceIds(db, ownerId),
         readyVersionResourceIds(db, ownerId),
+        ownedVersionForms(db, ownerId, branchVersionRids),
       );
 
       return WorkspaceGitImportPreviewSchema.parse({

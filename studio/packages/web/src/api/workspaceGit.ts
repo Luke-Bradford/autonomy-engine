@@ -18,6 +18,7 @@ import {
   type WorkspaceGitDisposition,
   type WorkspaceGitDivergence,
   type WorkspaceGitDrift,
+  type WorkspaceGitDriftChange,
   type WorkspaceGitImportPreview,
   type WorkspaceGitStatus,
 } from '@autonomy-studio/shared';
@@ -227,6 +228,36 @@ export function describeDisposition(disposition: WorkspaceGitDisposition): strin
       return 'content differs';
     case 'rename':
       return 'renamed';
+    // #983 — worded IDENTICALLY to `describeAppliedAction`'s `superseded`,
+    // because the preview and the outcome are now reporting the same fact about
+    // the same resource minutes apart, and two phrasings would read as two
+    // different findings.
+    case 'superseded':
+      return 'already here — this workspace has authored past it';
+  }
+}
+
+/**
+ * The human label for a DRIFT change — what a commit would send OUT.
+ *
+ * #964 — deliberately NOT a re-export of `describeDisposition`, though the two
+ * tables now share a row component and the enums nearly line up (drift has no
+ * counterpart to `superseded`, which is pull-direction only). Drift is the
+ * commit-direction dual of the pull-direction disposition, so the same word means
+ * opposite things: a drift `added` is a resource this workspace HAS and the branch
+ * does not, where a disposition `create` ("new here") is the exact reverse.
+ * Sharing the prose would silently invert the sentence in one of the two tables.
+ */
+export function describeDriftChange(change: WorkspaceGitDriftChange): string {
+  switch (change) {
+    case 'added':
+      return 'not on the branch yet';
+    case 'removed':
+      return 'gone here, still on the branch';
+    case 'modified':
+      return 'content differs';
+    case 'renamed':
+      return 'renamed';
   }
 }
 
@@ -242,9 +273,11 @@ export function describeAppliedAction(action: WorkspaceGitAppliedAction): string
     case 'renamed':
       return 'renamed';
     // #963 — the branch names a version this workspace already holds and has
-    // since authored past. Says what was true AND what to do about it, because
-    // the preview legitimately reported "content differs" a moment earlier and a
-    // bare "unchanged" here would read as a contradiction rather than an answer.
+    // since authored past. Says what was true AND what to do about it: the fact
+    // being reconciled is the `contentChanged: true` the preview reported for
+    // this resource, which a bare "unchanged" would flatly contradict. (Since
+    // #983 the preview LABELS that case `superseded` too, so this is now the
+    // second half of one sentence rather than a correction of the first.)
     case 'superseded':
       return 'already here — this workspace has authored past it';
     case 'unchanged':

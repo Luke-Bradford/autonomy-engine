@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   appliedActionWroteNothing,
+  dispositionWritesNothing,
   formatZodIssues,
   type WorkspaceGitApplyResult,
   type WorkspaceGitCommitResult,
@@ -19,6 +20,7 @@ import {
   connectWorkspaceGit,
   describeAppliedAction,
   describeDisposition,
+  describeDriftChange,
   disconnectWorkspaceGit,
   fetchWorkspaceGit,
   getWorkspaceGit,
@@ -913,28 +915,15 @@ function ImportPreviewReport({
       )}
 
       {preview.resources.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Resource</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Change</th>
-              <th scope="col">Path</th>
-            </tr>
-          </thead>
-          <tbody>
-            {preview.resources.map((resource) => (
-              <tr key={resource.path}>
-                <td>{resource.name}</td>
-                <td>{resource.kind}</td>
-                <td>{describeDisposition(resource.disposition)}</td>
-                <td>
-                  <code>{resource.path}</code>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResourceChangeTable
+          rows={preview.resources.map((resource) => ({
+            key: resource.path,
+            name: resource.name,
+            kind: resource.kind,
+            change: describeDisposition(resource.disposition),
+            path: resource.path,
+          }))}
+        />
       )}
 
       {/* The widest-blast-radius consequence on this page, and the one the
@@ -1079,6 +1068,58 @@ function ImportOutcomeReport({
   );
 }
 
+/** One row of a resource-change table: which resource, and what the act would do to it. */
+interface ResourceChangeRow {
+  key: string;
+  name: string;
+  kind: string;
+  change: string;
+  path: string;
+}
+
+/**
+ * #964 — the Resource / Kind / Change / Path table, shared by the OUTGOING drift
+ * report and the INCOMING import preview, which had built the same four columns
+ * twice. `ParseDiagnostics` below is this file's precedent for extracting a
+ * repeated block, but NOT for this signature: its two callers pass the same wire
+ * type unchanged, so it takes that type directly.
+ *
+ * Here the rows are prepared by the caller instead, because the two tables
+ * describe opposite comparisons (drift is workspace-vs-branch, preview is
+ * branch-vs-workspace) over different enums with their own prose. Sharing the
+ * MARKUP is the win; a shared vocabulary would invert one of the two sentences
+ * (see `describeDriftChange`). The `key` comes from the caller for the same
+ * reason: a preview row is unique by path, while two different drift rows can
+ * carry one path — an `added` and a `removed` resource that happen to serialize
+ * to the same filename — so drift keys on the change as well.
+ */
+function ResourceChangeTable({ rows }: { rows: ResourceChangeRow[] }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Resource</th>
+          <th scope="col">Kind</th>
+          <th scope="col">Change</th>
+          <th scope="col">Path</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key}>
+            <td>{row.name}</td>
+            <td>{row.kind}</td>
+            <td>{row.change}</td>
+            <td>
+              <code>{row.path}</code>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 /** The files git served that this workspace could not parse. Shared by preview and outcome. */
 function ParseDiagnostics({
   diagnostics,
@@ -1121,8 +1162,15 @@ function buildImportConfirmation(
    * resources would otherwise be confirmed as "20 resources" and then reported
    * as "1 resource changed" — the same quantity stated two ways, and the
    * overstatement landing at exactly the moment the operator is deciding.
+   *
+   * #983 — via the shared predicate rather than `!== 'unchanged'`, which is the
+   * trap `dispositionWritesNothing` documents: `superseded` writes nothing
+   * either, and the literal comparison would have gone on compiling while
+   * quietly counting those resources as pending changes.
    */
-  const differing = preview.resources.filter((resource) => resource.disposition !== 'unchanged');
+  const differing = preview.resources.filter(
+    (resource) => !dispositionWritesNothing(resource.disposition),
+  );
 
   const lines = [
     `Import ${shortSha(preview.head)} from ${status.collabBranch} into this workspace?`,
@@ -1158,28 +1206,15 @@ function DriftReport({ drift }: { drift: WorkspaceGitDrift }) {
       )}
 
       {drift.changes.length > 0 && (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Resource</th>
-              <th scope="col">Kind</th>
-              <th scope="col">Change</th>
-              <th scope="col">Path</th>
-            </tr>
-          </thead>
-          <tbody>
-            {drift.changes.map((change) => (
-              <tr key={`${change.change}:${change.path}`}>
-                <td>{change.name}</td>
-                <td>{change.kind}</td>
-                <td>{change.change}</td>
-                <td>
-                  <code>{change.path}</code>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <ResourceChangeTable
+          rows={drift.changes.map((change) => ({
+            key: `${change.change}:${change.path}`,
+            name: change.name,
+            kind: change.kind,
+            change: describeDriftChange(change.change),
+            path: change.path,
+          }))}
+        />
       )}
 
       {/* A committed file that would not parse could not be compared, so it is

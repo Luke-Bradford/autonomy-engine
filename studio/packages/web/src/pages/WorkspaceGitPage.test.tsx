@@ -407,7 +407,9 @@ describe('WorkspaceGitPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Check for changes' }));
 
       const row = within(await screen.findByRole('table')).getByRole('row', { name: /Nightly/ });
-      expect(within(row).getByText('modified')).toBeInTheDocument();
+      // #964 — prose, not the raw wire enum, and prose in the COMMIT direction:
+      // a drift `modified` is this workspace's edit on its way out.
+      expect(within(row).getByText('content differs')).toBeInTheDocument();
       expect(within(row).getByText('pipelines/nightly.json')).toBeInTheDocument();
     });
 
@@ -819,6 +821,53 @@ describe('WorkspaceGitPage', () => {
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
 
       expect(confirm.mock.calls[0]?.[0]).toMatch(/2 resources on the branch differ from/);
+    });
+
+    /**
+     * #983 — the pull-direction twin of the `superseded` roll-up rule above. The
+     * count was a bare `!== 'unchanged'`, so a branch pinned to versions this
+     * workspace already holds would have been confirmed as "3 resources will be
+     * applied" and then reported as an import that wrote nothing.
+     */
+    it('does not count a SUPERSEDED resource as a pending change in the confirmation', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({
+          resources: [
+            previewResource({ path: 'a.json', disposition: 'update' }),
+            previewResource({ path: 'b.json', disposition: 'superseded' }),
+            previewResource({ path: 'c.json', disposition: 'unchanged' }),
+          ],
+        }),
+      );
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await checkForIncoming();
+      await userEvent.click(screen.getByRole('button', { name: 'Import' }));
+
+      expect(confirm.mock.calls[0]?.[0]).toMatch(/1 resource on the branch differs from/);
+    });
+
+    /**
+     * #983 — and it must SAY so in the table, in the same words the outcome
+     * screen uses minutes later. Before this, the row read "content differs",
+     * which is true and reads as a promise of a write that never comes.
+     */
+    it('labels a superseded resource in the preview table, not as a content difference', async () => {
+      await renderConnected();
+      divergenceMock.mockResolvedValue(divergence());
+      previewMock.mockResolvedValue(
+        preview({ resources: [previewResource({ disposition: 'superseded' })] }),
+      );
+
+      await checkForIncoming();
+
+      const row = within(await screen.findByRole('table')).getByRole('row', { name: /Nightly/ });
+      expect(
+        within(row).getByText('already here — this workspace has authored past it'),
+      ).toBeInTheDocument();
+      expect(within(row).queryByText('content differs')).not.toBeInTheDocument();
     });
 
     /** `refused: true` arrives as a 200. A 200 is not an import. */

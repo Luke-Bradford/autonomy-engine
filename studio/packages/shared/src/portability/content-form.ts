@@ -145,6 +145,29 @@ export function pipelineVersionContentForm(
   return canonicalStringify(clone);
 }
 
+/**
+ * #983 — the content form of a pipeline's ROW fields alone (`versions` emptied).
+ * The reconcile preview needs "would anything but the version trail be written",
+ * because a branch whose version doc this workspace already holds still forces a
+ * row PATCH if e.g. `concurrency` differs — a real write, and not a `superseded`
+ * no-op. Deliberately derived from `pipelineContentForm` rather than naming the
+ * row fields: whatever the row grows next is covered without anyone remembering
+ * to come back here. Note `name` is already excluded (it is `RESOURCE_VOLATILE`)
+ * — the reconcile carries the name difference as its own independent signal.
+ *
+ * This is WIDER than the apply's `rowPatch` (`name` + `concurrency`) by design,
+ * and one field makes that concrete today: `strippedConnectionRefs`, which this
+ * app's own commit path always writes as `[]` and the apply never reads. A
+ * hand-authored branch file carrying a non-empty one therefore previews as
+ * `update` where the apply would do nothing. That is the direction to be wrong
+ * in — the preview over-states a write rather than promising a no-op ahead of a
+ * real one — and it is the same fallback every future row field gets until
+ * someone decides otherwise here.
+ */
+export function pipelineRowContentForm(data: PipelineExportData): string {
+  return pipelineContentForm({ ...data, versions: [] });
+}
+
 export function pipelineContentForm(data: PipelineExportData): string {
   const clone = jsonClone(data);
   omitKeys(clone.pipeline, RESOURCE_VOLATILE);
