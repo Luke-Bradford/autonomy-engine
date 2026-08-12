@@ -105,9 +105,10 @@ describe('runStatusTone', () => {
   });
 
   it('calls a pre-admission run HOLDING, not running', () => {
-    // `queued` and `pending` have no started bar on the chart at all (see
-    // `unplottableReason`), but the tone is still asked for by the untimed list
-    // and must not claim the run is executing.
+    // No surface reads these two yet — `unplottableReason` keeps a `queued` run
+    // off the axis and the named list beneath renders no swatch — but the map is
+    // exhaustive by construction, and a pre-admission fire must never be worded
+    // as executing on the day something does read them.
     expect(runStatusTone('queued')).toBe('holding');
     expect(runStatusTone('pending')).toBe('holding');
     expect(runStatusTone('waiting')).toBe('holding');

@@ -141,9 +141,15 @@ export function runStatusLabel(
  *    throwing is a distinction the label already draws. Greying it would hide
  *    the row an operator scanning for trouble is looking for.
  *  - `pending` and `queued` are `holding`, not `running`. Neither is plotted as
- *    a bar (`unplottableReason` refuses them), but the untimed list still asks
- *    for a tone, and calling a fire that has not been admitted "running" is the
- *    same lie in a swatch that plotting it would be in a bar.
+ *    a bar today — `unplottableReason` refuses `queued` outright, and `pending`
+ *    is plottable but has no finish to measure — and nothing renders a swatch
+ *    for the named list beneath the chart, so NO surface currently reads either
+ *    tone. They are worded anyway because the map is exhaustive by construction:
+ *    the only thing reading them is `palette.test.ts`'s completeness loop, which
+ *    is what guarantees a CSS rule exists before some later surface does read
+ *    one. Getting them right now is cheaper than discovering the default grey
+ *    later, and "running" would be the same lie in a swatch that plotting a
+ *    queued fire would be in a bar.
  */
 const RUN_TONES: Record<RunStatus, StatusTone> = {
   pending: 'holding',
