@@ -266,8 +266,12 @@ export interface ReconcileReport {
    *
    * EXCLUSIVITY — exact, because it is easy to state too strongly:
    *   - Exclusive of the VERDICT buckets (`resumed`/`finalized`/`resynced`/
-   *     `interrupted`/`deferred`). Each is pushed at a `continue` or at the loop
-   *     tail — i.e. only once that run's reconcile has SUCCEEDED.
+   *     `interrupted`/`deferred`/`sweptOrphanChildren`). Each is pushed at a
+   *     `continue` or at the loop tail — i.e. only once that run's reconcile has
+   *     SUCCEEDED. `sweptOrphanChildren` (#1041) keeps the property a different
+   *     way, and deliberately: `sweepOne` pushes to exactly one of it or `failed`
+   *     on every path, because its terminalize call can no-op silently rather
+   *     than throw.
    *   - NOT exclusive of `held`/`rearmed`. Those are pushed BEFORE the loop
    *     falls through to `pump`, and they record work already durably committed
    *     (`recoverHeld` armed the alarm row and appended `node.retryScheduled`).
@@ -498,6 +502,76 @@ export function emptyReconcileReport(): ReconcileReport {
   };
 }
 
+/**
+ * The `run_row_unparseable` skip handler BOTH boot scans hand to
+ * `listParsedRuns`. Shared rather than written twice: the two scans differ only
+ * in which rows they select, and a lenient-parse policy that drifts between them
+ * is a policy in name only.
+ *
+ * Truncated like `RunLogUnparseableError`'s message: a raw ZodError message is
+ * its full issues JSON, and this reason is logged in the boot report.
+ */
+function reportUnparseableRow(report: ReconcileReport): (id: string, err: unknown) => void {
+  return (id, err) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    report.corrupt.push({
+      runId: id,
+      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
+    });
+  };
+}
+
+/**
+ * #479 — the per-run fault boundary, plus the drive lock. ONE implementation
+ * shared by both boot scans (`running` reconcile and #1041's orphan sweep):
+ * they are the same policy applied to different row sets, and a second copy is
+ * a second place for the `ReconcileInvariantError` re-throw or the
+ * permanent-vs-transient split to rot.
+ *
+ * Boot reconcile IS the recovery path, so it is the worst place for an
+ * all-or-nothing failure mode: without this, ONE run whose reconcile threw
+ * (originally an unresolvable version — now that permanent case is terminalized
+ * by #508 before it reaches here, but a transient DB fault or an executor throw
+ * from `pump` still can) threw out of the whole function and every run after it
+ * in the scan was never resumed, interrupted, or re-synced.
+ *
+ * Wraps the WHOLE unit of work, not just the `resolveDoc` call that motivated
+ * the ticket: the property wanted is "a fault degrades THAT run", and a catch
+ * around one known throw site leaves every other one able to strand the loop.
+ * The cost of the breadth — that it could mask a genuine bug — is paid by the
+ * sentinel re-throw plus `failed` carrying the reason into the boot log.
+ *
+ * Partial side effects are survivable and were checked, not assumed: a throw
+ * from `pump` AFTER its events are appended leaves exactly the durable state it
+ * leaves today, because the append and the sync are separate statements either
+ * way. Today that ALSO crashes boot. The log is the SSOT and the projection is
+ * re-derived on the next boot, so catching is strictly better.
+ *
+ * `work` is AWAITED inside the try — an unawaited async call would reject
+ * OUTSIDE this catch and crash boot as an unhandled rejection, reinstating the
+ * exact fault #479 closes.
+ */
+async function underFaultBoundary(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  runId: string,
+  work: () => Promise<void>,
+): Promise<void> {
+  try {
+    await (deps.drives === undefined ? work() : deps.drives.serialize(runId, work));
+  } catch (err) {
+    if (err instanceof ReconcileInvariantError) throw err;
+    // #646 — a corrupt LOG is permanent, not transient: file it under `corrupt`
+    // (see that bucket's doc), never `failed`, so it does not masquerade as a
+    // fault the next boot could clear.
+    if (err instanceof RunLogUnparseableError) {
+      report.corrupt.push({ runId, reason: `run_log_unparseable:${err.message}` });
+      return;
+    }
+    report.failed.push({ runId, reason: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileReport> {
   const report = emptyReconcileReport();
 
@@ -518,55 +592,8 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   // BOOT at `index.ts`'s unguarded await — killing recovery for every run, with
   // the poison row visible nowhere (the strict list routes throw too). A skipped
   // row is reported in `corrupt`, the needs-attention channel.
-  for (const run of listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
-    // Truncated like `RunLogUnparseableError`'s message: a raw ZodError message
-    // is its full issues JSON, and this reason is logged in the boot report.
-    const detail = err instanceof Error ? err.message : String(err);
-    report.corrupt.push({
-      runId: id,
-      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
-    });
-  })) {
-    // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
-    // it is the worst place for an all-or-nothing failure mode: without this, ONE
-    // run whose reconcile threw (originally an unresolvable version — now that
-    // permanent case is terminalized by #508 before it reaches here, but a
-    // transient DB fault or an executor throw from `pump` still can) threw out of
-    // the whole function and every run after it in the scan was never resumed,
-    // interrupted, or re-synced.
-    //
-    // Wraps the WHOLE body, not just the `resolveDoc` call that motivated the
-    // ticket: the property wanted is "a fault degrades THAT run", and a catch
-    // around one known throw site leaves every other one able to strand the loop.
-    // The cost of the breadth — that it could mask a genuine bug — is paid by the
-    // sentinel re-throw below plus `failed` carrying the reason into the boot log.
-    //
-    // Partial side effects are survivable and were checked, not assumed: a throw
-    // from `pump` AFTER its events are appended leaves exactly the durable state
-    // it leaves today, because the append and the sync are separate statements
-    // either way. Today that ALSO crashes boot. The log is the SSOT and the
-    // projection is re-derived on the next boot, so catching is strictly better.
-    try {
-      // AWAITED inside the try — `reconcileOne` is async, so an unawaited call
-      // would reject OUTSIDE this catch and crash boot as an unhandled rejection,
-      // reinstating the exact fault #479 is closing.
-      await (deps.drives === undefined
-        ? reconcileOne(deps, report, run)
-        : deps.drives.serialize(run.id, () => reconcileOne(deps, report, run)));
-    } catch (err) {
-      if (err instanceof ReconcileInvariantError) throw err;
-      // #646 — a corrupt LOG is permanent, not transient: file it under
-      // `corrupt` (see that bucket's doc), never `failed`, so it does not
-      // masquerade as a fault the next boot could clear.
-      if (err instanceof RunLogUnparseableError) {
-        report.corrupt.push({ runId: run.id, reason: `run_log_unparseable:${err.message}` });
-        continue;
-      }
-      report.failed.push({
-        runId: run.id,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-    }
+  for (const run of listParsedRuns(deps.db, { status: 'running' }, reportUnparseableRow(report))) {
+    await underFaultBoundary(deps, report, run.id, () => reconcileOne(deps, report, run));
   }
 
   // AFTER the `running` loop, and the order is load-bearing in both directions.
@@ -637,13 +664,11 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  *     unreadable state is to leave it for attention rather than mint a verdict.
  */
 async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileReport): Promise<void> {
-  for (const child of listParsedRuns(deps.db, { status: 'pending' }, (id, err) => {
-    const detail = err instanceof Error ? err.message : String(err);
-    report.corrupt.push({
-      runId: id,
-      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
-    });
-  })) {
+  for (const child of listParsedRuns(
+    deps.db,
+    { status: 'pending' },
+    reportUnparseableRow(report),
+  )) {
     const parentRunId = child.parentRunId;
     // TYPE-NARROWING first, behaviour second, and worth saying which: removing
     // this line does not change what the sweep does (a `null` id finds no row,
@@ -651,23 +676,9 @@ async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileRepor
     // `sweepOne` can take a `string`, and it saves a pointless read per
     // top-level `pending` row. The top-level case is a stated non-goal above.
     if (parentRunId === null) continue;
-    // The same per-row fault boundary the `running` scan keeps, for the same
-    // reason: one bad row must degrade THAT row, not the sweep.
-    try {
-      await (deps.drives === undefined
-        ? sweepOne(deps, report, child, parentRunId)
-        : deps.drives.serialize(child.id, () => sweepOne(deps, report, child, parentRunId)));
-    } catch (err) {
-      if (err instanceof ReconcileInvariantError) throw err;
-      if (err instanceof RunLogUnparseableError) {
-        report.corrupt.push({ runId: child.id, reason: `run_log_unparseable:${err.message}` });
-        continue;
-      }
-      report.failed.push({
-        runId: child.id,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-    }
+    await underFaultBoundary(deps, report, child.id, () =>
+      sweepOne(deps, report, child, parentRunId),
+    );
   }
 }
 
