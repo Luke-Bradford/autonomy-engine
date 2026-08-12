@@ -10,6 +10,7 @@ import { usePolledResource } from '../../hooks/usePolledResource';
 import { costFigure, costHeadline } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
+import { TokenFlowChart } from './TokenFlowChart';
 import {
   QUOTA_STALE_AFTER_MS,
   formatPct,
@@ -287,35 +288,46 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
           No AI or agent activity in this window.
         </p>
       ) : (
-        <table className="ai-model-table">
-          <caption className="visually-hidden">
-            Billed exchanges by connection kind and model
-          </caption>
-          <thead>
-            <tr>
-              <th scope="col">Connection kind</th>
-              <th scope="col">Model</th>
-              <th scope="col">Exchanges</th>
-              <th scope="col">Tokens in / out</th>
-              <th scope="col">Spend</th>
-              <th scope="col">Last used</th>
-            </tr>
-          </thead>
-          <tbody>
-            {models.map((m) => (
-              <tr key={`${m.provider}/${m.model}`}>
-                <td>{m.provider}</td>
-                <td>{m.model}</td>
-                <td>{m.cost.responseCount}</td>
-                <td>
-                  {formatTokenCount(m.cost.inputTokens)} / {formatTokenCount(m.cost.outputTokens)}
-                </td>
-                <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
-                <td>{formatWhen(m.lastAt)}</td>
+        <>
+          {/* Inside the SAME `nothing` guard as the table, deliberately: a
+              window with no activity would otherwise render a row of zero-height
+              bars on a baseline, which states "no tokens" where the notice
+              states "nothing happened" — and those are different claims. */}
+          <TokenFlowChart
+            series={snapshot.series}
+            windowStart={snapshot.windowStart}
+            generatedAt={snapshot.generatedAt}
+          />
+          <table className="ai-model-table">
+            <caption className="visually-hidden">
+              Billed exchanges by connection kind and model
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Connection kind</th>
+                <th scope="col">Model</th>
+                <th scope="col">Exchanges</th>
+                <th scope="col">Tokens in / out</th>
+                <th scope="col">Spend</th>
+                <th scope="col">Last used</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {models.map((m) => (
+                <tr key={`${m.provider}/${m.model}`}>
+                  <td>{m.provider}</td>
+                  <td>{m.model}</td>
+                  <td>{m.cost.responseCount}</td>
+                  <td>
+                    {formatTokenCount(m.cost.inputTokens)} / {formatTokenCount(m.cost.outputTokens)}
+                  </td>
+                  <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
+                  <td>{formatWhen(m.lastAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
 
       {/* Agent-CLI use is counted apart from the token table because it is not

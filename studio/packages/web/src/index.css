@@ -52,6 +52,24 @@
     'Segoe UI',
     Roboto,
     sans-serif;
+  /* #967 — the token-flow chart's two series, and the repo's FIRST chart hues.
+     A CATEGORICAL pair (input vs output are identities, not magnitudes), so they
+     are two distinct hues rather than two steps of one ramp. Blue/amber and not
+     blue/green: the pair has to survive colour-vision deficiency, and blue-green
+     is the classic pair that does not.
+
+     Validated, not eyeballed — both modes clear the six checks (OKLCH lightness
+     band, chroma floor, adjacent CVD separation, normal-vision separation, and
+     3:1 against the surface, which is what WCAG 1.4.11 asks of a graphical
+     object). Worst adjacent CVD separation is dE 22.4 dark / 20.6 light, well
+     above the 8 floor. They are also never the ONLY encoding: the legend and
+     each bar's own text name the series.
+
+     Deliberately NOT --accent or the outcome hues. Those already mean selection
+     and success/failure/completion, and a chart series is neither — the same
+     reasoning that gave --branch and --container-fill their own hues. */
+  --chart-tokens-in: #4a90e2;
+  --chart-tokens-out: #bd8330;
   color-scheme: dark;
 }
 
@@ -90,6 +108,11 @@
      needs slightly LESS alpha to read as the same recessed region against white
      than the light grey needs against the dark canvas. */
   --container-fill: rgba(91, 98, 112, 0.08);
+  /* Light mode's own steps, chosen against the WHITE panel rather than derived
+     from the dark pair — the dark hues clear 3:1 against a dark surface and
+     would not against this one. Re-validated in light mode; see the dark block. */
+  --chart-tokens-in: #2b6fbf;
+  --chart-tokens-out: #9c6412;
   color-scheme: light;
 }
 
@@ -2809,4 +2832,132 @@ td button + button {
 .run-view-toggle {
   display: flex;
   gap: 0.5rem;
+}
+
+/* #967 — the token-flow chart. Hand-rolled bars; see TokenFlowChart.tsx for why
+   there is no charting library. Every colour here is a palette custom property,
+   so the chart themes with everything else rather than carrying its own. */
+.token-flow {
+  margin: 1rem 0 0;
+}
+
+.token-flow-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  /* Text wears TEXT colours, never a series colour — the swatches carry
+     identity, the words stay readable. */
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.token-flow-scale {
+  font-variant-numeric: tabular-nums;
+}
+
+.token-flow-bars {
+  display: flex;
+  align-items: flex-end;
+  /* The 2px gap IS the separator between adjacent bars — a border drawn around
+     each mark would read as chrome and thicken the whole plot. */
+  gap: 2px;
+  height: 96px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.token-flow-bucket {
+  flex: 1 1 0;
+  height: 100%;
+  min-width: 2px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.token-flow-stack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  /* Same 2px surface gap between the two stacked segments as between bars. */
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+}
+
+.token-flow-seg {
+  display: block;
+  width: 100%;
+  /* Rounded data-end only on the top of the stack; the bottom is anchored to
+     the baseline and a rounded foot would float the bar off its own axis. */
+  border-radius: 2px 2px 0 0;
+}
+
+.token-flow-seg--in {
+  background: var(--chart-tokens-in);
+}
+
+.token-flow-seg--out {
+  background: var(--chart-tokens-out);
+}
+
+/* An incomplete period makes a weaker claim than a finished one, so it is drawn
+   weaker. The reading is also restated in the bar's title and hidden text, so
+   this is never the only encoding. */
+.token-flow-stack[data-partial='true'] {
+  opacity: 0.6;
+}
+
+/* Exchanges happened and NOBODY counted the tokens. Hatched, and at a fixed
+   height that encodes nothing — a short bar would claim a small measured value
+   where there is no measurement at all. Matches the open-span hatch idiom. */
+.token-flow-unmeasured {
+  display: block;
+  width: 100%;
+  height: 12px;
+  border-radius: 2px;
+  background-color: var(--muted);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel) 0,
+    var(--panel) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}
+
+.token-flow-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  margin-top: 0.25rem;
+}
+
+.token-flow-legend {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.token-flow-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.token-flow-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
 }

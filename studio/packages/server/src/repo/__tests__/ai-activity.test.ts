@@ -375,7 +375,12 @@ describe('aggregateAiActivity — the token-flow series (#967)', () => {
      * broken query. These do not.
      */
     insertMetered(db, run.id, { ts: 1_200_000 + 137, inputTokens: 10, outputTokens: 1, cost: 1 });
-    insertMetered(db, run.id, { ts: 1_200_000 + 299_999, inputTokens: 5, outputTokens: 2, cost: 1 });
+    insertMetered(db, run.id, {
+      ts: 1_200_000 + 299_999,
+      inputTokens: 5,
+      outputTokens: 2,
+      cost: 1,
+    });
     insertMetered(db, run.id, { ts: 1_500_000 + 4, inputTokens: 7, outputTokens: 3, cost: 1 });
 
     const snapshot = callAggregate(db, {

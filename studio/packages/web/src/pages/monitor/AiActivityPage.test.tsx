@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import type { AiActivitySnapshot, RunCost } from '@autonomy-studio/shared';
+import type { AiActivitySnapshot, RunCost, TokenSeriesBucket } from '@autonomy-studio/shared';
 import * as monitorApi from '../../api/monitor';
 import { AiActivityPage } from './AiActivityPage';
 
@@ -37,6 +37,20 @@ function snapshot(over: Partial<AiActivitySnapshot> = {}): AiActivitySnapshot {
     models: [],
     agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
     totals: cost(),
+    series: { bucketMs: 300_000, buckets: [] },
+    ...over,
+  };
+}
+
+/** One token-flow bucket, defaulting to a measured, complete, empty one. */
+function bucket(over: Partial<TokenSeriesBucket> = {}): TokenSeriesBucket {
+  return {
+    bucketStart: 1_785_996_400_000,
+    bucketEnd: 1_785_996_700_000,
+    partial: false,
+    cost: cost(),
+    inputReportedResponseCount: 0,
+    outputReportedResponseCount: 0,
     ...over,
   };
 }
@@ -330,6 +344,128 @@ describe('AiActivityPage', () => {
       // Two freshness facts were on screen and the louder one was about the
       // REQUEST, not the number — so it now names what it stamps.
       expect(panel.textContent ?? '').not.toContain('Quota as of');
+    });
+  });
+
+  describe('the token-flow chart (#967)', () => {
+    /** Renders the page with a series and returns the chart's bars. */
+    async function renderBars(
+      buckets: TokenSeriesBucket[],
+      over: Partial<AiActivitySnapshot> = {},
+    ) {
+      activityMock.mockResolvedValue(
+        snapshot({
+          models: [
+            {
+              provider: 'anthropic_api',
+              model: 'claude-opus-4-8',
+              lastAt: 1_785_996_500_000,
+              cost: cost({ responseCount: 1, inputTokens: 10 }),
+            },
+          ],
+          totals: cost({ responseCount: 1, inputTokens: 10 }),
+          series: { bucketMs: 300_000, buckets },
+          ...over,
+        }),
+      );
+      const { container } = render(<AiActivityPage />);
+      await waitFor(() => expect(container.querySelector('.token-flow')).not.toBeNull());
+      return container;
+    }
+
+    it('draws one bar per bucket, scaled to the tallest stack', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({ responseCount: 1, inputTokens: 50, outputTokens: 50 }),
+          inputReportedResponseCount: 1,
+          outputReportedResponseCount: 1,
+        }),
+        bucket({
+          bucketStart: 2,
+          cost: cost({ responseCount: 1, inputTokens: 25, outputTokens: 25 }),
+          inputReportedResponseCount: 1,
+          outputReportedResponseCount: 1,
+        }),
+      ]);
+
+      expect(container.querySelectorAll('.token-flow-bucket')).toHaveLength(2);
+      const segments = container.querySelectorAll<HTMLElement>('.token-flow-seg--in');
+      // The tallest stack is 100 tokens, so its input half is 50% of the plot
+      // and the half-sized bucket's is 25%.
+      expect(segments[0]?.style.height).toBe('50%');
+      expect(segments[1]?.style.height).toBe('25%');
+    });
+
+    /**
+     * THE CASE THE WHOLE HONESTY MECHANISM EXISTS FOR. An agent-CLI exchange is
+     * real billed AI work carrying no token counts, and the SQL's
+     * `coalesce(…, 0)` hands it over as a zero. Drawn as a zero-height bar it
+     * would state that nothing happened.
+     */
+    it('draws an UNMEASURED bucket as a marker, never as a zero-height bar', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({ responseCount: 3, inputTokens: 0, outputTokens: 0 }),
+          inputReportedResponseCount: 0,
+          outputReportedResponseCount: 0,
+        }),
+      ]);
+
+      expect(container.querySelector('.token-flow-unmeasured')).not.toBeNull();
+      expect(container.querySelectorAll('.token-flow-seg')).toHaveLength(0);
+      expect(screen.getByTitle(/3 exchanges, tokens not reported/)).toBeTruthy();
+    });
+
+    it('distinguishes a genuinely empty bucket from an unmeasured one', async () => {
+      const container = await renderBars([
+        bucket({ bucketStart: 1, cost: cost({ responseCount: 0 }) }),
+      ]);
+
+      // No exchanges at all IS a measured zero, so it draws as a bar of no
+      // height rather than as the "not counted" marker.
+      expect(container.querySelector('.token-flow-unmeasured')).toBeNull();
+      expect(screen.getByTitle(/no billed exchanges/)).toBeTruthy();
+    });
+
+    it('marks a partial bucket and says so in text, not by colour alone', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          partial: true,
+          cost: cost({ responseCount: 1, inputTokens: 10 }),
+          inputReportedResponseCount: 1,
+        }),
+      ]);
+
+      expect(container.querySelector('.token-flow-stack[data-partial="true"]')).not.toBeNull();
+      expect(screen.getByTitle(/period incomplete/)).toBeTruthy();
+    });
+
+    /** A tooltip must never be the only way to reach a value. */
+    it('repeats every bucket sentence in visually-hidden text', async () => {
+      const container = await renderBars([
+        bucket({
+          bucketStart: 1,
+          cost: cost({ responseCount: 2, inputTokens: 10, outputTokens: 4 }),
+          inputReportedResponseCount: 2,
+          outputReportedResponseCount: 2,
+        }),
+      ]);
+
+      const hidden = container.querySelector('.token-flow-stack .visually-hidden');
+      expect(hidden?.textContent).toContain('2 exchanges');
+      expect(hidden?.textContent).toContain('10 in / 4 out');
+    });
+
+    it('is hidden entirely when the window has no activity at all', async () => {
+      activityMock.mockResolvedValue(snapshot({ series: { bucketMs: 300_000, buckets: [] } }));
+      const { container } = render(<AiActivityPage />);
+      await waitFor(() =>
+        expect(screen.getByText(/No AI or agent activity in this window/)).toBeTruthy(),
+      );
+      expect(container.querySelector('.token-flow')).toBeNull();
     });
   });
 });
