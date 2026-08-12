@@ -298,6 +298,15 @@ test.describe('modifier-click multi-select (#947)', () => {
    * Both directions live in ONE test on purpose. The surviving selection is a
    * NON-event, so it is only a real claim next to the unmodified click that
    * takes the same selection, at the same point, to zero.
+   *
+   * NO CONTAINER here, though #949's headline case is a ⌘-click in the empty
+   * space inside one. That case is covered by COMPOSITION rather than left out:
+   * `container-rendering.spec.ts` ('the box does not swallow gestures aimed
+   * through it') already mutation-proves that a click through a container body
+   * hit-tests to the pane, and CSS `pointer-events` resolution does not consult
+   * event modifiers — so a modified click through a body reaches the pane for
+   * exactly the same reason an unmodified one does, and from there it IS this
+   * test. Stated rather than left for a reader to reconstruct.
    */
   test('a ⌘-click on empty pane keeps the selection; an unmodified one clears it', async ({
     page,

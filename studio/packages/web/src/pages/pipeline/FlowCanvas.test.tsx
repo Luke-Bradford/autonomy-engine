@@ -186,6 +186,11 @@ describe('FlowCanvas container rendering (U6c)', () => {
     containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [
       { id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] },
     ],
+    /** #949 needed an edge in this fixture to reach the `onEdgesChange` seam.
+     *  Added as an optional second parameter rather than as a near-duplicate
+     *  mount helper — every existing caller passes one argument and is
+     *  unaffected. */
+    edges: Array<{ id: string; from: string; to: string; on: string }> = [],
   ) {
     const store = createCanvasStore();
     store.getState().loadVersion(
@@ -200,7 +205,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
           { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
           { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
         ],
-        edges: [],
+        edges,
         containers,
         catalogVersion: 1,
         createdAt: 1,
@@ -473,35 +478,9 @@ describe('FlowCanvas container rendering (U6c)', () => {
    * same element.
    */
   describe('modified pane click (#949)', () => {
-    /** Everything one pane click could clear, in one doc: two nodes, an edge
-     *  between them, and a container around them. */
-    function withGraph() {
-      const store = createCanvasStore();
-      store.getState().loadVersion(
-        PipelineVersionSchema.parse({
-          id: 'plv_1',
-          resourceId: 'res_plv1',
-          pipelineId: 'pl_1',
-          version: 1,
-          params: [],
-          outputs: [],
-          nodes: [
-            { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
-            { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
-          ],
-          edges: [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' }],
-          containers: [{ id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] }],
-          catalogVersion: 1,
-          createdAt: 1,
-        }),
-      );
-      const { container } = render(
-        <ReactFlowProvider>
-          <FlowCanvas store={store} />
-        </ReactFlowProvider>,
-      );
-      return { store, container };
-    }
+    /** The one edge these cases need, so the pane click has to spare the
+     *  `onEdgesChange` seam as well as the node one. */
+    const ONE_EDGE = [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' }];
 
     /** The pane, with the same non-null guard `mountCanvas` uses — without it a
      *  selector drift would dispatch into nothing and every case below would
@@ -529,7 +508,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
      * only thing that can ever clear one.
      */
     it('an UNMODIFIED pane click still clears nodes and edges', () => {
-      const { store, container } = withGraph();
+      const { store, container } = withContainer(undefined, ONE_EDGE);
       act(() =>
         store.getState().setSelection([
           { kind: 'node', id: 'n_a' },
@@ -541,7 +520,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
     });
 
     it('an UNMODIFIED pane click still clears a CONTAINER', () => {
-      const { store, container } = withGraph();
+      const { store, container } = withContainer(undefined, ONE_EDGE);
       act(() => store.getState().setSelection([{ kind: 'container', id: 'c_1' }]));
       fireEvent.click(paneOf(container));
       expect(store.getState().selected).toEqual([]);
@@ -558,7 +537,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
          itself carries the flag. Testing the flag alone would exercise the
          predicate but not the gesture. */
       it('keeps the whole selection, built by the real gesture', () => {
-        const { store, container } = withGraph();
+        const { store, container } = withContainer(undefined, ONE_EDGE);
         fireEvent.click(nodeWrapper(container, 'n_a'));
         fireEvent.keyDown(window, { key: modifier });
         fireEvent.click(nodeWrapper(container, 'n_b'));
@@ -583,7 +562,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
        * dead end. This is the case that goes red if the filter is moved.
        */
       it('leaves the survivors PAINTED selected, not merely stored', () => {
-        const { store, container } = withGraph();
+        const { store, container } = withContainer(undefined, ONE_EDGE);
         act(() =>
           store.getState().setSelection([
             { kind: 'node', id: 'n_a' },
@@ -599,7 +578,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
          with no raw view handler — so a node-only spec would leave that half of
          the fix unguarded. */
       it('keeps a MIXED node-and-edge selection, so BOTH seams are covered', () => {
-        const { store, container } = withGraph();
+        const { store, container } = withContainer(undefined, ONE_EDGE);
         act(() =>
           store.getState().setSelection([
             { kind: 'node', id: 'n_a' },
@@ -617,7 +596,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
          `onPaneClick` declined to call `select(null)` — the other half of the
          fix, and invisible to every assertion above. */
       it('keeps a selected CONTAINER, which only this handler could clear', () => {
-        const { store, container } = withGraph();
+        const { store, container } = withContainer(undefined, ONE_EDGE);
         act(() => store.getState().setSelection([{ kind: 'container', id: 'c_1' }]));
         fireEvent.click(paneOf(container), { [flag]: true });
         expect(store.getState().selected).toEqual([{ kind: 'container', id: 'c_1' }]);
@@ -638,7 +617,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
        * member would prove nothing either way.
        */
       it('does NOT latch — a later plain click still replaces the selection', () => {
-        const { store, container } = withGraph();
+        const { store, container } = withContainer(undefined, ONE_EDGE);
         act(() => store.getState().setSelection([{ kind: 'node', id: 'n_a' }]));
 
         fireEvent.click(paneOf(container), { [flag]: true });

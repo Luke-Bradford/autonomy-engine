@@ -1200,8 +1200,13 @@ export function FlowCanvas({
    * but it is a latch — the exact class of defect this Set exists to avoid, and
    * reachable here because `onConnectStart`/`onConnectEnd` are live.
    *
-   * The key carries the KIND because nodes and containers share one id
-   * namespace (see `containerIds`), so a bare id could collide.
+   * The key carries the KIND because a node id and an EDGE id can legally be
+   * equal. That is not the node/container collision `containerIds` guards — it
+   * is a separate and genuinely unchecked one: `validateDoc` builds its global
+   * uniqueness map from node and container ids only, and says so ("nothing
+   * validates edge-id uniqueness"). Only the `n_`/`e_` minting convention keeps
+   * the two apart in practice, which is a habit and not a rule. A bare id would
+   * therefore let a held-back node deselect consume an edge's, or the reverse.
    */
   const pendingPaneClear = useRef(new Set<string>());
 
@@ -1269,7 +1274,14 @@ export function FlowCanvas({
     /* Nothing survived the filters, so there is no view change, no move, no
        removal and no selection to fold. Returning skips a `setNodes` that would
        re-render for an empty change list — which a fully-held-back pane clear
-       produces every time. */
+       produces every time.
+
+       DELIBERATELY UNPINNED by a test, which is the honest disposition rather
+       than an oversight: RF's `applyChanges` is a content no-op on an empty list
+       (same node references, new array), so removing this line changes nothing
+       observable. The only assertion available would be a render COUNT, which
+       pins an implementation detail rather than a behaviour — a test that cannot
+       fail for the right reason is worse than none. */
     if (own.length === 0) return;
     // Apply every change to the view first (this is where React Flow records
     // measured dimensions, the in-progress drag position, and its own node
@@ -1309,7 +1321,11 @@ export function FlowCanvas({
     /* #949 — same drop as the node seam, but note the asymmetry rather than
        assuming one: edges have no raw view handler at all (`flowEdges` is
        mapped from the store on every render), so for them this is simply the
-       only seam, not a placement chosen over another. */
+       only seam, not a placement chosen over another.
+
+       `removed` below reads from `own` for consistency, NOT because a removal
+       could ever be held back: `isHeldBack` returns false for every change that
+       is not a `select`, so the two lists are identical for `remove`. */
     const own = changes.filter((c) => !isHeldBack('edge', c));
     const st = store.getState();
     const removed = own.flatMap((c) => (c.type === 'remove' ? [c.id] : []));
