@@ -258,7 +258,13 @@ describe('serializeWorkspace', () => {
       createPipelineVersion(db, {
         ...baseVersion(pipeline.id),
         nodes: [
-          { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+          {
+            id: 'n1',
+            type: 'llm_call',
+            config: {},
+            connectionId: conn.id,
+            position: { x: 0, y: 0 },
+          },
         ],
       });
       deleteConnection(db, conn.id);
@@ -324,7 +330,13 @@ describe('serializeWorkspace', () => {
 
       expect(files.map((f) => f.path)).toEqual([]);
       expect(unserializable).toMatchObject([
-        { kind: 'pipeline', name: 'Caller', ref: 'call', nodeId: 'c1', danglingId: calleeVersion.id },
+        {
+          kind: 'pipeline',
+          name: 'Caller',
+          ref: 'call',
+          nodeId: 'c1',
+          danglingId: calleeVersion.id,
+        },
       ]);
     });
 

@@ -451,7 +451,8 @@ describe('WorkspaceGitPage', () => {
             {
               path: 'pipelines/uses-conn.json',
               code: 'unserializable_ref',
-              message: '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
             },
           ],
         }),
@@ -754,7 +755,8 @@ describe('WorkspaceGitPage', () => {
             {
               path: 'pipelines/uses-conn.json',
               code: 'unserializable_ref',
-              message: '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
             },
           ],
         }),
@@ -969,7 +971,8 @@ describe('WorkspaceGitPage', () => {
             {
               path: 'pipelines/uses-conn.json',
               code: 'unserializable_ref',
-              message: '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
+              message:
+                '"Uses Conn" node "n1" references connection "conn_x", which no longer exists',
             },
           ],
         }),
