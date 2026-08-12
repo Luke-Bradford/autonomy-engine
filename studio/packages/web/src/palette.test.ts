@@ -197,10 +197,7 @@ describe('U6a edge variant hues', () => {
        tone no node status shares (there is none today, and that is exactly the
        kind of coincidence a test must not rely on) would reach the cross-run
        timeline with no rule and the plausible-grey failure above. */
-    const timelineTones = new Set([
-      ...nodeTones,
-      ...RunStatusSchema.options.map(runStatusTone),
-    ]);
+    const timelineTones = new Set([...nodeTones, ...RunStatusSchema.options.map(runStatusTone)]);
     for (const tone of timelineTones) {
       expect(
         ruleBody(css, `.timeline-span[data-tone='${tone}']`),

@@ -66,7 +66,7 @@ test('U29 — two pipelines, two lanes, one axis', async ({ page }) => {
   /* Every assertion in ONE evaluate. A per-assertion round trip is what makes a
      browser-driven check expensive, and all of this reads in a single pass. */
   const seen = await page.evaluate(
-    ([earlierName, laterName]) => {
+    ([earlierName, laterName]: readonly [string, string]) => {
       const laneOf = (name: string) => {
         const heading = [...document.querySelectorAll('.run-timeline-group-name')].find(
           (h) => (h.textContent ?? '').trim() === name,
@@ -113,7 +113,7 @@ test('U29 — two pipelines, two lanes, one axis', async ({ page }) => {
           .trim(),
       };
     },
-    [EARLIER, LATER],
+    [EARLIER, LATER] as const,
   );
 
   expect(seen.earlier, `no lane for ${EARLIER}`).not.toBeNull();

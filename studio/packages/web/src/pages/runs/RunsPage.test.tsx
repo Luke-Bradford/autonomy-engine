@@ -618,7 +618,13 @@ describe('RunsPage — U26 filter pane', () => {
 describe('U29 runs view toggle', () => {
   beforeEach(() => {
     listMock.mockResolvedValue([
-      run({ id: 'run_a', pipelineId: 'pipe_a', pipelineName: 'Alpha', startedAt: 1, finishedAt: 2 }),
+      run({
+        id: 'run_a',
+        pipelineId: 'pipe_a',
+        pipelineName: 'Alpha',
+        startedAt: 1,
+        finishedAt: 2,
+      }),
     ]);
   });
 

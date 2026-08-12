@@ -258,11 +258,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             `role="tab"` sets over one panel is a claim about the markup that
             is not true. */}
         <div role="group" aria-label="Runs view" className="run-view-toggle">
-          <ToggleButton
-            size="small"
-            checked={view === 'list'}
-            onClick={() => selectView('list')}
-          >
+          <ToggleButton size="small" checked={view === 'list'} onClick={() => selectView('list')}>
             List
           </ToggleButton>
           <ToggleButton

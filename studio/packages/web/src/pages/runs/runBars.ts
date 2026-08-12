@@ -57,7 +57,8 @@ export interface UnplottableRun {
  * four all have a real admission behind them.
  */
 const UNPLOTTABLE_BY_STATUS: Record<RunStatus, string | null> = {
-  queued: 'held for a concurrency slot — its start stamp is when it was enqueued, not when it began',
+  queued:
+    'held for a concurrency slot — its start stamp is when it was enqueued, not when it began',
   pending: null,
   running: null,
   waiting: null,

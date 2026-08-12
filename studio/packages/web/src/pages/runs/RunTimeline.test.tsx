@@ -125,8 +125,9 @@ describe('U29 RunTimeline', () => {
     expect(named?.textContent).toContain('enqueued');
     expect(named?.textContent).toContain('Beta');
     // And it is NOT a bar.
-    expect(screen.getAllByRole('listitem').filter((li) => li.querySelector('.timeline-span'))).
-      toHaveLength(1);
+    expect(
+      screen.getAllByRole('listitem').filter((li) => li.querySelector('.timeline-span')),
+    ).toHaveLength(1);
   });
 
   it('says so plainly when nothing in view can be plotted at all', () => {
