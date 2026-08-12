@@ -74,8 +74,30 @@ export const AccountQuotaWindowSchema = z
      * is why there is a lower bound but no upper one.
      */
     utilization: z.number().min(0),
-    /** When this window resets, epoch SECONDS. */
-    resets_at: z.number().int(),
+    /**
+     * When this window resets, epoch SECONDS — or `null` when the provider did
+     * not say (#1023).
+     *
+     * `.nullable()` rather than `.optional()`, which is a deliberate departure
+     * from `overage` directly below and from `five_hour` in the reading. The
+     * line between them: a key is OPTIONAL here when the thing it describes may
+     * not exist at all (there is no overage; there is no 5-hour window), and
+     * NULLABLE when the thing exists and its value is unknown. Every window has
+     * a reset; sometimes nobody reported when. That is a known-unknown, and it
+     * is the same encoding the renderer already uses for one (`formatWhen(ms:
+     * number | null)` → an em-dash).
+     *
+     * It is also what the provider literally sends: a window with no active
+     * period arrives as `{utilization: 0.0, resets_at: null}`, observed on the
+     * live endpoint 2026-08-12.
+     *
+     * `null` is NOT overloaded with the meaning it carries one level up.
+     * `account.claude: null` says "a reading was attempted and could not be
+     * had"; this says "the reading is here, and it carries no reset instant".
+     * The difference is that the utilization beside it is a real measurement
+     * either way — which is exactly what #1023 was about.
+     */
+    resets_at: z.number().int().nullable(),
     /** Present only when the account is drawing on overage credit. */
     overage: z.literal(true).optional(),
   })
@@ -84,10 +106,33 @@ export const AccountQuotaWindowSchema = z
 export type AccountQuotaWindow = z.infer<typeof AccountQuotaWindowSchema>;
 
 /**
- * A complete account-quota reading. ALL-OR-NOTHING: both windows must be
- * present and valid or the whole reading degrades to `null` (UNREADABLE),
- * inherited from the prototype's `_build` — a partial payload is a confusing
- * live/stale mix, and half a reading is not evidence.
+ * A complete account-quota reading: the 7-day window, and the 5-hour one when
+ * the provider reported it.
+ *
+ * ## The all-or-nothing rule this used to have, and why it went (#1023)
+ *
+ * Both windows were required, inherited from the prototype's `_build` — "a
+ * partial payload is a confusing live/stale mix, and half a reading is not
+ * evidence". **The inherited rule outlived its reason.** The prototype's reason
+ * was the dashboard PANEL, which merged a live sample with a 900s-graced stale
+ * one and could therefore render half of each; this reader has neither a grace
+ * window nor a last-good value inside it (see `claude-quota.ts`), so a partial
+ * reading here is not a mix of anything. It is one sample, of which the provider
+ * reported one window.
+ *
+ * Measured cost of keeping it: over 2026-08-09..12 the spend guard's own log
+ * recorded 31 `unrecognized_payload` readings where `loop/claude_usage.py` —
+ * same endpoint, same second, same credential — read a real 7-day figure. Every
+ * one of those was a good 7-day window discarded over a 5-hour one that nothing
+ * consumes. `CodexAccountQuotaSchema` below had already reached this conclusion
+ * for the other provider, in as many words.
+ *
+ * `seven_day` stays REQUIRED, so this is not codex's symmetric "at least one
+ * window" rule. It is asymmetric on purpose: `loop/drive.sh` reads
+ * `seven_day.utilization` and only that, so a payload without it carries no fact
+ * this surface exists to report — and keeping it required is what preserves the
+ * #825 iff, since a reading that cannot be built stays `null` and therefore
+ * still carries a reason for its absence.
  *
  * There is deliberately NO `source`/freshness discriminator. The prototype
  * carried one because it had two sources and a 900s grace window to badge; this
@@ -103,7 +148,8 @@ export type AccountQuotaWindow = z.infer<typeof AccountQuotaWindowSchema>;
  */
 export const ClaudeAccountQuotaSchema = z
   .object({
-    five_hour: AccountQuotaWindowSchema,
+    /** Absent when the provider did not report a 5-hour window (#1023). */
+    five_hour: AccountQuotaWindowSchema.optional(),
     seven_day: AccountQuotaWindowSchema,
   })
   .strict();

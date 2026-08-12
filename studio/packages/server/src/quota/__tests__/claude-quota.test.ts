@@ -96,8 +96,6 @@ describe('mapWindow — percent → fraction, ISO → epoch seconds', () => {
     ['a string utilization', { utilization: '7', resets_at: '2026-08-05T02:00:00Z' }],
     ['a negative utilization', { utilization: -1, resets_at: '2026-08-05T02:00:00Z' }],
     ['a NaN utilization', { utilization: Number.NaN, resets_at: '2026-08-05T02:00:00Z' }],
-    ['a missing resets_at', { utilization: 7 }],
-    ['an unparseable resets_at', { utilization: 7, resets_at: 'not-a-date' }],
     // Reachable from the wire, not theoretical: JSON overflows an out-of-range
     // numeric literal to Infinity, which would then fail the schema and turn a
     // reading the reader accepted into a 400 for the whole TTL.
@@ -114,17 +112,39 @@ describe('mapWindow — percent → fraction, ISO → epoch seconds', () => {
     ['no offset at all', '2026-08-05T02:00:00'],
     ['a date with no time', '2026-08-05'],
     ['a loose human date', 'Aug 5 2026'],
-  ])('rejects a timestamp with %s rather than guessing a zone', (_label, ts) => {
+  ])('never GUESSES a zone for a timestamp with %s', (_label, ts) => {
     // `Date.parse` reads an offset-less date-TIME as LOCAL time (ECMA-262),
     // where the prototype assumed UTC — a silent skew of up to 14 hours by
     // host zone. It also accepts forms the prototype rejected outright, which
     // would turn "malformed → null" into "malformed → a plausible wrong
-    // number". Requiring an explicit offset keeps the rejection honest.
-    expect(mapWindow({ utilization: 7, resets_at: ts })).toBeNull();
+    // number". So the INSTANT is refused — but that refusal is now confined to
+    // the field it is about (#1023): the utilization beside it was never in
+    // doubt, and discarding it would be the veto this ticket removed.
+    expect(mapWindow({ utilization: 7, resets_at: ts })).toEqual({
+      utilization: 0.07,
+      resets_at: null,
+    });
+  });
+
+  it.each([
+    ['an absent key', {}],
+    ['an explicit null', { resets_at: null }],
+    ['an unparseable string', { resets_at: 'not-a-date' }],
+    // The same provider family sends codex's reset as epoch SECONDS
+    // (`mapCodexWindow`), so a bare number reaching this reader is a plausible
+    // contract drift rather than a hypothetical. It is not an ISO string and is
+    // not guessed at — but it is also not grounds to discard the utilization.
+    ['a bare epoch number', { resets_at: 1_785_100_200 }],
+    ['a wrongly-typed object', { resets_at: { at: '2026-08-05T02:00:00Z' } }],
+  ])('reports an unknown reset instant as null and KEEPS the window: %s', (_label, reset) => {
+    expect(mapWindow({ utilization: 7, ...reset })).toEqual({
+      utilization: 0.07,
+      resets_at: null,
+    });
   });
 });
 
-describe('buildQuota — all-or-nothing', () => {
+describe('buildQuota — the 7-day window IS the reading; the 5-hour one is optional', () => {
   it('builds both windows from a full payload', () => {
     expect(buildQuota(LIVE_PAYLOAD)).toEqual({
       five_hour: { utilization: 0.08, resets_at: expect.any(Number) },
@@ -132,13 +152,89 @@ describe('buildQuota — all-or-nothing', () => {
     });
   });
 
+  /**
+   * #1023 — the measured defect. The provider stops reporting `five_hour` when
+   * there is no active session, and the all-or-nothing rule inherited from the
+   * prototype turned that into UNREADABLE for the WHOLE reading — including the
+   * 7-day figure the spend guard is the entire consumer of.
+   */
+  it.each([
+    ['an absent five_hour', { seven_day: LIVE_PAYLOAD.seven_day }],
+    ['an explicitly null five_hour', { ...LIVE_PAYLOAD, five_hour: null }],
+    ['a malformed five_hour', { ...LIVE_PAYLOAD, five_hour: { utilization: 'x' } }],
+    ['a five_hour that is not an object', { ...LIVE_PAYLOAD, five_hour: 'nope' }],
+  ])('still reports the 7-day window when there is %s', (_label, input) => {
+    expect(buildQuota(input)).toEqual({
+      seven_day: { utilization: 0.07, resets_at: expect.any(Number) },
+    });
+  });
+
+  it('OMITS the five_hour key rather than sending it as null', () => {
+    // `.optional()`, not `.nullable()`: on this surface a `null` means "present
+    // and unreadable" (that is what `account.claude: null` says), so sending one
+    // for a window the provider simply did not report would claim a failed read
+    // that never happened. An absent key is the honest encoding, and it is the
+    // one `CodexAccountQuotaSchema` already uses for the same fact.
+    expect(buildQuota({ seven_day: LIVE_PAYLOAD.seven_day })).not.toHaveProperty('five_hour');
+  });
+
   it.each([
     ['a missing seven_day', { five_hour: LIVE_PAYLOAD.five_hour }],
-    ['a missing five_hour', { seven_day: LIVE_PAYLOAD.seven_day }],
-    ['a malformed window', { ...LIVE_PAYLOAD, seven_day: { utilization: 'x' } }],
+    ['a malformed seven_day', { ...LIVE_PAYLOAD, seven_day: { utilization: 'x' } }],
+    ['a null seven_day', { ...LIVE_PAYLOAD, seven_day: null }],
     ['a non-object', null],
-  ])('degrades %s to null — half a reading is not evidence', (_label, input) => {
+  ])('degrades %s to null — a reading with no 7-day window is not a reading', (_label, input) => {
     expect(buildQuota(input)).toBeNull();
+  });
+
+  it('ignores top-level keys it does not know', () => {
+    // The live payload carries a dozen sibling keys (other window kinds, a
+    // spend block, a limits array). `buildQuota` reads two of them and applies
+    // no payload-level `.strict()`, so a provider ADDING a key must never be a
+    // contract break. Nothing pinned that before #1023.
+    expect(
+      buildQuota({
+        ...LIVE_PAYLOAD,
+        seven_day_opus: null,
+        speckled_hen: { utilization: 0.0, resets_at: null },
+        limits: [{ kind: 'session', percent: 9 }],
+        spend: { percent: 0, enabled: false },
+      }),
+    ).toEqual({
+      five_hour: { utilization: 0.08, resets_at: expect.any(Number) },
+      seven_day: { utilization: 0.07, resets_at: expect.any(Number) },
+    });
+  });
+});
+
+/**
+ * #1023's actual subject, stated as a property rather than as a list of bugs.
+ *
+ * The build loop runs TWO readers against this one endpoint: this one, and
+ * `loop/claude_usage.py`, which reads `seven_day.utilization` and nothing else.
+ * For three days they disagreed on the same bytes in the same second — the
+ * python one returned a percentage, this one returned `unrecognized_payload` —
+ * because this one vetoed the whole reading over fields the guard never reads.
+ *
+ * The fix is not "handle the field that happened to be at fault". It is that
+ * this reader's accept-set now CONTAINS the python one's, so that disagreement
+ * is unreachable. Each case below is a payload the python reader accepts (its
+ * own suite pins the first two by name), and every one of them must produce a
+ * reading here.
+ */
+describe('#1023 — a payload the guard’s other reader accepts is never UNREADABLE here', () => {
+  it.each([
+    ['no five_hour at all', { seven_day: { utilization: 48.0, resets_at: null } }],
+    ['an unparseable resets_at', { seven_day: { utilization: 48.0, resets_at: 'not-a-date' } }],
+    ['no resets_at at all', { seven_day: { utilization: 48.0 } }],
+    ['a null five_hour', { five_hour: null, seven_day: { utilization: 48.0 } }],
+    ['an inactive five_hour', { five_hour: { utilization: 0.0, resets_at: null }, seven_day: { utilization: 48.0 } }],
+    ['a zero reading', { seven_day: { utilization: 0 } }],
+    ['an overage reading', { seven_day: { utilization: 143.7 } }],
+  ])('reads the 7-day window when the payload has %s', (_label, payload) => {
+    expect(buildQuota(payload)?.seven_day.utilization).toBe(
+      (payload.seven_day as { utilization: number }).utilization / 100,
+    );
   });
 });
 
@@ -164,6 +260,11 @@ describe('the reader and the schema agree on what a valid window is', () => {
     ['a tiny percent', { utilization: 1e-9, resets_at: '2026-08-05T02:00:00Z' }],
     ['a negative offset', { utilization: 7, resets_at: '2026-08-05T02:00:00-05:00' }],
     ['a pre-epoch reset', { utilization: 7, resets_at: '1969-01-01T00:00:00Z' }],
+    // #1023 widened the accept-set; this table is the thing that stops it
+    // widening past the schema, so the new members belong in it.
+    ['an unreported reset', { utilization: 7 }],
+    ['an explicitly null reset', { utilization: 7, resets_at: null }],
+    ['an unparseable reset', { utilization: 7, resets_at: 'not-a-date' }],
   ])('accepts %s in BOTH the reader and the schema', (_label, input) => {
     const mapped = mapWindow(input);
     expect(mapped).not.toBeNull();
