@@ -2372,4 +2372,69 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
     });
     expect(within(costSection()).queryByText(/REUSED/)).not.toBeInTheDocument();
   });
+
+  describe('#932 — the child runs the total excludes', () => {
+    const callStarted = (childRunId: string, attemptId = 'call#0') =>
+      envelope({
+        type: 'call.started',
+        runId: 'run_1',
+        callNodeId: 'call',
+        attemptId,
+        childRunId,
+      } as EngineEvent);
+
+    it('states the exclusion and LINKS every child run', async () => {
+      await renderRun({
+        events: [
+          envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 })),
+          callStarted('run_child_a'),
+        ],
+      });
+      const section = costSection();
+      /* The figure is still this run's own spend — the point is that the sentence
+         beside it now says so, instead of the total silently standing for the
+         whole tree. */
+      expect(within(section).getByText('$0.02')).toBeInTheDocument();
+      expect(within(section).getByText(/called 1 sub-pipeline,/)).toBeVisible();
+      /* "and anything it called in turn" — children nest to `MAX_CALL_DEPTH`, so a
+         reader who opens the linked run has still not found the whole exclusion. */
+      expect(within(section).getByText(/anything it called in turn/)).toBeVisible();
+      const link = within(section).getByRole('link', { name: 'run_child_a' });
+      expect(link).toHaveAttribute('href', '/monitor/runs/run_child_a');
+    });
+
+    it('names both children of a call node that ran twice', async () => {
+      await renderRun({
+        events: [callStarted('run_child_a'), callStarted('run_child_b', 'call#1')],
+      });
+      const section = costSection();
+      expect(within(section).getByText(/called 2 sub-pipelines,/)).toBeVisible();
+      expect(within(section).getByRole('link', { name: 'run_child_a' })).toBeInTheDocument();
+      expect(within(section).getByRole('link', { name: 'run_child_b' })).toBeInTheDocument();
+    });
+
+    it('says nothing about children on a run that spawned none', async () => {
+      await renderRun({
+        events: [envelope(metered({ inputTokens: 10, outputTokens: 5, costEstimate: 0.02 }))],
+      });
+      expect(within(costSection()).queryByText(/sub-pipeline/)).not.toBeInTheDocument();
+    });
+
+    it('does NOT claim an exclusion while the log is still being read', async () => {
+      /* The caveat sits INSIDE the replay gate. `call.started` lands arbitrarily
+         late in a log, so a truncated replay can hold a child the fold has not
+         reached — and there is no figure to qualify anyway, since the gate's other
+         branch says the total cannot be computed. Announcing "excludes 1 child
+         run" here would attach a precise-sounding claim to a number that is not on
+         screen. */
+      await renderRun({
+        events: [callStarted('run_child_a')],
+        replayComplete: false,
+        phase: 'closed',
+      });
+      const section = costSection();
+      expect(within(section).getByText(/ended before the whole log was read/)).toBeVisible();
+      expect(within(section).queryByText(/sub-pipeline/)).not.toBeInTheDocument();
+    });
+  });
 });

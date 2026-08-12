@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeCost } from '@autonomy-studio/shared';
-import { costSentence, readCost, reusedSpend, unsettledSentence } from './costReading';
+import { childSpend, costSentence, readCost, reusedSpend, unsettledSentence } from './costReading';
 
 /** A folded node cost, defaulted to "nothing billed" and overridden per case. */
 function cost(fields: Partial<NodeCost> = {}): NodeCost {
@@ -223,6 +223,27 @@ describe('reusedSpend (#930 — a rerun total is incremental)', () => {
     expect(reusedSpend([{ copiedFromRunId: 'run_a' }, { copiedFromRunId: 'run_a' }])).toEqual({
       reusedNodeCount: 2,
       sourceRunId: 'run_a',
+    });
+  });
+});
+
+describe('childSpend (#932 — a total excludes its child runs)', () => {
+  it('is null when the run spawned nothing, so an ordinary run says nothing', () => {
+    expect(childSpend([{}, { childRunIds: undefined }, { childRunIds: [] }])).toBeNull();
+  });
+
+  it('collects every announced child, in log order', () => {
+    expect(
+      childSpend([{ childRunIds: ['run_c1'] }, {}, { childRunIds: ['run_c2', 'run_c3'] }]),
+    ).toEqual({ childRunIds: ['run_c1', 'run_c2', 'run_c3'] });
+  });
+
+  it('names a run ONCE even if two rows claim it', () => {
+    /* No producer emits this — a child belongs to exactly one call node, and the
+       fold already dedupes per row. It is guarded because the alternative is a
+       money caveat that counts one run twice in one sentence. */
+    expect(childSpend([{ childRunIds: ['run_c1'] }, { childRunIds: ['run_c1'] }])).toEqual({
+      childRunIds: ['run_c1'],
     });
   });
 });
