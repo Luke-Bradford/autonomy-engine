@@ -184,6 +184,19 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * `meteringStatus:'unpriced'` response is NOT a gap — it is counted separately
    * (`unpricedResponseCount`) and does NOT flip `complete`. Owner-scoped THROUGH
    * the run, exactly as `/events` is.
+   *
+   * #932 — SCOPE BOUNDARY, and it is not a gap this route can close. A
+   * `call_pipeline` child runs under its own run id, so its `activity.metered`
+   * events are in the CHILD's log; this run's log holds only `call.started` /
+   * `call.returned`. This figure is therefore what THIS run spent, excluding
+   * every descendant run — which `complete` does NOT report, because nothing here
+   * is missing or unpriced: the child's spend is a complete answer to a different
+   * question. Callers wanting the subtree walk `?parentRunId=` (the list route
+   * above) and sum, bounded by `MAX_CALL_DEPTH`. Rolling descendants in HERE
+   * would silently diverge from `aggregateRunCosts`, the bounded-SQL twin that
+   * backs the run list and cannot do that walk in SQL — one surface right and one
+   * wrong is worse than both honestly per-run. The run monitor renders the
+   * exclusion and links the children (`RunCostSummary`).
    */
   fastify.get<{ Params: { id: string } }>('/api/runs/:id/cost', async (request) => {
     const run = requireOwned(
