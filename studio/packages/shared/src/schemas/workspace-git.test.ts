@@ -4,6 +4,7 @@ import {
   ConnectWorkspaceGitBodySchema,
   deriveDefaultWorkingBranch,
   deriveWorkspaceGitState,
+  dispositionWritesNothing,
   parseGitHostRepo,
   precheckDivergence,
   PullRequestResultSchema,
@@ -11,6 +12,7 @@ import {
   SetWorkingBranchBodySchema,
   SetWorkspaceGitTokenBodySchema,
   WorkspaceGitBranchSchema,
+  WorkspaceGitDispositionSchema,
   WorkspaceGitDivergenceSchema,
   WorkspaceGitRepoUrlSchema,
   WorkspaceGitSchema,
@@ -512,6 +514,23 @@ describe('resolvePullRequestTarget', () => {
     expect(buildGuidedManualPullRequest(url, 'main', 'studio/local/work')).toEqual({
       provider: target.provider,
       url: target.compareUrl,
+    });
+  });
+});
+
+describe('dispositionWritesNothing', () => {
+  it('partitions the disposition enum into what a pull writes and what it does not', () => {
+    // Pinned as a PARTITION of the whole enum, not as a pair of spot checks: the
+    // predicate exists because `!== 'unchanged'` kept compiling when a second
+    // did-nothing value appeared (#983). A third one would slip through a spot
+    // check just as quietly — here it lands in the wrong bucket and fails.
+    const partition = { writes: [] as string[], silent: [] as string[] };
+    for (const disposition of WorkspaceGitDispositionSchema.options) {
+      partition[dispositionWritesNothing(disposition) ? 'silent' : 'writes'].push(disposition);
+    }
+    expect(partition).toEqual({
+      writes: ['create', 'update', 'rename'],
+      silent: ['unchanged', 'superseded'],
     });
   });
 });

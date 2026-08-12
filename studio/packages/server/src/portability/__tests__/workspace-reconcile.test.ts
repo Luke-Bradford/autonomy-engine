@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { pipelineVersionContentForm } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
   NodeExport,
@@ -347,6 +348,125 @@ describe('classifyWorkspace', () => {
     const plan = classify(db, incoming);
     expect(dispositionOf(plan, 'res_new')?.disposition).toBe('create');
     expect(plan.archive).toEqual([]);
+  });
+
+  /**
+   * #983 — the "commit, keep authoring, then pull" loop. The branch is pinned to
+   * a version this workspace already holds; the DB has moved on. The forms differ
+   * (the DB side is the LATEST version only), so before #983 every one of these
+   * read `update` — a promised write that the apply then correctly declined to
+   * make.
+   */
+  describe('superseded (a branch version this workspace already holds)', () => {
+    const V1 = 'ver_1';
+    /** The branch: pipeline `res_p`, pinned to version `V1`, whose node says v1. */
+    const branch = (name = 'P', concurrency: number | null = null) => {
+      const p = parsedPipeline('res_p', name, node({ config: { prompt: 'v1' } }));
+      p.data.versions[0]!.resourceId = V1;
+      p.data.pipeline.concurrency = concurrency;
+      return p;
+    };
+    /** The DB: the same pipeline, authored on to a v2 the branch has never seen. */
+    const authoredPast = (name = 'P', concurrency: number | null = null) => {
+      const p = parsedPipeline('res_p', name, node({ config: { prompt: 'v2' } }));
+      p.data.versions[0]!.resourceId = 'ver_2';
+      p.data.pipeline.concurrency = concurrency;
+      return p;
+    };
+    /** The stored form of `V1` as the route reads it, owned by `owner`. */
+    const held = (owner = 'res_p', of = branch()) =>
+      new Map([
+        [
+          V1,
+          {
+            pipelineResourceId: owner,
+            contentForm: pipelineVersionContentForm(of.data.versions[0]!),
+          },
+        ],
+      ]);
+
+    const classifyHeld = (
+      db: ParsedWorkspace,
+      incoming: ParsedWorkspace,
+      ownedVersions?: ReadonlyMap<string, { pipelineResourceId: string; contentForm: string }>,
+    ) => classifyWorkspace(db, incoming, new Set(), undefined, ownedVersions);
+
+    it('labels a version the workspace already holds superseded, keeping contentChanged true', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held(),
+      );
+      // `contentChanged` stays TRUE — the branch really does differ from the head.
+      // Only the label says a pull would write nothing for it.
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({
+        disposition: 'superseded',
+        contentChanged: true,
+        nameChanged: false,
+      });
+    });
+
+    it('does not claim superseded when the version id belongs to ANOTHER pipeline', () => {
+      // The apply REFUSES this outright (a version id is unique per resource).
+      // The preview must not describe it as a no-op.
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held('res_other'),
+      );
+      expect(dispositionOf(plan, 'res_p')?.disposition).toBe('update');
+    });
+
+    it('does not claim superseded when the held id carries DIFFERENT content', () => {
+      // A hand-edited file that kept the version id — the apply's other refusal.
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held('res_p', authoredPast()),
+      );
+      expect(dispositionOf(plan, 'res_p')?.disposition).toBe('update');
+    });
+
+    it('stays update when a ROW field also differs — the apply patches it, so a write happens', () => {
+      // The version is a no-op but `concurrency` is not: the apply reports
+      // `updated`. Calling the whole resource superseded would under-report a real
+      // write, which is the mirror of the bug #983 fixes.
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast('P', 1)] }),
+        ws({ pipelines: [branch('P', 4)] }),
+        held(),
+      );
+      expect(dispositionOf(plan, 'res_p')?.disposition).toBe('update');
+    });
+
+    it('reports rename when the name also differs — matching the apply action ladder', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast('Old')] }),
+        ws({ pipelines: [branch('New')] }),
+        held('res_p', branch('New')),
+      );
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({
+        disposition: 'rename',
+        nameChanged: true,
+        contentChanged: true,
+      });
+    });
+
+    it('is unreachable for a version the workspace does not hold — an ordinary edit', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        new Map(),
+      );
+      expect(dispositionOf(plan, 'res_p')?.disposition).toBe('update');
+    });
+
+    it('preserves the pre-#983 label when no owned-version domain is passed at all', () => {
+      // The apply calls `classifyWorkspace` without it (it reads only
+      // `plan.archive`), so omitting it must change nothing.
+      const plan = classifyHeld(ws({ pipelines: [authoredPast()] }), ws({ pipelines: [branch()] }));
+      expect(dispositionOf(plan, 'res_p')?.disposition).toBe('update');
+    });
   });
 
   it('orders resources pipelines → connections → triggers, following the incoming snapshot', () => {
