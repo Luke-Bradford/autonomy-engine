@@ -338,8 +338,7 @@ export interface NodeActivity {
    * The residual that DOES exist runs the other way, and this field is right to
    * omit it. If the announcement is DROPPED — the parent terminalized on another
    * branch while this stream sat mid-`startChild` — the child row survives as a
-   * `pending` orphan that nothing selects (`listParsedRuns` is only ever asked
-   * for `queued` by the launcher and `running` by reconcile and lease reclaim).
+   * `pending` orphan that no sweep ever selects (#1041 carries the path).
    * Such a child never ran and spent nothing, so naming it under a caveat about
    * MISSING SPEND would assert money that was never spent. That is the whole
    * difference between this fold and `GET /api/runs?parentRunId=`, and it is why
