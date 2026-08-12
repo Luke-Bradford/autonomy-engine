@@ -323,10 +323,24 @@ export interface NodeActivity {
    * exists (its schema: the log "can hold a spawned child with no announcement,
    * but never an announcement with no child"), so every id here names a real run.
    *
-   * The residual, stated rather than fixed: adopting an already-TERMINAL child
-   * after a crash resolves the node straight from `call.returned` with no
-   * announcement, so that child is missed. An under-count is the safe direction
-   * for a caveat whose whole job is to say the total is too low.
+   * NO RESIDUAL from the adopt-an-already-terminal-child path, though the shape
+   * of `executor.ts` invites the reading that there is one (#1038 read it that
+   * way): that branch resolves the node from `call.returned` and returns BEFORE
+   * the announcement block, so it looks like a child that ran unannounced. It
+   * cannot be — `ensure` returning `{terminal: true, announced: false}` has no
+   * producer. The argument is deliberately NOT re-derived here: it lives with
+   * the code it is about, in `executor.ts`'s `ensured.terminal` branch, and is
+   * pinned by `executor.test.ts` ("the announcement is what unlocks the kick").
+   *
+   * The residual that DOES exist runs the other way, and this field is right to
+   * omit it. If the announcement is DROPPED — the parent terminalized on another
+   * branch while this stream sat mid-`startChild` — the child row survives as a
+   * `pending` orphan that no sweep ever selects (#1041 carries the path).
+   * Such a child never ran and spent nothing, so naming it under a caveat about
+   * MISSING SPEND would assert money that was never spent. That is the whole
+   * difference between this fold and `GET /api/runs?parentRunId=`, and it is why
+   * the query is not simply the better source: it is more COMPLETE about rows
+   * and less TRUTHFUL about spend.
    *
    * APPEND-ONLY and never cleared, unlike the result fields `clearResult` drops.
    * A back-edge loop re-opens a call node with a fresh `attemptId` and so a fresh

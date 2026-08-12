@@ -21,7 +21,7 @@ import { createConnection } from '../../repo/connections.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { startRun, type DocResolver, type RetryAlarms } from '../driver.js';
+import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } from '../driver.js';
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
@@ -1576,6 +1576,127 @@ describe('createExecutor — call_pipeline with NO child-spawn seam wired', () =
         alarms: refuseToArm,
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+describe('createExecutor — call_pipeline: the announcement is what unlocks the kick (#1038)', () => {
+  /**
+   * #1038 read the adopt-an-already-terminal-child branch — which returns
+   * BEFORE the announcement block — as a path that can leave a child that RAN
+   * with no `call.started` in the parent's log, making `runSummary`'s
+   * `childRunIds` under-count a real spend.
+   *
+   * It cannot, and the link that makes it impossible was pinned nowhere: `kick`
+   * sits PAST the `call.started` yield, and the pump resumes a generator past a
+   * yield only once that event is durably appended — a dropped event `break`s
+   * the loop instead of resuming it (`driver.ts`'s per-stream backpressure). So
+   * kick ⟹ announced. Combined with terminal ⟹ kicked (only a drive moves a run
+   * to a terminal row status, and `kick` is the only entry that drives a child),
+   * `ensure` returning `{terminal: true, announced: false}` has no producer.
+   *
+   * Moving `kick` above the announcement yield turns the first test red.
+   */
+  function seedCall(db: Db) {
+    const childPvId = seedVersion(db, [httpNode('leaf', undefined, {})]);
+    const callNode: Node = {
+      id: 'caller',
+      type: 'http_request',
+      config: {},
+      position: { x: 1, y: 0 },
+      call: { pipelineVersionId: childPvId, params: {} },
+    };
+    const run = seedRun(db, seedVersion(db, [callNode]));
+    const child = createRun(
+      db,
+      {
+        ownerId: 'local',
+        pipelineVersionId: childPvId,
+        triggerId: null,
+        parentRunId: run.id,
+        params: {},
+      },
+      'child-1',
+    );
+    return { runId: run.id, childPvId, child };
+  }
+
+  const startChild = (pipelineVersionId: string) =>
+    ({
+      type: 'startChild' as const,
+      callNodeId: 'caller',
+      attemptId: 'attempt-1',
+      childRunId: 'child-1',
+      pipelineVersionId,
+      params: {},
+    }) satisfies ExecutorCommand;
+
+  it('a child whose announcement never lands is never kicked', async () => {
+    const db = freshDb().db;
+    const { runId, childPvId, child } = seedCall(db);
+    const kick = vi.fn();
+    const executor = createExecutor({
+      db,
+      masterKey: KEY,
+      resolveDoc: resolveDocFor(db),
+      adapters: testRegistry(),
+      childRuns: {
+        ensure: () => ({ ok: true, run: child, terminal: false, announced: false }),
+        kick,
+        result: () => ({ outcome: 'failure', outputs: {} }),
+      },
+    });
+
+    // `perform` is declared `AsyncIterable`, so take the iterator explicitly —
+    // the pump drives it with `for await`, and this test drives the same
+    // protocol by hand in order to STOP between the yield and the resume.
+    const it = executor.perform(startChild(childPvId), runId)[Symbol.asyncIterator]();
+    const first = await it.next();
+
+    // Suspended AT the announcement. The pump has not folded it yet, so the
+    // child must not have been kicked: this is the ordering the invariant rests
+    // on, not an incidental detail of how the branch is written.
+    if (first.done !== false) throw new Error('expected a call.started announcement');
+    expect(first.value.type).toBe('call.started');
+    expect(kick).not.toHaveBeenCalled();
+
+    // The pump's `break` on a DROPPED event runs the iterator's `return()`
+    // rather than resuming it (`driver.ts`). The announcement is never appended
+    // and the kick never happens.
+    if (it.return === undefined) throw new Error('expected an abandonable iterator');
+    await it.return();
+    expect(kick).not.toHaveBeenCalled();
+
+    // What survives in production is a `pending` orphan — a child row that
+    // never ran and spent nothing, which is the residual `childRunIds` is RIGHT
+    // to omit (#1041). Deliberately NOT asserted here: `kick` is stubbed, so
+    // nothing in this test can move the row either way and a status assertion
+    // would pass just as readily for a broken executor. The spy above is the
+    // whole signal.
+  });
+
+  it('an adopted TERMINAL child is resolved without a second announcement or a kick', async () => {
+    const db = freshDb().db;
+    const { runId, childPvId, child } = seedCall(db);
+    const kick = vi.fn();
+    const executor = createExecutor({
+      db,
+      masterKey: KEY,
+      resolveDoc: resolveDocFor(db),
+      adapters: testRegistry(),
+      childRuns: {
+        // The only shape `ensure` can return for a terminal child: it was
+        // kicked to get there, and the kick was gated on the announcement.
+        ensure: () => ({ ok: true, run: child, terminal: true, announced: true }),
+        kick,
+        result: () => ({ outcome: 'success', outputs: { ok: 1 } }),
+      },
+    });
+
+    const seen: string[] = [];
+    for await (const event of executor.perform(startChild(childPvId), runId)) seen.push(event.type);
+
+    expect(seen).toEqual(['call.returned']);
+    expect(kick).not.toHaveBeenCalled();
   });
 });
 
