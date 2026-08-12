@@ -46,8 +46,12 @@ export interface ConnectOptions {
  * wrapper, and a container's wrapper spans a REGION of the canvas, so the box
  * would swallow every pane click aimed between its children (mutation-proved by
  * `e2e/container-rendering.spec.ts`). A container is selected only by the
- * explicit button on its box, and cleared only by a pane click or by its own
- * deletion — never by `nextSelection`, which speaks for RF.
+ * explicit button on its box, and cleared only by an UNMODIFIED pane click or
+ * by its own deletion — never by `nextSelection`, which speaks for RF.
+ *
+ * #949 added the "unmodified" qualifier: a pane click carrying a multi-select
+ * modifier is a no-op for every kind, so it does not clear a container either.
+ * See `FlowCanvas`'s `pendingPaneClear` for why that needed more than a branch.
  */
 export interface Selection {
   kind: 'node' | 'edge' | 'container';

@@ -186,6 +186,11 @@ describe('FlowCanvas container rendering (U6c)', () => {
     containers: Array<{ id: string; kind: 'stage' | 'loop' | 'foreach'; children: string[] }> = [
       { id: 'c_1', kind: 'stage', children: ['n_a', 'n_b'] },
     ],
+    /** #949 needed an edge in this fixture to reach the `onEdgesChange` seam.
+     *  Added as an optional second parameter rather than as a near-duplicate
+     *  mount helper — every existing caller passes one argument and is
+     *  unaffected. */
+    edges: Array<{ id: string; from: string; to: string; on: string }> = [],
   ) {
     const store = createCanvasStore();
     store.getState().loadVersion(
@@ -200,7 +205,7 @@ describe('FlowCanvas container rendering (U6c)', () => {
           { id: 'n_a', type: 'http_request', config: {}, position: { x: 0, y: 0 } },
           { id: 'n_b', type: 'http_request', config: {}, position: { x: 0, y: 160 } },
         ],
-        edges: [],
+        edges,
         containers,
         catalogVersion: 1,
         createdAt: 1,
@@ -451,6 +456,176 @@ describe('FlowCanvas container rendering (U6c)', () => {
         { kind: 'node', id: 'n_a' },
         { kind: 'node', id: 'n_b' },
       ]);
+    });
+  });
+
+  /**
+   * #949 — a pane click carrying a multi-select modifier changes NOTHING.
+   *
+   * Every one of these lives in jsdom rather than the e2e for the same reason
+   * the #947 block above does: Control-click is macOS's secondary-button
+   * gesture, so the Windows/Linux operator's actual modifier is undrivable in a
+   * browser spec on a Mac. The browser half — genuine hit testing, so that the
+   * click provably lands on the PANE and not on something over it — is
+   * `e2e/multi-select.spec.ts`.
+   *
+   * The gesture these reproduce is the one #949 calls most reachable: a click
+   * that misses a node while a selection is being assembled, including in the
+   * empty space INSIDE a container, whose body is `pointer-events: none` and so
+   * hit-tests to the pane (mutation-proved in `e2e/container-rendering.spec.ts`,
+   * 'the box does not swallow gestures aimed through it'). jsdom does no hit
+   * testing, so at this layer that case IS this case — the same event on the
+   * same element.
+   */
+  describe('modified pane click (#949)', () => {
+    /** The one edge these cases need, so the pane click has to spare the
+     *  `onEdgesChange` seam as well as the node one. */
+    const ONE_EDGE = [{ id: 'e_1', from: 'n_a', to: 'n_b', on: 'success' }];
+
+    /** The pane, with the same non-null guard `mountCanvas` uses — without it a
+     *  selector drift would dispatch into nothing and every case below would
+     *  pass by doing nothing at all. */
+    function paneOf(container: HTMLElement): HTMLElement {
+      const el = container.querySelector<HTMLElement>('.react-flow__pane');
+      expect(el, 'no rendered pane').not.toBeNull();
+      return el!;
+    }
+
+    /**
+     * THE DISCRIMINATORS for every case below.
+     *
+     * Each of those asserts a NON-event — that a selection survives — which is
+     * only a real claim because this same click on this same element, without
+     * the modifier, takes it to zero.
+     *
+     * TWO of them, not one, because the two routes to zero are different code
+     * and a single mixed-kind case cannot exercise both: `containerExclusive`
+     * makes a container EXCLUSIVE of nodes and edges, with non-containers
+     * winning, so seeding one set containing all three kinds silently drops the
+     * container before the click even happens. Split, they pin the halves
+     * separately — React Flow's `resetSelectedElements` for nodes and edges,
+     * and `onPaneClick`'s own `select(null)` for the container, which is the
+     * only thing that can ever clear one.
+     */
+    it('an UNMODIFIED pane click still clears nodes and edges', () => {
+      const { store, container } = withContainer(undefined, ONE_EDGE);
+      act(() =>
+        store.getState().setSelection([
+          { kind: 'node', id: 'n_a' },
+          { kind: 'edge', id: 'e_1' },
+        ]),
+      );
+      fireEvent.click(paneOf(container));
+      expect(store.getState().selected).toEqual([]);
+    });
+
+    it('an UNMODIFIED pane click still clears a CONTAINER', () => {
+      const { store, container } = withContainer(undefined, ONE_EDGE);
+      act(() => store.getState().setSelection([{ kind: 'container', id: 'c_1' }]));
+      fireEvent.click(paneOf(container));
+      expect(store.getState().selected).toEqual([]);
+    });
+
+    /* The parameter is a pair, not a key name: #949's predicate reads the
+       MouseEvent's modifier FLAG, where #947's reads a held key. */
+    describe.each([
+      ['Meta', 'metaKey'],
+      ['Control', 'ctrlKey'],
+    ] as const)('%s', (modifier, flag) => {
+      /* The key is held AND the flag is set, which is what a real ⌘-click does:
+         `keydown` turns on React Flow's `multiSelectionActive`, and the click
+         itself carries the flag. Testing the flag alone would exercise the
+         predicate but not the gesture. */
+      it('keeps the whole selection, built by the real gesture', () => {
+        const { store, container } = withContainer(undefined, ONE_EDGE);
+        fireEvent.click(nodeWrapper(container, 'n_a'));
+        fireEvent.keyDown(window, { key: modifier });
+        fireEvent.click(nodeWrapper(container, 'n_b'));
+        expect(store.getState().selected).toHaveLength(2);
+
+        fireEvent.click(paneOf(container), { [flag]: true });
+        expect(store.getState().selected).toEqual([
+          { kind: 'node', id: 'n_a' },
+          { kind: 'node', id: 'n_b' },
+        ]);
+        fireEvent.keyUp(window, { key: modifier });
+      });
+
+      /**
+       * The half a store-only assertion would miss, and the reason the filter
+       * sits ahead of `onNodesChangeRaw` rather than inside `applySelectChange`.
+       *
+       * Suppressing only the store fold still lets React Flow's `select:false`
+       * reach the view array, and the effect that re-derives `selected` from the
+       * store is keyed on the store's selection — which did not change. So the
+       * nodes would stay selected in the store and paint UNselected, the #737
+       * dead end. This is the case that goes red if the filter is moved.
+       */
+      it('leaves the survivors PAINTED selected, not merely stored', () => {
+        const { store, container } = withContainer(undefined, ONE_EDGE);
+        act(() =>
+          store.getState().setSelection([
+            { kind: 'node', id: 'n_a' },
+            { kind: 'node', id: 'n_b' },
+          ]),
+        );
+        fireEvent.click(paneOf(container), { [flag]: true });
+        expect(nodeWrapper(container, 'n_a').className).toContain('selected');
+        expect(nodeWrapper(container, 'n_b').className).toContain('selected');
+      });
+
+      /* An edge's deselect arrives through `onEdgesChange` — a different seam,
+         with no raw view handler — so a node-only spec would leave that half of
+         the fix unguarded. */
+      it('keeps a MIXED node-and-edge selection, so BOTH seams are covered', () => {
+        const { store, container } = withContainer(undefined, ONE_EDGE);
+        act(() =>
+          store.getState().setSelection([
+            { kind: 'node', id: 'n_a' },
+            { kind: 'edge', id: 'e_1' },
+          ]),
+        );
+        fireEvent.click(paneOf(container), { [flag]: true });
+        expect(store.getState().selected).toEqual([
+          { kind: 'node', id: 'n_a' },
+          { kind: 'edge', id: 'e_1' },
+        ]);
+      });
+
+      /* The kind React Flow never deselects, so it survives only because
+         `onPaneClick` declined to call `select(null)` — the other half of the
+         fix, and invisible to every assertion above. */
+      it('keeps a selected CONTAINER, which only this handler could clear', () => {
+        const { store, container } = withContainer(undefined, ONE_EDGE);
+        act(() => store.getState().setSelection([{ kind: 'container', id: 'c_1' }]));
+        fireEvent.click(paneOf(container), { [flag]: true });
+        expect(store.getState().selected).toEqual([{ kind: 'container', id: 'c_1' }]);
+      });
+
+      /**
+       * The guard must not LATCH — the failure mode that ruled out both a
+       * boolean flag and the smaller capture-phase design.
+       *
+       * A plain click on a node that is NOT in the selection replaces it, which
+       * emits a `select:false` for the outgoing member. A key left behind by the
+       * pane click would swallow exactly that change, leaving the old member
+       * silently stuck in the selection.
+       *
+       * The click must land on a NON-member: React Flow's `handleNodeClick`
+       * early-returns on a node that is already selected and emits no change at
+       * all (which is what lets a group be dragged by one member), so clicking a
+       * member would prove nothing either way.
+       */
+      it('does NOT latch — a later plain click still replaces the selection', () => {
+        const { store, container } = withContainer(undefined, ONE_EDGE);
+        act(() => store.getState().setSelection([{ kind: 'node', id: 'n_a' }]));
+
+        fireEvent.click(paneOf(container), { [flag]: true });
+        expect(store.getState().selected).toEqual([{ kind: 'node', id: 'n_a' }]);
+
+        fireEvent.click(nodeWrapper(container, 'n_b'));
+        expect(store.getState().selected).toEqual([{ kind: 'node', id: 'n_b' }]);
+      });
     });
   });
 });

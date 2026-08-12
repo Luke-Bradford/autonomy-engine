@@ -284,4 +284,74 @@ test.describe('modifier-click multi-select (#947)', () => {
 
     await expectQuiet(page, problems);
   });
+
+  /**
+   * #949 — a ⌘-click that MISSES lands on the pane, and must change nothing.
+   *
+   * What only a browser can supply here is genuine hit testing: that the click
+   * reaches the PANE rather than some overlay above it, and so that the gesture
+   * under test is the one an operator actually makes when a click misses a node
+   * mid-selection. The modifier PAIR, and the store-level consequences of each
+   * change seam, are pinned in `FlowCanvas.test.tsx` — Control-click is macOS's
+   * secondary-button gesture and is not drivable here.
+   *
+   * Both directions live in ONE test on purpose. The surviving selection is a
+   * NON-event, so it is only a real claim next to the unmodified click that
+   * takes the same selection, at the same point, to zero.
+   *
+   * NO CONTAINER here, though #949's headline case is a ⌘-click in the empty
+   * space inside one. That case is covered by COMPOSITION rather than left out:
+   * `container-rendering.spec.ts` ('the box does not swallow gestures aimed
+   * through it') already mutation-proves that a click through a container body
+   * hit-tests to the pane, and CSS `pointer-events` resolution does not consult
+   * event modifiers — so a modified click through a body reaches the pane for
+   * exactly the same reason an unmodified one does, and from there it IS this
+   * test. Stated rather than left for a reader to reconstruct.
+   */
+  test('a ⌘-click on empty pane keeps the selection; an unmodified one clears it', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    await seedTwoNodes(page, 'e2e modified pane click', true);
+
+    // A mixed selection, so the pane click has to spare BOTH change seams.
+    await canvasNodes(page).nth(0).click();
+    const edge = await edgeMidpoint(page);
+    await metaClick(page, () => page.mouse.click(edge.x, edge.y));
+    await expect(selectedNodes(page)).toHaveCount(1);
+    await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
+
+    /* Found by asking the DOM rather than assumed from a layout guess: a
+       hardcoded point that silently drifted onto a node would turn this into a
+       test of node-click, which keeps the selection for its own reasons and
+       would pass while proving nothing. */
+    const empty = await page.evaluate(() => {
+      const pane = document.querySelector('.react-flow__pane');
+      if (!pane) return null;
+      const r = pane.getBoundingClientRect();
+      for (let fx = 0.1; fx < 0.95; fx += 0.1) {
+        for (let fy = 0.1; fy < 0.95; fy += 0.1) {
+          const x = r.x + r.width * fx;
+          const y = r.y + r.height * fy;
+          if (document.elementFromPoint(x, y) === pane) return { x, y };
+        }
+      }
+      return null;
+    });
+    expect(empty, 'no empty pane point found').not.toBeNull();
+
+    await metaClick(page, () => page.mouse.click(empty!.x, empty!.y));
+    await expect(selectedNodes(page)).toHaveCount(1);
+    await expect(page.locator('.react-flow__edge.selected')).toHaveCount(1);
+    // The panel agrees, which makes this a claim about the STORE and not just
+    // about React Flow's view array.
+    await expect(panelOf(page).getByRole('heading', { name: '2 selected' })).toBeVisible();
+
+    // The discriminator: same point, same selection, no modifier.
+    await page.mouse.click(empty!.x, empty!.y);
+    await expect(selectedNodes(page)).toHaveCount(0);
+    await expect(page.locator('.react-flow__edge.selected')).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
 });
