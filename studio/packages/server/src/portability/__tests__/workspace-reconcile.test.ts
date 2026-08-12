@@ -417,6 +417,34 @@ describe('classifyWorkspace', () => {
       });
     });
 
+    // #1018 — the preview and the apply judge the branch version with the SAME
+    // masked comparison, so a stored row that references a DELETED connection is
+    // superseded in both readings. Were the preview to compare raw forms it would
+    // say `update` — a promised write — ahead of an apply that writes nothing,
+    // which is exactly the divergence #983 lifted this lookup to prevent.
+    it('#1018 — an UNDECIDABLE ref is still superseded, and the preview says it was not judged', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held('res_p', branch(), 1),
+      );
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({
+        disposition: 'superseded',
+        contentChanged: true,
+        contentUnverified: true,
+      });
+    });
+
+    // ...and an ordinary supersession claims nothing of the sort.
+    it('#1018 — a fully decidable comparison reports contentUnverified false', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held(),
+      );
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({ contentUnverified: false });
+    });
+
     it('does not claim superseded when the version id belongs to ANOTHER pipeline', () => {
       // The apply REFUSES this outright (a version id is unique per resource).
       // The preview must not describe it as a no-op.
