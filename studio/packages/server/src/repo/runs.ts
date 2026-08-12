@@ -17,10 +17,24 @@ import { newId } from './ids.js';
 import { aggregateRunCosts } from './run-events.js';
 import type { Db } from './types.js';
 
-export function createRun(db: Db, input: NewRun): Run {
+/**
+ * #796 (P3b) — `id` is a SEPARATE argument rather than a field on `NewRun`, and
+ * deliberately so. A `call_pipeline` child's row id must be the reducer's
+ * DETERMINISTIC `childRunId` (a pure hash of parent run + call node + attempt),
+ * because that identity is the whole idempotency story: a crash-replay re-emits
+ * the same `startChild`, and `getRun(childRunId)` is then the crash-safe
+ * "already spawned?" test — no new column, no new index, no lookup key that
+ * could disagree with the one the reducer checks on `call.returned`.
+ *
+ * Keeping it OFF `NewRunSchema` keeps the wire shape closed: that schema is a
+ * parsed input type, so an optional `id` on it would make a caller-chosen run id
+ * structurally acceptable the day anything parses a request body into a
+ * `NewRun`. Only in-process callers holding a derived id can pass one here.
+ */
+export function createRun(db: Db, input: NewRun, id?: string): Run {
   const parsed = NewRunSchema.parse(input);
   const row: Run = {
-    id: newId('run'),
+    id: id ?? newId('run'),
     ...parsed,
     leaseUntil: null,
     heartbeatAt: null,

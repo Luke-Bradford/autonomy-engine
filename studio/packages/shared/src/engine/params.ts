@@ -3312,6 +3312,19 @@ function literalCallTargets(nodes: Pick<Node, 'call'>[]): string[] {
 }
 
 /**
+ * How many `call_pipeline` HOPS a chain may take. Root = 0 hops; `MAX_CALL_DEPTH`
+ * hops are allowed, and entering a version deeper than that is refused.
+ *
+ * ONE constant for two enforcement points that must not disagree: the save-time
+ * DFS below, and #796's run-time ancestor walk at the spawn seam. The save-time
+ * check alone was never a bound — it only follows LITERAL targets
+ * (`literalCallTargets`), so a `${}` target, a cross-owner callee or a missing
+ * one is skipped entirely (#1011), which is exactly the shape that reaches the
+ * spawn seam unbounded.
+ */
+export const MAX_CALL_DEPTH = 3;
+
+/**
  * Refuse a `call_pipeline` cycle / a path deeper than `maxCallDepth`. A direct
  * self-call is caught from `selfId` alone; the broader graph needs a
  * `resolvePipeline` to fetch each callee's `nodes` (a dynamic `${}` target is
@@ -3322,7 +3335,7 @@ function validateCallGraph(
   options: ValidateDocOptions,
 ): string[] {
   const errors: string[] = [];
-  const maxDepth = options.maxCallDepth ?? 3;
+  const maxDepth = options.maxCallDepth ?? MAX_CALL_DEPTH;
   const { selfId, resolvePipeline } = options;
 
   if (selfId !== undefined) {

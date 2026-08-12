@@ -88,6 +88,9 @@ describe('#443 — terminalStatusOf', () => {
         error: 'boom',
         kind: 'transient',
       }),
+      // #796 — the durable record that a `call_pipeline` child was spawned.
+      // NON-terminal: it announces a park, it does not end anything.
+      { type: 'call.started', ...run, callNodeId: 'c1', attemptId: 'c1#0', childRunId: 'r2' },
       {
         type: 'call.returned',
         ...run,

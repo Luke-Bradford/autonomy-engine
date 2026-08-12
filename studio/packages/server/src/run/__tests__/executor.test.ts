@@ -1540,8 +1540,13 @@ describe('createExecutor — secret-resolution boundary', () => {
   });
 });
 
-describe('createExecutor — call_pipeline (startChild) deferral is safe', () => {
-  it('a call node fails loudly and leaves NO waiting node for the reconciler to re-emit', async () => {
+describe('createExecutor — call_pipeline with NO child-spawn seam wired', () => {
+  it('#796 — fails the call node loudly rather than throwing or hanging', async () => {
+    // `deps()` builds an executor with no `childRuns`, which is how every driver
+    // test that has no run engine behind it is wired. The refusal must stay a
+    // typed `call.returned{failure}`: a throw would make the boot reconciler
+    // throw on every restart (it re-emits `startChild` for a `waiting` call
+    // node), and a hang would leave the node `waiting` forever.
     const db = freshDb().db;
     const childPvId = seedVersion(db, [httpNode('leaf', undefined, {})]);
     // A call node: carries a `call` config → the reducer emits startChild.

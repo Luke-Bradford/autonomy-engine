@@ -141,7 +141,10 @@ A call node emits `startChild{childRunId (deterministic), pipelineVersionId, par
 its state is `waiting` until a `call.returned{childRunId, childOutcome, outputs}`
 event. `childOutcome` may be failure and STILL return projected outputs (the findings
 loop). Depth ≤ N and call-cycle refusal are validated at pipeline-SAVE time
-(`validateRefs`/`validateDoc`), not at run time. The reducer is NOT child-agnostic —
+(`validateRefs`/`validateDoc`) — and, since #796, depth is ALSO bounded at run
+time, by walking the spawned child's `parentRunId` chain against the same
+`MAX_CALL_DEPTH`. The save-time DFS was never a bound on its own: it follows
+LITERAL targets only, so a `${}` target reaches the spawn seam unchecked (#1011). The reducer is NOT child-agnostic —
 parent waiting is core control flow (CP1 Q1).
 
 ## The `${}` language (ported; in `shared`, no server imports — CP1 Q3)

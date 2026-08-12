@@ -20,6 +20,7 @@ import {
   type RetryAlarms,
 } from './driver.js';
 import type { RunEventBus } from './event-bus.js';
+import type { RunDrives } from './drives.js';
 import {
   appendAndFold,
   appendEngineEvent,
@@ -76,12 +77,19 @@ import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
  * entry points, distinguished by how they satisfy F2c's "exactly one drive per
  * run":
  *
- *  - **Boot** (`reconcileOnBoot`): pumps WITHOUT the drive lock, safe because
- *    at boot it is provably the only pump source — `buildApp` awaits it BEFORE
- *    the alarm clock's interval starts and before the launcher or scheduler
- *    exist. That ordering is load-bearing rather than incidental (with the
- *    interval started first, a 1s tick would fire an alarm into a run this
- *    loop is mid-`pump` on — exactly B1), so it is stated at the call site too.
+ *  - **Boot** (`reconcileOnBoot`): takes the drive lock per run, like every
+ *    other caller. It used to pump WITHOUT it, on the argument that at boot it
+ *    was provably the only pump source — `buildApp` awaits it BEFORE the alarm
+ *    clock's interval starts and before the launcher or scheduler exist. #796
+ *    falsified that premise: reconciling a parent with a `waiting`
+ *    `call_pipeline` node re-emits `startChild`, which SPAWNS a child drive
+ *    (`run/child.ts`) while this loop is still scanning — and that child, or the
+ *    reactor that returns its result to the parent, is a second pump source
+ *    inside boot. The boot ORDERING is still load-bearing for a different reason
+ *    (with the alarm interval started first, a 1s tick would fire an alarm into a
+ *    run this loop is mid-`pump` on — exactly B1), so it is still stated at the
+ *    call site; the lock is what makes the child case safe rather than the
+ *    ordering. Taking it costs nothing when nothing contends.
  *  - **Lease reclaim** (#5 S7, `scheduler/lease.ts`): the LIVE-app caller. It
  *    MUST — and does — wrap `reconcileOne` in `drives.serialize(runId, …)`,
  *    re-reading the run row under the lock before acting. `reconcileOne`
@@ -161,6 +169,19 @@ export interface ReconcileDeps {
    * half is what `recoverHeld` checks a hold's alarm row with.
    */
   alarms: RetryAlarms;
+  /**
+   * #796 — the per-run DRIVE LOCK. Boot reconcile takes it per run because a
+   * reconciled parent can spawn a `call_pipeline` child mid-scan, making this
+   * loop no longer the only pump source (see the lock contract above).
+   *
+   * OPTIONAL for the same reason `executor` is, and with the same shape of
+   * contract: a child can only be spawned by an executor that HAS the
+   * `childRuns` seam, and a reconcile wired without a lock is wired without one
+   * of those too (every test executor here is a stub). Production always passes
+   * it. If you wire a real executor, wire this — the pairing is the requirement
+   * the type cannot state.
+   */
+  drives?: RunDrives;
   /** Clock seam (epoch ms) for a RE-ARMED retry's `dueAt`; mirrors `DriverDeps.now`. */
   now?: () => number;
   /**
@@ -511,7 +532,9 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
       // AWAITED inside the try — `reconcileOne` is async, so an unawaited call
       // would reject OUTSIDE this catch and crash boot as an unhandled rejection,
       // reinstating the exact fault #479 is closing.
-      await reconcileOne(deps, report, run);
+      await (deps.drives === undefined
+        ? reconcileOne(deps, report, run)
+        : deps.drives.serialize(run.id, () => reconcileOne(deps, report, run)));
     } catch (err) {
       if (err instanceof ReconcileInvariantError) throw err;
       // #646 — a corrupt LOG is permanent, not transient: file it under
