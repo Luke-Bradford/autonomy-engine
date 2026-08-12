@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pipelineVersionContentForm } from '@autonomy-studio/shared';
+import type { PipelineVersionExport } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
   NodeExport,
@@ -7,6 +8,7 @@ import type {
   TriggerExportData,
 } from '@autonomy-studio/shared';
 import { classifyWorkspace } from '../workspace-reconcile.js';
+import type { OwnedVersionForm } from '../workspace-serialize.js';
 import type {
   ParsedConnection,
   ParsedPipeline,
@@ -374,13 +376,26 @@ describe('classifyWorkspace', () => {
       return p;
     };
     /** The stored form of `V1` as the route reads it, owned by `owner`. */
-    const held = (owner = 'res_p', of = branch()) =>
+    const held = (
+      owner = 'res_p',
+      of = branch(),
+      undecidableRefs = 0,
+    ): Map<string, OwnedVersionForm> =>
       new Map([
         [
           V1,
           {
             pipelineResourceId: owner,
-            contentForm: pipelineVersionContentForm(of.data.versions[0]!),
+            // #1018 — the route hands the classifier a COMPARISON, not a form, so
+            // the masked stored-vs-branch rule lives in one place. Here that is a
+            // plain content-form equality plus whatever the caller declares
+            // undecidable.
+            compare: (incoming: PipelineVersionExport) => ({
+              identical:
+                pipelineVersionContentForm(of.data.versions[0]!) ===
+                pipelineVersionContentForm(incoming),
+              undecidableRefs,
+            }),
           },
         ],
       ]);
@@ -388,7 +403,7 @@ describe('classifyWorkspace', () => {
     const classifyHeld = (
       db: ParsedWorkspace,
       incoming: ParsedWorkspace,
-      ownedVersions?: ReadonlyMap<string, { pipelineResourceId: string; contentForm: string }>,
+      ownedVersions?: ReadonlyMap<string, OwnedVersionForm>,
     ) => classifyWorkspace(db, incoming, new Set(), undefined, ownedVersions);
 
     it('labels a version the workspace already holds superseded, keeping contentChanged true', () => {
@@ -404,6 +419,34 @@ describe('classifyWorkspace', () => {
         contentChanged: true,
         nameChanged: false,
       });
+    });
+
+    // #1018 — the preview and the apply judge the branch version with the SAME
+    // masked comparison, so a stored row that references a DELETED connection is
+    // superseded in both readings. Were the preview to compare raw forms it would
+    // say `update` — a promised write — ahead of an apply that writes nothing,
+    // which is exactly the divergence #983 lifted this lookup to prevent.
+    it('#1018 — an UNDECIDABLE ref is still superseded, and the preview says it was not judged', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held('res_p', branch(), 1),
+      );
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({
+        disposition: 'superseded',
+        contentChanged: true,
+        versionContentUnverified: true,
+      });
+    });
+
+    // ...and an ordinary supersession claims nothing of the sort.
+    it('#1018 — a fully decidable comparison reports versionContentUnverified false', () => {
+      const plan = classifyHeld(
+        ws({ pipelines: [authoredPast()] }),
+        ws({ pipelines: [branch()] }),
+        held(),
+      );
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({ versionContentUnverified: false });
     });
 
     it('does not claim superseded when the version id belongs to ANOTHER pipeline', () => {

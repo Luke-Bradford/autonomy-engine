@@ -211,6 +211,23 @@ export function importWorkspaceGit(): Promise<WorkspaceGitApplyResult> {
 }
 
 /**
+ * #1018 — the suffix that qualifies a change label whose comparison could not be
+ * fully made: the branch's version names a stored row that references a resource
+ * which has since been DELETED (typically a connection — versions are immutable
+ * and nothing stops the delete), so that ref cannot be expressed in
+ * resourceId-space and is excused from the comparison.
+ *
+ * ONE constant, appended to both the preview label and the outcome label, for the
+ * reason `superseded` is worded identically in both tables: the two surfaces
+ * report the same fact about the same resource minutes apart, and two phrasings
+ * would read as two different findings. It is a suffix rather than a label of its
+ * own because it qualifies the CONFIDENCE of the change, not the change — the
+ * resource really is `superseded`/`unchanged`; what is weaker is the evidence.
+ */
+export const UNVERIFIED_CONTENT_SUFFIX =
+  ' (a ref names a deleted resource, so it was not compared)';
+
+/**
  * The human label for a previewed disposition.
  *
  * Prose lives HERE rather than inline in the page, following

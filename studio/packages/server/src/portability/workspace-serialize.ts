@@ -170,11 +170,131 @@ export function dbVersionForm(
   return pipelineVersionContentForm(exportForm);
 }
 
+/**
+ * #1018 — the sentinel a ref is masked to when it cannot be expressed in
+ * resourceId-space. Its only job is to compare equal to itself on both sides of
+ * `compareStoredVersion`.
+ *
+ * Its safety does NOT rest on being unguessable, which is worth stating because
+ * the obvious argument for that ("ids are `[A-Za-z0-9_-]`") is not one the
+ * schemas actually enforce — `resourceId` is `z.string().min(1)`, and an
+ * imported branch supplies its own. The real guarantee is structural: WHICH
+ * fields are masked is decided entirely by the STORED row and the owner-scoped
+ * reverse map, never by the incoming file, so a branch choosing this exact
+ * string for a ref gets it compared like any other value and cannot buy itself
+ * an excuse. */
+const UNDECIDABLE_REF = ' undecidable';
+
+/** #1018 — the outcome of judging a branch version against the STORED row whose
+ * `resourceId` it names.
+ *
+ * `identical` is decided over the two content forms with every UNDECIDABLE ref
+ * masked out ON BOTH SIDES, so a difference that exists only because the reverse
+ * map lost an entry does not read as a difference in content. `undecidableRefs`
+ * counts the masks: it is how much of the comparison could NOT be made, and it
+ * must be reported rather than folded into `identical`, because `identical` with
+ * a non-zero count means "differs nowhere we can decide", not "byte-identical".
+ * Manufacturing the stronger claim from the weaker fact is the #473 shape.
+ */
+export interface StoredVersionComparison {
+  identical: boolean;
+  undecidableRefs: number;
+}
+
+/**
+ * #1018 — compare a branch version against the stored row its id names, tolerant
+ * of refs that no longer resolve and of nothing else.
+ *
+ * A stored version is IMMUTABLE, so a ref it holds outlives the thing it names: a
+ * connection can be hard-deleted (`repo/connections.ts` — deliberately, since
+ * there is no FK from versions) while a historic version still points at its DB
+ * id. `forwardRemapNode` then keeps that id verbatim, the branch file carries the
+ * `resourceId` recorded when it still existed, and the two forms differ for a
+ * reason that is not an edit. Comparing the raw forms therefore answers
+ * "different content" to a question that is really undecidable — which the apply
+ * used to report as a hand-edit of an immutable row, wedging every future pull
+ * with an accusation the operator could neither act on nor undo.
+ *
+ * The mask is per-NODE-REF, never per-version, and that is the whole point: only
+ * the fields that genuinely cannot be judged are excused, so a hand-edit anywhere
+ * else in the same version is still caught. The residual it does accept is
+ * narrow and worth naming — a branch that rewrites the connection ref OF THE
+ * NODE whose stored ref is already dangling compares as identical. Nothing is
+ * written either way (the version is immutable and already materialised), so the
+ * cost is a silent no-op on one field, not a bad write.
+ */
+export function compareStoredVersion(
+  stored: PipelineVersion,
+  branch: PipelineVersionExport,
+  connRidByDbId: Map<string, string>,
+  versionRidByDbId: Map<string, string>,
+): StoredVersionComparison {
+  const maskConnection = new Set<string>();
+  const maskCall = new Set<string>();
+  for (const node of stored.nodes) {
+    if (isUndecidableRef(node.connectionId, connRidByDbId)) maskConnection.add(node.id);
+    if (isUndecidableRef(node.call?.pipelineVersionId, versionRidByDbId)) maskCall.add(node.id);
+  }
+  const undecidableRefs = maskConnection.size + maskCall.size;
+  if (undecidableRefs === 0) {
+    return {
+      identical:
+        dbVersionForm(stored, connRidByDbId, versionRidByDbId) ===
+        pipelineVersionContentForm(branch),
+      undecidableRefs,
+    };
+  }
+  const storedForm = pipelineVersionContentForm({
+    ...stored,
+    nodes: stored.nodes.map((n) =>
+      maskNode(forwardRemapNode(n, connRidByDbId, versionRidByDbId), maskConnection, maskCall),
+    ),
+  } as PipelineVersionExport);
+  const branchForm = pipelineVersionContentForm({
+    ...branch,
+    nodes: branch.nodes.map((n) => maskNode(n, maskConnection, maskCall)),
+  });
+  return { identical: storedForm === branchForm, undecidableRefs };
+}
+
+/** #1018 — a stored ref that cannot be expressed in resourceId-space: LITERAL
+ * (a `${}` ref is portable already and never consults the map, so it is always
+ * decidable) and absent from the owner-scoped reverse map. */
+function isUndecidableRef(ref: string | undefined, ridByDbId: Map<string, string>): boolean {
+  if (ref === undefined) return false;
+  if (interpolationMode(ref).mode !== 'literal') return false;
+  return !ridByDbId.has(ref);
+}
+
+/** #1018 — blank the named node's undecidable ref(s) to the shared sentinel.
+ * Applied to BOTH sides by node id, so the masked positions cancel and every
+ * other field still speaks. A branch node that has no `call` where the stored one
+ * did is left alone — that is a real structural difference, not an undecidable
+ * ref. */
+function maskNode(
+  node: NodeExport,
+  maskConnection: Set<string>,
+  maskCall: Set<string>,
+): NodeExport {
+  let masked = node;
+  if (maskConnection.has(node.id)) masked = { ...masked, connectionId: UNDECIDABLE_REF };
+  if (maskCall.has(node.id) && masked.call !== undefined) {
+    masked = { ...masked, call: { ...masked.call, pipelineVersionId: UNDECIDABLE_REF } };
+  }
+  return masked;
+}
+
 /** #983 — one owned pipeline version, as the reconcile preview needs to see it:
- * which pipeline owns it, and its stored content form in resourceId-space. */
+ * which pipeline owns it, and how a branch version compares to its stored form.
+ *
+ * #1018 turned the precomputed `contentForm` string into a `compare` closure over
+ * the stored row and its maps. The comparison is no longer a plain equality on
+ * two strings — it has to mask the refs that cannot be judged — and the preview
+ * and the apply must not each grow their own copy of that rule, for exactly the
+ * reason #983 lifted the form here in the first place. */
 export interface OwnedVersionForm {
   pipelineResourceId: string;
-  contentForm: string;
+  compare: (branch: PipelineVersionExport) => StoredVersionComparison;
 }
 
 /**
@@ -209,7 +329,8 @@ export function ownedVersionForms(
       if (!versionResourceIds.has(version.resourceId)) continue;
       forms.set(version.resourceId, {
         pipelineResourceId: pipeline.resourceId,
-        contentForm: dbVersionForm(version, maps.connectionResourceId, maps.versionResourceId),
+        compare: (branch) =>
+          compareStoredVersion(version, branch, maps.connectionResourceId, maps.versionResourceId),
       });
     }
   }

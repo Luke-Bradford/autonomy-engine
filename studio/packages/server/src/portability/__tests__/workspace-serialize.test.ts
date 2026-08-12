@@ -8,8 +8,14 @@ import {
   createSecret,
   createTrigger,
 } from '../../repo/index.js';
+import { deleteConnection } from '../../repo/connections.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import { serializeWorkspace, WorkspaceSerializeError } from '../workspace-serialize.js';
+import {
+  ownedVersionForms,
+  serializeWorkspace,
+  WorkspaceSerializeError,
+} from '../workspace-serialize.js';
+import { parseWorkspaceFiles } from '../workspace-parse.js';
 
 /** Parse a serialized file's canonical JSON back to an envelope object (a test
  * peeks at nested envelope fields — the inferred `any` from `JSON.parse` is
@@ -357,5 +363,72 @@ describe('serializeWorkspace', () => {
     // The archived one is omitted, so the live one keeps the clean, un-suffixed
     // slug (path disambiguation is computed over the EMITTED set only).
     expect(serializeWorkspace(db, 'local').map((f) => f.path)).toEqual(['pipelines/report.json']);
+  });
+});
+
+// #1018 — `ownedVersionForms(...).compare` is the SSOT both the reconcile
+// PREVIEW and the reconcile APPLY judge a branch version with, so the masking
+// rule is pinned here rather than twice over at each consumer.
+describe('ownedVersionForms — compare (#1018)', () => {
+  /** A workspace holding one pipeline whose only version uses `conn`, plus the
+   * branch snapshot taken while that connection still existed. */
+  function heldVersionUsing(db: ReturnType<typeof freshDb>['db']) {
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'My Conn',
+      kind: 'http',
+      config: { baseUrl: 'https://x' },
+      secretRef: null,
+    });
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const version = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'a', type: 'string' }],
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    const branch = parseWorkspaceFiles(serializeWorkspace(db, 'local')).pipelines[0]!.data
+      .versions[0]!;
+    return { conn, version, branch };
+  }
+
+  const compareFor = (db: ReturnType<typeof freshDb>['db'], versionRid: string) =>
+    ownedVersionForms(db, 'local', new Set([versionRid])).get(versionRid)!.compare;
+
+  it('is identical with no undecidable refs while the connection still exists', () => {
+    const db = freshDb().db;
+    const { version, branch } = heldVersionUsing(db);
+
+    expect(compareFor(db, version.resourceId)(branch)).toEqual({
+      identical: true,
+      undecidableRefs: 0,
+    });
+  });
+
+  it('after the connection is DELETED, still identical — but says the ref could not be judged', () => {
+    const db = freshDb().db;
+    const { conn, version, branch } = heldVersionUsing(db);
+    deleteConnection(db, conn.id);
+
+    // Nothing about either document changed; only the reverse map lost an entry.
+    // An unmasked comparison would call this "different content".
+    expect(compareFor(db, version.resourceId)(branch)).toEqual({
+      identical: true,
+      undecidableRefs: 1,
+    });
+  });
+
+  it('masks per NODE REF, so a hand-edit elsewhere in the same version still differs', () => {
+    const db = freshDb().db;
+    const { conn, version, branch } = heldVersionUsing(db);
+    deleteConnection(db, conn.id);
+
+    const tampered = { ...branch, outputs: [{ name: 'tampered', type: 'string' as const }] };
+
+    expect(compareFor(db, version.resourceId)(tampered)).toEqual({
+      identical: false,
+      undecidableRefs: 1,
+    });
   });
 });

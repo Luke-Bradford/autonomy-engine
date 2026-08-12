@@ -38,6 +38,7 @@ const importApplied: WorkspaceEvent = {
       resourceId: 'res_pipe',
       action: 'updated',
       versionMinted: true,
+      versionContentUnverified: false,
     },
   ],
   archived: [],

@@ -2,7 +2,6 @@ import {
   connectionContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
-  pipelineVersionContentForm,
   triggerContentForm,
   type WorkspaceGitArchiveProposal,
   type WorkspaceGitDisposition,
@@ -130,6 +129,7 @@ function classifyResource(
   contentForm: string,
   dbByResourceId: Map<string, DbEntry>,
   supersedes = false,
+  versionContentUnverified = false,
 ): WorkspaceGitPreviewResource {
   const db = resourceId === null ? undefined : dbByResourceId.get(resourceId);
   if (db === undefined) {
@@ -141,6 +141,9 @@ function classifyResource(
       disposition: 'create',
       nameChanged: false,
       contentChanged: false,
+      // A `create` has no DB counterpart, so there was no comparison to leave
+      // undecided (#1018).
+      versionContentUnverified: false,
     };
   }
   const nameChanged = name !== db.name;
@@ -157,6 +160,7 @@ function classifyResource(
     disposition: disposition(nameChanged, contentChanged, supersedes),
     nameChanged,
     contentChanged,
+    versionContentUnverified,
   };
 }
 
@@ -270,32 +274,50 @@ export function classifyWorkspace(
    *
    * Without `ownedVersions` — the apply's own call, which reads only
    * `plan.archive` — this is always false, preserving the pre-#983 labels exactly.
+   *
+   * #1018 — the byte-identity test goes through `OwnedVersionForm.compare`, the
+   * SAME masked comparison the apply refuses on, so a stored row referencing a
+   * DELETED connection is superseded in BOTH readings or neither. Comparing raw
+   * forms here would put the preview back on the wrong side of the very
+   * divergence #983 lifted this lookup to prevent: `update` (a promised write)
+   * ahead of an apply that writes nothing. `versionContentUnverified` rides out with it,
+   * because a preview that hides which fields could not be judged is describing a
+   * comparison it did not make.
    */
-  const supersedes = (p: ParsedPipeline): boolean => {
-    if (ownedVersions === undefined || p.resourceId === null) return false;
+  const supersession = (
+    p: ParsedPipeline,
+  ): { supersedes: boolean; versionContentUnverified: boolean } => {
+    const no = { supersedes: false, versionContentUnverified: false };
+    if (ownedVersions === undefined || p.resourceId === null) return no;
     const version = latestVersion(p);
     const versionRid = version?.resourceId;
-    if (version === undefined || versionRid == null) return false;
+    if (version === undefined || versionRid == null) return no;
     const owned = ownedVersions.get(versionRid);
-    if (owned === undefined) return false;
-    if (owned.pipelineResourceId !== p.resourceId) return false;
-    if (owned.contentForm !== pipelineVersionContentForm(version)) return false;
+    if (owned === undefined) return no;
+    if (owned.pipelineResourceId !== p.resourceId) return no;
+    const comparison = owned.compare(version);
+    if (!comparison.identical) return no;
     const dbRowForm = dbPipelineRowForms.get(p.resourceId);
-    return dbRowForm !== undefined && dbRowForm === pipelineRowContentForm(p.data);
+    return {
+      supersedes: dbRowForm !== undefined && dbRowForm === pipelineRowContentForm(p.data),
+      versionContentUnverified: comparison.undecidableRefs > 0,
+    };
   };
 
   const resources: WorkspaceGitPreviewResource[] = [
-    ...incoming.pipelines.map((p) =>
-      classifyResource(
+    ...incoming.pipelines.map((p) => {
+      const { supersedes, versionContentUnverified } = supersession(p);
+      return classifyResource(
         'pipeline',
         p.path,
         p.resourceId,
         pipelineName(p),
         pipelineContentForm(p.data),
         dbPipelines,
-        supersedes(p),
-      ),
-    ),
+        supersedes,
+        versionContentUnverified,
+      );
+    }),
     ...incoming.connections.map((c) =>
       classifyResource(
         'connection',

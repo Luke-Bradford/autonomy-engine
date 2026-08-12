@@ -7,6 +7,7 @@ import {
   createPipelineVersion,
   createSecret,
   createTrigger,
+  deleteConnection,
   getConnectionByResourceId,
   getLatestPipelineVersion,
   getPipeline,
@@ -497,6 +498,121 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
       WorkspaceApplyError,
     );
+  });
+
+  // #1018 — the same collaborative loop, with one ordinary act in the middle: the
+  // operator DELETED a connection an older version still references. That version
+  // is immutable, so its node keeps naming a DB id that no longer resolves, and
+  // `forwardRemapNode` deliberately keeps the unmapped id AS-IS. The branch file
+  // meanwhile carries the connection's real `resourceId`, recorded when it still
+  // existed. The two forms therefore differ for a reason that is not a hand-edit,
+  // and the pre-#1018 guard reported it as one — wedging every future pull with an
+  // accusation the operator could neither act on nor undo.
+  it('#1018 — ACCEPTS a branch whose stored version references a DELETED connection', () => {
+    const db = freshDb().db;
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'My Conn',
+      kind: 'http',
+      config: { baseUrl: 'https://x' },
+      secretRef: null,
+    });
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    const v1 = createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    // The branch is committed while the connection still exists.
+    const incoming = snapshot(db);
+
+    // Then the two ordinary acts: delete the connection, author past it.
+    deleteConnection(db, conn.id);
+    const v2 = createPipelineVersion(db, baseVersion(pipe.id));
+
+    // NOTE for the reader: the branch snapshot was taken while the connection
+    // existed, so it still carries that connection's FILE, and the apply's
+    // ordinary connection loop RE-CREATES it — same `resourceId`, a NEW DB id.
+    // That does not soften what this test proves: `connRidByDbId` is snapshotted
+    // before that loop, and the stored version names the OLD id either way, so
+    // the ref stays undecidable. It is stated because "deleted connection"
+    // should not be read as a claim that a delete survives a re-import — by
+    // pre-existing design, git never syncs connection deletion at all.
+
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+
+    expect(result.refused).toBe(false);
+    const applied = result.applied.find((a) => a.resourceId === pipe.resourceId)!;
+    // The workspace HAS authored past the version the branch names, and nothing is
+    // written for it — the ordinary superseded outcome.
+    expect(applied.action).toBe('superseded');
+    expect(applied.versionMinted).toBe(false);
+    // ...but say so: one node's stored ref could not be expressed in
+    // resourceId-space, so byte-identity was not proved, only "differs nowhere we
+    // can decide". Never manufactured as a clean comparison.
+    expect(applied.versionContentUnverified).toBe(true);
+    expect(listPipelineVersions(db, pipe.id).map((v) => v.id)).toEqual([v1.id, v2.id]);
+  });
+
+  // The masking above is per-NODE-REF, not per-version: an undecidable connection
+  // ref must not buy an amnesty for the rest of the doc. A hand-edit to any other
+  // field of the same version is still a hand-edit of an immutable row.
+  it('#1018 — still REFUSES a hand-edit elsewhere in a version with a deleted connection', () => {
+    const db = freshDb().db;
+    const conn = createConnection(db, {
+      ownerId: 'local',
+      name: 'My Conn',
+      kind: 'http',
+      config: { baseUrl: 'https://x' },
+      secretRef: null,
+    });
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      outputs: [{ name: 'orig', type: 'string' }],
+      nodes: [
+        { id: 'n1', type: 'llm_call', config: {}, connectionId: conn.id, position: { x: 0, y: 0 } },
+      ],
+    });
+    const incoming = snapshot(db);
+    deleteConnection(db, conn.id);
+    createPipelineVersion(db, baseVersion(pipe.id));
+    incoming.pipelines[0]!.data.versions[0]!.outputs = [{ name: 'tampered', type: 'string' }];
+
+    expect(() => applyWorkspace(db, 'local', incoming, 'sha1', 'main')).toThrow(
+      WorkspaceApplyError,
+    );
+  });
+
+  // A `${}` connection ref is portable ALREADY — it is carried verbatim in both
+  // directions and never consults the reverse map, so it can never be
+  // "unresolvable". If it tripped the mask it would silently exempt every
+  // dynamically-bound node from the tamper guard.
+  it('#1018 — a ${} connection ref is not undecidable: the version compares cleanly', () => {
+    const db = freshDb().db;
+    const pipe = createPipeline(db, { ownerId: 'local', name: 'P' });
+    createPipelineVersion(db, {
+      ...baseVersion(pipe.id),
+      params: [{ name: 'conn', type: 'string', required: true }],
+      nodes: [
+        {
+          id: 'n1',
+          type: 'llm_call',
+          config: {},
+          connectionId: '${params.conn}',
+          position: { x: 0, y: 0 },
+        },
+      ],
+    });
+    const incoming = snapshot(db);
+    createPipelineVersion(db, baseVersion(pipe.id));
+
+    const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
+
+    const applied = result.applied.find((a) => a.resourceId === pipe.resourceId)!;
+    expect(applied.action).toBe('superseded');
+    expect(applied.versionContentUnverified).toBe(false);
   });
 
   // Version resourceIds are globally unique by construction, so a branch file for

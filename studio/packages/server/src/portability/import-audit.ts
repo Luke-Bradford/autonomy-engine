@@ -15,6 +15,14 @@ import type { ImportAppliedEvent, WorkspaceGitApplyResult } from '@autonomy-stud
  * a restore can mint a version while its `action` reads `restored` (#672 — the
  * two are orthogonal), and an archive-only import has an empty `applied` but a
  * non-empty `archived`.
+ *
+ * #1018 — `versionContentUnverified` is deliberately NOT part of the effectful
+ * test. It qualifies the CONFIDENCE of a comparison, never a write: the version
+ * it describes is already materialised and immutable, so the apply writes nothing
+ * for it whatever the flag says. Recording an audit event for it would put "what
+ * changed" entries in the log for imports that changed nothing. It still travels
+ * on every `applied` entry of an event emitted for some other reason, so the
+ * trace is not lost where a trace exists.
  */
 export function buildImportAppliedEvent(
   result: WorkspaceGitApplyResult,

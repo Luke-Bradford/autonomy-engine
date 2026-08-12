@@ -50,6 +50,7 @@ import { enabledForReadiness, normalizedTriggerContentForm } from './trigger-con
 import { classifyWorkspace } from './workspace-reconcile.js';
 import { latestVersion, parseWorkspaceFiles, type ParsedWorkspace } from './workspace-parse.js';
 import {
+  compareStoredVersion,
   dbVersionForm,
   serializeTrigger,
   serializeWorkspace,
@@ -506,6 +507,7 @@ export function applyWorkspace(
           resourceId: created.resourceId,
           action: 'created',
           versionMinted: false, // connections have no versions
+          versionContentUnverified: false, // ...so no version content to judge
         });
         continue;
       }
@@ -529,6 +531,7 @@ export function applyWorkspace(
         resourceId: existing.resourceId,
         action,
         versionMinted: false, // connections have no versions
+        versionContentUnverified: false, // ...so no version content to judge
       });
     }
 
@@ -579,6 +582,11 @@ export function applyWorkspace(
       // branch below sets it) so the reported `action` can never disagree with
       // what is actually written.
       let willMint: boolean;
+      // #1018 — whether the version comparison below had to EXCUSE any ref it
+      // could not express in resourceId-space. Declared beside `willMint` and for
+      // the same reason: it is reported on the applied entry, so it must be one
+      // variable rather than one per branch.
+      let versionContentUnverified = false;
 
       if (existing === null) {
         // A brand-new pipeline claiming a version `resourceId` that already
@@ -614,6 +622,17 @@ export function applyWorkspace(
         // resourceId-space via the reverse maps. Decided UNIFORMLY for a live OR
         // an archived (restore) pipeline. This drives the MINT; it deliberately
         // does NOT decide legality, which is the guard below's job.
+        //
+        // #1018 — deliberately NOT put through `compareStoredVersion`'s masking,
+        // and the asymmetry is a decision rather than an oversight. This
+        // comparison DOES drive a write, and masking it could fold a real
+        // difference away and silently skip a mint; erring toward minting is the
+        // fail-safe direction. The cost is named rather than left silent: an
+        // ARCHIVED pipeline whose head references a deleted connection (archived
+        // rows are omitted from `serializeWorkspace`, so they are not covered by
+        // its throw) can read `versionChanged` spuriously true and mint a
+        // redundant version. A redundant immutable version is additive and
+        // harmless; a dropped one is not.
         const dbLatest = getLatestPipelineVersion(db, existing.id);
         const dbLatestForm = dbLatest
           ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)
@@ -644,14 +663,22 @@ export function applyWorkspace(
               `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses a version id owned by a different pipeline — version ids are unique per resource`,
             );
           }
-          if (
-            pipelineVersionContentForm(version) !==
-            dbVersionForm(owner, connRidByDbId, versionRidByDbId)
-          ) {
+          // #1018 — masked comparison. A stored version is immutable, so a ref it
+          // holds can outlive what it names (a connection is hard-deleted with no
+          // FK to stop it). Such a ref cannot be put in resourceId-space, so the
+          // branch and the row differ THERE for a reason that is not an edit.
+          // `compareStoredVersion` excuses exactly those fields and judges every
+          // other one, so the refusal below still fires on a real hand-edit
+          // anywhere else in the same doc — what it no longer does is accuse the
+          // operator of tampering because they deleted a connection, which wedged
+          // every future pull of the branch with nothing they could act on.
+          const comparison = compareStoredVersion(owner, version, connRidByDbId, versionRidByDbId);
+          if (!comparison.identical) {
             throw new WorkspaceApplyError(
               `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
             );
           }
+          versionContentUnverified = comparison.undecidableRefs > 0;
           // Legal: the branch names a version we already hold, byte-identical.
           // If the workspace has since authored past it, say so rather than
           // reporting a bare `unchanged` the preview has already contradicted.
@@ -686,6 +713,7 @@ export function applyWorkspace(
         resourceId,
         action,
         versionMinted: willMint,
+        versionContentUnverified,
       });
       if (willMint && version !== undefined) {
         minters.push({
@@ -826,6 +854,7 @@ export function applyWorkspace(
         resourceId,
         action,
         versionMinted: false, // triggers have no versions
+        versionContentUnverified: false, // ...so no version content to judge
       });
     }
 
