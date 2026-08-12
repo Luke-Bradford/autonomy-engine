@@ -121,7 +121,8 @@ export function RunCostSummary({
       {reused !== null && (
         <p className="page-hint">
           {reused.reusedNodeCount} node{reused.reusedNodeCount === 1 ? ' was' : 's were'} REUSED
-          from run <Link to={runDetailPath(reused.sourceRunId)}>
+          from run{' '}
+          <Link to={runDetailPath(reused.sourceRunId)}>
             <code>{reused.sourceRunId}</code>
           </Link>{' '}
           rather than re-executed, and a copied node bills nothing. So this is what the rerun spent,
@@ -151,8 +152,8 @@ function ExcludedChildren({ childRunIds }: { childRunIds: readonly string[] }) {
   const many = childRunIds.length > 1;
   return (
     <p className="page-hint">
-      This run called {childRunIds.length} sub-pipeline{many ? 's' : ''}, and each one ran as its own
-      run that billed its own spend. So this figure is what THIS run spent — it excludes{' '}
+      This run called {childRunIds.length} sub-pipeline{many ? 's' : ''}, and each one ran as its
+      own run that billed its own spend. So this figure is what THIS run spent — it excludes{' '}
       {many ? 'those runs' : 'that run'}, and anything {many ? 'they' : 'it'} called in turn:{' '}
       {childRunIds.map((id, i) => (
         <span key={id}>

@@ -258,9 +258,7 @@ test('#932 — the run total says which child runs it leaves out, and links them
      — `callFailed` answers a refusal with a `call.returned` carrying the id of a
      run that was never created, which is exactly the case the fold declines to
      report. */
-  const childrenRes = await page.request.get(
-    `/api/runs?parentRunId=${encodeURIComponent(runId)}`,
-  );
+  const childrenRes = await page.request.get(`/api/runs?parentRunId=${encodeURIComponent(runId)}`);
   expect(childrenRes.status()).toBe(200);
   /* A BARE array — `GET /api/runs` returns `RunSummary[]`, not a paginated
      envelope (`listRunSummaries`). Reading `.items` off it yields `undefined`,
