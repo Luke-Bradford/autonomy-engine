@@ -207,8 +207,12 @@ describe('#796 — a call node runs a REAL child', () => {
     const childPv = seedVersion(db, [leaf('work')]);
     const parentPv = seedVersion(db, [callNode('caller', childPv)]);
     const run = seedRun(db, parentPv);
-    const b = boundary(db);
-    // No plan for `work` → the stub fails it, so the child run ends `failure`.
+    // An EXPLICIT failure plan. An unplanned node would also end the child
+    // `failure`, but for an unrelated reason — the stub defaults to SUCCESS with
+    // `{}` outputs, which the fold then rejects against `http_request`'s declared
+    // `status`/`body`/`headers` contract. Saying "the stub fails it" would have
+    // been a comment describing a mechanism that is not the one running.
+    const b = boundary(db, {}, { work: { outcome: 'failure', error: 'boom' } });
 
     await startRun(b, run);
     await settle(b.drives);
