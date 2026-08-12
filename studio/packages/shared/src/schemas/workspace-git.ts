@@ -402,6 +402,15 @@ export function dispositionWritesNothing(disposition: WorkspaceGitDisposition): 
  * rename that ALSO edits content loses neither signal (the apply, G5c, needs
  * both). Both are `false` for a `create` (there is no DB counterpart to diff).
  * `resourceId` is `null` for a pre-G1 file with no stable identity.
+ *
+ * `contentUnverified` (#1018) is the preview twin of
+ * `WorkspaceGitAppliedResource.versionContentUnverified`, and exists for the same
+ * reason the two enums are kept in step: the import that follows will report it,
+ * so a preview silent about it would be describing a different comparison from
+ * the one the apply makes. It is TRUE when the branch's version names a stored
+ * row that references a DELETED resource, whose ref therefore cannot be put in
+ * resourceId-space and is excused from the comparison. Always `false` for a
+ * connection or a trigger (neither has versions) and for a `create`.
  */
 export const WorkspaceGitPreviewResourceSchema = z.object({
   path: z.string().min(1),
@@ -411,6 +420,7 @@ export const WorkspaceGitPreviewResourceSchema = z.object({
   disposition: WorkspaceGitDispositionSchema,
   nameChanged: z.boolean(),
   contentChanged: z.boolean(),
+  contentUnverified: z.boolean(),
 });
 export type WorkspaceGitPreviewResource = z.infer<typeof WorkspaceGitPreviewResourceSchema>;
 
@@ -646,13 +656,26 @@ export function appliedActionWroteNothing(action: WorkspaceGitAppliedAction): bo
  * `false` for a connection; for a pipeline it is independent of `action` (a
  * `restored` that also advances the version reports `restored` + `true`, which
  * `action` alone cannot express). Explicit boolean, never defaulted — an absent
- * fact must not be manufactured as `false`. */
+ * fact must not be manufactured as `false`.
+ *
+ * `versionContentUnverified` (#1018) is the second such orthogonal signal, and it
+ * qualifies the CONFIDENCE of the action rather than its content: the branch's
+ * version doc names a stored row that references a resource which has since been
+ * DELETED (typically a connection — versions are immutable and nothing stops the
+ * delete), so that ref cannot be expressed in resourceId-space and the two forms
+ * cannot be compared there. The apply masks exactly those fields and judges the
+ * rest, so `unchanged`/`superseded` here means "differs nowhere we can decide"
+ * rather than "byte-identical". Always `false` for a connection (no versions),
+ * and `false` for every ordinary apply. Reported rather than folded into
+ * `action`, because a single-valued action cannot carry it and silently
+ * upgrading the weaker fact to the stronger one is the #473 shape. */
 export const WorkspaceGitAppliedResourceSchema = z.object({
   path: z.string().min(1),
   kind: ExportKindSchema,
   resourceId: z.string().min(1),
   action: WorkspaceGitAppliedActionSchema,
   versionMinted: z.boolean(),
+  versionContentUnverified: z.boolean(),
 });
 export type WorkspaceGitAppliedResource = z.infer<typeof WorkspaceGitAppliedResourceSchema>;
 

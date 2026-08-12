@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pipelineVersionContentForm } from '@autonomy-studio/shared';
+import type { PipelineVersionExport } from '@autonomy-studio/shared';
 import type {
   ConnectionExportData,
   NodeExport,
@@ -7,6 +8,7 @@ import type {
   TriggerExportData,
 } from '@autonomy-studio/shared';
 import { classifyWorkspace } from '../workspace-reconcile.js';
+import type { OwnedVersionForm } from '../workspace-serialize.js';
 import type {
   ParsedConnection,
   ParsedPipeline,
@@ -374,13 +376,22 @@ describe('classifyWorkspace', () => {
       return p;
     };
     /** The stored form of `V1` as the route reads it, owned by `owner`. */
-    const held = (owner = 'res_p', of = branch()) =>
+    const held = (owner = 'res_p', of = branch(), undecidableRefs = 0): Map<string, OwnedVersionForm> =>
       new Map([
         [
           V1,
           {
             pipelineResourceId: owner,
-            contentForm: pipelineVersionContentForm(of.data.versions[0]!),
+            // #1018 — the route hands the classifier a COMPARISON, not a form, so
+            // the masked stored-vs-branch rule lives in one place. Here that is a
+            // plain content-form equality plus whatever the caller declares
+            // undecidable.
+            compare: (incoming: PipelineVersionExport) => ({
+              identical:
+                pipelineVersionContentForm(of.data.versions[0]!) ===
+                pipelineVersionContentForm(incoming),
+              undecidableRefs,
+            }),
           },
         ],
       ]);
@@ -388,7 +399,7 @@ describe('classifyWorkspace', () => {
     const classifyHeld = (
       db: ParsedWorkspace,
       incoming: ParsedWorkspace,
-      ownedVersions?: ReadonlyMap<string, { pipelineResourceId: string; contentForm: string }>,
+      ownedVersions?: ReadonlyMap<string, OwnedVersionForm>,
     ) => classifyWorkspace(db, incoming, new Set(), undefined, ownedVersions);
 
     it('labels a version the workspace already holds superseded, keeping contentChanged true', () => {

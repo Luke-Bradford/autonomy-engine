@@ -106,6 +106,7 @@ function previewResource(
     disposition: 'update',
     nameChanged: false,
     contentChanged: true,
+    contentUnverified: false,
     ...overrides,
   };
 }
@@ -942,6 +943,7 @@ describe('WorkspaceGitPage', () => {
               resourceId: 'res_1',
               action: 'updated',
               versionMinted: true,
+              versionContentUnverified: false,
             },
             {
               path: 'connections/api.json',
@@ -949,6 +951,7 @@ describe('WorkspaceGitPage', () => {
               resourceId: 'res_2',
               action: 'unchanged',
               versionMinted: false,
+              versionContentUnverified: false,
             },
           ],
         }),
@@ -987,6 +990,7 @@ describe('WorkspaceGitPage', () => {
               resourceId: 'res_1',
               action: 'superseded',
               versionMinted: false,
+              versionContentUnverified: false,
             },
           ],
         }),
@@ -1013,6 +1017,7 @@ describe('WorkspaceGitPage', () => {
               resourceId: 'res_1',
               action: 'unchanged',
               versionMinted: false,
+              versionContentUnverified: false,
             },
           ],
         }),
@@ -1048,6 +1053,7 @@ describe('WorkspaceGitPage', () => {
               resourceId: 'res_1',
               action: 'unchanged',
               versionMinted: false,
+              versionContentUnverified: false,
             },
           ],
           deferred: [
