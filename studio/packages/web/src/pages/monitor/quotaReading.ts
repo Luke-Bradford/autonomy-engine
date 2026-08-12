@@ -3,7 +3,6 @@ import type {
   AccountQuotaProvider,
   AccountQuotaUnavailableReason,
   AccountQuotaWindow,
-  ClaudeAccountQuota,
   CodexAccountQuota,
 } from '@autonomy-studio/shared';
 

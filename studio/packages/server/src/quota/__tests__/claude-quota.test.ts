@@ -228,7 +228,10 @@ describe('#1023 — a payload the guard’s other reader accepts is never UNREAD
     ['an unparseable resets_at', { seven_day: { utilization: 48.0, resets_at: 'not-a-date' } }],
     ['no resets_at at all', { seven_day: { utilization: 48.0 } }],
     ['a null five_hour', { five_hour: null, seven_day: { utilization: 48.0 } }],
-    ['an inactive five_hour', { five_hour: { utilization: 0.0, resets_at: null }, seven_day: { utilization: 48.0 } }],
+    [
+      'an inactive five_hour',
+      { five_hour: { utilization: 0.0, resets_at: null }, seven_day: { utilization: 48.0 } },
+    ],
     ['a zero reading', { seven_day: { utilization: 0 } }],
     ['an overage reading', { seven_day: { utilization: 143.7 } }],
   ])('reads the 7-day window when the payload has %s', (_label, payload) => {
