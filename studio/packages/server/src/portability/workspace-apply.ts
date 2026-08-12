@@ -622,6 +622,17 @@ export function applyWorkspace(
         // resourceId-space via the reverse maps. Decided UNIFORMLY for a live OR
         // an archived (restore) pipeline. This drives the MINT; it deliberately
         // does NOT decide legality, which is the guard below's job.
+        //
+        // #1018 — deliberately NOT put through `compareStoredVersion`'s masking,
+        // and the asymmetry is a decision rather than an oversight. This
+        // comparison DOES drive a write, and masking it could fold a real
+        // difference away and silently skip a mint; erring toward minting is the
+        // fail-safe direction. The cost is named rather than left silent: an
+        // ARCHIVED pipeline whose head references a deleted connection (archived
+        // rows are omitted from `serializeWorkspace`, so they are not covered by
+        // its throw) can read `versionChanged` spuriously true and mint a
+        // redundant version. A redundant immutable version is additive and
+        // harmless; a dropped one is not.
         const dbLatest = getLatestPipelineVersion(db, existing.id);
         const dbLatestForm = dbLatest
           ? dbVersionForm(dbLatest, connRidByDbId, versionRidByDbId)

@@ -106,7 +106,7 @@ function previewResource(
     disposition: 'update',
     nameChanged: false,
     contentChanged: true,
-    contentUnverified: false,
+    versionContentUnverified: false,
     ...overrides,
   };
 }
@@ -1016,7 +1016,9 @@ describe('WorkspaceGitPage', () => {
       divergenceMock.mockResolvedValue(divergence());
       previewMock.mockResolvedValue(
         preview({
-          resources: [previewResource({ disposition: 'superseded', contentUnverified: true })],
+          resources: [
+            previewResource({ disposition: 'superseded', versionContentUnverified: true }),
+          ],
         }),
       );
       importMock.mockResolvedValue(
@@ -1037,7 +1039,7 @@ describe('WorkspaceGitPage', () => {
 
       await checkForIncoming();
       expect(screen.getByRole('table')).toHaveTextContent(
-        'already here — this workspace has authored past it (one ref names a deleted resource, so it was not compared)',
+        'already here — this workspace has authored past it (a ref names a deleted resource, so it was not compared)',
       );
 
       // The outcome for THIS case is the no-op sentence, because a superseded
@@ -1047,7 +1049,7 @@ describe('WorkspaceGitPage', () => {
       // land.
       await userEvent.click(screen.getByRole('button', { name: 'Import' }));
       expect(await screen.findByRole('status')).toHaveTextContent(
-        /already matches .* \(one ref names a deleted resource, so it was not compared\)\./,
+        /already matches .* \(a ref names a deleted resource, so it was not compared\)\./,
       );
     });
 
@@ -1084,7 +1086,7 @@ describe('WorkspaceGitPage', () => {
       const row = (await screen.findAllByRole('listitem')).find((li) =>
         li.textContent?.includes('pipelines/nightly.json'),
       );
-      expect(row).toHaveTextContent('one ref names a deleted resource, so it was not compared');
+      expect(row).toHaveTextContent('a ref names a deleted resource, so it was not compared');
     });
 
     /** ...and an ordinary comparison claims nothing of the sort. */

@@ -129,7 +129,7 @@ function classifyResource(
   contentForm: string,
   dbByResourceId: Map<string, DbEntry>,
   supersedes = false,
-  contentUnverified = false,
+  versionContentUnverified = false,
 ): WorkspaceGitPreviewResource {
   const db = resourceId === null ? undefined : dbByResourceId.get(resourceId);
   if (db === undefined) {
@@ -143,7 +143,7 @@ function classifyResource(
       contentChanged: false,
       // A `create` has no DB counterpart, so there was no comparison to leave
       // undecided (#1018).
-      contentUnverified: false,
+      versionContentUnverified: false,
     };
   }
   const nameChanged = name !== db.name;
@@ -160,7 +160,7 @@ function classifyResource(
     disposition: disposition(nameChanged, contentChanged, supersedes),
     nameChanged,
     contentChanged,
-    contentUnverified,
+    versionContentUnverified,
   };
 }
 
@@ -280,12 +280,14 @@ export function classifyWorkspace(
    * DELETED connection is superseded in BOTH readings or neither. Comparing raw
    * forms here would put the preview back on the wrong side of the very
    * divergence #983 lifted this lookup to prevent: `update` (a promised write)
-   * ahead of an apply that writes nothing. `contentUnverified` rides out with it,
+   * ahead of an apply that writes nothing. `versionContentUnverified` rides out with it,
    * because a preview that hides which fields could not be judged is describing a
    * comparison it did not make.
    */
-  const supersession = (p: ParsedPipeline): { supersedes: boolean; contentUnverified: boolean } => {
-    const no = { supersedes: false, contentUnverified: false };
+  const supersession = (
+    p: ParsedPipeline,
+  ): { supersedes: boolean; versionContentUnverified: boolean } => {
+    const no = { supersedes: false, versionContentUnverified: false };
     if (ownedVersions === undefined || p.resourceId === null) return no;
     const version = latestVersion(p);
     const versionRid = version?.resourceId;
@@ -298,13 +300,13 @@ export function classifyWorkspace(
     const dbRowForm = dbPipelineRowForms.get(p.resourceId);
     return {
       supersedes: dbRowForm !== undefined && dbRowForm === pipelineRowContentForm(p.data),
-      contentUnverified: comparison.undecidableRefs > 0,
+      versionContentUnverified: comparison.undecidableRefs > 0,
     };
   };
 
   const resources: WorkspaceGitPreviewResource[] = [
     ...incoming.pipelines.map((p) => {
-      const { supersedes, contentUnverified } = supersession(p);
+      const { supersedes, versionContentUnverified } = supersession(p);
       return classifyResource(
         'pipeline',
         p.path,
@@ -313,7 +315,7 @@ export function classifyWorkspace(
         pipelineContentForm(p.data),
         dbPipelines,
         supersedes,
-        contentUnverified,
+        versionContentUnverified,
       );
     }),
     ...incoming.connections.map((c) =>

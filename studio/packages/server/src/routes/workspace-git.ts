@@ -416,8 +416,13 @@ export const workspaceGitRoutes: FastifyPluginAsync<WorkspaceGitRoutesOptions> =
    * NOT byte/blob equality: a re-mint that only bumps a volatile field (a new
    * immutable version id/number, a `node.position` drag) is NOT drift. A git
    * failure surfaces as the existing `git_error` 502 (fail-safe — never a silent
-   * `clean`); a corrupt DB reference makes `serializeWorkspace` throw
-   * `WorkspaceSerializeError` → 500 (internal), also never `clean`. A committed
+   * `clean`); a DB reference that cannot be put in resourceId-space makes
+   * `serializeWorkspace` throw `WorkspaceSerializeError` → 500 (internal), also
+   * never `clean`. That is NOT necessarily corruption, and #1018 corrected the
+   * word: a live pipeline's head can name a hard-deleted connection after two
+   * ordinary acts (versions are immutable; the delete has no FK to stop it).
+   * Throwing is the right POLARITY here and wrong in blast radius — a read-only
+   * drift report 500ing over it is #1043, which owns the fix. A committed
    * file that would not parse becomes a VISIBLE `diagnostic` (never dropped,
    * never manufactured as a match — #473/#664 shape).
    */

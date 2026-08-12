@@ -531,6 +531,15 @@ describe('applyWorkspace (#3 G5c-1)', () => {
     deleteConnection(db, conn.id);
     const v2 = createPipelineVersion(db, baseVersion(pipe.id));
 
+    // NOTE for the reader: the branch snapshot was taken while the connection
+    // existed, so it still carries that connection's FILE, and the apply's
+    // ordinary connection loop RE-CREATES it — same `resourceId`, a NEW DB id.
+    // That does not soften what this test proves: `connRidByDbId` is snapshotted
+    // before that loop, and the stored version names the OLD id either way, so
+    // the ref stays undecidable. It is stated because "deleted connection"
+    // should not be read as a claim that a delete survives a re-import — by
+    // pre-existing design, git never syncs connection deletion at all.
+
     const result = applyWorkspace(db, 'local', incoming, 'sha1', 'main');
 
     expect(result.refused).toBe(false);

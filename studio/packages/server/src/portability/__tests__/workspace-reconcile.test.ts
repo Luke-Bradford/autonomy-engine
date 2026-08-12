@@ -435,18 +435,18 @@ describe('classifyWorkspace', () => {
       expect(dispositionOf(plan, 'res_p')).toMatchObject({
         disposition: 'superseded',
         contentChanged: true,
-        contentUnverified: true,
+        versionContentUnverified: true,
       });
     });
 
     // ...and an ordinary supersession claims nothing of the sort.
-    it('#1018 — a fully decidable comparison reports contentUnverified false', () => {
+    it('#1018 — a fully decidable comparison reports versionContentUnverified false', () => {
       const plan = classifyHeld(
         ws({ pipelines: [authoredPast()] }),
         ws({ pipelines: [branch()] }),
         held(),
       );
-      expect(dispositionOf(plan, 'res_p')).toMatchObject({ contentUnverified: false });
+      expect(dispositionOf(plan, 'res_p')).toMatchObject({ versionContentUnverified: false });
     });
 
     it('does not claim superseded when the version id belongs to ANOTHER pipeline', () => {

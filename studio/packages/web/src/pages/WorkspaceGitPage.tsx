@@ -19,8 +19,8 @@ import {
   commitWorkspace,
   connectWorkspaceGit,
   describeAppliedAction,
-  UNVERIFIED_CONTENT_SUFFIX,
   describeDisposition,
+  UNVERIFIED_CONTENT_SUFFIX,
   describeDriftChange,
   disconnectWorkspaceGit,
   fetchWorkspaceGit,
@@ -923,7 +923,7 @@ function ImportPreviewReport({
             kind: resource.kind,
             change:
               describeDisposition(resource.disposition) +
-              (resource.contentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''),
+              (resource.versionContentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''),
             path: resource.path,
           }))}
         />
@@ -992,7 +992,9 @@ function ImportOutcomeReport({
   // over `result.applied`, NOT over `changed`: the case this exists for is
   // precisely a version that wrote nothing, so filtering to the changed rows
   // would drop the caveat on every import that most needs it.
-  const contentUnverified = result.applied.some((applied) => applied.versionContentUnverified);
+  const versionContentUnverified = result.applied.some(
+    (applied) => applied.versionContentUnverified,
+  );
 
   return (
     <div>
@@ -1019,7 +1021,7 @@ function ImportOutcomeReport({
           {/* "already matches" is exactly the claim the excused ref left
               unchecked, so the caveat belongs on this sentence above all others
               — it is the one an operator reads as "verified identical". */}
-          {contentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
+          {versionContentUnverified ? UNVERIFIED_CONTENT_SUFFIX : ''}.
         </p>
       ) : (
         <p role="status">

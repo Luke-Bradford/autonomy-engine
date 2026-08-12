@@ -403,7 +403,7 @@ export function dispositionWritesNothing(disposition: WorkspaceGitDisposition): 
  * both). Both are `false` for a `create` (there is no DB counterpart to diff).
  * `resourceId` is `null` for a pre-G1 file with no stable identity.
  *
- * `contentUnverified` (#1018) is the preview twin of
+ * `versionContentUnverified` (#1018) is the preview twin of
  * `WorkspaceGitAppliedResource.versionContentUnverified`, and exists for the same
  * reason the two enums are kept in step: the import that follows will report it,
  * so a preview silent about it would be describing a different comparison from
@@ -420,7 +420,7 @@ export const WorkspaceGitPreviewResourceSchema = z.object({
   disposition: WorkspaceGitDispositionSchema,
   nameChanged: z.boolean(),
   contentChanged: z.boolean(),
-  contentUnverified: z.boolean(),
+  versionContentUnverified: z.boolean(),
 });
 export type WorkspaceGitPreviewResource = z.infer<typeof WorkspaceGitPreviewResourceSchema>;
 

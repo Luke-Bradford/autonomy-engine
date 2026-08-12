@@ -225,7 +225,7 @@ export function importWorkspaceGit(): Promise<WorkspaceGitApplyResult> {
  * resource really is `superseded`/`unchanged`; what is weaker is the evidence.
  */
 export const UNVERIFIED_CONTENT_SUFFIX =
-  ' (one ref names a deleted resource, so it was not compared)';
+  ' (a ref names a deleted resource, so it was not compared)';
 
 /**
  * The human label for a previewed disposition.
