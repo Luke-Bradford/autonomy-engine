@@ -219,7 +219,13 @@ fi
 # identically (case 1b-v). Interpolated RAW on purpose: case 1b-vii feeds it a
 # hostile string to prove the parser drops what it cannot validate, rather than
 # the stub sanitising it first and testing nothing.
-# CURL_RESET_NO_UTIL=<epoch>: a readable `resets_at` with NO `utilization`. The
+# CURL_RESET_NO_UTIL=<epoch>: a readable resets_at with NO utilization. The
+# (Those two field names carried BACKTICKS until #1029's sweep, and this comment
+# lives inside an UNQUOTED <<EOS heredoc, so bash ran them as commands every time
+# the stub was written -- two "command not found" lines per run_case, 64 per
+# suite run, on stderr. Behaviourally inert: the substitutions only blanked two
+# words of a comment in the GENERATED stub. Plain words rather than escaped,
+# because nothing here needs them to be code.)
 # shape behind #910's WARNING -- the guard cannot read a percent from it, so it
 # falls through to the next source, and a window line logged off this body would
 # describe a sample that lost.

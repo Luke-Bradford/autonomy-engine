@@ -823,7 +823,9 @@ describe('#1032 — a DROPPED five_hour is distinguishable from an unreported on
     await r.read();
     await r.read();
     await r.read();
-    expect(r.events()).toEqual([{ event: 'window_dropped', window: 'five_hour', reason: 'absent' }]);
+    expect(r.events()).toEqual([
+      { event: 'window_dropped', window: 'five_hour', reason: 'absent' },
+    ]);
   });
 
   it('distinguishes a MALFORMED window from an unreported one', async () => {
@@ -946,8 +948,10 @@ describe('#1032 — a DROPPED five_hour is distinguishable from an unreported on
 
     it('separates the two subjects by message, not only by payload', () => {
       const availability = describeQuotaLogEvent({ event: 'rate_limit_cleared' }).msg;
-      const visibility = describeQuotaLogEvent({ event: 'window_restored', window: 'five_hour' })
-        .msg;
+      const visibility = describeQuotaLogEvent({
+        event: 'window_restored',
+        window: 'five_hour',
+      }).msg;
       expect(availability).not.toBe(visibility);
       expect(availability).toContain('availability');
     });
