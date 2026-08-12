@@ -2,7 +2,6 @@ import {
   connectionContentForm,
   pipelineContentForm,
   pipelineRowContentForm,
-  pipelineVersionContentForm,
   triggerContentForm,
   type WorkspaceGitArchiveProposal,
   type WorkspaceGitDisposition,
@@ -285,9 +284,7 @@ export function classifyWorkspace(
    * because a preview that hides which fields could not be judged is describing a
    * comparison it did not make.
    */
-  const supersession = (
-    p: ParsedPipeline,
-  ): { supersedes: boolean; contentUnverified: boolean } => {
+  const supersession = (p: ParsedPipeline): { supersedes: boolean; contentUnverified: boolean } => {
     const no = { supersedes: false, contentUnverified: false };
     if (ownedVersions === undefined || p.resourceId === null) return no;
     const version = latestVersion(p);

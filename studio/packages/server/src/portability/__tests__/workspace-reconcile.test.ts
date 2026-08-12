@@ -376,7 +376,11 @@ describe('classifyWorkspace', () => {
       return p;
     };
     /** The stored form of `V1` as the route reads it, owned by `owner`. */
-    const held = (owner = 'res_p', of = branch(), undecidableRefs = 0): Map<string, OwnedVersionForm> =>
+    const held = (
+      owner = 'res_p',
+      of = branch(),
+      undecidableRefs = 0,
+    ): Map<string, OwnedVersionForm> =>
       new Map([
         [
           V1,

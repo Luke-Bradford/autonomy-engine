@@ -661,12 +661,7 @@ export function applyWorkspace(
           // anywhere else in the same doc — what it no longer does is accuse the
           // operator of tampering because they deleted a connection, which wedged
           // every future pull of the branch with nothing they could act on.
-          const comparison = compareStoredVersion(
-            owner,
-            version,
-            connRidByDbId,
-            versionRidByDbId,
-          );
+          const comparison = compareStoredVersion(owner, version, connRidByDbId, versionRidByDbId);
           if (!comparison.identical) {
             throw new WorkspaceApplyError(
               `pipeline "${existing.resourceId}" branch version "${versionRid}" reuses an existing immutable version id with different content — author a new version instead of editing one in place`,
