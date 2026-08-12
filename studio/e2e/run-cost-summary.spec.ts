@@ -285,7 +285,7 @@ test('#932 — the run total says which child runs it leaves out, and links them
   await fluentRootReady(page);
 
   const section = page.getByRole('region', { name: 'Cost & usage' });
-  await expect(section.getByText(/called 1 sub-pipeline,/)).toBeVisible();
+  await expect(section.getByText(/called 1 sub-pipeline, and it ran as its own run/)).toBeVisible();
   // Not a census: the linked child may have called others in turn.
   await expect(section.getByText(/anything it called in turn/)).toBeVisible();
 

@@ -2364,6 +2364,16 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
     expect(
       within(section).getByText(/what the rerun spent, not what the result cost/),
     ).toBeVisible();
+    /* #932 — and the reuse caveat carries the child boundary too. A copied call
+       node re-executes nothing, so THIS run announces no child and the exclusion
+       caveat says nothing; without this clause the spend those children hold
+       would be named nowhere on the page. */
+    expect(within(section).getByText(/on any sub-pipelines it called/)).toBeVisible();
+    // The source run is reachable, not just quoted.
+    expect(within(section).getByRole('link', { name: 'run_source' })).toHaveAttribute(
+      'href',
+      '/monitor/runs/run_source',
+    );
   });
 
   it('says nothing about reuse on an ordinary run', async () => {
@@ -2395,7 +2405,12 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
          beside it now says so, instead of the total silently standing for the
          whole tree. */
       expect(within(section).getByText('$0.02')).toBeInTheDocument();
-      expect(within(section).getByText(/called 1 sub-pipeline,/)).toBeVisible();
+      /* The SINGULAR clause in full. Matching only up to the comma would leave
+         "and each one ran" — a distributive quantifier over one item — free to
+         ship, which is what it did until the FIT lens caught it. */
+      expect(
+        within(section).getByText(/called 1 sub-pipeline, and it ran as its own run/),
+      ).toBeVisible();
       /* "and anything it called in turn" — children nest to `MAX_CALL_DEPTH`, so a
          reader who opens the linked run has still not found the whole exclusion. */
       expect(within(section).getByText(/anything it called in turn/)).toBeVisible();
@@ -2408,7 +2423,9 @@ describe('RunDetailPage — U27 the run says what it SPENT (#930)', () => {
         events: [callStarted('run_child_a'), callStarted('run_child_b', 'call#1')],
       });
       const section = costSection();
-      expect(within(section).getByText(/called 2 sub-pipelines,/)).toBeVisible();
+      expect(
+        within(section).getByText(/called 2 sub-pipelines, and each one ran as its own run/),
+      ).toBeVisible();
       expect(within(section).getByRole('link', { name: 'run_child_a' })).toBeInTheDocument();
       expect(within(section).getByRole('link', { name: 'run_child_b' })).toBeInTheDocument();
     });

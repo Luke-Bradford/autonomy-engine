@@ -295,6 +295,23 @@ export interface ReusedSpend {
   sourceRunId: string;
 }
 
+export function reusedSpend(
+  nodes: readonly { copiedFromRunId?: string | undefined }[],
+): ReusedSpend | null {
+  let reusedNodeCount = 0;
+  let sourceRunId: string | undefined;
+  for (const n of nodes) {
+    if (n.copiedFromRunId === undefined) continue;
+    reusedNodeCount += 1;
+    /* First wins. A reseed copies from ONE source run, so a second value cannot
+       occur; taking the first rather than the last makes the tie deterministic
+       instead of order-dependent were that ever to stop being true. */
+    sourceRunId ??= n.copiedFromRunId;
+  }
+  if (sourceRunId === undefined) return null;
+  return { reusedNodeCount, sourceRunId };
+}
+
 /**
  * #932 — the CHILD RUNS this run spawned, and therefore the other thing its money
  * figure does not include.
@@ -342,21 +359,4 @@ export function childSpend(
     }
   }
   return childRunIds.length === 0 ? null : { childRunIds };
-}
-
-export function reusedSpend(
-  nodes: readonly { copiedFromRunId?: string | undefined }[],
-): ReusedSpend | null {
-  let reusedNodeCount = 0;
-  let sourceRunId: string | undefined;
-  for (const n of nodes) {
-    if (n.copiedFromRunId === undefined) continue;
-    reusedNodeCount += 1;
-    /* First wins. A reseed copies from ONE source run, so a second value cannot
-       occur; taking the first rather than the last makes the tie deterministic
-       instead of order-dependent were that ever to stop being true. */
-    sourceRunId ??= n.copiedFromRunId;
-  }
-  if (sourceRunId === undefined) return null;
-  return { reusedNodeCount, sourceRunId };
 }

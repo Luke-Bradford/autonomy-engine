@@ -56,9 +56,9 @@ import { runDetailPath } from './runPath';
  * This docblock previously called that LATENT, "P3b has not landed the
  * child-spawn seam". #796 landed it, and the boundary went live without a word
  * changing on screen: the total quietly began omitting real money. So the
- * exclusion is now RENDERED (`childSpend`), with every child linked, which is the
- * fourth thing this section refuses to do — present a figure whose missing part
- * the operator has no way to find. The sentence is deliberately not a census:
+ * exclusion is now RENDERED (`childSpend`), with every child linked — the same
+ * refusal as the three above, applied to a figure whose missing part the operator
+ * otherwise has no way to find. The sentence is deliberately not a census:
  * children nest, and a rerun that copied a succeeded call node announces none of
  * its own while the original's children still hold spend.
  */
@@ -122,16 +122,16 @@ export function RunCostSummary({
         <p className="page-hint">
           {reused.reusedNodeCount} node{reused.reusedNodeCount === 1 ? ' was' : 's were'} REUSED
           from run{' '}
-          <Link to={runDetailPath(reused.sourceRunId)}>
+          <Link to={runDetailPath(reused.sourceRunId)} title={reused.sourceRunId}>
             <code>{reused.sourceRunId}</code>
           </Link>{' '}
           rather than re-executed, and a copied node bills nothing. So this is what the rerun spent,
           not what the result cost — the original spend stays on that run{' '}
-          {/* #932 — "and on its children" is not padding. A succeeded call node is
-              copied by `reseedFrontier` like any other, and a copied node
-              re-executes nothing, so THIS run announces no child and the caveat
-              above says nothing. The spend those children hold is real and sits
-              two hops away. */}
+          {/* #932 — the trailing "and on any sub-pipelines it called" is not
+              padding. A succeeded call node is copied by `reseedFrontier` like
+              any other, and a copied node re-executes nothing, so THIS run
+              announces no child and the caveat above says nothing at all. The
+              spend those children hold is real and sits two hops away. */}
           and on any sub-pipelines it called.
         </p>
       )}
@@ -152,9 +152,10 @@ function ExcludedChildren({ childRunIds }: { childRunIds: readonly string[] }) {
   const many = childRunIds.length > 1;
   return (
     <p className="page-hint">
-      This run called {childRunIds.length} sub-pipeline{many ? 's' : ''}, and each one ran as its
-      own run that billed its own spend. So this figure is what THIS run spent — it excludes{' '}
-      {many ? 'those runs' : 'that run'}, and anything {many ? 'they' : 'it'} called in turn:{' '}
+      This run called {childRunIds.length} sub-pipeline{many ? 's' : ''}, and{' '}
+      {many ? 'each one ran' : 'it ran'} as its own run that billed its own spend. So this figure is
+      what THIS run spent — it excludes {many ? 'those runs' : 'that run'}, and anything{' '}
+      {many ? 'they' : 'it'} called in turn:{' '}
       {childRunIds.map((id, i) => (
         <span key={id}>
           {i > 0 && ', '}
