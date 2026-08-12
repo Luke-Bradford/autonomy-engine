@@ -326,7 +326,7 @@ function CostSection({ node }: { node: NodeActivity }) {
                 `prompt_eval_count` carries one. Either way an unmeasured side
                 must say so rather than print `0` — the same manufactured zero
                 the Duration line refuses. */}
-            {tokenSummary(reading, cost)}
+            {tokenSummary(cost)}
           </dd>
         </dl>
       )}

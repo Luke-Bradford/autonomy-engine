@@ -2999,3 +2999,23 @@ td button + button {
   height: 10px;
   border-radius: 2px;
 }
+
+/* #1035 — the legend's key to BOTH hatched marks: the half-scale sliver
+   (`.token-flow-seg--unreported`) and the whole-bucket marker
+   (`.token-flow-unmeasured`).
+
+   Its OWN class rather than either mark's, deliberately. Those two carry a
+   `height` that encodes "no magnitude" inside a stack — meaningless on a 10px
+   swatch — and `.token-flow-seg` is a counted mark in the chart's own tests, so
+   borrowing it would put a legend entry into the bar counts. This sets the hatch
+   and nothing else, over the neutral the whole-bucket marker already uses. */
+.token-flow-swatch--unreported {
+  background-color: var(--muted);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--panel) 0,
+    var(--panel) 2px,
+    transparent 2px,
+    transparent 5px
+  );
+}

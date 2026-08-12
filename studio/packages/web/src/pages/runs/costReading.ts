@@ -94,16 +94,21 @@ export interface CostReading extends CostHeadline {
  *
  * Split out of `readCost` by #931, when the run LIST needed the same reading from
  * a bounded SQL aggregate. That path can supply every field the ladder below
- * actually reads — and NONE of the caveat facts `readCost` adds on top
- * (`providers`, the per-side reported-token counts), because counting those in
- * SQL is a different query. The alternative was to hand the aggregate's cost to
- * `readCost` with those fields defaulted, which would have manufactured exactly
- * the two claims this module exists to refuse: "no `agent_cli` here, so the
- * exchange count is a census" and "0 tokens" where nobody measured.
+ * actually reads — and, at the time, none of the caveat facts `readCost` adds on
+ * top. Handing the aggregate's cost to `readCost` with those defaulted would have
+ * manufactured exactly the claims this module exists to refuse: "no `agent_cli`
+ * here, so the exchange count is a census" and "0 tokens" where nobody measured.
  *
- * So the classification is the shared part and the caveats are the node/detail
- * part. There is still ONE ladder; a surface that cannot honestly answer the
- * caveats simply does not ask them.
+ * NARROWED by #1025: the per-side reported-token counts are no longer among them.
+ * `meteredAggregateColumns()` counts them for every cost surface now, so the
+ * aggregate path CAN answer "did anyone measure this side" — which is why
+ * {@link tokenSummary} takes a plain {@link RunCost}. What still needs the
+ * event-walk is `providers`, a distinct SET rather than a scalar, and it is what
+ * `exchangesAreFloor` turns on.
+ *
+ * So the classification is the shared part and the remaining caveat is the
+ * node/detail part. There is still ONE ladder; a surface that cannot honestly
+ * answer a caveat simply does not ask it.
  */
 export function costKindOf(cost: RunCost): CostKind {
   if (cost.responseCount === 0) return 'none';
@@ -158,13 +163,28 @@ export function readCost(cost: NodeCost): CostReading {
 /**
  * The token line. Each side answers for itself, so one measured side never lends
  * its credibility to an unmeasured one.
+ *
+ * Takes a plain {@link RunCost} since #1025 — the per-side presence counts are on
+ * every cost surface now, so this reads them directly rather than through a
+ * {@link CostReading}, and the AI-activity window totals and per-model rows can
+ * use it too. (`CostReading` still derives its own booleans from the same pair,
+ * for the "how partial" hints its callers render alongside.)
+ *
+ * ZERO BILLED EXCHANGES IS A MEASURED ZERO, and is the one case that must not read
+ * as "not reported". Nothing was billed, so nothing used tokens — a real
+ * measurement of nothing. It could not arise on the per-node and per-run surfaces
+ * (both gate this line behind having models), but the AI-activity totals tile
+ * renders unconditionally, so an idle window would otherwise flip from an honest
+ * `0 in · 0 out` to a claim that a measurement was missed. The chart states the
+ * same distinction with its own `responseCount > 0` guard.
  */
-export function tokenSummary(reading: CostReading, cost: NodeCost): string {
-  if (!reading.inputTokensReported && !reading.outputTokensReported) return 'not reported';
-  const input = reading.inputTokensReported
-    ? `${formatTokenCount(cost.inputTokens)} in`
-    : 'input not reported';
-  const output = reading.outputTokensReported
+export function tokenSummary(cost: RunCost): string {
+  const measured = (reported: number) => cost.responseCount === 0 || reported > 0;
+  const inputMeasured = measured(cost.inputReportedResponseCount);
+  const outputMeasured = measured(cost.outputReportedResponseCount);
+  if (!inputMeasured && !outputMeasured) return 'not reported';
+  const input = inputMeasured ? `${formatTokenCount(cost.inputTokens)} in` : 'input not reported';
+  const output = outputMeasured
     ? `${formatTokenCount(cost.outputTokens)} out`
     : 'output not reported';
   return `${input} · ${output}`;

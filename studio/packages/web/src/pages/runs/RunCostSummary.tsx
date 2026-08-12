@@ -187,7 +187,7 @@ function SettledFigure({ usage, settled }: { usage: NodeCost; settled: boolean }
             ))}
           </dd>
           <dt>Tokens</dt>
-          <dd>{tokenSummary(reading, usage)}</dd>
+          <dd>{tokenSummary(usage)}</dd>
         </dl>
       )}
 

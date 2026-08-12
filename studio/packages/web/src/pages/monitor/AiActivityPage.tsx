@@ -1,13 +1,12 @@
 import { useCallback, useState } from 'react';
 import {
-  formatTokenCount,
   type AiActivitySnapshot,
   type LiveRunCounts,
   type RunSince,
 } from '@autonomy-studio/shared';
 import { fetchAccountQuotaDisplay, fetchAiActivity } from '../../api/monitor';
 import { usePolledResource } from '../../hooks/usePolledResource';
-import { costFigure, costHeadline } from '../runs/costReading';
+import { costFigure, costHeadline, tokenSummary } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
 import { TokenFlowChart } from './TokenFlowChart';
@@ -271,9 +270,14 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         </div>
         <div>
           <dt>Tokens</dt>
-          <dd>
-            {formatTokenCount(totals.inputTokens)} in / {formatTokenCount(totals.outputTokens)} out
-          </dd>
+          {/* #1025 — `tokenSummary`, not a raw pair, because the SQL aggregate can
+              now say whether anyone COUNTED each side. It could not before, so this
+              printed `0 in / 0 out` for a window whose only AI use was agent-CLI
+              work — `cliSpendFact` carries no token fields at all, and
+              `coalesce(sum(…), 0)` delivered that absence as a confident zero.
+              Same helper as the run and node panels, so one vocabulary answers
+              "was this measured" everywhere. */}
+          <dd>{tokenSummary(totals)}</dd>
         </div>
         <div>
           <dt>Spend</dt>
@@ -313,7 +317,7 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                 <th scope="col">Connection kind</th>
                 <th scope="col">Model</th>
                 <th scope="col">Exchanges</th>
-                <th scope="col">Tokens in / out</th>
+                <th scope="col">Tokens</th>
                 <th scope="col">Spend</th>
                 <th scope="col">Last used</th>
               </tr>
@@ -324,9 +328,11 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
                   <td>{m.provider}</td>
                   <td>{m.model}</td>
                   <td>{m.cost.responseCount}</td>
-                  <td>
-                    {formatTokenCount(m.cost.inputTokens)} / {formatTokenCount(m.cost.outputTokens)}
-                  </td>
+                  {/* Per model, the same honesty as the tile above: a row whose
+                      provider never sent `usage` reads as not reported rather than
+                      as a measured zero. The header lost its "in / out" because
+                      the cell now states each side by name. */}
+                  <td>{tokenSummary(m.cost)}</td>
                   <td className="run-cost">{costFigure(costHeadline(m.cost))}</td>
                   <td>{formatWhen(m.lastAt)}</td>
                 </tr>
