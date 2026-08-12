@@ -140,7 +140,7 @@ test.describe('token-flow chart', () => {
     await expect(chart.getByText('Tokens in')).toBeVisible();
     await expect(chart.getByText('Tokens out')).toBeVisible();
 
-    expectQuiet(problems);
+    await expectQuiet(page, problems);
   });
 
   for (const theme of ['dark', 'light'] as const) {
@@ -186,7 +186,7 @@ test.describe('token-flow chart', () => {
       // from the background, or the stack is one indistinguishable block.
       expect(contrastRatio(measured.inColor, measured.outColor)).toBeGreaterThanOrEqual(1.4);
 
-      expectQuiet(problems);
+      await expectQuiet(page, problems);
     });
   }
 });
