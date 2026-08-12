@@ -846,6 +846,24 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         n.instanceId = instanceOf(e.nodeId);
         break;
       }
+      case 'call.started': {
+        // #796 / #735 — the child is in flight. Before this event a call node's
+        // ONLY event was `call.returned`, so `ensure` first created its row at
+        // RETURN: for the entire time a child ran, the node the operator was
+        // waiting on had no row on this page at all. `waiting` is the status the
+        // reducer already holds for it (`NodeRunStatus.waiting` = "child run in
+        // flight"), so the live view and the fold now agree.
+        const n = ensure(e.callNodeId);
+        n.status = 'waiting';
+        n.instanceId = instanceOf(e.callNodeId);
+        countIfUnstarted(n);
+        // Deliberately NOT `openSpan`. A restart re-emits `startChild` for a
+        // still-`waiting` call node, so this event can legitimately appear more
+        // than once for one child, and a second `openSpan` would draw a second
+        // bar for one attempt. Giving a call node a real timeline span is
+        // #796's own follow-up, not a free two-liner.
+        break;
+      }
       case 'call.returned': {
         const n = ensure(e.callNodeId);
         clearResult(n);
@@ -859,11 +877,11 @@ export function deriveNodeActivity(events: RunEvent[]): NodeActivity[] {
         // loop), and gating would silently drop exactly that documented case.
         n.outputValues = e.outputs;
         n.instanceId = instanceOf(e.callNodeId);
-        /* A no-op today — a call node has no start event, so there is no span
-           to close. It is wired anyway because #796 adds `call.started`: the
-           day it lands, a call node's span would open here and never close,
-           every call node would silently read as unmeasured, and no test would
-           fail. `closeSpan` is documented as a no-op without an open span. */
+        /* Still a no-op: #796 landed `call.started` but deliberately does NOT
+           open a span there (a restart can re-announce one child, which would
+           draw a second bar for one attempt), so there is nothing here to
+           close. Left wired for the day a call node gets a real span.
+           `closeSpan` is documented as a no-op without an open span. */
         closeSpan(n, e.callNodeId, row.ts);
         countIfUnstarted(n); // a call node's only event
         break;

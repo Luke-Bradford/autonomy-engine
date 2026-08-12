@@ -224,13 +224,62 @@ describe('deriveNodeActivity', () => {
         // output values were recorded" rather than hiding the section as it does
         // for a node that has not reported yet.
         outputValues: {},
-        /* #1007 — and NO span: `call.returned` is a terminal with no start to
-           pair it with until #796 appends `call.started`. The other absent
+        /* #1007 — and NO span: #796 landed `call.started` but deliberately does
+           not open one there, so there is still nothing to close. The other absent
            fields above are `undefined`, which `toEqual` treats as missing; an
            empty array is a value, so it has to be stated. */
         spans: [],
       },
     ]);
+  });
+
+  it('#796 — call.started puts the call node on the page WHILE its child runs', () => {
+    // Before #796 a call node's only event was `call.returned`, so for the whole
+    // time its child ran the node had NO row here at all (#735's blind spot) —
+    // the one activity an operator most wants to watch was invisible until it
+    // was over.
+    const started = envelope({
+      type: 'call.started',
+      runId: 'r',
+      callNodeId: 'c',
+      attemptId: 'c#0',
+      childRunId: 'child_abc',
+    });
+    expect(deriveNodeActivity([started])).toEqual([
+      {
+        ...NO_LLM_ACTIVITY,
+        nodeId: 'c',
+        status: 'waiting',
+        attempts: 1,
+        outputs: 0,
+        lastOutputName: undefined,
+        error: undefined,
+        outputValues: undefined,
+        // Deliberately NO span: a restart re-announces one child, and a second
+        // `openSpan` would draw a second bar for a single attempt.
+        spans: [],
+      },
+    ]);
+
+    // …and the result still resolves the SAME row rather than adding a second.
+    const returned = envelope({
+      type: 'call.returned',
+      runId: 'r',
+      callNodeId: 'c',
+      attemptId: 'c#0',
+      childRunId: 'child_abc',
+      childOutcome: 'success',
+      outputs: { answer: 42 },
+    });
+    const rows = deriveNodeActivity([started, returned]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      nodeId: 'c',
+      status: 'success',
+      attempts: 1,
+      outputValues: { answer: 42 },
+      spans: [],
+    });
   });
 
   it('ignores a malformed payload rather than throwing', () => {
