@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CallConfig } from '@autonomy-studio/shared';
+// The depth the hint quotes is the ENGINE's bound, not a number this panel gets
+// to pick — restating it as a literal here is exactly the drift this whole
+// docblock is about. Same pattern as `edgeCondition.ts` deferring to
+// `MaxBouncesSchema` rather than repeating its constraint.
+import { MAX_CALL_DEPTH } from '@autonomy-studio/shared';
 import {
   buildParams,
   loadCallTargets,
@@ -71,10 +76,20 @@ import type { createCanvasStore } from './canvasStore';
  *
  * What is STILL true, and is why the hint has not simply been deleted:
  * `validateCallGraph`'s self-call and depth guard (`maxCallDepth`, default 3)
- * only walks LITERAL targets (`literalCallTargets` drops a `${}` one), and
- * `startChild` has no runtime depth guard — so recursion through a DYNAMIC
- * target is bounded by nothing. That half is an engine-semantics change with
- * its own decision to make, tracked separately.
+ * only walks LITERAL targets (`literalCallTargets` drops a `${}` one). That is
+ * unfixable by construction rather than unfixed — a `${}` target's value is
+ * unknowable until dispatch — so this half is permanent, and the operator is
+ * owed it.
+ *
+ * THE OTHER HALF CLOSED IN #796, and this docblock lagged it by a release.
+ * It used to end "and `startChild` has no runtime depth guard — so recursion
+ * through a DYNAMIC target is bounded by nothing", which stopped being true
+ * when the spawn seam landed: `child.ts` walks the child's `parentRunId` chain
+ * and refuses a spawn past the SAME `MAX_CALL_DEPTH`, on the only code path
+ * that can create a child run. So a dynamic self-call is not refused when you
+ * SAVE, but it cannot run away either — it fails at dispatch, some bounded
+ * number of nested runs in. Saying otherwise was the precise failure the top
+ * of this docblock warns about, one layer down (#1011).
  *
  * ## Why the ExpressionPicker is still not wired in here (#952 fix sketch, 2)
  *
@@ -328,7 +343,10 @@ function CallEditor({
           />
           <span className="page-hint">
             A <code>{'${}'}</code> target is resolved when the node dispatches. Its references are
-            checked when you save, but the self-call and call-depth guards only see literal targets.
+            checked when you save, but the self-call and call-depth guards that run at save time
+            only see literal targets. A dynamic target that recurses is caught at run time instead:
+            a call chain deeper than {MAX_CALL_DEPTH} nested runs is refused, and that call node
+            fails.
           </span>
         </label>
       )}

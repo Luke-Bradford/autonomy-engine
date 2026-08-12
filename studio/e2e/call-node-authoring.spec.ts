@@ -130,15 +130,20 @@ test.describe('#425 — call-node authoring', () => {
     await canvasNodes(page).first().click();
     await panel(page).getByRole('radio', { name: 'Expression' }).check();
 
-    /* The honesty the panel owes the operator, and it moved with #952: the refs
-       in a `${}` target ARE now checked at save (`validateRefs` walks
-       `node.call`), while the self-call and call-depth guards still see only
-       literal targets. Both halves are asserted, because the failure this
-       guards is the hint drifting out of step with the validator in EITHER
-       direction — it shipped claiming no save-time checking at all, and kept
-       claiming it after that stopped being true. */
+    /* The honesty the panel owes the operator, asserted in all three of its
+       claims because the failure this guards is the hint drifting out of step
+       with the engine in EITHER direction — it has now done so TWICE, first
+       claiming no save-time checking at all (fixed by #952) and then claiming
+       run time was unbounded for the whole of #796 (fixed by #1011):
+         - refs in a `${}` target ARE checked at save (`validateRefs` walks
+           `node.call`);
+         - the SAVE-time self-call/depth guards still see literal targets only,
+           which is permanent — the value is unknowable until dispatch;
+         - RUN time bounds the chain (`child.ts` walks `parentRunId` against
+           `MAX_CALL_DEPTH`), and reaching that bound is a refusal, not a cap. */
     await expect(panel(page).getByText(/references are checked when you save/)).toBeVisible();
     await expect(panel(page).getByText(/only see literal targets/)).toBeVisible();
+    await expect(panel(page).getByText(/nested runs is refused/)).toBeVisible();
     await expect(panel(page).getByText(/not checked when you save/)).toHaveCount(0);
 
     await panel(page).getByLabel('Version id or expression').fill('${params.target}');
