@@ -80,6 +80,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     id: 'run_1',
     ownerId: 'local',
     pipelineVersionId: 'pv_1',
+    pipelineId: 'pipe_1',
     triggerId: 'trg_1',
     parentRunId: null,
     params: {},
