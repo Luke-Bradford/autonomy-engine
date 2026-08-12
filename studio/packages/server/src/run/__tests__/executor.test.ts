@@ -21,12 +21,7 @@ import { createConnection } from '../../repo/connections.js';
 import { createSecret } from '../../repo/secrets.js';
 import { encrypt } from '../../secrets/secrets.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
-import {
-  startRun,
-  type DocResolver,
-  type ExecutorCommand,
-  type RetryAlarms,
-} from '../driver.js';
+import { startRun, type DocResolver, type ExecutorCommand, type RetryAlarms } from '../driver.js';
 import { refuseToArm, stubAlarms } from './stub-alarms.js';
 import { reconcileOnBoot } from '../reconcile.js';
 import { loadEngineEvents } from '../events.js';
@@ -1651,8 +1646,11 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
       },
     });
 
-    const gen = executor.perform(startChild(childPvId), runId);
-    const first = await gen.next();
+    // `perform` is declared `AsyncIterable`, so take the iterator explicitly —
+    // the pump drives it with `for await`, and this test drives the same
+    // protocol by hand in order to STOP between the yield and the resume.
+    const it = executor.perform(startChild(childPvId), runId)[Symbol.asyncIterator]();
+    const first = await it.next();
 
     // Suspended AT the announcement. The pump has not folded it yet, so the
     // child must not have been kicked: this is the ordering the invariant rests
@@ -1661,10 +1659,11 @@ describe('createExecutor — call_pipeline: the announcement is what unlocks the
     expect(first.value.type).toBe('call.started');
     expect(kick).not.toHaveBeenCalled();
 
-    // The pump's `break` on a DROPPED event runs the generator's implicit
-    // `.return()` rather than resuming it (`driver.ts`). The announcement is
-    // never appended and the kick never happens.
-    await gen.return(undefined);
+    // The pump's `break` on a DROPPED event runs the iterator's `return()`
+    // rather than resuming it (`driver.ts`). The announcement is never appended
+    // and the kick never happens.
+    if (it.return === undefined) throw new Error('expected an abandonable iterator');
+    await it.return();
     expect(kick).not.toHaveBeenCalled();
 
     // What survives is a `pending` orphan — a child row that never ran and
