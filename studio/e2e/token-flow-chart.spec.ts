@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
-import { contrastRatio, fluentRootReady, resolvedPaletteColor } from './support/theme';
+import { contrastRatio, fluentRootReady, resolvedPaletteColor, setTheme } from './support/theme';
 
 /**
  * #967 — the token-flow chart on Monitor › AI activity.
@@ -90,12 +90,21 @@ function seriesSnapshot() {
           inputReportedResponseCount: 0,
           outputReportedResponseCount: 0,
         },
-        // ONE side counted, the other not — a stack, but a half-honest one
+        /*
+         * ONE side counted, the other not — a stack, but a half-honest one.
+         *
+         * Its counted side is deliberately the FULL 1000 that sets the scale, so
+         * this bucket's stack asks for the whole plot height PLUS the sliver and
+         * the row gap. That is the only arrangement under which the sliver is
+         * squeezed at all, and therefore the only one under which the geometry
+         * assertions below can fail. At 400 they passed no matter what the CSS
+         * said — checked by mutation, which is how this number got here.
+         */
         {
           bucketStart: 1_785_997_200_000,
           bucketEnd: 1_785_997_500_000,
           partial: false,
-          cost: { ...measured, inputTokens: 400, outputTokens: 0 },
+          cost: { ...measured, inputTokens: 1000, outputTokens: 0 },
           inputReportedResponseCount: 2,
           outputReportedResponseCount: 0,
         },
@@ -208,9 +217,7 @@ test.describe('token-flow chart', () => {
 
       await page.goto('/#/monitor/ai');
       await fluentRootReady(page);
-      await page.evaluate((t) => {
-        document.documentElement.dataset['theme'] = t;
-      }, theme);
+      await setTheme(page, theme);
       await expect(page.locator(CHART)).toBeVisible();
 
       const measured = await page.evaluate(() => {
@@ -221,24 +228,29 @@ test.describe('token-flow chart', () => {
         /*
          * THE SURFACE THE BARS ARE ACTUALLY PAINTED ON, found by walking up for
          * the first ancestor that paints one — not a token named on the guess
-         * that it is the one behind. `--panel` was that guess and it is wrong:
-         * nothing between the chart and `<body>` sets a background, so the
-         * chart sits on `--bg`. A ratio measured against a colour that is not
-         * behind the mark measures nothing, and would keep reading fine after a
-         * real regression.
+         * that it is the one behind. `--panel` was that guess and it is wrong
+         * twice over: nothing between the chart and `<body>` sets a background,
+         * and the thing that does is neither of those — it is the FluentProvider
+         * root, whose background comes from a Fluent token and not from this
+         * app's palette at all. Measured, not assumed, precisely because the
+         * answer was not the one the assumption produced; a ratio taken against
+         * a colour that is not behind the mark measures nothing and would keep
+         * reading fine straight through a real regression.
          */
         const opaque = (color: string) => color !== 'transparent' && !/,\s*0\)$/.test(color);
         let node: Element | null = document.querySelector('.token-flow');
         let surface = '';
+        let surfaceFrom = 'none';
         while (node) {
           const background = getComputedStyle(node).backgroundColor;
           if (opaque(background)) {
             surface = background;
+            surfaceFrom = `${node.tagName.toLowerCase()}.${node.className || '(no class)'}`;
             break;
           }
           node = node.parentElement;
         }
-        return { inColor: seg('in'), outColor: seg('out'), surface };
+        return { inColor: seg('in'), outColor: seg('out'), surface, surfaceFrom };
       });
 
       // Each segment paints exactly the token it claims to, resolved through the
@@ -255,9 +267,20 @@ test.describe('token-flow chart', () => {
       // behind it — in BOTH themes, which is the point of running this twice.
       // The walk above must have found a painted surface; an empty string here
       // would silently make both ratios meaningless.
+      // Both readings carry the colours they were taken from: a bare ratio in a
+      // failure tells you the palette is wrong but not which pair to change,
+      // and the surface is FOUND rather than named, so it is the one value a
+      // reader cannot look up in `index.css`.
+      const on = `on ${measured.surface} (${measured.surfaceFrom})`;
       expect(measured.surface).not.toBe('');
-      expect(contrastRatio(measured.inColor, measured.surface)).toBeGreaterThanOrEqual(3);
-      expect(contrastRatio(measured.outColor, measured.surface)).toBeGreaterThanOrEqual(3);
+      expect(
+        contrastRatio(measured.inColor, measured.surface),
+        `tokens-in ${measured.inColor} ${on}`,
+      ).toBeGreaterThanOrEqual(3);
+      expect(
+        contrastRatio(measured.outColor, measured.surface),
+        `tokens-out ${measured.outColor} ${on}`,
+      ).toBeGreaterThanOrEqual(3);
       /*
        * NO MUTUAL-CONTRAST ASSERTION BETWEEN THE TWO SERIES, deliberately.
        * WCAG contrast is a LUMINANCE ratio, and two categorical hues are
