@@ -82,6 +82,39 @@ describe('GET /api/quota', () => {
     expect(body.generated_at).toBeLessThanOrEqual(nowSeconds + 1);
   });
 
+  /**
+   * #1023 — the shape the spend guard now sees for most of the day.
+   *
+   * The provider stops reporting `five_hour` when there is no active session.
+   * That used to make the whole reading UNREADABLE, which is what put studio on
+   * `unrecognized_payload` for 31 of the guard's reads in three days. The guard
+   * never looked at `five_hour`, so the ONLY thing that has to survive is the
+   * key path it does parse — asserted here literally, and through the consumer's
+   * own arithmetic, because a type check cannot see either.
+   */
+  it('serves a reading with no five_hour at the key path the guard parses', async () => {
+    const app = await appReading({ seven_day: { utilization: 0.07, resets_at: 1_785_636_000 } });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+    expect(body.account.claude.seven_day.utilization).toBe(0.07);
+    expect(consumerPercent(body)).toBe(7);
+    // OMITTED, not `null`. A `null` here would be the guard's own signal for
+    // "unreadable" appearing one level down, where it means something else.
+    expect(body.account.claude).not.toHaveProperty('five_hour');
+    // Still a READING, so it carries no reason for its own absence (#825).
+    expect(body).not.toHaveProperty('unavailable');
+  });
+
+  it('serves an unreported reset instant as null rather than omitting or faking it', async () => {
+    const app = await appReading({ seven_day: { utilization: 0.07, resets_at: null } });
+    const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
+    expect(body.account.claude.seven_day.resets_at).toBeNull();
+    // `quota_parse_reset` in loop/drive.sh requires an int and prints '' for
+    // anything else, so a null takes the identical path to an absent field —
+    // the "window reopens at" log line is simply skipped, which it documents as
+    // intended. The PERCENT is unaffected, which is the property that matters.
+    expect(consumerPercent(body)).toBe(7);
+  });
+
   it('round-trips through the consumer arithmetic to the right percent', async () => {
     const app = await appReading(READING);
     const body = (await app.inject({ method: 'GET', url: '/api/quota' })).json();
