@@ -459,13 +459,29 @@ describe('AiActivityPage', () => {
       expect(hidden?.textContent).toContain('10 in / 4 out');
     });
 
-    it('is hidden entirely when the window has no activity at all', async () => {
-      activityMock.mockResolvedValue(snapshot({ series: { bucketMs: 300_000, buckets: [] } }));
+    /*
+     * Pins the guard the chart actually sits behind — `models`/`agentCli`, NOT
+     * its own `buckets`. An earlier version of this passed `buckets: []`, which
+     * is the fixture default and so varied nothing: it read as though an empty
+     * series were what hides the chart, when a row of zero-height bars on a
+     * baseline is exactly what it exists to avoid drawing. Asserting the TABLE
+     * is gone too is the point — the two are one guard, so the chart cannot come
+     * back on its own and state "no tokens" where the notice states "nothing
+     * happened".
+     */
+    it('is hidden by the same empty-window guard as the model table', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          models: [],
+          agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
+        }),
+      );
       const { container } = render(<AiActivityPage />);
       await waitFor(() =>
         expect(screen.getByText(/No AI or agent activity in this window/)).toBeTruthy(),
       );
       expect(container.querySelector('.token-flow')).toBeNull();
+      expect(container.querySelector('.ai-model-table')).toBeNull();
     });
   });
 });

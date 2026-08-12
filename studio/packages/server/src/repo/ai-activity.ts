@@ -19,9 +19,11 @@ import type { Db } from './types.js';
  * BOUNDED, in the same sense `aggregatePipelineCost` (#599) is: four queries
  * whose result sets are O(distinct provider/model pairs) + O(1) + O(4) +
  * O(buckets in the window), never a load of every metered event into memory. The
- * window makes it cheaper still. The bucket count is bounded by `maxBucketCount`
- * REGARDLESS of the data — see `buildSeries`, where a future-dated row is folded
- * into the last bucket rather than allowed to extend the series.
+ * window makes it cheaper still. The bucket query's ROW COUNT — not merely the
+ * series built from it — is bounded by `maxBucketCount` REGARDLESS of the data,
+ * because `bucketStartExpr` clamps inside the GROUP BY. Bounding it afterwards
+ * in JS would leave the fetch itself unbounded, which is the half that costs
+ * memory; see that function for why a clamp and not a filter.
  *
  * WHY NOT A LIST OF UNFINISHED RUNS — the shape this deliberately is not. Run
  * liveness is not evidence of AI use in either direction: `LIVE_RUN_STATUSES`
@@ -138,7 +140,7 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
         inputTokens: acc.inputTokens + row.inputTokens,
         outputTokens: acc.outputTokens + row.outputTokens,
       }),
-      { ...EMPTY_BUCKET_AGGREGATES },
+      { ...EMPTY_METERED_AGGREGATES },
     );
 
     // (B) Agent-CLI subprocesses — the untokened half of "connected AI" use.
@@ -192,7 +194,7 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
     // (D) #967 — the SAME billed exchanges as (A), partitioned by TIME.
     const bucketRows = tx
       .select({
-        bucketStart: bucketStartExpr(filter.bucketMs),
+        bucketStart: bucketStartExpr(filter.bucketMs, lastBucketStart(filter)),
         ...meteredAggregateColumns(),
         // The token-presence twin of `accumulateMetered`'s counters. `count(x)`
         // counts NON-NULL x, so this is "how many of these exchanges actually
@@ -203,7 +205,7 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
       .from(runEvents)
       .innerJoin(runs, eq(runEvents.runId, runs.id))
       .where(and(...eventConditions('activity.metered')))
-      .groupBy(bucketStartExpr(filter.bucketMs))
+      .groupBy(bucketStartExpr(filter.bucketMs, lastBucketStart(filter)))
       .all();
 
     return {
@@ -218,7 +220,24 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
 
 /**
  * The bucket a `run_events.ts` falls in, as an epoch-millisecond multiple of
- * `bucketMs`.
+ * `bucketMs`, CLAMPED to `lastBucketStart`.
+ *
+ * THE CLAMP IS WHAT MAKES THE QUERY BOUNDED, and it has to live HERE rather than
+ * in `buildSeries` for a reason the fold cannot cover. `run_events.ts` has no
+ * upper bound — clock skew or a fixture can date an event after `nowMs` — and
+ * grouping by the raw bucket therefore yields one row per distinct future
+ * bucket: a single row dated a year out returns ~105,000 rows on the `1h`
+ * window, every one of them materialised by `.all()` before any JS runs. Folding
+ * them afterwards bounds the SERIES but not the FETCH, which is the half that
+ * costs memory. Clamping inside the GROUP BY makes SQLite do the fold, so the
+ * result set is `maxBucketCount` rows REGARDLESS of the data.
+ *
+ * It is a clamp and not a `ts <= nowMs` filter because the row must still be
+ * COUNTED: query (A) has no upper bound either, so dropping future-dated rows
+ * here would break `sum(series.buckets[].cost) === totals` and the bars would
+ * visibly fail to add up to the "Tokens" figure beside them. Clamping keeps both
+ * properties — the row lands in the latest bucket we can defend, and the series
+ * still cannot exceed its bound.
  *
  * THE `cast(… as integer)` IS LOAD-BEARING, and its absence is silent. SQLite's
  * `/` is integer division only when BOTH operands are INTEGERs — but `bucketMs`
@@ -237,8 +256,16 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
  * SELECT and the GROUP BY must be the identical expression, and the only way to
  * guarantee that is to have one definition of it.
  */
-function bucketStartExpr(bucketMs: number) {
-  return sql<number>`(cast(${runEvents.ts} / ${bucketMs} as integer)) * ${bucketMs}`;
+function bucketStartExpr(bucketMs: number, lastBucketStart: number) {
+  // `min(X, Y)` with TWO arguments is SQLite's scalar min, not the aggregate —
+  // the aggregate is the one-argument form, and using it here would collapse the
+  // whole result to a single row.
+  return sql<number>`min((cast(${runEvents.ts} / ${bucketMs} as integer)) * ${bucketMs}, ${lastBucketStart})`;
+}
+
+/** The bucket containing `nowMs` — the last one the series can legitimately hold. */
+function lastBucketStart(filter: AiActivityFilter): number {
+  return Math.floor(filter.nowMs / filter.bucketMs) * filter.bucketMs;
 }
 
 type BucketRow = MeteredAggregates & {
@@ -260,16 +287,17 @@ type BucketRow = MeteredAggregates & {
  * means the bucket holds only in-window events — which is exactly what `partial`
  * then declares.
  *
- * IT ENDS AT THE BUCKET CONTAINING `nowMs`, AND A FUTURE-DATED ROW IS FOLDED
- * INTO IT RATHER THAN EXTENDING IT. `run_events.ts` is not bounded above by
- * anything — clock skew or a fixture can date an event after `nowMs` — and an
- * earlier draft simply widened the range to cover whatever came back, to keep
+ * IT ENDS AT THE BUCKET CONTAINING `nowMs`, WHICH IS ALSO THE LAST BUCKET THE
+ * QUERY CAN RETURN. `run_events.ts` is not bounded above by anything — clock
+ * skew or a fixture can date an event after `nowMs` — and an earlier draft
+ * simply widened the range to cover whatever came back, to keep
  * `sum(buckets) === totals` true unconditionally. That bought the invariant at
  * the price of the bound: ONE row dated a year out turns a 13-bucket `1h`
  * window into ~105,000 buckets, every one of which the chart then renders as a
- * list item. Folding keeps BOTH properties — the row is still counted, so the
- * bars still add up to the tile above them, and the series can never exceed
- * `maxBucketCount`.
+ * list item. `bucketStartExpr`'s clamp keeps BOTH properties — the row is still
+ * counted, so the bars still add up to the tile above them, and neither the
+ * series nor the fetch behind it can exceed `maxBucketCount`. This function
+ * therefore only has to fill the range; it does no clamping of its own.
  *
  * Folding is also the more honest of the two readings: the series is a picture
  * of the window the caller asked for, and an event stamped in the future did not
@@ -286,17 +314,14 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
   const last = alignDown(nowMs);
 
   /*
-   * Keyed by CLAMPED bucket, so two rows that clamp to the same bucket merge
-   * rather than one silently replacing the other — the merge is what keeps the
-   * fold lossless, and a plain `new Map(rows.map(...))` would have dropped all
-   * but the last future-dated row.
+   * A plain index, because the rows arrive ALREADY clamped and already merged:
+   * `bucketStartExpr` does the clamping inside the GROUP BY, so SQLite folds a
+   * future-dated row into `last` before the row set is materialised. Re-clamping
+   * here would be a second authority for the same rule, and — worse — it would
+   * make the bound look enforced while the unbounded fetch it exists to prevent
+   * had already happened.
    */
-  const byStart = new Map<number, BucketRow>();
-  for (const row of rows) {
-    const key = Math.min(row.bucketStart, last);
-    const prior = byStart.get(key);
-    byStart.set(key, prior === undefined ? { ...row, bucketStart: key } : mergeRows(prior, row));
-  }
+  const byStart = new Map<number, BucketRow>(rows.map((row) => [row.bucketStart, row]));
 
   const buckets = [];
   for (let start = first; start <= last; start += bucketMs) {
@@ -311,7 +336,7 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
       bucketStart: start,
       bucketEnd,
       partial: start < sinceMs || fullEnd > nowMs,
-      cost: runCostFromAggregates(row ?? EMPTY_BUCKET_AGGREGATES),
+      cost: runCostFromAggregates(row ?? EMPTY_METERED_AGGREGATES),
       inputReportedResponseCount: row?.inputReportedResponseCount ?? 0,
       outputReportedResponseCount: row?.outputReportedResponseCount ?? 0,
     });
@@ -320,30 +345,15 @@ function buildSeries(rows: BucketRow[], filter: AiActivityFilter): TokenSeries {
   return { bucketMs, buckets };
 }
 
-/**
- * Adds two bucket rows together, keeping the FIRST one's `bucketStart`.
- *
- * Only reachable via the future-dated fold above, where the destination bucket
- * is the one being kept. Every field is a count or a sum, so addition is the
- * whole merge — the derived `RunCost` is computed after, from the merged
- * aggregates, rather than by combining two already-derived `RunCost`s (which
- * would have to re-derive `complete` from figures that no longer carry it).
+/*
+ * `mergeRows` used to live here, adding two bucket rows together after the JS
+ * fold clamped them onto the same bucket. It is gone because SQLite now does the
+ * clamping inside the GROUP BY, so the rows arrive already summed by the same
+ * `sum()`/`count()` expressions that build every other bucket — one aggregation
+ * path instead of two that had to agree.
  */
-function mergeRows(a: BucketRow, b: BucketRow): BucketRow {
-  return {
-    bucketStart: a.bucketStart,
-    responseCount: a.responseCount + b.responseCount,
-    pricedResponseCount: a.pricedResponseCount + b.pricedResponseCount,
-    unpricedResponseCount: a.unpricedResponseCount + b.unpricedResponseCount,
-    totalCostEstimate: a.totalCostEstimate + b.totalCostEstimate,
-    inputTokens: a.inputTokens + b.inputTokens,
-    outputTokens: a.outputTokens + b.outputTokens,
-    inputReportedResponseCount: a.inputReportedResponseCount + b.inputReportedResponseCount,
-    outputReportedResponseCount: a.outputReportedResponseCount + b.outputReportedResponseCount,
-  };
-}
 
-const EMPTY_BUCKET_AGGREGATES: MeteredAggregates = {
+const EMPTY_METERED_AGGREGATES: MeteredAggregates = {
   responseCount: 0,
   pricedResponseCount: 0,
   unpricedResponseCount: 0,

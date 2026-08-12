@@ -61,9 +61,22 @@
      Validated, not eyeballed — both modes clear the six checks (OKLCH lightness
      band, chroma floor, adjacent CVD separation, normal-vision separation, and
      3:1 against the surface, which is what WCAG 1.4.11 asks of a graphical
-     object). Worst adjacent CVD separation is dE 22.4 dark / 20.6 light, well
-     above the 8 floor. They are also never the ONLY encoding: the legend and
-     each bar's own text name the series.
+     object). Worst adjacent CVD separation is dE 22.4 dark / 20.6 light on the
+     palette validator's own scale, well above its floor of 8.
+
+     THAT FIGURE IS AUTHORING-TIME PROVENANCE, NOT A CI-ENFORCED BOUND — it comes
+     from an external validator, on a perceptual scale this repo has no
+     implementation of, so nothing here can recompute it and no test asserts it.
+     Recorded with its source so a later reader knows which, rather than as a
+     bare number inviting the confidence of a measurement. The independently
+     reproducible half, checked with a stdlib CIE76 dE over Vienot-1999
+     protan/deutan/tritan simulations: the pair separates by dE 96+ under ALL
+     THREE, against 100 under normal vision — i.e. CVD barely degrades it. The
+     e2e (`token-flow-chart.spec.ts`) pins what a test honestly can: that each
+     series resolves its OWN token, in both themes.
+
+     They are also never the ONLY encoding: the legend and each bar's own text
+     name the series.
 
      Deliberately NOT --accent or the outcome hues. Those already mean selection
      and success/failure/completion, and a chart series is neither — the same
