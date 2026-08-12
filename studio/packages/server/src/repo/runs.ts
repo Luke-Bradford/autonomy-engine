@@ -208,6 +208,7 @@ export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): R
     const query = tx
       .select({
         run: runs,
+        pipelineId: pipelines.id,
         pipelineName: pipelines.name,
         pipelineVersion: pipelineVersions.version,
         triggerName: triggers.name,
@@ -227,6 +228,7 @@ export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): R
     return rows.map((row) =>
       RunSummarySchema.parse({
         ...row.run,
+        pipelineId: row.pipelineId,
         pipelineName: row.pipelineName,
         pipelineVersion: row.pipelineVersion,
         triggerName: row.triggerName,

@@ -4,7 +4,8 @@ import {
   RunStatusSchema,
   WaitingReasonSchema,
 } from '@autonomy-studio/shared';
-import { runStatusLabel } from './runStatus';
+import { ALL_TONES } from './nodeStatus';
+import { runStatusLabel, runStatusTone } from './runStatus';
 
 describe('#870 runStatusLabel', () => {
   /**
@@ -77,5 +78,40 @@ describe('#870 runStatusLabel', () => {
     expect(runStatusLabel('failure')).toBe('failure');
     expect(runStatusLabel('skipped')).toBe('skipped');
     expect(runStatusLabel('interrupted')).toBe('interrupted');
+  });
+});
+
+/**
+ * U29 (#1015) — the cross-run timeline paints a BAR per run, and a bar needs a
+ * hue. Kept here beside the words rather than in the chart, for the reason the
+ * file's header gives: the run vocabulary lives in one place and no surface owns
+ * its own copy.
+ */
+describe('runStatusTone', () => {
+  it('gives every DB run status a tone, exhaustively', () => {
+    for (const status of RunStatusSchema.options) {
+      expect(ALL_TONES, `no tone for ${status}`).toContain(runStatusTone(status));
+    }
+  });
+
+  it('separates the terminal outcomes an operator scans for', () => {
+    expect(runStatusTone('success')).toBe('success');
+    expect(runStatusTone('failure')).toBe('failure');
+    // `interrupted` is a FAILED outcome, not a neutral one: the run did not
+    // finish what it was asked to do, and a chart that greys it out hides the
+    // one row the operator is looking for.
+    expect(runStatusTone('interrupted')).toBe('failure');
+    expect(runStatusTone('skipped')).toBe('skipped');
+  });
+
+  it('calls a pre-admission run HOLDING, not running', () => {
+    // No surface reads these two yet — `unplottableReason` keeps a `queued` run
+    // off the axis and the named list beneath renders no swatch — but the map is
+    // exhaustive by construction, and a pre-admission fire must never be worded
+    // as executing on the day something does read them.
+    expect(runStatusTone('queued')).toBe('holding');
+    expect(runStatusTone('pending')).toBe('holding');
+    expect(runStatusTone('waiting')).toBe('holding');
+    expect(runStatusTone('running')).toBe('running');
   });
 });

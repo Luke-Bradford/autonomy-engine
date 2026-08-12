@@ -1,4 +1,5 @@
 import type { RunStatus, WaitingReason } from '@autonomy-studio/shared';
+import type { StatusTone } from './nodeStatus';
 
 /**
  * #870 — the Monitor's ONE run-level status vocabulary, the twin of
@@ -111,4 +112,56 @@ export function runStatusLabel(
     return `waiting (${WAITING_REASON_LABELS[waitingReason]})`;
   }
   return RUN_STATUS_LABELS[status];
+}
+
+/**
+ * U29 (#1015) — what COLOUR a run is, for the surfaces that paint rather than
+ * word: the cross-run timeline's bars.
+ *
+ * Here rather than in the chart for the reason the file header gives — the run
+ * vocabulary lives in one place — and exhaustive by construction for the reason
+ * `RUN_STATUS_LABELS` is: a ninth `RunStatus` must force a decision rather than
+ * fall through to a default hue. That default is not hypothetical. A timeline
+ * bar carries a `background` so the track is visible at all, so a status with no
+ * tone does not render as nothing; it renders as a plausible grey bar that
+ * reports a FAILURE as neutral, which is the one thing a monitoring chart may
+ * not do. `palette.test.ts` pins a CSS rule for every tone this can return.
+ *
+ * The tone vocabulary is `nodeStatus.ts`'s `StatusTone`, deliberately shared:
+ * "this went wrong" should be the same red whether the thing is a node or a run.
+ * The MAPPING is not shared, and could not be — these are different enums — and
+ * the same non-injectivity the node half records applies here: several statuses
+ * collapse onto `holding`, which is fine on a chart where the WORD sits beside
+ * the bar.
+ *
+ * Two calls worth stating rather than leaving to be inferred:
+ *
+ *  - `interrupted` is `failure`, not `neutral`. The run did not do what it was
+ *    asked to; that it was stopped from outside rather than by an activity
+ *    throwing is a distinction the label already draws. Greying it would hide
+ *    the row an operator scanning for trouble is looking for.
+ *  - `pending` and `queued` are `holding`, not `running`. Neither is plotted as
+ *    a bar today — `unplottableReason` refuses `queued` outright, and `pending`
+ *    is plottable but has no finish to measure — and nothing renders a swatch
+ *    for the named list beneath the chart, so NO surface currently reads either
+ *    tone. They are worded anyway because the map is exhaustive by construction:
+ *    the only thing reading them is `palette.test.ts`'s completeness loop, which
+ *    is what guarantees a CSS rule exists before some later surface does read
+ *    one. Getting them right now is cheaper than discovering the default grey
+ *    later, and "running" would be the same lie in a swatch that plotting a
+ *    queued fire would be in a bar.
+ */
+const RUN_TONES: Record<RunStatus, StatusTone> = {
+  pending: 'holding',
+  queued: 'holding',
+  running: 'running',
+  waiting: 'holding',
+  success: 'success',
+  failure: 'failure',
+  interrupted: 'failure',
+  skipped: 'skipped',
+};
+
+export function runStatusTone(status: RunStatus): StatusTone {
+  return RUN_TONES[status];
 }

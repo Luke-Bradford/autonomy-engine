@@ -767,6 +767,36 @@ describe('listRunSummaries (R2)', () => {
     const summaries = listRunSummaries(db, { ownerId: 'local' });
     expect(summaries.map((s) => s.id)).toEqual([mine.id]);
   });
+
+  /**
+   * U29 (#1015) — the row carries the pipeline's IDENTITY, not only its name.
+   *
+   * The cross-run timeline groups runs by pipeline, and `pipelineName` cannot
+   * carry that: `pipelines` has a unique index on `(owner_id, resource_id)` and
+   * none on `(owner_id, name)`, so two distinct pipelines may share a name.
+   * Grouping by the name would merge them into one row of the chart — a chart
+   * asserting that one pipeline was busy when two were. This is the consumer the
+   * design doc's deferred `pipelineId` row was waiting for.
+   */
+  it('carries the pipeline id, so two same-named pipelines stay distinguishable', () => {
+    const { db, version, pipeline } = setup();
+    const twin = createPipeline(db, { ownerId: 'local', name: 'Nightly report' });
+    const twinVersion = createPipelineVersion(db, {
+      pipelineId: twin.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    const mine = createRun(db, buildRunInput(version.id));
+    const theirs = createRun(db, buildRunInput(twinVersion.id));
+
+    const byId = new Map(listRunSummaries(db, { ownerId: 'local' }).map((r) => [r.id, r]));
+    expect(byId.get(mine.id)?.pipelineName).toBe(byId.get(theirs.id)?.pipelineName);
+    expect(byId.get(mine.id)?.pipelineId).toBe(pipeline.id);
+    expect(byId.get(theirs.id)?.pipelineId).toBe(twin.id);
+  });
 });
 
 /**

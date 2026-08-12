@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Tab, TabList } from '@fluentui/react-components';
+import { Tab, TabList, ToggleButton } from '@fluentui/react-components';
 import { RunStatusSchema, type RunSummary, type TriggerPublic } from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
@@ -10,6 +10,7 @@ import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore
 import { formatRunDuration, formatWhen } from './format';
 import { runDetailPath } from './runPath';
 import { runStatusLabel } from './runStatus';
+import { RunTimeline } from './RunTimeline';
 import {
   hasActiveRunFilters,
   readRunFilters,
@@ -25,6 +26,13 @@ import {
   RUN_TABS,
   type RunTab,
 } from './runOrigin';
+
+/**
+ * U29 (#1015) — which rendering of the SAME filtered rows is on screen. A view,
+ * not a filter: it changes nothing about which runs are in scope, which is why
+ * it lives beside the tab rather than inside `runFilters.ts`.
+ */
+type RunView = 'list' | 'timeline';
 
 /**
  * One Cost cell. A component rather than an inline expression so the decision
@@ -123,6 +131,25 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
    * follows: the URL is the only authority, a default is the param's ABSENCE,
    * and anything unrecognised falls back to unfiltered rather than erroring.
    */
+  /**
+   * U29 (#1015) — List or Timeline, under exactly the rules `?tab=` follows: the
+   * URL is the only authority, the default is the param's ABSENCE, and anything
+   * unrecognised falls back to the default rather than erroring. That makes a
+   * timeline link shareable and Back a working undo.
+   *
+   * It costs nothing to keep across the other URL writers: `selectTab`,
+   * `setFilter` and `clearFilters` all COPY `searchParams` and `clearFilters`
+   * deletes only `RUN_FILTER_PARAMS`, so switching a filter keeps the view.
+   */
+  const view: RunView = searchParams.get('view') === 'timeline' ? 'timeline' : 'list';
+
+  function selectView(next: RunView) {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'list') params.delete('view');
+    else params.set('view', next);
+    setSearchParams(params);
+  }
+
   const filters = useMemo(() => readRunFilters(searchParams), [searchParams]);
   const { status: statusFilter, pipelineId, triggerId, since } = filters;
   const filtered = hasActiveRunFilters(filters);
@@ -226,6 +253,22 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
     <section aria-labelledby="runs-heading">
       <div className="page-header">
         <h2 id="runs-heading">Runs</h2>
+        {/* A `role="group"` of toggles rather than a second Fluent `TabList`:
+            the panel below is already labelled by the ORIGIN tab, and two
+            `role="tab"` sets over one panel is a claim about the markup that
+            is not true. */}
+        <div role="group" aria-label="Runs view" className="run-view-toggle">
+          <ToggleButton size="small" checked={view === 'list'} onClick={() => selectView('list')}>
+            List
+          </ToggleButton>
+          <ToggleButton
+            size="small"
+            checked={view === 'timeline'}
+            onClick={() => selectView('timeline')}
+          >
+            Timeline
+          </ToggleButton>
+        </div>
         <button type="button" onClick={() => setReloadKey((k) => k + 1)}>
           Refresh
         </button>
@@ -375,6 +418,13 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
                   {filtered ? ' match these filters' : ''}.
                 </p>
               )
+            ) : view === 'timeline' ? (
+              /* One panel, one rendering — the timeline REPLACES the table
+                 rather than sitting above it. Showing both would put every run
+                 id and pipeline name on screen twice, which is the ambiguity
+                 `AttemptTimeline` records for its own untimed list, and would
+                 make the table's existing row queries match two things. */
+              <RunTimeline runs={visible} />
             ) : (
               <table>
                 <thead>

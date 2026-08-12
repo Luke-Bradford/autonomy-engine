@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
@@ -80,6 +80,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
     id: 'run_1',
     ownerId: 'local',
     pipelineVersionId: 'pv_1',
+    pipelineId: 'pipe_1',
     triggerId: 'trg_1',
     parentRunId: null,
     params: {},
@@ -604,5 +605,79 @@ describe('RunsPage — U26 filter pane', () => {
     renderWithRouter(<RunsPage store={storeWith()} />);
     expect(await screen.findByText('run_ok')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * U29 (#1015) — the List/Timeline switch.
+ *
+ * Its rules are `?tab=`'s, and the interesting one is that the view is a VIEW:
+ * it must not disturb which rows are in scope, and the other URL writers on this
+ * page must not disturb it.
+ */
+describe('U29 runs view toggle', () => {
+  beforeEach(() => {
+    listMock.mockResolvedValue([
+      run({
+        id: 'run_a',
+        pipelineId: 'pipe_a',
+        pipelineName: 'Alpha',
+        startedAt: 1,
+        finishedAt: 2,
+      }),
+    ]);
+  });
+
+  it('shows the table by default, and the chart at ?view=timeline', async () => {
+    renderWithRouter(<RunsPage />, '/monitor/runs');
+    await screen.findByText('run_a');
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Timeline' })).not.toBeInTheDocument();
+
+    cleanup();
+    renderWithRouter(<RunsPage />, '/monitor/runs?view=timeline');
+    expect(await screen.findByRole('heading', { name: 'Timeline' })).toBeInTheDocument();
+    // One panel, one rendering — showing both would put every run id on screen
+    // twice and make the table's own row queries ambiguous.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the table for an unrecognised ?view=, rather than erroring', async () => {
+    renderWithRouter(<RunsPage />, '/monitor/runs?view=gantt-3d');
+    await screen.findByText('run_a');
+    expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+
+  it('writes the view to the URL, and clears the param for the default', async () => {
+    const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
+    render(<RouterProvider router={router} />);
+    await screen.findByText('run_a');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    expect(router.state.location.search).toBe('?view=timeline');
+
+    await userEvent.click(screen.getByRole('button', { name: 'List' }));
+    // The default is the param's ABSENCE — one canonical URL per view.
+    expect(router.state.location.search).toBe('');
+  });
+
+  /**
+   * The view survives a FILTER change. `clearFilters` deletes only
+   * `RUN_FILTER_PARAMS` and every other writer copies `searchParams`, so this
+   * holds today for free — which is exactly why it is worth pinning: nothing in
+   * the code says it, and a future writer that rebuilds the params from scratch
+   * would silently throw the operator back to the table.
+   */
+  it('keeps the view when a filter changes', async () => {
+    const router = createMemoryRouter(ROUTES, {
+      initialEntries: ['/monitor/runs?view=timeline'],
+    });
+    render(<RouterProvider router={router} />);
+    await screen.findByRole('heading', { name: 'Timeline' });
+
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
+
+    expect(router.state.location.search).toContain('view=timeline');
+    expect(await screen.findByRole('heading', { name: 'Timeline' })).toBeInTheDocument();
   });
 });
