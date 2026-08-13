@@ -697,10 +697,10 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  * before this one.
  *
  * #1053 added a SECOND reader of "is the parent over" that deliberately reads the
- * LOG instead (`parentIsOver`). Not a contradiction and not drift: that one runs
- * INSIDE the `running` scan, so the last sentence above — this sweep's whole
- * licence for the cheap read — is not available to it. See its docblock; the two
- * are also answering different questions (drive vs consume).
+ * LOG instead. Not a contradiction and not drift — the argument is in
+ * `parentIsOver`'s docblock, which owns it; the short version is that the last
+ * sentence above is this sweep's whole licence for the cheap read, and that
+ * licence is not available inside the `running` scan.
  *
  * WHY NO EVENT IS APPENDED. `terminalizeInterrupted`'s no-events branch patches
  * the row and appends nothing, and that is the right primitive here rather than
