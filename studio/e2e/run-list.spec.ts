@@ -220,7 +220,10 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
   // ── The server: a real keyset walk, one row at a time ──────────────────────
   const first = await page.request.get('/api/runs?limit=1');
   expect(first.status()).toBe(200);
-  const firstPage = (await first.json()) as { items: { id: string }[]; nextCursor: string | null };
+  const firstPage = (await first.json()) as {
+    items: Record<string, unknown>[];
+    nextCursor: string | null;
+  };
   // BOUNDED — the property the route did not have. One row means one row.
   expect(firstPage.items).toHaveLength(1);
   // Newest-first, so the run fired second leads.
@@ -231,7 +234,7 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
     `/api/runs?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
   );
   expect(second.status()).toBe(200);
-  const secondPage = (await second.json()) as { items: { id: string }[] };
+  const secondPage = (await second.json()) as { items: Record<string, unknown>[] };
   // The cursor RESUMED rather than restarting: the older run, not the newer one
   // again. A silently-ignored cursor is the failure this pins.
   expect(secondPage.items[0]!.id).toBe(older);
@@ -241,16 +244,21 @@ test('#1083 — the runs list is served a page at a time, and extends on demand'
   expect(bad.status()).toBe(400);
 
   // ── The UI: Load older runs appends, and the tab count says so ─────────────
-  // The first page reports an older page exists; the second ends the walk.
+  /* The two pages are built from the REAL summaries fetched above — the same
+     rows, re-served one at a time so the boundary lands after row one. The
+     intercept deliberately does NOT forward to the server: the second request
+     carries a cursor this test invented, and the server would (correctly) 400
+     it, which is the very fail-closed behaviour asserted three lines up. */
+  const newerRow = firstPage.items[0]!;
+  const olderRow = secondPage.items[0]!;
   let served = 0;
   await page.route('**/api/runs?*', async (route) => {
-    const body = await (await route.fetch()).json();
     served += 1;
     await route.fulfill({
       json:
         served === 1
-          ? { items: [body.items[0]], nextCursor: 'e2e_cursor' }
-          : { items: [body.items[1]], nextCursor: null },
+          ? { items: [newerRow], nextCursor: 'e2e_cursor' }
+          : { items: [olderRow], nextCursor: null },
     });
   });
 
