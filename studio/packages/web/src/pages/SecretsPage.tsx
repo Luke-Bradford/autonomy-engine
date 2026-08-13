@@ -85,7 +85,20 @@ export function SecretsPage() {
   // a warning, so the cost is not a visible bug — it is that one of the two
   // load paths is guarded and the other is not, which is exactly the kind of
   // asymmetry the next reader has to re-derive.
-  const refresh = useCallback(() => load(mountAbort.current?.signal), [load]);
+  //
+  // A NULL ref is not "no controller available", it is proof the cleanup below
+  // has already run — i.e. the component is gone. That happens whenever the
+  // mutation itself was still awaiting at unmount, so the refresh had not yet
+  // been called to capture a signal. Starting an unabortable request for a
+  // component that no longer exists is strictly worse than not starting one:
+  // there is nobody left to show the result to. So skip, rather than fall back
+  // to an unguarded load — which keeps the invariant TOTAL (no load ever runs
+  // without the mount controller) instead of true only for the timings tested.
+  const refresh = useCallback(() => {
+    const controller = mountAbort.current;
+    if (!controller) return Promise.resolve();
+    return load(controller.signal);
+  }, [load]);
 
   useEffect(() => {
     // Created per effect RUN, not once per component: StrictMode mounts, tears

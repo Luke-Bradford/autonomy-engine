@@ -266,6 +266,33 @@ describe('SecretsPage', () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it('starts NO refresh at all when the delete itself was still pending at unmount', async () => {
+    // The sibling test above covers a refresh already in flight at unmount. This
+    // is the earlier timing: unmount lands while `deleteSecret` is still
+    // awaiting, so the cleanup nulls the controller ref BEFORE the continuation
+    // reaches `refresh` — there is no signal left to capture. Falling back to an
+    // unguarded load would start an unabortable request on behalf of a component
+    // that no longer exists, so the refresh must not be issued at all.
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValue([secret()]);
+    const pendingDelete = deferred<void>();
+    deleteMock.mockReturnValue(pendingDelete.promise);
+    const { unmount } = renderWithRouter(<SecretsPage />);
+    await screen.findByText('stripe-key');
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledTimes(1));
+
+    // Unmount while the DELETE is still in flight, then let it resolve.
+    unmount();
+    pendingDelete.resolve();
+    await pendingDelete.promise;
+
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(1));
+  });
+
   it('reports a failed delete instead of leaving the row silently in place', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
