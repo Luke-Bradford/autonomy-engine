@@ -604,11 +604,38 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
         throw new Error(
           `no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`,
         );
-      const mid = path.getPointAtLength(path.getTotalLength() / 2);
       const ctm = path.getScreenCTM();
       if (!ctm) throw new Error('the edge path has no screen transform');
-      const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
-      return { x: p.x, y: p.y };
+      const total = path.getTotalLength();
+      const own = path.closest('.react-flow__edge');
+      const screen = (fraction: number) => {
+        const at = path.getPointAtLength(total * fraction);
+        const p = new DOMPoint(at.x, at.y).matrixTransform(ctm);
+        return { x: p.x, y: p.y };
+      };
+      /* A POINT THIS EDGE WOULD ACTUALLY RECEIVE, which the midpoint is not
+         always. A click goes to whatever is topmost at the pixel, and two edges
+         between the same pair of nodes run within 10px of each other at their
+         middles (MEASURED on `back-edge-authoring`'s forward + back pair:
+         1122,558 and 1112,558). So the midpoint of one can be covered by the
+         other — the click then selects the wrong edge and the spec fails on a
+         property panel describing something it did not ask for, which reads as
+         a product bug rather than a miss.
+         Walking outward from the middle keeps the midpoint's virtue (it is the
+         point furthest from either endpoint, so least likely to be behind a
+         node) while stepping off a collision when there is one. An edge's OWN
+         label counts as itself: the label rect belongs to the same `<g>`, and a
+         click on it selects that edge. */
+      for (const fraction of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7]) {
+        const point = screen(fraction);
+        const hit = document.elementFromPoint(point.x, point.y);
+        if (hit !== null && own !== null && hit.closest('.react-flow__edge') === own) return point;
+      }
+      /* Nothing on the path hit-tested to it — mid-layout, or genuinely buried.
+         Return the middle rather than throwing: a throw ABORTS `expect.poll`
+         outright (it does not retry the callback), which would turn a transient
+         into a hard failure. The caller's own assertion is the honest reporter. */
+      return screen(0.5);
     }, index);
 
   let previous = await read();
