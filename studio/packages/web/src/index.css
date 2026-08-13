@@ -1264,7 +1264,24 @@ td button + button {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 0.5rem 0.75rem;
-  min-width: 120px;
+  /* A FIXED width, not a minimum, and it is load-bearing rather than cosmetic.
+     The title is `nowrap` so it can elide, which means an unconstrained box
+     GROWS with its name: measured, "HTTP Request 1" made a node 188 flow units
+     wide against the ~120 a wrapping title used to produce. Wide nodes pushed
+     the right-hand one's source port PAST the canvas pane, where a reverse drag
+     lands on the property panel and starts nothing at all — the exact failure
+     `connect-validation.spec.ts` documents at its `WIDE_CANVAS` constant, and it
+     came back as two red specs.
+
+     Uniform also reads better: a row of boxes that are all one size looks
+     intentional, where boxes sized by their titles look accidental. Long names
+     elide, and nothing is lost — the ellipsis is visual only, so the accessible
+     name and the property panel still carry the whole title.
+
+     132 rather than the 144 that first passed: at 144 the right-hand node's
+     source port cleared the pane by FOUR pixels, and a margin that thin is a
+     spec that goes red the next time the shell's chrome changes by a hair. */
+  width: 168px;
   display: flex;
   flex-direction: row;
   align-items: center;

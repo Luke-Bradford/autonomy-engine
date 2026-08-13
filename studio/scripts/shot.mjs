@@ -11,9 +11,12 @@
    the BROWSER, where `document` and `DOMPoint` are the globals. This file's own
    scope is Node's. */
 import { chromium } from '@playwright/test';
+import { PREVIEW_URL } from './previewPort.mjs';
 
 const [pipelineId, out = 'shot.png', selectEdge] = process.argv.slice(2);
-const base = process.env.PREVIEW_URL ?? 'http://127.0.0.1:8080';
+/* The preview server's ONE address, imported rather than repeated — a
+   screenshot taken against a different port is a screenshot of something else. */
+const base = PREVIEW_URL;
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1680, height: 940 } });

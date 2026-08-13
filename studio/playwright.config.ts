@@ -59,7 +59,17 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
  * cleared below — `secrets.ts` treats `''` as unset — as are the git host
  * credentials, which no spec needs and which should not reach a test server.
  */
-const DATA_DIR = join(ROOT, 'data', 'e2e');
+/* PER-PORT, so two suites can never share one SQLite file. `reset-state.mjs`
+   wipes this directory as the server's first act, so a second run starting while
+   a first is mid-flight deletes the database out from under it — the first run
+   then fails from wherever it had got to with `ECONNREFUSED`, which reads as
+   "the server died" and hides whatever it was actually testing. Measured: two
+   concurrent runs in this tree produced 32 and 91 connection-refused failures on
+   separate occasions, none of them real.
+
+   Keyed on the PORT because that is already the thing a second run has to change
+   to coexist (`E2E_SERVER_PORT`), so one override now buys both isolations. */
+const DATA_DIR = join(ROOT, 'data', `e2e-${PORT}`);
 
 export default defineConfig({
   testDir: './e2e',

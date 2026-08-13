@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import {
+  WIDE_CANVAS,
   addActivity,
   canvasNodes,
   connectNodes,
@@ -33,7 +34,6 @@ const REFUSAL = '.canvas-refusal';
 const OFFER = 'Make it a back-edge';
 
 /** See `connect-validation.spec.ts` — a reverse drag needs all four ports in the pane. */
-const WIDE_CANVAS = { width: 1800, height: 1000 };
 
 /** `HTTP Request → Write File`, so the reverse drag closes a forward cycle. */
 async function seedChain(page: Page): Promise<void> {

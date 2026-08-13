@@ -42,9 +42,18 @@ if (!dir) {
  * stored connection secret, neither of which is recoverable. The env var being
  * SET proves nothing about where it points.
  */
-if (basename(dir) !== 'e2e' || basename(dirname(dir)) !== 'data') {
+/**
+ * `e2e`, or `e2e-<port>` — the per-port form the config mints so two concurrent
+ * runs never share one SQLite file. Deliberately a NARROW widening: the suffix
+ * must be digits, so the guard still refuses `e2e-backup`, `e2e.old`, or
+ * anything that is merely near the name. The point of this check is that it
+ * cannot be satisfied by accident.
+ */
+const THROWAWAY_DIR = /^e2e(-\d+)?$/;
+
+if (!THROWAWAY_DIR.test(basename(dir)) || basename(dirname(dir)) !== 'data') {
   throw new Error(
-    `refusing to wipe ${dir} — E2E_DATA_DIR must be a directory named 'e2e' inside a 'data' directory`,
+    `refusing to wipe ${dir} — E2E_DATA_DIR must be a directory named 'e2e' or 'e2e-<port>' inside a 'data' directory`,
   );
 }
 
