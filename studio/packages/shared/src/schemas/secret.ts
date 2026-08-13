@@ -53,3 +53,66 @@ export type NewSecret = z.input<typeof NewSecretSchema>;
  */
 export const SecretPublicSchema = SecretSchema.omit({ ref: true, ciphertext: true });
 export type SecretPublic = z.infer<typeof SecretPublicSchema>;
+
+/**
+ * Upper bounds so a client cannot submit an unbounded payload to be encrypted
+ * and stored. `name` is a short human-chosen identifier; `secret` is generous
+ * enough for any realistic credential (an RSA-4096 PEM is ~3.2 KB, a full cert
+ * chain a few KB more) while still capping the encrypt-and-store cost.
+ */
+export const MAX_SECRET_NAME_LEN = 255;
+export const MAX_SECRET_VALUE_LEN = 16384;
+
+/**
+ * The client-facing write body of `POST /api/secrets`: a user-chosen `name` +
+ * the plaintext `secret`. `ownerId` is stamped server-side from the principal
+ * and `ref` (the opaque machine handle) is minted server-side — a client sets
+ * neither, and `.strict()` makes an attempt to smuggle either a loud 400 at the
+ * boundary rather than a silent drop. A secret write is the highest-stakes
+ * boundary in the API; there is no reason to be lenient about unknown keys.
+ *
+ * SHARED, so the route (`packages/server/src/routes/secrets.ts`) and the
+ * Secrets form (`packages/web/src/api/secrets.ts`) parse the SAME object rather
+ * than two copies that agree today. The `TriggerWriteBodySchema` precedent
+ * states the rule this follows: a response envelope can reasonably be
+ * re-declared client-side, but a RULE about which values are legal cannot — a
+ * copy drifts silently, and the drift only shows up as a 400 the client
+ * believed it had already ruled out. The `.refine` below is exactly such a
+ * rule.
+ *
+ * `ConnectionWriteSchema` (`packages/web/src/api/connections.ts`) does NOT do
+ * this — it re-declares the body client-side. That is not a counter-precedent
+ * to weigh against the above: the two declarations are structurally identical
+ * (its own docblock says it is "reconstructed to match the server's local
+ * `ConnectionWriteBodySchema` EXACTLY"), so it is precisely the copy-that-
+ * agrees-today this arrangement avoids. Pre-existing, and not this ticket's to
+ * change.
+ *
+ * `NewSecretSchema` is NOT the thing to derive this from: that is the internal
+ * INSERT shape, whose `ref` + `ciphertext` are the encrypted RESULT of this
+ * body rather than anything a client sends. (`name` does travel through
+ * unchanged into it — the two overlap there, they just do not correspond.)
+ */
+export const SecretWriteBodySchema = z
+  .object({
+    /*
+     * The name is a lookup KEY — F15's `{ "$secret": "<name>" }` sink resolves
+     * by it (case-insensitively per #533: `UNIQUE(owner_id, name COLLATE
+     * NOCASE)`, so a case-variant is a 409), and it is listed/deleted by it. So
+     * it must be non-blank AND already trimmed: a whitespace-only name (`" "`
+     * passes `min(1)`) or one with leading/trailing whitespace (`"key "` vs
+     * `"key"`) is a silent lookup footgun that ASCII case-folding does NOT
+     * cover. Reject it loudly at the boundary rather than mutating the client's
+     * input by trimming.
+     */
+    name: z
+      .string()
+      .min(1)
+      .max(MAX_SECRET_NAME_LEN)
+      .refine((s) => s.trim() === s && s.length > 0, {
+        message: 'name must not be blank or have leading/trailing whitespace',
+      }),
+    secret: z.string().min(1).max(MAX_SECRET_VALUE_LEN),
+  })
+  .strict();
+export type SecretWriteBody = z.infer<typeof SecretWriteBodySchema>;

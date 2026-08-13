@@ -4,6 +4,7 @@ import { sectionLabel } from './shell/hubs';
 import type { ShellRouteHandle } from './shell/routeHandle';
 import { HomePage } from './pages/HomePage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
+import { SecretsPage } from './pages/SecretsPage';
 import { PipelinesPage } from './pages/PipelinesPage';
 // #698 — loaded on demand (React Flow is reachable only from this route); the
 // `<Suspense>` boundary is in `AppShell`, inside `<main>`.
@@ -175,6 +176,11 @@ export const ROUTES: RouteObject[] = [
             path: 'connections',
             element: <ConnectionsPage />,
             handle: { crumb: sectionLabel('/manage/connections') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'secrets',
+            element: <SecretsPage />,
+            handle: { crumb: sectionLabel('/manage/secrets') } satisfies ShellRouteHandle,
           },
           {
             path: 'triggers',

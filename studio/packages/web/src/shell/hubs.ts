@@ -129,6 +129,13 @@ export const HUBS: readonly Hub[] = [
     // is where a hub's second section becomes navigable at all.
     sections: [
       { label: 'Connections', path: '/manage/connections' },
+      // #1060 — beside Connections, because they are the two places credentials
+      // enter the product and an operator looking for one will look at the
+      // other. Different provenance though: a connection's secret is bound to
+      // that connection and addressed by an opaque ref, while these are
+      // standalone and addressed by NAME, which is what `{"$secret":"<name>"}`
+      // resolves at dispatch.
+      { label: 'Secrets', path: '/manage/secrets' },
       { label: 'Triggers', path: '/manage/triggers' },
       { label: 'Git', path: '/manage/git' },
     ],

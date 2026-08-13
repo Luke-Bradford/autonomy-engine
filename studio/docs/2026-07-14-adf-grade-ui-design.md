@@ -264,8 +264,29 @@ P7 single-container Fastify static route still needs no history-API fallback.
 | `#/monitor/runs/:runId` | Run detail (live monitor) |
 | `#/manage` | index redirect (`replace`) → `#/manage/connections` |
 | `#/manage/connections` | Connections |
+| `#/manage/secrets` | Secrets (#1060) |
 | `#/manage/triggers` | Triggers |
+| `#/manage/git` | Git (workspace git) |
 | `#/*` | catch-all → `#/` (an unknown path, once the U3r legacy paths below have had their turn) |
+
+### Manage › Secrets (AS BUILT, 2026-08-13, #1060)
+
+Not a U-row: it closes a hole rather than building a planned surface. `/api/secrets` — the
+STANDALONE secret vault (item 7 / S1, `2026-07-16-foundation-unified-secret-model.md`) — had
+shipped complete server-side with ZERO web callers, while `{"$secret":"<name>"}` in a node's
+config resolves against exactly that table at dispatch. So a marker could be authored and the
+secret it names could not be created anywhere in the product.
+
+Shipped as list + create + delete at `#/manage/secrets`, beside Connections. Write-only end to
+end: no route returns a value, `SecretPublicSchema` omits `ciphertext` and `ref`, and the page
+renders a name and a date. There is no update route, so a delete-then-create is how a value is
+rotated — the delete confirmation says so, since it is also what breaks the nodes referencing
+that name.
+
+Still open, deliberately: a `{$secret}` PICKER in the node config form. `secretHeaders` is a
+`z.record`, which `classify()` has no case for, so it falls through to the generic JSON textarea
+(`packages/web/src/pages/pipeline/configForm.ts`) and the marker must be hand-typed. That is an
+authoring affordance on a control that works, and belongs with the U8a expression-picker work.
 
 ### U3r — legacy MVP-path compatibility (AS BUILT, 2026-07-24)
 
@@ -420,7 +441,7 @@ Decisions worth not re-deriving:
 - **No pane on Home.** Home declares no sections, so no pane renders. This is NOT a rule
   that a one-entry pane is not worth drawing — Author and Monitor ship exactly that today,
   because the container has to exist for U4's resources tree and U10's filters to land in,
-  and Manage genuinely has two entries. Home is different in kind: it IS the overview, so
+  and Manage genuinely has several. Home is different in kind: it IS the overview, so
   its pane could only ever point at the page you are already on.
 - **The drag deliberately bypasses React.** `pointermove` fires at refresh rate; routing
   each through the store would re-render the shell ~60×/s and persist to `localStorage`
