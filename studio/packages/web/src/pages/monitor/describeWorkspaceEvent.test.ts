@@ -237,6 +237,10 @@ describe('describeWorkspaceEvent (#1075)', () => {
    * `from` is the CAS expected-previous active and is `null` on the FIRST
    * publish. A template that interpolated it regardless would put the word
    * "null" — or an empty gap — in front of an operator reading a deploy history.
+   *
+   * This payload also carries NO `name` (#1077), which is the shape of a row
+   * written before that field existed — so the summary here pins the fallback
+   * to the `resourceId`. Keep it nameless.
    */
   it('calls the first publish the first publish, rather than replacing nothing', () => {
     const { summary, detail } = describeWorkspaceEvent(
@@ -252,6 +256,38 @@ describe('describeWorkspaceEvent (#1075)', () => {
     );
 
     expect(summary).toBe('Published a new active version of pipeline res_a');
+    expect(detail).toBe('Version pv_2, from commit fedcba9 — the first publish.');
+  });
+
+  /**
+   * #1077 — a publish names its pipeline, like every other variant in the
+   * union does. The name is captured on the payload at write time, so this
+   * renderer stays a pure function of one event and the page keeps its single
+   * request.
+   *
+   * The test ABOVE is the other half and is load-bearing rather than legacy
+   * clutter: its payload carries no `name`, which is exactly the shape of a row
+   * written before the field existed, and it pins the fallback to the
+   * `resourceId`. Between the two, neither the named nor the nameless case can
+   * regress unnoticed.
+   */
+  it('names the pipeline when the publish captured its name', () => {
+    const { summary, detail } = describeWorkspaceEvent(
+      event({
+        type: 'pipeline.published',
+        pipeline: 'res_a',
+        name: 'Nightly rollup',
+        from: null,
+        to: 'pv_2',
+        commit: 'fedcba9876543210fedcba9876543210fedcba98',
+        blob: 'blob_1',
+        by: 'local',
+      }),
+    );
+
+    expect(summary).toBe('Published a new active version of pipeline Nightly rollup');
+    // The detail is untouched: version ids stay ids. They are the identifiers an
+    // operator pastes into the version history, not prose.
     expect(detail).toBe('Version pv_2, from commit fedcba9 — the first publish.');
   });
 

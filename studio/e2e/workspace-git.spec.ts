@@ -354,6 +354,33 @@ test('a workspace connects to a repo, commits itself, imports it back, and disco
   ).toContainText('active');
 
   /**
+   * ── the publish is LEGIBLE in the audit log (#1077) ────────────────────────
+   *
+   * Here because this is the only spec in the suite that reaches a real
+   * publish — it needs a connected repo AND a git-provenanced version, which
+   * nothing else sets up. `manage-audit.spec.ts` owns the audit page's own
+   * narrative but runs in DB-only mode, so the `pipeline.published` variant is
+   * unreachable from it.
+   *
+   * What this proves that no unit test can: the name survives the WHOLE seam —
+   * the shared schema's new optional field, the server writing it through
+   * `appendWorkspaceEvent`'s parse, SQLite, the api wrapper, and the renderer.
+   * That parse is the trap: a server built against a stale `@autonomy-studio/
+   * shared` strips an unknown key SILENTLY at write, so every unit suite passes
+   * while the stored row has no name. This assertion is the only thing that
+   * fails in that world.
+   */
+  await page.goto('/#/monitor/audit');
+  await fluentRootReady(page);
+  const publishedRow = page
+    .getByRole('row')
+    .filter({ hasText: `Published a new active version of pipeline ${publishName}` });
+  await expect(publishedRow).toHaveCount(1);
+  // The defect itself: the row used to name the pipeline by its opaque
+  // `resourceId`. Nothing on this page may render one.
+  await expect(publishedRow).not.toContainText('res_');
+
+  /**
    * ── bind a trigger to the active version, in GIT mode (#981) ───────────────
    *
    * Here rather than in `trigger-bind-to-active.spec.ts` because this is the one

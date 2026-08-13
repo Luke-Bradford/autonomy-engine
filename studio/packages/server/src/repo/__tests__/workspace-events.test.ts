@@ -218,6 +218,40 @@ describe('getActivePublishedVersion (#3 G6c-1 — the active pointer projection)
     expect(getActivePublishedVersion(db, OWNER, 'res_pipe')).toBeNull();
   });
 
+  /**
+   * #1077 — a row written BEFORE `name` existed still reads. This is the guard
+   * on the one decision in that change that could break running workspaces:
+   * `name` is OPTIONAL, and it has to stay that way.
+   *
+   * The blast radius of getting it wrong is much wider than the audit page.
+   * This projection parses the stored payload on the CAS publish path
+   * (`routes/pipelines.ts` — a stale-publish refusal) and on bind-to-active
+   * (`routes/triggers.ts`), so a required field would make every already-
+   * published pipeline throw on its next publish. And `listWorkspaceEventsPage`
+   * parses the whole page all-or-nothing, so one legacy row would blank the
+   * ENTIRE audit log rather than degrade one line of it.
+   *
+   * `published()` deliberately omits `name` — it IS the legacy shape — so this
+   * asserts the absence explicitly rather than relying on that being noticed.
+   */
+  it('still projects a publish written before the name field existed', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, published());
+
+    const active = getActivePublishedVersion(db, OWNER, 'res_pipe');
+    expect(active?.to).toBe('pv_1');
+    // Absent, NOT manufactured: an event that never carried a name must not
+    // acquire a plausible-looking one on the way out (#473's rule — an absent
+    // fact is never defaulted into a benign-looking value).
+    expect(active?.name).toBeUndefined();
+  });
+
+  it('reads back the captured name when the publish carried one', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, published({ name: 'Nightly rollup' }));
+    expect(getActivePublishedVersion(db, OWNER, 'res_pipe')?.name).toBe('Nightly rollup');
+  });
+
   it('projects the LATEST publish (by append seq), not the newest wall-clock', () => {
     const { db } = freshDb();
     appendWorkspaceEvent(db, OWNER, published({ from: null, to: 'pv_1' }));
