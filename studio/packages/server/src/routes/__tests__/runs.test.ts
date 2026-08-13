@@ -1,8 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import {
   CATALOG_VERSION,
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  paginatedResponseSchema,
   RerunAcceptedSchema,
   RunDetailSchema,
   RunSchema,
@@ -17,6 +19,16 @@ import {
 import { eq } from 'drizzle-orm';
 import { pipelineVersions, runs } from '../../db/schema.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
+
+/**
+ * #1083 — `GET /api/runs` answers the `{ items, nextCursor }` envelope, so every
+ * assertion about WHICH runs come back reads `items`. Hoisted rather than
+ * repeated inline: the shape is the contract, and a test that reached past it
+ * would keep passing if the envelope regressed to a bare array.
+ */
+function runIdsOf(res: { json: () => { items: { id: string }[] } }): string[] {
+  return res.json().items.map((r) => r.id);
+}
 
 describe('runs routes (read-only)', () => {
   let app: FastifyInstance;
@@ -51,7 +63,7 @@ describe('runs routes (read-only)', () => {
 
     const listRes = await app.inject({ method: 'GET', url: '/api/runs' });
     expect(listRes.statusCode).toBe(200);
-    expect(listRes.json().map((r: { id: string }) => r.id)).toContain(run.id);
+    expect(runIdsOf(listRes)).toContain(run.id);
 
     const getRes = await app.inject({ method: 'GET', url: `/api/runs/${run.id}` });
     expect(getRes.statusCode).toBe(200);
@@ -79,9 +91,9 @@ describe('runs routes (read-only)', () => {
 
     const res = await app.inject({ method: 'GET', url: `/api/runs?rerunOf=${source.id}` });
     expect(res.statusCode).toBe(200);
-    const ids = res.json().map((r: { id: string }) => r.id);
+    const ids = runIdsOf(res);
     expect(ids).toEqual([rerun.id]);
-    expect(res.json()[0].rerunOf).toBe(source.id);
+    expect(res.json().items[0].rerunOf).toBe(source.id);
   });
 
   it("GET /api/runs?rerunOf= is owner-scoped — never lists another owner's reruns (authz != authn)", async () => {
@@ -106,7 +118,7 @@ describe('runs routes (read-only)', () => {
 
     const res = await app.inject({ method: 'GET', url: `/api/runs?rerunOf=${source.id}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual([]); // principal is `local`, not `someone-else`
+    expect(res.json().items).toEqual([]); // principal is `local`, not `someone-else`
   });
 
   /**
@@ -151,7 +163,7 @@ describe('runs routes (read-only)', () => {
         url: `/api/runs?status=failure&pipelineId=${pipelineId}&since=24h`,
       });
       expect(res.statusCode).toBe(200);
-      const ids = res.json().map((r: { id: string }) => r.id);
+      const ids = runIdsOf(res);
       expect(ids).toContain(wanted.id);
       // One exclusion per axis: the wrong pipeline, and — the one that matters —
       // another owner's run that satisfies every axis the caller supplied.
@@ -176,9 +188,9 @@ describe('runs routes (read-only)', () => {
         .run();
 
       const within = await app.inject({ method: 'GET', url: '/api/runs?since=24h' });
-      expect(within.json().map((r: { id: string }) => r.id)).toContain(stale.id);
+      expect(runIdsOf(within)).toContain(stale.id);
       const outside = await app.inject({ method: 'GET', url: '/api/runs?since=1h' });
-      expect(outside.json().map((r: { id: string }) => r.id)).not.toContain(stale.id);
+      expect(runIdsOf(outside)).not.toContain(stale.id);
     });
 
     /**
@@ -209,7 +221,7 @@ describe('runs routes (read-only)', () => {
       });
       const unknown = await app.inject({ method: 'GET', url: '/api/runs?pipelineId=pl_nope' });
       expect(foreign.statusCode).toBe(200);
-      expect(foreign.json()).toEqual([]);
+      expect(foreign.json().items).toEqual([]);
       expect(unknown.statusCode).toBe(foreign.statusCode);
       expect(unknown.json()).toEqual(foreign.json());
     });
@@ -440,7 +452,7 @@ describe('runs routes (read-only)', () => {
 
     const res = await app.inject({ method: 'GET', url: '/api/runs' });
     expect(res.statusCode).toBe(200);
-    const rows = z.array(RunSummarySchema).parse(res.json());
+    const rows = paginatedResponseSchema(RunSummarySchema).parse(res.json()).items;
     const summary = rows.find((r) => r.id === run.id);
     expect(summary).toBeDefined();
     expect(typeof summary?.pipelineName).toBe('string');
@@ -452,6 +464,145 @@ describe('runs routes (read-only)', () => {
     // Parsed from THIS run's summary, not `[0]` — the new ORDER BY no longer
     // guarantees which run is first.
     expect(() => RunSchema.parse(summary)).not.toThrow();
+  });
+
+  /**
+   * #1083 — the HTTP half of the keyset walk. The repo tests own WHICH rows a
+   * page holds; these own the BOUNDARY: that the route accepts `limit`/`cursor`
+   * at all, that a malformed cursor is a loud 400 rather than a silent first
+   * page, and that the owner scope survives a resumed request.
+   */
+  describe('pagination (#1083)', () => {
+    /**
+     * ITS OWN APP, deliberately, where the rest of this file shares one. The
+     * `DEFAULT_PAGE_SIZE` case has to seed more runs than a page holds, and on
+     * the shared db those rows become the newest page for every test after it —
+     * which is exactly how this block first broke a sibling assertion that had
+     * been passing for a year.
+     *
+     * PER-TEST, not per-block, for the same reason one step further in: these
+     * cases seed overlapping stamp ranges, so a shared db would leave each one
+     * asserting "the newest page" against the previous test's rows too. A fresh
+     * db makes the fixtures the ONLY runs, which is what every assertion here
+     * actually claims.
+     */
+    let pageApp: FastifyInstance;
+    let pageVersionId: string;
+
+    beforeEach(async () => {
+      pageApp = await buildTestApp();
+      const pipeline = createPipeline(pageApp.db, { ownerId: 'local', name: 'For paging' });
+      const version = createPipelineVersion(pageApp.db, {
+        pipelineId: pipeline.id,
+        params: [],
+        outputs: [],
+        nodes: [],
+        edges: [],
+        catalogVersion: CATALOG_VERSION,
+      });
+      pageVersionId = version.id;
+    });
+
+    afterEach(async () => {
+      await pageApp.close();
+    });
+
+    function seedRuns(count: number, ownerId = 'local', offset = 0) {
+      const ids: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const run = createRun(pageApp.db, {
+          ownerId,
+          pipelineVersionId: pageVersionId,
+          triggerId: null,
+          parentRunId: null,
+          params: {},
+        });
+        // Distinct, ordered stamps so "newest-first across pages" is checkable
+        // rather than dependent on same-millisecond creation.
+        pageApp.db
+          .update(runs)
+          .set({ startedAt: 2_000_000 + offset + i * 1_000 })
+          .where(eq(runs.id, run.id))
+          .run();
+        ids.push(run.id);
+      }
+      return ids.reverse();
+    }
+
+    it('honours ?limit and hands back a cursor that resumes the SAME order', async () => {
+      const newestFirst = seedRuns(5);
+
+      const first = await pageApp.inject({ method: 'GET', url: '/api/runs?limit=2' });
+      expect(first.statusCode).toBe(200);
+      expect(runIdsOf(first)).toEqual(newestFirst.slice(0, 2));
+      const cursor = first.json().nextCursor;
+      expect(cursor).not.toBeNull();
+
+      const second = await pageApp.inject({
+        method: 'GET',
+        url: `/api/runs?limit=2&cursor=${encodeURIComponent(cursor)}`,
+      });
+      expect(second.statusCode).toBe(200);
+      // The rows AFTER the first page, in the same descending order — not the
+      // first page again, which is what a cursor silently ignored would give.
+      expect(runIdsOf(second)).toEqual(newestFirst.slice(2, 4));
+    });
+
+    it('refuses a malformed cursor with a 400 — never a silent first page', async () => {
+      seedRuns(3);
+      // Fail-CLOSED. Serving page one for an unreadable cursor would hand the
+      // caller a different result set than the one they asked to resume, and
+      // nothing in the response would say so.
+      for (const cursor of ['not-base64!!', 'bm90LWpzb24', '']) {
+        const res = await pageApp.inject({
+          method: 'GET',
+          url: `/api/runs?cursor=${encodeURIComponent(cursor)}`,
+        });
+        expect(res.statusCode).toBe(400);
+      }
+    });
+
+    it('refuses a limit outside [1, MAX_PAGE_SIZE] rather than clamping it', async () => {
+      for (const limit of ['0', '-1', String(MAX_PAGE_SIZE + 1), 'all']) {
+        const res = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${limit}` });
+        expect(res.statusCode).toBe(400);
+      }
+      const ok = await pageApp.inject({ method: 'GET', url: `/api/runs?limit=${MAX_PAGE_SIZE}` });
+      expect(ok.statusCode).toBe(200);
+    });
+
+    it('defaults to DEFAULT_PAGE_SIZE, so an omitted limit is still BOUNDED', async () => {
+      // The property this route existed without: no query string may produce an
+      // unbounded body. One row past the default proves the cap is applied and
+      // not merely large.
+      seedRuns(DEFAULT_PAGE_SIZE + 1);
+      const res = await pageApp.inject({ method: 'GET', url: '/api/runs' });
+      expect(res.json().items).toHaveLength(DEFAULT_PAGE_SIZE);
+      expect(res.json().nextCursor).not.toBeNull();
+    });
+
+    it('keeps the owner scope on a RESUMED page, not only the first', async () => {
+      const mine = seedRuns(3);
+      // Interleaved into the same stamp range, so a dropped scope on page two
+      // would surface these rather than leaving them sorted out of reach.
+      const theirs = seedRuns(3, 'someone-else', 500);
+
+      const first = await pageApp.inject({ method: 'GET', url: '/api/runs?limit=1' });
+      expect(runIdsOf(first)).toEqual([mine[0]]);
+      const cursor = first.json().nextCursor;
+
+      // A limit wide enough to hold every remaining row of BOTH owners, so the
+      // page is bounded by the scope rather than by the page size.
+      const second = await pageApp.inject({
+        method: 'GET',
+        url: `/api/runs?limit=10&cursor=${encodeURIComponent(cursor)}`,
+      });
+      expect(runIdsOf(second)).toEqual(mine.slice(1));
+      for (const id of theirs) expect(runIdsOf(second)).not.toContain(id);
+      // The walk is over: the caller's own rows ran out, and another owner's
+      // rows must not extend it.
+      expect(second.json().nextCursor).toBeNull();
+    });
   });
 
   it('there is no POST /api/runs route (runs are created by the engine/scheduler, not this API)', async () => {
@@ -473,7 +624,7 @@ describe('runs routes (read-only)', () => {
     });
 
     const listRes = await app.inject({ method: 'GET', url: '/api/runs' });
-    expect(listRes.json().map((r: { id: string }) => r.id)).not.toContain(other.id);
+    expect(runIdsOf(listRes)).not.toContain(other.id);
 
     const getRes = await app.inject({ method: 'GET', url: `/api/runs/${other.id}` });
     expect(getRes.statusCode).toBe(404);
@@ -558,7 +709,7 @@ describe('runs routes (read-only)', () => {
       url: `/api/runs?pipelineVersionId=${pipelineVersionId}`,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().map((r: { id: string }) => r.id)).toContain(run.id);
+    expect(runIdsOf(res)).toContain(run.id);
   });
 
   it('validation: a non-string query param value -> 400', async () => {

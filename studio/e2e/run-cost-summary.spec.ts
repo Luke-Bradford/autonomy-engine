@@ -153,10 +153,16 @@ test('#931 — the run list states what each run cost, and never invents a figur
      assertions below could pass against a column rendering the empty case. */
   const listRes = await page.request.get('/api/runs');
   expect(listRes.status()).toBe(200);
-  const summaries = (await listRes.json()) as {
-    id: string;
-    cost: { responseCount: number; unpricedResponseCount: number; complete: boolean };
-  }[];
+  /* #1083 — the PAGED envelope. The newest page is more than enough to hold a
+     run this spec just fired, so no walk is needed here. */
+  const summaries = (
+    (await listRes.json()) as {
+      items: {
+        id: string;
+        cost: { responseCount: number; unpricedResponseCount: number; complete: boolean };
+      }[];
+    }
+  ).items;
   const summary = summaries.find((r) => r.id === runId);
   expect(summary, `run ${runId} missing from GET /api/runs`).toBeDefined();
   expect(summary?.cost).toEqual(
@@ -260,11 +266,12 @@ test('#932 — the run total says which child runs it leaves out, and links them
      report. */
   const childrenRes = await page.request.get(`/api/runs?parentRunId=${encodeURIComponent(runId)}`);
   expect(childrenRes.status()).toBe(200);
-  /* A BARE array — `GET /api/runs` returns `RunSummary[]`, not a paginated
-     envelope (`listRunSummaries`). Reading `.items` off it yields `undefined`,
-     which `toHaveLength` reports as a length mismatch rather than as the shape
-     error it is. */
-  const children = (await childrenRes.json()) as { id: string; status: string }[];
+  /* THE PAGINATED ENVELOPE since #1083 — this comment said the opposite until
+     `GET /api/runs` was the last unbounded list body. One child is far inside a
+     page, so reading the first page is complete here; a caller summing a whole
+     SUBTREE must follow `nextCursor` (the `/cost` route's docblock says so). */
+  const children = ((await childrenRes.json()) as { items: { id: string; status: string }[] })
+    .items;
   expect(children).toHaveLength(1);
   const childRunId = children[0]!.id;
   expect(children[0]!.status).toBe('success');

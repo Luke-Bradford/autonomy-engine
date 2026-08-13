@@ -190,3 +190,95 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * #1083 — `GET /api/runs` was the last list route with no `limit` and no
+ * `cursor`, over the one table with no retention policy: the whole run history
+ * came back in one body, and this page rendered all of it.
+ *
+ * TWO HALVES, verified two ways, and the split is deliberate rather than
+ * convenient. The SERVER's walk is asserted against the real API — a genuine
+ * keyset walk over rows this suite really created. The UI's Load-more wiring is
+ * asserted against an INTERCEPTED response, because forcing a page boundary
+ * through the real server would mean seeding more than `RUNS_PAGE_SIZE` (50)
+ * settled runs into a shared e2e database, which is minutes of fixture for a
+ * control that the interception exercises exactly. Nothing about the server's
+ * behaviour is mocked in the half that tests the server.
+ */
+test('#1083 — the runs list is served a page at a time, and extends on demand', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const pipelineName = `Run paging ${Date.now()}`;
+  const { pipelineVersionId } = await seedVersion(page, pipelineName, {
+    nodes: [{ id: 'n1', type: 'fail', config: { message: 'expected' }, position: { x: 0, y: 0 } }],
+  });
+  const older = await fireAndSettle(page, pipelineVersionId, 'e2e paging trigger A');
+  const newer = await fireAndSettle(page, pipelineVersionId, 'e2e paging trigger B');
+
+  // ── The server: a real keyset walk, one row at a time ──────────────────────
+  const first = await page.request.get('/api/runs?limit=1');
+  expect(first.status()).toBe(200);
+  const firstPage = (await first.json()) as {
+    items: Record<string, unknown>[];
+    nextCursor: string | null;
+  };
+  // BOUNDED — the property the route did not have. One row means one row.
+  expect(firstPage.items).toHaveLength(1);
+  // Newest-first, so the run fired second leads.
+  expect(firstPage.items[0]!.id).toBe(newer);
+  expect(firstPage.nextCursor).not.toBeNull();
+
+  const second = await page.request.get(
+    `/api/runs?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor!)}`,
+  );
+  expect(second.status()).toBe(200);
+  const secondPage = (await second.json()) as { items: Record<string, unknown>[] };
+  // The cursor RESUMED rather than restarting: the older run, not the newer one
+  // again. A silently-ignored cursor is the failure this pins.
+  expect(secondPage.items[0]!.id).toBe(older);
+
+  // A cursor the server did not mint is a 400, never a silent first page.
+  const bad = await page.request.get('/api/runs?cursor=not-a-real-cursor');
+  expect(bad.status()).toBe(400);
+
+  // ── The UI: Load older runs appends, and the tab count says so ─────────────
+  /* The two pages are built from the REAL summaries fetched above — the same
+     rows, re-served one at a time so the boundary lands after row one. The
+     intercept deliberately does NOT forward to the server: the second request
+     carries a cursor this test invented, and the server would (correctly) 400
+     it, which is the very fail-closed behaviour asserted three lines up. */
+  const newerRow = firstPage.items[0]!;
+  const olderRow = secondPage.items[0]!;
+  let served = 0;
+  await page.route('**/api/runs?*', async (route) => {
+    served += 1;
+    await route.fulfill({
+      json:
+        served === 1
+          ? { items: [newerRow], nextCursor: 'e2e_cursor' }
+          : { items: [olderRow], nextCursor: null },
+    });
+  });
+
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+
+  await expect(page.getByRole('row').filter({ hasText: newer })).toHaveCount(1);
+  await expect(page.getByRole('row').filter({ hasText: older })).toHaveCount(0);
+  // OPEN-ENDED while older pages remain: the strip counts what is loaded, and a
+  // bare number there would be a census claim over a prefix.
+  await expect(page.getByRole('tab', { name: /Triggered \d+\+/ })).toHaveCount(1);
+
+  await page.getByRole('button', { name: 'Load older runs' }).click();
+
+  // APPENDED — the reader keeps the rows they were already looking at.
+  await expect(page.getByRole('row').filter({ hasText: older })).toHaveCount(1);
+  await expect(page.getByRole('row').filter({ hasText: newer })).toHaveCount(1);
+  // The walk ended, so the control goes and the count is a complete claim again.
+  await expect(page.getByRole('button', { name: 'Load older runs' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: /Triggered \d+\+/ })).toHaveCount(0);
+
+  await expectQuiet(page, problems);
+});

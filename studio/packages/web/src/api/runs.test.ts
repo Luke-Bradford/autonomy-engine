@@ -1,6 +1,13 @@
 import { computeRunCost } from '@autonomy-studio/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getRun, getRunDiagnostics, getRunEvents, listExternalWaits, listRuns } from './runs';
+import {
+  getRun,
+  getRunDiagnostics,
+  getRunEvents,
+  listExternalWaits,
+  listRuns,
+  RUNS_PAGE_SIZE,
+} from './runs';
 
 const sampleRun = {
   id: 'run_1',
@@ -87,13 +94,33 @@ afterEach(() => {
 });
 
 describe('runs API', () => {
-  it('lists runs and hits GET /api/runs', async () => {
-    const fetchMock = stubFetch(200, [sampleRunSummary]);
+  it('lists a PAGE of runs and hits GET /api/runs with a bounded limit', async () => {
+    const fetchMock = stubFetch(200, { items: [sampleRunSummary], nextCursor: 'cur_1' });
     const out = await listRuns();
-    expect(out).toEqual([sampleRunSummary]);
+    expect(out).toEqual({ items: [sampleRunSummary], nextCursor: 'cur_1' });
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('/api/runs');
+    // #1083 — `limit` is on EVERY request including the first, and it is the
+    // page's own size rather than the transport maximum. An unbounded request
+    // is what this route used to make.
+    const parsed = new URL(url as string, 'http://x');
+    expect(parsed.pathname).toBe('/api/runs');
+    expect(parsed.searchParams.get('limit')).toBe(String(RUNS_PAGE_SIZE));
+    expect(parsed.searchParams.get('cursor')).toBeNull();
     expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('sends the cursor on an older page, alongside the filters it was minted under', async () => {
+    const fetchMock = stubFetch(200, { items: [], nextCursor: null });
+    await listRuns({ status: 'failure' }, 'cur_1');
+    const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
+    // The filters MUST travel with the cursor: a cursor names a position within
+    // one filtered result set, so resuming it against a different set would
+    // return a coherent but wrong slice, and nothing would error.
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      status: 'failure',
+      limit: String(RUNS_PAGE_SIZE),
+      cursor: 'cur_1',
+    });
   });
 
   /**
@@ -103,15 +130,24 @@ describe('runs API', () => {
    * caller meant "unfiltered".
    */
   it('sends only the filter axes that are set, and omits the query string entirely when none are', async () => {
-    const bare = stubFetch(200, []);
+    const emptyPage = { items: [], nextCursor: null };
+    const bare = stubFetch(200, emptyPage);
     await listRuns({});
-    expect(bare.mock.calls[0]![0]).toBe('/api/runs');
+    // Only `limit` — the pagination key the route always needs. No filter key
+    // rides along uninvited.
+    expect(
+      Object.fromEntries(new URL(bare.mock.calls[0]![0] as string, 'http://x').searchParams),
+    ).toEqual({
+      limit: String(RUNS_PAGE_SIZE),
+    });
 
-    const empties = stubFetch(200, []);
+    const empties = stubFetch(200, emptyPage);
     await listRuns({ pipelineId: '', triggerId: undefined });
-    expect(empties.mock.calls[0]![0]).toBe('/api/runs');
+    expect(
+      Object.fromEntries(new URL(empties.mock.calls[0]![0] as string, 'http://x').searchParams),
+    ).toEqual({ limit: String(RUNS_PAGE_SIZE) });
 
-    const filtered = stubFetch(200, []);
+    const filtered = stubFetch(200, emptyPage);
     await listRuns({ status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' });
     const url = new URL(filtered.mock.calls[0]![0] as string, 'http://x');
     expect(Object.fromEntries(url.searchParams)).toEqual({
@@ -119,13 +155,26 @@ describe('runs API', () => {
       pipelineId: 'pl_1',
       triggerId: 'trg_1',
       since: '24h',
+      limit: String(RUNS_PAGE_SIZE),
     });
   });
 
+  /* The bad row rides INSIDE a valid envelope, deliberately. Stubbing a bare
+     `[bad]` also rejects — but on the envelope's shape, so the assertion would
+     hold with the element schema removed entirely and this test would certify
+     nothing about row validation. #1083 kept the claim and fixed the fixture. */
   it('applies the shared run schema — a malformed row rejects', async () => {
     const bad: Record<string, unknown> = { ...sampleRunSummary };
     delete bad.status;
-    stubFetch(200, [bad]);
+    stubFetch(200, { items: [bad], nextCursor: null });
+    await expect(listRuns()).rejects.toThrow();
+  });
+
+  it('rejects a bare ARRAY — the list route must serve the paginated envelope', async () => {
+    // The pre-#1083 response shape. A client that accepted it would read
+    // `page.items` as `undefined` and blank the list rather than reporting a
+    // contract breach.
+    stubFetch(200, [sampleRunSummary]);
     await expect(listRuns()).rejects.toThrow();
   });
 
@@ -135,7 +184,7 @@ describe('runs API', () => {
    * rather than leave the page rendering `undefined` in its identity column.
    */
   it('rejects a bare Run — the list route must serve the joined names', async () => {
-    stubFetch(200, [sampleRun]);
+    stubFetch(200, { items: [sampleRun], nextCursor: null });
     await expect(listRuns()).rejects.toThrow();
   });
 

@@ -138,8 +138,19 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
   };
 }
 
+/**
+ * #1083 — `listRuns` answers a `{ items, nextCursor }` page. Every mock goes
+ * through this rather than hand-writing the envelope, so a test states WHICH
+ * runs come back and, where it matters, whether an older page exists.
+ * `nextCursor` defaults to `null` — "this is the whole list" is what almost
+ * every case here means, and it is what keeps a tab count a complete count.
+ */
+function pageOf(items: RunSummary[], nextCursor: string | null = null) {
+  return { items, nextCursor };
+}
+
 beforeEach(() => {
-  listMock.mockResolvedValue([]);
+  listMock.mockResolvedValue(pageOf([]));
   triggersMock.mockResolvedValue([]);
   costMock.mockResolvedValue(rollup());
   vi.mocked(runsApi.getRun).mockResolvedValue({} as never);
@@ -154,7 +165,7 @@ describe('RunsPage', () => {
   });
 
   it('renders a run row with its status', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'success' })]));
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText('run_abc')).toBeInTheDocument();
     // Scoped to the TABLE, not the page: U26's status picker offers the same
@@ -177,9 +188,11 @@ describe('RunsPage', () => {
    * the cell deleted.
    */
   it('states what a run cost, from the same authority the detail page uses', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -190,7 +203,7 @@ describe('RunsPage', () => {
   });
 
   it('a run that billed nothing says so, rather than showing $0.00', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_abc', status: 'success' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc', status: 'success' })]));
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -201,9 +214,11 @@ describe('RunsPage', () => {
   });
 
   it("marks a LIVE run's figure as spend-so-far, visibly rather than on hover", async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -225,14 +240,16 @@ describe('RunsPage', () => {
      that keeps a rerun from reading as inexplicably cheap would just be absent.
   */
   it("forwards a rerun's identity, so its figure says it is only the INCREMENT", async () => {
-    listMock.mockResolvedValue([
-      run({
-        id: 'run_abc',
-        status: 'success',
-        rerunOf: 'run_source',
-        cost: computeRunCost([metered({ cost: 0.03 })]),
-      }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_abc',
+          status: 'success',
+          rerunOf: 'run_source',
+          cost: computeRunCost([metered({ cost: 0.03 })]),
+        }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -244,7 +261,7 @@ describe('RunsPage', () => {
   });
 
   it('Watch navigates to the run detail route', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_abc' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     vi.mocked(runsApi.getRun).mockResolvedValue({ id: 'run_abc' } as never);
     const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
     render(<RouterProvider router={router} />);
@@ -265,7 +282,7 @@ describe('RunsPage', () => {
    */
   it('words every run status through the shared vocabulary', async () => {
     listMock.mockResolvedValue(
-      RunStatusSchema.options.map((status, i) => run({ id: `run_${i}`, status })),
+      pageOf(RunStatusSchema.options.map((status, i) => run({ id: `run_${i}`, status }))),
     );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_0');
@@ -286,7 +303,7 @@ describe('RunsPage', () => {
    * inventing a reason the row does not carry.
    */
   it('shows a parked run as a bare `waiting` — the row carries no reason', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_parked', status: 'waiting' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_parked', status: 'waiting' })]));
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_parked');
     expect(within(screen.getByRole('table')).getByText('waiting')).toBeInTheDocument();
@@ -306,9 +323,11 @@ describe('RunsPage', () => {
    * name-only check while leaving the column just as unreadable.
    */
   it('names the pipeline and its version instead of the raw version id', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_abc', pipelineVersionId: 'pv_opaque', pipelineName: 'Nightly report' }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', pipelineVersionId: 'pv_opaque', pipelineName: 'Nightly report' }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText(/Nightly report/)).toBeInTheDocument();
     expect(screen.getByText('v3')).toBeInTheDocument();
@@ -318,10 +337,12 @@ describe('RunsPage', () => {
   });
 
   it('names the trigger, and em-dashes a run that has none', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_t', triggerName: 'Every morning' }),
-      run({ id: 'run_m', triggerId: null, triggerName: null }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_t', triggerName: 'Every morning' }),
+        run({ id: 'run_m', triggerId: null, triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText('Every morning')).toBeInTheDocument();
     // Scoped to the trigger-less run's own TRIGGER cell: an unscoped `—` search
@@ -332,10 +353,12 @@ describe('RunsPage', () => {
   });
 
   it('renders a finished run duration, and marks an unfinished one "so far"', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_done', status: 'success', startedAt: 1_000, finishedAt: 8_000 }),
-      run({ id: 'run_live', status: 'running', startedAt: 1_000, finishedAt: null }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_done', status: 'success', startedAt: 1_000, finishedAt: 8_000 }),
+        run({ id: 'run_live', status: 'running', startedAt: 1_000, finishedAt: null }),
+      ]),
+    );
     vi.spyOn(Date, 'now').mockReturnValue(4_000);
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_done');
@@ -349,11 +372,13 @@ describe('RunsPage', () => {
    * triggered run under "Triggered" and pass a single-tab check.
    */
   it('filters the list by run origin, and marks the selected tab', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
-      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_trig');
 
@@ -379,11 +404,13 @@ describe('RunsPage', () => {
   });
 
   it('counts each tab with the same filter the table applies', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_trig');
     expect(screen.getByRole('tab', { name: /^All/ })).toHaveTextContent('3');
@@ -393,7 +420,7 @@ describe('RunsPage', () => {
   });
 
   it('says so when a tab has no runs, rather than showing an empty table', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_trig');
     await userEvent.click(screen.getByRole('tab', { name: /Manual/ }));
@@ -407,10 +434,12 @@ describe('RunsPage', () => {
    * filtered view has to arrive filtered, not flash All and then correct itself.
    */
   it('takes the selected tab from the URL', async () => {
-    listMock.mockResolvedValue([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
     expect(await screen.findByText('run_manual')).toBeInTheDocument();
     expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
@@ -418,7 +447,7 @@ describe('RunsPage', () => {
   });
 
   it('falls back to All on an unrecognised ?tab, rather than showing nothing', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=not-a-tab');
     expect(await screen.findByText('run_trig')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^All/ })).toHaveAttribute('aria-selected', 'true');
@@ -429,7 +458,7 @@ describe('RunsPage', () => {
    * is expressed by the param's ABSENCE — one canonical URL per view.
    */
   it('writes the selected tab to the URL, and clears it for All', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_trig', triggerId: 'trg_1' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_trig', triggerId: 'trg_1' })]));
     const router = createMemoryRouter(ROUTES, { initialEntries: ['/monitor/runs'] });
     render(<RouterProvider router={router} />);
     await screen.findByText('run_trig');
@@ -447,7 +476,7 @@ describe('RunsPage', () => {
    * middle-clickable; the `useNavigate()` button it replaced was none of those.
    */
   it('renders the row action as a link with a real href', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_abc' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_abc' })]));
     renderWithRouter(<RunsPage />);
     const link = await screen.findByRole('link', { name: 'Watch run run_abc' });
     expect(link).toHaveAttribute('href', expect.stringContaining('run_abc') as unknown as string);
@@ -473,7 +502,11 @@ describe('RunsPage — U26 filter pane', () => {
   it('sends no filter params at all when nothing is selected', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />);
     await screen.findByText(/No runs yet/i);
-    expect(listMock).toHaveBeenCalledWith({}, expect.anything());
+    // #1083 — the FIRST page, so the cursor argument is `undefined`. Asserted
+    // rather than waved through with `expect.anything()`: a first request that
+    // carried a cursor would resume mid-list, which is exactly the bug a
+    // stale-cursor regression produces.
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
   });
 
   it('reads every axis out of the URL and asks the SERVER for it', async () => {
@@ -484,6 +517,7 @@ describe('RunsPage — U26 filter pane', () => {
     await screen.findByText(/No runs match these filters/i);
     expect(listMock).toHaveBeenCalledWith(
       { status: 'failure', pipelineId: 'pl_1', triggerId: 'trg_1', since: '24h' },
+      undefined,
       expect.anything(),
     );
   });
@@ -495,7 +529,7 @@ describe('RunsPage — U26 filter pane', () => {
 
     await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
 
-    expect(listMock).toHaveBeenCalledWith({ status: 'failure' }, expect.anything());
+    expect(listMock).toHaveBeenCalledWith({ status: 'failure' }, undefined, expect.anything());
     expect(await screen.findByText(/No runs match these filters/i)).toBeInTheDocument();
   });
 
@@ -508,7 +542,7 @@ describe('RunsPage — U26 filter pane', () => {
   it('ignores an unrecognised status/window rather than sending or erroring on it', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=nope&since=forever');
     await screen.findByText(/No runs yet/i);
-    expect(listMock).toHaveBeenCalledWith({}, expect.anything());
+    expect(listMock).toHaveBeenCalledWith({}, undefined, expect.anything());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -567,7 +601,7 @@ describe('RunsPage — U26 filter pane', () => {
     /* The placement rule: it sits outside the rows guard, because an all-time
        figure is MOST informative exactly when the filtered list is empty. */
     it('survives a filter that matches no runs', async () => {
-      listMock.mockResolvedValue([]);
+      listMock.mockResolvedValue(pageOf([]));
       renderWithRouter(
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
         '/monitor/runs?pipeline=pl_1&status=failure',
@@ -647,15 +681,15 @@ describe('RunsPage — U26 filter pane', () => {
    * is needed, leaving the URL as the only way out.
    */
   it('keeps the pane reachable when the filter matches nothing, and Clear restores the list', async () => {
-    listMock.mockResolvedValue([]);
+    listMock.mockResolvedValue(pageOf([]));
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=failure');
     await screen.findByText(/No runs match these filters/i);
 
-    listMock.mockResolvedValue([run({ id: 'run_back' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_back' })]));
     await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
 
     expect(await screen.findByText('run_back')).toBeInTheDocument();
-    expect(listMock).toHaveBeenLastCalledWith({}, expect.anything());
+    expect(listMock).toHaveBeenLastCalledWith({}, undefined, expect.anything());
     expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
@@ -666,7 +700,7 @@ describe('RunsPage — U26 filter pane', () => {
    * which for a status filter means reading a success as a failure.
    */
   it("never shows the previous filter's rows under the new filter", async () => {
-    listMock.mockResolvedValue([run({ id: 'run_old' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_old' })]));
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     expect(await screen.findByText('run_old')).toBeInTheDocument();
 
@@ -684,7 +718,7 @@ describe('RunsPage — U26 filter pane', () => {
    * blanking the list to re-answer it identically would be a flash for nothing.
    */
   it('keeps the current rows on screen while a Refresh of the same filter is in flight', async () => {
-    listMock.mockResolvedValue([run({ id: 'run_here' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_here' })]));
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?status=failure');
     expect(await screen.findByText('run_here')).toBeInTheDocument();
 
@@ -695,25 +729,37 @@ describe('RunsPage — U26 filter pane', () => {
   });
 
   /**
-   * `filterKey` settles which QUESTION an answer belongs to, but two loads can
-   * share a key — a double-Refresh — and abort does not fully cover them: a
-   * request whose response has already arrived can still resolve after the
-   * controller aborts. Without a sequence guard the OLDER answer wins on
-   * completion order, so the list silently reverts to a stale snapshot.
+   * A load can be superseded while it is still in flight, and abort does not
+   * fully cover it: a request whose response has already arrived can still
+   * resolve after the controller aborts. Without a sequence guard the OLDER
+   * answer wins on completion order, so the list silently reverts to a stale
+   * snapshot.
+   *
+   * #1083 — the guard MOVED rather than went away. It used to be this page's own
+   * `latestLoad` ref; it is now the single counter inside `usePagedList` (via
+   * `useGuardedLoad`). This test stays pointed at the PAGE, so it proves the
+   * behaviour survived the move rather than only that the hook has it.
+   *
+   * THE TRIGGER CHANGED WITH IT, and the reason is worth recording. This used to
+   * supersede via a double-Refresh; Refresh is now `disabled` while a request is
+   * in flight (the AuditPage rule — `usePagedList` is latest-wins rather than
+   * drop-the-new, so a second click would abort and re-issue a request already
+   * on its way), which makes that path unreachable through the UI. A FILTER
+   * CHANGE is the reachable superseder, and it exercises the same counter.
    */
-  it('drops a superseded load that resolves LATE under the same filter', async () => {
-    let resolveFirst: (rows: RunSummary[]) => void = () => {};
+  it('drops a superseded load that resolves LATE', async () => {
+    let resolveFirst: (page: { items: RunSummary[]; nextCursor: string | null }) => void = () => {};
     listMock.mockReturnValueOnce(
-      new Promise<RunSummary[]>((resolve) => {
+      new Promise<{ items: RunSummary[]; nextCursor: string | null }>((resolve) => {
         resolveFirst = resolve;
       }),
     );
     renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
     await screen.findByText(/Loading runs/i);
 
-    // A second load of the SAME filter, which answers first.
-    listMock.mockResolvedValue([run({ id: 'run_fresh' })]);
-    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    // A second load — a different filter — which answers first.
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_fresh' })]));
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'failure');
     expect(await screen.findByText('run_fresh')).toBeInTheDocument();
 
     // Now the abandoned first load finally answers. It must be dropped.
@@ -722,10 +768,85 @@ describe('RunsPage — U26 filter pane', () => {
     // WAS applied would still not be in the DOM yet and the test would pass
     // against a missing guard.
     await act(async () => {
-      resolveFirst([run({ id: 'run_stale' })]);
+      resolveFirst(pageOf([run({ id: 'run_stale' })]));
     });
     expect(screen.queryByText('run_stale')).not.toBeInTheDocument();
     expect(screen.getByText('run_fresh')).toBeInTheDocument();
+  });
+
+  /**
+   * #1083 — the page renders ONE page of runs and extends it on demand. What is
+   * pinned here is the honesty of the surfaces that used to describe a complete
+   * list: the origin tab counts and the empty-tab line were a census when every
+   * run was fetched, and they must not keep claiming that over a prefix.
+   */
+  describe('paging (#1083)', () => {
+    it('offers Load older runs only while the server says there are older ones', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+      expect(screen.getByRole('button', { name: 'Load older runs' })).toBeInTheDocument();
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      // APPENDED, not replaced — the reader keeps what they were looking at.
+      expect(await screen.findByText('run_2')).toBeInTheDocument();
+      expect(screen.getByText('run_1')).toBeInTheDocument();
+      expect(listMock).toHaveBeenLastCalledWith({}, 'cur_1', expect.anything());
+      // The walk ended, so the control goes: a button that did nothing would
+      // make the end of the history indistinguishable from a stalled load.
+      expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
+    });
+
+    it('marks a tab count as a LOWER BOUND while older runs remain', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+
+      // `1+`, not `1`: one run of this origin has been LOADED, and the workspace
+      // may hold more. The bare number would be a census claim over a prefix.
+      const tabs = screen.getByRole('tablist');
+      expect(within(tabs).getByRole('tab', { name: /Triggered 1\+/ })).toBeInTheDocument();
+      expect(within(tabs).getByRole('tab', { name: /Manual 0\+/ })).toBeInTheDocument();
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+      await screen.findByText('run_2');
+
+      // The walk is exhausted, so the counts are complete claims again.
+      expect(within(tabs).getByRole('tab', { name: /Triggered 2$/ })).toBeInTheDocument();
+      expect(within(tabs).getByRole('tab', { name: /Manual 0$/ })).toBeInTheDocument();
+    });
+
+    it('scopes the empty-tab line to what has been loaded while older runs remain', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?tab=manual');
+      await screen.findByText(/No manual runs in the runs loaded so far/i);
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      // Once the walk has ended the unqualified sentence is TRUE, and is what
+      // the reader should see.
+      expect(await screen.findByText(/^No manual runs\.$/i)).toBeInTheDocument();
+    });
+
+    it('words a failed OLDER page apart from a failed first one, keeping the loaded runs', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+
+      listMock.mockRejectedValue(new Error('network down'));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      expect(
+        await screen.findByText(/Could not load older runs: network down/i),
+      ).toBeInTheDocument();
+      // The history already on screen is real and stays — a failed older page
+      // must not cost the reader what they were already looking at.
+      expect(screen.getByText('run_1')).toBeInTheDocument();
+    });
   });
 
   it('does not offer Clear when nothing is filtered', async () => {
@@ -756,7 +877,7 @@ describe('RunsPage — U26 filter pane', () => {
    */
   it('still lists runs when the trigger picker fails to load', async () => {
     triggersMock.mockRejectedValue(new Error('offline'));
-    listMock.mockResolvedValue([run({ id: 'run_ok' })]);
+    listMock.mockResolvedValue(pageOf([run({ id: 'run_ok' })]));
     renderWithRouter(<RunsPage store={storeWith()} />);
     expect(await screen.findByText('run_ok')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -772,15 +893,17 @@ describe('RunsPage — U26 filter pane', () => {
  */
 describe('U29 runs view toggle', () => {
   beforeEach(() => {
-    listMock.mockResolvedValue([
-      run({
-        id: 'run_a',
-        pipelineId: 'pipe_a',
-        pipelineName: 'Alpha',
-        startedAt: 1,
-        finishedAt: 2,
-      }),
-    ]);
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_a',
+          pipelineId: 'pipe_a',
+          pipelineName: 'Alpha',
+          startedAt: 1,
+          finishedAt: 2,
+        }),
+      ]),
+    );
   });
 
   it('shows the table by default, and the chart at ?view=timeline', async () => {

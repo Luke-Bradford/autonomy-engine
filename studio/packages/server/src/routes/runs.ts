@@ -11,7 +11,7 @@ import {
   type RerunAccepted,
   type RunDetail,
 } from '@autonomy-studio/shared';
-import { getRun, listRunDiagnostics, listRunEvents, listRunSummaries } from '../repo/index.js';
+import { getRun, listRunDiagnostics, listRunEvents, listRunSummariesPage } from '../repo/index.js';
 import { getExternalWaitByAttempt, listPendingExternalWaitsByRun } from '../repo/external-waits.js';
 import { deriveExternalWaitToken } from '../webhooks/external-wait-token.js';
 import { makeDocResolver } from '../run/driver.js';
@@ -20,7 +20,7 @@ import {
   ExternalWaitPayloadError,
   ExternalWaitSettledError,
 } from '../run/external-wait-service.js';
-import { requireOwned } from './util.js';
+import { pageArgsFromQuery, requireOwned } from './util.js';
 
 /**
  * `pipelineVersionId`/`triggerId`/`parentRunId` are opaque ids, not
@@ -73,9 +73,21 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   const resolveDoc = makeDocResolver(db);
 
   /**
-   * R2 — the Monitor's list read-model. Returns `RunSummary[]`: every field of
-   * the `Run` row PLUS the pipeline's name + version number and the trigger's
+   * R2 — the Monitor's list read-model. Each item is a `RunSummary`: every field
+   * of the `Run` row PLUS the pipeline's name + version number and the trigger's
    * name, joined server-side so U10's list needn't N+1 its way to a human label.
+   *
+   * KEYSET-PAGINATED since #1083 (`{ items, nextCursor }`, the #534 envelope),
+   * and this was the LAST list route emitting an unbounded body. It is also the
+   * one that most needed bounding: runs have no retention policy, so the
+   * response grew for the life of the workspace and never fell, and every
+   * element carries a joined summary plus an aggregated cost.
+   *
+   * NEWEST-FIRST ONLY — deliberately NO `?order=` param, unlike
+   * `/api/workspace/audit`. That route has two genuine readers (a newest-first
+   * page and the append-order provenance readers); this one has a single
+   * meaning, "the operator's recent runs". A parameter with one legal value is
+   * a contract nobody can rely on and every caller must still pass.
    *
    * The response shape widened from `Run[]` to `RunSummary[]`, which is safe
    * because `RunSummarySchema` is strictly ADDITIVE over `RunSchema` — it adds
@@ -105,16 +117,21 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/api/runs', async (request) => {
     const { pipelineVersionId, triggerId, parentRunId, rerunOf, status, pipelineId, since } =
       ListRunsQuerystringSchema.parse(request.query);
-    return listRunSummaries(db, {
-      pipelineVersionId,
-      triggerId,
-      parentRunId,
-      rerunOf,
-      status,
-      pipelineId,
-      startedAfter: since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since],
-      ownerId: request.principal.ownerId,
-    });
+    const page = listRunSummariesPage(
+      db,
+      {
+        pipelineVersionId,
+        triggerId,
+        parentRunId,
+        rerunOf,
+        status,
+        pipelineId,
+        startedAfter: since === undefined ? undefined : Date.now() - RUN_SINCE_MS[since],
+        ownerId: request.principal.ownerId,
+      },
+      pageArgsFromQuery(request.query),
+    );
+    return { items: page.items, nextCursor: page.nextCursor };
   });
 
   fastify.get<{ Params: { id: string } }>('/api/runs/:id', async (request) => {
@@ -192,7 +209,12 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
    * every descendant run — which `complete` does NOT report, because nothing here
    * is missing or unpriced: the child's spend is a complete answer to a different
    * question. Callers wanting the subtree walk `?parentRunId=` (the list route
-   * above) and sum, bounded by `MAX_CALL_DEPTH`. Rolling descendants in HERE
+   * above) and sum, bounded by `MAX_CALL_DEPTH` — and since #1083 that walk is
+   * PAGED, so it means following `nextCursor` to the end, not reading one
+   * response. A caller that sums a single page silently under-reports the
+   * subtree the moment a parent has more children than a page holds, which is
+   * precisely the shape of error this docblock exists to prevent.
+   * Rolling descendants in HERE
    * would silently diverge from `aggregateRunCosts`, the bounded-SQL twin that
    * backs the run list and cannot do that walk in SQL — one surface right and one
    * wrong is worse than both honestly per-run. The run monitor renders the

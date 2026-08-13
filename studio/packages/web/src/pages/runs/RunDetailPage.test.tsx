@@ -14,7 +14,10 @@ import type { RunStreamState } from './useRunStream';
 
 vi.mock('../../api/runs', async (importActual) => ({
   ...(await importActual<typeof import('../../api/runs')>()),
-  listRuns: vi.fn().mockResolvedValue([]),
+  // #1083 — the paged envelope, not a bare array. `usePagedList` spreads
+  // `page.items`, so a stale `[]` here throws inside the hook rather than
+  // rendering an empty list.
+  listRuns: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
   getRunDetail: vi.fn(),
   getRun: vi.fn(),
   getRunEvents: vi.fn().mockResolvedValue([]),

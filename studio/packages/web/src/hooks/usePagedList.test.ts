@@ -11,6 +11,9 @@ import { usePagedList } from './usePagedList';
  */
 
 type Page = Paginated<string>;
+/** The hook's fetcher contract, named so a test can swap one implementation for
+ *  another (scripted → deferred) without the props type narrowing to the first. */
+type Fetcher = (cursor: string | undefined, signal: AbortSignal) => Promise<Page>;
 
 const page = (items: string[], nextCursor: string | null = null): Page => ({ items, nextCursor });
 
@@ -164,6 +167,60 @@ describe('usePagedList (#1076)', () => {
     expect(result.current.items).toEqual(['a']);
     expect(result.current.loading).toBe(false);
     expect(result.current.busy).toBe(true);
+  });
+
+  /**
+   * #1083 — a NEW fetcher is a new list. The distinction from a refresh (same
+   * fetcher, rows kept) is the whole point: `RunsPage` memoizes its fetcher on
+   * the filter axes, so this fires when the operator changes a filter, and the
+   * rows on screen are then the PREVIOUS filter's answer.
+   */
+  it('blanks the list when the fetcher changes, and reloads from the first page', async () => {
+    const first = scriptedFetcher([page(['a'], 'cur_1'), page(['b'], 'cur_2')]);
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
+    });
+    await waitFor(() => expect(result.current.items).toEqual(['a']));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.items).toEqual(['a', 'b']));
+
+    const second = scriptedFetcher([page(['x'], null)]);
+    rerender({ f: second.fetchPage });
+
+    // Synchronously blank — the previous filter's rows must not be readable
+    // under the new one, not even for a frame.
+    expect(result.current.items).toBeNull();
+    expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(result.current.items).toEqual(['x']));
+    // From the FIRST page: resuming the old cursor would splice one query's
+    // position into another query's result set.
+    expect(second.cursors).toEqual([undefined]);
+  });
+
+  it('drops the previous list’s cursor with it, so Load more cannot resume the wrong query', async () => {
+    const first = scriptedFetcher([page(['a'], 'cur_1')]);
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
+    });
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+
+    // DEFERRED, so the assertions land in the window that actually matters: the
+    // new list's first page is in flight and has not yet overwritten the cursor.
+    // An earlier version of this test resolved immediately and was VACUOUS —
+    // deleting `setNextCursor(null)` from the reset kept it green, because the
+    // arriving page nulled the cursor anyway. (Measured: 13/13 passed under that
+    // mutation.) The defect being guarded only exists mid-flight.
+    const second = deferredFetcher();
+    rerender({ f: second.fetchPage });
+
+    // The old list said there was more; the new list has not said anything yet,
+    // and "more" must not be inherited across the two.
+    expect(result.current.hasMore).toBe(false);
+    act(() => result.current.loadMore());
+    // Exactly the one first-page request, and it carries NO cursor. A surviving
+    // `cur_1` would resume a position in the previous query's result set.
+    expect(second.calls).toHaveLength(1);
+    expect(second.calls[0]!.cursor).toBeUndefined();
   });
 
   it('surfaces a failed first page as a first-scoped error, with no items', async () => {

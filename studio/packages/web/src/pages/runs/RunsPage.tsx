@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Tab, TabList, ToggleButton } from '@fluentui/react-components';
 import {
   RunStatusSchema,
@@ -9,6 +9,7 @@ import {
 import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
 import { listRuns } from '../../api/runs';
+import { usePagedList } from '../../hooks/usePagedList';
 import { getPipelineCost } from '../../api/pipelines';
 import { ApiError, messageOf } from '../../api/client';
 import { costCell } from './costColumn';
@@ -113,42 +114,37 @@ function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
  * R2 + U10 — each row is a `RunSummary`, so the identity column reads the
  * PIPELINE'S NAME rather than the opaque `pv_…` version id it used to render,
  * and the trigger reads its name. The tab strip filters by where a run came
- * from (`runOrigin.ts`), client-side over the single fetched list, which is
- * exactly the "client-side small-data v1" U10 specifies.
+ * from (`runOrigin.ts`), client-side over the rows fetched so far.
  *
  * U26 — and above that strip, the SERVER-side filter pane: status, pipeline,
  * trigger and a relative time window, each an optional query param on
  * `GET /api/runs`. Two filters with two authorities is forced rather than
  * chosen, and `runFilters.ts` records why (the origin axis needs an `isNull`
- * predicate the repo layer has no arm for) along with what follows from it —
- * the tab counts describe the server-filtered set.
+ * predicate the repo layer has no arm for).
+ *
+ * PAGED SINCE #1083, and that changed what the ORIGIN STRIP can honestly say.
+ * The page used to fetch every run the filters matched, so a tab count was a
+ * census: `Child 0` meant the workspace held none. Now it counts the rows
+ * LOADED, and an unqualified `0` beside "No child runs" would assert something
+ * a Load more can immediately falsify. So while older pages remain, a count
+ * renders open-ended (`12+`) and the empty-tab line says "in the runs loaded so
+ * far". Once the walk is exhausted both revert to the plain, complete claim —
+ * which is the ordinary case, since the first page holds `RUNS_PAGE_SIZE` runs.
+ *
+ * The alternative — moving the origin axis server-side and counting in SQL — is
+ * a bigger change than it looks (`runOriginOf` is expressible as a CASE, but
+ * honest per-tab totals need their own grouped query and a place in the response
+ * envelope) and is deliberately NOT bundled here. What is fixed here is that the
+ * strip stops making claims it cannot support.
  */
 export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } = {}) {
   /**
-   * The last answer, STAMPED with the filter it answers. `loadedAt` rides along
-   * for the same reason it always did: the clock the Duration column measures an
-   * UNFINISHED run against, captured once when the load resolves rather than
-   * read per render, so every row's "so far" is as-of the same instant and
-   * rendering stays pure.
-   *
-   * Stamped rather than cleared, and that is U26's doing. The rows on screen
-   * were fetched under the PREVIOUS filter, so a filter change must not leave
-   * them sitting under the new controls — briefly, but long enough to be read as
-   * the answer. Clearing them in the load effect would be a synchronous
-   * `setState` inside an effect (a cascading render, and the lint rule that
-   * names it is right); DERIVING staleness costs no render at all. A `Refresh`
-   * of the SAME filter deliberately does not go through this — the key is
-   * unchanged, so the current rows stay up until their replacements land.
+   * Bumped by "Refresh" so BOTH panels re-fetch from one button. Since #1083
+   * the run list itself is refreshed through `usePagedList` rather than by this
+   * key (a paged list has its own notion of "re-read the first page and drop the
+   * tail"), so this now drives the #931 cost panel alone — kept, because one
+   * button that freshens half the screen is worse than no button.
    */
-  const [loaded, setLoaded] = useState<{
-    key: string;
-    rows: RunSummary[];
-    at: number;
-  } | null>(null);
-  const [failed, setFailed] = useState<{ key: string; message: string } | null>(null);
-  // Bumped by "Refresh" to re-run the load effect (re-fetch on demand). The
-  // effect owns the fetch so its AbortController cleanly cancels an in-flight
-  // request on unmount or a re-refresh.
   const [reloadKey, setReloadKey] = useState(0);
 
   /**
@@ -219,59 +215,55 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   }
 
   /**
-   * The identity of the QUESTION currently being asked. An answer stamped with a
-   * different key belongs to a filter that is no longer on screen, so it reads
-   * as "still loading" rather than as this filter's result.
-   *
-   * `reloadKey` is deliberately NOT part of it — a Refresh asks the same
-   * question again, and blanking the list to re-answer it identically would be a
-   * flash for nothing.
+   * #1083 — the `filterKey` stamping this replaced is gone. It existed because
+   * the page owned the rows and had to decide whether an arriving answer still
+   * belonged to the filter on screen; `usePagedList` now owns them and keys that
+   * decision on the FETCHER's identity, which changes with exactly these four
+   * axes. One authority instead of a key and a fetcher that could disagree.
    */
-  const filterKey = `${statusFilter ?? ''}|${pipelineId ?? ''}|${triggerId ?? ''}|${since ?? ''}`;
-  const runs = loaded?.key === filterKey ? loaded.rows : null;
-  const loadedAt = loaded?.key === filterKey ? loaded.at : 0;
-  const error = failed?.key === filterKey ? failed.message : null;
 
   /**
-   * Monotonic id of the most recently STARTED load — `pipelinesStore`'s
-   * `latestLoad` guard, for the same reason it has one. `filterKey` settles which
-   * QUESTION an answer belongs to, but two loads can share a key (a Refresh, or
-   * a double-Refresh) and abort does not fully cover them: a request whose
-   * response has already arrived can still resolve its `.then` after the
-   * controller aborts, so the older answer would win on completion order.
-   * A superseded load drops its result, success AND failure alike — a late
-   * rejection from an abandoned request must not bury the fresher answer that
-   * replaced it under an error banner.
+   * #1083 — ONE page of runs, extended on demand, instead of every run the
+   * filters matched. The fetcher is memoized on the filter PRIMITIVES (never the
+   * `filters` object, which is a fresh literal every render), and that identity
+   * is load-bearing twice over: it is the dependency of the hook's first-page
+   * effect, and it is what tells `usePagedList` the list has CHANGED rather than
+   * merely needing a refresh — so a filter change blanks the rows and drops the
+   * cursor, where a Refresh keeps the rows on screen. The hand-rolled
+   * `latestLoad` counter this replaced is gone with it; `useGuardedLoad`, which
+   * the hook wraps, is that counter with its rules written down and tested.
    */
-  const latestLoad = useRef(0);
-
-  // Deps are PRIMITIVES, never the `filters` object: a fresh object literal every
-  // render would make this effect re-run forever.
-  useEffect(() => {
-    const controller = new AbortController();
-    const load = (latestLoad.current += 1);
-    listRuns({ status: statusFilter, pipelineId, triggerId, since }, controller.signal)
-      .then((rows) => {
-        if (load !== latestLoad.current) return;
-        setLoaded({ key: filterKey, rows, at: Date.now() });
-        setFailed(null);
-      })
-      .catch((err: unknown) => {
-        if (load !== latestLoad.current || controller.signal.aborted) return;
-        setFailed({ key: filterKey, message: err instanceof Error ? err.message : String(err) });
-      });
-    return () => controller.abort();
-  }, [reloadKey, filterKey, statusFilter, pipelineId, triggerId, since]);
+  const fetchPage = useCallback(
+    (cursor: string | undefined, signal: AbortSignal) =>
+      listRuns({ status: statusFilter, pipelineId, triggerId, since }, cursor, signal),
+    [statusFilter, pipelineId, triggerId, since],
+  );
+  const {
+    items: runs,
+    error: pageError,
+    loading,
+    busy,
+    hasMore,
+    lastUpdatedAt,
+    loadMore,
+    refresh,
+  } = usePagedList(fetchPage);
+  /* The clock an UNFINISHED row's duration is measured against — captured when
+     the first page was requested rather than read per render, so every row's "so
+     far" is as-of the same instant and rendering stays pure. `0` before the
+     first answer, which `formatRunDuration` already handles. */
+  const loadedAt = lastUpdatedAt ?? 0;
 
   /**
    * #931 (U27 slice 2) — the filtered pipeline's LIFETIME spend, stamped with the
    * pipeline it answers for exactly the reason the rows above are stamped: an
    * answer for the previous pipeline must not sit under the new one's controls.
    *
-   * Its own `latestLoad` ref, deliberately not the rows'. That counter is
-   * monotonic across every load it guards, so sharing it would make each of the
+   * Its own latest-wins ref, deliberately not the run list's. A counter is
+   * monotonic across every load it guards, so sharing one would make each of the
    * two fetches discard the other's result — whichever started second would win
-   * twice.
+   * twice. (The run list's own counter now lives inside `usePagedList`, which is
+   * the same rule expressed once: one counter per state target.)
    *
    * A 404 renders NOTHING. `listRuns` answers an unowned or deleted pipeline id
    * with an empty list by design (`runFilters.ts`), and the picker already shows
@@ -371,7 +363,21 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             Timeline
           </ToggleButton>
         </div>
-        <button type="button" onClick={() => setReloadKey((k) => k + 1)}>
+        {/* Drives BOTH panels: the paged run list re-reads its first page (and
+            drops any accumulated tail — a refreshed head glued to a stale tail
+            would skip whatever was appended in between), and the key bump
+            re-fetches the lifetime-spend panel. Disabled while any run-list
+            request is in flight, since `usePagedList` is latest-wins rather than
+            drop-the-new, so a second click would abort and re-issue a request
+            already on its way. */}
+        <button
+          type="button"
+          onClick={() => {
+            refresh();
+            setReloadKey((k) => k + 1);
+          }}
+          disabled={busy}
+        >
           Refresh
         </button>
       </div>
@@ -381,9 +387,15 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         live — its nodes and events stream in as the engine executes.
       </p>
 
-      {error && (
+      {/* Worded apart because they are different news: a failed FIRST page
+          means there are no runs on screen, while a failed older page means the
+          runs on screen are real and merely stop short of where the reader
+          asked. */}
+      {pageError !== null && (
         <p role="alert" className="error">
-          {error}
+          {pageError.scope === 'more'
+            ? `Could not load older runs: ${pageError.message}`
+            : pageError.message}
         </p>
       )}
 
@@ -481,16 +493,16 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
       {costSummary && <PipelineSpend summary={costSummary} />}
       {costError && <p className="page-hint">{costError}</p>}
 
-      {runs === null && !error && <p>Loading runs…</p>}
+      {loading && pageError === null && <p>Loading runs…</p>}
 
       {/* Three distinct empty states, because they call for three different
           things. "You have none" sends the operator to the Triggers page;
           "none MATCH" sends them to the Clear control right above, and saying
           the first when the second is true is simply false. */}
-      {runs !== null && runs.length === 0 && !filtered && (
+      {runs !== null && runs.length === 0 && pageError === null && !filtered && (
         <p>No runs yet. Fire a trigger on the Triggers page to start one.</p>
       )}
-      {runs !== null && runs.length === 0 && filtered && (
+      {runs !== null && runs.length === 0 && pageError === null && filtered && (
         <p>No runs match these filters. Widen them, or clear them, to see more.</p>
       )}
 
@@ -510,7 +522,17 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           >
             {RUN_TABS.map((key) => (
               <Tab key={key} value={key} id={`run-tab-${key}`} title={RUN_TAB_HINT[key]}>
-                {RUN_TAB_LABEL[key]} <span className="run-tab-count">{counts[key]}</span>
+                {RUN_TAB_LABEL[key]}{' '}
+                {/* #1083 — OPEN-ENDED while older pages remain. This counts the
+                    runs loaded, not the runs that exist, and a bare `0` next to
+                    "No child runs" would state as fact something the very next
+                    click can falsify. `12+` is the honest form of a lower
+                    bound; once the walk is exhausted it is a complete count
+                    again and the marker goes. */}
+                <span className="run-tab-count">
+                  {counts[key]}
+                  {hasMore ? '+' : ''}
+                </span>
               </Tab>
             ))}
           </TabList>
@@ -524,7 +546,11 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
               runs.length > 0 && (
                 <p>
                   No {RUN_TAB_LABEL[tab].toLowerCase()} runs
-                  {filtered ? ' match these filters' : ''}.
+                  {filtered ? ' match these filters' : ''}
+                  {/* Scoped to what has been LOADED while older pages remain —
+                      the unqualified sentence claims the workspace holds none,
+                      which is only true once the walk has ended. */}
+                  {hasMore ? ' in the runs loaded so far' : ''}.
                 </p>
               )
             ) : view === 'timeline' ? (
@@ -604,6 +630,19 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
             )}
           </div>
         </>
+      )}
+
+      {/* Rendered only when the server said there IS an older page. An
+          always-present button that sometimes did nothing would make the end of
+          the history indistinguishable from a list that had stopped loading —
+          and where the history ends is exactly what a reader is checking.
+          OUTSIDE the "are there rows" guard above, because a tab holding none of
+          the loaded rows is precisely when the reader needs to reach further
+          back rather than being told there is nothing there. */}
+      {hasMore && (
+        <button type="button" onClick={loadMore} disabled={busy}>
+          Load older runs
+        </button>
       )}
     </section>
   );

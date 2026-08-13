@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeRunCost,
   CATALOG_VERSION,
+  MAX_PAGE_SIZE,
   RunStatusSchema,
   type NewPipelineVersion,
   type NewRun,
@@ -23,12 +24,13 @@ import {
   LIVE_RUN_STATUSES,
   listParsedRuns,
   listRuns,
-  listRunSummaries,
+  listRunSummariesPage,
   nextQueuedRunForTrigger,
   queuedTriggerCandidatesForPipeline,
   updateRun,
 } from '../runs.js';
 import { appendRunEvent } from '../run-events.js';
+import { decodeCursor, type CursorKey } from '../pagination.js';
 import { freshDb } from './helpers.js';
 import { runs } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -642,6 +644,24 @@ describe('#646 — nextQueuedRunForTrigger picks PAST a corrupt FIFO head', () =
   });
 });
 
+/**
+ * #1083 — the whole owner-scoped list, for the assertions that predate paging
+ * and are about the JOIN, the cost fold, the filter axes and the order rather
+ * than about the walk. They keep meaning exactly what they meant by asking for
+ * one page larger than the fixture; the paging itself is pinned separately in
+ * `listRunSummariesPage — keyset paging` below.
+ *
+ * `MAX_PAGE_SIZE` rather than a literal, so a fixture that grew past a
+ * hand-picked number would be a compile-time-visible SSOT change and not a
+ * silently truncated assertion.
+ */
+function summariesOf(
+  db: ReturnType<typeof freshDb>['db'],
+  filter: Parameters<typeof listRunSummariesPage>[1] = {},
+) {
+  return listRunSummariesPage(db, filter, { limit: MAX_PAGE_SIZE }).items;
+}
+
 describe('listRunSummaries (R2)', () => {
   function setup() {
     const { db } = freshDb();
@@ -719,7 +739,7 @@ describe('listRunSummaries (R2)', () => {
        empty log — nothing about it should produce a cost. */
     appendRunEvent(db, { runId: quiet.id, type: 'run.started', payload: {} });
 
-    const byId = new Map(listRunSummaries(db, { ownerId: 'local' }).map((r) => [r.id, r.cost]));
+    const byId = new Map(summariesOf(db, { ownerId: 'local' }).map((r) => [r.id, r.cost]));
     expect(byId.get(cheap.id)?.totalCostEstimate).toBeCloseTo(0.01, 10);
     expect(byId.get(cheap.id)?.responseCount).toBe(1);
     expect(byId.get(dear.id)?.totalCostEstimate).toBeCloseTo(0.75, 10);
@@ -735,7 +755,7 @@ describe('listRunSummaries (R2)', () => {
     const trigger = makeTrigger(db, version.id, 'Every morning');
     const run = createRun(db, buildRunInput(version.id, { triggerId: trigger.id }));
 
-    const summaries = listRunSummaries(db);
+    const summaries = summariesOf(db);
     expect(summaries).toHaveLength(1);
     const summary = summaries[0];
     expect(summary?.id).toBe(run.id);
@@ -763,7 +783,7 @@ describe('listRunSummaries (R2)', () => {
     const parent = createRun(db, buildRunInput(version.id, { triggerId: null }));
     const child = createRun(db, buildRunInput(version.id, { parentRunId: parent.id }));
 
-    const summaries = listRunSummaries(db);
+    const summaries = summariesOf(db);
     expect(summaries.map((s) => s.id).sort()).toEqual(
       [triggered.id, rerun.id, parent.id, child.id].sort(),
     );
@@ -773,7 +793,7 @@ describe('listRunSummaries (R2)', () => {
     expect(byId.get(child.id)?.triggerName).toBeNull();
   });
 
-  it('orders newest-first, breaking a startedAt tie CHRONOLOGICALLY', () => {
+  it('orders newest-first, breaking a startedAt tie by a TOTAL, stable key', () => {
     const { db, version } = setup();
     const oldest = createRun(db, buildRunInput(version.id));
     // FIVE tied runs, not two, so an accidental agreement is 1/120 rather than
@@ -788,24 +808,28 @@ describe('listRunSummaries (R2)', () => {
       db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, run.id)).run();
     }
 
-    const ordered = listRunSummaries(db).map((s) => s.id);
-    // The tie-break is `rowid` — INSERTION order — so the tied block comes back
-    // newest-inserted first. Asserting reverse-CREATION order (rather than
-    // reverse-sorted ids) is what pins the tie-break as CHRONOLOGICAL: run ids
-    // are random nanoids, so swapping `rowid` for `id` fails this every time
-    // (measured, 6/6).
+    const ordered = summariesOf(db).map((s) => s.id);
+    // #1083 — the tie-break is now `id` DESC, not `rowid`, so the tied block
+    // comes back in DESCENDING ID order rather than reverse-insertion order.
+    // This test asserted the opposite before, and the reversal is deliberate:
+    // `listRunSummariesPage`'s docblock has the argument (an implicit rowid can
+    // be renumbered by VACUUM, and this order is now a CURSOR the client
+    // replays). Sorting the expectation rather than hard-coding it is what
+    // keeps the assertion about the ORDER instead of about the nanoids the
+    // fixture happened to mint.
     //
-    // MEASURED LIMIT, stated so nobody reads more into this test than it earns:
-    // deleting the tie-break clause ENTIRELY still passes (measured, 8/8),
-    // because SQLite's temp-b-tree sort happens to emit the tied block in rowid
-    // order anyway. That incidental agreement is exactly why the clause is
-    // written explicitly — an undocumented sort detail is not a guarantee — but
-    // this fixture cannot falsify its absence, and pretending otherwise would
-    // make it the kind of test that certifies nothing while looking like proof.
+    // What this pins is the property paging actually needs — a TOTAL, stable
+    // order — and it fails if the tie-break is dropped to `startedAt` alone:
+    // measured by deleting `desc(runs.id)` from `pageOrderDesc`'s call, 5/5 red.
+    // That is a stronger guarantee than the version it replaces, which recorded
+    // that it could NOT falsify a missing tie-break clause (SQLite's temp-b-tree
+    // emitted rowid order anyway). The chronology within one millisecond is the
+    // property genuinely given up, and it is given up knowingly.
     expect(ordered).toEqual(
       [...tied]
-        .reverse()
         .map((r) => r.id)
+        .sort()
+        .reverse()
         .concat(oldest.id),
     );
   });
@@ -815,7 +839,7 @@ describe('listRunSummaries (R2)', () => {
     const mine = createRun(db, buildRunInput(version.id, { ownerId: 'local' }));
     createRun(db, buildRunInput(version.id, { ownerId: 'someone_else' }));
 
-    const summaries = listRunSummaries(db, { ownerId: 'local' });
+    const summaries = summariesOf(db, { ownerId: 'local' });
     expect(summaries.map((s) => s.id)).toEqual([mine.id]);
   });
 
@@ -843,10 +867,194 @@ describe('listRunSummaries (R2)', () => {
     const mine = createRun(db, buildRunInput(version.id));
     const theirs = createRun(db, buildRunInput(twinVersion.id));
 
-    const byId = new Map(listRunSummaries(db, { ownerId: 'local' }).map((r) => [r.id, r]));
+    const byId = new Map(summariesOf(db, { ownerId: 'local' }).map((r) => [r.id, r]));
     expect(byId.get(mine.id)?.pipelineName).toBe(byId.get(theirs.id)?.pipelineName);
     expect(byId.get(mine.id)?.pipelineId).toBe(pipeline.id);
     expect(byId.get(theirs.id)?.pipelineId).toBe(twin.id);
+  });
+});
+
+/**
+ * #1083 — the keyset walk itself. `GET /api/runs` was the last list route with
+ * no `limit` and no `cursor`, over the one table with no retention policy.
+ */
+describe('listRunSummariesPage — keyset paging', () => {
+  function setup(count: number) {
+    const { db } = freshDb();
+    const pipeline = createPipeline(db, { ownerId: 'local', name: 'Nightly report' });
+    const version = createPipelineVersion(db, {
+      pipelineId: pipeline.id,
+      params: [],
+      outputs: [],
+      nodes: [],
+      edges: [],
+      catalogVersion: CATALOG_VERSION,
+    });
+    // Distinct, DESCENDING-friendly stamps so "newest-first" is unambiguous and
+    // the walk order is checkable without relying on a tie-break.
+    const created = Array.from({ length: count }, (_, i) => {
+      const run = createRun(db, buildRunInput(version.id));
+      db.update(runs)
+        .set({ startedAt: 1_000 + i * 1_000 })
+        .where(eq(runs.id, run.id))
+        .run();
+      return run.id;
+    });
+    // Newest first — the order the walk must reproduce across its pages.
+    return { db, version, newestFirst: [...created].reverse() };
+  }
+
+  /** Follows `nextCursor` to the end, returning every id seen and how many
+   * requests it took — the walk a client actually performs. */
+  function walk(db: ReturnType<typeof freshDb>['db'], limit: number) {
+    const seen: string[] = [];
+    let cursor: CursorKey | undefined;
+    let pages = 0;
+    for (;;) {
+      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit, cursor });
+      pages += 1;
+      seen.push(...page.items.map((r) => r.id));
+      if (page.nextCursor === null) return { seen, pages };
+      // Through the real codec, exactly as the route does (`pageArgsFromQuery`):
+      // the repo takes a decoded `CursorKey`, and the opaque string is the wire
+      // form. Round-tripping it here is what makes this a walk a CLIENT could
+      // perform rather than one only the repo's internals could.
+      const key = decodeCursor(page.nextCursor);
+      expect(key).not.toBeNull();
+      cursor = key ?? undefined;
+      // A non-advancing cursor would loop forever; fail loudly instead.
+      expect(pages).toBeLessThan(20);
+    }
+  }
+
+  it('returns one page newest-first, and a cursor only when older rows exist', () => {
+    const { db, newestFirst } = setup(7);
+
+    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 3 });
+    expect(first.items.map((r) => r.id)).toEqual(newestFirst.slice(0, 3));
+    expect(first.nextCursor).not.toBeNull();
+
+    // The LAST page fits exactly, which is the fetch-one-extra probe's whole
+    // point: a `nextCursor` here would promise an older page that does not
+    // exist, and the reader would be offered a Load more that returns nothing.
+    const exact = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 7 });
+    expect(exact.items).toHaveLength(7);
+    expect(exact.nextCursor).toBeNull();
+  });
+
+  it('walks every row exactly once across pages, in one total order', () => {
+    const { db, newestFirst } = setup(7);
+    const { seen, pages } = walk(db, 3);
+    // Not just "same set" — the same SEQUENCE, so a boundary that dropped or
+    // repeated a row fails rather than being masked by a sort.
+    expect(seen).toEqual(newestFirst);
+    expect(pages).toBe(3);
+  });
+
+  it('neither drops nor duplicates a row when every row ties on startedAt', () => {
+    const { db, version } = setup(0);
+    const tied = Array.from({ length: 6 }, () => createRun(db, buildRunInput(version.id)));
+    for (const run of tied) {
+      db.update(runs).set({ startedAt: 5_000 }).where(eq(runs.id, run.id)).run();
+    }
+
+    const { seen } = walk(db, 2);
+    // The tuple predicate `(started_at < c) OR (started_at = c AND id < i)` is
+    // what makes this hold; a bare `started_at <` would return NOTHING after
+    // page one, and a bare `id <` would drop rows across a stamp boundary.
+    expect(seen).toHaveLength(6);
+    expect(new Set(seen).size).toBe(6);
+    expect(seen).toEqual([...tied.map((r) => r.id)].sort().reverse());
+  });
+
+  it('keeps the owner scope and the filter axes on EVERY page, not just the first', () => {
+    const { db, version } = setup(0);
+    const mine: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const run = createRun(db, buildRunInput(version.id, { status: 'success' }));
+      db.update(runs)
+        .set({ startedAt: 1_000 + i * 1_000 })
+        .where(eq(runs.id, run.id))
+        .run();
+      mine.push(run.id);
+      // Interleaved so a leak would land MID-WALK, on page two — the case a
+      // first-page-only assertion cannot see.
+      const theirs = createRun(db, buildRunInput(version.id, { ownerId: 'someone_else' }));
+      db.update(runs)
+        .set({ startedAt: 1_500 + i * 1_000 })
+        .where(eq(runs.id, theirs.id))
+        .run();
+      const failed = createRun(db, buildRunInput(version.id, { status: 'failure' }));
+      db.update(runs)
+        .set({ startedAt: 1_700 + i * 1_000 })
+        .where(eq(runs.id, failed.id))
+        .run();
+    }
+
+    const seen: string[] = [];
+    let cursor: CursorKey | undefined;
+    for (;;) {
+      const page = listRunSummariesPage(
+        db,
+        { ownerId: 'local', status: 'success' },
+        { limit: 2, cursor },
+      );
+      seen.push(...page.items.map((r) => r.id));
+      if (page.nextCursor === null) break;
+      cursor = decodeCursor(page.nextCursor) ?? undefined;
+    }
+    expect(seen).toEqual([...mine].reverse());
+  });
+
+  /**
+   * The mutable-ordering-scalar case, pinned rather than argued. `started_at` is
+   * re-stamped by `admitQueuedRun`, so unlike every other keyset list here the
+   * order column can move under a walk in progress.
+   *
+   * The claim being fixed is the BOUND, not the absence of an effect: an
+   * admission moves the row toward the HEAD, so a walk already past that point
+   * MISSES it — and must never see it twice, and must never lose a different
+   * row to it.
+   */
+  it('a run admitted mid-walk is skipped, never duplicated and never displaces another', () => {
+    const { db, version } = setup(0);
+    const older = Array.from({ length: 4 }, (_, i) => {
+      const run = createRun(db, buildRunInput(version.id));
+      db.update(runs)
+        .set({ startedAt: 1_000 + i * 1_000 })
+        .where(eq(runs.id, run.id))
+        .run();
+      return run.id;
+    });
+    // A queued run stamped at the OLDEST end, so page one cannot contain it.
+    const queued = createRun(db, buildRunInput(version.id, { status: 'queued' }));
+    db.update(runs).set({ startedAt: 500 }).where(eq(runs.id, queued.id)).run();
+
+    const first = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 });
+    expect(first.items.map((r) => r.id)).toEqual([older[3], older[2]]);
+
+    // Admission re-stamps `started_at` to NOW — far newer than the cursor, so
+    // the row jumps above the page already read.
+    expect(admitQueuedRun(db, queued.id)).not.toBeNull();
+
+    const rest: string[] = [];
+    let cursor =
+      first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
+    while (cursor !== undefined) {
+      const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2, cursor });
+      rest.push(...page.items.map((r) => r.id));
+      cursor = page.nextCursor === null ? undefined : (decodeCursor(page.nextCursor) ?? undefined);
+    }
+
+    const seen = [...first.items.map((r) => r.id), ...rest];
+    // Skipped by THIS walk...
+    expect(seen).not.toContain(queued.id);
+    // ...and no row was seen twice or lost to it.
+    expect(seen).toEqual(older.slice().reverse());
+    // A fresh read finds it at the head, which is where a just-admitted run
+    // belongs — the miss is confined to the walk that was already under way.
+    const fresh = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2 });
+    expect(fresh.items[0]!.id).toBe(queued.id);
   });
 });
 
@@ -904,7 +1112,7 @@ describe('listRunSummaries — U26 filter axes', () => {
     // `pipelineVersionId` could never express this — that is the whole point of
     // the axis.
     expect(
-      listRunSummaries(db, { pipelineId: reports.id })
+      summariesOf(db, { pipelineId: reports.id })
         .map((s) => s.id)
         .sort(),
     ).toEqual([v1Run.id, v2Run.id].sort());
@@ -913,7 +1121,7 @@ describe('listRunSummaries — U26 filter axes', () => {
   it('an unknown pipelineId matches nothing rather than everything', () => {
     const { db, reportsV } = setup();
     createRun(db, buildRunInput(reportsV.id));
-    expect(listRunSummaries(db, { pipelineId: 'pl_does_not_exist' })).toEqual([]);
+    expect(summariesOf(db, { pipelineId: 'pl_does_not_exist' })).toEqual([]);
   });
 
   it('filters by startedAt lower bound, INCLUSIVE of the bound itself', () => {
@@ -929,7 +1137,7 @@ describe('listRunSummaries — U26 filter axes', () => {
     // exactly an hour ago, or the boundary run flickers out of "the last hour"
     // on a millisecond.
     expect(
-      listRunSummaries(db, { startedAfter: 1_000 })
+      summariesOf(db, { startedAfter: 1_000 })
         .map((s) => s.id)
         .sort(),
     ).toEqual([onBound.id, recent.id].sort());
@@ -972,7 +1180,7 @@ describe('listRunSummaries — U26 filter axes', () => {
     db.update(runs).set({ status: 'failure', startedAt: 10 }).where(eq(runs.id, tooOld.id)).run();
 
     expect(
-      listRunSummaries(db, {
+      summariesOf(db, {
         ownerId: 'local',
         status: 'failure',
         pipelineId: reports.id,
