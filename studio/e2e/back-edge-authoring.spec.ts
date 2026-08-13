@@ -6,8 +6,8 @@ import {
   connectNodes,
   dragNodeBy,
   edgeGroup,
+  firesOn,
   fitAndSettle,
-  selectEdge,
 } from './support/canvasGraph';
 import { collectPageProblems, expectQuiet } from './support/console-guard';
 
@@ -105,8 +105,21 @@ test.describe('U6e back-edge authoring', () => {
     await page.locator(REFUSAL).getByRole('button', { name: OFFER }).click();
     await expect(edgeGroup(page)).toHaveCount(2);
 
-    // Select the back-edge — the second path, the one just authored.
-    await selectEdge(page, 1);
+    /* NAME the edge, do not point at it. `selectEdge(page, 1)` clicks the
+       middle of the second path, and these two edges run between the SAME pair
+       of nodes in opposite directions — measured, their midpoints are 10px
+       apart (1122,558 and 1112,558), so a coordinate on one is a coordinate on
+       the other and the click picks whichever is topmost at that instant. The
+       DOM order is stable (the back-edge is index 1, checked over five runs), so
+       the flake was never about which path got measured; it was about what a
+       pixel in the overlap belongs to. `selectEdge`'s own docblock already says
+       a spec that can name its edge should prefer a selector — this one can, by
+       the label only the back-edge carries. */
+    await edgeGroup(page)
+      .filter({ hasText: '↺ success ×10' })
+      .locator('.react-flow__edge-textwrapper')
+      .click();
+    await expect(firesOn(page)).toBeVisible();
     const panel = page.getByLabel('Properties');
     await expect(panel.getByRole('heading')).toHaveText('Back-edge');
     const cap = panel.getByLabel(/Bounce cap/);
