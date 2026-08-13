@@ -1278,9 +1278,12 @@ td button + button {
      elide, and nothing is lost — the ellipsis is visual only, so the accessible
      name and the property panel still carry the whole title.
 
-     132 rather than the 144 that first passed: at 144 the right-hand node's
-     source port cleared the pane by FOUR pixels, and a margin that thin is a
-     spec that goes red the next time the shell's chrome changes by a hair. */
+     168 is the readable size. 132 was tried first and kept the suite green by
+     truncating "Copy File 1" to "Copy…", which is not shippable; 144 read
+     correctly but cleared the pane by FOUR pixels, and a margin that thin is a
+     spec that goes red the next time the shell's chrome changes by a hair. So
+     the card takes the size it needs and `WIDE_CANVAS` gives the specs the room
+     — measured there, 2000 leaves the worst port 81px inside the pane. */
   width: 168px;
   display: flex;
   flex-direction: row;
@@ -2600,9 +2603,26 @@ td button + button {
   overflow: hidden;
 }
 
+/* THE RUN MONITOR STACKS, and this rule is what keeps it doing so.
+ *
+ * `RunActivityNode` reuses `.flow-node` for the box, type scale and spacing, but
+ * it carries a SECOND line the author canvas does not — the run status — and it
+ * has always read title-above-status. When `.flow-node` became an icon-and-name
+ * ROW with a fixed width, this view inherited that and would have squeezed the
+ * title and the status side by side. Caught in review, not by looking: the
+ * visual pass only ever opened the authoring canvas.
+ *
+ * The width is kept so the two canvases still draw boxes of one size; only the
+ * DIRECTION goes back. The title wraps here rather than eliding, which is what
+ * it did before and is right for a view whose job is to be read rather than
+ * edited. */
 .run-node {
   outline: 2px solid transparent;
   outline-offset: 2px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.2rem;
 }
 
 .run-node-neutral {

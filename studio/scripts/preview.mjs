@@ -33,7 +33,18 @@ import { PREVIEW_HOST as HOST, PREVIEW_PORT } from './previewPort.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA_DIR = join(ROOT, 'data', 'preview');
 
-/** Refuse a busy port by NAME, so the message says what to do about it. */
+/**
+ * Refuse a busy port by NAME, so the message says what to do about it.
+ *
+ * This is a MESSAGE, not a lock, and the distinction is worth stating because
+ * the check looks like one. There is a window between this probe closing and the
+ * server binding in which something else could take the port. Nothing is lost
+ * when that happens: the server's own bind fails with `EADDRINUSE` and the
+ * process exits, which is the same outcome with a worse message. Holding the
+ * socket open and handing the descriptor to the child would close the window and
+ * is not worth the machinery in a dev script whose failure mode is "run it
+ * again".
+ */
 async function assertPortFree() {
   await new Promise((resolve, reject) => {
     const probe = createServer();
