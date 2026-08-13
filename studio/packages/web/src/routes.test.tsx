@@ -62,6 +62,13 @@ vi.mock('./api/connections', async (importActual) => ({
   ...(await importActual<typeof import('./api/connections')>()),
   listConnections: vi.fn().mockResolvedValue([]),
 }));
+// This suite MOUNTS every hub section for real (see the walk over `HUBS`
+// below), so a page that loads on mount reaches a real `fetch` in jsdom
+// unless its api module is mocked here.
+vi.mock('./api/secrets', async (importActual) => ({
+  ...(await importActual<typeof import('./api/secrets')>()),
+  listSecrets: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./api/pipelines', async (importActual) => ({
   ...(await importActual<typeof import('./api/pipelines')>()),
   listPipelines: vi.fn().mockResolvedValue([]),
@@ -178,6 +185,7 @@ describe('route tree', () => {
     ['/author/pipelines', 'Pipelines'],
     ['/monitor/runs', 'Runs'],
     ['/manage/connections', 'Connections'],
+    ['/manage/secrets', 'Secrets'],
     ['/manage/triggers', 'Triggers'],
     ['/manage/git', 'Git'],
   ])('renders %s', async (path, heading) => {
@@ -544,6 +552,7 @@ describe('shell chrome over the real route tree', () => {
     ['/author/pipelines/pl_42', ['Author', 'Pipelines', 'pl_42']],
     ['/monitor/runs/run_42', ['Monitor', 'Runs', 'run_42']],
     ['/manage/connections', ['Manage', 'Connections']],
+    ['/manage/secrets', ['Manage', 'Secrets']],
     ['/manage/triggers', ['Manage', 'Triggers']],
     ['/manage/git', ['Manage', 'Git']],
   ])('breadcrumbs %s as %j', async (path, expected) => {
@@ -575,7 +584,7 @@ describe('shell chrome over the real route tree', () => {
       within(pane)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Connections', 'Triggers', 'Git']);
+    ).toEqual(['Connections', 'Secrets', 'Triggers', 'Git']);
     expect(screen.getByRole('separator')).toHaveAttribute('aria-controls', pane.id);
   });
 
