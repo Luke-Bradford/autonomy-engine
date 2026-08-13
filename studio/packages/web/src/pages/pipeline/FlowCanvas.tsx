@@ -21,8 +21,10 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
+  useConnection,
   useStore as useReactFlowStore,
   useStoreApi as useReactFlowStoreApi,
+  useUpdateNodeInternals,
   type Connection,
   type Edge as FlowEdge,
   type EdgeChange,
@@ -43,6 +45,7 @@ import { containerLabels, routingChangeBetween, routingSentence } from './contai
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
+import { useHoverIntent } from '../../hooks/useHoverIntent';
 import { SourcePorts } from './SourcePorts';
 import {
   backEdgeOffer,
@@ -101,12 +104,87 @@ interface ActivityData extends Record<string, unknown> {
  * dropdown chosen afterwards; `ports.ts` owns the set and `SourcePorts` draws
  * it, for the author canvas and the run monitor alike.
  */
-const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps) {
+const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProps) {
   const d = data as ActivityData;
+  /* #997 — the fan is hover INTENT, not raw hover: a pass-over must not set off
+     a wave of nodes opening behind the cursor, and a momentary exit must not
+     snatch the ports away as the user reaches for one. The node and its ports
+     are ONE hover region (the ports sit inside this box's bounds), so there is
+     no gap to cross and no exit to debounce beyond the hook's own grace. */
+  const { open, handlers } = useHoverIntent();
+
+  /* WHILE A CONNECTION IS BEING DRAGGED, every node fans with NO dwell — the
+     ticket's "connecting mode" clause, and it is load-bearing rather than a
+     nicety. A drop happens the moment the pointer ARRIVES over a port, so no
+     dwell can ever elapse: with hover intent alone the ports a drag is aiming
+     for are unreachable by that drag. `connect-validation`'s backwards drag is
+     the proof — it dropped onto a collapsed stack and authored a NEW edge where
+     the duplicate should have been refused, which is a wrong graph, not a
+     cosmetic miss. `useConnection` rather than plumbing a flag through node
+     data, so a gesture does not rebuild the whole nodes array. */
+  const connecting = useConnection((c) => c.inProgress);
+  const expanded = open || connecting;
+
+  /* React Flow caches each handle's position in `internals.handleBounds`,
+     measured from the DOM once (`getBoundingClientRect`) — it does NOT re-read
+     the DOM per frame. Moving the ports in CSS alone therefore fans the DOTS
+     while every edge stays attached where the dots USED to be. Telling RF to
+     re-measure is what keeps the lines and the ports one object.
+
+     Containers are the opposite case and are deliberately NOT handled here:
+     their bounds are STATED (`containerHandles`), because RF resets a container
+     to unmeasured forever — so a re-measure there is discarded, and their half
+     of this change needs its own stated collapsed geometry. */
+  const updateNodeInternals = useUpdateNodeInternals();
+  /* ONLY ON A CHANGE, never on mount — and that is a correctness fix, not a
+     performance one. Asking RF to re-measure while it is still performing its
+     INITIAL measurement leaves the mount-time `fitView` working from bounds it
+     is told to discard, so the viewport is never fitted; with
+     `onlyRenderVisibleElements` on, a node outside that unfitted viewport is
+     then not rendered AT ALL. It cost `version-history.spec.ts` its third node,
+     which reads as "the canvas lost a node" rather than as a measurement race. */
+  const fanned = useRef(expanded);
+  useEffect(() => {
+    if (fanned.current === expanded) return;
+    fanned.current = expanded;
+    updateNodeInternals(id);
+  }, [expanded, id, updateNodeInternals]);
+
+  /* KEYBOARD ARRIVAL IS NOT OBSERVABLE FROM HERE without this. React Flow owns
+     the focusable element — `.react-flow__node`, the PARENT of the box below —
+     so focusing a node with Tab fires no focus event inside this subtree at all,
+     and an `onFocus` on the box would never run. A CSS-only reveal keyed on
+     `.react-flow__node:focus-visible` was the tempting shortcut and is wrong in
+     a way that matters: it would fan the DOTS while the state this component
+     holds stayed closed, so `updateNodeInternals` would never fire and every
+     edge would stay attached at the middle. Same disagreement between lines and
+     ports the inline `top` would have caused, arrived at from the other side. */
+  const boxRef = useRef<HTMLDivElement>(null);
+  const { onFocus, onBlur } = handlers;
+  useEffect(() => {
+    const wrapper = boxRef.current?.parentElement;
+    if (!wrapper) return;
+    // `focusin`/`focusout` rather than `focus`/`blur`: the ports themselves are
+    // focusable, and only the bubbling pair keeps the fan open while Tab moves
+    // between them.
+    wrapper.addEventListener('focusin', onFocus);
+    wrapper.addEventListener('focusout', onBlur);
+    return () => {
+      wrapper.removeEventListener('focusin', onFocus);
+      wrapper.removeEventListener('focusout', onBlur);
+    };
+  }, [onFocus, onBlur]);
+
   return (
     <div
+      ref={boxRef}
       className={`flow-node${selected ? ' selected' : ''}`}
+      /* The stylesheet reads this to choose the ports' geometry and opacity.
+         An ATTRIBUTE rather than a class so the e2e spec can assert the state
+         directly, and so the collapsed case stays the plain default. */
+      data-ports-expanded={expanded ? 'true' : 'false'}
       style={{ minHeight: nodeBoxHeight(d.ports.length) }}
+      {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <strong>{d.title}</strong>

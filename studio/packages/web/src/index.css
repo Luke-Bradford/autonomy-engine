@@ -1294,6 +1294,127 @@ td button + button {
 .flow-port.react-flow__handle {
   background: var(--port-color, var(--muted));
   border-color: var(--port-color, var(--muted));
+
+  /* ── #997 — QUIET AT REST ──────────────────────────────────────────────
+   *
+   * Every source port sits at the node's middle and is not drawn, so each
+   * outgoing edge appears to leave ONE point on the right edge and colour
+   * alone says which outcome it routes (which is what #992 relies on, having
+   * removed the words that used to say it). `data-ports-expanded` below fans
+   * them back out on hover intent or keyboard focus.
+   *
+   * POSITION AND OPACITY ONLY — never conditional rendering. The handles stay
+   * mounted with their ids because React Flow resolves an edge's
+   * `sourceHandle` against them; unmounting at rest would leave every edge
+   * unable to find its endpoint and snap to the node centre, silently (RF's
+   * error channel is a no-op in a production build).
+   *
+   * `top` IS DELIBERATELY NOT TRANSITIONED, and that is not a style choice.
+   * The node calls `updateNodeInternals` the moment the fan state flips, and
+   * RF re-measures the handle's rect AT THAT INSTANT. Animating `top` would
+   * hand it the position the dot is animating FROM, so every edge would
+   * attach to where the port was about to leave. Opacity carries the motion;
+   * geometry lands immediately, and measurement therefore reads the truth. */
+}
+
+/* SCOPED TO ACTIVITY BOXES, and the scope is load-bearing. A container's ports
+   are excluded from this change (its handle bounds are STATED, so it needs its
+   own collapsed geometry), and it therefore never carries `data-ports-expanded`
+   — so an unscoped collapse hid its ports with nothing able to bring them back.
+   `container-rendering.spec.ts` caught exactly that: a container port that could
+   never be seen or grabbed again. */
+.flow-node .flow-port.react-flow__handle {
+  top: 50%;
+  opacity: 0;
+  /* An invisible dot must not eat a click aimed at the node under it. */
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+.flow-node[data-ports-expanded='true'] .flow-port.react-flow__handle {
+  top: calc(50% + var(--port-offset, 0px));
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* A CONTAINER'S PORTS ARE PERMANENTLY FANNED, and this rule is what keeps them
+   so. `SourcePorts` used to place every port with an inline `top`, which applied
+   wherever it was drawn; publishing the offset as a property instead moved that
+   decision into the two rules above, and BOTH are scoped to `.flow-node` — so a
+   container was left with React Flow's own `top: 50%` and all four of its ports
+   stacked on one point, unfanned and unfannable. Not a cosmetic loss: a
+   coordinate-addressed drag then grabbed whichever port paints last, so
+   `container-rendering.spec.ts` asked for `success`, was handed `skipped`, and
+   authored a brand-new edge in place of the duplicate refusal it expected.
+
+   Deliberately UNCONDITIONAL, not a second copy of the collapse. A container is
+   excluded from #997's quiet-at-rest by design — React Flow can never measure
+   one, so its handle bounds are STATED (`containerHandles`) and a re-measure
+   after a fan is discarded. Collapsing it needs its own stated collapsed
+   geometry, which is its own change; this restores exactly the pre-#997
+   position and nothing else. */
+.flow-container .flow-port.react-flow__handle {
+  top: calc(50% + var(--port-offset, 0px));
+}
+
+/* A bigger target than the drawn dot — noise is a function of what is DRAWN,
+   not what is clickable. Inert while collapsed, because the handle it hangs off
+   is `pointer-events: none` there.
+ *
+ * THE HEIGHT IS THE PORT PITCH, AND NOTHING LARGER. This is not a rounding of
+ * WCAG 2.2's 24px down to what fits — it is the bound the gesture imposes, and
+ * exceeding it authors the WRONG EDGE rather than merely feeling imprecise:
+ *
+ * React Flow does NOT decide which port a drag landed on by its own measured
+ * geometry. `isValidHandle` (`@xyflow/system` 0.0.79, index.js:2563-2574) calls
+ * `document.elementFromPoint` and, in its own words, "always want[s] to
+ * prioritize the handle below the mouse cursor over the closest distance
+ * handle". So this invisible box, not the dot and not `connectionRadius`, is
+ * what a drop resolves against. At 24px against a 14px pitch each port's target
+ * covered ±12px and therefore reached both neighbours; a drag approaching
+ * `success` from above crossed `failure`'s target first, and `.connectingto`'s
+ * `scale(1.6)` below then grew the wrongly-picked port's target over `success`'s
+ * own centre, so the pointer finishing EXACTLY on `success` still dropped on
+ * `failure`. MEASURED, not reasoned: `e2e/connect-validation.spec.ts`'s
+ * backwards drag authored a second `on failure` edge where the duplicate refusal
+ * belonged. At exactly the pitch the targets tile instead of overlapping.
+ *
+ * THE WIDTH GROWS INWARD ONLY, for a different reason with the same shape. A
+ * port has no horizontal NEIGHBOUR, but it does have a horizontal neighbour's
+ * worth of traffic just outside it: the reconnect anchor is drawn TANGENT to the
+ * dot and displaced outward by `RECONNECT_RADIUS` (`shiftX`, `@xyflow/react`
+ * 12.11.2 index.mjs:2834-2852), so the only grabbable part of a selected edge's
+ * end is the crescent BEYOND the dot. A target centred on the port covered that
+ * crescent, and since a handle paints above an edge, pressing the anchor pressed
+ * the port instead — starting a NEW connection where the gesture meant to pick
+ * the existing edge up. MEASURED: the anchor's left edge and the dot's right
+ * edge coincide, and `e2e/edge-reconnect.spec.ts`'s retype landed on a
+ * self-connect refusal and left the edge on its original outcome.
+ *
+ * `left: 100%` + `translate(-100%, …)` therefore ends the box exactly at the
+ * dot's outer edge — the target claims the node side, which is empty, and
+ * nothing of the crescent. It is the same rule as the height: take all the room
+ * there is, and none that belongs to another gesture.
+ *
+ * No fallback on `var(--port-pitch)`: restating `14px` here would recreate the
+ * two-homes problem the property exists to solve, and an unresolved custom
+ * property leaves `height: auto` on an empty box, i.e. zero. That fails in the
+ * safe direction — a target that shrank to the dot, never one that reaches a
+ * neighbour. `SourcePorts` publishes it on every port. */
+.flow-node .flow-port.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: 24px;
+  height: var(--port-pitch);
+  transform: translate(-100%, -50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-node .flow-port.react-flow__handle {
+    transition: none;
+  }
 }
 
 .flow-port--success {
@@ -1427,6 +1548,10 @@ td button + button {
 .flow-port-label {
   position: absolute;
   left: calc(100% + 0.6rem);
+  /* #997 — the label tracks its port's fanned position, from the same
+     `--port-offset` the handle reads. At rest the port is at the middle and the
+     label is hidden anyway, so there is no second geometry to keep in step. */
+  top: calc(50% + var(--port-offset, 0px));
   transform: translateY(-50%);
   opacity: 0;
   transition: opacity 80ms ease-in;
@@ -1446,11 +1571,19 @@ td button + button {
    outcome ports revealed nothing while doing the same on an activity revealed
    the labels. A reveal that only answers a pointer is a control a keyboard user
    cannot see at all. */
-.flow-node:hover .flow-port-label,
-.flow-node:focus-within .flow-port-label,
-.react-flow__node:focus-visible .flow-port-label,
+/* #997 moved the ACTIVITY arms from `:hover` to the fan state, so the words and
+   the dots arrive together — a label revealed by raw hover while the port it
+   names was still collapsed at the middle would point at nothing. The CONTAINER
+   arms keep `:hover`/`:focus-within` because a container's ports do not collapse
+   yet: its handle bounds are STATED (`containerHandles`) rather than measured,
+   so its half needs stated collapsed geometry and is tracked separately. */
+.flow-node[data-ports-expanded='true'] .flow-port-label,
 .flow-container:hover .flow-port-label,
-.flow-container:focus-within .flow-port-label {
+.flow-container:focus-within .flow-port-label,
+/* RESTORED, and it is the only arm that answers a KEYBOARD user on a container:
+   React Flow owns the focusable wrapper, which is the PARENT of `.flow-container`,
+   so `:focus-within` on the box itself never matches a node focused with Tab. */
+.react-flow__node:focus-visible .flow-port-label {
   opacity: 1;
 }
 
@@ -1732,6 +1865,41 @@ td button + button {
  * applied, never that the arrow paints the hue — whereas a `var()` resolves to a
  * concrete `rgb(...)` that a Playwright spec can assert.
  */
+/* ── #992 — the edge label is REVEALED, not permanent ────────────────────────
+ *
+ * U19's palette stands and is doing the work: green/red/blue/grey-dashed/neutral
+ * already say which outcome an edge routes. The always-on word beside every line
+ * said it a second time, and on a four-node graph the labels crowd the canvas and
+ * overlap the boxes. So the text is hidden by default and revealed on demand —
+ * hover, selection, or keyboard focus.
+ *
+ * NOTHING IS LOST TO ASSISTIVE TECH, and that is structural rather than careful:
+ * React Flow renders an edge as `role="img"`/`"group"`, under which the SVG
+ * `<text>` is not exposed at all — so the routing key has ALWAYS been carried by
+ * `edgeAriaLabel` (`toFlowEdge`'s `ariaLabel`), which spells `on <outcome>` and
+ * is untouched here. Hiding the visual label removes a duplicate, not the fact.
+ *
+ * Opacity rather than `display`/`visibility`: the label keeps its layout box, so
+ * revealing it cannot reflow the edge path underneath the pointer that is
+ * reaching for it. */
+.react-flow__edge .react-flow__edge-textwrapper {
+  opacity: 0;
+  transition: opacity 80ms ease-in;
+}
+
+.react-flow__edge:hover .react-flow__edge-textwrapper,
+.react-flow__edge.selected .react-flow__edge-textwrapper,
+.react-flow__edge:focus .react-flow__edge-textwrapper,
+.react-flow__edge:focus-visible .react-flow__edge-textwrapper {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge .react-flow__edge-textwrapper {
+    transition: none;
+  }
+}
+
 .edge-marker-defs {
   /* Zero-size and absolute, NOT `display: none`: a marker inside a
      `display: none` svg is not guaranteed to resolve when referenced. */
