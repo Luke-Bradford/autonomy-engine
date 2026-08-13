@@ -41,7 +41,13 @@ import {
 } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { deriveExternalWaitToken } from '../../webhooks/external-wait-token.js';
-import { ReconcileInvariantError, reconcileOnBoot, refuseToExecute } from '../reconcile.js';
+import {
+  emptyReconcileReport,
+  ReconcileInvariantError,
+  reconcileOnBoot,
+  reconcileOne,
+  refuseToExecute,
+} from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -1946,9 +1952,14 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 
-  it('RESUMES a `pending` child whose log has `run.started` — a crash survivor, not an orphan', async () => {
+  it('delegates a `pending` child whose log has `run.started` to `reconcileOne` — which then freezes it, its parent being terminal (#1053)', async () => {
     const { db } = freshDb();
     const parent = seedRun(db, seedVersion(db, [node('a')]));
+    // A terminal LOG fact, not just a terminal row: #1053's guard lives in
+    // `reconcileOne` and reads the parent's log (see its own describe block for
+    // why), so a row-only patch — which is all `seedOrphanChild` needs for
+    // #1041's row-based sweep — would leave this parent readable as still live.
+    appendEngineEvent(db, { type: 'run.finished', runId: parent.id, outcome: 'failure' });
     updateRun(db, parent.id, { status: 'failure', finishedAt: Date.now() });
     const child = createRun(db, {
       ownerId: 'local',
@@ -1975,18 +1986,21 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     // #1048 — NOT swept. The log holds `run.started`, so this is a crash
     // survivor whose ROW sync was lost, indistinguishable from a `running` row
     // except in the projection (#443: the log outranks the row). It is handed to
-    // `reconcileOne`, the `running` scan's own unit, and driven to completion.
-    // Terminalizing it would make the verdict depend on which sub-tick the crash
-    // landed in.
+    // `reconcileOne`, the `running` scan's own unit, so its verdict comes from
+    // there and not from this sweep — which is the property being asserted.
     expect(report.sweptOrphans).toEqual([]);
-    expect(getRun(db, child.id)!.status).toBe('success');
 
-    // And the parent is TERMINAL here (set `failure` above), which is the point:
-    // the started-check outranks #1041's parent rule, so a terminal parent does
-    // NOT make this a sweepable orphan. The cost is named in `sweepOne` — the
-    // `running` scan already
-    // resumes a `running` child of a terminal parent, so freezing this one would
-    // split the verdict on sub-tick timing.
+    // #1053 — and `reconcileOne`'s verdict for a started child of a TERMINAL
+    // parent is now `interrupted`, not "drive it to completion". Before #1053
+    // this line read `success`: the child was resumed, its activities re-billed,
+    // and its result then discarded by `returnToParent` against the dead parent.
+    //
+    // The two boot paths still agree, which is #1048's requirement: a
+    // never-started child is swept by `sweepOne` and a started one is frozen by
+    // `reconcileOne`. They differ only in whether a terminal FACT is appended,
+    // and #443 is what decides that — the run started, so it gets one.
+    expect(report.interrupted).toEqual([child.id]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
     expect(getRun(db, parent.id)!.status).toBe('failure');
   });
 
@@ -2261,5 +2275,255 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(report.failed).toEqual([]);
     expect(report.sweptOrphans).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+});
+
+describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent is frozen, not resumed', () => {
+  /**
+   * A `call_pipeline` child that was mid-flight when the process died is a crash
+   * survivor like any other, so before #1053 both boot paths resumed it —
+   * re-dispatching real, billable activities. Its ONLY consumer is
+   * `returnToParent` (`child.ts`), which bails on a terminal parent, so the work
+   * was done, paid for and discarded.
+   *
+   * The parent's terminality is read from its LOG here, not its row. Two
+   * reasons, and the first is the one that matters: `terminalFactFromLog` is the
+   * expression the CONSUMER itself uses to decide deliverability, so this asks
+   * the same question of the same source rather than becoming a second reader of
+   * it. And this guard runs INSIDE the `running` scan, where `sweepOne`'s "the
+   * running scan has already repaired every stale row" precondition does not
+   * hold and `listParsedRuns` promises no row order.
+   */
+  function seedTerminalLogParent(db: Db, rowStatus: RunStatus = 'failure') {
+    const parent = seedRun(db, seedVersion(db, [node('a')]));
+    appendEngineEvent(db, { type: 'run.finished', runId: parent.id, outcome: 'failure' });
+    updateRun(
+      db,
+      parent.id,
+      rowStatus === 'running'
+        ? { status: 'running' }
+        : { status: rowStatus, finishedAt: Date.now() },
+    );
+    return parent;
+  }
+
+  /**
+   * A `running` CHILD crash survivor: its log holds `run.started` and node `c`
+   * is left `dispatched` + provably idempotent, so absent the new guard
+   * `reconcileOne` re-dispatches it under a fresh attempt.
+   *
+   * On a DIFFERENT pipeline from the parent deliberately, for the reason
+   * `seedOrphanChild` gives: `countActiveRunsForPipeline` joins through
+   * `pipeline_versions`, so a shared version would make the slot assertion
+   * measure the parent's pipeline.
+   */
+  async function seedCrashedChild(db: Db, parentRunId: string) {
+    const pvId = seedVersion(db, [node('c')]);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId,
+      params: {},
+    });
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ nodes: { c: { hang: true, idempotent: true } } }),
+        alarms: stubAlarms(),
+      },
+      child,
+    );
+    return { child, pipelineId: getPipelineVersion(db, pvId)!.pipelineId };
+  }
+
+  it('freezes it, dispatches NOTHING, and frees the admission slot it held', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    const { child, pipelineId } = await seedCrashedChild(db, parent.id);
+    expect(countActiveRunsForPipeline(db, pipelineId)).toBe(1);
+
+    const executor = makeStubExecutor();
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor,
+      alarms: stubAlarms(),
+    });
+
+    expect(report.interrupted).toEqual([child.id]);
+    expect(report.resumed).toEqual([]);
+    const frozen = getRun(db, child.id)!;
+    expect(frozen.status).toBe('interrupted');
+    // #5 S4 — a terminal run holds no execution lease, or S7's expiry reconciler
+    // reads it as a phantom live worker.
+    expect(frozen.leaseUntil).toBeNull();
+    expect(countActiveRunsForPipeline(db, pipelineId)).toBe(0);
+
+    // THE assertion the ticket is about: nothing was re-dispatched, so nothing
+    // was billed. `dispatched` is the stub's record of every attempt it was
+    // asked to run, across every run in this boot.
+    expect(executor.dispatched).toEqual([]);
+
+    // A STARTED run's terminality must be a durable FACT, not a row patch
+    // (#443) — unlike #1041's never-started child, which correctly appends
+    // nothing because it has no event-sourced lifecycle to preserve.
+    expect(types(loadEngineEvents(db, child.id))).not.toContain('run.resumed');
+    expect(loadEngineEvents(db, child.id).filter((e) => e.type === 'run.interrupted')).toEqual([
+      { type: 'run.interrupted', runId: child.id, reason: `parent_terminal:${parent.id}` },
+    ]);
+  });
+
+  it('resumes it when the parent log holds NO terminal fact — the guard does not over-fire', async () => {
+    const { db } = freshDb();
+    // A genuinely crashed parent: still resumable, so its child's result is
+    // still deliverable and the child must be driven exactly as before #1053.
+    const parent = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const { child } = await seedCrashedChild(db, parent.id);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor({ nodes: { a: { hang: true, idempotent: true } } }),
+      alarms: stubAlarms(),
+    });
+
+    expect(report.interrupted).toEqual([]);
+    expect(report.resumed).toContain(child.id);
+    expect(getRun(db, child.id)!.status).toBe('success');
+  });
+
+  /**
+   * The LOG-authority property, pinned at the UNIT rather than through
+   * `reconcileOnBoot` — and the first draft of this test went through the boot
+   * scan, passed under a row-status read, and therefore proved nothing.
+   *
+   * Why it was vacuous: the parent is in the same snapshot as the child, so the
+   * `running` scan REPAIRS the parent's stale row to `failure` — and if it
+   * happens to reach the parent first, a row read gets the right answer for the
+   * wrong reason. `listParsedRuns` issues no `ORDER BY` and run ids are content
+   * hashes, so which one comes first is not a property of the test at all.
+   *
+   * Calling `reconcileOne` directly removes the scan, and with it the ordering:
+   * the parent's row is stale `running` at the moment the guard reads it, full
+   * stop. That is also exactly the shape S7's lease reclaim calls this function
+   * in (`scheduler/lease.ts`, its own fresh report), so this covers the third
+   * caller too.
+   */
+  it('freezes it from a STALE `running` parent row — the verdict comes from the log, not the row', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db, 'running');
+    const { child } = await seedCrashedChild(db, parent.id);
+    // Re-read: `startRun` has moved the row on since `createRun` returned it.
+    const childRow = getRun(db, child.id)!;
+    expect(getRun(db, parent.id)!.status).toBe('running');
+
+    const report = emptyReconcileReport();
+    await reconcileOne(
+      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(), alarms: stubAlarms() },
+      report,
+      childRow,
+    );
+
+    expect(report.interrupted).toEqual([child.id]);
+    expect(report.resumed).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+  });
+
+  it('resyncs a child whose OWN log already ended terminal, rather than interrupting it again', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    const { child } = await seedCrashedChild(db, parent.id);
+    appendEngineEvent(db, { type: 'run.finished', runId: child.id, outcome: 'success' });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    // #443 — the child's own recorded terminal fact stands. The guard sits BELOW
+    // that check for exactly this reason: a finished child needs its row synced,
+    // not a second terminal fact minted over the first.
+    expect(report.resynced).toEqual([child.id]);
+    expect(report.interrupted).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('success');
+    expect(types(loadEngineEvents(db, child.id))).not.toContain('run.interrupted');
+  });
+
+  it("manufactures NO terminal fact for a corrupted `running` child that never started — the row patch is the sweep's job", async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    // A CORRUPTED row: status `running` with an empty log. The `pending` branch
+    // in `reconcileOne` documents this as unreachable via the real callers, but
+    // every `running` row reaches that function unconditionally — the started
+    // test guards the `pending` sweep only — so the guard must exclude it itself.
+    const pvId = seedVersion(db, [node('c')]);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    updateRun(db, child.id, { status: 'running' });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    // #443 — the run has no event-sourced lifecycle to preserve, so it gets a ROW
+    // PATCH and no event. THIS is the assertion: a `run.interrupted` here would be
+    // manufacturing a fact the log never held, exactly what #1041 appends nothing
+    // to avoid.
+    expect(loadEngineEvents(db, child.id)).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+
+    // The two paths partition the case along #443's line: never-started is the
+    // sweep's, started is the guard's. Both buckets are correct for one run here —
+    // `resynced` answers "what does the log project to", `sweptOrphans` answers
+    // "can anything ever drive this" — the pair the `pending` branch documents.
+    expect(report.resynced).toEqual([child.id]);
+    expect(report.sweptOrphans).toEqual([child.id]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+    expect(countActiveRunsForPipeline(db, getPipelineVersion(db, pvId)!.pipelineId)).toBe(0);
+  });
+
+  it('does not freeze on an UNREADABLE parent log, and keys the corruption on the parent', async () => {
+    const { db, sqlite } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    const { child } = await seedCrashedChild(db, parent.id);
+    // The parent's ROW is terminal, so the `running` scan never selects it and
+    // this guard's own read is the one that meets the poison row.
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison_parent', parent.id, 999, 'x', 'not json', 1_700_000_000_000);
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    // Keyed on the PARENT — the row an operator has to repair — the same choice
+    // `sweepOne` makes for a corrupt parent row, and for the same reason: the
+    // fault boundary would key it on the child it wraps.
+    expect(report.corrupt).toEqual([
+      { runId: parent.id, reason: expect.stringMatching(/^run_log_unparseable:/) as string },
+    ]);
+    // #646's posture: unreadable state is left for attention, never used to mint
+    // a verdict. Undecidable is not terminal, so the child is driven as before.
+    expect(report.interrupted).toEqual([]);
+    expect(report.resumed).toContain(child.id);
   });
 });

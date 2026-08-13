@@ -1277,7 +1277,7 @@ const isTerminalRow = (status: string): boolean =>
  * second caller with a different story: the boot sweep terminalizes a run that
  * NEVER STARTED, where no drive existed to fail. The reason is durable and is
  * what an operator reads off the run, so inheriting `drive_failed` there would
- * have minted a false fact — the same objection `terminalizeUnresolvable`
+ * have minted a false fact — the same objection `interruptRun`
  * (`reconcile.ts`) was written to avoid. The default keeps every existing
  * drive-path caller unchanged.
  */
