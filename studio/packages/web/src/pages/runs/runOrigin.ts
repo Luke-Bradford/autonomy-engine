@@ -26,12 +26,12 @@ export type RunOrigin = (typeof RUN_ORIGINS)[number];
  *  - `manual` — a RERUN. `run/reseed.ts` sets `triggerId = null, parentRunId = null`
  *    deliberately ("a rerun is an explicit operator action"), so reruns are
  *    precisely the runs no trigger and no parent produced.
- *  - `child` — **carries no rows today.** Every production `createRun` call
- *    passes `parentRunId: null` (`run/launcher.ts`, `run/reseed.ts`); the
- *    `call_pipeline` spawn seam that would set it is P3b's obligation and is not
- *    built (#796). The tab is the pre-wired seam for that ticket, and the branch
- *    below is what keeps this classification TOTAL when it lands — not a claim
- *    that child runs exist now.
+ *  - `child` — a run a `call_pipeline` node spawned. It carries rows since P3b
+ *    slice 1 (#796) landed the spawn seam: `run/child.ts` creates the child with
+ *    `parentRunId` set, against the CALLED pipeline's version. This docblock said
+ *    the tab "carries no rows today" until #931 corrected it — the claim was true
+ *    when written and quietly stopped being true, which is the failure mode a
+ *    docblock that names its evidence is supposed to make visible.
  *
  * KNOWN LIMITATION, stated rather than papered over: `runs.trigger_id` is
  * `onDelete: 'set null'`, so deleting a trigger re-classifies its historical runs

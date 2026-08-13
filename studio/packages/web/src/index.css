@@ -2493,6 +2493,27 @@ td button + button {
   font-size: 0.8rem;
 }
 
+/* #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows.
+   No panel chrome of its own: the tiles inside are `.monitor-tiles`, shared with
+   the AI-activity page, because the two show the same kind of number from the
+   same kind of bounded aggregate and a second visual treatment would imply
+   otherwise. All this rule owns is the heading's weight and the block's rhythm. */
+.pipeline-spend {
+  margin-bottom: 1rem;
+}
+
+.pipeline-spend h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+/* The caveats. Deliberately not a notice or an alert — they qualify the figure
+   permanently rather than reporting an event, and the page already runs as many
+   live regions as it should. */
+.pipeline-spend .page-hint {
+  margin-top: 0.35rem;
+}
+
 /* --- U22 slice 1: pipeline version history (#903) ------------------------- */
 
 .version-history {
