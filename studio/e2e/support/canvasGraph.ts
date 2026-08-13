@@ -544,16 +544,34 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * land before the collapse has re-rendered at all, and two reads of a point that
  * has not started moving yet agree; the helper then returns the FANNED position
  * and reproduces the exact race it exists to remove. So a settle is
- * `SETTLE_QUIET_READS` CONSECUTIVE agreeing probes at `SETTLE_INTERVAL_MS`
- * apart, i.e. the point must hold still across a window strictly longer than the
- * 80ms the collapse measured above takes; any movement inside it resets the run
- * to zero. `edge-midpoint-settle.spec.ts` pins this against a path scripted to
- * move on its THIRD read — a sequence with no timing in it, so the proof does
- * not depend on the machine that runs it.
+ * `SETTLE_QUIET_READS` CONSECUTIVE agreeing probes, and any movement inside the
+ * run resets it to zero.
+ *
+ * BE PRECISE ABOUT WHAT THAT BUYS, because the obvious arithmetic overstates it
+ * by an interval. `expect.poll` fires its first probe IMMEDIATELY and only waits
+ * `intervals` between subsequent ones (`pollAgainstDeadline`, playwright-core),
+ * so the seed-vs-first-probe agreement is that same back-to-back pair and
+ * contributes NO elapsed time. The enforced quiet span is the remaining
+ * `(SETTLE_QUIET_READS - 1) * SETTLE_INTERVAL_MS` = 200ms — not 300ms — which is
+ * still comfortably past the 80ms the collapse measured above takes. The
+ * coincidence is now harmless rather than absent: it can still happen, it just
+ * only reaches 1 of the 3 agreements a settle needs.
+ *
+ * `edge-midpoint-settle.spec.ts` pins this against a path scripted to move on
+ * its THIRD read — a sequence with no timing in it, so the proof does not depend
+ * on the machine that runs it.
  */
-/** Agreeing probes that make a settle. Two reads that merely coincide are not one. */
+/**
+ * Agreeing probes that make a settle. Two reads that merely coincide are not one
+ * — and since the first agreement costs no time (above), this must be at least 3
+ * for the enforced window to span more than a single interval.
+ */
 const SETTLE_QUIET_READS = 3;
-/** Milliseconds between probes. `SETTLE_QUIET_READS` of these must exceed the layout. */
+/**
+ * Milliseconds between probes. `(SETTLE_QUIET_READS - 1)` of these is the
+ * enforced quiet window, and THAT is the figure that must exceed the layout —
+ * not `SETTLE_QUIET_READS` of them.
+ */
 const SETTLE_INTERVAL_MS = 100;
 
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
