@@ -28,6 +28,32 @@ function portOpacity(page: Page, index: number): Promise<number> {
   }, index);
 }
 
+/**
+ * The LOUDEST port on the canvas — the opacity of whichever one is most drawn.
+ *
+ * REST IS A PROPERTY OF THE WHOLE CANVAS, and `portOpacity(page, 0)` is not it.
+ * DOM index 0 is one node's port, so a wait on it returns the instant THAT node
+ * is quiet while another is still mid-fan — and every assertion below reads
+ * `portTops`/`handleIds`, which span EVERY node. Measured: seeding an edge
+ * leaves the pointer dwelling on the target node, so `restTops` was captured as
+ * four collapsed ports plus four fanned ones at #1067's 24px pitch
+ * (`3/27/51/75px`) while the poll on port 0 had already passed against the
+ * other node's `39px`. The comparison then measured fanned against collapsed
+ * and reported movement that was really the baseline being wrong.
+ *
+ * This does NOT weaken what the specs assert. Opacity is how the fan says it is
+ * out; `top` is where the dots actually are. A collapse that moved the opacity
+ * and left the geometry behind — the one failure this file exists to catch —
+ * still fails, because waiting on the first is not asserting the second.
+ */
+function maxPortOpacity(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const ports = [...document.querySelectorAll('.flow-port')];
+    if (ports.length === 0) return -1;
+    return Math.max(...ports.map((p) => Number(getComputedStyle(p).opacity)));
+  });
+}
+
 /** Every source port's computed `top`, in order — the fan's geometry. */
 function portTops(page: Page): Promise<string[]> {
   return page.evaluate(() =>
@@ -79,7 +105,9 @@ test.describe('a canvas at rest says it with colour alone', () => {
     page,
   }) => {
     await quietCanvas(page, 'collapsed');
-    await expect.poll(() => portOpacity(page, 0)).toBe(0);
+    // Every port, not the first one — the assertion below spans every node, so
+    // the wait has to as well (see `maxPortOpacity`).
+    await expect.poll(() => maxPortOpacity(page)).toBe(0);
 
     const tops = await portTops(page);
     expect(tops.length).toBeGreaterThan(1);
@@ -118,8 +146,13 @@ test.describe('a canvas at rest says it with colour alone', () => {
        as the resting state, and the comparison below then measures fanned
        against fanned and reports no movement. That is a false negative for the
        one mechanism this test exists to prove, and it is how this spec first
-       failed. */
-    await expect.poll(() => portOpacity(page, 0)).toBe(0);
+       failed.
+
+       AND WAIT ON EVERY PORT. Polling port 0 alone was the same bug one level
+       down: it passes the moment ITS node is quiet, which let `restTops` record
+       the other node still fanned — a baseline that then disagrees with the
+       collapsed reading at the end of the test. */
+    await expect.poll(() => maxPortOpacity(page)).toBe(0);
     const restTops = await portTops(page);
     const restStart = await edgeStart(page);
     const restIds = await handleIds(page);
@@ -142,7 +175,7 @@ test.describe('a canvas at rest says it with colour alone', () => {
     expect(await handleIds(page)).toEqual(restIds);
 
     await page.mouse.move(5, 5);
-    await expect.poll(() => portOpacity(page, 0)).toBe(0);
+    await expect.poll(() => maxPortOpacity(page)).toBe(0);
     expect(await portTops(page)).toEqual(restTops);
     expect(await handleIds(page)).toEqual(restIds);
   });
