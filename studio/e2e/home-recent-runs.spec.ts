@@ -41,10 +41,10 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
   // Count the run-list requests the page actually makes. Home must fetch ONE
   // page and stop — the never-walks rule, proved in the real browser rather
   // than against a mocked wrapper.
-  const runListCalls: string[] = [];
+  const runListCalls: URLSearchParams[] = [];
   page.on('request', (req) => {
     const url = new URL(req.url());
-    if (url.pathname === '/api/runs') runListCalls.push(url.search);
+    if (url.pathname === '/api/runs') runListCalls.push(url.searchParams);
   });
 
   await page.goto('/#/');
@@ -69,17 +69,28 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
   // screenful of 50. `limit` reaching the wire is the whole point of the
   // `pageSize` parameter — the server aggregates metered costs per returned
   // row, so an over-fetch is billed work thrown away on the catch-all route.
+  //
+  // Read the param and compare it EXACTLY. A `toContain('limit=5')` over the
+  // query string passes against `limit=50` — "50" contains "5" — so the
+  // assertion survived the very mutation it exists to catch (page size dropped,
+  // wrapper falls back to RUNS_PAGE_SIZE=50). Found by the mutation pass.
   expect(runListCalls).toHaveLength(1);
-  expect(runListCalls[0]).toContain('limit=5');
-  expect(runListCalls[0]).not.toContain('cursor=');
+  expect(runListCalls[0]!.get('limit')).toBe('5');
+  expect(runListCalls[0]!.get('cursor')).toBeNull();
 
   // Nothing offers to extend the prefix: Home is not a paged list.
   await expect(page.getByRole('button', { name: /older|load more/i })).toHaveCount(0);
 
   // The hub signposts survive the rework — they are the one thing the
   // placeholder got right, and `hub-nav.spec.ts` scopes around them.
+  //
+  // SCOPED to Home's own section: the rail names the same hubs, so an unscoped
+  // `getByRole('link', {name: 'Author'})` matches two elements and fails strict
+  // mode. `App.test.tsx` carries the same warning about the same ambiguity —
+  // this spec rediscovered it the expensive way.
+  const shortcuts = page.getByRole('region', { name: 'Go to' });
   for (const label of ['Author', 'Monitor', 'Manage']) {
-    await expect(page.getByRole('link', { name: label })).toBeVisible();
+    await expect(shortcuts.getByRole('link', { name: label })).toBeVisible();
   }
 
   await expectQuiet(page, problems);
