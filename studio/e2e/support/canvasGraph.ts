@@ -535,9 +535,27 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * a race the pitch change EXPOSED rather than introduced — it was always wrong
  * to read a moving coordinate.
  *
- * Stability across two reads, not a fixed wait: the point is settled when it
- * stops changing, whatever the machine's speed.
+ * Stability over a QUIET WINDOW, not a fixed wait: the point is settled when it
+ * has stopped changing, whatever the machine's speed.
+ *
+ * THE WINDOW IS THE WHOLE POINT, and one comparison is not a window. The first
+ * version of this compared a seed read to the poll's first probe — two
+ * `page.evaluate` round-trips back to back, with no wait between them. Both can
+ * land before the collapse has re-rendered at all, and two reads of a point that
+ * has not started moving yet agree; the helper then returns the FANNED position
+ * and reproduces the exact race it exists to remove. So a settle is
+ * `SETTLE_QUIET_READS` CONSECUTIVE agreeing probes at `SETTLE_INTERVAL_MS`
+ * apart, i.e. the point must hold still across a window strictly longer than the
+ * 80ms the collapse measured above takes; any movement inside it resets the run
+ * to zero. `edge-midpoint-settle.spec.ts` pins this against a path scripted to
+ * move on its THIRD read — a sequence with no timing in it, so the proof does
+ * not depend on the machine that runs it.
  */
+/** Agreeing probes that make a settle. Two reads that merely coincide are not one. */
+const SETTLE_QUIET_READS = 3;
+/** Milliseconds between probes. `SETTLE_QUIET_READS` of these must exceed the layout. */
+const SETTLE_INTERVAL_MS = 100;
+
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
   const read = () =>
     page.evaluate((i) => {
@@ -555,17 +573,22 @@ export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; 
     }, index);
 
   let previous = await read();
+  let quiet = 0;
   await expect
     .poll(
       async () => {
         const current = await read();
         const stable = Math.abs(current.x - previous.x) < 1 && Math.abs(current.y - previous.y) < 1;
+        quiet = stable ? quiet + 1 : 0;
         previous = current;
-        return stable;
+        return quiet;
       },
-      { message: 'the edge path never stopped moving' },
+      {
+        message: `the edge path never held still for ${String(SETTLE_QUIET_READS)} reads`,
+        intervals: [SETTLE_INTERVAL_MS],
+      },
     )
-    .toBe(true);
+    .toBeGreaterThanOrEqual(SETTLE_QUIET_READS);
   return previous;
 }
 
