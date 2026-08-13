@@ -3,6 +3,7 @@ import { ChevronDownRegular, ChevronRightRegular } from '@fluentui/react-icons';
 import type { StoreApi } from 'zustand';
 import type { ActivityCategory } from '@autonomy-studio/shared';
 import { setActivityDragType } from './activityDnd';
+import { ActivityGlyph } from './ActivityGlyph';
 import { toolboxGroups } from './activityGroups';
 import type { CanvasState } from './canvasStore';
 
@@ -159,7 +160,15 @@ export function ActivityToolbox({ store }: { store: StoreApi<CanvasState> }) {
                     }}
                     onClick={() => store.getState().addNode(entry.type)}
                   >
-                    {entry.title}
+                    {/* THE SAME GLYPH THE CANVAS DRAWS, and sharing it is the
+                        point rather than an economy: the palette is where an
+                        operator learns what a shape means, so a different icon
+                        here would teach nothing. Decorative — the button's text
+                        is its accessible name. */}
+                    <span aria-hidden="true" className="activity-toolbox__icon">
+                      <ActivityGlyph type={entry.type} category={entry.category} />
+                    </span>
+                    <span>{entry.title}</span>
                   </button>
                 </li>
               ))}

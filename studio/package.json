@@ -15,7 +15,8 @@
     "test:e2e": "pnpm build && playwright test",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
-    "audit:licenses": "pnpm --filter @autonomy-studio/cli run audit:licenses"
+    "audit:licenses": "pnpm --filter @autonomy-studio/cli run audit:licenses",
+    "preview": "pnpm build && node scripts/preview.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

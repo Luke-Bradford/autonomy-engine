@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import {
+  WIDE_CANVAS,
   addActivity,
   canvasNodes,
   clickConnect,
@@ -32,7 +33,6 @@ const REFUSAL = '.canvas-refusal';
 
 /** See `connect-validation.spec.ts` for why the default viewport is too narrow
  *  to hold all four ports of a two-node graph. */
-const WIDE_CANVAS = { width: 1800, height: 1000 };
 
 async function seedTwoNodes(page: Page): Promise<void> {
   await addActivity(page, 'HTTP Request');

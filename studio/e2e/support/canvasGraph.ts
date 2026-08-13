@@ -24,6 +24,32 @@ import { RECONNECT_RADIUS } from '../../packages/web/src/pages/pipeline/ports';
  * the un-hardened second copy.
  */
 
+/**
+ * A canvas big enough that every port of a two-node graph is INSIDE the pane.
+ *
+ * Not a preference — a spec that lays two nodes out for an edge and then drags
+ * BACKWARDS along it needs both nodes' ports hit-testable, and the shell's rail,
+ * resources pane, toolbox and property panel take ~900px of any window before
+ * the canvas gets any. Too small a viewport puts the right-hand node's source
+ * port outside the pane, where the pointer lands on the property panel and the
+ * gesture starts nothing at all — which reads as "no refusal was shown" rather
+ * than as a layout problem, and has now cost this suite two separate debugging
+ * sessions.
+ *
+ * ONE constant, imported by every spec that needs it. It lived as three
+ * identical copies in `connect-validation`, `back-edge-authoring` and
+ * `canvas-click-connect`; widening the node card broke all three, and the first
+ * fix widened only the copy that had failed first — the other two then failed
+ * on the next run for the same reason. That is precisely the "hardened in only
+ * one of them" trap this file's header records.
+ *
+ * MEASURED at the layout those specs build, with the current node card: 1800
+ * leaves the worst port 20px OUTSIDE the pane, 1900 leaves 31px inside, 2000
+ * leaves 81px. Taking the roomy one, so the next change to the node or the
+ * shell chrome does not reopen it.
+ */
+export const WIDE_CANVAS = { width: 2000, height: 1000 };
+
 /** The activities toolbox, addressed the way a user perceives it. */
 export function toolbox(page: Page): Locator {
   return page.getByRole('complementary', { name: 'Activities' });

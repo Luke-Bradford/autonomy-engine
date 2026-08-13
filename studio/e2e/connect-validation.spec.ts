@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
 import {
+  WIDE_CANVAS,
   addActivity,
   canvasNodes,
   connectNodes,
@@ -58,8 +59,16 @@ const REFUSAL = '.canvas-refusal';
  * there, which is why U6a never noticed; a REVERSE drag — the gesture that
  * closes a cycle, and the whole point of these specs — puts the pointer down on
  * the toolbox and starts nothing at all, failing as "no refusal was shown".
+ *
+ * WIDENED 1800 -> 2000 when the node became an icon-and-name card of a FIXED
+ * width, which is wider than the ~120 units a wrapping title used to produce.
+ * The same failure this constant was invented for came straight back — the
+ * right-hand node's source port landed 20px OUTSIDE the pane and the reverse
+ * drag started nothing. Measured rather than guessed, at the layout this file
+ * actually builds: 1800 gives -20px of margin on the worst port, 1900 gives 31,
+ * and 2000 gives 81. Taking the roomy one, because a margin of tens of pixels is
+ * what stops the next change to the node or the shell chrome reopening this.
  */
-const WIDE_CANVAS = { width: 1800, height: 1000 };
 
 /** Two nodes, laid out apart, with no edges yet. */
 async function seedTwoNodes(page: Page): Promise<void> {

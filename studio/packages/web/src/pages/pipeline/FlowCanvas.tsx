@@ -34,6 +34,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
+  getActivity,
   implicitRouting,
   type ContainerKind,
   type Position as DomainPosition,
@@ -45,6 +46,9 @@ import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
 import { useNodeFan } from './useNodeFan';
+import { ActivityGlyph } from './ActivityGlyph';
+import { SpreadEdge } from './SpreadEdge';
+import { parallelEdgeOffsets } from './parallelEdges';
 import { SourcePorts } from './SourcePorts';
 import {
   backEdgeOffer,
@@ -89,7 +93,14 @@ import { namedList } from '../../lib/namedList';
 
 interface ActivityData extends Record<string, unknown> {
   title: string;
-  hasConnection: boolean;
+  /**
+   * The catalogued activity type, carried for its GLYPH (`activityIcon`).
+   *
+   * It replaced `hasConnection`, which existed only to print "connection bound"
+   * / "no connection" under every title — see the node's own comment for why
+   * that came off the box.
+   */
+  type: string;
   /** U19 — one outgoing port per outcome this source can route. */
   ports: readonly SourcePort[];
 }
@@ -148,10 +159,20 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
       {...handlers}
     >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
-      <strong>{d.title}</strong>
-      <span className="flow-node-sub">
-        {d.hasConnection ? 'connection bound' : 'no connection'}
+      {/* The glyph is DECORATIVE and says so: the name beside it is the
+          accessible content, and a second reading of "copy file" would just make
+          a screen reader say it twice. */}
+      <span className="flow-node-icon" aria-hidden="true">
+        <ActivityGlyph type={d.type} category={getActivity(d.type)?.category} />
       </span>
+      <strong className="flow-node-title">{d.title}</strong>
+      {/* THE CONNECTION LINE IS GONE, deliberately. Every box used to carry
+          "no connection" or "connection bound" in grey — a per-node CONFIG state
+          repeated on every box, which is what turns eight activities into a wall
+          of text. It is not a warning either: nothing in `validatePipelineDoc`
+          requires `connectionId`, so a graph with none is a legal graph. Where a
+          connection IS bound, the property panel says so on the node the
+          operator selected — which is where a per-node setting belongs. */}
       <SourcePorts ports={d.ports} />
     </div>
   );
@@ -312,6 +333,10 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
 // Module-level constant: React Flow requires a stable `nodeTypes` identity (a
 // new object each render re-mounts every node and warns).
 const nodeTypes = { activity: ActivityNode, container: ContainerNode };
+
+/* Module-level for the same reason `nodeTypes` is: a new object each render
+   re-mounts every edge. */
+const edgeTypes = { spread: SpreadEdge };
 
 /**
  * How many activity ids the #788 implicit-chain advisory spells out before it
@@ -773,7 +798,7 @@ export function FlowCanvas({
             // operator cannot act on. The fallback is unreachable: `nodeLabels`
             // is built from this very array.
             title: nodeLabels.get(n.id) ?? activityLabel(n),
-            hasConnection: n.connectionId != null,
+            type: n.type,
             ports: portsOf(n.id),
           } satisfies ActivityData,
           // #737 — RE-DERIVED from the store every time, NOT carried forward in
@@ -1282,10 +1307,16 @@ export function FlowCanvas({
    * gives them their own defs and their own CSS rules: `EdgeMarkers`.)
    */
   const sole = singleSelection(selected);
+  /* #992/#997 — two edges between the same pair of activities now leave from the
+     same collapsed point, so they would paint on top of each other. See
+     `parallelEdges.ts`. */
+  const spreads = parallelEdgeOffsets(edges);
   const flowEdges: FlowEdge[] = edges.map((e) => {
     const isSelected = selected.some((s) => s.kind === 'edge' && s.id === e.id);
     return {
       ...toFlowEdge(e),
+      type: 'spread',
+      data: { spread: spreads.get(e.id) ?? 0 },
       selected: isSelected,
       /**
        * U19 slice 2 — only the SELECTED edge offers reconnect anchors.
@@ -1900,6 +1931,7 @@ export function FlowCanvas({
       <ReactFlow
         nodes={renderedNodes}
         edges={flowEdges}
+        edgeTypes={edgeTypes}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -2034,6 +2066,22 @@ export function FlowCanvas({
         <MiniMap
           pannable
           zoomable
+          /* SIZED THROUGH THE COMPONENT, never in CSS. React Flow renders the map
+             as `<svg width={elementWidth} height={elementHeight} viewBox=…>`
+             taken from THESE props (200x150 by default); a stylesheet that
+             shrinks the container leaves the svg at its old size, so the box
+             CROPS the map instead of scaling it and the mask no longer
+             corresponds to what is on screen. That is what "the navigation box
+             is not aligned with the page" was.
+
+             It goes through `style`, which is where React Flow READS it:
+             `elementWidth = style?.width ?? defaultWidth` (index.mjs:4712), and
+             that same number is what it puts on the `<svg>`. There is no
+             `width` prop. 160x120 keeps React Flow's own 4:3, so the viewBox
+             maps without distortion. `usableExtent` (containerLayout.ts) still reserves the
+             larger default footprint, which now merely leaves extra clearance —
+             the direction that is safe. */
+          style={{ width: 160, height: 120 }}
           nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
         />
         <Controls />
