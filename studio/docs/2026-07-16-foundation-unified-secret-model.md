@@ -314,7 +314,10 @@ S1 → S2 → S3 → S4. Source before sink; gate before resolution; resolution 
   `run/executor.ts` (dispatch resolution + codes); `connectors/types.ts` (+`secretFields?` arg);
   `connectors/http.ts` (sink consumer) + `connectors/redact.ts` (extend).
 - `web`: a Secrets management surface is a UI-epic ticket (browser-verify gated), NOT item 7 —
-  item 7 delivers the REST + engine; the UI epic renders it.
+  item 7 delivers the REST + engine; the UI epic renders it. **AS BUILT 2026-08-13 (#1060):**
+  shipped as Manage › Secrets (list/create/delete) — see the AS-BUILT note in
+  `2026-07-14-adf-grade-ui-design.md`. The `{$secret}` picker in the node config form is NOT
+  part of it and remains outstanding.
 - Tests: `secrets` repo/route, `secret-ref` schema, `validateRefs` sink-gating (synthetic +
   http), executor dispatch resolution + redaction, http adapter sink.
 
@@ -325,7 +328,8 @@ S1 → S2 → S3 → S4. Source before sink; gate before resolution; resolution 
 - Multi-secret-per-connection / secret-in-connection-config (A10 remainder) — deferred to the
   A11/A14 connectors that need it; resolved *mechanism* recorded (§5).
 - `SecureString` run-scoped params (resolved-Q-1, deferred, own ticket).
-- A Secrets management UI — the UI epic renders it.
+- A Secrets management UI — the UI epic renders it (**built 2026-08-13, #1060**; this stays a
+  non-goal OF ITEM 7, which is what the line records).
 - RBAC / multi-user secret permissions — a later spec.
 
 ## Evidence (probed, not argued)

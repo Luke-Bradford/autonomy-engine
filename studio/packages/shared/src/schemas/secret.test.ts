@@ -73,7 +73,9 @@ describe('SecretWriteBodySchema', () => {
     expect(() =>
       SecretWriteBodySchema.parse({ name: 'k', secret: 'v', ownerId: 'someone-else' }),
     ).toThrow();
-    expect(() => SecretWriteBodySchema.parse({ name: 'k', secret: 'v', ref: 'secref_1' })).toThrow();
+    expect(() =>
+      SecretWriteBodySchema.parse({ name: 'k', secret: 'v', ref: 'secref_1' }),
+    ).toThrow();
   });
 
   it('rejects a blank or untrimmed name — the name is an exact-match lookup key', () => {

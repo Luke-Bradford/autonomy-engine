@@ -412,7 +412,9 @@ rerun (gated).**
 ## Non-goals
 
 - LLM-activity DEPTH → Foundation Spec #2. Git/publish → #3. File/copy activity library → #4.
-- No UI (UI epic renders this). No `SecureString` broadening of `secret` (D8, decided in review).
+- No UI (UI epic renders this — the SOURCE half is now built: Manage › Secrets, #1060; the
+  `{$secret}` SINK picker in the config form is still outstanding). No `SecureString` broadening
+  of `secret` (D8, decided in review).
 
 ## Resolved open questions (decided 2026-07-14)
 

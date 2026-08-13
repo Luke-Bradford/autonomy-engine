@@ -33,12 +33,7 @@ describe('SecondaryPane', () => {
     renderWithRouter(<SecondaryPane hub={manage} collapsed={false} />, '/manage/connections');
 
     const links = within(pane()).getAllByRole('link');
-    expect(links.map((a) => a.textContent)).toEqual([
-      'Connections',
-      'Secrets',
-      'Triggers',
-      'Git',
-    ]);
+    expect(links.map((a) => a.textContent)).toEqual(['Connections', 'Secrets', 'Triggers', 'Git']);
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/manage/connections',
       '/manage/secrets',
