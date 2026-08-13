@@ -334,6 +334,11 @@ export function isDeterministicRowCorruption(err: unknown): boolean {
  * `null` covers both "absent" and "corrupt" because every caller so far treats
  * them the same way — there is no row to act on. `onSkip` is what distinguishes
  * them, for a caller that must report the corruption rather than just skip it.
+ *
+ * So a caller that would CREATE or OVERWRITE on `null` must pass `onSkip` and
+ * treat a report as "do not touch this id": to that caller the two outcomes are
+ * NOT the same, and silently rebuilding state over a row that merely needs
+ * repair is how a corrupt row becomes a lost one.
  */
 export function getParsedRun(
   db: Db,

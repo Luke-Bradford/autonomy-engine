@@ -741,11 +741,18 @@ async function sweepOne(
 ): Promise<void> {
   if (loadEngineEvents(deps.db, child.id).length > 0) return;
 
-  // The PARENT row is arbitrary stored state this scan never parsed (it selects
-  // `pending`, and an orphaning parent is terminal), so this read is its ONLY
-  // reader and nothing else classifies a parse failure on it. `getParsedRun`
-  // rather than `getRun` + a local catch: the classification it applies is the
-  // repo's own, and hand-rolling it here is how the two copies drift.
+  // The PARENT row is arbitrary stored state THIS scan never parsed (it selects
+  // `pending`, and an orphaning parent is terminal), so this read must classify
+  // a parse failure itself. `getParsedRun` rather than `getRun` + a local catch:
+  // the classification it applies is the repo's own, and hand-rolling it here is
+  // how the two copies drift.
+  //
+  // NOT "the only reader of that row", which would be an overclaim: a corrupt
+  // row whose `status` column still reads `running` is ALSO picked up by the
+  // other boot scan, so one such row can appear twice in `corrupt` — once per
+  // scan that met it. Noise in a boot report, not a wrong verdict; both entries
+  // name the same id and the same repair. Long-standing, and stated rather than
+  // deduped because the two scans deliberately share no state.
   //
   // The report is keyed on the PARENT's id — that is the row an operator has to
   // repair, and the one id the fault boundary below could not supply (it knows

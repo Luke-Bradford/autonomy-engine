@@ -2078,10 +2078,11 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     const { db, sqlite } = freshDb();
     const { parent, child } = seedOrphanChild(db);
     // `listParsedRuns` never parses this row (it selects `pending`, and the
-    // parent is terminal), so `sweepOne`'s direct `getRun` is the ONLY reader —
-    // and it throws. Left to the fault boundary that lands in `failed`, whose
-    // contract is transient-only; stored-row corruption is permanent and would
-    // re-`failed` on every boot forever.
+    // parent is terminal), so `sweepOne`'s own read is what meets the
+    // corruption. Left to the fault boundary it would still be filed `corrupt`
+    // — but keyed on the CHILD, since that is the id the boundary wraps. The
+    // parent is the row an operator has to repair, and this asserts the report
+    // names it.
     sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', parent.id);
 
     const report = await reconcileOnBoot(bootDeps(db));
@@ -2093,6 +2094,23 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(report.sweptOrphanChildren).toEqual([]);
     // Left for repair, not terminalized on an unreadable premise.
     expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('reports a corrupt `running` parent ONCE PER SCAN that meets it — duplicate, not wrong', async () => {
+    const { db, sqlite } = freshDb();
+    // The one row both boot scans read: the `running` scan selects it on its
+    // status column (the parse fails after the SQL filter, so a corrupt row is
+    // still selected), and the orphan sweep reads it again as a pending child's
+    // parent. `sweepOne`'s docblock states this rather than deduping; the test
+    // is here so a future dedupe is a deliberate change, not a silent one.
+    const { parent } = seedOrphanChild(db, 'running');
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', parent.id);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.corrupt.map((c) => c.runId)).toEqual([parent.id, parent.id]);
+    // Same id, same repair, one verdict — noise in the boot log, not a conflict.
+    expect(report.failed).toEqual([]);
   });
 
   it('files a child row corrupted DURING the sweep under `corrupt` — the fault boundary classifies it', async () => {
