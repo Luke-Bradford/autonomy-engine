@@ -69,6 +69,10 @@ vi.mock('./api/connections', async (importActual) => ({
 // This suite MOUNTS every hub section for real (see the walk over `HUBS`
 // below), so a page that loads on mount reaches a real `fetch` in jsdom
 // unless its api module is mocked here.
+vi.mock('./api/workspaceAudit', async (importActual) => ({
+  ...(await importActual<typeof import('./api/workspaceAudit')>()),
+  listWorkspaceAudit: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./api/secrets', async (importActual) => ({
   ...(await importActual<typeof import('./api/secrets')>()),
   listSecrets: vi.fn().mockResolvedValue([]),

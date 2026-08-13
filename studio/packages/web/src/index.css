@@ -3263,3 +3263,16 @@ td button + button {
     transparent 5px
   );
 }
+
+/* --- #1075 Monitor › Audit ------------------------------------------------- */
+
+/* The particulars of an entry, beneath its one-line act. A block span rather
+   than a second column: the detail is a full sentence whose length varies by an
+   order of magnitude between variants (a branch name vs a named list of every
+   imported path), and a column sized for the longest would leave the short ones
+   mostly empty. Muted, so the scannable line stays the act itself. */
+.audit-detail {
+  display: block;
+  color: var(--muted);
+  font-size: 0.9em;
+}
