@@ -3,6 +3,7 @@ import {
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
   RunDetailSchema,
+  RunDiagnosticSchema,
   RunSchema,
   RunSummarySchema,
   RunEventSchema,
@@ -10,6 +11,7 @@ import {
   type PendingExternalWait,
   type RerunAccepted,
   type Run,
+  type RunDiagnostic,
   type RunSummary,
   type RunDetail,
   type RunEvent,
@@ -20,6 +22,14 @@ import { apiFetch } from './client';
 
 const RunListSchema = z.array(RunSummarySchema);
 const RunEventListSchema = z.array(RunEventSchema);
+/* Declared HERE rather than in the shared package, following `RunEventListSchema`
+   two lines up: this is a client-side parse of a run sub-resource, and the server
+   route is already held to the element schema by `listRunDiagnostics`, which
+   returns `RunDiagnosticSchema.parse`d rows. A shared list alias would add a
+   package export with exactly one caller. (`PendingExternalWaitListSchema` is
+   shared for the opposite reason — the route `satisfies` it, so it is a contract
+   both sides are held to rather than a client assertion.) */
+const RunDiagnosticListSchema = z.array(RunDiagnosticSchema);
 
 /**
  * The run model the P6 live monitor sits on: a list, one run, its append-only
@@ -113,6 +123,37 @@ export function getRunDetail(id: string, signal?: AbortSignal): Promise<RunDetai
 export function getRunEvents(id: string, signal?: AbortSignal): Promise<RunEvent[]> {
   return apiFetch(`/api/runs/${encodeURIComponent(id)}/events`, {
     schema: RunEventListSchema,
+    signal,
+  });
+}
+
+/**
+ * #497 / #1065 — the reducer's EXPLANATIONS for this run
+ * (`GET /api/runs/:id/diagnostics`), in derivation order.
+ *
+ * The DECISIONS are `getRunEvents` above — the durable log of what happened.
+ * These say WHY: which edge was ignored, which container child was neutralized,
+ * which dispatch prep failed. #497 landed the whole producer (the table, the
+ * fold-site writer, the truncation marker, this route) and nothing called it, so
+ * a run that behaved nothing like the graph its author drew gave no hint why.
+ *
+ * FETCHED rather than re-derived on the client, and that is not a preference.
+ * The pure reducer returns `{state, commands, diagnostics}`, but the client's
+ * fold entry point is `projectRunState`, which returns `RunState` alone and
+ * structurally discards the channel. Decisively: `resume`-phase diagnostics are
+ * derived by `Engine.resume()` over a projection, and refolding an event log
+ * never calls `resume()` — so a client re-derivation would not merely duplicate
+ * this, it would silently omit a whole phase and be a second, quieter source
+ * that disagrees. The server is the only complete one.
+ *
+ * Owner-scoped through the RUN on the server (`requireOwned`), exactly as
+ * `/events` is. An empty list means "the reducer neutralized nothing", never
+ * "the lookup failed" — so a caller must render a rejection rather than an empty
+ * section, or an absent fact reads as a clean run (the #473/F13a rule).
+ */
+export function getRunDiagnostics(id: string, signal?: AbortSignal): Promise<RunDiagnostic[]> {
+  return apiFetch(`/api/runs/${encodeURIComponent(id)}/diagnostics`, {
+    schema: RunDiagnosticListSchema,
     signal,
   });
 }

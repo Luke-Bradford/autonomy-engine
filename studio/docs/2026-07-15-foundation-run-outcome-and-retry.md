@@ -416,6 +416,10 @@ See §C.5's amendment for the systemic gap.
 log — see §C.5.4) now receives every fold's diagnostics, read at `GET /api/runs/:id/diagnostics`, so
 the named never-terminal entities ARE operator-visible. Both halves of the backstop ship.
 
+**AMENDED by #1065:** "operator-visible" was an overstatement for a year — #497 shipped the route and
+nothing in the web app ever called it, so the entity list was reachable only with `curl`. #1065 renders
+it on the run detail page, which is what finally makes the sentence above literally true.
+
 Four things about it are load-bearing and were each probed rather than argued:
 
 1. **`else if`, not `if`.** A forward cycle does **not** imply a stall — §P4's skip-propagated cycle
@@ -622,7 +626,8 @@ only ever reached once `allTopLevelTerminal` holds.
    event log, deliberately NOT an engine event (a diagnostic is a DERIVATION of doc+log; putting it in
    the log would re-fold every bound log per #443 and double-count on replay) — receives every fold's
    diagnostics, keyed `(runId, seq, phase, ordinal)` so a re-derivation is idempotent, and is read at
-   `GET /api/runs/:id/diagnostics`. The stalled-entity ids are now observable, as is EVERY `docDefects`
+   `GET /api/runs/:id/diagnostics` (and, since **#1065**, on the run detail page — until then the route
+   had no caller, so "observable" meant observable to `curl`). The stalled-entity ids are now observable, as is EVERY `docDefects`
    report (#480/#487/#488). Two truncation caps now coexist and are NOT the same problem: this clause's
    is **#496's** — capping the never-terminal id list WITHIN one `stalled` message; #497's is a
    per-RUN cap on the number of diagnostic ROWS (`RUN_DIAGNOSTIC_CAP`, with a `phase='cap'` marker

@@ -1,6 +1,6 @@
 import { computeRunCost } from '@autonomy-studio/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getRun, getRunEvents, listExternalWaits, listRuns } from './runs';
+import { getRun, getRunDiagnostics, getRunEvents, listExternalWaits, listRuns } from './runs';
 
 const sampleRun = {
   id: 'run_1',
@@ -42,6 +42,26 @@ const sampleEvent = {
   type: 'run.started',
   payload: { type: 'run.started', runId: 'run_1', pipelineVersionId: 'pv_1', params: {} },
   ts: 101,
+};
+
+/** One reducer diagnostic, in the shape `GET /api/runs/:id/diagnostics` serves. */
+const sampleDiagnostic = {
+  id: 'rdg_1',
+  runId: 'run_1',
+  seq: 4,
+  phase: 'fold' as const,
+  ordinal: 0,
+  message: "container 'stg' failed: child 'stop' failed",
+  ts: 140,
+};
+
+/** The truncation marker: `seq: -1`, `phase: 'cap'` (`RUN_DIAGNOSTIC_CAP`). */
+const capMarker = {
+  ...sampleDiagnostic,
+  id: 'rdg_cap',
+  seq: -1,
+  phase: 'cap' as const,
+  message: 'diagnostics for this run reached the cap of 500 and later ones were NOT recorded.',
 };
 
 function stubFetch(status: number, jsonBody: unknown) {
@@ -131,6 +151,31 @@ describe('runs API', () => {
     const out = await getRunEvents('run_1');
     expect(out).toEqual([sampleEvent]);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/runs/run_1/events');
+  });
+
+  /* #1065 — the reducer's explanations for the run. */
+
+  it('gets run diagnostics and hits GET /api/runs/:id/diagnostics (id encoded)', async () => {
+    const fetchMock = stubFetch(200, [sampleDiagnostic]);
+    const out = await getRunDiagnostics('run 1');
+    expect(out).toEqual([sampleDiagnostic]);
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/runs/run%201/diagnostics');
+  });
+
+  it('parses the cap marker, whose seq is the -1 sentinel', async () => {
+    /* `RunDiagnosticSchema.seq` is `gte(-1)`, not `nonnegative()`, precisely so
+       the truncation marker parses. A client schema that rejected it would drop
+       the one row saying the list is incomplete — the exact fact the sentinel
+       exists to surface first. */
+    stubFetch(200, [capMarker]);
+    await expect(getRunDiagnostics('run_1')).resolves.toEqual([capMarker]);
+  });
+
+  it('returns an empty list for a run the reducer had nothing to explain', async () => {
+    // A healthy run emits no diagnostics, so `[]` is the COMMON case and must
+    // parse rather than throw.
+    stubFetch(200, []);
+    await expect(getRunDiagnostics('run_1')).resolves.toEqual([]);
   });
 
   /* #900 — the pending external waits, and the callback path that resumes each. */

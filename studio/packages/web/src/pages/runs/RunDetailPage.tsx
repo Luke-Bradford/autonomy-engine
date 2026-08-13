@@ -26,6 +26,7 @@ import { runStatusLabel } from './runStatus';
 import { AttemptTimeline } from './AttemptTimeline';
 import { NodeActivityPanel, PANEL_ID } from './NodeActivityPanel';
 import { RunCostSummary } from './RunCostSummary';
+import { RunDiagnostics } from './RunDiagnostics';
 import { RunGraph } from './RunGraph.lazy';
 import { useRunProjection } from './useRunProjection';
 
@@ -641,6 +642,32 @@ export function RunDetailPage({ runId }: { runId: string }) {
           list beneath it says nothing the "No node activity yet." above has not
           already said. */}
       {nodes.length > 0 && <AttemptTimeline nodes={nodes} nameOf={nameOf} />}
+
+      {/* #1065 — the reducer's explanations, between the run's SHAPE and its raw
+          decision log. Everything above answers "what happened"; the event feed
+          below is the same answer at full resolution. This is the only section
+          that answers "why", so it reads as the bridge between them: an operator
+          who has just seen a node do something surprising in the table meets the
+          reason before the log they would otherwise go hunting through.
+
+          Not placed ABOVE the node table, though that is where the question is
+          first asked. A diagnostic names nodes and containers by id, so it is
+          only legible once the table has established what those are — and on the
+          overwhelmingly common healthy run this section says "nothing to
+          explain", which must not be the first thing on the page.
+
+          Rendered unconditionally, like `RunCostSummary` and unlike
+          `AttemptTimeline`: a section that appears only when there are
+          diagnostics is indistinguishable from an app that has no diagnostics
+          surface, and "the reducer neutralized nothing" is itself a fact worth
+          stating on a run that misbehaved for some other reason. */}
+      <RunDiagnostics
+        runId={runId}
+        /* The same ROW-status set `RunCostSummary` uses one section up — `status`
+           falls back to `run.status`, which can be `queued` or `skipped`, neither
+           of which the lifecycle set knows about. */
+        settled={TERMINAL_RUN_ROW_STATUS.has(status)}
+      />
 
       <h3>Events</h3>
       {totalEvents === 0 ? (
