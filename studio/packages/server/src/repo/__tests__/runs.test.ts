@@ -18,6 +18,7 @@ import {
   createRun,
   deleteRun,
   findLiveRerunOf,
+  getParsedRun,
   getRun,
   LIVE_RUN_STATUSES,
   listParsedRuns,
@@ -532,6 +533,56 @@ describe('#646 — listParsedRuns (lenient per-row scan)', () => {
     const rows = listParsedRuns(db, { status: 'running' }, (id) => skipped.push(id));
     expect(rows).toEqual([]);
     expect(skipped).toEqual([bad.id]);
+  });
+});
+
+describe('#1041 — getParsedRun (the single-row twin of the lenient scan)', () => {
+  it('returns the row when it parses, and reports nothing', () => {
+    const { db } = freshDb();
+    const run = createRun(db, buildRunInput(setupPipelineVersion(db).id));
+
+    const skipped: string[] = [];
+    expect(getParsedRun(db, run.id, (id) => skipped.push(id))?.id).toBe(run.id);
+    expect(skipped).toEqual([]);
+  });
+
+  it('returns null for an ABSENT row without reporting a skip — absent is not corrupt', () => {
+    const { db } = freshDb();
+
+    const skipped: string[] = [];
+    expect(getParsedRun(db, 'run_nope', (id) => skipped.push(id))).toBeNull();
+    expect(skipped).toEqual([]);
+  });
+
+  it('reports a corrupt row via onSkip and returns null', () => {
+    const { db, sqlite } = freshDb();
+    const run = createRun(db, buildRunInput(setupPipelineVersion(db).id));
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', run.id);
+
+    const skipped: string[] = [];
+    expect(
+      getParsedRun(db, run.id, (id, err) => {
+        skipped.push(id);
+        expect(err).toBeInstanceOf(SyntaxError);
+      }),
+    ).toBeNull();
+    expect(skipped).toEqual([run.id]);
+    // The strict read still throws — leniency is opt-in, per reader.
+    expect(() => getRun(db, run.id)).toThrow();
+  });
+
+  it('PROPAGATES a live DB fault instead of calling it corruption', () => {
+    const { db, sqlite } = freshDb();
+    const run = createRun(db, buildRunInput(setupPipelineVersion(db).id));
+    // A fault of the transient class: the row is FINE and would parse on the
+    // next attempt — it is the connection that is gone. Reporting this as a
+    // corrupt row would ask an operator to repair healthy state, and (for the
+    // boot reconciler) re-report it under a permanent bucket on every boot.
+    sqlite.close();
+
+    const skipped: string[] = [];
+    expect(() => getParsedRun(db, run.id, (id) => skipped.push(id))).toThrow();
+    expect(skipped).toEqual([]);
   });
 });
 

@@ -4,10 +4,16 @@ import {
   type Engine,
   type EngineEvent,
   type PipelineVersion,
+  TERMINAL_RUN_ROW_STATUS,
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
-import { listParsedRuns } from '../repo/runs.js';
+import {
+  getParsedRun,
+  getRun,
+  isDeterministicRowCorruption,
+  listParsedRuns,
+} from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -15,6 +21,7 @@ import {
   pump,
   retryArmInput,
   syncRunLifecycle,
+  terminalizeInterrupted,
   type DocResolver,
   type Executor,
   type RetryAlarms,
@@ -264,8 +271,19 @@ export interface ReconcileReport {
    *
    * EXCLUSIVITY — exact, because it is easy to state too strongly:
    *   - Exclusive of the VERDICT buckets (`resumed`/`finalized`/`resynced`/
-   *     `interrupted`/`deferred`). Each is pushed at a `continue` or at the loop
-   *     tail — i.e. only once that run's reconcile has SUCCEEDED.
+   *     `interrupted`/`deferred`/`sweptOrphanChildren`). Each is pushed at a
+   *     `continue` or at the loop tail — i.e. only once that run's reconcile has
+   *     SUCCEEDED. `sweptOrphanChildren` (#1041) keeps the property a different
+   *     way, and deliberately. Stated exactly, because the loose version of this
+   *     sentence claimed more than the code does: `sweepOne` reaches AT MOST one
+   *     bucket for a given run, NOT exactly one. Most of its paths report nothing
+   *     at all — a non-empty log, an absent or non-terminal parent — because those
+   *     are not orphans and there is no verdict to record. What IS guaranteed is
+   *     the exclusivity this list is about: an id in `sweptOrphanChildren` is
+   *     never also in `failed`, because the two are the arms of ONE decision, and
+   *     that decision reads the row back rather than trusting the call (the
+   *     terminalize can no-op silently rather than throw). An unreadable row short-
+   *     circuits to `corrupt` before either arm is reached.
    *   - NOT exclusive of `held`/`rearmed`. Those are pushed BEFORE the loop
    *     falls through to `pump`, and they record work already durably committed
    *     (`recoverHeld` armed the alarm row and appended `node.retryScheduled`).
@@ -283,6 +301,16 @@ export interface ReconcileReport {
    * contract, transient — hence lands here. The OTHER permanent class — stored-row
    * CORRUPTION — is #646's `corrupt` bucket below, branched on its typed error
    * before this catch files anything, so the transient-only contract stays true.
+   *
+   * ONE producer does NOT come through that catch, and this doc would otherwise
+   * read as exhaustive: #1041's `sweepOne` pushes `orphan_child_sweep_no_op`
+   * DIRECTLY, when it terminalizes an orphaned child and the row read back says
+   * the patch did not happen. It belongs here rather than in `corrupt` on the
+   * same transient/permanent test the rest of this bucket applies — the only way
+   * to reach it is a read fault swallowed inside `terminalizeInterrupted` (it
+   * logs and returns `void`), and a read fault is the transient class. A row that
+   * is permanently unreadable throws on the re-read instead and is filed
+   * `corrupt`, so the split holds on both sides.
    */
   failed: Array<{ runId: string; reason: string }>;
   /**
@@ -305,6 +333,21 @@ export interface ReconcileReport {
    * would hide it. This bucket in the boot log IS that attention signal.
    */
   corrupt: Array<{ runId: string; reason: string }>;
+  /**
+   * #1041 — `call_pipeline` CHILD rows terminalized because nothing could ever
+   * drive them: `status: 'pending'`, a non-null `parentRunId`, an EMPTY log, and
+   * a parent that has already reached a terminal ROW status. See
+   * `sweepOrphanedChildren` for how they arise and why the predicate is what it
+   * is.
+   *
+   * A SEPARATE bucket rather than a fourth producer of `interrupted`, because
+   * that bucket's contract is not just its count: its docblock rests on
+   * `run.interrupted.reason` telling an operator WHICH producer fired. A swept
+   * orphan has no `run.interrupted` event to carry a reason — it never started,
+   * so there is no log to record one in — and filing it there would leave an id
+   * whose reason is unreadable. The bucket name IS the reason here.
+   */
+  sweptOrphanChildren: string[];
 }
 
 /**
@@ -477,7 +520,95 @@ export function emptyReconcileReport(): ReconcileReport {
     rearmed: [],
     failed: [],
     corrupt: [],
+    sweptOrphanChildren: [],
   };
+}
+
+/**
+ * The `run_row_unparseable` skip handler BOTH boot scans hand to
+ * `listParsedRuns`. Shared rather than written twice: the two scans differ only
+ * in which rows they select, and a lenient-parse policy that drifts between them
+ * is a policy in name only.
+ *
+ * Truncated like `RunLogUnparseableError`'s message: a raw ZodError message is
+ * its full issues JSON, and this reason is logged in the boot report.
+ */
+function reportUnparseableRow(report: ReconcileReport): (id: string, err: unknown) => void {
+  return (id, err) => {
+    report.corrupt.push({ runId: id, reason: unparseableRowReason(err) });
+  };
+}
+
+/**
+ * The `corrupt` reason for a row that will not parse. Shared by all three
+ * reporters of one — the two scans' skip handler, `sweepOne`'s parent read (it
+ * sits outside any lenient scan) and the fault boundary — so the boot report
+ * spells the same fault the same way wherever it was noticed.
+ */
+function unparseableRowReason(err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`;
+}
+
+/**
+ * #479 — the per-run fault boundary, plus the drive lock. ONE implementation
+ * shared by both boot scans (`running` reconcile and #1041's orphan sweep):
+ * they are the same policy applied to different row sets, and a second copy is
+ * a second place for the `ReconcileInvariantError` re-throw or the
+ * permanent-vs-transient split to rot.
+ *
+ * Boot reconcile IS the recovery path, so it is the worst place for an
+ * all-or-nothing failure mode: without this, ONE run whose reconcile threw
+ * (originally an unresolvable version — now that permanent case is terminalized
+ * by #508 before it reaches here, but a transient DB fault or an executor throw
+ * from `pump` still can) threw out of the whole function and every run after it
+ * in the scan was never resumed, interrupted, or re-synced.
+ *
+ * Wraps the WHOLE unit of work, not just the `resolveDoc` call that motivated
+ * the ticket: the property wanted is "a fault degrades THAT run", and a catch
+ * around one known throw site leaves every other one able to strand the loop.
+ * The cost of the breadth — that it could mask a genuine bug — is paid by the
+ * sentinel re-throw plus `failed` carrying the reason into the boot log.
+ *
+ * Partial side effects are survivable and were checked, not assumed: a throw
+ * from `pump` AFTER its events are appended leaves exactly the durable state it
+ * leaves today, because the append and the sync are separate statements either
+ * way. Today that ALSO crashes boot. The log is the SSOT and the projection is
+ * re-derived on the next boot, so catching is strictly better.
+ *
+ * `work` is AWAITED inside the try — an unawaited async call would reject
+ * OUTSIDE this catch and crash boot as an unhandled rejection, reinstating the
+ * exact fault #479 closes.
+ */
+async function underFaultBoundary(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  runId: string,
+  work: () => Promise<void>,
+): Promise<void> {
+  try {
+    await (deps.drives === undefined ? work() : deps.drives.serialize(runId, work));
+  } catch (err) {
+    if (err instanceof ReconcileInvariantError) throw err;
+    // #646 — a corrupt LOG is permanent, not transient: file it under `corrupt`
+    // (see that bucket's doc), never `failed`, so it does not masquerade as a
+    // fault the next boot could clear.
+    if (err instanceof RunLogUnparseableError) {
+      report.corrupt.push({ runId, reason: `run_log_unparseable:${err.message}` });
+      return;
+    }
+    // The same permanence argument for a corrupt ROW. The scans parse their own
+    // rows leniently, so this catches the ones read AFTER the scan — #1041's
+    // sweep re-reads the child it just patched, and a row corrupted in that
+    // window (or by anything else this boundary wraps) is repair-needing state,
+    // not a fault the next boot clears. Everything left is transient by
+    // elimination, which is what `failed` promises.
+    if (isDeterministicRowCorruption(err)) {
+      report.corrupt.push({ runId, reason: unparseableRowReason(err) });
+      return;
+    }
+    report.failed.push({ runId, reason: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileReport> {
@@ -500,58 +631,159 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   // BOOT at `index.ts`'s unguarded await — killing recovery for every run, with
   // the poison row visible nowhere (the strict list routes throw too). A skipped
   // row is reported in `corrupt`, the needs-attention channel.
-  for (const run of listParsedRuns(deps.db, { status: 'running' }, (id, err) => {
-    // Truncated like `RunLogUnparseableError`'s message: a raw ZodError message
-    // is its full issues JSON, and this reason is logged in the boot report.
-    const detail = err instanceof Error ? err.message : String(err);
-    report.corrupt.push({
-      runId: id,
-      reason: `run_row_unparseable:${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`,
-    });
-  })) {
-    // #479 — the per-run fault boundary. Boot reconcile IS the recovery path, so
-    // it is the worst place for an all-or-nothing failure mode: without this, ONE
-    // run whose reconcile threw (originally an unresolvable version — now that
-    // permanent case is terminalized by #508 before it reaches here, but a
-    // transient DB fault or an executor throw from `pump` still can) threw out of
-    // the whole function and every run after it in the scan was never resumed,
-    // interrupted, or re-synced.
-    //
-    // Wraps the WHOLE body, not just the `resolveDoc` call that motivated the
-    // ticket: the property wanted is "a fault degrades THAT run", and a catch
-    // around one known throw site leaves every other one able to strand the loop.
-    // The cost of the breadth — that it could mask a genuine bug — is paid by the
-    // sentinel re-throw below plus `failed` carrying the reason into the boot log.
-    //
-    // Partial side effects are survivable and were checked, not assumed: a throw
-    // from `pump` AFTER its events are appended leaves exactly the durable state
-    // it leaves today, because the append and the sync are separate statements
-    // either way. Today that ALSO crashes boot. The log is the SSOT and the
-    // projection is re-derived on the next boot, so catching is strictly better.
-    try {
-      // AWAITED inside the try — `reconcileOne` is async, so an unawaited call
-      // would reject OUTSIDE this catch and crash boot as an unhandled rejection,
-      // reinstating the exact fault #479 is closing.
-      await (deps.drives === undefined
-        ? reconcileOne(deps, report, run)
-        : deps.drives.serialize(run.id, () => reconcileOne(deps, report, run)));
-    } catch (err) {
-      if (err instanceof ReconcileInvariantError) throw err;
-      // #646 — a corrupt LOG is permanent, not transient: file it under
-      // `corrupt` (see that bucket's doc), never `failed`, so it does not
-      // masquerade as a fault the next boot could clear.
-      if (err instanceof RunLogUnparseableError) {
-        report.corrupt.push({ runId: run.id, reason: `run_log_unparseable:${err.message}` });
-        continue;
-      }
-      report.failed.push({
-        runId: run.id,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-    }
+  for (const run of listParsedRuns(deps.db, { status: 'running' }, reportUnparseableRow(report))) {
+    await underFaultBoundary(deps, report, run.id, () => reconcileOne(deps, report, run));
   }
 
+  // AFTER the `running` loop, and the order is load-bearing in both directions.
+  // A parent this very boot terminalized (`interrupted`/`resynced`/`finalized`)
+  // makes its orphaned child eligible in the SAME boot rather than the next one;
+  // and a parent whose LOG was terminal while its row still said `running` has
+  // by now been resynced, so the row predicate below reads the repaired truth.
+  // It must also stay BEFORE `index.ts`'s `recoverQueued`: the sweep frees
+  // per-pipeline admission slots and publishes no event, so nothing else would
+  // turn them into admissions until the next boot.
+  await sweepOrphanedChildren(deps, report);
+
   return report;
+}
+
+/**
+ * #1041 — terminalize `call_pipeline` child rows that nothing can ever drive.
+ *
+ * HOW THEY ARISE. `ensure` creates the child `runs` row (`child.ts`) BEFORE the
+ * executor yields `call.started` — the arm-before-append handshake, so the log
+ * can never name a child that does not exist. If the parent then reaches a
+ * terminal fact on ANOTHER branch before that yield is folded, the pump's
+ * teardown resolves the queued event `dropped` and breaks the stream: the
+ * announcement is never appended and `kick` never runs. A crash between
+ * `createRun` and the append lands in the same place. What is left is a row with
+ * a non-null `parentRunId`, the `pending` default, an empty log, and a terminal
+ * parent that will never re-emit `startChild`.
+ *
+ * WHY IT IS NOT MERELY UNTIDY. `ACTIVE_RUN_STATUSES` includes `pending`
+ * (`repo/runs.ts`), so `countActiveRunsForPipeline` — the per-pipeline half of
+ * S6b admission, which its own docblock says covers "a trigger-less
+ * `call_pipeline` child" — counts every orphan forever. The leak is monotonic:
+ * enough of them and the CHILD pipeline can never be admitted again, with
+ * nothing on any surface saying why. (It does NOT leak a trigger slot;
+ * `countActiveRunsForTrigger` keys on `triggerId`, which is null for a child.)
+ *
+ * WHY THE PARENT'S ROW STATUS, when #443 makes the LOG authoritative. It is not
+ * a departure from that rule. Exactly two writers put a terminal status on a run
+ * row: `syncRunLifecycle`, always from a log fact or a projection of one, and
+ * `terminalizeInterrupted`'s `patchRow`, which fires ONLY on an empty log — and
+ * a run with an empty log never spawned a child. So for any run that HAS
+ * children, row-terminal and log-terminal are the same answer, and one `getRun`
+ * beats loading a whole log to re-derive it. The one asymmetric case (log
+ * terminal, row still `running`) is repaired by the `running` scan that runs
+ * before this one.
+ *
+ * WHY NO EVENT IS APPENDED. `terminalizeInterrupted`'s no-events branch patches
+ * the row and appends nothing, and that is the right primitive here rather than
+ * a near-copy of `terminalizeUnresolvable`: a run that never started has no
+ * event-sourced lifecycle to preserve, and minting a terminal fact into a log
+ * that never held one is manufacturing, not deriving (#443). The `run.interrupted`
+ * that `terminalizeUnresolvable` DOES append is for a run that had already
+ * started. The report bucket is this sweep's channel instead. A second reason
+ * not to append: a terminal event publishes into `subscribeChildReturns`, which
+ * would spawn a `returnToParent` microtask per swept child at boot, each one
+ * only to no-op against an already-terminal parent.
+ *
+ * DELIBERATE NON-GOALS, so the next reader does not assume wider cover:
+ *   - a `pending` child with a NON-EMPTY log (a crash between `startRun`'s
+ *     `run.started` append and its row sync) is stranded identically and leaks
+ *     the same slot. `terminalizeInterrupted` would in fact handle it (its
+ *     append-then-sync branch), so the empty-log guard is a SCOPE choice, not a
+ *     correctness one — that case is a resumable run, not a never-started one,
+ *     and deciding whether to resume or terminalize it is its own ticket (#1048).
+ *   - a top-level (`parentRunId === null`) `pending` orphan, same ticket.
+ *   - a child whose parent ROW is missing entirely: left alone. An absent parent
+ *     is unreadable state, not a terminal fact, and #646's posture for
+ *     unreadable state is to leave it for attention rather than mint a verdict.
+ */
+async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileReport): Promise<void> {
+  for (const child of listParsedRuns(
+    deps.db,
+    { status: 'pending' },
+    reportUnparseableRow(report),
+  )) {
+    const parentRunId = child.parentRunId;
+    // TYPE-NARROWING first, behaviour second, and worth saying which: removing
+    // this line does not change what the sweep does (a `null` id finds no row,
+    // so the `parent === null` skip below catches it anyway) — it is here so
+    // `sweepOne` can take a `string`, and it saves a pointless read per
+    // top-level `pending` row. The top-level case is a stated non-goal above.
+    if (parentRunId === null) continue;
+    await underFaultBoundary(deps, report, child.id, () =>
+      sweepOne(deps, report, child, parentRunId),
+    );
+  }
+}
+
+/**
+ * One orphan candidate, decided and terminalized UNDER the child's drive lock.
+ *
+ * The lock is what makes this safe against a concurrent `kick` — `child.ts`
+ * takes the same lock to decide whether to start a child, and the boot scan
+ * above can resume a parent that then drives and spawns children while this
+ * sweep is walking its (already-taken) snapshot. Under the lock, either the kick
+ * wins and the log is no longer empty, so this returns without touching it; or
+ * this wins and the row goes terminal, which `kick` now re-checks before
+ * starting anything (its log-only check could not see a row patch that appends
+ * no event).
+ */
+async function sweepOne(
+  deps: ReconcileDeps,
+  report: ReconcileReport,
+  child: Run,
+  parentRunId: string,
+): Promise<void> {
+  if (loadEngineEvents(deps.db, child.id).length > 0) return;
+
+  // The PARENT row is arbitrary stored state THIS scan never parsed (it selects
+  // `pending`, and an orphaning parent is terminal), so this read must classify
+  // a parse failure itself. `getParsedRun` rather than `getRun` + a local catch:
+  // the classification it applies is the repo's own, and hand-rolling it here is
+  // how the two copies drift.
+  //
+  // NOT "the only reader of that row", which would be an overclaim: a corrupt
+  // row whose `status` column still reads `running` is ALSO picked up by the
+  // other boot scan, so one such row can appear twice in `corrupt` — once per
+  // scan that met it. Noise in a boot report, not a wrong verdict; both entries
+  // name the same id and the same repair. Long-standing, and stated rather than
+  // deduped because the two scans deliberately share no state.
+  //
+  // The report is keyed on the PARENT's id — that is the row an operator has to
+  // repair, and the one id the fault boundary below could not supply (it knows
+  // only the run being swept). A corrupt parent then returns `null` and takes
+  // the same "nothing to act on" exit as an absent one.
+  //
+  // A NON-corruption fault (a locked DB, a closed connection) deliberately
+  // propagates to the fault boundary, which files it under `failed` — transient,
+  // and cleared by the next boot's re-read. Bucketing it as `corrupt` here would
+  // report a healthy row as needing manual repair.
+  const parent = getParsedRun(deps.db, parentRunId, (id, err) => {
+    report.corrupt.push({ runId: id, reason: unparseableRowReason(err) });
+  });
+  if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
+
+  terminalizeInterrupted(deps, child.id);
+
+  // `terminalizeInterrupted` returns void and SWALLOWS a read fault (it logs and
+  // returns), and `ReconcileDeps` deliberately carries no logger — so a silent
+  // no-op would otherwise be reported here as a sweep that happened. Report what
+  // the row actually says, not what was attempted.
+  //
+  // UNGUARDED, unlike the parent read above: this run IS the one the fault
+  // boundary is keyed on, so it already classifies a throw here correctly and
+  // under the right id. Only the parent needed a local reader.
+  const swept = getRun(deps.db, child.id);
+  if (swept !== null && TERMINAL_RUN_ROW_STATUS.has(swept.status)) {
+    report.sweptOrphanChildren.push(child.id);
+  } else {
+    report.failed.push({ runId: child.id, reason: 'orphan_child_sweep_no_op' });
+  }
 }
 
 /**

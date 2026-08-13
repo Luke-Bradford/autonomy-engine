@@ -7,11 +7,19 @@ import {
   type EngineEvent,
   type Node,
   type NewPipelineVersion,
+  type RunStatus,
 } from '@autonomy-studio/shared';
 import { pipelineVersions, scheduledWakeups } from '../../db/schema.js';
 import { createPipeline } from '../../repo/pipelines.js';
 import { createPipelineVersion, getPipelineVersion } from '../../repo/pipeline-versions.js';
-import { createRun, getRun, listRuns, updateRun } from '../../repo/runs.js';
+import {
+  countActiveRunsForPipeline,
+  createRun,
+  getRun,
+  listRuns,
+  updateRun,
+} from '../../repo/runs.js';
+import { createRunDrives } from '../drives.js';
 import { freshDb } from '../../repo/__tests__/helpers.js';
 import {
   armWakeup,
@@ -1823,5 +1831,328 @@ describe('reconcileOnBoot — #646 stored-state corruption is PERMANENT, filed `
     });
     expect(again.corrupt.map((c) => c.runId)).toEqual([run.id]);
     expect(again.failed).toEqual([]);
+  });
+});
+
+describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', () => {
+  /**
+   * The #1041 shape. `ensure` creates the child `runs` row (default `pending`,
+   * non-null `parentRunId`) BEFORE the parent yields `call.started`; if the
+   * parent reaches a terminal fact on another branch first, the pump's teardown
+   * drops that queued event, so the announcement is never appended and `kick`
+   * never runs. What is left is this: a `pending` row, an EMPTY log, and a
+   * terminal parent that will never re-emit `startChild`.
+   *
+   * Parent and child sit on DIFFERENT pipelines deliberately.
+   * `countActiveRunsForPipeline` joins `runs ⋈ pipeline_versions`, so a child
+   * seeded onto the parent's version would count against the PARENT's pipeline
+   * and the slot-leak assertion below would pass without measuring anything.
+   */
+  function seedOrphanChild(db: Db, parentStatus: RunStatus = 'failure') {
+    const parent = seedRun(db, seedVersion(db, [node('a')]));
+    updateRun(db, parent.id, { status: parentStatus, finishedAt: Date.now() });
+    const childPvId = seedVersion(db, [node('c')]);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: childPvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    return { parent, child, childPipelineId: getPipelineVersion(db, childPvId)!.pipelineId };
+  }
+
+  const bootDeps = (db: Db) => ({
+    db,
+    resolveDoc: resolveDocFor(db),
+    executor: makeStubExecutor(),
+    alarms: stubAlarms(),
+  });
+
+  it('terminalizes it, frees the pipeline slot it was holding, and manufactures no event', async () => {
+    const { db } = freshDb();
+    const { child, childPipelineId } = seedOrphanChild(db);
+
+    // The leak the ticket under-stated: `ACTIVE_RUN_STATUSES` includes
+    // `pending`, and this count is the CHILD pipeline's half of S6b admission.
+    expect(countActiveRunsForPipeline(db, childPipelineId)).toBe(1);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([child.id]);
+    expect(report.failed).toEqual([]);
+    expect(report.corrupt).toEqual([]);
+
+    const swept = getRun(db, child.id)!;
+    expect(swept.status).toBe('interrupted');
+    expect(swept.finishedAt).not.toBeNull();
+    // #5 S4 — a terminal run holds no execution lease, or S7's expiry
+    // reconciler reads it as a phantom live worker.
+    expect(swept.leaseUntil).toBeNull();
+    expect(countActiveRunsForPipeline(db, childPipelineId)).toBe(0);
+
+    // NO event: a run that never started has no event-sourced lifecycle to
+    // preserve, and minting a terminal fact for a log that never held one is
+    // exactly the manufacturing #443 forbids. The row is pure provenance here.
+    expect(loadEngineEvents(db, child.id)).toEqual([]);
+  });
+
+  it('leaves a child whose parent is PARKED — its alarm will un-park it and re-emit `startChild`', async () => {
+    const { db } = freshDb();
+    const { child } = seedOrphanChild(db, 'waiting');
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('leaves a child whose parent is still RUNNING', async () => {
+    const { db } = freshDb();
+    // A genuinely crashed parent: the boot scan resumes it, its node hangs
+    // again, and the row is still `running` when the sweep runs after it.
+    const parent = await seedCrashedRun(db, [node('a')], [], {
+      nodes: { a: { hang: true, idempotent: true } },
+    });
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: seedVersion(db, [node('c')]),
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor({ nodes: { a: { hang: true, idempotent: true } } }),
+      alarms: stubAlarms(),
+    });
+
+    expect(getRun(db, parent.id)!.status).toBe('running');
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('leaves a `pending` child that HAS a log — the sibling leak is out of scope, not swept blind', async () => {
+    const { db } = freshDb();
+    const parent = seedRun(db, seedVersion(db, [node('a')]));
+    updateRun(db, parent.id, { status: 'failure', finishedAt: Date.now() });
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: seedVersion(db, [node('c')]),
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    // A crash between `startRun`'s `run.started` append and its row sync leaves
+    // exactly this: a `pending` row with a non-empty log.
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ nodes: { c: { hang: true, idempotent: true } } }),
+        alarms: stubAlarms(),
+      },
+      child,
+    );
+    updateRun(db, child.id, { status: 'pending' });
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('leaves a top-level `pending` run alone — no parent, so nothing is orphaned', async () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+    expect(getRun(db, run.id)!.status).toBe('pending');
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('pending');
+  });
+
+  it('sweeps under the child DRIVE LOCK when one is supplied', async () => {
+    const { db } = freshDb();
+    const { child } = seedOrphanChild(db);
+
+    const report = await reconcileOnBoot({ ...bootDeps(db), drives: createRunDrives() });
+
+    expect(report.sweptOrphanChildren).toEqual([child.id]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+  });
+
+  it('QUEUES BEHIND a drive already in flight for the child, rather than sweeping past it', async () => {
+    const { db } = freshDb();
+    const { child } = seedOrphanChild(db);
+    const drives = createRunDrives();
+
+    // The race the lock exists for: a `kick` issued while the boot scan was
+    // resuming this child's parent is ALREADY holding the child's chain when the
+    // sweep reaches it. This stands in for that kick — `serialize` is the same
+    // seam `child.ts` uses, on the same key (the CHILD's run id).
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const inFlight = drives.serialize(child.id, async () => {
+      await held;
+      // What `startRun` does first: the log stops being empty.
+      appendEngineEvent(db, {
+        type: 'run.started',
+        runId: child.id,
+        pipelineVersionId: child.pipelineVersionId,
+        params: {},
+      });
+    });
+
+    // `serialize` REGISTERS SYNCHRONOUSLY (see `RunDrives`), and `reconcileOnBoot`
+    // runs straight through its empty `running` scan into the sweep's own
+    // `serialize` before it yields — so the queue order is settled by the time
+    // this returns, with no timer and nothing to guess at.
+    const booting = reconcileOnBoot({ ...bootDeps(db), drives });
+    release();
+    await inFlight;
+    const report = await booting;
+
+    // FIFO: the drive won, so by the time the sweep ran the log was no longer
+    // empty and it declined. Without the lock the sweep would have read the
+    // empty log first and terminalized a child that was starting.
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('is idempotent — a second boot sweeps nothing', async () => {
+    const { db } = freshDb();
+    const { child } = seedOrphanChild(db);
+
+    await reconcileOnBoot(bootDeps(db));
+    const again = await reconcileOnBoot(bootDeps(db));
+
+    expect(again.sweptOrphanChildren).toEqual([]);
+    expect(again.failed).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+  });
+
+  it('reports a sweep that silently did NOT happen as `failed`, not as swept', async () => {
+    const { db, sqlite } = freshDb();
+    const { child } = seedOrphanChild(db);
+    // `terminalizeInterrupted` returns `void` and swallows a read fault (it logs
+    // and returns), so "it was called" is not evidence the row moved — which is
+    // why `sweepOne` re-reads instead of reporting the attempt. `RAISE(IGNORE)`
+    // in a BEFORE trigger skips the row operation SILENTLY, with no error to
+    // reach the fault boundary: the exact shape of a no-op the caller cannot
+    // otherwise detect.
+    sqlite.exec(`
+      CREATE TRIGGER swallow_child_patch BEFORE UPDATE ON runs
+      WHEN NEW.id = '${child.id}'
+      BEGIN SELECT RAISE(IGNORE); END;
+    `);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.failed).toEqual([{ runId: child.id, reason: 'orphan_child_sweep_no_op' }]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('files a corrupt `pending` ROW under `corrupt` and still sweeps its healthy sibling', async () => {
+    const { db, sqlite } = freshDb();
+    const healthy = seedOrphanChild(db);
+    const bad = seedOrphanChild(db);
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', bad.child.id);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphanChildren).toEqual([healthy.child.id]);
+    expect(report.corrupt).toEqual([
+      { runId: bad.child.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    // Permanent, not transient — the same discipline the `running` scan keeps.
+    expect(report.failed).toEqual([]);
+  });
+
+  it('files a corrupt PARENT row under `corrupt` — keyed on the parent, the row needing repair', async () => {
+    const { db, sqlite } = freshDb();
+    const { parent, child } = seedOrphanChild(db);
+    // `listParsedRuns` never parses this row (it selects `pending`, and the
+    // parent is terminal), so `sweepOne`'s own read is what meets the
+    // corruption. Left to the fault boundary it would still be filed `corrupt`
+    // — but keyed on the CHILD, since that is the id the boundary wraps. The
+    // parent is the row an operator has to repair, and this asserts the report
+    // names it.
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', parent.id);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.corrupt).toEqual([
+      { runId: parent.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    expect(report.sweptOrphanChildren).toEqual([]);
+    // Left for repair, not terminalized on an unreadable premise.
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
+  it('reports a corrupt `running` parent ONCE PER SCAN that meets it — duplicate, not wrong', async () => {
+    const { db, sqlite } = freshDb();
+    // The one row both boot scans read: the `running` scan selects it on its
+    // status column (the parse fails after the SQL filter, so a corrupt row is
+    // still selected), and the orphan sweep reads it again as a pending child's
+    // parent. `sweepOne`'s docblock states this rather than deduping; the test
+    // is here so a future dedupe is a deliberate change, not a silent one.
+    const { parent } = seedOrphanChild(db, 'running');
+    sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', parent.id);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.corrupt.map((c) => c.runId)).toEqual([parent.id, parent.id]);
+    // Same id, same repair, one verdict — noise in the boot log, not a conflict.
+    expect(report.failed).toEqual([]);
+  });
+
+  it('files a child row corrupted DURING the sweep under `corrupt` — the fault boundary classifies it', async () => {
+    const { db, sqlite } = freshDb();
+    const { child } = seedOrphanChild(db);
+    // The read-back sits AFTER `terminalizeInterrupted`, so `listParsedRuns`'s
+    // lenient scan (which parsed this row at the top of the sweep) is not the
+    // reader that meets the corruption — the fault boundary is. Corrupting the
+    // row from the patch's own trigger puts the fault exactly in that window.
+    sqlite.exec(`
+      CREATE TRIGGER corrupt_child_on_patch AFTER UPDATE ON runs
+      WHEN NEW.id = '${child.id}' AND NEW.params != 'not json'
+      BEGIN UPDATE runs SET params = 'not json' WHERE id = NEW.id; END;
+    `);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    // PERMANENT: the row parses the same way on every boot, so `failed` would
+    // re-report it forever as a fault the next boot might clear.
+    expect(report.corrupt).toEqual([
+      { runId: child.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    expect(report.sweptOrphanChildren).toEqual([]);
+  });
+
+  it('files an unreadable child LOG under `corrupt`, never `failed`', async () => {
+    const { db, sqlite } = freshDb();
+    const { child } = seedOrphanChild(db);
+    sqlite
+      .prepare(
+        'INSERT INTO run_events (id, run_id, seq, type, payload, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      )
+      .run('evt_poison_child', child.id, 999, 'x', 'not json', 1_700_000_000_000);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.corrupt).toEqual([
+      { runId: child.id, reason: expect.stringMatching(/^run_log_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
   });
 });
