@@ -94,6 +94,15 @@ test.describe('U19 outcome ports', () => {
   }) => {
     await openSeededCanvas(page, 'u19 spacing', TWO_NODES);
 
+    /* #997 — the pitch only EXISTS while the fan is out: at rest every port is
+       collapsed onto one point, so the gaps below are all zero and the snap
+       radius has nothing to be compared against. That is not a weakening of this
+       check, it is its precise scope — two ports can only be confused by a drag
+       during the state in which a drag can reach them. */
+    const nodeA = page.locator('.react-flow__node[data-id="a"]');
+    await nodeA.hover();
+    await expect(nodeA.locator('.flow-node')).toHaveAttribute('data-ports-expanded', 'true');
+
     const centres = await page.evaluate(() =>
       [
         ...document.querySelectorAll('.react-flow__node[data-id="a"] .react-flow__handle-right'),

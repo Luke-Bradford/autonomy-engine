@@ -1315,6 +1315,15 @@ td button + button {
    * hand it the position the dot is animating FROM, so every edge would
    * attach to where the port was about to leave. Opacity carries the motion;
    * geometry lands immediately, and measurement therefore reads the truth. */
+}
+
+/* SCOPED TO ACTIVITY BOXES, and the scope is load-bearing. A container's ports
+   are excluded from this change (its handle bounds are STATED, so it needs its
+   own collapsed geometry), and it therefore never carries `data-ports-expanded`
+   — so an unscoped collapse hid its ports with nothing able to bring them back.
+   `container-rendering.spec.ts` caught exactly that: a container port that could
+   never be seen or grabbed again. */
+.flow-node .flow-port.react-flow__handle {
   top: 50%;
   opacity: 0;
   /* An invisible dot must not eat a click aimed at the node under it. */
@@ -1322,7 +1331,7 @@ td button + button {
   transition: opacity 120ms ease-out;
 }
 
-[data-ports-expanded='true'] .flow-port.react-flow__handle {
+.flow-node[data-ports-expanded='true'] .flow-port.react-flow__handle {
   top: calc(50% + var(--port-offset, 0px));
   opacity: 1;
   pointer-events: all;
@@ -1331,7 +1340,7 @@ td button + button {
 /* WCAG 2.2 target size, without drawing a bigger dot — noise is a function of
    what is DRAWN, not what is clickable. Inert while collapsed, because the
    handle it hangs off is `pointer-events: none` there. */
-.flow-port.react-flow__handle::after {
+.flow-node .flow-port.react-flow__handle::after {
   content: '';
   position: absolute;
   top: 50%;
@@ -1342,7 +1351,7 @@ td button + button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow-port.react-flow__handle {
+  .flow-node .flow-port.react-flow__handle {
     transition: none;
   }
 }
@@ -1507,9 +1516,13 @@ td button + button {
    arms keep `:hover`/`:focus-within` because a container's ports do not collapse
    yet: its handle bounds are STATED (`containerHandles`) rather than measured,
    so its half needs stated collapsed geometry and is tracked separately. */
-[data-ports-expanded='true'] .flow-port-label,
+.flow-node[data-ports-expanded='true'] .flow-port-label,
 .flow-container:hover .flow-port-label,
-.flow-container:focus-within .flow-port-label {
+.flow-container:focus-within .flow-port-label,
+/* RESTORED, and it is the only arm that answers a KEYBOARD user on a container:
+   React Flow owns the focusable wrapper, which is the PARENT of `.flow-container`,
+   so `:focus-within` on the box itself never matches a node focused with Tab. */
+.react-flow__node:focus-visible .flow-port-label {
   opacity: 1;
 }
 

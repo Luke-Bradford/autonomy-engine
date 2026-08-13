@@ -123,7 +123,17 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      to unmeasured forever — so a re-measure there is discarded, and their half
      of this change needs its own stated collapsed geometry. */
   const updateNodeInternals = useUpdateNodeInternals();
+  /* ONLY ON A CHANGE, never on mount — and that is a correctness fix, not a
+     performance one. Asking RF to re-measure while it is still performing its
+     INITIAL measurement leaves the mount-time `fitView` working from bounds it
+     is told to discard, so the viewport is never fitted; with
+     `onlyRenderVisibleElements` on, a node outside that unfitted viewport is
+     then not rendered AT ALL. It cost `version-history.spec.ts` its third node,
+     which reads as "the canvas lost a node" rather than as a measurement race. */
+  const fanned = useRef(open);
   useEffect(() => {
+    if (fanned.current === open) return;
+    fanned.current = open;
     updateNodeInternals(id);
   }, [open, id, updateNodeInternals]);
 

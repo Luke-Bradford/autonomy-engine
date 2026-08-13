@@ -243,6 +243,32 @@ export type NodeRef = { index: number } | { id: string };
  * below, which is the useful unit. Exporting the coordinate helpers as well would
  * offer two ways to do the same thing and invite a spec to hand-roll the drag.
  */
+/**
+ * #997 — fan a node's source ports out before anything measures one.
+ *
+ * At rest every source port is collapsed onto the SAME point at the middle of
+ * the node, so all four rects are identical and a coordinate-based drag lands on
+ * whichever handle happens to be topmost: `outcome-ports.spec.ts` asked for the
+ * `failure` port and authored a `skipped` edge. A port's geometry only means
+ * anything once the fan is out, which is also the gesture a real user makes —
+ * hover, then reach for the port they want.
+ *
+ * Containers are skipped: their ports do not collapse (their handle bounds are
+ * STATED rather than measured), so there is nothing to wait for and hovering
+ * would only add a race.
+ */
+async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
+  const node =
+    'id' in ref
+      ? page.locator(`.react-flow__node[data-id="${ref.id}"]`)
+      : page.locator('.react-flow__node').nth(ref.index);
+  const box = node.locator('.flow-node');
+  if ((await box.count()) === 0) return;
+  await node.hover();
+  // Polls, because the fan is deliberately delayed by a dwell.
+  await expect(box.first()).toHaveAttribute('data-ports-expanded', 'true');
+}
+
 function portCentreOf(
   page: Page,
   ref: NodeRef,
@@ -260,18 +286,23 @@ function portCentreOf(
     side === 'source'
       ? `.react-flow__handle[data-handleid="${outcome}"]`
       : '.react-flow__handle-left';
-  return page.evaluate(
-    ({ ref: r, cls }) => {
-      const node =
-        'id' in r
-          ? document.querySelector(`.react-flow__node[data-id="${r.id}"]`)
-          : document.querySelectorAll('.react-flow__node')[r.index];
-      const box = node?.querySelector(cls)?.getBoundingClientRect();
-      if (!box) throw new Error(`node ${JSON.stringify(r)} has no ${cls} port laid out`);
-      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-    },
-    { ref, cls: selector },
-  );
+  if (side === 'source') return fanSourcePorts(page, ref).then(() => measure());
+  return measure();
+
+  function measure(): Promise<{ x: number; y: number }> {
+    return page.evaluate(
+      ({ ref: r, cls }) => {
+        const node =
+          'id' in r
+            ? document.querySelector(`.react-flow__node[data-id="${r.id}"]`)
+            : document.querySelectorAll('.react-flow__node')[r.index];
+        const box = node?.querySelector(cls)?.getBoundingClientRect();
+        if (!box) throw new Error(`node ${JSON.stringify(r)} has no ${cls} port laid out`);
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      },
+      { ref, cls: selector },
+    );
+  }
 }
 
 /**
