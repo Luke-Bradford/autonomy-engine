@@ -8,12 +8,8 @@ import {
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
-import {
-  getParsedRun,
-  getRun,
-  isDeterministicRowCorruption,
-  listParsedRuns,
-} from '../repo/runs.js';
+import { isDeterministicRowCorruption } from '../repo/row-corruption.js';
+import { getParsedRun, getRun, listParsedRuns } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,

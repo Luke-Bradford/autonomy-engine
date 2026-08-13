@@ -33,17 +33,31 @@ import { sourcePortsOf, usedConditionsBySource } from './ports';
  * (see the anchor step below), so nothing teleports to the origin and a small
  * graph that already fits barely moves at all.
  *
- * ## The one assumption it makes, stated because it is not free
+ * ## Sizes, and what the overlap guarantees are conditional on
  *
- * Sizes are NOMINAL (`unmeasuredNodeSize`), never measured. A node's real width
- * is whatever its title makes it — `.flow-node` sets `min-width: 120px` and no
- * maximum — so a node with a long title renders wider than the 150px assumed
- * here, and past `150 + LAYOUT_GAP` it crowds the column to its right. The
- * layout cannot see that: measured sizes live in React Flow's store, and this
- * runs from a click handler outside it. The failure degrades gently (a tight
- * graph, not a pile) and is tracked separately; what would NOT be acceptable is
- * leaving the assumption unwritten, since every overlap guarantee below is
- * conditional on it.
+ * A node's real width is whatever its title makes it — `.flow-node` sets
+ * `min-width: 120px` and no maximum — so sizing every node at the nominal 150
+ * drew anything past `150 + LAYOUT_GAP` straight through the column to its
+ * right (#1005). So the caller may pass what React Flow MEASURED, and
+ * `unmeasuredNodeSize` is the per-node FALLBACK rather than the flat answer.
+ *
+ * That closes the gap but does not make the function omniscient, and the
+ * difference matters to anyone reading the guarantees below. The map holds what
+ * has been measured SO FAR: React Flow writes `measured` only for a node it has
+ * actually mounted, and with `onlyRenderVisibleElements` on, a node that has
+ * never been scrolled into view has no entry. Such a node is laid out at its
+ * nominal size and, if it is a wide one, still crowds its neighbour. Every
+ * overlap guarantee here is therefore conditional on the sizes it was GIVEN
+ * being the rendered ones — exact for a measured node, an assumption for the
+ * rest.
+ *
+ * One visible consequence: Arrange is idempotent only while measurement
+ * coverage holds still. The press itself moves the viewport (`fitSignal`), which
+ * can mount nodes that were culled, so a second press may legitimately find a
+ * better layout and report a move where the first press would have said
+ * "already arranged". That is the layout improving as it learns, not a bug —
+ * but it is why "arrange twice, get the same answer" is not a property to lean
+ * on.
  *
  * It also does not reduce edge CROSSINGS. Order within a column is document
  * order — deterministic and explainable. A barycenter pass is a real
@@ -80,6 +94,16 @@ interface Size {
   height: number;
 }
 
+/**
+ * What React Flow has MEASURED for each node id, as the canvas sees it.
+ *
+ * Partial by nature — an unmounted node is simply absent, and the layout falls
+ * back to `unmeasuredNodeSize` for it. Only ACTIVITY ids ever appear: a
+ * container's box is derived from its members' rects, never measured, so the
+ * layout continues to compute one rather than look it up.
+ */
+export type MeasuredSizes = ReadonlyMap<string, Size>;
+
 interface Slot extends Size {
   /** The ids to place, in document order, once the slot's origin is known. */
   place: (origin: { x: number; y: number }) => LayoutMove[];
@@ -97,20 +121,26 @@ export function autoLayout(
   nodes: readonly Node[],
   edges: readonly Edge[],
   containers: readonly Container[],
+  measured?: MeasuredSizes,
 ): LayoutMove[] {
   if (nodes.length === 0) return [];
 
   const { owner } = containerMembership([...containers]);
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  /* Sizes come from the SAME nominal-size function the canvas falls back to
-     before React Flow has measured a node, so the packing and the picture agree
-     on how tall a node with four outcome ports is. `used` is read off the
-     DECLARED edges, matching what the canvas actually renders ports for — the
-     implicit chain below is a ranking device, not something that grows ports. */
+  /* A measured size when the canvas has one, else the SAME nominal-size
+     function the canvas itself falls back to before React Flow has measured a
+     node — one fallback, so the packing and the picture agree on how tall a node
+     with four outcome ports is. Both axes come from the same source rather than
+     mixing a measured width with a nominal height: the container slots below
+     reserve exactly the box `containerRects` will draw, and that box unions
+     MEASURED rects, so a half-measured size would leave that invariant true
+     horizontally and false vertically. `used` is read off the DECLARED edges,
+     matching what the canvas actually renders ports for — the implicit chain
+     below is a ranking device, not something that grows ports. */
   const used = usedConditionsBySource(edges);
   const sizeOfNode = (n: Node): Size =>
-    unmeasuredNodeSize(sourcePortsOf(n, used.get(n.id) ?? []).length);
+    measured?.get(n.id) ?? unmeasuredNodeSize(sourcePortsOf(n, used.get(n.id) ?? []).length);
 
   /* Only containers with a child that resolves to a real node take part.
      An empty one has no node position to write and `containerRects` parks its
@@ -240,9 +270,10 @@ export function arrangeMoves(
   nodes: readonly Node[],
   edges: readonly Edge[],
   containers: readonly Container[],
+  measured?: MeasuredSizes,
 ): LayoutMove[] {
   const current = new Map(nodes.map((n) => [n.id, n.position]));
-  return autoLayout(nodes, edges, containers).filter((move) => {
+  return autoLayout(nodes, edges, containers, measured).filter((move) => {
     const was = current.get(move.id);
     return was !== undefined && (was.x !== move.position.x || was.y !== move.position.y);
   });

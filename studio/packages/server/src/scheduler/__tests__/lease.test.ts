@@ -678,10 +678,22 @@ describe('#646 — the bespoke lease handler suppresses a corrupt run row (no 1 
     // ...then the row goes corrupt (the surface-3 row boot now lets survive).
     sqlite.prepare('UPDATE runs SET params = ? WHERE id = ?').run('not json', run.id);
 
-    // The alarm comes due: `getRun` inside the fire throws the codec
+    // The alarm comes due: the run read inside the fire hits the codec
     // SyntaxError. Pre-#646 that rolled back the settle — the alarm stayed
     // pending and re-fired on EVERY 1s tick, forever. Now: suppressed.
     time.t = NOW + LEASE_TTL_MS;
+
+    // WHY it suppressed, not just that it did (#1051). Since the handler reads
+    // through `getParsedRun`, a corrupt row and an ABSENT one both come back
+    // `null` — the `onSkip` report is the only thing that still tells them
+    // apart, and `run_not_found` here would be a lie about a row that is
+    // present and repairable. The settle below is identical either way, so it
+    // cannot pin this: fire the handler directly for the verdict itself.
+    const due = pendingLeaseAlarms(db)[0]!;
+    expect(
+      lease.handler.fire(due, { scheduledFor: due.dueAt, firedAt: time.t, latenessMs: 0 }, db),
+    ).toMatchObject({ status: 'suppressed', reason: 'run_unparseable' });
+
     clock.tick();
     expect(pendingLeaseAlarms(db)).toHaveLength(0);
     const settled = sqlite

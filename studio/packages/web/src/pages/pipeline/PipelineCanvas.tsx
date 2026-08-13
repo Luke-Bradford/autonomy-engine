@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
@@ -32,7 +32,7 @@ import {
   redoDisabledReason,
   undoDisabledReason,
 } from './undoRedo';
-import { arrangeMoves } from './autoLayout';
+import { arrangeMoves, type MeasuredSizes } from './autoLayout';
 import { messageOf } from '../../api/client';
 import {
   createPipelineVersion,
@@ -160,6 +160,12 @@ export function PipelineCanvas({
   /* U9 — bumped by Arrange to ask the canvas to fit what it just laid out. See
      `FlowCanvas`'s `fitSignal` prop for why it is a counter. */
   const [fitSignal, setFitSignal] = useState(0);
+  /* #1005 — the sizes React Flow has measured, filled in by `FlowCanvas` and
+     read by Arrange. A ref, not state: nothing here RENDERS from it, and making
+     a measurement re-render this component would feed the tree being measured.
+     Initialised empty rather than null so every read is total — an empty map is
+     honestly "nothing measured yet", which the layout already handles. */
+  const measuredSizesRef = useRef<MeasuredSizes>(new Map());
   // #907 — the unarchive request's own in-flight + failure state. Kept apart
   // from `saveMsg` because that is a SAVE outcome and gets clobbered by the
   // next save; this one is about whether the pipeline can be saved at all.
@@ -283,7 +289,12 @@ export function PipelineCanvas({
    */
   const onArrange = useCallback(() => {
     const state = store.getState();
-    const changed = arrangeMoves(state.nodes, state.edges, state.containers);
+    const changed = arrangeMoves(
+      state.nodes,
+      state.edges,
+      state.containers,
+      measuredSizesRef.current,
+    );
     if (changed.length === 0) {
       showCanvasMsg('Already arranged — nothing moved.');
       return;
@@ -1083,7 +1094,7 @@ export function PipelineCanvas({
           <ActivityToolbox store={store} />
           <div className="canvas-wrap">
             <ReactFlowProvider>
-              <FlowCanvas store={store} fitSignal={fitSignal} />
+              <FlowCanvas store={store} fitSignal={fitSignal} measuredSizesRef={measuredSizesRef} />
             </ReactFlowProvider>
           </div>
           <PropertyPanel

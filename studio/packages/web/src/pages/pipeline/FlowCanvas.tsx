@@ -2,11 +2,13 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
 } from 'react';
 import { useStore } from 'zustand';
 import {
@@ -61,6 +63,7 @@ import {
   unmeasuredNodeSize,
   type ContainerBox,
 } from './containerLayout';
+import type { MeasuredSizes } from './autoLayout';
 import {
   conditionFromConnection,
   CONNECTION_RADIUS,
@@ -317,6 +320,7 @@ function isOverCanvasSurface(event: DragEvent<HTMLDivElement>): boolean {
 export function FlowCanvas({
   store,
   fitSignal = 0,
+  measuredSizesRef,
 }: {
   store: StoreApi<CanvasState>;
   /**
@@ -330,6 +334,26 @@ export function FlowCanvas({
    * this only ever fires on an explicit gesture.
    */
   fitSignal?: number;
+  /**
+   * #1005 — an OUT parameter: what React Flow has measured, published to the
+   * owner so Arrange can pack columns from real widths instead of the nominal
+   * 150 (see `autoLayout`'s size section for why that mattered).
+   *
+   * A ref rather than a callback prop or lifted state because this is data the
+   * owner READS AT THE MOMENT OF A CLICK, never renders. Routing it through
+   * state would re-render `PipelineCanvas` on every measurement React Flow
+   * lands — a feedback loop into the very component tree being measured, which
+   * is the hazard `containerBoxes` and the `measured`/`handles` block below are
+   * both written around. It is the same posture `onArrange` already takes with
+   * `store.getState()`: read the world as it is when the button is pressed.
+   *
+   * The alternative — hoisting `ReactFlowProvider` so the handler could call
+   * `useReactFlow().getNodes()` — was rejected: the provider deliberately sits
+   * inside `ready && previewed === null` and unmounts on every version preview,
+   * and widening its lifetime to reach a getter is a much larger change than
+   * the read needs.
+   */
+  measuredSizesRef?: MutableRefObject<MeasuredSizes>;
 }) {
   const nodes = useStore(store, (s) => s.nodes);
   const edges = useStore(store, (s) => s.edges);
@@ -803,6 +827,41 @@ export function FlowCanvas({
     },
     [store],
   );
+
+  /* #1005 — what React Flow has ACTUALLY measured, for `measuredSizesRef`.
+     Deliberately PARTIAL, and deliberately not the `?? nominal` map
+     `containerBoxes` builds below: a container box must be drawable every
+     frame, so it needs a total function, whereas the layout wants to know which
+     sizes are facts. An id absent here means "not measured", and `autoLayout`
+     applies its own nominal fallback — which is the SAME fallback, asked for
+     the port count it derives itself, so an unmeasured node lays out exactly as
+     it did before this existed rather than picking up a second opinion.
+
+     Note this must NOT be folded into `containerBoxes`, whose first line
+     short-circuits on a doc with no containers — the common case, and precisely
+     the case Arrange needs sizes for. */
+  const measuredSizes = useMemo<MeasuredSizes>(() => {
+    const sizes = new Map<string, { width: number; height: number }>();
+    for (const n of flowNodes) {
+      const { width, height } = n.measured ?? {};
+      if (width === undefined || height === undefined) continue;
+      sizes.set(n.id, { width, height });
+    }
+    return sizes;
+  }, [flowNodes]);
+
+  /* Published in the LAYOUT phase, so a click handler that runs after a commit
+     can never read sizes from the render before it. Cleared on unmount because
+     `FlowCanvas` is torn down while a version preview is open and node ids
+     survive a restore — a stale map would otherwise describe the previous
+     document's geometry. */
+  useLayoutEffect(() => {
+    if (measuredSizesRef === undefined) return;
+    measuredSizesRef.current = measuredSizes;
+    return () => {
+      measuredSizesRef.current = new Map();
+    };
+  }, [measuredSizes, measuredSizesRef]);
 
   /* The BOXES are their own memo, separate from the nodes rendered from them.
      The reveal effect below needs `childCount`, which the rendered node keeps

@@ -1,8 +1,8 @@
-import { z, ZodError } from 'zod';
+import { z } from 'zod';
 import { buildDedupeKey, type ArmWakeupInput, type Run } from '@autonomy-studio/shared';
 import { LEASE_TTL_MS, type DriveDeps } from '../run/driver.js';
 import { emptyReconcileReport, reconcileOne } from '../run/reconcile.js';
-import { getRun, listParsedRuns, updateRun } from '../repo/runs.js';
+import { getParsedRun, getRun, listParsedRuns, updateRun } from '../repo/runs.js';
 import { RunLogUnparseableError } from '../run/events.js';
 import { armWakeup, getWakeupByKey, supersedeWakeup } from '../repo/scheduled-wakeups.js';
 import type { Db } from '../repo/types.js';
@@ -232,19 +232,21 @@ export function createLeaseService(deps: LeaseServiceDeps): LeaseService {
       // tick — the clock's per-row catch keeps the alarm pending, a 1 Hz
       // poison-fire loop for as long as the row exists. Suppress is self-healing:
       // once the row is repaired, the sweep's expired-lease branch re-arms.
-      let run: Run | null;
-      try {
-        run = getRun(db, ref.runId);
-      } catch (err) {
-        if (err instanceof ZodError || err instanceof SyntaxError) {
-          deps.log?.warn?.(
-            { err, runId: ref.runId },
-            'run_lease: run row unparseable — suppressing (permanently corrupt)',
-          );
-          return { status: 'suppressed', reason: 'run_unparseable' };
-        }
-        throw err;
-      }
+      //
+      // `getParsedRun` rather than `getRun` + a local catch (#1051): it is the
+      // single-row reader that already OWNS this classification, so a transient
+      // DB fault still propagates for the redeliver. The two outcomes it folds
+      // into `null` are NOT the same here — corrupt suppresses self-healingly,
+      // absent is a different verdict — so `onSkip` is what tells them apart.
+      let corrupt = false;
+      const run: Run | null = getParsedRun(db, ref.runId, (id, err) => {
+        corrupt = true;
+        deps.log?.warn?.(
+          { err, runId: id },
+          'run_lease: run row unparseable — suppressing (permanently corrupt)',
+        );
+      });
+      if (corrupt) return { status: 'suppressed', reason: 'run_unparseable' };
       if (run === null) return { status: 'suppressed', reason: 'run_not_found' };
       if (run.status !== 'running') return { status: 'suppressed', reason: 'not_running' };
       // THE GENERATION-TOKEN CHECK (codex-hardened): reclaim only if the row

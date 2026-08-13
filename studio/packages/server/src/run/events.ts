@@ -1,4 +1,3 @@
-import { ZodError } from 'zod';
 import {
   EngineEventSchema,
   terminalStatusOf,
@@ -11,6 +10,7 @@ import {
 } from '@autonomy-studio/shared';
 import { appendRunEvent, listRunEvents } from '../repo/run-events.js';
 import { recordRunDiagnostics } from '../repo/run-diagnostics.js';
+import { isDeterministicRowCorruption } from '../repo/row-corruption.js';
 import type { Db } from '../repo/types.js';
 import type { RunEventBus } from './event-bus.js';
 
@@ -118,8 +118,8 @@ export interface DiagnosticLog {
  * by the #515 classification: stored bytes parse the same way on every read, so
  * this is definitionally not the transient blip retry/redelivery contracts
  * exist for. Typed at the SOURCE (the `driver.ts` doctrine: the classification
- * lives here rather than re-derived by every consumer as a raw
- * `ZodError || SyntaxError` check) so the boot reconciler can file it as
+ * is asked of {@link isDeterministicRowCorruption} once here rather than
+ * re-derived by every consumer) so the boot reconciler can file it as
  * corruption instead of transient `failed`, and the durable-alarm skeleton can
  * suppress on it. Any NON-corruption throw (a DB read fault) passes through
  * `loadEngineEvents` unwrapped — callers' transient handling is unaffected.
@@ -153,7 +153,7 @@ export function loadEngineEvents(db: Db, runId: string): EngineEvent[] {
   try {
     return listRunEvents(db, runId).map((row) => EngineEventSchema.parse(row.payload));
   } catch (err) {
-    if (err instanceof ZodError || err instanceof SyntaxError) {
+    if (isDeterministicRowCorruption(err)) {
       throw new RunLogUnparseableError(runId, err);
     }
     throw err;
