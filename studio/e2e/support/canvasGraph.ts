@@ -264,7 +264,15 @@ async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
       : page.locator('.react-flow__node').nth(ref.index);
   const box = node.locator('.flow-node');
   if ((await box.count()) === 0) return;
-  await node.hover();
+  /* RAW pointer move, not `hover()`. Playwright's hover runs actionability
+     checks and aims at the element's centre — and a container box drawn OVER an
+     activity makes that centre resolve to the container, so the activity never
+     sees the pointer, never fans, and the drag that follows starts from a
+     collapsed port. This is a gesture, not a click on a control, so the same
+     reasoning `dragNodeBy` and `marqueeAllNodes` already record applies. */
+  const rect = await node.boundingBox();
+  if (rect === null) throw new Error('the node has no box to hover');
+  await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
   // Polls, because the fan is deliberately delayed by a dwell.
   await expect(box.first()).toHaveAttribute('data-ports-expanded', 'true');
 }
