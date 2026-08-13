@@ -4,11 +4,19 @@ import { createMemoryRouter, RouterProvider } from 'react-router';
 import { renderWithRouter } from '../../testing/renderWithRouter';
 import { ROUTES } from '../../routes';
 import userEvent from '@testing-library/user-event';
-import { computeRunCost, RunStatusSchema, type RunSummary } from '@autonomy-studio/shared';
+import {
+  computeRunCost,
+  rollupFromAggregates,
+  RunStatusSchema,
+  type PipelineCostAggregates,
+  type RunSummary,
+} from '@autonomy-studio/shared';
 import { RunsPage } from './RunsPage';
 import { runStatusLabel } from './runStatus';
 import * as runsApi from '../../api/runs';
+import * as pipelinesApi from '../../api/pipelines';
 import * as triggersApi from '../../api/triggers';
+import { ApiError } from '../../api/client';
 import { createPipelinesStore } from '../../stores/pipelinesStore';
 
 // Mock the whole api/runs network surface (matching the ConnectionsPage test
@@ -29,8 +37,38 @@ vi.mock('../../api/triggers', async (importActual) => ({
   listTriggers: vi.fn(),
 }));
 
+/**
+ * #931 — `api/pipelines` is PARTIALLY mocked, unlike the two above: the pipeline
+ * LIST still comes through the store seam against the real module (see the note
+ * above `storeWith`), and only the cost read is stubbed. A whole-module stub
+ * would take the store's fetch out of the test too, and every existing
+ * `?pipeline=` test would then exercise a page whose picker was never wired.
+ */
+vi.mock('../../api/pipelines', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/pipelines')>()),
+  getPipelineCost: vi.fn(),
+}));
+
 const listMock = vi.mocked(runsApi.listRuns);
 const triggersMock = vi.mocked(triggersApi.listTriggers);
+const costMock = vi.mocked(pipelinesApi.getPipelineCost);
+
+/** A pipeline rollup in the shape the bounded SQL aggregate really produces. */
+function rollup(over: Partial<PipelineCostAggregates> = {}) {
+  return rollupFromAggregates({
+    responseCount: 2,
+    pricedResponseCount: 2,
+    unpricedResponseCount: 0,
+    totalCostEstimate: 2.5,
+    inputTokens: 10,
+    outputTokens: 20,
+    inputReportedResponseCount: 2,
+    outputReportedResponseCount: 2,
+    runCount: 2,
+    incompleteRunCount: 0,
+    ...over,
+  });
+}
 
 /** #931 — a run that billed nothing, which is the honest default for a fixture
  * that is not about money: zero metered exchanges reads as "No billed exchange",
@@ -103,6 +141,7 @@ function run(overrides: Partial<RunSummary> = {}): RunSummary {
 beforeEach(() => {
   listMock.mockResolvedValue([]);
   triggersMock.mockResolvedValue([]);
+  costMock.mockResolvedValue(rollup());
   vi.mocked(runsApi.getRun).mockResolvedValue({} as never);
   vi.mocked(runsApi.getRunEvents).mockResolvedValue([]);
 });
@@ -484,6 +523,122 @@ describe('RunsPage — U26 filter pane', () => {
     const select = screen.getByLabelText<HTMLSelectElement>('Pipeline');
     expect(select.value).toBe('pl_gone');
     expect(screen.getByRole('option', { name: /pl_gone/ })).toBeDisabled();
+  });
+
+  /**
+   * #931 (U27 slice 2) — the pipeline-level rollup. `GET /api/pipelines/:id/cost`
+   * had no web caller at all before this; what these pin is the CONTRACT between
+   * the filter and that request, and the honesty rules the figure travels with.
+   * The five-way reading itself is `pipelineCostSummary`'s suite, not re-asserted
+   * through a mock here.
+   */
+  describe('pipeline spend', () => {
+    const spend = () => screen.getByRole('region', { name: 'Lifetime spend' });
+
+    it('asks for the filtered pipeline’s lifetime spend and states it', async () => {
+      renderWithRouter(
+        <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
+        '/monitor/runs?pipeline=pl_1',
+      );
+      expect(await screen.findByRole('region', { name: 'Lifetime spend' })).toBeInTheDocument();
+      expect(costMock).toHaveBeenCalledWith('pl_1', expect.anything());
+      expect(within(spend()).getByText('$2.50')).toBeInTheDocument();
+    });
+
+    /* The sentence that stops the figure being read as the total of the rows
+       below it — which it is not, under ANY of the four filters or the tab. */
+    it('says the figure covers every run of the pipeline, not the rows on screen', async () => {
+      renderWithRouter(
+        <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
+        '/monitor/runs?pipeline=pl_1&status=failure',
+      );
+      const section = await screen.findByRole('region', { name: 'Lifetime spend' });
+      expect(section).toHaveTextContent(/Across all 2 runs, every version/);
+      expect(section).toHaveTextContent(/not just the runs listed below/);
+    });
+
+    it('does not fetch or render it when no pipeline is selected', async () => {
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText(/No runs yet/i);
+      expect(costMock).not.toHaveBeenCalled();
+      expect(screen.queryByRole('region', { name: 'Lifetime spend' })).not.toBeInTheDocument();
+    });
+
+    /* The placement rule: it sits outside the rows guard, because an all-time
+       figure is MOST informative exactly when the filtered list is empty. */
+    it('survives a filter that matches no runs', async () => {
+      listMock.mockResolvedValue([]);
+      renderWithRouter(
+        <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
+        '/monitor/runs?pipeline=pl_1&status=failure',
+      );
+      await screen.findByText(/No runs match these filters/i);
+      expect(within(spend()).getByText('$2.50')).toBeInTheDocument();
+    });
+
+    /* A 404 is the SAME state the run list handles silently (an unowned or
+       deleted id), and the picker already marks it "(unavailable)". Shouting
+       here would make one URL both handled and broken. */
+    it('says nothing at all when the pipeline is not this owner’s', async () => {
+      costMock.mockRejectedValue(new ApiError(404, 'pipeline pl_gone not found'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?pipeline=pl_gone');
+      await screen.findByText(/No runs match these filters/i);
+      expect(screen.queryByRole('region', { name: 'Lifetime spend' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Lifetime spend unavailable/)).not.toBeInTheDocument();
+    });
+
+    /* Any other failure is disclosed — but as a hint, not a second alert beside
+       the run list's own. A figure that failed to load must not look like a
+       pipeline that spent nothing. */
+    it('discloses a real failure quietly, without a second alert', async () => {
+      costMock.mockRejectedValue(new ApiError(500, 'database is locked'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?pipeline=pl_1');
+      expect(await screen.findByText(/Lifetime spend unavailable/)).toHaveTextContent(
+        'database is locked',
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('re-fetches the rollup on Refresh, so one button freshens the whole page', async () => {
+      renderWithRouter(
+        <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
+        '/monitor/runs?pipeline=pl_1',
+      );
+      await screen.findByRole('region', { name: 'Lifetime spend' });
+      costMock.mockClear();
+      costMock.mockResolvedValue(rollup({ totalCostEstimate: 9 }));
+
+      await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+      expect(costMock).toHaveBeenCalledWith('pl_1', expect.anything());
+      expect(await within(spend()).findByText('$9.00')).toBeInTheDocument();
+    });
+
+    /* Stamped with the pipeline it answers for. Without that, switching pipelines
+       leaves the previous one's money under the new one's name — briefly, but
+       long enough to be read as this pipeline's spend. */
+    it('never shows one pipeline’s spend under another', async () => {
+      const store = storeWith(pipeline('pl_1', 'Reports'), pipeline('pl_2', 'Backups'));
+      renderWithRouter(<RunsPage store={store} />, '/monitor/runs?pipeline=pl_1');
+      await within(await screen.findByRole('region', { name: 'Lifetime spend' })).findByText(
+        '$2.50',
+      );
+
+      let release: (r: ReturnType<typeof rollup>) => void = () => undefined;
+      costMock.mockReturnValue(
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+      );
+      await userEvent.selectOptions(screen.getByLabelText('Pipeline'), 'pl_2');
+
+      expect(screen.queryByText('$2.50')).not.toBeInTheDocument();
+      await act(async () => {
+        release(rollup({ totalCostEstimate: 4 }));
+      });
+      expect(within(spend()).getByText('$4.00')).toBeInTheDocument();
+    });
   });
 
   /**

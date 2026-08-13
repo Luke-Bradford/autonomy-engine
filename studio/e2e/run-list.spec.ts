@@ -154,7 +154,17 @@ test('U26 — the runs list filters by status, pipeline and window, and the filt
   // the pane survives that emptiness with a message that names the cause and a
   // control that undoes it. A pane rendered only when rows exist would strand
   // the operator here.
-  await page.getByLabel('Pipeline').selectOption({ label: passingName });
+  /* ANCHORED, because `getByLabel` matches by substring and a `<label>`-wrapped
+     `<select>` contributes its OPTION text to that label: this picker's label
+     text reads "PipelineAll pipelines<every pipeline name>", and the Trigger
+     picker's reads "TriggerAll triggers<every trigger name>". So a bare
+     `getByLabel('Pipeline')` matched the TRIGGER picker too the moment any spec
+     in the suite created a trigger with "pipeline" in its name — a real
+     cross-spec coupling through the shared database, and one that would keep
+     recurring. `^Pipeline` can only match the picker whose own label starts with
+     it. (`{ exact: true }` does NOT work here: the option text is part of the
+     string, so nothing is exactly "Pipeline".) */
+  await page.getByLabel(/^Pipeline/).selectOption({ label: passingName });
   await expect(rowFor(failedRun)).toHaveCount(0);
   await expect(page.getByText(/No runs match these filters/i)).toBeVisible();
   await page.getByRole('button', { name: 'Clear filters' }).click();

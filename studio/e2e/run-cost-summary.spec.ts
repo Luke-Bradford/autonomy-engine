@@ -301,3 +301,100 @@ test('#932 — the run total says which child runs it leaves out, and links them
 
   await expectQuiet(page, problems);
 });
+
+/**
+ * U27 slice 2, the other half (#931) — the run list states what a whole PIPELINE
+ * has cost, from `GET /api/pipelines/:id/cost`.
+ *
+ * That route has existed since #599 with no web caller at all, so what this
+ * proves is the path end to end: the bounded SQL rollup, the JSON, the Zod parse,
+ * and the render — under the `?pipeline=` filter that scopes it.
+ *
+ * TWO runs, deliberately. A pipeline rollup is a sum across RUNS, and a
+ * single-run pipeline cannot tell a sum from a copy of that one run's cost —
+ * `runCount` would read 1 either way. Same egress-free `agent_cli` seeding as the
+ * tests above, so the reading is a KNOWN covered zero rather than a priced one.
+ *
+ * The last navigation is the honesty assertion, and it is the reason the figure
+ * sits outside the rows guard: filtered to a status these runs never reached, the
+ * list is empty while the pipeline's lifetime spend is still on screen. A figure
+ * that vanished there would be missing exactly when it is the only spend to see —
+ * and one that stayed while claiming to describe the rows would be lying.
+ */
+test('#931 — the run list states what a whole pipeline has cost, across every run', async ({
+  page,
+}) => {
+  const problems = collectPageProblems(page);
+
+  const created = await page.request.post('/api/connections', {
+    data: {
+      name: 'e2e echo cli pipeline-cost',
+      kind: 'agent_cli',
+      config: { command: '/bin/echo' },
+    },
+  });
+  expect(created.status(), `creating connection: ${await created.text()}`).toBe(201);
+  const { id: connectionId } = (await created.json()) as { id: string };
+
+  const doc: SeedDoc = {
+    nodes: [
+      {
+        id: 'only',
+        type: 'agent_task',
+        config: { task: 'e2e pipeline spend' },
+        connectionId,
+        position: { x: 0, y: 0 },
+      },
+    ],
+    edges: [],
+  };
+  const { pipelineId, pipelineVersionId } = await seedVersion(page, '#931 pipeline spend', doc);
+  await fireAndSettle(page, pipelineVersionId, '#931 rollup run A');
+  await fireAndSettle(page, pipelineVersionId, '#931 rollup run B');
+
+  /* The PREMISE, from the route itself, before any UI: two runs and two billed
+     exchanges really are in the rollup. Without it every assertion below could
+     pass against a section rendering the never-ran case. */
+  const rollupRes = await page.request.get(`/api/pipelines/${encodeURIComponent(pipelineId)}/cost`);
+  expect(rollupRes.status()).toBe(200);
+  expect(await rollupRes.json()).toEqual(
+    expect.objectContaining({ runCount: 2, responseCount: 2, unpricedResponseCount: 2 }),
+  );
+
+  await page.goto(`/#/monitor/runs?pipeline=${encodeURIComponent(pipelineId)}`);
+  await fluentRootReady(page);
+
+  const spend = page.getByRole('region', { name: 'Lifetime spend' });
+  await expect(spend.getByRole('heading', { name: 'Lifetime spend', level: 3 })).toBeVisible();
+
+  // A KNOWN covered zero — not a priced $0.00, and not a measurement gap.
+  await expect(spend.getByText('No marginal cost')).toBeVisible();
+  await expect(spend.getByText('$0.00', { exact: true })).toHaveCount(0);
+  await expect(spend.getByText('Cost unknown')).toHaveCount(0);
+
+  // The SUM across runs, and the scope that stops it reading as the rows' total.
+  await expect(spend.getByText(/Across all 2 runs, every version/)).toBeVisible();
+  await expect(spend.getByText(/not just the runs listed below/)).toBeVisible();
+  await expect(
+    spend.getByText(/2 billed exchanges, every one a subscription or CLI call/),
+  ).toBeVisible();
+  // The exclusion the rollup's own scoping forces, said out loud.
+  await expect(
+    spend.getByText(/Excludes what any sub-pipeline this one calls spent/),
+  ).toBeVisible();
+
+  // No pipeline filter, no claim about any one pipeline's spend.
+  await page.goto('/#/monitor/runs');
+  await fluentRootReady(page);
+  await expect(page.getByRole('region', { name: 'Lifetime spend' })).toHaveCount(0);
+
+  // Filtered to a status these runs never reached: no rows, and the lifetime
+  // figure is still there — the whole reason it sits outside the rows guard.
+  await page.goto(`/#/monitor/runs?pipeline=${encodeURIComponent(pipelineId)}&status=failure`);
+  await fluentRootReady(page);
+  await expect(page.getByText(/No runs match these filters/)).toBeVisible();
+  await expect(spend.getByText('No marginal cost')).toBeVisible();
+  await expect(spend.getByText(/Across all 2 runs/)).toBeVisible();
+
+  await expectQuiet(page, problems);
+});

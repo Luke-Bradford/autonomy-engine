@@ -37,10 +37,22 @@ import type { NodeCost, RunCost } from '@autonomy-studio/shared';
  * be a second wording, free to drift from this one.
  */
 
-/** Whose spend is being described. The classification is identical for both;
+/**
+ * A subject that can be IN FLIGHT, and so can have a spend-so-far. A node and a
+ * run both reach a terminal state; a pipeline never does — it is a definition,
+ * not an execution — which is why {@link unsettledSentence} takes this narrower
+ * type and `costSentence` the wider one. Saying "this pipeline has not settled"
+ * would be a category error, and the types are what stop it being written.
+ */
+export type SettleableSubject = 'node' | 'run';
+
+/** Whose spend is being described. The classification is identical for all three;
  * three of the sentences name their subject, and one arm of `costSentence` is
- * only REACHABLE at run level. */
-export type CostSubject = 'node' | 'run';
+ * only REACHABLE above node level.
+ *
+ * `pipeline` (#931) is the LIFETIME spend of every run of one pipeline, from the
+ * bounded SQL rollup rather than an event fold. */
+export type CostSubject = SettleableSubject | 'pipeline';
 
 /** How the summed figure must be read. */
 export type CostKind =
@@ -228,7 +240,25 @@ export function costFigure(reading: CostHeadline): string {
   }
 }
 
-export function costSentence(reading: CostReading, subject: CostSubject): string {
+/**
+ * Exactly what {@link costSentence} reads — the headline plus the three counts it
+ * names — and nothing else.
+ *
+ * NARROWED from the full {@link CostReading} by #931, when the pipeline rollup
+ * needed the same sentences from a bounded SQL aggregate. The narrowing is not a
+ * convenience: it is the proof that no caveat gets DEFAULTED into these sentences.
+ * `exchangesAreFloor` (which needs `providers`, a set no aggregate carries) and
+ * the per-side partial-token hints are rendered SEPARATELY by the detail panel,
+ * so the sentence itself never depended on them. Same precedent as
+ * {@link unsettledSentence}, which has always taken the narrow headline.
+ *
+ * The point is one wording per reading. A surface that cannot answer a caveat
+ * declines to state it — it does not get its own paraphrase of the caveats it can.
+ */
+export type CostSentenceFacts = CostHeadline &
+  Pick<CostReading, 'exchangeCount' | 'unknownCount' | 'coveredCount'>;
+
+export function costSentence(reading: CostSentenceFacts, subject: CostSubject): string {
   const exchanges = `${reading.exchangeCount} billed exchange${reading.exchangeCount === 1 ? '' : 's'}`;
   switch (reading.kind) {
     case 'none':
@@ -274,7 +304,7 @@ export function costSentence(reading: CostReading, subject: CostSubject): string
  * billed exchange" would qualify a figure that is not on screen — the same
  * contradiction the `lower-bound` sentence already answers.
  */
-export function unsettledSentence(reading: CostHeadline, subject: CostSubject): string {
+export function unsettledSentence(reading: CostHeadline, subject: SettleableSubject): string {
   return showsAnAmount(reading)
     ? `This ${subject} has not settled, so this is what it has spent SO FAR — not a final figure.`
     : `This ${subject} has not settled, so more exchanges may still be billed to it.`;

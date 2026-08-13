@@ -188,6 +188,21 @@ export interface PipelineCostRollup extends RunCost {
 }
 
 /**
+ * #931 — the wire shape of `GET /api/pipelines/:id/cost`, which acquired its
+ * first web caller when U27's pipeline-level surface landed.
+ *
+ * EXTENDS {@link RunCostSchema} rather than restating its ten fields, exactly as
+ * {@link PipelineCostRollup} extends {@link RunCost}: one shape, so the money
+ * fields cannot drift between the per-run and per-pipeline readings. The
+ * `satisfies` pins missing/mistyped keys at compile time and the key-set
+ * assertion in the tests pins an EXTRA one, which `satisfies` cannot see.
+ */
+export const PipelineCostRollupSchema = RunCostSchema.extend({
+  runCount: z.number().int().nonnegative(),
+  incompleteRunCount: z.number().int().nonnegative(),
+}) satisfies z.ZodType<PipelineCostRollup>;
+
+/**
  * #599 — the scalar aggregates for ONE SCOPE's metered responses: the shape a
  * BOUNDED SQL aggregation produces as well as what the in-memory array fold sums
  * to. Deliberately carries neither `costUnknownResponseCount` NOR `complete`:

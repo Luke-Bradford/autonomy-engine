@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tab, TabList, ToggleButton } from '@fluentui/react-components';
-import { RunStatusSchema, type RunSummary, type TriggerPublic } from '@autonomy-studio/shared';
+import {
+  RunStatusSchema,
+  type PipelineCostRollup,
+  type RunSummary,
+  type TriggerPublic,
+} from '@autonomy-studio/shared';
 import { useStore } from 'zustand';
 import { Link, useSearchParams } from 'react-router';
 import { listRuns } from '../../api/runs';
+import { getPipelineCost } from '../../api/pipelines';
+import { ApiError, messageOf } from '../../api/client';
 import { costCell } from './costColumn';
+import { pipelineCostSummary, type PipelineCostSummary } from './pipelineCostSummary';
 import { listTriggers } from '../../api/triggers';
 import { pipelinesStore, type PipelinesStore } from '../../stores/pipelinesStore';
 import { formatRunDuration, formatWhen } from './format';
@@ -48,6 +56,49 @@ function RunCostCell({ run }: { run: RunSummary }) {
       {cell.figure}
       {cell.unsettled ? <span className="run-cost-unsettled"> so far</span> : null}
     </td>
+  );
+}
+
+/**
+ * #931 (U27 slice 2) — the filtered pipeline's lifetime spend, above the rows.
+ *
+ * The tile strip is `AiActivityPage`'s (`.monitor-tiles`), not a second one: that
+ * page already pairs `costFigure`/`tokenSummary` from a bounded SQL aggregate in
+ * exactly this markup, and a per-page summary that looked different would imply a
+ * different kind of number.
+ *
+ * The caveats sit in ONE paragraph rather than a stack of notices because they
+ * qualify one figure, and because `FlowCanvas` records that this app already runs
+ * as many live regions as it should — this is static text, announced by nothing.
+ * Scope comes FIRST: it is the sentence that stops the figure being read as the
+ * total of the rows underneath it.
+ */
+function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
+  return (
+    <section className="lifetime-spend" aria-labelledby="lifetime-spend-heading">
+      <h3 id="lifetime-spend-heading">Lifetime spend</h3>
+      {/* No tiles for a pipeline that has never run: every figure would be a
+          reading of a measurement nobody took, which is what `figure: null` says. */}
+      {summary.figure !== null && (
+        <dl className="monitor-tiles">
+          <div>
+            <dt>Spend</dt>
+            <dd className="run-cost">{summary.figure}</dd>
+          </div>
+          {summary.tokens !== null && (
+            <div>
+              <dt>Tokens</dt>
+              <dd>{summary.tokens}</dd>
+            </div>
+          )}
+        </dl>
+      )}
+      <p className="page-hint">
+        {summary.scope} {summary.reading}
+        {summary.incomplete === null ? null : ` ${summary.incomplete}`}
+        {summary.excludes === null ? null : ` ${summary.excludes}`}
+      </p>
+    </section>
   );
 }
 
@@ -213,6 +264,57 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
   }, [reloadKey, filterKey, statusFilter, pipelineId, triggerId, since]);
 
   /**
+   * #931 (U27 slice 2) — the filtered pipeline's LIFETIME spend, stamped with the
+   * pipeline it answers for exactly the reason the rows above are stamped: an
+   * answer for the previous pipeline must not sit under the new one's controls.
+   *
+   * Its own `latestLoad` ref, deliberately not the rows'. That counter is
+   * monotonic across every load it guards, so sharing it would make each of the
+   * two fetches discard the other's result — whichever started second would win
+   * twice.
+   *
+   * A 404 renders NOTHING. `listRuns` answers an unowned or deleted pipeline id
+   * with an empty list by design (`runFilters.ts`), and the picker already shows
+   * it as "(unavailable)", so shouting here would make the same URL both handled
+   * and broken. Any OTHER failure gets a quiet hint rather than a second
+   * `role="alert"` beside the list's own — same call, and same reason, as the
+   * trigger picker's silent degrade below.
+   */
+  const [loadedCost, setLoadedCost] = useState<{ key: string; rollup: PipelineCostRollup } | null>(
+    null,
+  );
+  const [costFailed, setCostFailed] = useState<{ key: string; message: string } | null>(null);
+  const latestCostLoad = useRef(0);
+  useEffect(() => {
+    if (pipelineId === undefined) return;
+    const controller = new AbortController();
+    const load = (latestCostLoad.current += 1);
+    getPipelineCost(pipelineId, controller.signal)
+      .then((rollup) => {
+        if (load !== latestCostLoad.current) return;
+        setLoadedCost({ key: pipelineId, rollup });
+        setCostFailed(null);
+      })
+      .catch((err: unknown) => {
+        if (load !== latestCostLoad.current || controller.signal.aborted) return;
+        setCostFailed(
+          err instanceof ApiError && err.status === 404
+            ? null
+            : { key: pipelineId, message: `Lifetime spend unavailable: ${messageOf(err)}` },
+        );
+      });
+    return () => controller.abort();
+    // `reloadKey` is in the deps so Refresh re-fetches BOTH panels — one button
+    // that freshens half the screen is worse than no button.
+  }, [reloadKey, pipelineId]);
+  const costSummary =
+    pipelineId !== undefined && loadedCost?.key === pipelineId
+      ? pipelineCostSummary(loadedCost.rollup)
+      : null;
+  const costError =
+    pipelineId !== undefined && costFailed?.key === pipelineId ? costFailed.message : null;
+
+  /**
    * The pipeline picker's options come from the shared `pipelinesStore`, not a
    * local fetch: it keeps the last good list through a failed refresh, so a
    * picker that cannot reload can never blank out and silently drop the filter
@@ -371,6 +473,13 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
           </button>
         )}
       </div>
+
+      {/* OUTSIDE the rows guard and outside the list/timeline switch below, for
+          the same reason the filter pane is: this figure is all-time, so the two
+          places it would otherwise vanish — a filter that matches no rows, and
+          the timeline view — are precisely where it is the only spend on screen. */}
+      {costSummary && <PipelineSpend summary={costSummary} />}
+      {costError && <p className="page-hint">{costError}</p>}
 
       {runs === null && !error && <p>Loading runs…</p>}
 
