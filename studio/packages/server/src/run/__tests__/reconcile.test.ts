@@ -1990,6 +1990,40 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(getRun(db, parent.id)!.status).toBe('failure');
   });
 
+  it('RESUMES a `pending` TOP-LEVEL run whose log has `run.started` — the same delegation, no parent in it', async () => {
+    const { db } = freshDb();
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const pipelineId = getPipelineVersion(db, pvId)!.pipelineId;
+
+    // The same sub-tick crash as the child case above, on a run with NO parent:
+    // `run.started` is appended, then the row sync is lost.
+    await startRun(
+      {
+        db,
+        resolveDoc: resolveDocFor(db),
+        executor: makeStubExecutor({ nodes: { a: { hang: true, idempotent: true } } }),
+        alarms: stubAlarms(),
+      },
+      run,
+    );
+    updateRun(db, run.id, { status: 'pending' });
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    // The started-check is asked BEFORE the top-level branch, so this row never
+    // reaches the `never_started` terminalize — even though it is otherwise
+    // exactly the shape that branch sweeps. That ordering is the whole point of
+    // the delegation: a top-level crash survivor is no more an orphan than a
+    // child one, and nothing about "has no parent" makes it safe to terminalize.
+    expect(report.sweptOrphans).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('success');
+    // The slot is freed by the run FINISHING, not by being swept — the leak
+    // #1048 is about is closed either way, but by the truthful route here.
+    expect(countActiveRunsForPipeline(db, pipelineId)).toBe(0);
+  });
+
   it('sweeps a TOP-LEVEL `pending` run that never started, freeing the slot it held', async () => {
     const { db } = freshDb();
     const pvId = seedVersion(db, [node('a')]);
