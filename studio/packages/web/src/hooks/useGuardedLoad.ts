@@ -56,11 +56,12 @@ import { useCallback, useEffect, useRef } from 'react';
  *    every request of its is behind the file picker), but a child that starts
  *    doing so must be handed something other than a bare refresh.
  * 3. A RESOLVED load is not evidence the list reloaded. A dropped result and a
- *    skipped load both resolve exactly like a successful one, and failures go to
- *    `onError` rather than to the returned promise, which never rejects. Callers
- *    that awaited a refresh to report "and here it is" must say something they
- *    can still stand behind. (`WorkspaceGitPage` words the same caveat for
- *    `syncStatus`.)
+ *    skipped load both resolve exactly like a successful one, and a load that
+ *    FAILED goes to `onError` rather than to the returned promise. Callers that
+ *    awaited a refresh to report "and here it is" must say something they can
+ *    still stand behind. (`WorkspaceGitPage` words the same caveat for
+ *    `syncStatus`.) The promise rejects for exactly one reason: a handler of the
+ *    caller's own threw.
  *
  * WHY HANDLERS AND NOT RETURNED STATE. `usePolledResource` returns its state,
  * which is the established shape here and the better one when a hook owns a
@@ -119,19 +120,33 @@ export function useGuardedLoad(): GuardedLoad {
       // a handler makes inside a callback rather than in the synchronous body of
       // a caller's mount effect, which is what the `set-state-in-effect` rule
       // requires.
-      return fetch(controller.signal)
-        .then((value) => {
-          if (ticket !== latestLoad.current) return;
+      //
+      // And the TWO-ARGUMENT `.then`, not `.then().catch()`: a chained `.catch`
+      // also catches whatever `onData` throws, so a bug in a caller's state
+      // writing would be re-reported through `onError` as a failed LOAD — "Could
+      // not load connections" over what is really a render bug. Here the two
+      // handlers cannot see each other's failures.
+      return fetch(controller.signal).then(
+        (value) => {
+          // The abort check is NOT redundant with the ticket. A load that is
+          // still the newest when the page unmounts keeps its ticket, so the
+          // ticket alone would let its answer through; whether an aborted fetch
+          // rejects rather than resolves is the fetch's choice, not this hook's,
+          // and the guard cannot be left to it. Same two conditions as below,
+          // deliberately — the invariant is "a superseded or dead load writes
+          // nothing", and it holds on both branches or it is not an invariant.
+          if (controller.signal.aborted || ticket !== latestLoad.current) return;
           handlers.onData(value);
-        })
-        .catch((err: unknown) => {
+        },
+        (err: unknown) => {
           // A stale REJECTION is dropped for the same reason as a stale success:
           // it would replace a good list with an error banner just as
           // convincingly. An abort is this component unmounting, not a failure
           // to report to anyone.
           if (controller.signal.aborted || ticket !== latestLoad.current) return;
           handlers.onError(err);
-        });
+        },
+      );
     },
     [],
   );

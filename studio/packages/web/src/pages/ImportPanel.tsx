@@ -114,12 +114,13 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         }
         const result = await importEnvelope(envelope);
         const resource = describeImported(result);
-        // Refresh BEFORE reporting, so the row is already on screen when the
-        // message names it — but catch its failure SEPARATELY rather than
-        // letting it reach the outer `catch`. Past this line the resource
-        // EXISTS; reporting a failed reload as a failed import would be a false
-        // negative, and `/api/import` does not dedupe, so the operator's
-        // natural retry would mint a duplicate.
+        // Refresh BEFORE reporting, so the row is on screen when the message
+        // names it — as strongly as an awaited refresh can promise that, which
+        // is weaker than it sounds (see the prop's docblock) — but catch its
+        // failure SEPARATELY rather than letting it reach the outer `catch`.
+        // Past this line the resource EXISTS; reporting a failed reload as a
+        // failed import would be a false negative, and `/api/import` does not
+        // dedupe, so the operator's natural retry would mint a duplicate.
         //
         // No CURRENT caller can reach this catch — all three route their
         // failures into their own error slot (see the prop's docblock) — but the

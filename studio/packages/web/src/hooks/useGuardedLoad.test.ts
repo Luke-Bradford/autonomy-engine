@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useGuardedLoad } from './useGuardedLoad';
@@ -123,6 +124,71 @@ describe('useGuardedLoad', () => {
 
     expect(onError).not.toHaveBeenCalled();
     expect(onData).not.toHaveBeenCalled();
+  });
+
+  it('does not write DATA from a load that resolves after the unmount', async () => {
+    // The complement of the case above, and the one the ticket check alone does
+    // not cover: nothing superseded this load, so its ticket is still the
+    // newest. Whether an aborted fetch rejects or resolves anyway is the
+    // fetch's choice — a body read can win the race with the abort — so the
+    // success branch has to check the signal itself rather than assume it will
+    // be told through a rejection.
+    const { result, unmount } = renderHook(() => useGuardedLoad());
+    const onData = vi.fn();
+    const onError = vi.fn();
+    const load = deferred<string>();
+
+    await act(async () => {
+      void result.current(() => load.promise, { onData, onError });
+    });
+
+    unmount();
+    await act(async () => {
+      load.resolve('answered after the page was gone');
+      await load.promise;
+    });
+
+    expect(onData).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('does not re-report a throw from onData as a failed LOAD', async () => {
+    // A chained `.catch` would have handed the caller's own bug to `onError`,
+    // which renders it as "could not load …" — a state-writing bug wearing a
+    // network failure's clothes. It propagates instead.
+    const { result } = renderHook(() => useGuardedLoad());
+    const boom = new Error('a bug in the caller');
+    const onData = vi.fn(() => {
+      throw boom;
+    });
+    const onError = vi.fn();
+
+    await act(async () => {
+      await expect(result.current(() => Promise.resolve('fine'), { onData, onError })).rejects.toBe(
+        boom,
+      );
+    });
+
+    expect(onData).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('still loads on the SECOND mount under StrictMode', async () => {
+    // StrictMode mounts, tears down and remounts. The controller is therefore
+    // created per effect RUN: one hoisted into the ref's initial value would
+    // arrive at the second mount already aborted, and — now that the success
+    // branch checks the signal — would silently drop every answer the page ever
+    // asked for.
+    const { result } = renderHook(() => useGuardedLoad(), { wrapper: StrictMode });
+    const onData = vi.fn();
+    const onError = vi.fn();
+
+    await act(async () => {
+      await result.current(() => Promise.resolve('loaded'), { onData, onError });
+    });
+
+    expect(onData).toHaveBeenCalledWith('loaded');
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it('starts NO load once the component has unmounted', async () => {
