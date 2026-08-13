@@ -113,11 +113,21 @@ export interface ListRunsQuery {
  * R2 — each element is a `RunSummary`, the run row PLUS the pipeline name +
  * version number and trigger name the list renders. Strictly additive over
  * `Run`, so this is a widening, not a breaking change.
+ *
+ * `pageSize` defaults to `RUNS_PAGE_SIZE` and exists so a caller showing FEWER
+ * runs asks for fewer, rather than fetching a reader's screenful and slicing
+ * (#1085, the Home hub's five). That is not a per-caller preference: the server
+ * aggregates metered-event costs for the rows it returns
+ * (`repo/runs.ts::listRunSummariesPage`), so an over-fetch costs a 50-row join
+ * plus a 50-run cost aggregation to render five — and Home is the router's
+ * CATCH-ALL, so every stray URL would pay it. One reader, parameterised; a
+ * second runs reader is what #1083 exists to prevent.
  */
 export function listRuns(
   filters: ListRunsQuery = {},
   cursor?: string,
   signal?: AbortSignal,
+  pageSize: number = RUNS_PAGE_SIZE,
 ): Promise<Paginated<RunSummary>> {
   // Only SET axes reach the wire. An empty-string param is not "no filter" to
   // the server — `pipelineId`/`triggerId` are `min(1)`, so `?pipelineId=` is a
@@ -130,7 +140,7 @@ export function listRuns(
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== '') extra[key] = value;
   }
-  return apiFetch(`/api/runs${pageQuery(cursor, extra, RUNS_PAGE_SIZE)}`, {
+  return apiFetch(`/api/runs${pageQuery(cursor, extra, pageSize)}`, {
     schema: RunPageSchema,
     signal,
   });

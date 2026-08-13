@@ -123,6 +123,18 @@ describe('runs API', () => {
     });
   });
 
+  it('asks for a caller-sized page when one is given, not a reader screenful', async () => {
+    // #1085 — the Home hub shows five. The size reaches the WIRE rather than
+    // being sliced off a 50-row response, because the server aggregates metered
+    // costs for the rows it returns: over-fetching would bill a 50-run
+    // aggregation to render five, on the router's catch-all route.
+    const fetchMock = stubFetch(200, { items: [], nextCursor: null });
+    await listRuns({}, undefined, undefined, 5);
+    const url = new URL(fetchMock.mock.calls[0]![0] as string, 'http://x');
+    expect(url.searchParams.get('limit')).toBe('5');
+    expect(url.searchParams.get('cursor')).toBeNull();
+  });
+
   /**
    * U26 — the filter axes ride as query params. Only SET axes reach the wire:
    * an empty string is NOT "no filter" to the server (`pipelineId` is `min(1)`,
