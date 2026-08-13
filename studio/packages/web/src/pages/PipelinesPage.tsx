@@ -160,6 +160,19 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
    */
   const latestArchivedLoad = useRef(0);
 
+  /**
+   * Invalidate the archived set: mark it stale AND supersede any load already
+   * in flight. The bump is the load-bearing half. Without it a load issued
+   * before the invalidation can still land afterwards, pass the staleness
+   * guard (nothing moved the counter), and write `ready` over this `idle` —
+   * after which reopening sees a non-idle status and never refetches, so the
+   * pre-invalidation answer sticks permanently.
+   */
+  const invalidateArchived = useCallback(() => {
+    latestArchivedLoad.current += 1;
+    setArchivedStatus('idle');
+  }, []);
+
   /** Load the archived set, reporting a failure AS a failure (never as empty). */
   const loadArchived = useCallback(async () => {
     const id = (latestArchivedLoad.current += 1);
@@ -209,12 +222,12 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         // stale. Refetch it when it is open, invalidate it when it is not.
         await refresh();
         if (showArchived) await loadArchived();
-        else setArchivedStatus('idle');
+        else invalidateArchived();
       } catch (err) {
         setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, showArchived, loadArchived],
+    [refresh, showArchived, loadArchived, invalidateArchived],
   );
 
   /**

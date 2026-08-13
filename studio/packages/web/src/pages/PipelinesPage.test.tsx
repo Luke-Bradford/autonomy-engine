@@ -257,6 +257,46 @@ describe('PipelinesPage', () => {
       expect(screen.getByText('Retired')).toBeInTheDocument();
     });
 
+    it('supersedes an in-flight load when an archive invalidates the CLOSED section', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+
+      // The load is still in flight when the section is closed, and nothing
+      // reopens it before it answers — so unlike the case above, no SECOND
+      // load exists to move the counter past it.
+      const inFlight = (() => {
+        let resolve!: (v: Pipeline[]) => void;
+        const promise = new Promise<Pipeline[]>((r) => {
+          resolve = r;
+        });
+        return { promise, resolve };
+      })();
+      listArchivedMock.mockReturnValueOnce(inFlight.promise);
+      renderPage();
+
+      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+
+      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await waitFor(() => expect(archiveMock).toHaveBeenCalled());
+
+      // Only NOW does the pre-archive load answer. Invalidation has to have
+      // superseded it: if it is allowed to land it writes `ready` over the
+      // `idle` the archive just set, and reopening then sees a non-idle status
+      // and never refetches — permanently hiding the pipeline just archived
+      // from the ONE surface that is the way back to it.
+      inFlight.resolve([]);
+      listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
+
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      expect(
+        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+      ).toBeInTheDocument();
+      expect(listArchivedMock).toHaveBeenCalledTimes(2);
+    });
+
     it('re-reads the archived set after an archive performed while it was closed', async () => {
       const user = userEvent.setup();
       vi.spyOn(window, 'confirm').mockReturnValue(true);
