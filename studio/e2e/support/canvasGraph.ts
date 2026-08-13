@@ -506,25 +506,67 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
 }
 
 /**
- * The screen point at the middle of an edge's rendered path.
+ * The screen point at the middle of an edge's rendered path, once it has STOPPED
+ * MOVING.
  *
  * Split out of `selectEdge` for callers that need the point but not its
  * assertion — a MODIFIED click adds the edge to a multi-selection, where the
  * single-edge condition picker `selectEdge` waits for is precisely what does
  * NOT appear.
+ *
+ * THE SETTLE IS LOAD-BEARING, and it is the edge-path form of the trap this
+ * file's header already records for node boxes: a screen coordinate read while
+ * the canvas is still laying out has moved by the time the pointer arrives.
+ *
+ * An edge drawn by a CONNECT GESTURE is laid out twice. Every node fans its
+ * source ports while a connection is in flight (#997), so the new edge's start
+ * is the FANNED port position — and the moment the gesture ends the fan
+ * collapses and the endpoint travels back to the middle of the node. MEASURED on
+ * `seedSelectedEdge`'s `If Condition`, whose six ports put `success` at the top
+ * of the column: the midpoint moves 60px within 80ms of the edge appearing.
+ * Reading it at the first instant and clicking after the collapse lands on empty
+ * pane, which deselects instead of selecting — `edge-typing.spec.ts` failed in
+ * CI as "the Fires on picker never appeared", with the property panel still
+ * saying "Select a node or an edge to edit it".
+ *
+ * It survived at U19's 14px pitch because the same collapse moved the endpoint
+ * only 35px, which usually stayed inside the edge's own hit stroke; #1067's 24px
+ * pitch made the move 60px and it stopped landing on the line at all. So this is
+ * a race the pitch change EXPOSED rather than introduced — it was always wrong
+ * to read a moving coordinate.
+ *
+ * Stability across two reads, not a fixed wait: the point is settled when it
+ * stops changing, whatever the machine's speed.
  */
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
-  return page.evaluate((i) => {
-    const paths = document.querySelectorAll('.react-flow__edge-path');
-    const path = paths[i] as SVGPathElement | undefined;
-    if (!path)
-      throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
-    const mid = path.getPointAtLength(path.getTotalLength() / 2);
-    const ctm = path.getScreenCTM();
-    if (!ctm) throw new Error('the edge path has no screen transform');
-    const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
-    return { x: p.x, y: p.y };
-  }, index);
+  const read = () =>
+    page.evaluate((i) => {
+      const paths = document.querySelectorAll('.react-flow__edge-path');
+      const path = paths[i] as SVGPathElement | undefined;
+      if (!path)
+        throw new Error(
+          `no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`,
+        );
+      const mid = path.getPointAtLength(path.getTotalLength() / 2);
+      const ctm = path.getScreenCTM();
+      if (!ctm) throw new Error('the edge path has no screen transform');
+      const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
+      return { x: p.x, y: p.y };
+    }, index);
+
+  let previous = await read();
+  await expect
+    .poll(
+      async () => {
+        const current = await read();
+        const stable = Math.abs(current.x - previous.x) < 1 && Math.abs(current.y - previous.y) < 1;
+        previous = current;
+        return stable;
+      },
+      { message: 'the edge path never stopped moving' },
+    )
+    .toBe(true);
+  return previous;
 }
 
 /**
