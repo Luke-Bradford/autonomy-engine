@@ -101,7 +101,15 @@ describe('HomePage', () => {
 
     expect(screen.getByText('Loading runs…')).toBeInTheDocument();
     expect(screen.queryByText(/No runs yet/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: '' })).not.toHaveClass('recent-runs');
+    // The runs list itself must be absent — checked across ALL lists on the
+    // page. `queryByRole('list', {name: ''})` cannot express this: neither `ul`
+    // carries a naming attribute (a `section`'s `aria-labelledby` is NOT
+    // inherited by its descendants), so the empty-name query resolves to the
+    // ALWAYS-mounted hub-cards list, and asserting that one lacks the
+    // `recent-runs` class is true no matter what the runs list does.
+    expect(screen.queryAllByRole('list').some((el) => el.classList.contains('recent-runs'))).toBe(
+      false,
+    );
   });
 
   it('surfaces a failed load instead of showing an empty workspace', async () => {
