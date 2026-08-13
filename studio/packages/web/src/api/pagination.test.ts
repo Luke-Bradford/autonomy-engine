@@ -56,4 +56,16 @@ describe('pageQuery', () => {
     // reads as the whole one.
     expect(pageQuery('real', { limit: '1', cursor: 'fake' })).toBe('?limit=100&cursor=real');
   });
+
+  it('drops a caller cursor on the FIRST page, where there is none to overwrite it', () => {
+    // The case above only proves the guarantee when a real cursor exists to
+    // overwrite the caller's. On the first page `cursor` is undefined and
+    // nothing is written, so an `extra.cursor` would survive from the caller's
+    // params and `fetchAllPages` would start mid-list — returning a truncated
+    // list that reads as the whole one.
+    expect(pageQuery(undefined, { cursor: 'fake' })).toBe('?limit=100');
+    expect(pageQuery(undefined, { archived: 'true', cursor: 'fake' })).toBe(
+      '?archived=true&limit=100',
+    );
+  });
 });

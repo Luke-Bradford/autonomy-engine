@@ -52,11 +52,17 @@ export async function fetchAllPages<T>(
  * than being concatenated onto the returned string at the call site, which is
  * what keeps this function the single owner of the leading `?` and of the
  * encoding. Pagination keys are written last so a caller cannot accidentally
- * override `limit`/`cursor` and break the page walk.
+ * override `limit`/`cursor` and break the page walk — including on the FIRST
+ * page, where there is no cursor argument to overwrite an `extra.cursor` with,
+ * so it is deleted outright.
  */
 export function pageQuery(cursor: string | undefined, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams(extra);
   params.set('limit', String(MAX_PAGE_SIZE));
+  // `limit` is unconditionally written, so a caller's copy is always replaced.
+  // `cursor` is written only on later pages, so on the first page an
+  // `extra.cursor` would otherwise survive and start the walk mid-list.
+  params.delete('cursor');
   if (cursor !== undefined) params.set('cursor', cursor);
   return `?${params.toString()}`;
 }
