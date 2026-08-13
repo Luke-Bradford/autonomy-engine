@@ -92,7 +92,8 @@ export const HUBS: readonly Hub[] = [
     label: 'Home',
     path: '/',
     // No pane: Home IS the overview, so a sibling list of one entry pointing at
-    // the page you are already on would be furniture. U15 builds the real Home.
+    // the page you are already on would be furniture. U15 slice 1 (#1085) built
+    // that overview — recent runs above the hub signposts; slice 2 adds Settings.
     sections: [],
     Icon: HomeRegular,
     IconActive: HomeFilled,
