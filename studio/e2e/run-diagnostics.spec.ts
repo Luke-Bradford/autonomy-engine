@@ -74,9 +74,7 @@ test('#1065 — the run monitor explains why a container failed, and says which 
   ).toBeVisible();
 
   // The explanation itself, verbatim — the whole point of the section.
-  await expect(
-    section.getByText("container 'stg' failed: child 'stop' failed"),
-  ).toBeVisible();
+  await expect(section.getByText("container 'stg' failed: child 'stop' failed")).toBeVisible();
 
   /* The seq is the cross-reference into the Events table below, so it has to be
      the SAME number the reducer derived the diagnostic at — not a row index. */
@@ -92,9 +90,7 @@ test('#1065 — the run monitor explains why a container failed, and says which 
   /* The section is a READER, so a refresh must leave the same answer standing —
      this is the manual re-read path, and a broken one would blank the list. */
   await section.getByRole('button', { name: 'Refresh diagnostics' }).click();
-  await expect(
-    section.getByText("container 'stg' failed: child 'stop' failed"),
-  ).toBeVisible();
+  await expect(section.getByText("container 'stg' failed: child 'stop' failed")).toBeVisible();
 
   await expectQuiet(page, problems);
 });

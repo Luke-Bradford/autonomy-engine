@@ -141,7 +141,9 @@ describe('RunDiagnostics', () => {
 
     rerender(<RunDiagnostics runId="run_1" settled />);
     await waitFor(() =>
-      expect(screen.queryByText(/has not finished, so this is a snapshot/i)).not.toBeInTheDocument(),
+      expect(
+        screen.queryByText(/has not finished, so this is a snapshot/i),
+      ).not.toBeInTheDocument(),
     );
   });
 

@@ -146,9 +146,7 @@ export function RunDiagnostics({ runId, settled }: { runId: string; settled: boo
             </p>
           )}
 
-          {lastUpdatedAt !== null && (
-            <p className="page-hint">Read {formatWhen(lastUpdatedAt)}.</p>
-          )}
+          {lastUpdatedAt !== null && <p className="page-hint">Read {formatWhen(lastUpdatedAt)}.</p>}
         </>
       )}
     </section>
