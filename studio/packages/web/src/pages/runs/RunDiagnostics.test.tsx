@@ -40,7 +40,19 @@ const RESUME: RunDiagnostic = {
   message: "node 'send' was re-dispatched after the run resumed",
 };
 
-/** The truncation marker the server writes at `RUN_DIAGNOSTIC_CAP`. */
+/**
+ * The truncation marker the server writes at `RUN_DIAGNOSTIC_CAP`.
+ *
+ * VERBATIM from `capMarkerMessage` (server `repo/run-diagnostics.ts`), down to
+ * the straight apostrophe. It cannot be imported — it is a module-local const in
+ * the server package, which the web package does not depend on — so this is a
+ * hand-kept copy, and keeping it faithful is the point: its final clause, "(see
+ * the diagnostics below)", is a claim about WHERE this marker is rendered, and
+ * it is true only while the component keeps showing it ABOVE the list. A
+ * paraphrased fixture silently drops the very sentence that constrains the
+ * layout. #1069 tracks hoisting the string into `shared` so both sides are
+ * pinned to one source rather than to a comment like this one.
+ */
 const CAP: RunDiagnostic = {
   id: 'rdg_cap',
   runId: 'run_1',
@@ -48,8 +60,10 @@ const CAP: RunDiagnostic = {
   phase: 'cap',
   ordinal: 0,
   message:
-    'diagnostics for this run reached the cap of 500 and later ones were NOT recorded. ' +
-    'The run’s decisions are unaffected and remain fully durable in its event log.',
+    "diagnostics for this run reached the cap of 500 and later ones were NOT recorded. The run's " +
+    'decisions are unaffected and remain fully durable in its event log — what is capped here is ' +
+    'the EXPLANATION of them. A run emitting this many diagnostics almost always means a malformed ' +
+    'doc reached the reducer (see the diagnostics below).',
   ts: 90,
 };
 
@@ -99,6 +113,17 @@ describe('RunDiagnostics', () => {
     /* And the marker's own text must not appear inside the table. */
     const table = screen.getByRole('table');
     expect(table).not.toHaveTextContent(/reached the cap of 500/);
+
+    /* ABOVE the table, not merely outside it — the marker's own closing clause
+       says "(see the diagnostics below)", so the server's sentence is FALSE if
+       this is rendered underneath them. "Not a row" and "before the list" are
+       different properties and only the first was pinned; a marker moved to the
+       bottom of the section would still satisfy every assertion above. */
+    const banner = screen.getByText(/reached the cap of 500/);
+    expect(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    /* The clause itself, verbatim — it is what makes the position load-bearing,
+       and the component renders the server's string rather than restating it. */
+    expect(banner).toHaveTextContent('(see the diagnostics below).');
   });
 
   it('does not claim there is nothing to explain when the cap dropped everything', async () => {
