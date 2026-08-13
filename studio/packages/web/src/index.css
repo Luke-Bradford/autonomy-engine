@@ -1417,7 +1417,26 @@ td button + button {
  * recreate the two-homes problem they exist to solve, and an unresolved one
  * leaves `auto` on an empty box, i.e. zero. That fails in the safe direction — a
  * target that shrank to the dot, never one that reaches a neighbour.
- * `SourcePorts` publishes both on every port, from `ports.ts`. */
+ * `SourcePorts` publishes both on every port, from `ports.ts`.
+ *
+ * DELIBERATELY UNSCOPED — a CONTAINER'S PORTS CARRY THIS TOO, and #1066 made it
+ * load-bearing there rather than merely nice. A container's box is
+ * `pointer-events: none`, so its single collapsed dot is the only thing a
+ * pointer can use to open the fan — and opening it moves the ports out from
+ * under the pointer that opened them. At a 24px pitch the nearest fanned dot is
+ * 12px away and 6px across, so the DRAWN dots alone leave the pointer over
+ * nothing: pointer-leave fires, the grace elapses, the column collapses back
+ * under the cursor and opens again. Because the targets tile at exactly the
+ * pitch, the point the collapsed dot occupied is still inside a port's target
+ * once the fan is out, and the pointer never leaves. MEASURED — scoping this
+ * rule back to `.flow-node` reds `quiet-canvas.spec.ts`'s "the fan stays open
+ * after the port that opened it has moved away".
+ *
+ * The cost is accepted and bounded: a container's ports are `pointer-events:
+ * all` at all times (they are its only affordance), so this is one live 24x24
+ * box per container at its right edge, growing inward over the box's own
+ * interior. Child nodes paint above it and take their own clicks; the two chrome
+ * buttons are stacked above it explicitly for the same reason. */
 .flow-port.react-flow__handle::after {
   content: '';
   position: absolute;

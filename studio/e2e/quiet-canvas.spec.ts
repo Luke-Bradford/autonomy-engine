@@ -252,6 +252,46 @@ test.describe('#1066 — a container collapses its ports too', () => {
    * Read through `elementFromPoint` because that is what decides it: React Flow
    * resolves a press against the topmost element, not against its own geometry.
    */
+  /**
+   * The fan STAYS open once a container's port has opened it.
+   *
+   * This is the half of #1066 that reads as a style detail and is not one. A
+   * container's box is `pointer-events: none`, so the single collapsed dot is
+   * the ONLY thing a pointer can use to open the fan — and the moment it opens,
+   * the ports move out from under the pointer that opened them. At a 24px pitch
+   * the nearest fanned dot is 12px away and only 6px across, so the drawn dots
+   * alone leave the pointer over nothing: `onPointerLeave` fires, the close
+   * grace elapses, the column collapses back under the cursor and opens again.
+   * A fan that flickers shut on the gesture that opens it is unusable.
+   *
+   * What prevents it is the invisible target, which is why a container's ports
+   * carry one too. The targets TILE at exactly the pitch, so the point the
+   * collapsed dot occupied is still inside a port's target after the fan opens,
+   * and the pointer never leaves.
+   *
+   * Asserted by WAITING rather than by measuring the target: the defect is
+   * temporal, and a spec that read the `::after` box would pass against a fan
+   * that collapsed a beat later for some other reason.
+   */
+  test('the fan stays open after the port that opened it has moved away', async ({ page }) => {
+    await openSeededCanvas(page, 'container fan holds', CONTAINED);
+
+    const dot = page.locator('.flow-container .flow-port').first();
+    const stack = await dot.boundingBox();
+    if (stack === null) throw new Error('the container has no port to hover');
+    await page.mouse.move(stack.x + stack.width / 2, stack.y + stack.height / 2);
+
+    await expect.poll(async () => new Set(await containerPortTops(page)).size).toBeGreaterThan(1);
+
+    /* Well past the close grace, with the pointer NOT moved. Anything that lets
+       go of the pointer when the ports move will have collapsed by now. */
+    await page.waitForTimeout(600);
+    expect(
+      new Set(await containerPortTops(page)).size,
+      'the fan collapsed under a stationary pointer — the ports moved out from under it',
+    ).toBeGreaterThan(1);
+  });
+
   test('its chrome still takes the click once the ports have fanned over it', async ({ page }) => {
     await openSeededCanvas(page, 'container chrome', CONTAINED);
 
