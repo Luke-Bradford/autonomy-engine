@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
@@ -140,14 +140,41 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     [refresh],
   );
 
+  /**
+   * Monotonic id of the most recently STARTED archived load. A load whose id is
+   * no longer the latest has been superseded and drops its result on the floor.
+   *
+   * The same guard `pipelinesStore` holds for the live list (`latestLoad`), and
+   * needed here for the same reason: two loads can be in flight at once and they
+   * apply in COMPLETION order, so a slower OLDER answer can overwrite a newer
+   * one. The concrete sequence — open the section, close it before it answers,
+   * archive a pipeline (which invalidates the cache), reopen (a second load
+   * fires and lands correctly), then the FIRST load finally resolves carrying a
+   * list from before the archive and overwrites it. The section then renders
+   * "No archived pipelines" over a pipeline that genuinely is archived, and
+   * nothing refetches to self-correct.
+   *
+   * That is the precise lie this section's status triple exists to prevent, on
+   * the one surface that is the way back out of archive — so it is worth a
+   * counter rather than a comment. Two rapid Unarchive clicks race the same way.
+   */
+  const latestArchivedLoad = useRef(0);
+
   /** Load the archived set, reporting a failure AS a failure (never as empty). */
   const loadArchived = useCallback(async () => {
+    const id = (latestArchivedLoad.current += 1);
     setArchivedStatus('loading');
     setArchivedError(null);
     try {
-      setArchived(await listArchivedPipelines());
+      const items = await listArchivedPipelines();
+      if (id !== latestArchivedLoad.current) return;
+      setArchived(items);
       setArchivedStatus('ready');
     } catch (err) {
+      // A superseded load's FAILURE is dropped too, not just its success: a late
+      // rejection from an abandoned request must not bury the fresher answer
+      // that replaced it under an error banner.
+      if (id !== latestArchivedLoad.current) return;
       // The previous list is left in place: a refresh failure is not "we know
       // nothing", the same contract `pipelinesStore` holds for the live list.
       setArchivedStatus('error');

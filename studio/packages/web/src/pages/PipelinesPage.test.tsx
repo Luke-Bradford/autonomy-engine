@@ -212,6 +212,51 @@ describe('PipelinesPage', () => {
       expect(await screen.findByText('Retired')).toBeInTheDocument();
     });
 
+    it('drops a SUPERSEDED archived load, so a stale answer cannot overwrite a fresh one', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+
+      // Two loads whose completion order is controlled here, because that is
+      // the whole defect: they apply in COMPLETION order, not issue order.
+      const deferred = () => {
+        let resolve!: (v: Pipeline[]) => void;
+        const promise = new Promise<Pipeline[]>((r) => {
+          resolve = r;
+        });
+        return { promise, resolve };
+      };
+      const first = deferred();
+      const second = deferred();
+      listArchivedMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+      renderPage();
+
+      // 1. Open — load #1 starts, carrying a view from BEFORE the archive below.
+      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      // 2. Close before it answers, 3. archive (invalidating the cache),
+      //    4. reopen — load #2 starts and is the only correct answer.
+      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await waitFor(() => expect(archiveMock).toHaveBeenCalled());
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+
+      // 5. The fresher load lands first and is right.
+      second.resolve([pipeline({ id: 'pl_9', name: 'Retired' })]);
+      expect(await screen.findByText('Retired')).toBeInTheDocument();
+
+      // 6. The STALE load finally answers, with a list from before the archive.
+      first.resolve([]);
+
+      // It must be dropped. Without the guard the section overwrites itself
+      // with "No archived pipelines" — the exact lie the status triple exists
+      // to prevent, on the ONE surface that is the way back out of archive, and
+      // nothing refetches to self-correct.
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/No archived pipelines/i)).not.toBeInTheDocument();
+      expect(screen.getByText('Retired')).toBeInTheDocument();
+    });
+
     it('re-reads the archived set after an archive performed while it was closed', async () => {
       const user = userEvent.setup();
       vi.spyOn(window, 'confirm').mockReturnValue(true);
