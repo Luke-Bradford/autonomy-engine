@@ -14,6 +14,16 @@ import type { RunSince, RunStatus } from '@autonomy-studio/shared';
  * the current query), and it keeps `RunsPage`'s existing invariant intact: a tab
  * still never advertises a number of rows it then declines to show.
  *
+ * #1083 NARROWED THAT AGAIN, and the sentence above is no longer the whole
+ * story: the list is PAGED, so a client-side pass sees only the rows LOADED, not
+ * the whole server-filtered set. A facet counting within the current query is
+ * ordinary; a facet counting within an arbitrary PREFIX of it is a claim the
+ * next click can falsify. `RunsPage` therefore renders an open-ended count
+ * (`12+`) and scopes its empty-tab line while older pages remain. Closing this
+ * properly means an `isNull` arm and a grouped count query so the origin axis
+ * joins the server-side set — the same fix the first paragraph says is missing,
+ * now with a second reason to want it.
+ *
  * The URL is the single authority for all four axes, exactly as `?tab=` already
  * is — a filtered view has to be linkable, survive a reload, and be undoable
  * with Back. There is deliberately no `useState` mirror to disagree with it.
