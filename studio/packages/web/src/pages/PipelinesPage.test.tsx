@@ -20,6 +20,12 @@ vi.mock('../api/pipelines', async (importActual) => {
     listPipelines: vi.fn(),
     createPipeline: vi.fn(),
     deletePipeline: vi.fn(),
+    // #1058 — the archive half. `archiveConfirmMessage` is deliberately NOT
+    // mocked: it is a pure builder and the confirm text is part of what the
+    // page owes the operator, so the real one runs.
+    archivePipeline: vi.fn(),
+    restorePipeline: vi.fn(),
+    listArchivedPipelines: vi.fn(),
   };
 });
 
@@ -41,6 +47,9 @@ vi.mock('../api/portability', async (importActual) => ({
 const listMock = vi.mocked(pipelinesApi.listPipelines);
 const createMock = vi.mocked(pipelinesApi.createPipeline);
 const deleteMock = vi.mocked(pipelinesApi.deletePipeline);
+const archiveMock = vi.mocked(pipelinesApi.archivePipeline);
+const restoreMock = vi.mocked(pipelinesApi.restorePipeline);
+const listArchivedMock = vi.mocked(pipelinesApi.listArchivedPipelines);
 const downloadMock = vi.mocked(downloadApi.downloadTextFile);
 const exportMock = vi.mocked(portabilityApi.exportPipeline);
 
@@ -67,6 +76,9 @@ beforeEach(() => {
   listMock.mockResolvedValue([]);
   createMock.mockResolvedValue(pipeline());
   deleteMock.mockResolvedValue(undefined);
+  archiveMock.mockResolvedValue(pipeline({ archived: true }));
+  restoreMock.mockResolvedValue(pipeline());
+  listArchivedMock.mockResolvedValue([]);
   downloadMock.mockReset();
   exportMock.mockReset();
   exportMock.mockResolvedValue('{"kind":"pipeline"}');
@@ -110,6 +122,120 @@ describe('PipelinesPage', () => {
     const form = within(screen.getByRole('form', { name: /New pipeline/i }));
     await user.click(form.getByRole('button', { name: /Create pipeline/i }));
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #1058 — archive is the only way to retire a pipeline that has ever run, and
+   * the archived section is the only way back. Both halves, plus the load-status
+   * honesty the section needs to be a real recovery surface.
+   */
+  describe('#1058 archive and the way back', () => {
+    it('archives after confirmation, naming the consequences in the confirm', async () => {
+      const user = userEvent.setup();
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      renderPage();
+
+      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+
+      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
+      // The confirm is where every consequence is named — the route discards
+      // the trigger ids it disabled, so nothing can be reported afterwards.
+      const asked = confirmSpy.mock.calls[0]![0] as string;
+      expect(asked).toContain('Nightly digest');
+      expect(asked).toMatch(/run history are KEPT/i);
+      expect(asked).toContain('triggers stay disabled');
+      expect(asked).toMatch(/Commit will delete its file/);
+      // The live list refreshes: the row has left it, and the Factory Resources
+      // pane shares that store.
+      await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('does not archive when the confirmation is declined', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      renderPage();
+
+      await user.click(await screen.findByRole('button', { name: 'Archive Nightly digest' }));
+      expect(archiveMock).not.toHaveBeenCalled();
+    });
+
+    it('fetches the archived set only when the section is opened', async () => {
+      const user = userEvent.setup();
+      listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+      renderPage();
+
+      // Closed: no request at all. A recovery surface nobody opened must not
+      // cost a round-trip on every visit to the page.
+      await screen.findByText(/No pipelines yet/i);
+      expect(listArchivedMock).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      expect(await screen.findByText('Retired')).toBeInTheDocument();
+      expect(listArchivedMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('unarchives from the archived list and refreshes BOTH lists', async () => {
+      const user = userEvent.setup();
+      listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+      renderPage();
+      await screen.findByText(/No pipelines yet/i);
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+
+      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+
+      await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
+      // The row leaves the archived list and rejoins the live one, so both are
+      // re-read — a stale live list would hide the pipeline just recovered.
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    });
+
+    it('reports a failed archived load AS a failure, never as an empty list', async () => {
+      const user = userEvent.setup();
+      listArchivedMock.mockRejectedValue(new Error('server down'));
+      renderPage();
+      await screen.findByText(/No pipelines yet/i);
+
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+
+      // The lie this guards against: "No archived pipelines" over a load that
+      // never answered tells the operator their pipeline is gone, on the ONE
+      // surface that exists to bring it back.
+      expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load archived/i);
+      expect(screen.queryByText(/No archived pipelines/i)).not.toBeInTheDocument();
+
+      // And the failure is not a dead end.
+      listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+      await user.click(screen.getByRole('button', { name: /Retry loading archived/i }));
+      expect(await screen.findByText('Retired')).toBeInTheDocument();
+    });
+
+    it('re-reads the archived set after an archive performed while it was closed', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      renderPage();
+
+      // Open, then close — so a naive "fetch once" would now be holding a list
+      // that predates the archive below.
+      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+
+      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+      await waitFor(() => expect(archiveMock).toHaveBeenCalled());
+      // Still closed, so still no second request.
+      expect(listArchivedMock).toHaveBeenCalledTimes(1);
+
+      listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+      // The row just archived is THERE, because opening refetched.
+      expect(
+        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+      ).toBeInTheDocument();
+    });
   });
 
   it('deletes a pipeline after confirmation', async () => {

@@ -4,7 +4,15 @@ import { useStore } from 'zustand';
 import type { Pipeline } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
 import { downloadTextFile, exportFileName } from '../api/download';
-import { createPipeline, deletePipeline, describeDeleteFailure } from '../api/pipelines';
+import {
+  archiveConfirmMessage,
+  archivePipeline,
+  createPipeline,
+  deletePipeline,
+  describeDeleteFailure,
+  listArchivedPipelines,
+  restorePipeline,
+} from '../api/pipelines';
 import { exportPipeline } from '../api/portability';
 import { pipelinesStore, type PipelinesStore } from '../stores/pipelinesStore';
 import { ImportPanel } from './ImportPanel';
@@ -38,6 +46,30 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
+
+  /**
+   * #1058 — the ARCHIVED list, held here and deliberately NOT in
+   * `pipelinesStore`. That store is the LIVE list, and it is shared with the
+   * Factory Resources pane mounted beside this page; archived rows placed in it
+   * would appear in that pane's tree as though they were still live.
+   *
+   * Its own status, not a bare array, for the reason the live list above is
+   * gated on `status === 'ready'`: an empty list and a failed load are
+   * different facts, and "No archived pipelines" is a lie about the second.
+   * That matters more here than anywhere else on the page — this section IS the
+   * way back out of archive, so a failure it renders as emptiness tells the
+   * operator their pipeline is gone.
+   *
+   * `idle` doubles as "stale": archiving while the section is closed resets it,
+   * so opening next refetches rather than showing a list missing the row that
+   * was just archived. Nothing is fetched while it is closed.
+   */
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedStatus, setArchivedStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle',
+  );
+  const [archived, setArchived] = useState<Pipeline[]>([]);
+  const [archivedError, setArchivedError] = useState<string | null>(null);
 
   /**
    * #761 — this page is sticky for the same reason the Author pane was, by a
@@ -108,6 +140,75 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     [refresh],
   );
 
+  /** Load the archived set, reporting a failure AS a failure (never as empty). */
+  const loadArchived = useCallback(async () => {
+    setArchivedStatus('loading');
+    setArchivedError(null);
+    try {
+      setArchived(await listArchivedPipelines());
+      setArchivedStatus('ready');
+    } catch (err) {
+      // The previous list is left in place: a refresh failure is not "we know
+      // nothing", the same contract `pipelinesStore` holds for the live list.
+      setArchivedStatus('error');
+      setArchivedError(`Could not load archived pipelines: ${messageOf(err)}`);
+    }
+  }, []);
+
+  const onToggleArchived = useCallback(() => {
+    const next = !showArchived;
+    setShowArchived(next);
+    // Fetch on OPEN, and only when there is nothing fresh to show — `idle` is
+    // both "never loaded" and "invalidated by an archive". A closed section
+    // never fetches.
+    if (next && archivedStatus === 'idle') void loadArchived();
+  }, [showArchived, archivedStatus, loadArchived]);
+
+  /**
+   * Archive: the soft-delete, and the ONLY way to retire a pipeline that has
+   * ever run (`deletePipeline` is refused with a 409 once run history exists).
+   *
+   * The confirmation is where every consequence is named — the route discards
+   * the `disabledTriggerIds` it computed, so nothing can be reported after the
+   * fact even if we wanted to.
+   */
+  const onArchive = useCallback(
+    async (p: Pipeline) => {
+      if (!window.confirm(archiveConfirmMessage(p.name))) return;
+      setActionMsg(null);
+      try {
+        await archivePipeline(p.id);
+        // The row leaves the live list; the archived list it joins is now
+        // stale. Refetch it when it is open, invalidate it when it is not.
+        await refresh();
+        if (showArchived) await loadArchived();
+        else setArchivedStatus('idle');
+      } catch (err) {
+        setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
+      }
+    },
+    [refresh, showArchived, loadArchived],
+  );
+
+  /**
+   * The way back. `restorePipeline` is the API verb; every string here says
+   * UNARCHIVE, matching the canvas banner — "restore" already means restoring
+   * an old VERSION on that screen (#903).
+   */
+  const onUnarchive = useCallback(
+    async (p: Pipeline) => {
+      setActionMsg(null);
+      try {
+        await restorePipeline(p.id);
+        // Both lists change: the row leaves this one and rejoins the live one.
+        await Promise.all([loadArchived(), refresh()]);
+      } catch (err) {
+        setActionMsg(`Could not unarchive “${p.name}”: ${messageOf(err)}`);
+      }
+    },
+    [loadArchived, refresh],
+  );
+
   return (
     <section aria-labelledby="pipelines-heading">
       <div className="page-header">
@@ -175,6 +276,18 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
                   >
                     Export
                   </button>
+                  {/* #1058 — sits BESIDE Delete on purpose. Delete is refused
+                      with a 409 the moment the pipeline has run history, and
+                      `describeDeleteFailure` (shared with the Factory Resources
+                      pane, which has no Archive) says so without naming a way
+                      out. The way out is this button, in the same row. */}
+                  <button
+                    type="button"
+                    onClick={() => void onArchive(p)}
+                    aria-label={`Archive ${p.name}`}
+                  >
+                    Archive
+                  </button>
                   <button
                     type="button"
                     onClick={() => void onDelete(p)}
@@ -188,6 +301,74 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
           </tbody>
         </table>
       )}
+
+      {/* #1058 — the ARCHIVED set. Behind a toggle rather than always on
+          screen: it is a recovery surface, not part of the day-to-day list, and
+          leaving it closed costs no request. Archiving is only safe to offer
+          because this exists — "a refusal is safe exactly when the way back is
+          reachable by the same person" (#907). It is also the way back from an
+          archive this page did NOT perform: a git import soft-archives every
+          resource absent from the branch. */}
+      <section aria-labelledby="archived-heading">
+        <h3 id="archived-heading">Archived</h3>
+        <button type="button" onClick={onToggleArchived} aria-expanded={showArchived}>
+          {showArchived ? 'Hide archived' : 'Show archived'}
+        </button>
+
+        {showArchived && (
+          <>
+            {archivedError && (
+              <p className="error" role="alert">
+                {archivedError}
+              </p>
+            )}
+            {/* Its own Retry, for the same reason the live list has one: this
+                section is the only in-app route back out of archive, so a
+                failed load must not be a dead end. */}
+            {archivedStatus === 'error' && (
+              <p>
+                <button type="button" onClick={() => void loadArchived()}>
+                  Retry loading archived
+                </button>
+              </p>
+            )}
+            {archivedStatus === 'loading' && <p>Loading archived pipelines…</p>}
+            {/* Gated on a load having SUCCEEDED — an empty list and a failed
+                load are different facts, and this is the section where
+                confusing them tells the operator their pipeline is gone. */}
+            {archivedStatus === 'ready' && archived.length === 0 && (
+              <p>No archived pipelines.</p>
+            )}
+
+            {archived.length > 0 && (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th aria-label="actions" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {archived.map((p) => (
+                    <tr key={p.id}>
+                      <td>{p.name}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => void onUnarchive(p)}
+                          aria-label={`Unarchive ${p.name}`}
+                        >
+                          Unarchive
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+      </section>
 
       <form
         className="connection-form"
