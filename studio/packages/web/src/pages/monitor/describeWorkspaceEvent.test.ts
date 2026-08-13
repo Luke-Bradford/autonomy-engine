@@ -94,9 +94,7 @@ describe('describeWorkspaceEvent (#1075)', () => {
     );
 
     expect(summary).toBe('Restored the pipeline Nightly report from archive');
-    expect(detail).toBe(
-      'Restoring re-enables nothing — its triggers stay disabled either way.',
-    );
+    expect(detail).toBe('Restoring re-enables nothing — its triggers stay disabled either way.');
   });
 
   it('totals both halves of an import and names what it touched', () => {
@@ -190,21 +188,63 @@ describe('describeWorkspaceEvent (#1075)', () => {
   });
 
   /**
-   * The union is closed and this renderer is exhaustive over it. Nothing here
-   * can assert the `never` branch at RUNTIME (it is unreachable by
-   * construction, which is the point) — what this pins is that every variant
-   * the schema admits produces a real summary, so a variant added to the schema
-   * and forgotten here shows up as a typecheck failure rather than as a blank
-   * row.
+   * The union is closed and this renderer is exhaustive over it. The `never`
+   * branch cannot be reached at RUNTIME — that is the point of it, and a
+   * forgotten variant fails TYPECHECK rather than rendering a placeholder.
+   *
+   * What this adds on top of the typecheck is the SIXTH-VARIANT case, which the
+   * typecheck alone does not cover: a variant added to `WorkspaceEventSchema`
+   * and given a `case` here that returns an empty string would compile. So it
+   * walks the schema's own option list, insists this file carries a fixture for
+   * every variant the union admits, and describes each one — a new variant with
+   * no fixture fails here, and a variant rendered as nothing fails too.
    */
   it('renders a non-empty summary for every variant of the closed union', () => {
+    const fixtures: Record<WorkspaceEvent['type'], unknown> = {
+      'repo.connected': {
+        type: 'repo.connected',
+        repoUrl: 'https://example.invalid/r.git',
+        collabBranch: 'studio/main',
+        by: 'local',
+      },
+      'pipeline.archived': {
+        type: 'pipeline.archived',
+        resourceId: 'res_a',
+        name: 'P',
+        disabledTriggerIds: [],
+        by: 'local',
+      },
+      'pipeline.restored': {
+        type: 'pipeline.restored',
+        resourceId: 'res_a',
+        name: 'P',
+        by: 'local',
+      },
+      'import.applied': {
+        type: 'import.applied',
+        head: 'abcdef1234567890abcdef1234567890abcdef12',
+        branch: 'studio/main',
+        applied: [],
+        archived: [{ resourceId: 'res_b', name: 'Q', disabledTriggerIds: [] }],
+        by: 'local',
+      },
+      'pipeline.published': {
+        type: 'pipeline.published',
+        pipeline: 'res_a',
+        from: null,
+        to: 'pv_1',
+        commit: 'abcdef1234567890abcdef1234567890abcdef12',
+        blob: 'blob_1',
+        by: 'local',
+      },
+    };
+
     const variants = WorkspaceEventSchema.options.map((option) => option.shape.type.value);
-    expect(variants).toEqual([
-      'repo.connected',
-      'pipeline.archived',
-      'pipeline.restored',
-      'import.applied',
-      'pipeline.published',
-    ]);
+    expect(Object.keys(fixtures).sort()).toEqual([...variants].sort());
+
+    for (const [type, payload] of Object.entries(fixtures)) {
+      const { summary } = describeWorkspaceEvent(event(payload));
+      expect(summary, `${type} rendered no summary`).not.toBe('');
+    }
   });
 });

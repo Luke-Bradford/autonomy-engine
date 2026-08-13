@@ -49,9 +49,7 @@ function archived(name: string) {
 /** The table's data rows (the header row dropped), typed so `.cells` — the
  *  cheapest way to assert a value is in the RIGHT column — is available. */
 function bodyRows(): HTMLTableRowElement[] {
-  return within(screen.getByRole('table'))
-    .getAllByRole('row')
-    .slice(1) as HTMLTableRowElement[];
+  return within(screen.getByRole('table')).getAllByRole('row').slice(1) as HTMLTableRowElement[];
 }
 
 beforeEach(() => {
