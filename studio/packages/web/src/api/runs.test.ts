@@ -135,7 +135,9 @@ describe('runs API', () => {
     await listRuns({});
     // Only `limit` — the pagination key the route always needs. No filter key
     // rides along uninvited.
-    expect(Object.fromEntries(new URL(bare.mock.calls[0]![0] as string, 'http://x').searchParams)).toEqual({
+    expect(
+      Object.fromEntries(new URL(bare.mock.calls[0]![0] as string, 'http://x').searchParams),
+    ).toEqual({
       limit: String(RUNS_PAGE_SIZE),
     });
 

@@ -1038,7 +1038,8 @@ describe('listRunSummariesPage — keyset paging', () => {
     expect(admitQueuedRun(db, queued.id)).not.toBeNull();
 
     const rest: string[] = [];
-    let cursor = first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
+    let cursor =
+      first.nextCursor === null ? undefined : (decodeCursor(first.nextCursor) ?? undefined);
     while (cursor !== undefined) {
       const page = listRunSummariesPage(db, { ownerId: 'local' }, { limit: 2, cursor });
       rest.push(...page.items.map((r) => r.id));

@@ -188,9 +188,11 @@ describe('RunsPage', () => {
    * the cell deleted.
    */
   it('states what a run cost, from the same authority the detail page uses', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', status: 'success', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -212,9 +214,11 @@ describe('RunsPage', () => {
   });
 
   it("marks a LIVE run's figure as spend-so-far, visibly rather than on hover", async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', status: 'running', cost: computeRunCost([metered({ cost: 0.03 })]) }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -236,14 +240,16 @@ describe('RunsPage', () => {
      that keeps a rerun from reading as inexplicably cheap would just be absent.
   */
   it("forwards a rerun's identity, so its figure says it is only the INCREMENT", async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({
-        id: 'run_abc',
-        status: 'success',
-        rerunOf: 'run_source',
-        cost: computeRunCost([metered({ cost: 0.03 })]),
-      }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_abc',
+          status: 'success',
+          rerunOf: 'run_source',
+          cost: computeRunCost([metered({ cost: 0.03 })]),
+        }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     const cost = cellUnder(
       (await screen.findByText('run_abc')).closest('tr') as HTMLElement,
@@ -275,9 +281,9 @@ describe('RunsPage', () => {
    * this failing — the guard is the module boundary, not any one word.
    */
   it('words every run status through the shared vocabulary', async () => {
-    listMock.mockResolvedValue(pageOf(
-      RunStatusSchema.options.map((status, i) => run({ id: `run_${i}`, status })),
-    ));
+    listMock.mockResolvedValue(
+      pageOf(RunStatusSchema.options.map((status, i) => run({ id: `run_${i}`, status }))),
+    );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_0');
     // Table-scoped for the same reason as above — the picker speaks the same
@@ -317,9 +323,11 @@ describe('RunsPage', () => {
    * name-only check while leaving the column just as unreadable.
    */
   it('names the pipeline and its version instead of the raw version id', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_abc', pipelineVersionId: 'pv_opaque', pipelineName: 'Nightly report' }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_abc', pipelineVersionId: 'pv_opaque', pipelineName: 'Nightly report' }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText(/Nightly report/)).toBeInTheDocument();
     expect(screen.getByText('v3')).toBeInTheDocument();
@@ -329,10 +337,12 @@ describe('RunsPage', () => {
   });
 
   it('names the trigger, and em-dashes a run that has none', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_t', triggerName: 'Every morning' }),
-      run({ id: 'run_m', triggerId: null, triggerName: null }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_t', triggerName: 'Every morning' }),
+        run({ id: 'run_m', triggerId: null, triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     expect(await screen.findByText('Every morning')).toBeInTheDocument();
     // Scoped to the trigger-less run's own TRIGGER cell: an unscoped `—` search
@@ -343,10 +353,12 @@ describe('RunsPage', () => {
   });
 
   it('renders a finished run duration, and marks an unfinished one "so far"', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_done', status: 'success', startedAt: 1_000, finishedAt: 8_000 }),
-      run({ id: 'run_live', status: 'running', startedAt: 1_000, finishedAt: null }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_done', status: 'success', startedAt: 1_000, finishedAt: 8_000 }),
+        run({ id: 'run_live', status: 'running', startedAt: 1_000, finishedAt: null }),
+      ]),
+    );
     vi.spyOn(Date, 'now').mockReturnValue(4_000);
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_done');
@@ -360,11 +372,13 @@ describe('RunsPage', () => {
    * triggered run under "Triggered" and pass a single-tab check.
    */
   it('filters the list by run origin, and marks the selected tab', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
-      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_trig');
 
@@ -390,11 +404,13 @@ describe('RunsPage', () => {
   });
 
   it('counts each tab with the same filter the table applies', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_trig2', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_child', triggerId: null, parentRunId: 'run_trig', triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />);
     await screen.findByText('run_trig');
     expect(screen.getByRole('tab', { name: /^All/ })).toHaveTextContent('3');
@@ -418,10 +434,12 @@ describe('RunsPage', () => {
    * filtered view has to arrive filtered, not flash All and then correct itself.
    */
   it('takes the selected tab from the URL', async () => {
-    listMock.mockResolvedValue(pageOf([
-      run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
-      run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({ id: 'run_trig', triggerId: 'trg_1', parentRunId: null }),
+        run({ id: 'run_manual', triggerId: null, parentRunId: null, triggerName: null }),
+      ]),
+    );
     renderWithRouter(<RunsPage />, '/monitor/runs?tab=manual');
     expect(await screen.findByText('run_manual')).toBeInTheDocument();
     expect(screen.queryByText('run_trig')).not.toBeInTheDocument();
@@ -822,7 +840,9 @@ describe('RunsPage — U26 filter pane', () => {
       listMock.mockRejectedValue(new Error('network down'));
       await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
 
-      expect(await screen.findByText(/Could not load older runs: network down/i)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/Could not load older runs: network down/i),
+      ).toBeInTheDocument();
       // The history already on screen is real and stays — a failed older page
       // must not cost the reader what they were already looking at.
       expect(screen.getByText('run_1')).toBeInTheDocument();
@@ -873,15 +893,17 @@ describe('RunsPage — U26 filter pane', () => {
  */
 describe('U29 runs view toggle', () => {
   beforeEach(() => {
-    listMock.mockResolvedValue(pageOf([
-      run({
-        id: 'run_a',
-        pipelineId: 'pipe_a',
-        pipelineName: 'Alpha',
-        startedAt: 1,
-        finishedAt: 2,
-      }),
-    ]));
+    listMock.mockResolvedValue(
+      pageOf([
+        run({
+          id: 'run_a',
+          pipelineId: 'pipe_a',
+          pipelineName: 'Alpha',
+          startedAt: 1,
+          finishedAt: 2,
+        }),
+      ]),
+    );
   });
 
   it('shows the table by default, and the chart at ?view=timeline', async () => {

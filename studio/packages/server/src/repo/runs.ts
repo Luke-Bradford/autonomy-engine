@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gte, inArray, sql } from 'drizzle-orm';
 import {
   computeRunCost,
   NewRunSchema,

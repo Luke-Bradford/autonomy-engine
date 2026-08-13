@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
 import {
   CATALOG_VERSION,
   DEFAULT_PAGE_SIZE,
