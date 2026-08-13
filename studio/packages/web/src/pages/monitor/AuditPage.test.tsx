@@ -154,7 +154,7 @@ describe('AuditPage (#1075)', () => {
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
 
     listMock.mockResolvedValue([row(0, 1_000, CONNECT), row(1, 2_000, archived('Later'))]);
-    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh audit log' }));
 
     await waitFor(() => expect(bodyRows()).toHaveLength(2));
     expect(listMock).toHaveBeenCalledTimes(2);

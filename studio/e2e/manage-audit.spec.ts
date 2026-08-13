@@ -55,7 +55,7 @@ test.describe('#1075 the workspace audit log is readable in the app', () => {
 
     // The page loads on mount and does not poll — an audit log only moves when
     // the operator acts elsewhere — so this is the reader's own refresh.
-    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.getByRole('button', { name: 'Refresh audit log' }).click();
     await expect(entry).toBeVisible();
 
     // The row carries the actor and the particulars, not just the act. The

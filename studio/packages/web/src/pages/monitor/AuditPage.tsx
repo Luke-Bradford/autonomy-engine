@@ -51,8 +51,14 @@ export function AuditPage() {
     <section aria-labelledby="audit-heading">
       <div className="page-header">
         <h2 id="audit-heading">Audit</h2>
+        {/* Named, like every other refresh control in the app ("Refresh
+            quota", "Refresh diagnostics") — a bare "Refresh" makes the reader
+            infer the target. `disabled` only ever bites during the FIRST load
+            (`usePolledResource` never re-arms `loading`), which is exactly when
+            there is nothing yet to refresh and a click would abort the load it
+            was waiting for. */}
         <button type="button" onClick={refresh} disabled={loading}>
-          Refresh
+          Refresh audit log
         </button>
       </div>
 
@@ -73,7 +79,7 @@ export function AuditPage() {
       )}
 
       {newestFirst !== null && newestFirst.length === 0 && (
-        <p className="notice">
+        <p role="status" className="notice">
           Nothing has happened to this workspace yet. Connecting a repository, archiving a pipeline
           or applying an import records an entry here.
         </p>
@@ -99,7 +105,9 @@ export function AuditPage() {
         </table>
       )}
 
-      {lastUpdatedAt !== null && <p className="page-hint">As of {formatWhen(lastUpdatedAt)}.</p>}
+      {lastUpdatedAt !== null && (
+        <p className="page-hint">Audit log as of {formatWhen(lastUpdatedAt)}.</p>
+      )}
     </section>
   );
 }
