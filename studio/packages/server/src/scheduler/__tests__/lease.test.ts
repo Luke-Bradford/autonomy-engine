@@ -690,8 +690,9 @@ describe('#646 — the bespoke lease handler suppresses a corrupt run row (no 1 
     // present and repairable. The settle below is identical either way, so it
     // cannot pin this: fire the handler directly for the verdict itself.
     const due = pendingLeaseAlarms(db)[0]!;
-    expect(lease.handler.fire(due, { scheduledFor: due.dueAt, firedAt: time.t, latenessMs: 0 }, db))
-      .toMatchObject({ status: 'suppressed', reason: 'run_unparseable' });
+    expect(
+      lease.handler.fire(due, { scheduledFor: due.dueAt, firedAt: time.t, latenessMs: 0 }, db),
+    ).toMatchObject({ status: 'suppressed', reason: 'run_unparseable' });
 
     clock.tick();
     expect(pendingLeaseAlarms(db)).toHaveLength(0);

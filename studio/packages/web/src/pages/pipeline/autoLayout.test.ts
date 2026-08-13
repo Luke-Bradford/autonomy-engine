@@ -145,6 +145,71 @@ describe('autoLayout', () => {
     }
   });
 
+  /* #1005 — the cases the assertions above are structurally blind to.
+     Every one of them sizes its rects with `NODE_SIZE`, the SAME nominal
+     function the layout used, so the two agree by construction and no overlap
+     can ever be observed. These size the rects the way the CANVAS does — from
+     what React Flow measured — which is the only way the gap between assumed
+     and rendered width becomes visible. */
+  const WIDE = { width: 420, height: NODE_SIZE.height };
+
+  it('#1005 packs a column from the MEASURED width, so a wide node does not crowd the next', () => {
+    // A node is as wide as its title: `.flow-node` sets `min-width: 120px` and
+    // no maximum, and an imported doc naming an activity type the catalog does
+    // not have renders that raw type as the title. Sized nominally at 150, any
+    // node past `150 + LAYOUT_GAP` was drawn straight through its neighbour.
+    const nodes = [node('wide'), node('next')];
+    const edges = [edge('wide', 'next')];
+    const measured = new Map([['wide', WIDE]]);
+
+    const pos = new Map(autoLayout(nodes, edges, [], measured).map((m) => [m.id, m.position]));
+    const rectOf = (id: string): Rect => ({
+      ...pos.get(id)!,
+      ...(measured.get(id) ?? NODE_SIZE),
+    });
+
+    expect(intersects(rectOf('wide'), rectOf('next'))).toBe(false);
+    // And the gap is the real one, not an accident of the two widths: the
+    // column is as wide as what was MEASURED, plus the stated gap.
+    expect(pos.get('next')!.x - pos.get('wide')!.x).toBe(WIDE.width + LAYOUT_GAP);
+  });
+
+  it('#1005 a WIDE container child does not push its derived box over a neighbour', () => {
+    // Transitively the same defect: the container's slot is reserved from its
+    // children's NOMINAL extent, but `containerRects` unions their REAL rects,
+    // so an under-reserved slot draws the box across whatever sits next to it —
+    // asserting a membership the doc does not have.
+    const nodes = [node('inner'), node('after')];
+    const edges = [edge('inner', 'after')];
+    const containers = [stage('c1', ['inner'])];
+    const measured = new Map([['inner', WIDE]]);
+
+    const pos = new Map(
+      autoLayout(nodes, edges, containers, measured).map((m) => [m.id, m.position]),
+    );
+    const rects = new Map<string, Rect>(
+      nodes.map((n) => [n.id, { ...pos.get(n.id)!, ...(measured.get(n.id) ?? NODE_SIZE) }]),
+    );
+    const box = containerRects(containers, rects).get('c1')!;
+
+    expect(intersects(rects.get('after')!, box), 'the box is drawn over a non-member').toBe(false);
+    expect(intersects(rects.get('inner')!, box), 'the child sits inside its own box').toBe(true);
+  });
+
+  it('#1005 falls back to the nominal size for a node nothing has measured', () => {
+    // The map is what React Flow has measured SO FAR — a node it has never
+    // rendered is simply absent, and must lay out exactly as it does today
+    // rather than collapsing to a zero-width slot.
+    const nodes = [node('a'), node('b')];
+    const edges = [edge('a', 'b')];
+
+    const withEmptyMap = positionsOf(nodes, edges);
+    const partial = new Map(autoLayout(nodes, edges, [], new Map()).map((m) => [m.id, m.position]));
+
+    expect(partial.get('b')).toEqual(withEmptyMap.get('b'));
+    expect(partial.get('b')!.x - partial.get('a')!.x).toBe(NODE_SIZE.width + LAYOUT_GAP);
+  });
+
   it('drops an EMPTY container from the graph — its box is placed elsewhere', () => {
     // An empty container has no node position to write, and `containerRects`
     // parks its box outside the content bounds by design (#785). Reserving a
