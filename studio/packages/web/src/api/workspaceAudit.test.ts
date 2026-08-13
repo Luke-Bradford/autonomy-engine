@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { listWorkspaceAudit } from './workspaceAudit';
+import { AUDIT_PAGE_SIZE, fetchWorkspaceAuditPage } from './workspaceAudit';
 
 function eventRow(seq: number, payload: unknown) {
   return {
@@ -35,48 +35,52 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('workspace-audit API (#1075)', () => {
-  it('reads GET /api/workspace/audit and returns the parsed rows', async () => {
-    const fetchMock = stubFetch([{ items: [eventRow(0, ARCHIVED)], nextCursor: null }]);
+describe('workspace-audit API (#1075, paged newest-first by #1076)', () => {
+  const url = `/api/workspace/audit?order=desc&limit=${AUDIT_PAGE_SIZE}`;
 
-    const out = await listWorkspaceAudit();
+  it('reads ONE page and returns it whole — items and the cursor', async () => {
+    const fetchMock = stubFetch([{ items: [eventRow(9, ARCHIVED)], nextCursor: 'cur_1' }]);
 
-    expect(out).toHaveLength(1);
-    expect(out[0]!.payload).toEqual(ARCHIVED);
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/workspace/audit?limit=100');
+    const page = await fetchWorkspaceAuditPage(undefined);
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]!.payload).toEqual(ARCHIVED);
+    // The cursor is handed BACK rather than followed. Before #1076 this wrapper
+    // walked to the end of the log to render its newest rows; a walk would show
+    // up here as a second call.
+    expect(page.nextCursor).toBe('cur_1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![0]).toBe(url);
   });
 
   /**
-   * The page renders the newest entries by reversing this walk, so a wrapper
-   * that stopped at the first page would show the OLDEST events under a
-   * "most recent first" caption — wrong in the one direction that matters.
+   * `order=desc` is what makes the FIRST page the newest entries. Without it the
+   * page would render the oldest events under a "most recent first" caption —
+   * wrong in the one direction that matters — and a cursor names a position with
+   * no direction of its own, so it has to be on every request, not just the
+   * first.
    */
-  it('walks every page, keeping the server append order', async () => {
+  it('asks for descending order on every page, and threads the cursor', async () => {
     const fetchMock = stubFetch([
-      { items: [eventRow(0, ARCHIVED), eventRow(1, ARCHIVED)], nextCursor: 'cur_1' },
-      { items: [eventRow(2, ARCHIVED)], nextCursor: null },
+      { items: [eventRow(9, ARCHIVED)], nextCursor: 'cur_1' },
+      { items: [eventRow(8, ARCHIVED)], nextCursor: null },
     ]);
 
-    const out = await listWorkspaceAudit();
+    await fetchWorkspaceAuditPage(undefined);
+    const older = await fetchWorkspaceAuditPage('cur_1');
 
-    expect(out.map((row) => row.seq)).toEqual([0, 1, 2]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]![0]).toBe('/api/workspace/audit?limit=100&cursor=cur_1');
+    expect(older.items.map((row) => row.seq)).toEqual([8]);
+    expect(fetchMock.mock.calls[0]![0]).toBe(url);
+    expect(fetchMock.mock.calls[1]![0]).toBe(`${url}&cursor=cur_1`);
   });
 
-  it('threads the abort signal through every page of the walk', async () => {
-    const fetchMock = stubFetch([
-      { items: [eventRow(0, ARCHIVED)], nextCursor: 'cur_1' },
-      { items: [eventRow(1, ARCHIVED)], nextCursor: null },
-    ]);
+  it('threads the abort signal through', async () => {
+    const fetchMock = stubFetch([{ items: [eventRow(0, ARCHIVED)], nextCursor: null }]);
     const controller = new AbortController();
 
-    await listWorkspaceAudit(controller.signal);
+    await fetchWorkspaceAuditPage(undefined, controller.signal);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [, init] of fetchMock.mock.calls) {
-      expect((init as RequestInit).signal).toBe(controller.signal);
-    }
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).signal).toBe(controller.signal);
   });
 
   /**
@@ -86,7 +90,7 @@ describe('workspace-audit API (#1075)', () => {
    * one. This pins that polarity so a later "resilience" change has to argue
    * with a test rather than with a comment.
    */
-  it('rejects the whole load rather than dropping a row it cannot parse', async () => {
+  it('rejects the whole page rather than dropping a row it cannot parse', async () => {
     stubFetch([
       {
         items: [eventRow(0, ARCHIVED), eventRow(1, { type: 'pipeline.teleported' })],
@@ -94,6 +98,6 @@ describe('workspace-audit API (#1075)', () => {
       },
     ]);
 
-    await expect(listWorkspaceAudit()).rejects.toThrow();
+    await expect(fetchWorkspaceAuditPage(undefined)).rejects.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Paginated } from '@autonomy-studio/shared';
 import { messageOf } from '../api/client';
 import { useGuardedLoad } from './useGuardedLoad';
@@ -77,20 +77,23 @@ export function usePagedList<T>(
   const [pending, setPending] = useState<'first' | 'more' | null>('first');
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
-  // Read inside `loadMore` without making it a dependency: a `loadMore`
-  // identity that changed on every page would re-arm any effect a caller hangs
-  // on it, and the button that calls it does not need to re-render to work.
-  const stateRef = useRef({ nextCursor, pending });
-  stateRef.current = { nextCursor, pending };
-
+  /**
+   * Issues one page. It deliberately performs NO setState of its own: the mount
+   * effect below calls it, and a state write in the synchronous body of an
+   * effect triggers a cascading render (the rule `useGuardedLoad`'s docblock
+   * names). `pending` is initialised to `'first'` for exactly that reason, and
+   * the two USER-driven entry points set it themselves before calling in.
+   */
   const load = useCallback(
     (cursor: string | undefined, scope: 'first' | 'more') => {
       // Stamped at ISSUE, not at arrival, so a caller's "as of" is literally
       // true for a response that was in flight for a while — `usePolledResource`
       // makes the same promise in the same words.
       const issuedAt = Date.now();
-      setPending(scope);
-      runLoad<Paginated<T>>((signal) => fetchPage(cursor, signal), {
+      // `void`: the runner's promise settles after its handlers have written
+      // state, and it rejects only if one of THEM threw — there is nothing here
+      // to await and nothing a caller could do with it.
+      void runLoad<Paginated<T>>((signal) => fetchPage(cursor, signal), {
         onData: (page) => {
           setItems((prev) => (scope === 'first' ? page.items : [...(prev ?? []), ...page.items]));
           setNextCursor(page.nextCursor);
@@ -117,17 +120,20 @@ export function usePagedList<T>(
     // No busy guard: a refresh is the load that must WIN, so it supersedes
     // whatever is in flight (`useGuardedLoad`'s counter drops the loser's
     // answer) rather than being dropped by it.
+    setPending('first');
     load(undefined, 'first');
   }, [load]);
 
   const loadMore = useCallback(() => {
-    const { nextCursor: cursor, pending: inFlight } = stateRef.current;
     // Unlike a refresh, an older page is DROPPED while one is in flight: two
     // concurrent ones would both read from the same cursor and append the same
-    // rows twice, and there is no newer intent to honour.
-    if (inFlight !== null || cursor === null) return;
-    load(cursor, 'more');
-  }, [load]);
+    // rows twice, and there is no newer intent to honour. A null cursor means
+    // the log ended — issuing the request anyway would re-read the newest page
+    // and append the head a second time.
+    if (pending !== null || nextCursor === null) return;
+    setPending('more');
+    load(nextCursor, 'more');
+  }, [load, nextCursor, pending]);
 
   return {
     items,

@@ -71,7 +71,7 @@ vi.mock('./api/connections', async (importActual) => ({
 // unless its api module is mocked here.
 vi.mock('./api/workspaceAudit', async (importActual) => ({
   ...(await importActual<typeof import('./api/workspaceAudit')>()),
-  listWorkspaceAudit: vi.fn().mockResolvedValue([]),
+  fetchWorkspaceAuditPage: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
 }));
 vi.mock('./api/secrets', async (importActual) => ({
   ...(await importActual<typeof import('./api/secrets')>()),

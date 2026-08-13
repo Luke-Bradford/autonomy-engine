@@ -2,13 +2,7 @@ import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { connections, pipelines, secrets } from '../../db/schema.js';
 import { listConnectionsPage } from '../connections.js';
-import {
-  beforeCursor,
-  decodeCursor,
-  encodeCursor,
-  pageOrderDesc,
-  toPage,
-} from '../pagination.js';
+import { beforeCursor, decodeCursor, encodeCursor, pageOrderDesc, toPage } from '../pagination.js';
 import { listPipelinesPage } from '../pipelines.js';
 import { listNamedSecretsPage } from '../secrets.js';
 import { freshDb } from './helpers.js';

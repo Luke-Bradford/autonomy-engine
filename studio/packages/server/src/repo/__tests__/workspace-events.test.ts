@@ -216,7 +216,12 @@ describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
     let key: ReturnType<typeof decodeCursor> | undefined;
     let pages = 0;
     for (;;) {
-      const page = listWorkspaceEventsPage(db, OWNER, { limit: 2, cursor: key ?? undefined }, 'desc');
+      const page = listWorkspaceEventsPage(
+        db,
+        OWNER,
+        { limit: 2, cursor: key ?? undefined },
+        'desc',
+      );
       pages++;
       seqs.push(...page.items.map((e) => e.seq));
       if (page.nextCursor === null) break;

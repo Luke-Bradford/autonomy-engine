@@ -57,8 +57,8 @@ export function fetchWorkspaceAuditPage(
   cursor: string | undefined,
   signal?: AbortSignal,
 ): Promise<Paginated<WorkspaceEventRow>> {
-  return apiFetch(
-    `/api/workspace/audit${pageQuery(cursor, { order: 'desc' }, AUDIT_PAGE_SIZE)}`,
-    { schema: WorkspaceAuditPageSchema, signal },
-  );
+  return apiFetch(`/api/workspace/audit${pageQuery(cursor, { order: 'desc' }, AUDIT_PAGE_SIZE)}`, {
+    schema: WorkspaceAuditPageSchema,
+    signal,
+  });
 }
