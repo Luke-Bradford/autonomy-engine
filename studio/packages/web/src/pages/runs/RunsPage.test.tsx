@@ -756,6 +756,79 @@ describe('RunsPage — U26 filter pane', () => {
     expect(screen.getByText('run_fresh')).toBeInTheDocument();
   });
 
+  /**
+   * #1083 — the page renders ONE page of runs and extends it on demand. What is
+   * pinned here is the honesty of the surfaces that used to describe a complete
+   * list: the origin tab counts and the empty-tab line were a census when every
+   * run was fetched, and they must not keep claiming that over a prefix.
+   */
+  describe('paging (#1083)', () => {
+    it('offers Load older runs only while the server says there are older ones', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+      expect(screen.getByRole('button', { name: 'Load older runs' })).toBeInTheDocument();
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      // APPENDED, not replaced — the reader keeps what they were looking at.
+      expect(await screen.findByText('run_2')).toBeInTheDocument();
+      expect(screen.getByText('run_1')).toBeInTheDocument();
+      expect(listMock).toHaveBeenLastCalledWith({}, 'cur_1', expect.anything());
+      // The walk ended, so the control goes: a button that did nothing would
+      // make the end of the history indistinguishable from a stalled load.
+      expect(screen.queryByRole('button', { name: 'Load older runs' })).not.toBeInTheDocument();
+    });
+
+    it('marks a tab count as a LOWER BOUND while older runs remain', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+
+      // `1+`, not `1`: one run of this origin has been LOADED, and the workspace
+      // may hold more. The bare number would be a census claim over a prefix.
+      const tabs = screen.getByRole('tablist');
+      expect(within(tabs).getByRole('tab', { name: /Triggered 1\+/ })).toBeInTheDocument();
+      expect(within(tabs).getByRole('tab', { name: /Manual 0\+/ })).toBeInTheDocument();
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+      await screen.findByText('run_2');
+
+      // The walk is exhausted, so the counts are complete claims again.
+      expect(within(tabs).getByRole('tab', { name: /Triggered 2$/ })).toBeInTheDocument();
+      expect(within(tabs).getByRole('tab', { name: /Manual 0$/ })).toBeInTheDocument();
+    });
+
+    it('scopes the empty-tab line to what has been loaded while older runs remain', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1', triggerId: 'trg_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?tab=manual');
+      await screen.findByText(/No manual runs in the runs loaded so far/i);
+
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_2', triggerId: 'trg_1' })]));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      // Once the walk has ended the unqualified sentence is TRUE, and is what
+      // the reader should see.
+      expect(await screen.findByText(/^No manual runs\.$/i)).toBeInTheDocument();
+    });
+
+    it('words a failed OLDER page apart from a failed first one, keeping the loaded runs', async () => {
+      listMock.mockResolvedValue(pageOf([run({ id: 'run_1' })], 'cur_1'));
+      renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
+      await screen.findByText('run_1');
+
+      listMock.mockRejectedValue(new Error('network down'));
+      await userEvent.click(screen.getByRole('button', { name: 'Load older runs' }));
+
+      expect(await screen.findByText(/Could not load older runs: network down/i)).toBeInTheDocument();
+      // The history already on screen is real and stays — a failed older page
+      // must not cost the reader what they were already looking at.
+      expect(screen.getByText('run_1')).toBeInTheDocument();
+    });
+  });
+
   it('does not offer Clear when nothing is filtered', async () => {
     renderWithRouter(<RunsPage store={storeWith()} />);
     await screen.findByText(/No runs yet/i);
