@@ -22,6 +22,7 @@ import {
   sourcePortOffset,
   sourcePortsOf,
   TARGET_PORT_ID,
+  WCAG_MIN_TARGET,
 } from './ports';
 
 /**
@@ -326,10 +327,32 @@ describe('port geometry', () => {
     // Monotonic: a source that declares more outcomes is never drawn smaller.
     expect(nodeBoxHeight(8)).toBeGreaterThan(nodeBoxHeight(4));
     /* An ordinary activity — the four operational outcomes and nothing else —
-       keeps the box it had before U19. Node placement staggers a new node only
-       40px diagonally, so growing every node is what pushes each one into the
-       previous one's port column. */
-    expect(nodeBoxHeight(OPERATIONAL_CONDITIONS.length)).toBe(nodeBoxHeight(0));
+       is now TALLER than the portless box, which #1067 changed deliberately.
+       Asserted rather than left implicit because the opposite was pinned here
+       for a reason (a taller box used to push each newly-added node into the
+       previous one's port column), and the reason expired: #997 collapsed the
+       ports at rest, so the extra height carries nothing drawn. Stated as a
+       claim about which is bigger, not as a copy of either number. */
+    expect(nodeBoxHeight(OPERATIONAL_CONDITIONS.length)).toBeGreaterThan(nodeBoxHeight(0));
+  });
+
+  /**
+   * #1067 — the pitch is ALSO bounded from below by the hit target, and this is
+   * the bound nothing else can see.
+   *
+   * React Flow resolves a drop with `document.elementFromPoint` in preference to
+   * its own measured geometry (`isValidHandle`, `@xyflow/system` 0.0.79
+   * index.js:2563-2574), so what a drag lands on is the port's invisible target,
+   * not its dot. `index.css` gives that target `WCAG_MIN_TARGET` of width and a
+   * height of exactly one pitch — the largest that cannot reach a neighbour. A
+   * pitch below the target size therefore cannot be reached in BOTH axes at once,
+   * and the version that tried it silently authored the neighbouring outcome.
+   *
+   * The e2e (`outcome-ports.spec.ts`) proves the ownership in a real cascade;
+   * this pins the arithmetic that makes it possible, where the constants live.
+   */
+  it('keeps the port pitch at or above the minimum target size', () => {
+    expect(SOURCE_PORT_PITCH).toBeGreaterThanOrEqual(WCAG_MIN_TARGET);
   });
 });
 

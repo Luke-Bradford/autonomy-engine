@@ -253,16 +253,19 @@ export type NodeRef = { index: number } | { id: string };
  * anything once the fan is out, which is also the gesture a real user makes —
  * hover, then reach for the port they want.
  *
- * Containers are skipped: their ports do not collapse (their handle bounds are
- * STATED rather than measured), so there is nothing to wait for and hovering
- * would only add a race.
+ * #1066 gave a CONTAINER the same collapse, and it is aimed at differently on
+ * purpose. An activity is fanned by hovering its BOX; a container's box is
+ * `pointer-events: none` (#748), so the only thing on it a pointer can reach is
+ * a port — which is exactly why a container's ports stay drawn while an
+ * activity's do not. Aiming at the box centre there would hover whatever child
+ * node sits under the middle of the region and fan THAT instead.
  */
 async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
   const node =
     'id' in ref
       ? page.locator(`.react-flow__node[data-id="${ref.id}"]`)
       : page.locator('.react-flow__node').nth(ref.index);
-  const box = node.locator('.flow-node');
+  const box = node.locator('.flow-node, .flow-container');
   if ((await box.count()) === 0) return;
   /* RAW pointer move, not `hover()`. Playwright's hover runs actionability
      checks and aims at the element's centre — and a container box drawn OVER an
@@ -270,7 +273,9 @@ async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
      sees the pointer, never fans, and the drag that follows starts from a
      collapsed port. This is a gesture, not a click on a control, so the same
      reasoning `dragNodeBy` and `marqueeAllNodes` already record applies. */
-  const rect = await node.boundingBox();
+  const container = (await node.locator('.flow-container').count()) > 0;
+  const aim = container ? node.locator('.flow-port.react-flow__handle').first() : node;
+  const rect = await aim.boundingBox();
   if (rect === null) throw new Error('the node has no box to hover');
   await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
   // Polls, because the fan is deliberately delayed by a dwell.
@@ -501,25 +506,140 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
 }
 
 /**
- * The screen point at the middle of an edge's rendered path.
+ * The screen point at the middle of an edge's rendered path, once it has STOPPED
+ * MOVING.
  *
  * Split out of `selectEdge` for callers that need the point but not its
  * assertion — a MODIFIED click adds the edge to a multi-selection, where the
  * single-edge condition picker `selectEdge` waits for is precisely what does
  * NOT appear.
+ *
+ * THE SETTLE IS LOAD-BEARING, and it is the edge-path form of the trap this
+ * file's header already records for node boxes: a screen coordinate read while
+ * the canvas is still laying out has moved by the time the pointer arrives.
+ *
+ * An edge drawn by a CONNECT GESTURE is laid out twice. Every node fans its
+ * source ports while a connection is in flight (#997), so the new edge's start
+ * is the FANNED port position — and the moment the gesture ends the fan
+ * collapses and the endpoint travels back to the middle of the node. MEASURED on
+ * `seedSelectedEdge`'s `If Condition`, whose six ports put `success` at the top
+ * of the column: the midpoint moves 60px within 80ms of the edge appearing.
+ * Reading it at the first instant and clicking after the collapse lands on empty
+ * pane, which deselects instead of selecting — `edge-typing.spec.ts` failed in
+ * CI as "the Fires on picker never appeared", with the property panel still
+ * saying "Select a node or an edge to edit it".
+ *
+ * It survived at U19's 14px pitch because the same collapse moved the endpoint
+ * only 35px, which usually stayed inside the edge's own hit stroke; #1067's 24px
+ * pitch made the move 60px and it stopped landing on the line at all. So this is
+ * a race the pitch change EXPOSED rather than introduced — it was always wrong
+ * to read a moving coordinate.
+ *
+ * Stability over a QUIET WINDOW, not a fixed wait: the point is settled when it
+ * has stopped changing, whatever the machine's speed.
+ *
+ * THE WINDOW IS THE WHOLE POINT, and one comparison is not a window. The first
+ * version of this compared a seed read to the poll's first probe — two
+ * `page.evaluate` round-trips back to back, with no wait between them. Both can
+ * land before the collapse has re-rendered at all, and two reads of a point that
+ * has not started moving yet agree; the helper then returns the FANNED position
+ * and reproduces the exact race it exists to remove. So a settle is
+ * `SETTLE_QUIET_READS` CONSECUTIVE agreeing probes, and any movement inside the
+ * run resets it to zero.
+ *
+ * BE PRECISE ABOUT WHAT THAT BUYS, because the obvious arithmetic overstates it
+ * by an interval. `expect.poll` fires its first probe IMMEDIATELY and only waits
+ * `intervals` between subsequent ones (`pollAgainstDeadline`, playwright-core),
+ * so the seed-vs-first-probe agreement is that same back-to-back pair and
+ * contributes NO elapsed time. The enforced quiet span is the remaining
+ * `(SETTLE_QUIET_READS - 1) * SETTLE_INTERVAL_MS` = 200ms — not 300ms — which is
+ * still comfortably past the 80ms the collapse measured above takes. The
+ * coincidence is now harmless rather than absent: it can still happen, it just
+ * only reaches 1 of the 3 agreements a settle needs.
+ *
+ * `edge-midpoint-settle.spec.ts` pins this against a path scripted to move on
+ * its THIRD read — a sequence with no timing in it, so the proof does not depend
+ * on the machine that runs it.
+ *
+ * PARK THE POINTER FIRST, and this is not tidiness — waiting alone trades one
+ * race for its mirror image. The gesture that draws an edge RELEASES over the
+ * target node, so the pointer is still resting on it, and a hovered node holds
+ * its fan OPEN (#997). A held-open fan is perfectly STABLE, so the settle
+ * happily converges on it — and then `page.mouse.click` moves the pointer off
+ * the node, the fan collapses, and the endpoint travels out from under the very
+ * point the poll just agreed on. Measured: `back-edge-authoring.spec.ts` picked
+ * the forward edge instead of the back-edge that way, on 1 run in 3.
+ *
+ * So the pointer is moved clear of every node BEFORE the first read, which makes
+ * the state that is measured and the state that is clicked the same state. The
+ * neutral point is `deselect`'s: 30px into the pane, which this file already
+ * relies on being empty canvas.
  */
+/**
+ * Agreeing probes that make a settle. Two reads that merely coincide are not one
+ * — and since the first agreement costs no time (above), this must be at least 3
+ * for the enforced window to span more than a single interval.
+ */
+const SETTLE_QUIET_READS = 3;
+/**
+ * Milliseconds between probes. `(SETTLE_QUIET_READS - 1)` of these is the
+ * enforced quiet window, and THAT is the figure that must exceed the layout —
+ * not `SETTLE_QUIET_READS` of them.
+ */
+const SETTLE_INTERVAL_MS = 100;
+
+/** Where the pointer is parked so nothing is hovered while the point is read. */
+const NEUTRAL_PANE_OFFSET = 30;
+/** How long the pane is waited for before saying it is not there. */
+const PANE_TIMEOUT_MS = 5_000;
+
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
-  return page.evaluate((i) => {
-    const paths = document.querySelectorAll('.react-flow__edge-path');
-    const path = paths[i] as SVGPathElement | undefined;
-    if (!path)
-      throw new Error(`no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`);
-    const mid = path.getPointAtLength(path.getTotalLength() / 2);
-    const ctm = path.getScreenCTM();
-    if (!ctm) throw new Error('the edge path has no screen transform');
-    const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
-    return { x: p.x, y: p.y };
-  }, index);
+  const pane = await page
+    .locator('.react-flow__pane')
+    .boundingBox({ timeout: PANE_TIMEOUT_MS })
+    .catch(() => null);
+  /* Say what is missing, in seconds rather than in the whole test budget. A bare
+     `boundingBox()` waits for the locator until the TEST times out, so a page
+     with no canvas on it fails 30s later as "waiting for
+     locator('.react-flow__pane')" — which reads as a hang, not as a caller that
+     asked for an edge on a page that has none. */
+  if (pane === null)
+    throw new Error('no React Flow pane to park the pointer on before reading an edge midpoint');
+  await page.mouse.move(pane.x + NEUTRAL_PANE_OFFSET, pane.y + NEUTRAL_PANE_OFFSET);
+
+  const read = () =>
+    page.evaluate((i) => {
+      const paths = document.querySelectorAll('.react-flow__edge-path');
+      const path = paths[i] as SVGPathElement | undefined;
+      if (!path)
+        throw new Error(
+          `no edge path at index ${String(i)} (${String(paths.length)} on the canvas)`,
+        );
+      const mid = path.getPointAtLength(path.getTotalLength() / 2);
+      const ctm = path.getScreenCTM();
+      if (!ctm) throw new Error('the edge path has no screen transform');
+      const p = new DOMPoint(mid.x, mid.y).matrixTransform(ctm);
+      return { x: p.x, y: p.y };
+    }, index);
+
+  let previous = await read();
+  let quiet = 0;
+  await expect
+    .poll(
+      async () => {
+        const current = await read();
+        const stable = Math.abs(current.x - previous.x) < 1 && Math.abs(current.y - previous.y) < 1;
+        quiet = stable ? quiet + 1 : 0;
+        previous = current;
+        return quiet;
+      },
+      {
+        message: `the edge path never held still for ${String(SETTLE_QUIET_READS)} reads`,
+        intervals: [SETTLE_INTERVAL_MS],
+      },
+    )
+    .toBeGreaterThanOrEqual(SETTLE_QUIET_READS);
+  return previous;
 }
 
 /**

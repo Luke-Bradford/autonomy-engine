@@ -21,7 +21,6 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
-  useConnection,
   useStore as useReactFlowStore,
   useStoreApi as useReactFlowStoreApi,
   useUpdateNodeInternals,
@@ -45,7 +44,7 @@ import { containerLabels, routingChangeBetween, routingSentence } from './contai
 import { hasActivityDragType, readActivityDragType } from './activityDnd';
 import { toFlowEdge, type EdgeCondition } from './edgeCondition';
 import { EdgeMarkers } from './EdgeMarkers';
-import { useHoverIntent } from '../../hooks/useHoverIntent';
+import { useNodeFan } from './useNodeFan';
 import { SourcePorts } from './SourcePorts';
 import {
   backEdgeOffer,
@@ -106,24 +105,11 @@ interface ActivityData extends Record<string, unknown> {
  */
 const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProps) {
   const d = data as ActivityData;
-  /* #997 — the fan is hover INTENT, not raw hover: a pass-over must not set off
-     a wave of nodes opening behind the cursor, and a momentary exit must not
-     snatch the ports away as the user reaches for one. The node and its ports
-     are ONE hover region (the ports sit inside this box's bounds), so there is
-     no gap to cross and no exit to debounce beyond the hook's own grace. */
-  const { open, handlers } = useHoverIntent();
-
-  /* WHILE A CONNECTION IS BEING DRAGGED, every node fans with NO dwell — the
-     ticket's "connecting mode" clause, and it is load-bearing rather than a
-     nicety. A drop happens the moment the pointer ARRIVES over a port, so no
-     dwell can ever elapse: with hover intent alone the ports a drag is aiming
-     for are unreachable by that drag. `connect-validation`'s backwards drag is
-     the proof — it dropped onto a collapsed stack and authored a NEW edge where
-     the duplicate should have been refused, which is a wrong graph, not a
-     cosmetic miss. `useConnection` rather than plumbing a flag through node
-     data, so a gesture does not rebuild the whole nodes array. */
-  const connecting = useConnection((c) => c.inProgress);
-  const expanded = open || connecting;
+  /* #997 — the fan is hover INTENT, not raw hover, and since #1066 a container
+     opens on exactly the same terms; `useNodeFan` is where those terms live so
+     the two kinds cannot drift apart. */
+  const boxRef = useRef<HTMLDivElement>(null);
+  const { expanded, handlers } = useNodeFan(boxRef);
 
   /* React Flow caches each handle's position in `internals.handleBounds`,
      measured from the DOM once (`getBoundingClientRect`) — it does NOT re-read
@@ -131,10 +117,10 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      while every edge stays attached where the dots USED to be. Telling RF to
      re-measure is what keeps the lines and the ports one object.
 
-     Containers are the opposite case and are deliberately NOT handled here:
-     their bounds are STATED (`containerHandles`), because RF resets a container
-     to unmeasured forever — so a re-measure there is discarded, and their half
-     of this change needs its own stated collapsed geometry. */
+     This is the ONE place the two node kinds genuinely differ. A container's
+     bounds are STATED (`containerHandles`), because RF resets a derived node to
+     unmeasured on every render — so a re-measure there is discarded, and it
+     states its collapsed geometry instead (#1066). */
   const updateNodeInternals = useUpdateNodeInternals();
   /* ONLY ON A CHANGE, never on mount — and that is a correctness fix, not a
      performance one. Asking RF to re-measure while it is still performing its
@@ -149,31 +135,6 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
     fanned.current = expanded;
     updateNodeInternals(id);
   }, [expanded, id, updateNodeInternals]);
-
-  /* KEYBOARD ARRIVAL IS NOT OBSERVABLE FROM HERE without this. React Flow owns
-     the focusable element — `.react-flow__node`, the PARENT of the box below —
-     so focusing a node with Tab fires no focus event inside this subtree at all,
-     and an `onFocus` on the box would never run. A CSS-only reveal keyed on
-     `.react-flow__node:focus-visible` was the tempting shortcut and is wrong in
-     a way that matters: it would fan the DOTS while the state this component
-     holds stayed closed, so `updateNodeInternals` would never fire and every
-     edge would stay attached at the middle. Same disagreement between lines and
-     ports the inline `top` would have caused, arrived at from the other side. */
-  const boxRef = useRef<HTMLDivElement>(null);
-  const { onFocus, onBlur } = handlers;
-  useEffect(() => {
-    const wrapper = boxRef.current?.parentElement;
-    if (!wrapper) return;
-    // `focusin`/`focusout` rather than `focus`/`blur`: the ports themselves are
-    // focusable, and only the bubbling pair keeps the fan open while Tab moves
-    // between them.
-    wrapper.addEventListener('focusin', onFocus);
-    wrapper.addEventListener('focusout', onBlur);
-    return () => {
-      wrapper.removeEventListener('focusin', onFocus);
-      wrapper.removeEventListener('focusout', onBlur);
-    };
-  }, [onFocus, onBlur]);
 
   return (
     <div
@@ -208,6 +169,18 @@ interface ContainerData extends Record<string, unknown> {
   onConfigure: (id: string) => void;
   /** U19 — the box is a legal edge SOURCE, so it carries the same port column. */
   ports: readonly SourcePort[];
+  /**
+   * #1066 — report this box's fan state UP, because a container's port bounds
+   * are stated outside it.
+   *
+   * An activity owns its own collapse end to end: it flips an attribute and asks
+   * React Flow to re-measure. A container cannot — `containerHandles` states its
+   * bounds where the derived node object is built, and RF discards any
+   * measurement of one. So the box is the only thing that knows the pointer is
+   * over it, and the node builder is the only thing that can act on it. The two
+   * have to be told about each other, and this is that wire.
+   */
+  onFanChange: (id: string, fanned: boolean) => void;
 }
 
 /**
@@ -237,8 +210,50 @@ interface ContainerData extends Record<string, unknown> {
  */
 const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   const d = data as ContainerData;
+  /* #1066 — the same fan an activity gets, on the same terms (`useNodeFan`).
+     A container is `pointer-events: none` as a BOX, so what these handlers
+     actually receive is the pointer arriving on one of the parts that opt back
+     in — a port, the ✕, the ⚙ — which bubble to here. That is the same set of
+     places a hover could ever have meant "I am working on this box". */
+  const boxRef = useRef<HTMLDivElement>(null);
+  const { expanded, handlers } = useNodeFan(boxRef);
+
+  /* Reported UP rather than acted on here, because the bounds this state moves
+     are stated where the node object is built — see `onFanChange`'s docblock on
+     `ContainerData`. Effect rather than a call inside the handlers so the two
+     ways in (pointer, focus) and the connecting-mode override all report through
+     one path; a missed one would leave the dots fanned with every edge still
+     attached at the middle. */
+  const { onFanChange } = d;
+  useEffect(() => {
+    onFanChange(id, expanded);
+    /* Withdrawn on unmount, so the canvas's fan set stays a statement about
+       boxes that EXIST. Deleting a container while its ports are fanned would
+       otherwise leave its id there with nothing able to remove it, and the set
+       would grow for the life of the session.
+
+       SCOPED HONESTLY: this is about memory, not geometry. Container ids are
+       reused (`loop_1` is minted again once the first is gone), but a remounted
+       box runs this effect and reports its own `false`, so the stale entry
+       prunes itself and the reused id does not come back fanned — MEASURED,
+       after a regression test written for that claim passed against the
+       unfixed code. What remains without the cleanup is the set growing without
+       bound, plus one commit's window before the mount effect flushes.
+
+       The cleanup also runs between every dep change (React tears the previous
+       effect down first), which is harmless: the withdrawal and the new report
+       land in the same commit, so the intermediate `false` never reaches a
+       render. */
+    return () => onFanChange(id, false);
+  }, [id, expanded, onFanChange]);
+
   return (
-    <div className={`flow-container${d.selected ? ' flow-container--selected' : ''}`}>
+    <div
+      ref={boxRef}
+      className={`flow-container${d.selected ? ' flow-container--selected' : ''}`}
+      data-ports-expanded={expanded ? 'true' : 'false'}
+      {...handlers}
+    >
       <Handle type="target" id={TARGET_PORT_ID} position={Position.Left} />
       <span className="flow-container-label">{d.label}</span>
       {/* #748 — the box's own chrome is inert, and this is the one part of it
@@ -985,6 +1000,35 @@ export function FlowCanvas({
     return rects;
   }, [containers, nodes, flowNodes, portsOf]);
 
+  /**
+   * #1066 — which container boxes currently have their ports fanned out.
+   *
+   * Held HERE rather than in `ContainerNode` because it is read by
+   * `containerHandles` below, which states the bounds React Flow binds every
+   * container edge to. The box reports its own hover/focus/connecting state up
+   * through `onFanChange`; this is the only place the two can meet, so the dots
+   * the CSS draws and the endpoints RF resolves come from one fact.
+   *
+   * A SET rather than a single id: connecting mode fans every box at once, so
+   * "the fanned container" is not a thing that exists.
+   */
+  const [fannedContainers, setFannedContainers] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const onContainerFanChange = useCallback((id: string, fanned: boolean) => {
+    setFannedContainers((prev) => {
+      /* Returning the SAME set when nothing changed is what stops this being a
+         render loop: the node objects below are rebuilt from this state, which
+         re-renders every box, which re-runs the reporting effect. An effect that
+         reports the value it already reported must not produce a new object. */
+      if (prev.has(id) === fanned) return prev;
+      const next = new Set(prev);
+      if (fanned) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
   const containerNodes: FlowNode[] = useMemo(() => {
     // The SAME within-kind ordinals the membership `<select>` offers and
     // `readableIssue` quotes, so "loop 2" names one container everywhere it
@@ -1030,7 +1074,12 @@ export function FlowCanvas({
            question the other does not, and both are exactly as trustworthy as
            `rect`, which is this node's only source of truth anyway. */
         measured: { width: rect.width, height: rect.height },
-        handles: containerHandles(rect.width, rect.height, portsOf(c.id)),
+        handles: containerHandles(
+          rect.width,
+          rect.height,
+          portsOf(c.id),
+          fannedContainers.has(c.id),
+        ),
         data: {
           kind: c.kind,
           ports: portsOf(c.id),
@@ -1040,6 +1089,7 @@ export function FlowCanvas({
           selected: selected.some((s) => s.kind === 'container' && s.id === c.id),
           onDelete: confirmDeleteContainer,
           onConfigure: selectContainer,
+          onFanChange: onContainerFanChange,
         } satisfies ContainerData,
         /* On the node, so RF puts them on the element it owns — the wrapper this
            component renders inside. `ariaRole` is needed explicitly because a
@@ -1093,6 +1143,8 @@ export function FlowCanvas({
     selected,
     confirmDeleteContainer,
     selectContainer,
+    fannedContainers,
+    onContainerFanChange,
   ]);
 
   /**
