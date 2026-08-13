@@ -1015,7 +1015,11 @@ export async function reconcileOne(
   // to"; `interrupted` is the truthful answer to "can anything ever drive this",
   // a different question and the one the admission-slot leak turns on. Such a run
   // therefore appears in `resynced` AND in `sweptOrphans` — the one documented
-  // case of a single run reaching two verdict buckets in one report.
+  // case of a single run reaching two verdict buckets in one report. Reachable
+  // ONLY through this branch, which the paragraph above marks unreachable via
+  // the real callers: it needs a row already at `running` with no `run.started`.
+  // So it is a corrupted-row scenario, not a live-traffic one, and the exclusivity
+  // rules on `ReconcileReport` should be read with that scope.
   //
   // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
   // fail if this branch is removed — so it cannot bit-rot silently.
