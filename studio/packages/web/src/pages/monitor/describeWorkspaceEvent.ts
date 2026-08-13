@@ -1,4 +1,4 @@
-import type { WorkspaceEvent } from '@autonomy-studio/shared';
+import { appliedActionWroteNothing, type WorkspaceEvent } from '@autonomy-studio/shared';
 import { TRIGGERS_STAY_DISABLED_NOTE } from '../../api/pipelines';
 import { namedList } from '../../lib/namedList';
 
@@ -33,13 +33,17 @@ function plural(n: number, noun: string): string {
  * five payloads carry the human name they need — `pipeline.archived` and
  * `pipeline.restored` have `name`, `import.applied.archived[]` has one per
  * entry, `repo.connected` needs none — so a join would serve only
- * `pipeline.published`, whose payload carries a bare `resourceId`. And the only
- * list that could supply that name is LIVE-ONLY (`repo/pipelines.ts` filters
- * `eq(pipelines.archived, …)`, the two readings being exact complements), so
- * the join would resolve to nothing for exactly the pipelines this log is most
- * often about — the archived ones. A raw `resourceId` is honest; a name that
- * silently goes missing for archived pipelines is not. #1077 covers naming it
- * properly, which needs a by-resourceId read the server does not offer yet.
+ * `pipeline.published`, whose payload carries a bare `resourceId`.
+ *
+ * Naming that one needs BOTH `listPipelines` and `listArchivedPipelines`
+ * (`api/pipelines.ts`), because the two are exact complements and an audit log
+ * is disproportionately about pipelines that have since been archived — so a
+ * live-only join would resolve to nothing for exactly the rows most worth
+ * naming. That is two more requests, and two more ways for a read-only page to
+ * fail, in service of one variant's cosmetics. It also has a real question
+ * inside it that a join quietly answers wrongly: an audit entry naming the
+ * pipeline as it is called NOW is not the same fact as what it was called when
+ * it was published. #1077 owns both.
  *
  * WORDING IS TRUTHFUL TO THE SCHEMA'S OWN SEMANTICS, which are load-bearing and
  * easy to paraphrase into a lie:
@@ -77,20 +81,52 @@ export function describeWorkspaceEvent(event: WorkspaceEvent): WorkspaceEventDes
       };
 
     case 'import.applied': {
+      /*
+       * `applied` is the apply's FULL judgement, not its writes: it carries a
+       * row for every resource the branch offered, including the ones that
+       * turned out to need nothing (`workspace-apply.ts` pushes
+       * `action: 'unchanged'` for a connection whose content and name both
+       * matched). Counting or naming those would tell an operator that a
+       * routine re-import touched ten resources when it wrote one — which is
+       * the SECOND of the two failure modes `appliedActionWroteNothing`'s own
+       * docblock says it exists to prevent ("the Git page's roll-up saying 'N
+       * changed' about resources it did not touch"). So the predicate is
+       * reused, not re-spelled.
+       *
+       * `versionMinted` is ORed in rather than folded into the predicate,
+       * because it is ORTHOGONAL to `action` (#672) — a row can write a new
+       * version while its action reports no change. This is the same test
+       * `buildImportAppliedEvent` uses to decide the event is worth emitting at
+       * all, which is what keeps the sentence and the event's own existence
+       * criterion from drifting apart.
+       */
+      const wrote = event.applied.filter(
+        (resource) => !appliedActionWroteNothing(resource.action) || resource.versionMinted,
+      );
+      const untouched = event.applied.length - wrote.length;
+
       const parts: string[] = [];
-      if (event.applied.length > 0) {
-        parts.push(`Applied ${namedList(event.applied.map((resource) => resource.path))}.`);
+      if (wrote.length > 0) {
+        parts.push(`Applied ${namedList(wrote.map((resource) => resource.path))}.`);
       }
       if (event.archived.length > 0) {
         parts.push(`Archived ${namedList(event.archived.map((pipeline) => pipeline.name))}.`);
       }
+      // Stated rather than dropped: the import DID look at these, and an
+      // operator wondering why a re-import reported so little is owed the
+      // difference between "not considered" and "considered, nothing to do".
+      if (untouched > 0) {
+        parts.push(`${plural(untouched, 'resource')} already matched.`);
+      }
+
       return {
         summary: `Imported ${plural(
-          event.applied.length + event.archived.length,
+          wrote.length + event.archived.length,
           'resource',
         )} from ${event.branch} at ${shortSha(event.head)}`,
-        // An import is emitted only when it was EFFECTFUL, so at least one of
-        // the two arrays is non-empty and this is never the empty string.
+        // An import is emitted only when it was EFFECTFUL — `archived` is
+        // non-empty or some row wrote — so this count is never zero and
+        // `parts` is never empty.
         detail: parts.join(' '),
       };
     }

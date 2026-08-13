@@ -124,6 +124,90 @@ describe('describeWorkspaceEvent (#1075)', () => {
     expect(detail).toBe('Applied “pipelines/nightly.json”. Archived “Old report”.');
   });
 
+  /**
+   * `applied` is the apply's FULL judgement, not its writes — `workspace-apply`
+   * pushes an `unchanged` row for a connection that matched, and `superseded`
+   * for a version comparison that decided nothing. Counting or naming those is
+   * the second failure mode `appliedActionWroteNothing` was extracted to
+   * prevent: a routine re-import of ten tracked files, one of them changed,
+   * reporting that it imported ten.
+   */
+  it('counts and names only what the import actually WROTE', () => {
+    const { summary, detail } = describeWorkspaceEvent(
+      event({
+        type: 'import.applied',
+        head: '0123456789abcdef0123456789abcdef01234567',
+        branch: 'studio/main',
+        applied: [
+          {
+            path: 'pipelines/changed.json',
+            kind: 'pipeline',
+            resourceId: 'res_a',
+            action: 'updated',
+            versionMinted: true,
+            versionContentUnverified: false,
+          },
+          {
+            path: 'connections/matched.json',
+            kind: 'connection',
+            resourceId: 'res_b',
+            action: 'unchanged',
+            versionMinted: false,
+            versionContentUnverified: false,
+          },
+          {
+            path: 'pipelines/undecidable.json',
+            kind: 'pipeline',
+            resourceId: 'res_c',
+            action: 'superseded',
+            versionMinted: false,
+            versionContentUnverified: true,
+          },
+        ],
+        archived: [],
+        by: 'local',
+      }),
+    );
+
+    expect(summary).toBe('Imported 1 resource from studio/main at 0123456');
+    expect(detail).toBe('Applied “pipelines/changed.json”. 2 resources already matched.');
+    // The no-op paths are not merely uncounted — they are not NAMED as applied.
+    expect(detail).not.toContain('matched.json');
+    expect(detail).not.toContain('undecidable.json');
+  });
+
+  /**
+   * `versionMinted` is ORTHOGONAL to `action` (#672): a row can mint a version
+   * while its action reports no change. `buildImportAppliedEvent` ORs the two
+   * to decide the event is worth emitting at all, so a sentence that consulted
+   * only `action` would render "Imported 0 resources" for an event that exists
+   * precisely because something was written.
+   */
+  it('treats a minted version as a write even where the action reports no change', () => {
+    const { summary, detail } = describeWorkspaceEvent(
+      event({
+        type: 'import.applied',
+        head: '0123456789abcdef0123456789abcdef01234567',
+        branch: 'studio/main',
+        applied: [
+          {
+            path: 'pipelines/minted.json',
+            kind: 'pipeline',
+            resourceId: 'res_a',
+            action: 'unchanged',
+            versionMinted: true,
+            versionContentUnverified: false,
+          },
+        ],
+        archived: [],
+        by: 'local',
+      }),
+    );
+
+    expect(summary).toBe('Imported 1 resource from studio/main at 0123456');
+    expect(detail).toBe('Applied “pipelines/minted.json”.');
+  });
+
   /* An import that archived nothing must not render a dangling "Archived ." */
   it('omits the half of an import that did nothing', () => {
     expect(
