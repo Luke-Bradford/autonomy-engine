@@ -78,8 +78,11 @@ import { useCallback, useEffect, useRef } from 'react';
  * filter they were issued under; and `PipelinesPage.invalidateArchived` bumps its
  * counter WITHOUT issuing a load, to void an in-flight answer, which this hook
  * has no vocabulary for. `WorkspaceGitPage` has the unguarded mount shape but
- * not the race: its mutation surfaces render only before the load has arrived,
- * and its post-mutation state comes from callbacks rather than a second load.
+ * not the race: while its load is in flight `status` is `undefined`, which
+ * renders a loading line and nothing else — both of its mutation surfaces are
+ * gated on `status` having settled, so there is no window in which a mutation
+ * can be started alongside an unanswered mount load. Its post-mutation state
+ * then comes from callbacks rather than from a second load.
  */
 export interface GuardedHandlers<T> {
   onData: (value: T) => void;
