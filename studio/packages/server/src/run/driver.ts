@@ -19,9 +19,9 @@ import {
   type ScheduledWakeup,
   type TriggerContext,
 } from '@autonomy-studio/shared';
-import { ZodError } from 'zod';
 import pLimit from 'p-limit';
 import { getRun, updateRun } from '../repo/runs.js';
+import { isDeterministicRowCorruption } from '../repo/row-corruption.js';
 import { getConnection } from '../repo/connections.js';
 import { recordConnectionQuotaExhaustion } from '../repo/connection-quota.js';
 import { getPipelineVersion } from '../repo/pipeline-versions.js';
@@ -139,13 +139,12 @@ export class DocUnparseableError extends DocUnresolvableError {
  *
  * The `getPipelineVersion` call is wrapped so an UNPARSEABLE present row —
  * permanent, see {@link DocUnparseableError} — is reclassified to that permanent
- * subtype. Two throw shapes mean exactly that, and both come only from decoding
- * the stored row: a `ZodError` (the JSON is well-formed but no longer satisfies
- * the schema, e.g. after a tightening) and a `SyntaxError` (a stored json column
- * is not valid JSON, so Drizzle's codec throws before the schema is even reached).
- * Any OTHER throw is a DB *read* fault (a better-sqlite3 error is neither) —
- * genuinely transient — and propagates unchanged, so a passing blip is never
- * mistaken for a dead version. The reclassification lives here, not inside
+ * subtype. Which throws mean exactly that is {@link isDeterministicRowCorruption}'s
+ * answer, not this module's (#1051): a `ZodError` or a `SyntaxError`, the two
+ * shapes that come only from decoding the stored row. Any OTHER throw is a DB
+ * *read* fault (a better-sqlite3 error is neither) — genuinely transient — and
+ * propagates unchanged, so a passing blip is never mistaken for a dead version.
+ * The reclassification lives here, not inside
  * `getPipelineVersion`, so its other callers (routes, `listPipelineVersions`)
  * still see the raw error their contexts want.
  */
@@ -155,7 +154,7 @@ export function makeDocResolver(db: Db): DocResolver {
     try {
       pv = getPipelineVersion(db, pipelineVersionId);
     } catch (err) {
-      if (err instanceof ZodError || err instanceof SyntaxError) {
+      if (isDeterministicRowCorruption(err)) {
         throw new DocUnparseableError(
           `pipeline version '${pipelineVersionId}' is present but does not parse`,
           { cause: err },

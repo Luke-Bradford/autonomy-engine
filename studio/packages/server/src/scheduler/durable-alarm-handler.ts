@@ -1,4 +1,4 @@
-import { ZodError, type z } from 'zod';
+import type { z } from 'zod';
 import type {
   EngineEvent,
   NodeRunStatus,
@@ -7,7 +7,7 @@ import type {
   ScheduledWakeup,
   WakeupRef,
 } from '@autonomy-studio/shared';
-import { getRun } from '../repo/runs.js';
+import { getParsedRun } from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -67,10 +67,12 @@ import type { WakeupFireResult, WakeupHandler } from './alarms.js';
  * So SUPPRESS on that type — and (#642) on the SAME poison-pending class from the
  * fire's three other stored-row reads: the wakeup `ref` failing the kind's schema,
  * a `run_events` payload `EngineEventSchema` rejects, and a run row `RunSchema`
- * rejects. The classification is #515's, verbatim (`makeDocResolver`): a
- * `ZodError` (well-formed JSON, wrong shape) or a `SyntaxError` (drizzle's json
- * codec is a bare `JSON.parse`, so invalid TEXT throws before the schema) is
- * DETERMINISTIC — the same row throws the same way on every tick, definitionally
+ * rejects. The classification is #515's, and since #1051 it is asked of the ONE
+ * predicate that owns it (`isDeterministicRowCorruption`) rather than re-derived
+ * here: a `ZodError` (well-formed JSON, wrong shape) or a `SyntaxError`
+ * (drizzle's json codec is a bare `JSON.parse`, so invalid TEXT throws before the
+ * schema) is DETERMINISTIC — the same row throws the same way on every tick,
+ * definitionally
  * not the transient blip the rollback+redeliver contract exists for. Any OTHER
  * throw is a DB read fault (a better-sqlite3 error is neither type) — genuinely
  * transient — so rethrow it (the clock leaves the row `pending` for the next
@@ -185,19 +187,19 @@ export function createDurableAlarmHandler<TRef extends WakeupRef & { runId: stri
         return { status: 'suppressed', reason: 'run_already_terminal' };
       }
 
-      let run: Run | null;
-      try {
-        run = getRun(tx, ref.runId);
-      } catch (err) {
-        if (err instanceof ZodError || err instanceof SyntaxError) {
-          deps.log?.warn?.(
-            { err, wakeupId: row.id, runId: ref.runId },
-            'durable alarm: run row unparseable — settling (permanently corrupt)',
-          );
-          return { status: 'suppressed', reason: 'run_unparseable' };
-        }
-        throw err;
-      }
+      // `getParsedRun` rather than `getRun` + a local catch (#1051) — the
+      // single-row reader that already owns this classification; a transient DB
+      // fault still propagates for the rollback+redeliver. Corrupt and absent
+      // are DIFFERENT verdicts here, which is what `onSkip` distinguishes.
+      let corrupt = false;
+      const run: Run | null = getParsedRun(tx, ref.runId, (id, err) => {
+        corrupt = true;
+        deps.log?.warn?.(
+          { err, wakeupId: row.id, runId: id },
+          'durable alarm: run row unparseable — settling (permanently corrupt)',
+        );
+      });
+      if (corrupt) return { status: 'suppressed', reason: 'run_unparseable' };
       if (run === null) return { status: 'suppressed', reason: 'run_not_found' };
 
       let engine;

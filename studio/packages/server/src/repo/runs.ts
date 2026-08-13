@@ -1,5 +1,4 @@
 import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
-import { ZodError } from 'zod';
 import {
   computeRunCost,
   NewRunSchema,
@@ -14,6 +13,7 @@ import {
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
+import { isDeterministicRowCorruption } from './row-corruption.js';
 import { aggregateRunCosts } from './run-events.js';
 import type { Db } from './types.js';
 
@@ -303,21 +303,6 @@ export function listParsedRuns(
     }
   }
   return parsed;
-}
-
-/**
- * The #515 classification, named once: a row that will not parse is
- * PERMANENTLY corrupt (`ZodError`/`SyntaxError` — it fails identically on every
- * read), and ANY other throw is a live DB fault (a locked database, a closed
- * connection, a disk error) which the next attempt may well clear.
- *
- * The distinction is load-bearing, not cosmetic: callers file the first under a
- * permanent bucket that asks an operator to repair the row, and must let the
- * second propagate to a transient one. Conflating them either re-reports a
- * healthy row as corrupt forever, or retries a repair-needing row forever.
- */
-export function isDeterministicRowCorruption(err: unknown): boolean {
-  return err instanceof ZodError || err instanceof SyntaxError;
 }
 
 /**

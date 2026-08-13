@@ -1,5 +1,4 @@
 import { and, asc, eq, inArray, lt, lte, ne } from 'drizzle-orm';
-import { ZodError } from 'zod';
 import {
   ArmWakeupInputSchema,
   ScheduledWakeupSchema,
@@ -11,6 +10,7 @@ import {
 import { scheduledWakeups } from '../db/schema.js';
 import { newId } from './ids.js';
 import { drainByBatches } from './retention.js';
+import { isDeterministicRowCorruption } from './row-corruption.js';
 import type { Db } from './types.js';
 
 /**
@@ -189,11 +189,12 @@ export type ParsedDueWakeup =
  * kind for as long as it existed. Two phases: an id-only projection (codec-free,
  * so it cannot throw on a corrupt cell) with the WHERE/ORDER above, then a
  * strict per-id read whose failure is scoped to its own row. Only the
- * DETERMINISTIC corruption classes are reported as `unparseable`
- * (`SyntaxError` = invalid stored TEXT, `ZodError` = wrong shape — the #515
- * classification: stored bytes parse the same way on every tick, definitionally
- * not transient); any other throw is a genuine DB fault and propagates so the
- * tick's structural catch retries next tick. A row settled between the two
+ * DETERMINISTIC corruption classes are reported as `unparseable` — the #515
+ * classification, asked of {@link isDeterministicRowCorruption} rather than
+ * re-derived here (#1051): stored bytes parse the same way on every tick,
+ * definitionally not transient. Any other throw is a genuine DB fault and
+ * propagates so the tick's structural catch retries next tick. A row settled
+ * between the two
  * phases is skipped — the fire-time in-transaction re-read makes that window
  * harmless anyway.
  */
@@ -227,7 +228,7 @@ export function listParsedDueWakeups(
       if (row === null || row.status !== 'pending') continue;
       parsed.push({ status: 'found', wakeup: row });
     } catch (error) {
-      if (error instanceof ZodError || error instanceof SyntaxError) {
+      if (isDeterministicRowCorruption(error)) {
         parsed.push({ status: 'unparseable', id, error });
       } else {
         throw error;
