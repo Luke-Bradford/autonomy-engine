@@ -1056,7 +1056,7 @@ export async function reconcileOne(
   // strength of the minority that is independently useful, and an operator can
   // see exactly which runs were frozen and why (`parent_terminal:<id>` in the
   // log, `report.interrupted` in the boot log). Making the LIVE path stop too is
-  // the other half of this and needs a cancel primitive — filed, not built here.
+  // the other half of this and needs a cancel primitive — #1056, filed not built.
   //
   // POSITION. Below the terminal-fact check above, so a child that already
   // FINISHED resyncs instead of having a second terminal fact minted over its
