@@ -271,13 +271,7 @@ describe('PipelinesPage', () => {
       // The load is still in flight when the section is closed, and nothing
       // reopens it before it answers — so unlike the case above, no SECOND
       // load exists to move the counter past it.
-      const inFlight = (() => {
-        let resolve!: (v: Pipeline[]) => void;
-        const promise = new Promise<Pipeline[]>((r) => {
-          resolve = r;
-        });
-        return { promise, resolve };
-      })();
+      const inFlight = deferred<Pipeline[]>();
       listArchivedMock.mockReturnValueOnce(inFlight.promise);
       renderPage();
 
