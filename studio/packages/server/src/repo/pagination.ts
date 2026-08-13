@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, lt, or, type SQL } from 'drizzle-orm';
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 import type { Paginated } from '@autonomy-studio/shared';
@@ -86,14 +86,53 @@ export function afterCursor(
 /**
  * The `ORDER BY created_at ASC, id ASC` clause — the total order the
  * owner-scoped list endpoints (secrets/connections/pipelines) share, matched by
- * `afterCursor`'s `gt` predicate. Deliberately ASC-only: these are "browse my
- * items" lists. A newest-first surface (e.g. a future paginated `GET /api/runs`)
- * will need a DESC sibling of BOTH this and `afterCursor` (`desc`/`lt`) — the
- * cursor codec and `toPage` are already direction-agnostic, so only these two
- * helpers gain a direction, not a second cursor format.
+ * `afterCursor`'s `gt` predicate. These are "browse my items" lists, and
+ * ascending is the right default for them. #1076 added the DESC sibling below
+ * for the newest-first surfaces; as predicted here, only these two helpers
+ * gained a direction — the cursor codec and `toPage` are direction-agnostic and
+ * were not touched, so there is still ONE cursor format.
  */
 export function pageOrder(createdAtCol: AnySQLiteColumn, idCol: AnySQLiteColumn): SQL[] {
   return [asc(createdAtCol), asc(idCol)];
+}
+
+/**
+ * #1076 — the DESC mirror of `afterCursor`: rows strictly BEFORE the cursor
+ * position under `ORDER BY <ordering scalar> DESC, id DESC`. Same tuple
+ * discipline for the same reason — `(c < k) OR (c = k AND id < i)`, never
+ * `id < i` alone — so a tie in the ordering scalar neither drops nor duplicates
+ * a row at the page boundary.
+ *
+ * A CURSOR NAMES A POSITION, NOT A DIRECTION, and that is deliberate (it is
+ * what keeps one cursor format rather than two). The consequence is worth
+ * stating because it is the one way to misuse this: pairing a cursor minted
+ * during an ascending walk with `order=desc` (or the reverse) returns a
+ * coherent but DIFFERENT slice, and nothing errors. `decodeCursor` is
+ * fail-closed about a cursor's SHAPE; it cannot be fail-closed about a
+ * direction the payload does not carry. So the direction must come from the
+ * same query that minted the cursor — a caller picks one and keeps it for the
+ * whole walk, which is what the audit wrapper (`api/workspaceAudit.ts`) does by
+ * sending `order` on every page including the first.
+ */
+export function beforeCursor(
+  createdAtCol: AnySQLiteColumn,
+  idCol: AnySQLiteColumn,
+  cursor: CursorKey,
+): SQL | undefined {
+  return or(
+    lt(createdAtCol, cursor.createdAt),
+    and(eq(createdAtCol, cursor.createdAt), lt(idCol, cursor.id)),
+  );
+}
+
+/**
+ * #1076 — the `ORDER BY <ordering scalar> DESC, id DESC` clause, matched by
+ * `beforeCursor`'s `lt` predicate. For a newest-first HISTORY surface (the
+ * workspace audit log), where rendering the newest page must not mean walking
+ * the whole log to reverse it client-side.
+ */
+export function pageOrderDesc(createdAtCol: AnySQLiteColumn, idCol: AnySQLiteColumn): SQL[] {
+  return [desc(createdAtCol), desc(idCol)];
 }
 
 /**

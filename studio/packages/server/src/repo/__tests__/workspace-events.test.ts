@@ -61,7 +61,7 @@ function published(
 }
 
 function firstPage(db: ReturnType<typeof freshDb>['db'], ownerId: string, limit = 50) {
-  return listWorkspaceEventsPage(db, ownerId, { limit });
+  return listWorkspaceEventsPage(db, ownerId, { limit }, 'asc');
 }
 
 describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
@@ -183,7 +183,7 @@ describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
       appendWorkspaceEvent(db, OWNER, importApplied).id,
     ];
 
-    const page1 = listWorkspaceEventsPage(db, OWNER, { limit: 2 });
+    const page1 = listWorkspaceEventsPage(db, OWNER, { limit: 2 }, 'asc');
     expect(page1.items).toHaveLength(2);
     expect(page1.nextCursor).not.toBeNull();
 
@@ -191,7 +191,7 @@ describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
     if (cursor === null) throw new Error('expected a next cursor');
     const key = decodeCursor(cursor);
     if (key === null) throw new Error('expected a decodable cursor');
-    const page2 = listWorkspaceEventsPage(db, OWNER, { limit: 2, cursor: key });
+    const page2 = listWorkspaceEventsPage(db, OWNER, { limit: 2, cursor: key }, 'asc');
     expect(page2.items).toHaveLength(1);
     expect(page2.nextCursor).toBeNull();
 
