@@ -349,8 +349,8 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
     edges: [],
   };
   const { pipelineId, pipelineVersionId } = await seedVersion(page, '#931 pipeline spend', doc);
-  await fireAndSettle(page, pipelineVersionId, '#931 pipeline run A');
-  await fireAndSettle(page, pipelineVersionId, '#931 pipeline run B');
+  await fireAndSettle(page, pipelineVersionId, '#931 rollup run A');
+  await fireAndSettle(page, pipelineVersionId, '#931 rollup run B');
 
   /* The PREMISE, from the route itself, before any UI: two runs and two billed
      exchanges really are in the rollup. Without it every assertion below could
