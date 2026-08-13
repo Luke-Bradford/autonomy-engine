@@ -560,6 +560,20 @@ export async function selectEdge(page: Page, index = 0): Promise<void> {
  * `edge-midpoint-settle.spec.ts` pins this against a path scripted to move on
  * its THIRD read — a sequence with no timing in it, so the proof does not depend
  * on the machine that runs it.
+ *
+ * PARK THE POINTER FIRST, and this is not tidiness — waiting alone trades one
+ * race for its mirror image. The gesture that draws an edge RELEASES over the
+ * target node, so the pointer is still resting on it, and a hovered node holds
+ * its fan OPEN (#997). A held-open fan is perfectly STABLE, so the settle
+ * happily converges on it — and then `page.mouse.click` moves the pointer off
+ * the node, the fan collapses, and the endpoint travels out from under the very
+ * point the poll just agreed on. Measured: `back-edge-authoring.spec.ts` picked
+ * the forward edge instead of the back-edge that way, on 1 run in 3.
+ *
+ * So the pointer is moved clear of every node BEFORE the first read, which makes
+ * the state that is measured and the state that is clicked the same state. The
+ * neutral point is `deselect`'s: 30px into the pane, which this file already
+ * relies on being empty canvas.
  */
 /**
  * Agreeing probes that make a settle. Two reads that merely coincide are not one
@@ -574,7 +588,14 @@ const SETTLE_QUIET_READS = 3;
  */
 const SETTLE_INTERVAL_MS = 100;
 
+/** Where the pointer is parked so nothing is hovered while the point is read. */
+const NEUTRAL_PANE_OFFSET = 30;
+
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
+  const pane = await page.locator('.react-flow__pane').boundingBox();
+  if (pane === null) throw new Error('no React Flow pane to park the pointer on');
+  await page.mouse.move(pane.x + NEUTRAL_PANE_OFFSET, pane.y + NEUTRAL_PANE_OFFSET);
+
   const read = () =>
     page.evaluate((i) => {
       const paths = document.querySelectorAll('.react-flow__edge-path');
