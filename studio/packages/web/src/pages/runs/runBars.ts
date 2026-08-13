@@ -113,7 +113,7 @@ export interface GroupedRuns {
    *
    * Stated as a pass-through rather than as "newest first", which is what it
    * LOOKS like on screen and would be a claim this function cannot keep:
-   * `listRunSummaries` orders `desc(startedAt)` and `filterRunsByTab` preserves
+   * `listRunSummariesPage` orders `desc(startedAt), desc(id)` and `filterRunsByTab` preserves
    * order, so the rows arrive newest-first and the list renders newest-first —
    * but nothing here enforces that, and a caller passing rows in another order,
    * or a change to the server's `ORDER BY`, would quietly falsify it. The
