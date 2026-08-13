@@ -82,5 +82,5 @@ test('U15 — Home names the workspace’s recent runs and links each to its det
     await expect(page.getByRole('link', { name: label })).toBeVisible();
   }
 
-  expectQuiet(problems);
+  await expectQuiet(page, problems);
 });
