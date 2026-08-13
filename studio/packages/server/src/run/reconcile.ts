@@ -875,30 +875,37 @@ function recordSweep(deps: ReconcileDeps, report: ReconcileReport, runId: string
 }
 
 /**
- * #508 — terminalize a run whose pipeline version can NEVER be resolved.
+ * Freeze a STARTED run `interrupted`, DOC-FREE — the interrupt is recorded as a
+ * durable FACT in the log and the row is synced from `terminalStatusOf` (#443's
+ * SSOT for the fact an event records), never from a projection.
  *
- * DOC-FREE by necessity: the version is gone, so there is no engine to fold
- * through — the interrupt is recorded as a durable FACT in the log and the row is
- * synced from `terminalStatusOf` (#443's SSOT for the fact an event records),
- * never from a projection. This is the same primitive `terminalizeInterrupted`'s
- * `foldErr → patchRow` branch reaches when a drive's doc turns out unresolvable
- * (`driver.ts`) — inlined here because the call-site precondition is STRONGER:
- * the `terminalFactFromLog` fast path above has PROVEN the log non-terminal, so
- * this needs none of that function's re-load / terminal re-check / try-to-fold
- * dance (which would only re-call the resolver to have it throw again into its
- * own catch). It deliberately does NOT reuse `recoverHeld`'s `appendAndFold`
- * either: that path HAS an engine and records fold-diagnostics (#497); with no
- * doc there is no fold, and so no diagnostics to record.
+ * Two callers, both of which have already PROVEN the log non-terminal via the
+ * `terminalFactFromLog` fast path in `reconcileOne`:
+ *   - #508, a run whose pipeline version can never be resolved
+ *     (`doc_unresolvable:<pvId>`) — doc-free by necessity, the version is gone;
+ *   - #1053, a `call_pipeline` child whose parent is already over
+ *     (`parent_terminal:<parentRunId>`) — doc-free by choice, since resolving a
+ *     doc only to fold nothing would be work for a run that is not going to run.
+ *
+ * This is the same primitive `terminalizeInterrupted`'s `foldErr → patchRow`
+ * branch reaches when a drive's doc turns out unresolvable (`driver.ts`) —
+ * inlined here because the call-site precondition is STRONGER: the log is known
+ * non-terminal, so this needs none of that function's re-load / terminal
+ * re-check / try-to-fold dance (which would only re-call the resolver to have it
+ * throw again into its own catch). It deliberately does NOT reuse `recoverHeld`'s
+ * `appendAndFold` either: that path HAS an engine and records fold-diagnostics
+ * (#497); with no doc there is no fold, and so no diagnostics to record.
+ *
+ * Takes a `runId` + `reason` rather than a `Run` because the two reasons are
+ * derived from DIFFERENT fields (the version id, the parent id) and neither
+ * caller wants the other's — passing the row would invite a third caller to
+ * derive its reason here instead of at the site that knows why.
  *
  * The reason follows the `interrupted` bucket's `<label>:<detail>` convention
  * (`non_idempotent_in_flight:` / `retry_alarm_spent:`).
  */
-function terminalizeUnresolvable(deps: ReconcileDeps, run: Run): void {
-  const interrupted: EngineEvent = {
-    type: 'run.interrupted',
-    runId: run.id,
-    reason: `doc_unresolvable:${run.pipelineVersionId}`,
-  };
+function interruptRun(deps: ReconcileDeps, runId: string, reason: string): void {
+  const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason };
   appendEngineEvent(deps.db, interrupted, deps.bus);
   // `terminalStatusOf`, not a `?? 'interrupted'` default: if `run.interrupted`
   // ever drops out of `TERMINAL_RUN_EVENT_TYPES` (#443's silent-drift mode — the
@@ -912,7 +919,58 @@ function terminalizeUnresolvable(deps: ReconcileDeps, run: Run): void {
       'run.interrupted must record a terminal fact — TERMINAL_RUN_EVENT_TYPES drift (#443)',
     );
   }
-  syncRunLifecycle(deps.db, run.id, status);
+  syncRunLifecycle(deps.db, runId, status);
+}
+
+/**
+ * #1053 — is this child's result still DELIVERABLE, i.e. is its parent still
+ * live? Read from the parent's LOG, and both halves of that are deliberate.
+ *
+ * WHY THE LOG AND NOT THE ROW. `sweepOne` answers a neighbouring question from
+ * `runs.status` and argues for it at length; that argument does NOT transfer
+ * here, and the difference is not stylistic:
+ *   - The QUESTION is different. `sweepOne` asks "can anything ever DRIVE this
+ *     child" — a liveness question, whose answer is that no terminal parent will
+ *     re-emit `startChild`. This asks "can anything ever CONSUME its result",
+ *     and the consumer is `returnToParent` (`child.ts`), which decides by
+ *     `terminalFactFromLog(parentEvents)`. Using the identical expression on the
+ *     identical source makes this one reader of one fact, rather than a second
+ *     reader that can disagree with the first.
+ *   - The PRECONDITION is different. `sweepOne`'s row read is sound because it
+ *     runs as a strictly LATER scan, after the `running` scan has repaired every
+ *     stale row (see its docblock). This guard runs INSIDE that scan, so a
+ *     parent in the same snapshot may still be holding a stale `running` row —
+ *     and `listParsedRuns` issues no `ORDER BY`, while run ids are content
+ *     hashes rather than anything chronological. A row read would therefore make
+ *     the child's verdict depend on an order SQLite explicitly does not promise.
+ *     It would fail SAFE (a missed freeze is today's resume), but "correct only
+ *     for orderings we happened to observe" is not a property worth shipping.
+ *   The extra cost is one log load per CHILD run in the scan — top-level runs
+ *   never reach here — on a boot path. Cheap enough not to trade the above for.
+ *
+ * AN UNREADABLE parent log is NOT terminal (#646): it is unreadable state, and
+ * minting a terminal verdict for the child from it would freeze a run on an
+ * undecidable premise. Reported `corrupt` and keyed on the PARENT — the row an
+ * operator has to repair — because the fault boundary would key it on the child
+ * it wraps, exactly the correction `sweepOne` makes for a corrupt parent row.
+ * An ABSENT parent reads as an empty log, hence non-terminal, hence left alone:
+ * the same posture, and the same one `sweepPendingRuns` states as a non-goal.
+ *
+ * A NON-corruption fault (a locked DB) propagates to the fault boundary, which
+ * files it `failed` — transient, cleared by the next boot's re-read.
+ */
+function parentIsOver(deps: ReconcileDeps, report: ReconcileReport, parentRunId: string): boolean {
+  let parentEvents: EngineEvent[];
+  try {
+    parentEvents = loadEngineEvents(deps.db, parentRunId);
+  } catch (err) {
+    if (err instanceof RunLogUnparseableError) {
+      report.corrupt.push({ runId: parentRunId, reason: `run_log_unparseable:${err.message}` });
+      return false;
+    }
+    throw err;
+  }
+  return terminalFactFromLog(parentEvents) !== null;
 }
 
 /**
@@ -957,6 +1015,67 @@ export async function reconcileOne(
     return;
   }
 
+  // #1053 — a `call_pipeline` CHILD whose PARENT is already over. Freeze it
+  // rather than resume it: nothing can consume the result, so every activity a
+  // resume would dispatch is pure cost.
+  //
+  // WHY THIS IS NOT "reconcile must reproduce the no-crash outcome". Absent a
+  // crash this child would run to completion and its result would be discarded
+  // by `returnToParent` all the same — there is no cancel primitive crossing a
+  // run boundary (`kick` is detached on the CHILD's own drive lock, the only
+  // `AbortController` is per-activity/per-run, and `cancelled` is not a legal
+  // `RunStatus`). So this DOES diverge from the live path, deliberately, and the
+  // reason it is still right is that the two acts are not the same act: the live
+  // case is failing to STOP a spend already in flight, which needs a primitive
+  // that does not exist; this is DECLINING TO START one, on work already known
+  // undeliverable, which is precisely reconcile's job. The same trade is already
+  // made twice in this function — `non_idempotent_in_flight` freezes a run that
+  // would otherwise have completed, and `retry_alarm_spent` freezes one nothing
+  // can advance — so "the reconciler may reach a different outcome than an
+  // uncrashed run" is settled policy here, not a new licence.
+  //
+  // THE COST, NAMED. A child's nodes may have side effects that are meaningful
+  // in themselves and not only via the value returned to the parent. Those now
+  // do not happen when a crash lands in this window, where absent the crash they
+  // would have. That is a real inconsistency and it is accepted rather than
+  // hidden: the alternative is to keep paying for every one of them on the
+  // strength of the minority that is independently useful, and an operator can
+  // see exactly which runs were frozen and why (`parent_terminal:<id>` in the
+  // log, `report.interrupted` in the boot log). Making the LIVE path stop too is
+  // the other half of this and needs a cancel primitive — filed, not built here.
+  //
+  // POSITION. Below the terminal-fact check above, so a child that already
+  // FINISHED resyncs instead of having a second terminal fact minted over its
+  // first (#443). Above `resolveDoc`, so a frozen child needs no doc — it works
+  // when the version is gone, arms no alarm and re-dispatches no node.
+  // Precedented: `interruptRun`'s other caller also sits above the `pending`
+  // resync branch below.
+  //
+  // BOTH BOOT PATHS, which #1048 requires: `sweepOne` delegates every started
+  // `pending` row here, so a started child reaches this guard whichever sub-tick
+  // the crash hit. Its own never-started branch stays as it is, and the two
+  // verdicts agree — differing only in whether a terminal FACT is appended,
+  // which #443 decides from whether the run started.
+  //
+  // A THIRD caller is affected and it is not a boot path at all: S7's lease
+  // reclaim (`scheduler/lease.ts`) runs this same function on a live server.
+  // That composes without special-casing — it already reads `report.interrupted`
+  // as "terminal, nothing further needed", and `syncRunLifecycle` releases the
+  // lease on any terminal transition — and it is a GAIN: a child orphaned by a
+  // parent that died mid-flight is now frozen at reclaim instead of resumed by
+  // whichever worker picks it up.
+  //
+  // The `run.interrupted` append publishes into `subscribeChildReturns`, which
+  // spawns a `returnToParent` microtask that no-ops against the (by definition
+  // terminal) parent. #1041 cites that cost as one reason NOT to append for a
+  // NEVER-started child; here #443 requires the fact, and the no-op is identical
+  // to the one every other `interrupted` verdict for a child already produces.
+  if (run.parentRunId !== null && parentIsOver(deps, report, run.parentRunId)) {
+    interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
+    report.interrupted.push(run.id);
+    return;
+  }
+
   // #508/#515 — the doc is resolved HERE, and a PERMANENT resolve failure is
   // terminalized rather than left to re-`failed` on every boot forever. A
   // `DocUnresolvableError` means the immutable version can never be driven again:
@@ -983,7 +1102,7 @@ export async function reconcileOne(
     doc = deps.resolveDoc(run.pipelineVersionId);
   } catch (err) {
     if (err instanceof DocUnresolvableError) {
-      terminalizeUnresolvable(deps, run);
+      interruptRun(deps, run.id, `doc_unresolvable:${run.pipelineVersionId}`);
       report.interrupted.push(run.id);
       return;
     }
