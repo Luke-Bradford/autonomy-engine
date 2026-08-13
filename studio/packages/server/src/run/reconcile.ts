@@ -970,6 +970,15 @@ function interruptRun(deps: ReconcileDeps, runId: string, reason: string): void 
  * An ABSENT parent reads as an empty log, hence non-terminal, hence left alone:
  * the same posture, and the same one `sweepPendingRuns` states as a non-goal.
  *
+ * That report is NOT deduped, so one corrupt parent can appear in `corrupt` more
+ * than once in a single scan: once per `running` CHILD of it that gets this far,
+ * plus once more if the parent's own row is `running` and the scan visits it
+ * directly (its `loadEngineEvents` throws into the fault boundary, which files
+ * the same reason). Noise in a boot report, not a wrong verdict — every entry
+ * names the same id and the same repair. Stated rather than deduped for the
+ * reason `sweepOne` gives about its cross-scan twin: the dedupe would have to be
+ * report-wide state shared by readers that deliberately share none.
+ *
  * A NON-corruption fault (a locked DB) propagates to the fault boundary, which
  * files it `failed` — transient, cleared by the next boot's re-read.
  */
@@ -1065,6 +1074,12 @@ export async function reconcileOne(
   // Precedented: `interruptRun`'s other caller also sits above the `pending`
   // resync branch below.
   //
+  // Being above `resolveDoc` also fixes a PRECEDENCE: a child whose parent is
+  // over AND whose own version is gone is frozen `parent_terminal:` rather than
+  // `doc_unresolvable:`. Both are truthful, and the order is the useful one —
+  // the parent's death is why this run should not run, whereas the missing
+  // version is only why it could not.
+  //
   // BOTH BOOT PATHS, which #1048 requires: `sweepOne` delegates every started
   // `pending` row here, so a started child reaches this guard whichever sub-tick
   // the crash hit. Its own never-started branch stays as it is, and the two
@@ -1084,7 +1099,29 @@ export async function reconcileOne(
   // terminal) parent. #1041 cites that cost as one reason NOT to append for a
   // NEVER-started child; here #443 requires the fact, and the no-op is identical
   // to the one every other `interrupted` verdict for a child already produces.
-  if (run.parentRunId !== null && parentIsOver(deps, report, run.parentRunId)) {
+  // WHY `hasRunStartedFact` IS PART OF THE CONDITION and not assumed from the
+  // caller. Every `running`-status row reaches this function unconditionally —
+  // the started test lives in `sweepOne`, which guards the `pending` rows only.
+  // So a CORRUPTED row (status `running`, log with no `run.started`; documented
+  // as unreachable via the real callers at the `pending` branch below) would
+  // otherwise be given a `run.interrupted` here, which is precisely the
+  // "minting a terminal fact into a log that never held one is manufacturing,
+  // not deriving" that #443 forbids and that #1041 cites as its reason for
+  // patching the row instead.
+  //
+  // Excluded, such a child falls through to the `pending` resync below and is
+  // then met by `sweepPendingRuns` in the SAME boot, whose child branch patches
+  // the row and appends nothing — the correct primitive for a run with no
+  // event-sourced lifecycle to preserve. So the two paths now partition the case
+  // exactly along #443's own line: STARTED gets a durable fact, NEVER-STARTED
+  // gets a row patch, and neither manufactures. (That run legitimately appears
+  // in `resynced` AND `sweptOrphans`; see the `pending` branch, which already
+  // documents that pair.)
+  if (
+    run.parentRunId !== null &&
+    hasRunStartedFact(events) &&
+    parentIsOver(deps, report, run.parentRunId)
+  ) {
     interruptRun(deps, run.id, `parent_terminal:${run.parentRunId}`);
     report.interrupted.push(run.id);
     return;

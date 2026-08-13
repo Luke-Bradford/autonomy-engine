@@ -2455,6 +2455,47 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
     expect(types(loadEngineEvents(db, child.id))).not.toContain('run.interrupted');
   });
 
+  it('manufactures NO terminal fact for a corrupted `running` child that never started — the row patch is the sweep\'s job', async () => {
+    const { db } = freshDb();
+    const parent = seedTerminalLogParent(db);
+    // A CORRUPTED row: status `running` with an empty log. The `pending` branch
+    // in `reconcileOne` documents this as unreachable via the real callers, but
+    // every `running` row reaches that function unconditionally — the started
+    // test guards the `pending` sweep only — so the guard must exclude it itself.
+    const pvId = seedVersion(db, [node('c')]);
+    const child = createRun(db, {
+      ownerId: 'local',
+      pipelineVersionId: pvId,
+      triggerId: null,
+      parentRunId: parent.id,
+      params: {},
+    });
+    updateRun(db, child.id, { status: 'running' });
+
+    const report = await reconcileOnBoot({
+      db,
+      resolveDoc: resolveDocFor(db),
+      executor: makeStubExecutor(),
+      alarms: stubAlarms(),
+    });
+
+    // #443 — the run has no event-sourced lifecycle to preserve, so it gets a ROW
+    // PATCH and no event. THIS is the assertion: a `run.interrupted` here would be
+    // manufacturing a fact the log never held, exactly what #1041 appends nothing
+    // to avoid.
+    expect(loadEngineEvents(db, child.id)).toEqual([]);
+    expect(report.interrupted).toEqual([]);
+
+    // The two paths partition the case along #443's line: never-started is the
+    // sweep's, started is the guard's. Both buckets are correct for one run here —
+    // `resynced` answers "what does the log project to", `sweptOrphans` answers
+    // "can anything ever drive this" — the pair the `pending` branch documents.
+    expect(report.resynced).toEqual([child.id]);
+    expect(report.sweptOrphans).toEqual([child.id]);
+    expect(getRun(db, child.id)!.status).toBe('interrupted');
+    expect(countActiveRunsForPipeline(db, getPipelineVersion(db, pvId)!.pipelineId)).toBe(0);
+  });
+
   it('does not freeze on an UNREADABLE parent log, and keys the corruption on the parent', async () => {
     const { db, sqlite } = freshDb();
     const parent = seedTerminalLogParent(db);
