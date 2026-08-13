@@ -78,6 +78,48 @@ export function usePagedList<T>(
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
 
   /**
+   * #1083 — A NEW FETCHER IS A NEW LIST, so the accumulated one is dropped
+   * rather than extended. `RunsPage` memoizes its fetcher on the filter axes, so
+   * this fires exactly when the operator changes a filter — and both halves
+   * matter: the ROWS are the previous filter's answer and must not sit under the
+   * new controls, and the CURSOR names a position in the previous filter's
+   * result set, so resuming from it would splice two different queries together.
+   *
+   * React's documented "adjust state when a prop changes" pattern (compare
+   * against a state copy during render, set both, let React re-render before
+   * committing), NOT an effect. An effect would paint the stale rows under the
+   * new filter for a frame first, which is the exact thing this prevents.
+   *
+   * FETCHER IDENTITY IS THE ONLY TRIGGER, deliberately — no separate `resetKey`
+   * argument. A second authority can disagree with the first: bump a key without
+   * changing the fetcher and the list blanks and never reloads (the load effect
+   * keys on the fetcher); change the fetcher without the key and a stale
+   * `nextCursor` survives into a list it does not belong to. That second case is
+   * not caught by `loadMore`'s guard either, because `load` deliberately sets no
+   * `pending` — so during the reload `pending === null && nextCursor !== null`,
+   * and a click would append the NEW list's rows resumed from the OLD list's
+   * cursor. One authority, no disagreement possible.
+   *
+   * A REFRESH IS NOT THIS. It passes the same fetcher, so it takes the
+   * replace-don't-blank path above and the current rows stay on screen.
+   */
+  /* Both `useState` and the setter are given ARROWS returning the fetcher, never
+     the fetcher itself. React reads a bare function argument as a lazy
+     initializer / updater and CALLS it — so `useState(fetchPage)` would issue a
+     request during render and `setFetcherOfItems(fetchPage)` would store
+     whatever it returned (a Promise), leaving the comparison below permanently
+     unequal. Measured: it re-rendered until React's own loop guard threw. */
+  const [fetcherOfItems, setFetcherOfItems] = useState(() => fetchPage);
+  if (fetchPage !== fetcherOfItems) {
+    setFetcherOfItems(() => fetchPage);
+    setItems(null);
+    setNextCursor(null);
+    setError(null);
+    setLastUpdatedAt(null);
+    setPending('first');
+  }
+
+  /**
    * Issues one page. It deliberately performs NO setState of its own: the mount
    * effect below calls it, and a state write in the synchronous body of an
    * effect triggers a cascading render (the rule `useGuardedLoad`'s docblock

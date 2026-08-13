@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import {
+  paginatedResponseSchema,
   PendingExternalWaitListSchema,
   RerunAcceptedSchema,
   RunDetailSchema,
@@ -15,12 +16,26 @@ import {
   type RunSummary,
   type RunDetail,
   type RunEvent,
+  type Paginated,
   type RunSince,
   type RunStatus,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
+import { pageQuery } from './pagination';
 
-const RunListSchema = z.array(RunSummarySchema);
+const RunPageSchema = paginatedResponseSchema(RunSummarySchema);
+
+/**
+ * How many runs one page holds. Deliberately NOT `DEFAULT_PAGE_SIZE` or
+ * `MAX_PAGE_SIZE` — the same distinction `AUDIT_PAGE_SIZE` draws: those size a
+ * TRANSPORT chunk for a caller reconstructing a whole list, where bigger is
+ * strictly better, while this is how many runs a reader is shown before asking
+ * for more. Larger than the audit page because a run row is scanned rather than
+ * read — an operator looking for "the failure this morning" wants a screenful of
+ * history, not a paragraph. Exported so the tests and the e2e spec assert
+ * against the real value instead of re-literalling it.
+ */
+export const RUNS_PAGE_SIZE = 50;
 const RunEventListSchema = z.array(RunEventSchema);
 /* Declared HERE rather than in the shared package, following `RunEventListSchema`
    two lines up: this is a client-side parse of a run sub-resource, and the server
@@ -73,27 +88,52 @@ export interface ListRunsQuery {
 }
 
 /**
- * Owner-scoped list of runs, newest-first — an order the server now genuinely
- * imposes (`started_at DESC, rowid DESC`). It did not before: `listRuns` issued
- * no `ORDER BY` at all, so this docblock's previous "newest-first as the server
- * returns them" described SQLite's incidental row order, not a promise. The
- * tie-break is `rowid` — insert order, so chronological — and NOT `id`, which
- * is a random nanoid and would order same-instant runs arbitrarily.
+ * Owner-scoped PAGE of runs, newest-first — an order the server genuinely
+ * imposes (`started_at DESC, id DESC`). It did not always: `listRuns` once
+ * issued no `ORDER BY` at all, so an earlier version of this docblock described
+ * SQLite's incidental row order as if it were a promise.
+ *
+ * PAGED since #1083, and this was the last list route returning an unbounded
+ * body. Runs have no retention policy, so the response grew for the life of the
+ * workspace and never fell — the same property that made the audit log #1076,
+ * but over rows that each carry a joined pipeline/trigger summary and an
+ * aggregated cost. `RunsPage` consumes this through `usePagedList`.
+ *
+ * The tie-break is `id`, and it USED to be `rowid` (insert order, so
+ * chronological). `listRunSummariesPage`'s docblock owns that argument; the
+ * short version is that the order is now also a CURSOR the client replays, and
+ * an implicit rowid is not stable across `VACUUM`. Two runs stamped in the same
+ * millisecond therefore read back in stable-but-arbitrary order rather than
+ * creation order.
+ *
+ * NO `order` PARAMETER, unlike the audit wrapper: this list has one meaning.
+ * A cursor still names a POSITION and not a direction, so nothing here may
+ * pair one with a differently-ordered request.
  *
  * R2 — each element is a `RunSummary`, the run row PLUS the pipeline name +
  * version number and trigger name the list renders. Strictly additive over
  * `Run`, so this is a widening, not a breaking change.
  */
-export function listRuns(filters: ListRunsQuery = {}, signal?: AbortSignal): Promise<RunSummary[]> {
-  const query = new URLSearchParams();
+export function listRuns(
+  filters: ListRunsQuery = {},
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<Paginated<RunSummary>> {
   // Only SET axes reach the wire. An empty-string param is not "no filter" to
   // the server — `pipelineId`/`triggerId` are `min(1)`, so `?pipelineId=` is a
-  // 400, and `since`/`status` are closed enums that refuse it too.
+  // 400, and `since`/`status` are closed enums that refuse it too. This loop
+  // survives #1083 rather than collapsing into `pageQuery`'s `extra` argument
+  // directly: `extra` is `Record<string, string>` and these fields are optional,
+  // so handing it `filters` would both fail to typecheck and put `?pipelineId=`
+  // back on the wire.
+  const extra: Record<string, string> = {};
   for (const [key, value] of Object.entries(filters)) {
-    if (value !== undefined && value !== '') query.set(key, value);
+    if (value !== undefined && value !== '') extra[key] = value;
   }
-  const suffix = query.size > 0 ? `?${query.toString()}` : '';
-  return apiFetch(`/api/runs${suffix}`, { schema: RunListSchema, signal });
+  return apiFetch(`/api/runs${pageQuery(cursor, extra, RUNS_PAGE_SIZE)}`, {
+    schema: RunPageSchema,
+    signal,
+  });
 }
 
 /** One run by id (`GET /api/runs/:id`); 404 → `ApiError(404)`. */
