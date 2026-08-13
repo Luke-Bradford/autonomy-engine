@@ -241,9 +241,17 @@ test.describe('U19 outcome ports', () => {
    * The two gestures are aimed at what is actually hit-testable. `.flow-container`
    * is `pointer-events: none` (the box must not eat pane clicks aimed between its
    * children), with the handles and the two chrome buttons opting back in — so
-   * the hover arm hovers a PORT and relies on `:hover` matching the ancestor box,
-   * and the focus arm tabs to the Configure button, which is a real control a
-   * real keyboard reaches. Neither is simulated.
+   * the hover arm hovers a PORT and the focus arm tabs to the Configure button,
+   * which is a real control a real keyboard reaches. Neither is simulated.
+   *
+   * #1066 collapsed a container's ports to one point at rest, which changes how
+   * the hover arm has to be DRIVEN without changing what it proves. A RAW
+   * pointer move, because Playwright's `hover()` runs actionability checks and
+   * refuses a stacked port ("`op:skipped` … intercepts pointer events") — four
+   * ports on one point is the collapse working, not an obstruction. The pointer
+   * therefore lands on whichever port paints topmost, and the label asserted on
+   * belongs to a DIFFERENT one, so what is still proved is the box-level reveal
+   * rather than a port revealing its own name.
    */
   test('a container port names itself on hover AND on keyboard focus', async ({ page }) => {
     await openSeededCanvas(page, 'u19 container labels', {
@@ -255,9 +263,9 @@ test.describe('U19 outcome ports', () => {
     const label = box.locator('.flow-port-label').filter({ hasText: 'failure' });
     await expect(label).toHaveCSS('opacity', '0');
 
-    /* A DIFFERENT port than the label asserted on, so what is proved is the
-       box-level reveal rather than a port revealing its own name. */
-    await port(page, 'stage_1', outcomePort('success')).hover();
+    const stack = await port(page, 'stage_1', outcomePort('success')).boundingBox();
+    if (stack === null) throw new Error('the container has no port to hover');
+    await page.mouse.move(stack.x + stack.width / 2, stack.y + stack.height / 2);
     await expect(label).toHaveCSS('opacity', '1');
 
     // Away from the box entirely, or the hover arm would mask the focus one.

@@ -1,6 +1,6 @@
 import { Handle, Position } from '@xyflow/react';
 import type { CSSProperties } from 'react';
-import { SOURCE_PORT_PITCH, sourcePortOffset, type SourcePort } from './ports';
+import { SOURCE_PORT_PITCH, sourcePortOffset, WCAG_MIN_TARGET, type SourcePort } from './ports';
 
 /**
  * U19 — the outgoing ports, drawn as a labelled column down the node's right
@@ -50,6 +50,10 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
              that matters (`sourcePortOffset`) is here. See `index.css`'s
              `::after` rule for what goes wrong when the two disagree. */
           '--port-pitch': `${SOURCE_PORT_PITCH}px`,
+          /* The hit target's WIDTH, for the same reason — the number is WCAG's,
+             and `ports.ts` is where it is stated and where the test that keeps
+             the pitch at or above it can see it. */
+          '--port-target': `${WCAG_MIN_TARGET}px`,
         } as CSSProperties;
         const name = port.orphaned ? `${port.label} — not offered by this source` : port.label;
         return (

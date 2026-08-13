@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { openCanvas } from './support/canvas';
+import { nodeById, openSeededCanvas } from './support/seedDoc';
 import {
   canvasNodes,
   deselect,
@@ -157,5 +158,135 @@ test.describe('a canvas at rest says it with colour alone', () => {
     });
     await expect.poll(() => portOpacity(page, 0)).toBe(1);
     expect(new Set(await portTops(page)).size).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * #1066 — the CONTAINER half, which is a different mechanism wearing the same
+ * clothes.
+ *
+ * An activity collapses in CSS and then tells React Flow to re-measure. A
+ * container cannot: RF resets a derived node to unmeasured on every render and
+ * takes `containerHandles`' numbers verbatim, so its collapse has to be STATED
+ * in the node object and the stylesheet has to be told the same thing
+ * separately. Two sources for one fact, which is exactly the shape that ships
+ * broken and looks fine — the dots move and the edges stay, or the reverse, and
+ * nothing throws either way.
+ *
+ * So the assertion is not "the ports moved". It is that the ports and the EDGE
+ * BOUND TO THEM moved together, which is the only thing that can tell a working
+ * collapse from two disagreeing opinions about where a port is.
+ */
+test.describe('#1066 — a container collapses its ports too', () => {
+  const CONTAINED = {
+    nodes: [
+      { id: 'a', position: { x: 0, y: 0 } },
+      { id: 'after', type: 'file_write' as const, position: { x: 420, y: 40 } },
+    ],
+    edges: [{ from: 'stage_1', to: 'after', on: 'success' as const }],
+    containers: [{ id: 'stage_1', kind: 'stage' as const, children: ['a'] }],
+  };
+
+  /** Every container port's computed `top` — the fan's geometry, in order. */
+  function containerPortTops(page: Page): Promise<string[]> {
+    return page.evaluate(() =>
+      [...document.querySelectorAll('.flow-container .flow-port')].map(
+        (p) => getComputedStyle(p).top,
+      ),
+    );
+  }
+
+  test('its ports sit on one point at rest and fan together with their edge', async ({ page }) => {
+    await openSeededCanvas(page, 'quiet container', CONTAINED);
+
+    /* AT REST: one point, not four. Asserted as a SET so it says "they coincide"
+       rather than restating whatever `top` happens to compute to. */
+    await expect.poll(async () => new Set(await containerPortTops(page)).size).toBe(1);
+
+    /* STILL DRAWN, unlike an activity's, and this is the half most likely to be
+       "tidied" away later. A container's box is `pointer-events: none` (#748),
+       so a port is the only thing on it a pointer can reach — hide the ports and
+       the fan becomes unreachable by mouse, with no way back at all. The single
+       visible dot IS the affordance. */
+    const dot = page.locator('.flow-container .flow-port').first();
+    await expect(dot).toHaveCSS('opacity', '1');
+
+    const restStart = await edgeStart(page);
+    const restIds = await handleIds(page);
+
+    const stack = await dot.boundingBox();
+    if (stack === null) throw new Error('the container has no port to hover');
+    await page.mouse.move(stack.x + stack.width / 2, stack.y + stack.height / 2);
+
+    // The dwell is deliberate, so this polls rather than reading once.
+    await expect.poll(async () => new Set(await containerPortTops(page)).size).toBeGreaterThan(1);
+
+    /* THE assertion. The edge is bound to the container's `success` port, and
+       that port has just moved — so the line must have moved with it. A stated
+       collapse that forgot to restate the fanned bounds leaves this exactly
+       where it was while the dots spread out around it. */
+    await expect.poll(async () => (await edgeStart(page)).y).not.toBeCloseTo(restStart.y, 0);
+
+    // Visual only, the same invariant the activity half holds: ids never change.
+    expect(await handleIds(page)).toEqual(restIds);
+  });
+
+  /**
+   * The fan must not steal the box's own controls.
+   *
+   * A container's ✕ and ⚙ sit top-right, which is the corner the port column
+   * fans INTO: on an emptied box the `success` port lands 36px above the middle
+   * and its invisible 24px target covers the ✕'s centre. React Flow's handles
+   * carry no `z-index`, so DOM order decided the overlap and `SourcePorts`
+   * renders last — the port won.
+   *
+   * The shape of the failure is why this is asserted directly rather than left
+   * to the spec that found it. Hovering the ✕ for the dwell is what FANS the
+   * ports, so the target that steals the click only arrives once the pointer has
+   * been sitting on the button: the hit-test passes, the button is visibly
+   * hovered, and then mousedown starts a connection. `container-membership.spec`
+   * reports that as an emptied container that can no longer be deleted — #748's
+   * one-way trap reopened, on a box whose only escape hatch this is — which
+   * names the symptom three steps downstream of the cause.
+   *
+   * Read through `elementFromPoint` because that is what decides it: React Flow
+   * resolves a press against the topmost element, not against its own geometry.
+   */
+  test('its chrome still takes the click once the ports have fanned over it', async ({ page }) => {
+    await openSeededCanvas(page, 'container chrome', CONTAINED);
+
+    /* THE BOX MUST BE EMPTY, and that is the fixture doing real work rather than
+       setting a scene. A container sized around a child is tall enough that the
+       fanned column never reaches its header, so this same assertion passes with
+       the stacking fix REMOVED — mutation-proved, and it is how this test was
+       first written. Only at `EMPTY_CONTAINER_SIZE`'s 120px does the outermost
+       port land 36px above the middle and lay its 24px target across a ✕ pinned
+       2px from the top. */
+    await nodeById(page, 'a').click();
+    await page.getByRole('button', { name: 'Delete node' }).click();
+    await expect(nodeById(page, 'a')).toHaveCount(0);
+    await expect
+      .poll(async () => (await page.locator('.flow-container').boundingBox())?.height)
+      .toBeLessThan(140);
+
+    const remove = page
+      .locator('.react-flow__node[data-id="stage_1"]')
+      .getByRole('button', { name: /^Delete / });
+    const box = await remove.boundingBox();
+    if (box === null) throw new Error('the container has no delete control');
+    const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+    // The gesture exactly as it fails: rest on the button until the fan opens.
+    await page.mouse.move(centre.x, centre.y);
+    await expect.poll(async () => new Set(await containerPortTops(page)).size).toBeGreaterThan(1);
+
+    const topmost = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return {
+        isChrome: el?.closest('.flow-container-delete') !== null,
+        found: `${el?.tagName ?? 'nothing'}.${el?.className ?? ''}`,
+      };
+    }, centre);
+    expect(topmost.isChrome, `the fanned ports took the ✕: hit ${topmost.found}`).toBe(true);
   });
 });

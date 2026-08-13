@@ -12,9 +12,12 @@ import {
   emptyContainerIds,
   liveNodeRects,
   revealTransform,
+  containerHandles,
   usableExtent,
   type Rect,
 } from './containerLayout';
+import type { NodeHandle } from '@xyflow/react';
+import { encodeCondition, HANDLE_SIZE, sourcePortOffset } from './ports';
 
 function rect(x: number, y: number, width = 150, height = 50): Rect {
   return { x, y, width, height };
@@ -451,5 +454,72 @@ describe('the reveal trigger', () => {
       expect(width).toBeGreaterThan(0);
       expect(height).toBeGreaterThan(0);
     });
+  });
+});
+
+/**
+ * #1066 — a container's STATED port bounds, in both fan states.
+ *
+ * Untested until now, and it is the one piece of geometry in this file with no
+ * second opinion anywhere. An activity's handle positions are MEASURED from the
+ * DOM, so a mistake there is self-correcting the moment React Flow re-measures;
+ * a container's are taken verbatim by `parseHandles` and RF resets a derived
+ * node to unmeasured on every render, so whatever this function says is where
+ * every container edge attaches, forever. The e2e proves the gesture; these pin
+ * the arithmetic the gesture rests on.
+ */
+describe('containerHandles — the stated port bounds of a derived box', () => {
+  const ports = (['success', 'failure', 'completion', 'skipped'] as const).map((on) => ({
+    id: encodeCondition({ on }),
+    label: on,
+    condition: { on } as const,
+    orphaned: false,
+  }));
+  /* The vertical CENTRE of a stated handle, in the same units React Flow reads
+     it in. `NodeHandle` types every dimension as optional, so a handle that
+     stated no geometry at all would silently centre on zero — `?? NaN` makes
+     that arrive as a failed assertion instead of as a plausible number. */
+  const centreOf = (h: NodeHandle) => (h.y ?? NaN) + (h.height ?? NaN) / 2;
+  const sources = (fanned: boolean) =>
+    containerHandles(200, 300, ports, fanned).filter((h) => h.type === 'source');
+
+  it('collapses every source port onto the box MIDDLE at rest', () => {
+    const centres = sources(false).map(centreOf);
+    expect(centres).toHaveLength(ports.length);
+    /* ONE point, and it is the middle — not merely "all equal". An off-centre
+       stack would still read as one point while every edge left the box at the
+       wrong height, which is invisible until compared against the fanned case. */
+    for (const centre of centres) expect(centre).toBe(300 / 2);
+  });
+
+  it('fans them to the SAME offsets the rendered dot uses', () => {
+    /* Against `sourcePortOffset` rather than against copied numbers: the whole
+       reason the offset is a shared function is that a container's stated `y`
+       and the stylesheet's `--port-offset` must not be two opinions. Restating
+       the arithmetic here would pass for a formula that had drifted. */
+    expect(sources(true).map(centreOf)).toEqual(
+      ports.map((_, i) => 300 / 2 + sourcePortOffset(i, ports.length)),
+    );
+  });
+
+  it('leaves the TARGET port alone in both states', () => {
+    /* Only the outgoing column fans. A target that moved with it would drag
+       every INCOMING edge to a new height for the duration of a hover — and
+       nothing in the ticket, the CSS or the e2e would notice, because they all
+       watch the source side. */
+    const target = (fanned: boolean) =>
+      containerHandles(200, 300, ports, fanned).find((h) => h.type === 'target')!;
+    expect(centreOf(target(false))).toBe(300 / 2);
+    expect(target(true)).toEqual(target(false));
+  });
+
+  it('keeps every port on its own edge, whatever the fan is doing', () => {
+    for (const fanned of [false, true]) {
+      const handles = containerHandles(200, 300, ports, fanned);
+      for (const h of handles) {
+        // The dot is centred ON the border, so its box starts half a dot outside.
+        expect(h.x).toBe(h.type === 'target' ? -HANDLE_SIZE / 2 : 200 - HANDLE_SIZE / 2);
+      }
+    }
   });
 });

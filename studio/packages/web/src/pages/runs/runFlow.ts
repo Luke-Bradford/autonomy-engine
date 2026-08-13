@@ -256,7 +256,14 @@ export function runFlowNodes(
       height: rect.height,
       style: { width: rect.width, height: rect.height },
       measured: { width: rect.width, height: rect.height },
-      handles: containerHandles(rect.width, rect.height, portsOf(c.id, undefined)),
+      /* COLLAPSED, permanently — the run monitor has no fan and needs none.
+         `connectable: false` below is the reason in one word: nothing here can
+         draw or re-point an edge, so a port exists only as the anchor its edge
+         binds to, and every edge leaving one point at the box's middle is the
+         resting look #992/#997 are for. The `false` matches what `RunCanvas`
+         draws, which never carries `data-ports-expanded`; stated and rendered
+         agree, which on a derived node nothing else would ever correct. */
+      handles: containerHandles(rect.width, rect.height, portsOf(c.id, undefined), false),
       draggable: false,
       selectable: false,
       connectable: false,

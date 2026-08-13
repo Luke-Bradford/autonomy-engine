@@ -253,16 +253,19 @@ export type NodeRef = { index: number } | { id: string };
  * anything once the fan is out, which is also the gesture a real user makes —
  * hover, then reach for the port they want.
  *
- * Containers are skipped: their ports do not collapse (their handle bounds are
- * STATED rather than measured), so there is nothing to wait for and hovering
- * would only add a race.
+ * #1066 gave a CONTAINER the same collapse, and it is aimed at differently on
+ * purpose. An activity is fanned by hovering its BOX; a container's box is
+ * `pointer-events: none` (#748), so the only thing on it a pointer can reach is
+ * a port — which is exactly why a container's ports stay drawn while an
+ * activity's do not. Aiming at the box centre there would hover whatever child
+ * node sits under the middle of the region and fan THAT instead.
  */
 async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
   const node =
     'id' in ref
       ? page.locator(`.react-flow__node[data-id="${ref.id}"]`)
       : page.locator('.react-flow__node').nth(ref.index);
-  const box = node.locator('.flow-node');
+  const box = node.locator('.flow-node, .flow-container');
   if ((await box.count()) === 0) return;
   /* RAW pointer move, not `hover()`. Playwright's hover runs actionability
      checks and aims at the element's centre — and a container box drawn OVER an
@@ -270,7 +273,9 @@ async function fanSourcePorts(page: Page, ref: NodeRef): Promise<void> {
      sees the pointer, never fans, and the drag that follows starts from a
      collapsed port. This is a gesture, not a click on a control, so the same
      reasoning `dragNodeBy` and `marqueeAllNodes` already record applies. */
-  const rect = await node.boundingBox();
+  const container = (await node.locator('.flow-container').count()) > 0;
+  const aim = container ? node.locator('.flow-port.react-flow__handle').first() : node;
+  const rect = await aim.boundingBox();
   if (rect === null) throw new Error('the node has no box to hover');
   await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
   // Polls, because the fan is deliberately delayed by a dwell.

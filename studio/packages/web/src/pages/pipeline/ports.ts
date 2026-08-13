@@ -399,8 +399,39 @@ export function usedConditionsBySource(
  * refusal for a mis-click — and would make a backwards drag onto the column
  * author whichever outcome happened to be nearest. Hence the pitch, the reduced
  * radius below, and the test that pins one under half the other.
+ *
+ * #1067 RAISED IT FROM 14 TO `WCAG_MIN_TARGET`, and the pitch is now set by the
+ * larger of two floors. The second one is the hit target: a port's invisible
+ * target is what React Flow actually resolves a drop against (`elementFromPoint`
+ * — see `index.css`'s `::after` rule), so two ports can only both carry a
+ * 24×24px target if they are at least 24px apart. Below that the targets overlap
+ * and the topmost sibling takes every drop, which is a WRONG EDGE rather than a
+ * stiff gesture.
+ *
+ * It sat at 14 because a wider pitch grows the node box (`nodeBoxHeight`) and a
+ * taller box pushed each newly-added node into the previous one's port column.
+ * #997 removed that pressure by collapsing the ports at rest: a box is only
+ * larger, never busier, and nothing is drawn where the extra height went.
+ * Measured rather than assumed — the full e2e suite is green at 24 including the
+ * thirteen connect specs the old note named.
  */
-export const SOURCE_PORT_PITCH = 14;
+export const SOURCE_PORT_PITCH = 24;
+
+/**
+ * WCAG 2.2 SC 2.5.8 Target Size (Minimum), in CSS px.
+ *
+ * Lives here because two things must agree about it and neither can see the
+ * other: `index.css` spends it as a port's hit-target WIDTH (via `--port-target`,
+ * published by `SourcePorts`), and `SOURCE_PORT_PITCH` above must be at least
+ * this for the target's HEIGHT to reach it without overlapping a neighbour. A
+ * test pins that relation, because a pitch below this silently buys back the
+ * overlap the target exists to avoid.
+ *
+ * The criterion's spacing exception does NOT apply as an alternative: it excuses
+ * an undersized target only when 24px circles centred on each target do not
+ * intersect, which at any pitch under 24 they do.
+ */
+export const WCAG_MIN_TARGET = 24;
 
 /**
  * React Flow's snap radius, reduced from its default 20 for the reason above.
@@ -476,18 +507,27 @@ export function sourcePortOffset(index: number, count: number): number {
 /**
  * The height a node needs for `portCount` ports at the pitch above.
  *
- * A floor, not a target: four ports at 14px span 42px and already fit the
- * pre-U19 52px box, so an ordinary activity is drawn exactly the size it always
- * was. Only a node that declares MORE than the four operational outcomes — an
- * `if`, a `switch` with cases — grows, and it grows by what its own
- * configuration asked for.
+ * A floor, not a target: the box is whichever is larger, the pre-U19 52px or the
+ * span its own ports need.
  *
- * Keeping the ordinary node its old size is not cosmetic. `addNode` staggers a
- * freshly-added node by 40px diagonally, so growing every box pushed each new
- * node into the previous one's port column, and thirteen e2e specs that draw a
- * connection between two toolbox-added activities started failing on
- * intercepted pointer events. Node placement is U21/U23's to revisit; U19 must
- * not silently make it worse.
+ * UNTIL #1067 AN ORDINARY ACTIVITY NEVER GREW — four ports at a 14px pitch span
+ * 42px and fit the 52px box — and that was deliberate rather than incidental.
+ * `addNode` staggers a freshly-added node by 40px diagonally, so growing every
+ * box pushed each new node into the previous one's port COLUMN, and thirteen
+ * e2e specs that draw a connection between two toolbox-added activities failed
+ * on intercepted pointer events.
+ *
+ * At the `WCAG_MIN_TARGET` pitch four ports span 78px, so the ordinary node now
+ * does grow. What changed is not the arithmetic but what a box CONTAINS: since
+ * #997 the ports are collapsed and undrawn at rest, so a taller box is emptier
+ * rather than busier, and the thing that used to land in a neighbour's port
+ * column is not drawn there to be landed on. Measured, not argued — the whole
+ * e2e suite is green at 78px, those thirteen specs included.
+ *
+ * Node placement is still U21/U23's to revisit, and the stagger is still 40px
+ * against a node now half again as tall. That is a layout question, not a
+ * gesture one: nodes have overlapped at that stagger since long before this
+ * (a 131px-wide node offset 40px horizontally always did).
  */
 export function nodeBoxHeight(portCount: number): number {
   /* The SPAN of n ports is (n-1) pitches between their centres, plus half a dot

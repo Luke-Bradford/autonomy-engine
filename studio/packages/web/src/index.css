@@ -1317,14 +1317,49 @@ td button + button {
    * geometry lands immediately, and measurement therefore reads the truth. */
 }
 
-/* SCOPED TO ACTIVITY BOXES, and the scope is load-bearing. A container's ports
-   are excluded from this change (its handle bounds are STATED, so it needs its
-   own collapsed geometry), and it therefore never carries `data-ports-expanded`
-   — so an unscoped collapse hid its ports with nothing able to bring them back.
-   `container-rendering.spec.ts` caught exactly that: a container port that could
-   never be seen or grabbed again. */
-.flow-node .flow-port.react-flow__handle {
+/* KEYED ON THE ATTRIBUTE, not on which KIND of box draws the port — #1066.
+ *
+ * #997 scoped this to `.flow-node` because only an activity could fan back out;
+ * a container's ports had no state to reveal them, so an unscoped collapse hid
+ * them permanently (`container-rendering.spec.ts` caught it: a port that could
+ * never be seen or grabbed again). #1066 gave the container the same fan, so the
+ * scope that made the rule safe is now the thing that would make the two kinds
+ * behave differently.
+ *
+ * `[data-ports-expanded]` is therefore the whole condition, and a box that never
+ * carries it stays collapsed — which is the CORRECT reading for the one surface
+ * that does not: the RUN MONITOR (`RunCanvas`) reuses `.flow-node` and
+ * `.flow-container` for a read-only view where no connection can be drawn, so
+ * its ports exist only as the anchors its edges bind to. Nothing there needs a
+ * port to be reachable, and every edge leaving one point is exactly the resting
+ * look #992 and #997 are for. */
+.flow-port.react-flow__handle {
   top: 50%;
+}
+
+[data-ports-expanded='true'] .flow-port.react-flow__handle {
+  top: calc(50% + var(--port-offset, 0px));
+}
+
+/* THE DOTS ARE UNDRAWN ONLY WHERE SOMETHING CAN DRAW THEM BACK, which is why
+ * this half stays scoped to the activity box while the positions above are not.
+ *
+ * An activity's box is hit-testable, so hovering the NODE fans its ports and an
+ * invisible port at rest costs nothing. A container's box is `pointer-events:
+ * none` by design (#748 — a box spanning a region of canvas must not eat the
+ * pane clicks aimed between its children), so the only thing on it a pointer can
+ * ever reach is a port, the ✕ or the ⚙. Hiding a container's ports would
+ * therefore make its own fan UNREACHABLE by mouse: nothing left to hover.
+ * Shrinking them to an invisible 6px target instead only trades that for a
+ * control the operator cannot find.
+ *
+ * So a container collapses its POSITION and keeps its paint: four dots become
+ * one dot at the middle, which is the operator's ask in their own words ("all
+ * outputs should come from the middle … when hovered over, split so it's easy to
+ * click them") and leaves the affordance visible. Hovering that dot fans the
+ * column, and the fanned targets tile across the middle it sat on, so the
+ * pointer is still over a port afterwards and the fan does not flicker shut. */
+.flow-node .flow-port.react-flow__handle {
   opacity: 0;
   /* An invisible dot must not eat a click aimed at the node under it. */
   pointer-events: none;
@@ -1332,38 +1367,20 @@ td button + button {
 }
 
 .flow-node[data-ports-expanded='true'] .flow-port.react-flow__handle {
-  top: calc(50% + var(--port-offset, 0px));
   opacity: 1;
   pointer-events: all;
-}
-
-/* A CONTAINER'S PORTS ARE PERMANENTLY FANNED, and this rule is what keeps them
-   so. `SourcePorts` used to place every port with an inline `top`, which applied
-   wherever it was drawn; publishing the offset as a property instead moved that
-   decision into the two rules above, and BOTH are scoped to `.flow-node` — so a
-   container was left with React Flow's own `top: 50%` and all four of its ports
-   stacked on one point, unfanned and unfannable. Not a cosmetic loss: a
-   coordinate-addressed drag then grabbed whichever port paints last, so
-   `container-rendering.spec.ts` asked for `success`, was handed `skipped`, and
-   authored a brand-new edge in place of the duplicate refusal it expected.
-
-   Deliberately UNCONDITIONAL, not a second copy of the collapse. A container is
-   excluded from #997's quiet-at-rest by design — React Flow can never measure
-   one, so its handle bounds are STATED (`containerHandles`) and a re-measure
-   after a fan is discarded. Collapsing it needs its own stated collapsed
-   geometry, which is its own change; this restores exactly the pre-#997
-   position and nothing else. */
-.flow-container .flow-port.react-flow__handle {
-  top: calc(50% + var(--port-offset, 0px));
 }
 
 /* A bigger target than the drawn dot — noise is a function of what is DRAWN,
    not what is clickable. Inert while collapsed, because the handle it hangs off
    is `pointer-events: none` there.
  *
- * THE HEIGHT IS THE PORT PITCH, AND NOTHING LARGER. This is not a rounding of
- * WCAG 2.2's 24px down to what fits — it is the bound the gesture imposes, and
- * exceeding it authors the WRONG EDGE rather than merely feeling imprecise:
+ * THE HEIGHT IS THE PORT PITCH, AND NOTHING LARGER — a bound the gesture
+ * imposes, where exceeding it authors the WRONG EDGE rather than merely feeling
+ * imprecise. Since #1067 the pitch IS `WCAG_MIN_TARGET`, so the target reaches
+ * the full 24×24 in both axes; that is why the pitch was raised rather than the
+ * target trimmed, and `ports.test.ts` pins the pitch at or above it so a later
+ * tightening cannot quietly buy the overlap back.
  *
  * React Flow does NOT decide which port a drag landed on by its own measured
  * geometry. `isValidHandle` (`@xyflow/system` 0.0.79, index.js:2563-2574) calls
@@ -1396,17 +1413,17 @@ td button + button {
  * nothing of the crescent. It is the same rule as the height: take all the room
  * there is, and none that belongs to another gesture.
  *
- * No fallback on `var(--port-pitch)`: restating `14px` here would recreate the
- * two-homes problem the property exists to solve, and an unresolved custom
- * property leaves `height: auto` on an empty box, i.e. zero. That fails in the
- * safe direction — a target that shrank to the dot, never one that reaches a
- * neighbour. `SourcePorts` publishes it on every port. */
-.flow-node .flow-port.react-flow__handle::after {
+ * No fallback on either custom property: restating the numbers here would
+ * recreate the two-homes problem they exist to solve, and an unresolved one
+ * leaves `auto` on an empty box, i.e. zero. That fails in the safe direction — a
+ * target that shrank to the dot, never one that reaches a neighbour.
+ * `SourcePorts` publishes both on every port, from `ports.ts`. */
+.flow-port.react-flow__handle::after {
   content: '';
   position: absolute;
   top: 50%;
   left: 100%;
-  width: 24px;
+  width: var(--port-target);
   height: var(--port-pitch);
   transform: translate(-100%, -50%);
 }
@@ -1573,17 +1590,17 @@ td button + button {
    cannot see at all. */
 /* #997 moved the ACTIVITY arms from `:hover` to the fan state, so the words and
    the dots arrive together — a label revealed by raw hover while the port it
-   names was still collapsed at the middle would point at nothing. The CONTAINER
-   arms keep `:hover`/`:focus-within` because a container's ports do not collapse
-   yet: its handle bounds are STATED (`containerHandles`) rather than measured,
-   so its half needs stated collapsed geometry and is tracked separately. */
-.flow-node[data-ports-expanded='true'] .flow-port-label,
-.flow-container:hover .flow-port-label,
-.flow-container:focus-within .flow-port-label,
-/* RESTORED, and it is the only arm that answers a KEYBOARD user on a container:
-   React Flow owns the focusable wrapper, which is the PARENT of `.flow-container`,
-   so `:focus-within` on the box itself never matches a node focused with Tab. */
-.react-flow__node:focus-visible .flow-port-label {
+   names was still collapsed at the middle would point at nothing. #1066 brought
+   the CONTAINER onto the same state, which finally makes the symmetry above a
+   fact rather than an intention: ONE arm, the same for both kinds, and the
+   keyboard is answered inside `useNodeFan` (which listens for `focusin` on the
+   wrapper React Flow owns) rather than by a second selector here.
+
+   The `:hover`/`:focus-within`/`:focus-visible` arms this replaces are gone
+   deliberately. Each of them could reveal a WORD while the port it names was
+   still collapsed at the middle — a label pointing at nothing — because none of
+   them is the state the dots are drawn from. */
+[data-ports-expanded='true'] .flow-port-label {
   opacity: 1;
 }
 
@@ -1687,6 +1704,25 @@ td button + button {
  * say what the click does. Never colour ALONE — the accessible name is
  * "Delete <kind> container" and the same string is the tooltip.
  */
+/* A VISIBLE CONTROL BEATS AN INVISIBLE ONE — #1066, and it is a correctness fix
+ * rather than polish. Both chrome buttons sit top-RIGHT, which is the same
+ * corner the port column fans into: on an emptied box (220x120) the `success`
+ * port lands 36px above the middle, and its 24px hit target then covers the ✕'s
+ * centre. `.react-flow__handle` carries no `z-index`, so DOM order decided it
+ * and `SourcePorts` renders last — the port won.
+ *
+ * The failure that exposed it is the worst shape available: hovering the ✕ for
+ * the dwell FANS the ports, so the target that steals the click only arrives
+ * once the pointer has been sitting on the button. The hit-test passes, the
+ * button is visibly hovered, and then mousedown starts a connection instead.
+ * `container-membership.spec.ts` caught it as an emptied container that could no
+ * longer be deleted — which is #748's one-way trap, reopened from a new
+ * direction, on a box whose only escape hatch this is. */
+.flow-container-delete,
+.flow-container-configure {
+  z-index: 1;
+}
+
 .flow-container-delete {
   position: absolute;
   top: 2px;

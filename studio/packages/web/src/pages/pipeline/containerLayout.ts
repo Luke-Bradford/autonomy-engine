@@ -378,11 +378,26 @@ export function unmeasuredNodeSize(portCount: number): { width: number; height: 
  * miss: RF's own stylesheet draws an activity's handle the same way, and what it
  * MEASURES for one lands within a pixel of this. The line therefore meets the
  * rendered dot on a container exactly as it does on an activity.
+ *
+ * `fanned` IS THE WHOLE OF #1066, and it has to be a parameter rather than a
+ * stylesheet rule. An activity collapses its ports in CSS and then tells React
+ * Flow to re-measure (`updateNodeInternals`); a container cannot, because RF
+ * resets a derived node to unmeasured on every render and `parseHandles` takes
+ * THESE numbers verbatim. So a container's collapse has to be stated in the same
+ * breath as its fanned geometry, and the caller must pass the same fan state the
+ * box renders with — otherwise the dots move and every edge stays where the dots
+ * were, which is the exact disagreement #997's activity half had to avoid from
+ * the other direction.
+ *
+ * Collapsed means every source port at the box's vertical MIDDLE — one point, so
+ * every outgoing edge appears to leave one point, which is what #997 buys and
+ * what #992's palette-only labelling relies on.
  */
 export function containerHandles(
   width: number,
   height: number,
   sourcePorts: readonly SourcePort[],
+  fanned: boolean,
 ): NodeHandle[] {
   const size = { width: HANDLE_SIZE, height: HANDLE_SIZE };
   const centred = (offset: number) => height / 2 + offset - HANDLE_SIZE / 2;
@@ -407,7 +422,7 @@ export function containerHandles(
       type: 'source' as const,
       position: Position.Right,
       x: width - HANDLE_SIZE / 2,
-      y: centred(sourcePortOffset(index, sourcePorts.length)),
+      y: centred(fanned ? sourcePortOffset(index, sourcePorts.length) : 0),
       ...size,
     })),
   ];
