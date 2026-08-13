@@ -89,15 +89,25 @@ test.describe('#1060 the secrets vault has a front end', () => {
     await page.getByLabel('Value').fill('second');
     await page.getByRole('button', { name: 'Create secret' }).click();
 
-    const alert = page.getByRole('alert');
-    await expect(alert).toContainText('already exists');
-    await expect(alert).toContainText('ignore case');
-    await expect(alert).not.toContainText('The request conflicts with existing data.');
-
-    // Clean up so a re-run of this file starts from the same state it assumes.
-    await page.getByRole('button', { name: 'Cancel' }).click();
-    page.once('dialog', (dialog) => void dialog.accept());
-    await page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }).click();
+    try {
+      const alert = page.getByRole('alert');
+      await expect(alert).toContainText('already exists');
+      await expect(alert).toContainText('ignore case');
+      await expect(alert).not.toContainText('The request conflicts with existing data.');
+    } finally {
+      // In a `finally`, because the cleanup matters MOST when an assertion
+      // above has just failed: `reset-state.mjs` wipes once per RUN, not per
+      // test, so a row left behind would make the next attempt at this test
+      // 409 on its FIRST create — which reads as "create is broken" rather
+      // than as leftover state. Exactly the trap the note at the top of this
+      // file describes, which a trailing cleanup does not actually avoid.
+      await page.getByRole('button', { name: 'Cancel' }).click();
+      page.once('dialog', (dialog) => void dialog.accept());
+      await page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }).click();
+      await expect(
+        page.getByRole('button', { name: `Delete ${DUP_NAME}`, exact: true }),
+      ).toHaveCount(0);
+    }
 
     // This test PROVOKES the 409, so the browser's own network entry for it is
     // expected output. Anchored on the browser-level text so it cannot swallow

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatZodIssues } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -33,43 +33,56 @@ function blankForm(): FormState {
  * `requireOwned` on delete) — this page never sends an owner, and the strict
  * write body 400s a client that tries.
  *
- * There is deliberately NO request-sequencing guard here (contrast
- * `pipelinesStore.latestLoad`). That guard exists where two concurrent loads
- * of the same list can be in flight — a filter toggle, a poll. This page has
- * exactly two load paths: the mount effect, aborted on unmount, and a
- * post-mutation `refresh` already awaited inside its own handler. Adding a
- * latest-wins token here would be machinery guarding a race that has no
- * producer.
+ * Every load goes through `load`, which is LATEST-WINS (`pipelinesStore`'s
+ * `latestLoad` is the precedent). An earlier draft argued no guard was needed
+ * because the only concurrent load was the mount effect, "aborted on unmount".
+ * That was wrong, and cheaply so: the New secret button is not gated behind
+ * the list having arrived, so an operator can create a secret while the MOUNT
+ * load is still in flight. If the post-create refresh resolves first, the
+ * mount load then lands and overwrites it with a list taken before the secret
+ * existed — the new row appears and then silently vanishes, on the one surface
+ * that exists to confirm it was stored. Two quick deletes reach the same state
+ * from the other direction. `abort()` does not cover this: it fires on
+ * unmount, and the component is still very much mounted.
  */
 export function SecretsPage() {
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  const latestLoad = useRef(0);
 
-  // Refetch after a mutation. Called only from event handlers, never
-  // synchronously inside an effect — so its setState is safe.
-  const refresh = useCallback(async () => {
-    try {
-      setSecrets(await listSecrets());
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(`Could not load secrets: ${messageOf(err)}`);
-    }
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    listSecrets(controller.signal)
+  /**
+   * The ONE load path. Every caller takes a ticket; a response whose ticket is
+   * no longer the newest is dropped rather than written, on the failure branch
+   * as well as the success one — a stale REJECTION would otherwise replace a
+   * good list with an error banner just as convincingly.
+   */
+  const load = useCallback((signal?: AbortSignal) => {
+    const ticket = ++latestLoad.current;
+    // The promise-callback form, not `async`/`await`: it keeps every setState
+    // inside a callback rather than in the synchronous body of the mount
+    // effect below, which is what the `set-state-in-effect` rule requires.
+    return listSecrets(signal)
       .then((list) => {
+        if (ticket !== latestLoad.current) return;
         setSecrets(list);
         setLoadError(null);
       })
       .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+        if (signal?.aborted || ticket !== latestLoad.current) return;
         setLoadError(`Could not load secrets: ${messageOf(err)}`);
       });
-    return () => controller.abort();
   }, []);
+
+  // Refetch after a mutation. Called only from event handlers, never
+  // synchronously inside an effect — so its setState is safe.
+  const refresh = useCallback(() => load(), [load]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const onDelete = useCallback(
     async (secret: NamedSecret) => {
@@ -208,6 +221,12 @@ function SecretForm({
       // the name, still less that it collided case-insensitively (#533:
       // `UNIQUE(owner_id, name COLLATE NOCASE)`). Name both here — this is the
       // single likeliest failure on first use of this page.
+      //
+      // `secrets` carries a second unique index, on `ref`, so a 409 is not
+      // NECESSARILY the name. But `ref` is a server-minted nanoid, so a
+      // collision there is not a state a client can provoke or realistically
+      // reach; treating it as the name is the right call for a message, not an
+      // oversight.
       setError(
         err instanceof ApiError && err.status === 409
           ? `A secret named “${form.name}” already exists. Secret names ignore case, so ` +

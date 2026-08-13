@@ -22,6 +22,16 @@ const listMock = vi.mocked(api.listSecrets);
 const createMock = vi.mocked(api.createSecret);
 const deleteMock = vi.mocked(api.deleteSecret);
 
+/** A promise this test resolves by hand, so a load can be held open across
+ *  other interactions and answered out of order. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function secret(overrides: Partial<api.NamedSecret> = {}): api.NamedSecret {
   return {
     id: 'sec_1',
@@ -85,6 +95,37 @@ describe('SecretsPage', () => {
     expect(await screen.findByText('stripe-key')).toBeInTheDocument();
     // The form closed, so the typed credential is no longer on screen.
     expect(screen.queryByLabelText('Value')).not.toBeInTheDocument();
+  });
+
+  it('does not let the MOUNT load overwrite the list a create just refreshed', async () => {
+    // The New secret button is not gated behind the list having arrived, so a
+    // create can complete while the initial load is still in flight. Without a
+    // latest-wins guard the mount load lands second and writes a list taken
+    // BEFORE the secret existed — the new row appears, then silently vanishes
+    // from the one surface that exists to confirm it was stored.
+    const user = userEvent.setup();
+    const mountLoad = deferred<api.NamedSecret[]>();
+    listMock.mockReturnValueOnce(mountLoad.promise);
+    createMock.mockResolvedValue(secret());
+    renderWithRouter(<SecretsPage />);
+
+    // The mount load is held open; the form is reachable regardless.
+    await user.click(screen.getByRole('button', { name: 'New secret' }));
+    await user.type(screen.getByLabelText('Name'), 'stripe-key');
+    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+
+    // The post-create refresh resolves FIRST, with the secret present.
+    listMock.mockResolvedValue([secret()]);
+    await user.click(screen.getByRole('button', { name: 'Create secret' }));
+    expect(await screen.findByText('stripe-key')).toBeInTheDocument();
+
+    // ...and only now does the stale mount load answer, with the empty list it
+    // was always going to return.
+    mountLoad.resolve([]);
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('stripe-key')).toBeInTheDocument();
+    expect(screen.queryByText(/No secrets yet/)).not.toBeInTheDocument();
   });
 
   it('refuses an untrimmed name client-side, without a round trip', async () => {

@@ -78,12 +78,20 @@ export const MAX_SECRET_VALUE_LEN = 16384;
  * re-declared client-side, but a RULE about which values are legal cannot — a
  * copy drifts silently, and the drift only shows up as a 400 the client
  * believed it had already ruled out. The `.refine` below is exactly such a
- * rule. (`ConnectionWriteSchema` re-derives instead, because there the client
- * body genuinely DIVERGES from the server's; this one does not.)
+ * rule.
+ *
+ * `ConnectionWriteSchema` (`packages/web/src/api/connections.ts`) does NOT do
+ * this — it re-declares the body client-side. That is not a counter-precedent
+ * to weigh against the above: the two declarations are structurally identical
+ * (its own docblock says it is "reconstructed to match the server's local
+ * `ConnectionWriteBodySchema` EXACTLY"), so it is precisely the copy-that-
+ * agrees-today this arrangement avoids. Pre-existing, and not this ticket's to
+ * change.
  *
  * `NewSecretSchema` is NOT the thing to derive this from: that is the internal
- * INSERT shape (`ref` + `ciphertext`), which is the encrypted result of this
- * body, not the body itself. They share no field a client sends.
+ * INSERT shape, whose `ref` + `ciphertext` are the encrypted RESULT of this
+ * body rather than anything a client sends. (`name` does travel through
+ * unchanged into it — the two overlap there, they just do not correspond.)
  */
 export const SecretWriteBodySchema = z
   .object({
