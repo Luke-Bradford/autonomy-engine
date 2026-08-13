@@ -123,6 +123,47 @@ test.describe('canvas auto-layout (U9)', () => {
     await expectQuiet(page, problems);
   });
 
+  test('#1005 a node WIDER than the nominal size does not crowd the next column', async ({
+    page,
+  }) => {
+    const problems = collectPageProblems(page);
+    // A node is as wide as its TITLE, and the title falls back to the raw
+    // activity `type` when the catalog has no entry for it — which the write
+    // gate permits (an unknown type fails at DISPATCH, not at save), so this is
+    // the doc an import from a newer or older build actually produces. One
+    // unbroken token on purpose: a multi-word title can wrap, which would make
+    // the width precondition below depend on the pane width instead of on the
+    // layout.
+    await openSeededCanvas(page, 'e2e arrange wide', {
+      nodes: [
+        { id: 'wide', type: 'an_extremely_long_unregistered_activity_type_name', position: PILE },
+        { id: 'next', position: PILE },
+      ],
+      edges: [{ from: 'wide', to: 'next', on: 'success' }],
+    });
+    await viewportSettled(page);
+
+    const at = (id: string) => rectOf(page, `.react-flow__node[data-id="${id}"]`);
+
+    // The PRECONDITION, asserted rather than assumed: this fixture is only the
+    // failing case while the rendered box really is wider than the nominal
+    // 150 + LAYOUT_GAP 60 the layout used to reserve for it. If a future style
+    // change caps node width, this goes red HERE and says why, rather than
+    // quietly passing as a test of nothing.
+    const wideBefore = await at('wide');
+    expect(wideBefore!.width, 'the fixture must render wider than the reserved column').toBeGreaterThan(210);
+
+    await page.getByRole('button', { name: 'Arrange', exact: true }).click();
+    await viewportSettled(page);
+
+    // Screen coords: the wide box must END before its neighbour BEGINS. Packed
+    // from the nominal width this overlapped by the difference.
+    const [wide, next] = await Promise.all([at('wide'), at('next')]);
+    expect(wide!.right).toBeLessThan(next!.left);
+
+    await expectQuiet(page, problems);
+  });
+
   test('a container keeps its children, and encloses nothing else', async ({ page }) => {
     const problems = collectPageProblems(page);
     await openSeededCanvas(page, 'e2e arrange container', {
