@@ -1,6 +1,17 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { SecretPublicSchema, SecretWriteBodySchema, type Secret } from '@autonomy-studio/shared';
-import { createSecret, deleteSecret, getSecret, listNamedSecretsPage } from '../repo/index.js';
+import {
+  SecretPublicSchema,
+  SecretRotateBodySchema,
+  SecretWriteBodySchema,
+  type Secret,
+} from '@autonomy-studio/shared';
+import {
+  createSecret,
+  deleteSecret,
+  getSecret,
+  listNamedSecretsPage,
+  updateSecretCiphertext,
+} from '../repo/index.js';
 import { newId } from '../repo/ids.js';
 import { encrypt } from '../secrets/secrets.js';
 import { NotFoundError } from '../errors.js';
@@ -50,6 +61,52 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
       pageArgsFromQuery(request.query),
     );
     return { items: page.items.map(toPublic), nextCursor: page.nextCursor };
+  });
+
+  /**
+   * #1061 — ROTATION, in place. Replacing a standalone secret's value used to
+   * mean DELETE + POST, and between those two calls the name resolved to
+   * nothing: every node dispatching in that window failed with `secret
+   * '<name>' not found` (`run/executor.ts`), which a scheduled trigger firing
+   * mid-rotation would hit. This route closes the window by re-encrypting
+   * under the row's existing `id`/`ref`/`name` — exactly what `PATCH
+   * /api/connections/:id` has always done for a connection-owned secret, via
+   * the same `updateSecretCiphertext` repo function.
+   *
+   * The body carries `secret` and NOTHING else. Renaming is not merely
+   * unimplemented, it is refused: the name is the key every stored
+   * `{ "$secret": "<name>" }` marker resolves through, and a pipeline version
+   * is immutable, so a rename would strand those markers with no way to repair
+   * the version holding them. Because the name cannot move, a rotation needs
+   * no revalidation of any stored pipeline version — the property to preserve
+   * if this body is ever widened.
+   */
+  fastify.patch<{ Params: { id: string } }>('/api/secrets/:id', async (request) => {
+    // Ownership first, mirroring `PATCH /api/connections/:id`. Same two gates
+    // as DELETE below, for the same reasons: `requireOwned` is the real
+    // authorization check, and the `name === null` guard keeps this route to
+    // STANDALONE secrets — a connection's secret is managed only through its
+    // connection, never sideways by id.
+    const existing = requireOwned(
+      getSecret(db, request.params.id),
+      request.principal,
+      'secret',
+      request.params.id,
+    );
+    if (existing.name === null) throw new NotFoundError('secret', request.params.id);
+
+    const { secret } = SecretRotateBodySchema.parse(request.body);
+
+    // Encrypt BEFORE the DB touch, as POST does — the plaintext is never
+    // stored, returned, or logged.
+    const ciphertext = await encrypt(secret, masterKey);
+    const updated = updateSecretCiphertext(db, existing.id, ciphertext);
+    // `null` means the row vanished between the read above and this write (a
+    // concurrent DELETE). Report it as the 404 it is; never report a write
+    // that did not land as a success.
+    if (!updated) throw new NotFoundError('secret', request.params.id);
+
+    return toPublic(updated);
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/secrets/:id', async (request, reply) => {
