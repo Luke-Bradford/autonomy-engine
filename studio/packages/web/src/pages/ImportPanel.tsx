@@ -56,6 +56,15 @@ export interface ImportPanelProps {
    * Reload the surrounding list. Awaited, so the imported row is on screen
    * before the outcome names it — but its failure is reported SEPARATELY from
    * the import's, because by then the resource already exists.
+   *
+   * "Awaited" is weaker than it reads, and deliberately so. All three current
+   * callers hand over a `useGuardedLoad` refresh, whose promise resolves the
+   * same way whether the answer was written, dropped as superseded, or never
+   * requested because the page unmounted; failures go to that page's own error
+   * slot, not to this promise. So a resolved `onImported` is evidence the
+   * reload was ISSUED, not that the row is on screen — which is why the outcome
+   * below names the resource from the IMPORT's own response rather than from
+   * anything the list went on to show.
    */
   onImported: () => Promise<void> | void;
 }
@@ -111,6 +120,11 @@ export function ImportPanel({ listKind, onImported }: ImportPanelProps) {
         // EXISTS; reporting a failed reload as a failed import would be a false
         // negative, and `/api/import` does not dedupe, so the operator's
         // natural retry would mint a duplicate.
+        //
+        // No CURRENT caller can reach this catch — all three route their
+        // failures into their own error slot (see the prop's docblock) — but the
+        // prop's contract permits a rejecting `onImported`, so the guard stays
+        // rather than becoming a trap for the next caller to write one.
         let refreshFailure: string | null = null;
         try {
           await onImported();

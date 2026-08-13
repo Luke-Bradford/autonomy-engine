@@ -218,10 +218,20 @@ describe('ConnectionsPage', () => {
     expect(body.secret).toBe('sk-new');
   });
 
-  it('threads an AbortSignal into the initial load', async () => {
+  it('threads an AbortSignal into EVERY load, the post-mutation refresh included', async () => {
+    // Both load paths share the mount controller (#1062), so a refresh left in
+    // flight when the operator navigates away is abortable too — it is not only
+    // the initial load that is.
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
     renderWithRouter(<ConnectionsPage />);
-    await screen.findByText(/No connections yet/i);
+    await screen.findByText('Doomed');
     expect(listMock).toHaveBeenCalledWith(expect.any(AbortSignal));
+
+    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    expect(listMock.mock.calls[1]![0]).toEqual(expect.any(AbortSignal));
   });
 
   it('deletes a connection after confirmation', async () => {
