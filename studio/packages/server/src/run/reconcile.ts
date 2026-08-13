@@ -970,6 +970,24 @@ function interruptRun(deps: ReconcileDeps, runId: string, reason: string): void 
  * An ABSENT parent reads as an empty log, hence non-terminal, hence left alone:
  * the same posture, and the same one `sweepPendingRuns` states as a non-goal.
  *
+ * THE RESUME THAT FOLLOWS IS THE ACCEPTED COST — stated because it is the half
+ * a reader asks about, and because it is BOUNDED rather than wasted. The child
+ * resumes and may bill activities whose `call.returned` then fails to land:
+ * `returnToParent` re-reads the same corrupt log and throws, caught and logged
+ * by `subscribeChildReturns` (`child.ts`). But undelivered is not undeliverable.
+ * Once an operator repairs the parent's log, the parent's reconcile re-emits
+ * `startChild` for its still-`waiting` call node — always safe, per this
+ * module's header, because the deterministic `childRunId` makes it idempotent —
+ * and `ensure` ADOPTS the already-terminal child instead of re-running it
+ * (`child.ts`). The spend is banked and consumed on repair.
+ *
+ * FREEZING INSTEAD WOULD NOT BE THE CHEAPER TRADE, which is the point. It
+ * appends `run.interrupted`, a terminal fact #443 makes STAND on every later
+ * boot, so the repaired parent would adopt a FROZEN child and that work would be
+ * permanently lost — the log is append-only and versions are immutable, so there
+ * is nothing to undo it with. The asymmetry decides this, not the average cost:
+ * a resume under an undecidable premise is recoverable, a freeze is not.
+ *
  * That report is NOT deduped, so one corrupt parent can appear in `corrupt` more
  * than once in a single scan: once per `running` CHILD of it that gets this far,
  * plus once more if the parent's own row is `running` and the scan visits it
