@@ -200,6 +200,61 @@ describe('workspace-events repo (#3 G6a — the workspace-audit log)', () => {
     expect(new Set(seen)).toEqual(new Set(ids));
     expect(seen).toHaveLength(3);
   });
+
+  /**
+   * #1076 — the descending walk, which is what lets the Monitor › Audit page
+   * render the newest entries in ONE request instead of walking an append-only
+   * log to its end and reversing. `seq` is the ordering scalar in both
+   * directions, so these assertions are on `seq` and not on wall-clock
+   * `createdAt` (which several appends in one millisecond would tie).
+   */
+  it('walks newest-first under order=desc, every event exactly once', () => {
+    const { db } = freshDb();
+    for (let i = 0; i < 5; i++) appendWorkspaceEvent(db, OWNER, pipelineArchived);
+
+    const seqs: number[] = [];
+    let key: ReturnType<typeof decodeCursor> | undefined;
+    let pages = 0;
+    for (;;) {
+      const page = listWorkspaceEventsPage(db, OWNER, { limit: 2, cursor: key ?? undefined }, 'desc');
+      pages++;
+      seqs.push(...page.items.map((e) => e.seq));
+      if (page.nextCursor === null) break;
+      key = decodeCursor(page.nextCursor);
+      expect(key).not.toBeNull();
+      if (pages > 10) throw new Error('descending walk did not terminate');
+    }
+
+    // Strictly descending, complete, no duplicates — and the FIRST page alone
+    // already holds the newest events, which is the whole point of the mode.
+    expect(seqs).toEqual([4, 3, 2, 1, 0]);
+    expect(pages).toBe(3);
+  });
+
+  it('reads the same log in opposite orders — desc is the exact reverse of asc', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, repoConnected);
+    appendWorkspaceEvent(db, OWNER, pipelineArchived);
+    appendWorkspaceEvent(db, OWNER, importApplied);
+
+    const asc = listWorkspaceEventsPage(db, OWNER, { limit: 50 }, 'asc');
+    const desc = listWorkspaceEventsPage(db, OWNER, { limit: 50 }, 'desc');
+
+    expect(asc.items.map((e) => e.id)).toEqual([...desc.items].reverse().map((e) => e.id));
+    expect(desc.items.map((e) => e.seq)).toEqual([2, 1, 0]);
+  });
+
+  it('holds owner scope on the descending path — another owner is never returned', () => {
+    const { db } = freshDb();
+    appendWorkspaceEvent(db, OWNER, repoConnected);
+    appendWorkspaceEvent(db, 'other_owner', pipelineArchived);
+
+    // Authentication is not authorization: the direction of the walk changes
+    // the ORDER BY, and must not change the owner filter.
+    const page = listWorkspaceEventsPage(db, 'other_owner', { limit: 50 }, 'desc');
+    expect(page.items).toHaveLength(1);
+    expect(page.items.every((e) => e.ownerId === 'other_owner')).toBe(true);
+  });
 });
 
 describe('getActivePublishedVersion (#3 G6c-1 — the active pointer projection)', () => {
