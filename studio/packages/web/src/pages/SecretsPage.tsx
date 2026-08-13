@@ -50,6 +50,7 @@ export function SecretsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const latestLoad = useRef(0);
+  const mountAbort = useRef<AbortController | null>(null);
 
   /**
    * The ONE load path. Every caller takes a ticket; a response whose ticket is
@@ -76,12 +77,27 @@ export function SecretsPage() {
 
   // Refetch after a mutation. Called only from event handlers, never
   // synchronously inside an effect — so its setState is safe.
-  const refresh = useCallback(() => load(), [load]);
+  //
+  // It shares the MOUNT's controller rather than going unguarded: an operator
+  // who deletes a secret and immediately navigates away leaves this request in
+  // flight, and its settle path would otherwise still run `setSecrets` against
+  // a component that no longer exists. React 18 makes that a no-op rather than
+  // a warning, so the cost is not a visible bug — it is that one of the two
+  // load paths is guarded and the other is not, which is exactly the kind of
+  // asymmetry the next reader has to re-derive.
+  const refresh = useCallback(() => load(mountAbort.current?.signal), [load]);
 
   useEffect(() => {
+    // Created per effect RUN, not once per component: StrictMode mounts, tears
+    // down and remounts, so a controller hoisted into the ref's initial value
+    // would arrive at the second mount already aborted and fail every load.
     const controller = new AbortController();
+    mountAbort.current = controller;
     void load(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (mountAbort.current === controller) mountAbort.current = null;
+    };
   }, [load]);
 
   const onDelete = useCallback(

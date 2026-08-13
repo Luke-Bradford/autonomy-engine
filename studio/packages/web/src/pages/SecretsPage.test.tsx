@@ -216,6 +216,31 @@ describe('SecretsPage', () => {
     expect(deleteMock).not.toHaveBeenCalled();
   });
 
+  it('aborts an in-flight post-mutation refresh when the page unmounts', async () => {
+    // The mount load is abort-guarded; a refresh triggered by a create or a
+    // delete has to be too, or navigating away mid-mutation leaves a request
+    // running whose settle path still writes state into a dead component.
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValue([secret()]);
+    deleteMock.mockResolvedValue(undefined);
+    const { unmount } = renderWithRouter(<SecretsPage />);
+    await screen.findByText('stripe-key');
+
+    // Hold the post-delete refresh open, so it is genuinely in flight at unmount.
+    const refreshLoad = deferred<api.NamedSecret[]>();
+    listMock.mockReturnValueOnce(refreshLoad.promise);
+    await user.click(screen.getByRole('button', { name: 'Delete stripe-key' }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+
+    const signal = listMock.mock.calls[1]![0];
+    expect(signal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(signal?.aborted).toBe(true);
+  });
+
   it('reports a failed delete instead of leaving the row silently in place', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
