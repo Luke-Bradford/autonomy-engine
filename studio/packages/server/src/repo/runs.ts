@@ -298,11 +298,55 @@ export function listParsedRuns(
       const row = getRun(db, id);
       if (row !== null) parsed.push(row);
     } catch (err) {
-      if (err instanceof ZodError || err instanceof SyntaxError) onSkip?.(id, err);
+      if (isDeterministicRowCorruption(err)) onSkip?.(id, err);
       else throw err;
     }
   }
   return parsed;
+}
+
+/**
+ * The #515 classification, named once: a row that will not parse is
+ * PERMANENTLY corrupt (`ZodError`/`SyntaxError` — it fails identically on every
+ * read), and ANY other throw is a live DB fault (a locked database, a closed
+ * connection, a disk error) which the next attempt may well clear.
+ *
+ * The distinction is load-bearing, not cosmetic: callers file the first under a
+ * permanent bucket that asks an operator to repair the row, and must let the
+ * second propagate to a transient one. Conflating them either re-reports a
+ * healthy row as corrupt forever, or retries a repair-needing row forever.
+ */
+export function isDeterministicRowCorruption(err: unknown): boolean {
+  return err instanceof ZodError || err instanceof SyntaxError;
+}
+
+/**
+ * `getRun`, but with `listParsedRuns`'s per-row leniency — the SINGLE-ROW twin,
+ * for a reader that knows the one id it wants and so has no list to scan.
+ *
+ * Same contract as the scan, deliberately: a row whose stored state is
+ * deterministically corrupt is reported via `onSkip` and returns `null`; a
+ * genuine DB fault PROPAGATES. Callers that read a row outside a lenient scan
+ * (the boot reconciler's orphan sweep reads a `pending` child's PARENT, which no
+ * scan parsed) would otherwise hand-roll this classification, and a policy
+ * hand-rolled per call site is a policy that drifts.
+ *
+ * `null` covers both "absent" and "corrupt" because every caller so far treats
+ * them the same way — there is no row to act on. `onSkip` is what distinguishes
+ * them, for a caller that must report the corruption rather than just skip it.
+ */
+export function getParsedRun(
+  db: Db,
+  id: string,
+  onSkip?: (id: string, err: unknown) => void,
+): Run | null {
+  try {
+    return getRun(db, id);
+  } catch (err) {
+    if (!isDeterministicRowCorruption(err)) throw err;
+    onSkip?.(id, err);
+    return null;
+  }
 }
 
 /**
@@ -516,7 +560,7 @@ export function nextQueuedRunForTrigger(
       if (row === null || row.status !== 'queued') continue;
       return row;
     } catch (err) {
-      if (err instanceof ZodError || err instanceof SyntaxError) onSkip?.(id, err);
+      if (isDeterministicRowCorruption(err)) onSkip?.(id, err);
       else throw err;
     }
   }

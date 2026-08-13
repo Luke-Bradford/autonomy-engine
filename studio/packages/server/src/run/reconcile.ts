@@ -8,7 +8,12 @@ import {
   type Run,
   type RunState,
 } from '@autonomy-studio/shared';
-import { getRun, listParsedRuns } from '../repo/runs.js';
+import {
+  getParsedRun,
+  getRun,
+  isDeterministicRowCorruption,
+  listParsedRuns,
+} from '../repo/runs.js';
 import type { Db } from '../repo/types.js';
 import {
   buildEngine,
@@ -535,9 +540,10 @@ function reportUnparseableRow(report: ReconcileReport): (id: string, err: unknow
 }
 
 /**
- * The `corrupt` reason for a row that will not parse. Shared with the DIRECT
- * `getRun` reads in `sweepOne`, which sit outside `listParsedRuns`'s lenient
- * scan and so must classify the same fault the same way — see that function.
+ * The `corrupt` reason for a row that will not parse. Shared by all three
+ * reporters of one — the two scans' skip handler, `sweepOne`'s parent read (it
+ * sits outside any lenient scan) and the fault boundary — so the boot report
+ * spells the same fault the same way wherever it was noticed.
  */
 function unparseableRowReason(err: unknown): string {
   const detail = err instanceof Error ? err.message : String(err);
@@ -589,6 +595,16 @@ async function underFaultBoundary(
     // fault the next boot could clear.
     if (err instanceof RunLogUnparseableError) {
       report.corrupt.push({ runId, reason: `run_log_unparseable:${err.message}` });
+      return;
+    }
+    // The same permanence argument for a corrupt ROW. The scans parse their own
+    // rows leniently, so this catches the ones read AFTER the scan — #1041's
+    // sweep re-reads the child it just patched, and a row corrupted in that
+    // window (or by anything else this boundary wraps) is repair-needing state,
+    // not a fault the next boot clears. Everything left is transient by
+    // elimination, which is what `failed` promises.
+    if (isDeterministicRowCorruption(err)) {
+      report.corrupt.push({ runId, reason: unparseableRowReason(err) });
       return;
     }
     report.failed.push({ runId, reason: err instanceof Error ? err.message : String(err) });
@@ -725,26 +741,24 @@ async function sweepOne(
 ): Promise<void> {
   if (loadEngineEvents(deps.db, child.id).length > 0) return;
 
-  // `getRun` re-parses the row and THROWS on one that no longer validates, and
-  // these two reads sit outside `listParsedRuns`'s lenient scan, so nothing else
-  // classifies them. Left to the fault boundary a `ZodError` here would land in
-  // `failed` — breaking that bucket's stated transient-only contract, and
-  // re-`failed`ing the same run on every boot forever, which is the exact
-  // misfiling #646's `corrupt` bucket exists to close. A corrupt row is
-  // PERMANENT: it parses the same way on every boot.
+  // The PARENT row is arbitrary stored state this scan never parsed (it selects
+  // `pending`, and an orphaning parent is terminal), so this read is its ONLY
+  // reader and nothing else classifies a parse failure on it. `getParsedRun`
+  // rather than `getRun` + a local catch: the classification it applies is the
+  // repo's own, and hand-rolling it here is how the two copies drift.
   //
-  // The PARENT read is the reachable one (its row is arbitrary stored state this
-  // scan never parsed), and it is reported against the PARENT's id — that is the
-  // row an operator has to repair. The child re-read is guarded for the same
-  // reason rather than on the same odds: it parsed at the top of this scan and
-  // has since only been touched by a schema-restricted lifecycle patch.
-  let parent: Run | null;
-  try {
-    parent = getRun(deps.db, parentRunId);
-  } catch (err) {
-    report.corrupt.push({ runId: parentRunId, reason: unparseableRowReason(err) });
-    return;
-  }
+  // The report is keyed on the PARENT's id — that is the row an operator has to
+  // repair, and the one id the fault boundary below could not supply (it knows
+  // only the run being swept). A corrupt parent then returns `null` and takes
+  // the same "nothing to act on" exit as an absent one.
+  //
+  // A NON-corruption fault (a locked DB, a closed connection) deliberately
+  // propagates to the fault boundary, which files it under `failed` — transient,
+  // and cleared by the next boot's re-read. Bucketing it as `corrupt` here would
+  // report a healthy row as needing manual repair.
+  const parent = getParsedRun(deps.db, parentRunId, (id, err) => {
+    report.corrupt.push({ runId: id, reason: unparseableRowReason(err) });
+  });
   if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
 
   terminalizeInterrupted(deps, child.id);
@@ -753,13 +767,11 @@ async function sweepOne(
   // returns), and `ReconcileDeps` deliberately carries no logger — so a silent
   // no-op would otherwise be reported here as a sweep that happened. Report what
   // the row actually says, not what was attempted.
-  let swept: Run | null;
-  try {
-    swept = getRun(deps.db, child.id);
-  } catch (err) {
-    report.corrupt.push({ runId: child.id, reason: unparseableRowReason(err) });
-    return;
-  }
+  //
+  // UNGUARDED, unlike the parent read above: this run IS the one the fault
+  // boundary is keyed on, so it already classifies a throw here correctly and
+  // under the right id. Only the parent needed a local reader.
+  const swept = getRun(deps.db, child.id);
   if (swept !== null && TERMINAL_RUN_ROW_STATUS.has(swept.status)) {
     report.sweptOrphanChildren.push(child.id);
   } else {

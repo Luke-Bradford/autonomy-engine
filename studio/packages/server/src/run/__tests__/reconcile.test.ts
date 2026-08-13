@@ -2095,6 +2095,30 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 
+  it('files a child row corrupted DURING the sweep under `corrupt` — the fault boundary classifies it', async () => {
+    const { db, sqlite } = freshDb();
+    const { child } = seedOrphanChild(db);
+    // The read-back sits AFTER `terminalizeInterrupted`, so `listParsedRuns`'s
+    // lenient scan (which parsed this row at the top of the sweep) is not the
+    // reader that meets the corruption — the fault boundary is. Corrupting the
+    // row from the patch's own trigger puts the fault exactly in that window.
+    sqlite.exec(`
+      CREATE TRIGGER corrupt_child_on_patch AFTER UPDATE ON runs
+      WHEN NEW.id = '${child.id}' AND NEW.params != 'not json'
+      BEGIN UPDATE runs SET params = 'not json' WHERE id = NEW.id; END;
+    `);
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    // PERMANENT: the row parses the same way on every boot, so `failed` would
+    // re-report it forever as a fault the next boot might clear.
+    expect(report.corrupt).toEqual([
+      { runId: child.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
+    ]);
+    expect(report.failed).toEqual([]);
+    expect(report.sweptOrphanChildren).toEqual([]);
+  });
+
   it('files an unreadable child LOG under `corrupt`, never `failed`', async () => {
     const { db, sqlite } = freshDb();
     const { child } = seedOrphanChild(db);
