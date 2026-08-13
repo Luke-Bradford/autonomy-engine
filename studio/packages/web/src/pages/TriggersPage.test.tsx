@@ -78,6 +78,16 @@ vi.mock('../api/portability', async (importActual) => ({
   importEnvelope: vi.fn(),
 }));
 
+/** A promise this test resolves by hand, so a load can be held open across
+ *  other interactions and answered out of order. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 const listTriggersMock = vi.mocked(triggersApi.listTriggers);
 const createMock = vi.mocked(triggersApi.createTrigger);
 const updateMock = vi.mocked(triggersApi.updateTrigger);
@@ -199,6 +209,49 @@ describe('TriggersPage', () => {
     renderWithRouter(<TriggersPage />);
     await user.click(await screen.findByRole('button', { name: /Fire Nightly now/i }));
     expect(await screen.findByText(/skipped — a run is already active/i)).toBeInTheDocument();
+  });
+
+  it('does not let the MOUNT load overwrite the list a create just refreshed', async () => {
+    // #1062 — the New trigger button is not gated behind the list having
+    // arrived, so a create can complete while the initial load is still in
+    // flight. Without a latest-wins guard the mount load lands second and
+    // writes a list taken BEFORE the trigger existed: the new row appears and
+    // then silently vanishes.
+    //
+    // The binding label is asserted too, and it is the more interesting half.
+    // The mount load is the only thing that ever wrote `bindings`, so guarding
+    // the two loads with ONE counter over TWO different fetchers would drop the
+    // superseded mount result WHOLE — leaving the binding options empty for the
+    // rest of the page's life, with no retry path, and every bound row reading
+    // as a raw version id. The refresh therefore reloads both.
+    const user = userEvent.setup();
+    const mountTriggers = deferred<TriggerPublic[]>();
+    listTriggersMock.mockReturnValueOnce(mountTriggers.promise);
+    createMock.mockResolvedValue(trigger({ name: 'Nightly' }));
+    renderWithRouter(<TriggersPage />);
+
+    // The mount load is held open; the form is reachable regardless. A blank
+    // form is unbound, disabled and manual, so a name is all it needs — which
+    // is what makes it authorable before the binding options have arrived.
+    await user.click(await screen.findByRole('button', { name: /New trigger/i }));
+    const form = within(screen.getByRole('form', { name: /Trigger form/i }));
+    await user.type(form.getByLabelText('Name'), 'Nightly');
+
+    // The post-create refresh resolves FIRST, with the trigger present.
+    listTriggersMock.mockResolvedValue([trigger({ name: 'Nightly' })]);
+    await user.click(form.getByRole('button', { name: /Create trigger/i }));
+    expect(await screen.findByText('Nightly')).toBeInTheDocument();
+
+    // ...and only now does the stale mount load answer, with the empty list it
+    // was always going to return.
+    mountTriggers.resolve([]);
+    await waitFor(() => expect(listTriggersMock).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('Nightly')).toBeInTheDocument();
+    expect(screen.queryByText(/No triggers yet/i)).not.toBeInTheDocument();
+    // The binding options survived the superseded mount load: the row reads as
+    // the resolved label, not the opaque `plv_1` it falls back to.
+    expect(screen.getByText('My pipeline v3')).toBeInTheDocument();
   });
 
   it('creates a schedule trigger from a raw cron, via the escape-hatch mode', async () => {
