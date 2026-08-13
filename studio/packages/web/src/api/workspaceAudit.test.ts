@@ -42,7 +42,7 @@ describe('workspace-audit API (#1075)', () => {
     const out = await listWorkspaceAudit();
 
     expect(out).toHaveLength(1);
-    expect(out[0].payload).toEqual(ARCHIVED);
+    expect(out[0]!.payload).toEqual(ARCHIVED);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/workspace/audit?limit=100');
   });
 

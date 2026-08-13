@@ -46,8 +46,12 @@ function archived(name: string) {
   };
 }
 
-function bodyRows() {
-  return within(screen.getByRole('table')).getAllByRole('row').slice(1);
+/** The table's data rows (the header row dropped), typed so `.cells` — the
+ *  cheapest way to assert a value is in the RIGHT column — is available. */
+function bodyRows(): HTMLTableRowElement[] {
+  return within(screen.getByRole('table'))
+    .getAllByRole('row')
+    .slice(1) as HTMLTableRowElement[];
 }
 
 beforeEach(() => {
@@ -71,7 +75,7 @@ describe('AuditPage (#1075)', () => {
     renderWithRouter(<AuditPage />);
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
-    const acts = bodyRows().map((tr) => tr.cells[2].textContent);
+    const acts = bodyRows().map((tr) => tr.cells[2]!.textContent);
     expect(acts).toEqual([
       expect.stringContaining('Archived the pipeline Last archived'),
       expect.stringContaining('Archived the pipeline First archived'),
@@ -95,7 +99,7 @@ describe('AuditPage (#1075)', () => {
     renderWithRouter(<AuditPage />);
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
-    expect(bodyRows().map((tr) => tr.cells[2].textContent)).toEqual([
+    expect(bodyRows().map((tr) => tr.cells[2]!.textContent)).toEqual([
       expect.stringContaining('Appended second'),
       expect.stringContaining('Appended first'),
     ]);
@@ -107,7 +111,7 @@ describe('AuditPage (#1075)', () => {
     renderWithRouter(<AuditPage />);
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
-    expect(bodyRows()[0].cells[1].textContent).toBe('local');
+    expect(bodyRows()[0]!.cells[1]!.textContent).toBe('local');
   });
 
   it('renders the detail line beneath the act', async () => {
@@ -116,7 +120,7 @@ describe('AuditPage (#1075)', () => {
     renderWithRouter(<AuditPage />);
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
-    expect(bodyRows()[0].cells[2].textContent).toContain('Collaboration branch studio/main.');
+    expect(bodyRows()[0]!.cells[2]!.textContent).toContain('Collaboration branch studio/main.');
   });
 
   /* An empty log is a real state (a workspace nobody has published, archived or
@@ -169,7 +173,7 @@ describe('AuditPage (#1075)', () => {
     const { unmount } = renderWithRouter(<AuditPage />);
     await waitFor(() => expect(listMock).toHaveBeenCalled());
 
-    const signal = listMock.mock.calls[0][0];
+    const signal = listMock.mock.calls[0]![0];
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal!.aborted).toBe(false);
     unmount();
