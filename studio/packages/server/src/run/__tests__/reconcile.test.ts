@@ -344,12 +344,24 @@ describe('reconcileOnBoot — resync a torn terminal write', () => {
       alarms: stubAlarms(),
     });
 
+    // The branch under test still fires, and `resynced` is what pins it: delete
+    // it and the run falls through to the resume path, which reports `finalized`
+    // instead. This is the assertion that keeps the branch from bit-rotting.
     expect(report.resynced).toEqual([run.id]);
     expect(report.resumed).toEqual([]);
-    expect(getRun(db, run.id)!.status).toBe('pending');
     // The load-bearing half: NO `run.resumed` appended to a log with no
     // `run.started` — the corruption the branch exists to prevent.
     expect(loadEngineEvents(db, run.id)).toEqual([]);
+
+    // #1048 — and then the SAME boot sweeps it. The resync wrote the row back to
+    // `pending`, `sweepPendingRuns` takes its snapshot after this scan, and a
+    // top-level row with no `run.started` is one nothing can ever drive. Both
+    // verdicts are true of different questions (see the branch's comment in
+    // `reconcile.ts`), so this run is the one documented case of an id in TWO
+    // verdict buckets — and the end state is terminal, not a `pending` row left
+    // holding an admission slot forever.
+    expect(report.sweptOrphans).toEqual([run.id]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
   });
 
   it('a `run.started`-less row does not strand the runs after it in the loop', async () => {
@@ -1879,7 +1891,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([child.id]);
+    expect(report.sweptOrphans).toEqual([child.id]);
     expect(report.failed).toEqual([]);
     expect(report.corrupt).toEqual([]);
 
@@ -1903,7 +1915,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.sweptOrphans).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 
@@ -1930,11 +1942,11 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     });
 
     expect(getRun(db, parent.id)!.status).toBe('running');
-    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.sweptOrphans).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 
-  it('leaves a `pending` child that HAS a log — the sibling leak is out of scope, not swept blind', async () => {
+  it('RESUMES a `pending` child whose log has `run.started` — a crash survivor, not an orphan', async () => {
     const { db } = freshDb();
     const parent = seedRun(db, seedVersion(db, [node('a')]));
     updateRun(db, parent.id, { status: 'failure', finishedAt: Date.now() });
@@ -1946,7 +1958,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
       params: {},
     });
     // A crash between `startRun`'s `run.started` append and its row sync leaves
-    // exactly this: a `pending` row with a non-empty log.
+    // exactly this: a `pending` row whose log says the run STARTED.
     await startRun(
       {
         db,
@@ -1960,19 +1972,75 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([]);
-    expect(getRun(db, child.id)!.status).toBe('pending');
+    // #1048 — NOT swept. The log holds `run.started`, so this is a crash
+    // survivor whose ROW sync was lost, indistinguishable from a `running` row
+    // except in the projection (#443: the log outranks the row). It is handed to
+    // `reconcileOne`, the `running` scan's own unit, and driven to completion.
+    // Terminalizing it would make the verdict depend on which sub-tick the crash
+    // landed in.
+    expect(report.sweptOrphans).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('success');
+
+    // And the parent is TERMINAL here (set `failure` above), which is the point:
+    // the started-check outranks #1041's parent rule, so a terminal parent does
+    // NOT make this a sweepable orphan. The cost is named in `sweepOne` — the
+    // `running` scan already
+    // resumes a `running` child of a terminal parent, so freezing this one would
+    // split the verdict on sub-tick timing.
+    expect(getRun(db, parent.id)!.status).toBe('failure');
   });
 
-  it('leaves a top-level `pending` run alone — no parent, so nothing is orphaned', async () => {
+  it('sweeps a TOP-LEVEL `pending` run that never started, freeing the slot it held', async () => {
     const { db } = freshDb();
-    const run = seedRun(db, seedVersion(db, [node('a')]));
+    const pvId = seedVersion(db, [node('a')]);
+    const run = seedRun(db, pvId);
+    const pipelineId = getPipelineVersion(db, pvId)!.pipelineId;
     expect(getRun(db, run.id)!.status).toBe('pending');
+    // The leak: `ACTIVE_RUN_STATUSES` includes `pending`, so this row counts
+    // against its pipeline's S6b admission budget for as long as it exists.
+    expect(countActiveRunsForPipeline(db, pipelineId)).toBe(1);
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([]);
-    expect(getRun(db, run.id)!.status).toBe('pending');
+    // #1048 — no parent exists to key "nothing will ever drive this" on, and
+    // none is needed: every top-level driver is structurally barred from this row
+    // (fresh ids from `launch`/`reseed`, the `status = 'queued'` guard on
+    // `admitQueuedRun`, and an alarm/external-wait only a STARTED run can hold).
+    expect(report.sweptOrphans).toEqual([run.id]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+    expect(countActiveRunsForPipeline(db, pipelineId)).toBe(0);
+    // Empty log in, empty log out: `terminalizeInterrupted`'s row-patch branch
+    // appends nothing, so no terminal fact is manufactured into a log that never
+    // held one (#443).
+    expect(loadEngineEvents(db, run.id)).toEqual([]);
+  });
+
+  it('sweeps a top-level run stranded with a `run.triggerContext`-only log, recording WHY', async () => {
+    const { db } = freshDb();
+    const run = seedRun(db, seedVersion(db, [node('a')]));
+
+    // The middle outcome of the crash window, and the reason the predicate is
+    // "no `run.started`" rather than "empty log": #5 S12 seeds the durable
+    // trigger context BEFORE `run.started`, so a crash between the two leaves a
+    // NON-EMPTY log for a run that never started.
+    appendEngineEvent(db, {
+      type: 'run.triggerContext',
+      runId: run.id,
+      triggerId: 'trg_x',
+    });
+
+    const report = await reconcileOnBoot(bootDeps(db));
+
+    expect(report.sweptOrphans).toEqual([run.id]);
+    expect(getRun(db, run.id)!.status).toBe('interrupted');
+    // The log was non-empty, so `terminalizeInterrupted` takes its APPEND branch
+    // and the reason becomes durable. It must say what actually happened: no
+    // drive existed to fail, so inheriting the `drive_failed` default would mint
+    // a false fact into the one field an operator reads off the run.
+    const interrupted = loadEngineEvents(db, run.id).filter((e) => e.type === 'run.interrupted');
+    expect(interrupted).toHaveLength(1);
+    expect(interrupted[0]).toMatchObject({ reason: 'never_started' });
   });
 
   it('sweeps under the child DRIVE LOCK when one is supplied', async () => {
@@ -1981,7 +2049,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot({ ...bootDeps(db), drives: createRunDrives() });
 
-    expect(report.sweptOrphanChildren).toEqual([child.id]);
+    expect(report.sweptOrphans).toEqual([child.id]);
     expect(getRun(db, child.id)!.status).toBe('interrupted');
   });
 
@@ -2016,12 +2084,17 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     await inFlight;
     const report = await booting;
 
-    // FIFO: the drive won, so by the time the sweep ran the log was no longer
-    // empty and it declined. Without the lock the sweep would have read the
-    // empty log first and terminalized a child that was starting.
-    expect(report.sweptOrphanChildren).toEqual([]);
+    // FIFO: the drive won, so by the time the sweep ran the log already held
+    // `run.started` and it did NOT terminalize. Without the lock the sweep would
+    // have read the empty log first and swept a child that was starting — which
+    // is the property this test exists for, and it is unchanged by #1048.
+    expect(report.sweptOrphans).toEqual([]);
     expect(report.failed).toEqual([]);
-    expect(getRun(db, child.id)!.status).toBe('pending');
+    // #1048 changed what "declined" means here. It used to be a silent skip
+    // leaving the row `pending`; the run is now recognised as a crash survivor
+    // and driven. The lock property is asserted by `sweptOrphans` being empty —
+    // the row simply no longer stops at `pending`.
+    expect(getRun(db, child.id)!.status).toBe('success');
   });
 
   it('is idempotent — a second boot sweeps nothing', async () => {
@@ -2031,7 +2104,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     await reconcileOnBoot(bootDeps(db));
     const again = await reconcileOnBoot(bootDeps(db));
 
-    expect(again.sweptOrphanChildren).toEqual([]);
+    expect(again.sweptOrphans).toEqual([]);
     expect(again.failed).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('interrupted');
   });
@@ -2053,8 +2126,8 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([]);
-    expect(report.failed).toEqual([{ runId: child.id, reason: 'orphan_child_sweep_no_op' }]);
+    expect(report.sweptOrphans).toEqual([]);
+    expect(report.failed).toEqual([{ runId: child.id, reason: 'orphan_sweep_no_op' }]);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 
@@ -2066,7 +2139,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
 
     const report = await reconcileOnBoot(bootDeps(db));
 
-    expect(report.sweptOrphanChildren).toEqual([healthy.child.id]);
+    expect(report.sweptOrphans).toEqual([healthy.child.id]);
     expect(report.corrupt).toEqual([
       { runId: bad.child.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
     ]);
@@ -2091,7 +2164,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
       { runId: parent.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
     ]);
     expect(report.failed).toEqual([]);
-    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.sweptOrphans).toEqual([]);
     // Left for repair, not terminalized on an unreadable premise.
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
@@ -2134,7 +2207,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
       { runId: child.id, reason: expect.stringMatching(/^run_row_unparseable:/) as string },
     ]);
     expect(report.failed).toEqual([]);
-    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.sweptOrphans).toEqual([]);
   });
 
   it('files an unreadable child LOG under `corrupt`, never `failed`', async () => {
@@ -2152,7 +2225,7 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
       { runId: child.id, reason: expect.stringMatching(/^run_log_unparseable:/) as string },
     ]);
     expect(report.failed).toEqual([]);
-    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.sweptOrphans).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('pending');
   });
 });
