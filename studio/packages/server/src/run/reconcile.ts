@@ -216,7 +216,7 @@ export interface ReconcileReport {
   /** Runs that got `run.resumed` + `node.retryRequested` and were re-driven. */
   resumed: string[];
   /**
-   * Runs frozen `interrupted`, for one of THREE reasons — the bucket has three
+   * Runs frozen `interrupted`, for one of FOUR reasons — the bucket has four
    * producers and they are not the same story:
    *   - a non-idempotent activity was in flight at crash time
    *     (`non_idempotent_in_flight:<nodes>`); or
@@ -224,9 +224,14 @@ export interface ReconcileReport {
    *     (`retry_alarm_spent:<nodes>` — see `recoverHeld`). Nothing was in flight
    *     here; the alarm came and went; or
    *   - the run's pipeline version is GONE (`doc_unresolvable:<pvId>` — #508, see
-   *     `terminalizeUnresolvable`). Versions are immutable, so it never returns;
-   *     the run can never be driven again, so it is frozen rather than left to
-   *     re-`failed` on every boot forever.
+   *     `interruptRun`). Versions are immutable, so it never returns; the run can
+   *     never be driven again, so it is frozen rather than left to re-`failed` on
+   *     every boot forever; or
+   *   - it is a `call_pipeline` CHILD whose parent is already over
+   *     (`parent_terminal:<parentRunId>` — #1053). The first three are "nothing
+   *     can ADVANCE this run"; this one is "nothing can CONSUME it", and it is
+   *     the only one where the run was still perfectly resumable — see the guard
+   *     in `reconcileOne` for why it is frozen anyway.
    * The `run.interrupted.reason` distinguishes them; an operator reading a boot
    * report needs to know which.
    */
@@ -691,12 +696,18 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  * terminal, row still `running`) is repaired by the `running` scan that runs
  * before this one.
  *
+ * #1053 added a SECOND reader of "is the parent over" that deliberately reads the
+ * LOG instead (`parentIsOver`). Not a contradiction and not drift: that one runs
+ * INSIDE the `running` scan, so the last sentence above — this sweep's whole
+ * licence for the cheap read — is not available to it. See its docblock; the two
+ * are also answering different questions (drive vs consume).
+ *
  * WHY NO EVENT IS APPENDED. `terminalizeInterrupted`'s no-events branch patches
  * the row and appends nothing, and that is the right primitive here rather than
- * a near-copy of `terminalizeUnresolvable`: a run that never started has no
+ * a near-copy of `interruptRun`: a run that never started has no
  * event-sourced lifecycle to preserve, and minting a terminal fact into a log
  * that never held one is manufacturing, not deriving (#443). The `run.interrupted`
- * that `terminalizeUnresolvable` DOES append is for a run that had already
+ * that `interruptRun` DOES append is for a run that had already
  * started. The report bucket is this sweep's channel instead. A second reason
  * not to append: a terminal event publishes into `subscribeChildReturns`, which
  * would spawn a `returnToParent` microtask per swept child at boot, each one
@@ -716,8 +727,12 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  *     a crash survivor whose ROW sync was lost, indistinguishable from a
  *     `running` row except in the projection. It is handed to `reconcileOne` —
  *     the `running` scan's own unit — so it resyncs / interrupts / resumes by the
- *     SAME rules. Terminalizing it instead would make the verdict depend on which
- *     sub-tick the crash landed in, which is not a semantics anyone chose.
+ *     SAME rules. Terminalizing it HERE instead would make the verdict depend on
+ *     which sub-tick the crash landed in, which is not a semantics anyone chose.
+ *     (#1053 — note precisely what that does and does not say. A started CHILD of
+ *     a terminal parent IS now frozen, but by `reconcileOne`'s own guard, which
+ *     the `running` scan applies identically. The delegation is what makes that
+ *     safe: one unit decides, so the sub-tick cannot.)
  *
  * WHY A TOP-LEVEL ORPHAN NEEDS NO PARENT-EQUIVALENT GUARD. For a child, "nothing
  * can drive this" is proven by the terminal parent. For a top-level row the same
@@ -780,15 +795,14 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   // widening its signature to take events it would otherwise own, and at this
   // scale one extra read per stranded row is not worth that coupling).
   //
-  // A CHILD lands here too, terminal parent or not, and that is a decision with
-  // a cost worth naming: resuming it re-dispatches real, billable activities
-  // whose `returnToParent` will no-op against an already-terminal parent. It is
-  // taken because the `running` scan ALREADY resumes a `running` child of a
-  // terminal parent — it applies no parent test — so freezing one here would
-  // make the verdict turn on which sub-tick the crash hit. Whether a
-  // crash-surviving child of a dead parent should be resumed AT ALL is a real
-  // question, but it is the `running` scan's question first and is filed
-  // separately rather than answered asymmetrically here.
+  // A CHILD lands here too, terminal parent or not — and #1053 has since ANSWERED
+  // what happens to it, in the one place that could answer it symmetrically.
+  // `reconcileOne` now freezes a started child whose parent is over, rather than
+  // re-dispatching billable activities whose `returnToParent` would no-op against
+  // the dead parent. That guard is the `running` scan's too, so the delegation
+  // below is exactly what makes the verdict independent of which sub-tick the
+  // crash hit — the property this branch was protecting all along. Nothing to do
+  // here: hand the row over and let the shared unit decide.
   if (hasRunStartedFact(events)) {
     await reconcileOne(deps, report, run);
     return;

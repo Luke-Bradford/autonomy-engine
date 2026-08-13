@@ -41,7 +41,13 @@ import {
 } from '../driver.js';
 import { appendEngineEvent, loadEngineEvents } from '../events.js';
 import { deriveExternalWaitToken } from '../../webhooks/external-wait-token.js';
-import { ReconcileInvariantError, reconcileOnBoot, refuseToExecute } from '../reconcile.js';
+import {
+  emptyReconcileReport,
+  ReconcileInvariantError,
+  reconcileOnBoot,
+  reconcileOne,
+  refuseToExecute,
+} from '../reconcile.js';
 import { makeStubExecutor, type StubExecutorOptions } from './stub-executor.js';
 import { stubAlarms } from './stub-alarms.js';
 
@@ -2294,7 +2300,9 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
     updateRun(
       db,
       parent.id,
-      rowStatus === 'running' ? { status: 'running' } : { status: rowStatus, finishedAt: Date.now() },
+      rowStatus === 'running'
+        ? { status: 'running' }
+        : { status: rowStatus, finishedAt: Date.now() },
     );
     return parent;
   }
@@ -2388,26 +2396,41 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
     expect(getRun(db, child.id)!.status).toBe('success');
   });
 
-  it('freezes it even when the parent ROW still says `running` — so the verdict is not scan-order dependent', async () => {
+  /**
+   * The LOG-authority property, pinned at the UNIT rather than through
+   * `reconcileOnBoot` — and the first draft of this test went through the boot
+   * scan, passed under a row-status read, and therefore proved nothing.
+   *
+   * Why it was vacuous: the parent is in the same snapshot as the child, so the
+   * `running` scan REPAIRS the parent's stale row to `failure` — and if it
+   * happens to reach the parent first, a row read gets the right answer for the
+   * wrong reason. `listParsedRuns` issues no `ORDER BY` and run ids are content
+   * hashes, so which one comes first is not a property of the test at all.
+   *
+   * Calling `reconcileOne` directly removes the scan, and with it the ordering:
+   * the parent's row is stale `running` at the moment the guard reads it, full
+   * stop. That is also exactly the shape S7's lease reclaim calls this function
+   * in (`scheduler/lease.ts`, its own fresh report), so this covers the third
+   * caller too.
+   */
+  it('freezes it from a STALE `running` parent row — the verdict comes from the log, not the row', async () => {
     const { db } = freshDb();
     const parent = seedTerminalLogParent(db, 'running');
     const { child } = await seedCrashedChild(db, parent.id);
+    // Re-read: `startRun` has moved the row on since `createRun` returned it.
+    const childRow = getRun(db, child.id)!;
+    expect(getRun(db, parent.id)!.status).toBe('running');
 
-    const report = await reconcileOnBoot({
-      db,
-      resolveDoc: resolveDocFor(db),
-      executor: makeStubExecutor(),
-      alarms: stubAlarms(),
-    });
+    const report = emptyReconcileReport();
+    await reconcileOne(
+      { db, resolveDoc: resolveDocFor(db), executor: makeStubExecutor(), alarms: stubAlarms() },
+      report,
+      childRow,
+    );
 
-    // The parent is in the SAME snapshot as the child and `listParsedRuns`
-    // issues no `ORDER BY`, so a row-status read here would resume the child
-    // whenever the parent happened to sort after it. Reading the parent's LOG
-    // makes the verdict independent of an order SQLite never promised.
     expect(report.interrupted).toEqual([child.id]);
+    expect(report.resumed).toEqual([]);
     expect(getRun(db, child.id)!.status).toBe('interrupted');
-    expect(report.resynced).toEqual([parent.id]);
-    expect(getRun(db, parent.id)!.status).toBe('failure');
   });
 
   it('resyncs a child whose OWN log already ended terminal, rather than interrupting it again', async () => {
