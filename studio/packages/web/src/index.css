@@ -3403,14 +3403,15 @@ td button + button {
  * off-viewport. `usableExtent` in `containerLayout.ts` states the pane area this
  * occupies so the #785 reveal never lands a box underneath it — THE TWO MUST
  * AGREE: growing this past that constant puts boxes back under the minimap. */
+/* COLOUR AND CHROME ONLY — the SIZE is a prop on `<MiniMap>`, not a rule here.
+   Setting width/height in CSS leaves React Flow's inner `<svg>` at the size its
+   props say, so the container crops the map rather than scaling it and the mask
+   stops matching the viewport. */
 .react-flow__minimap {
-  width: 148px;
-  height: 104px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   margin: 10px;
-  overflow: hidden;
 }
 
 /* The mask is the "you are here" rectangle. RF paints it as a dark fill over the

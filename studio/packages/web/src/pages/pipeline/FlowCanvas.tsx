@@ -2066,6 +2066,22 @@ export function FlowCanvas({
         <MiniMap
           pannable
           zoomable
+          /* SIZED THROUGH THE COMPONENT, never in CSS. React Flow renders the map
+             as `<svg width={elementWidth} height={elementHeight} viewBox=…>`
+             taken from THESE props (200x150 by default); a stylesheet that
+             shrinks the container leaves the svg at its old size, so the box
+             CROPS the map instead of scaling it and the mask no longer
+             corresponds to what is on screen. That is what "the navigation box
+             is not aligned with the page" was.
+
+             It goes through `style`, which is where React Flow READS it:
+             `elementWidth = style?.width ?? defaultWidth` (index.mjs:4712), and
+             that same number is what it puts on the `<svg>`. There is no
+             `width` prop. 160x120 keeps React Flow's own 4:3, so the viewBox
+             maps without distortion. `usableExtent` (containerLayout.ts) still reserves the
+             larger default footprint, which now merely leaves extra clearance —
+             the direction that is safe. */
+          style={{ width: 160, height: 120 }}
           nodeClassName={(n) => (n.type === 'container' ? 'minimap-node-container' : '')}
         />
         <Controls />
