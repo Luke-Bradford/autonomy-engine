@@ -108,7 +108,7 @@ export function useGuardedLoad(): GuardedLoad {
   }, []);
 
   return useCallback(
-    <T,>(fetch: (signal: AbortSignal) => Promise<T>, handlers: GuardedHandlers<T>) => {
+    <T>(fetch: (signal: AbortSignal) => Promise<T>, handlers: GuardedHandlers<T>) => {
       const controller = mountAbort.current;
       if (!controller) return Promise.resolve();
       const ticket = ++latestLoad.current;
