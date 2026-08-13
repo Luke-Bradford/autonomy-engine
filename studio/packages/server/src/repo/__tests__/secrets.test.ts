@@ -47,6 +47,20 @@ describe('secrets repo', () => {
     expect(rotated!.id).toBe(created.id);
   });
 
+  /* The contract `PATCH /api/secrets/:id` leans on: a row that has gone (a
+   * concurrent DELETE between the route's ownership read and this write)
+   * reports NOTHING WRITTEN, so the route can turn it into the 404 it is
+   * rather than answering a rotation that did not happen with a 200. The
+   * route's own branch cannot be raced deterministically from a single-
+   * threaded test — this is that branch's precondition, asserted where it is
+   * actually decided. */
+  it('reports a vanished row as null rather than silently writing nothing', () => {
+    const { db } = freshDb();
+    const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'old-blob' });
+    deleteSecret(db, created.id);
+    expect(updateSecretCiphertext(db, created.id, 'new-blob')).toBeNull();
+  });
+
   it('deletes a secret', () => {
     const { db } = freshDb();
     const created = createSecret(db, { ref: 'anthropic-key-1', ciphertext: 'blob' });

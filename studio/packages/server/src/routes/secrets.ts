@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import {
   SecretPublicSchema,
   SecretRotateBodySchema,
@@ -33,6 +33,31 @@ function toPublic(secret: Secret) {
 
 export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
   const { db, masterKey } = fastify;
+
+  /**
+   * The gate both by-id routes pass through, and the ONE place its reasoning
+   * lives now that there are two of them.
+   *
+   * `requireOwned` (owner-scope) is the real authorization gate: a
+   * connection-owned secret carries `ownerId = null`, so it can never match
+   * `principal.ownerId` and is already invisible here. The `name === null`
+   * guard is belt-and-braces — it keeps these routes to STANDALONE secrets
+   * even if a future connection-owned secret were ever stamped with an owner.
+   * Both failures are the SAME 404 as an absent row: not-owned, not-standalone
+   * and not-there are deliberately indistinguishable to a client.
+   */
+  function requireOwnedStandaloneSecret(
+    request: FastifyRequest<{ Params: { id: string } }>,
+  ): Secret {
+    const secret = requireOwned(
+      getSecret(db, request.params.id),
+      request.principal,
+      'secret',
+      request.params.id,
+    );
+    if (secret.name === null) throw new NotFoundError('secret', request.params.id);
+    return secret;
+  }
 
   fastify.post('/api/secrets', async (request, reply) => {
     const { name, secret } = SecretWriteBodySchema.parse(request.body);
@@ -82,18 +107,9 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
    * if this body is ever widened.
    */
   fastify.patch<{ Params: { id: string } }>('/api/secrets/:id', async (request) => {
-    // Ownership first, mirroring `PATCH /api/connections/:id`. Same two gates
-    // as DELETE below, for the same reasons: `requireOwned` is the real
-    // authorization check, and the `name === null` guard keeps this route to
-    // STANDALONE secrets — a connection's secret is managed only through its
-    // connection, never sideways by id.
-    const existing = requireOwned(
-      getSecret(db, request.params.id),
-      request.principal,
-      'secret',
-      request.params.id,
-    );
-    if (existing.name === null) throw new NotFoundError('secret', request.params.id);
+    // Ownership first, mirroring `PATCH /api/connections/:id`. A connection's
+    // secret is managed only through its connection, never sideways by id.
+    const existing = requireOwnedStandaloneSecret(request);
 
     const { secret } = SecretRotateBodySchema.parse(request.body);
 
@@ -110,18 +126,7 @@ export const secretsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete<{ Params: { id: string } }>('/api/secrets/:id', async (request, reply) => {
-    // `requireOwned` (owner-scope) is the real authorization gate: a
-    // connection-owned secret carries `ownerId = null`, so it can never match
-    // `principal.ownerId` and is already invisible here. The `name === null`
-    // guard is belt-and-braces — it keeps this route to STANDALONE secrets even
-    // if a future connection-owned secret were ever stamped with an owner.
-    const secret = requireOwned(
-      getSecret(db, request.params.id),
-      request.principal,
-      'secret',
-      request.params.id,
-    );
-    if (secret.name === null) throw new NotFoundError('secret', request.params.id);
+    const secret = requireOwnedStandaloneSecret(request);
 
     deleteSecret(db, secret.id);
     reply.status(204).send();

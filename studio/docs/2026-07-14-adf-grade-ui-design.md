@@ -269,7 +269,7 @@ P7 single-container Fastify static route still needs no history-API fallback.
 | `#/manage/git` | Git (workspace git) |
 | `#/*` | catch-all → `#/` (an unknown path, once the U3r legacy paths below have had their turn) |
 
-### Manage › Secrets (AS BUILT, 2026-08-13, #1060)
+### Manage › Secrets (AS BUILT, 2026-08-13, #1060 + #1061)
 
 Not a U-row: it closes a hole rather than building a planned surface. `/api/secrets` — the
 STANDALONE secret vault (item 7 / S1, `2026-07-16-foundation-unified-secret-model.md`) — had
