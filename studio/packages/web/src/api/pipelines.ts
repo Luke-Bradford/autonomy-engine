@@ -3,6 +3,7 @@ import {
   ActivePipelineVersionResponseSchema,
   CreatePipelineVersionBodySchema,
   NewPipelineSchema,
+  PipelineCostRollupSchema,
   PipelineSchema,
   PipelineVersionSchema,
   PublishPipelineBodySchema,
@@ -10,6 +11,7 @@ import {
   paginatedResponseSchema,
   type ActivePipelineVersion,
   type Pipeline,
+  type PipelineCostRollup,
   type PipelineVersion,
   type PublishPipelineBody,
   type PublishPipelineResult,
@@ -80,6 +82,26 @@ export function listPipelines(signal?: AbortSignal): Promise<Pipeline[]> {
  */
 export function getPipeline(id: string, signal?: AbortSignal): Promise<Pipeline> {
   return apiFetch(`/api/pipelines/${encodeURIComponent(id)}`, { schema: PipelineSchema, signal });
+}
+
+/**
+ * The LIFETIME cost rollup of one pipeline (`GET /api/pipelines/:id/cost`).
+ *
+ * #931 / U27 — the route has existed since #599 and until now had no web caller
+ * at all; this is that caller. The server answers with a BOUNDED SQL aggregation
+ * over every run of the pipeline (all versions), so this is one small request
+ * rather than a walk of runs × metered events — which is exactly why the figure
+ * belongs to a single pipeline in view and not to a column on the pipelines list
+ * (that would be one request per row, the #720 waterfall).
+ *
+ * A pipeline id that is not this owner's is a 404 from `requireOwned`, the same
+ * as `getPipeline`. The caller decides what a 404 means for its surface.
+ */
+export function getPipelineCost(id: string, signal?: AbortSignal): Promise<PipelineCostRollup> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}/cost`, {
+    schema: PipelineCostRollupSchema,
+    signal,
+  });
 }
 
 /**

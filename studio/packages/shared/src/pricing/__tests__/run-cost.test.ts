@@ -5,6 +5,7 @@ import {
   computeRunUsage,
   emptyMeteredTotals,
   nodeCostFromTotals,
+  PipelineCostRollupSchema,
   rollupFromAggregates,
   rollupPipelineCost,
   RunCostSchema,
@@ -710,5 +711,47 @@ describe('RunCostSchema (#931 — the Zod twin of RunCost)', () => {
     expect(RunCostSchema.safeParse({ ...cost, totalCostEstimate: -0.01 }).success).toBe(false);
     expect(RunCostSchema.safeParse({ ...cost, responseCount: 1.5 }).success).toBe(false);
     expect(RunCostSchema.safeParse({ ...cost, currency: 'GBP' }).success).toBe(false);
+  });
+});
+
+/**
+ * #931 — the same three obligations for the PIPELINE rollup's wire shape, which
+ * exists because `GET /api/pipelines/:id/cost` finally has a web caller and its
+ * response has to be parsed rather than trusted.
+ *
+ * Built by EXTENDING `RunCostSchema` rather than restating its ten fields, so the
+ * two shapes cannot drift; the key-set assertion below is what proves the
+ * extension stayed faithful to `PipelineCostRollup`.
+ */
+describe('PipelineCostRollupSchema (#931 — the Zod twin of PipelineCostRollup)', () => {
+  const rollup = rollupFromAggregates({
+    responseCount: 3,
+    pricedResponseCount: 2,
+    unpricedResponseCount: 0,
+    totalCostEstimate: 0.75,
+    inputTokens: 120,
+    outputTokens: 340,
+    inputReportedResponseCount: 3,
+    outputReportedResponseCount: 2,
+    runCount: 4,
+    incompleteRunCount: 1,
+  });
+
+  it('has EXACTLY the keys PipelineCostRollup declares — no more, no fewer', () => {
+    expect(Object.keys(PipelineCostRollupSchema.shape).sort()).toEqual(Object.keys(rollup).sort());
+  });
+
+  it('round-trips a real derived rollup unchanged', () => {
+    expect(PipelineCostRollupSchema.parse(rollup)).toEqual(rollup);
+  });
+
+  it('REFUSES a fractional or negative run count, and still refuses what RunCost refuses', () => {
+    expect(PipelineCostRollupSchema.safeParse({ ...rollup, runCount: 1.5 }).success).toBe(false);
+    expect(PipelineCostRollupSchema.safeParse({ ...rollup, incompleteRunCount: -1 }).success).toBe(
+      false,
+    );
+    expect(
+      PipelineCostRollupSchema.safeParse({ ...rollup, totalCostEstimate: -0.01 }).success,
+    ).toBe(false);
   });
 });
