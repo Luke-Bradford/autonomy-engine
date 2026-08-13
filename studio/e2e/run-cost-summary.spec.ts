@@ -364,8 +364,8 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   await page.goto(`/#/monitor/runs?pipeline=${encodeURIComponent(pipelineId)}`);
   await fluentRootReady(page);
 
-  const spend = page.getByRole('region', { name: 'Pipeline spend' });
-  await expect(spend.getByRole('heading', { name: 'Pipeline spend', level: 3 })).toBeVisible();
+  const spend = page.getByRole('region', { name: 'Lifetime spend' });
+  await expect(spend.getByRole('heading', { name: 'Lifetime spend', level: 3 })).toBeVisible();
 
   // A KNOWN covered zero — not a priced $0.00, and not a measurement gap.
   await expect(spend.getByText('No marginal cost')).toBeVisible();
@@ -386,7 +386,7 @@ test('#931 — the run list states what a whole pipeline has cost, across every 
   // No pipeline filter, no claim about any one pipeline's spend.
   await page.goto('/#/monitor/runs');
   await fluentRootReady(page);
-  await expect(page.getByRole('region', { name: 'Pipeline spend' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Lifetime spend' })).toHaveCount(0);
 
   // Filtered to a status these runs never reached: no rows, and the lifetime
   // figure is still there — the whole reason it sits outside the rows guard.

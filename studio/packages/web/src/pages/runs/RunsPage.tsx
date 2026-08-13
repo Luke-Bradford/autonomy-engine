@@ -75,8 +75,8 @@ function RunCostCell({ run }: { run: RunSummary }) {
  */
 function PipelineSpend({ summary }: { summary: PipelineCostSummary }) {
   return (
-    <section className="pipeline-spend" aria-labelledby="pipeline-spend-heading">
-      <h3 id="pipeline-spend-heading">Pipeline spend</h3>
+    <section className="lifetime-spend" aria-labelledby="lifetime-spend-heading">
+      <h3 id="lifetime-spend-heading">Lifetime spend</h3>
       {/* No tiles for a pipeline that has never run: every figure would be a
           reading of a measurement nobody took, which is what `figure: null` says. */}
       {summary.figure !== null && (
@@ -300,7 +300,7 @@ export function RunsPage({ store = pipelinesStore }: { store?: PipelinesStore } 
         setCostFailed(
           err instanceof ApiError && err.status === 404
             ? null
-            : { key: pipelineId, message: `Pipeline spend unavailable: ${messageOf(err)}` },
+            : { key: pipelineId, message: `Lifetime spend unavailable: ${messageOf(err)}` },
         );
       });
     return () => controller.abort();

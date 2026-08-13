@@ -533,14 +533,14 @@ describe('RunsPage — U26 filter pane', () => {
    * through a mock here.
    */
   describe('pipeline spend', () => {
-    const spend = () => screen.getByRole('region', { name: 'Pipeline spend' });
+    const spend = () => screen.getByRole('region', { name: 'Lifetime spend' });
 
     it('asks for the filtered pipeline’s lifetime spend and states it', async () => {
       renderWithRouter(
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
         '/monitor/runs?pipeline=pl_1',
       );
-      expect(await screen.findByRole('region', { name: 'Pipeline spend' })).toBeInTheDocument();
+      expect(await screen.findByRole('region', { name: 'Lifetime spend' })).toBeInTheDocument();
       expect(costMock).toHaveBeenCalledWith('pl_1', expect.anything());
       expect(within(spend()).getByText('$2.50')).toBeInTheDocument();
     });
@@ -552,7 +552,7 @@ describe('RunsPage — U26 filter pane', () => {
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
         '/monitor/runs?pipeline=pl_1&status=failure',
       );
-      const section = await screen.findByRole('region', { name: 'Pipeline spend' });
+      const section = await screen.findByRole('region', { name: 'Lifetime spend' });
       expect(section).toHaveTextContent(/Across all 2 runs, every version/);
       expect(section).toHaveTextContent(/not just the runs listed below/);
     });
@@ -561,7 +561,7 @@ describe('RunsPage — U26 filter pane', () => {
       renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs');
       await screen.findByText(/No runs yet/i);
       expect(costMock).not.toHaveBeenCalled();
-      expect(screen.queryByRole('region', { name: 'Pipeline spend' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Lifetime spend' })).not.toBeInTheDocument();
     });
 
     /* The placement rule: it sits outside the rows guard, because an all-time
@@ -583,9 +583,9 @@ describe('RunsPage — U26 filter pane', () => {
       costMock.mockRejectedValue(new ApiError(404, 'pipeline pl_gone not found'));
       renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?pipeline=pl_gone');
       await screen.findByText(/No runs match these filters/i);
-      expect(screen.queryByRole('region', { name: 'Pipeline spend' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: 'Lifetime spend' })).not.toBeInTheDocument();
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-      expect(screen.queryByText(/Pipeline spend unavailable/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Lifetime spend unavailable/)).not.toBeInTheDocument();
     });
 
     /* Any other failure is disclosed — but as a hint, not a second alert beside
@@ -594,7 +594,7 @@ describe('RunsPage — U26 filter pane', () => {
     it('discloses a real failure quietly, without a second alert', async () => {
       costMock.mockRejectedValue(new ApiError(500, 'database is locked'));
       renderWithRouter(<RunsPage store={storeWith()} />, '/monitor/runs?pipeline=pl_1');
-      expect(await screen.findByText(/Pipeline spend unavailable/)).toHaveTextContent(
+      expect(await screen.findByText(/Lifetime spend unavailable/)).toHaveTextContent(
         'database is locked',
       );
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -605,7 +605,7 @@ describe('RunsPage — U26 filter pane', () => {
         <RunsPage store={storeWith(pipeline('pl_1', 'Reports'))} />,
         '/monitor/runs?pipeline=pl_1',
       );
-      await screen.findByRole('region', { name: 'Pipeline spend' });
+      await screen.findByRole('region', { name: 'Lifetime spend' });
       costMock.mockClear();
       costMock.mockResolvedValue(rollup({ totalCostEstimate: 9 }));
 
@@ -621,7 +621,7 @@ describe('RunsPage — U26 filter pane', () => {
     it('never shows one pipeline’s spend under another', async () => {
       const store = storeWith(pipeline('pl_1', 'Reports'), pipeline('pl_2', 'Backups'));
       renderWithRouter(<RunsPage store={store} />, '/monitor/runs?pipeline=pl_1');
-      await within(await screen.findByRole('region', { name: 'Pipeline spend' })).findByText(
+      await within(await screen.findByRole('region', { name: 'Lifetime spend' })).findByText(
         '$2.50',
       );
 

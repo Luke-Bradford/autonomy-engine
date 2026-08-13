@@ -443,15 +443,21 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
    * `owner_id` — defense in depth, never trusting that every run under the
    * pipeline shares its owner.
    *
-   * NOTE (scope): this is the API/projection half of "→ Monitor", and THIS ROUTE
-   * still has no web caller. The per-RUN surfaces have since landed and neither
-   * reads it: #866 renders per-NODE cost on the drill-in and #930 the whole run's,
-   * both folded client-side from the event stream; #931 puts a cost column on the
-   * run LIST, from `aggregateRunCosts` — this aggregation's per-run twin, sharing
-   * its predicates and its one fail-closed derivation site, but grouped by run.
-   * What remains unrendered is the PIPELINE-level rollup this route actually
-   * serves, and it stays U27's (#439/#931): the route works, so that half is pure
-   * front-end consumption, deferred on WHERE it belongs rather than on how.
+   * ITS WEB CALLER, at last, is the Runs list under the `?pipeline=` filter
+   * (#931, U27's "Monitor" placement): `getPipelineCost` → `pipelineCostSummary`.
+   * This note used to say the route had none, which was true from #599 until that
+   * landed. The other cost surfaces read neither this route nor each other —
+   * #866 renders per-NODE cost on the drill-in and #930 the whole run's, both
+   * folded client-side from the event stream, and the run LIST's column comes from
+   * `aggregateRunCosts`, this aggregation's per-run twin, sharing its predicates
+   * and its one fail-closed derivation site but grouped by run.
+   *
+   * WHAT THIS ROLLUP EXCLUDES, and the caller is required to say so: a
+   * `call_pipeline` child runs against the CALLED pipeline's version
+   * (`run/child.ts`), so the scope filter above puts its spend in that pipeline's
+   * rollup and never in its caller's. An understatement, and a safe one — every
+   * excluded penny is counted under some pipeline — but only once it is legible,
+   * which is #932's rule at run scope applied here.
    */
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id/cost', async (request) => {
     const pipeline = requireOwned(

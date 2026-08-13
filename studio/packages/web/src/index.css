@@ -2498,11 +2498,11 @@ td button + button {
    the AI-activity page, because the two show the same kind of number from the
    same kind of bounded aggregate and a second visual treatment would imply
    otherwise. All this rule owns is the heading's weight and the block's rhythm. */
-.pipeline-spend {
+.lifetime-spend {
   margin-bottom: 1rem;
 }
 
-.pipeline-spend h3 {
+.lifetime-spend h3 {
   margin: 0;
   font-size: 0.95rem;
 }
@@ -2510,7 +2510,7 @@ td button + button {
 /* The caveats. Deliberately not a notice or an alert — they qualify the figure
    permanently rather than reporting an event, and the page already runs as many
    live regions as it should. */
-.pipeline-spend .page-hint {
+.lifetime-spend .page-hint {
   margin-top: 0.35rem;
 }
 
