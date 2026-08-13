@@ -67,6 +67,36 @@ describe('#3 G5a — archived pipeline state', () => {
       // Still reachable by id (manage/restore surface).
       expect(getPipeline(db, gone.id)!.archived).toBe(true);
     });
+
+    /**
+     * #1058 — the OPT-IN archived selector, which is what makes an archived
+     * pipeline reachable by LIST and not only by id. Before it, the only way
+     * back from archive was a deep link into the canvas carrying an id the
+     * operator could no longer see anywhere in the app.
+     *
+     * It is archived-ONLY, not include-archived: the two sets front different
+     * actions (Unarchive vs Delete/Export), and a union would silently widen
+     * the default list for any caller that forgot the flag.
+     */
+    it('the archived selector lists exactly the archived pipelines, still owner-scoped', () => {
+      const { db } = freshDb();
+      const kept = createPipeline(db, { ...newPipeline, name: 'Kept' });
+      const gone = createPipeline(db, { ...newPipeline, name: 'Gone' });
+      archivePipelineRow(db, gone.id);
+      // Another owner's ARCHIVED pipeline: the selector must not become a hole
+      // in owner scoping (authentication is not authorization).
+      const foreign = createPipeline(db, { ownerId: 'someone-else', name: 'Foreign' });
+      archivePipelineRow(db, foreign.id);
+
+      const ids = (opts?: { archived?: boolean }) =>
+        listPipelinesPage(db, 'local', { limit: 10 }, opts).items.map((p) => p.id);
+
+      expect(ids({ archived: true })).toEqual([gone.id]);
+      // The default is UNCHANGED, and the two sets are complements — not one a
+      // superset of the other.
+      expect(ids()).toEqual([kept.id]);
+      expect(ids({ archived: false })).toEqual([kept.id]);
+    });
   });
 
   describe('listTriggersByPipeline (the pipeline→dependent-triggers reverse index)', () => {

@@ -45,6 +45,28 @@ const PipelinePatchBodySchema = PipelineWriteBodySchema.extend({
   concurrency: z.number().int().positive().nullable(),
 }).partial();
 
+/**
+ * #1058 — the list route's non-pagination query params. Parsed SEPARATELY from
+ * `pageArgsFromQuery`, the `ListRunsQuerystringSchema` idiom, because
+ * `PaginationQuerySchema` is deliberately non-strict and IGNORES unknown keys:
+ * without its own parse, `?archvied=true` would quietly hand back the LIVE list
+ * while the caller read it as the archived one.
+ *
+ * A closed two-value ENUM, and that is load-bearing rather than fussy. Both
+ * obvious alternatives fail OPEN — they turn a typo into a wrong-but-plausible
+ * answer instead of a 400:
+ *
+ *  - `z.coerce.boolean()` maps the string `"false"` to `true` (every non-empty
+ *    string is truthy), so the one value meaning "no" would mean "yes";
+ *  - zod 4's `z.stringbool()` accepts `yes`/`1`/`on`/`y`/`enabled` as well, so
+ *    the accepted vocabulary would be wider than the one documented here.
+ *
+ * Absent means live-only, matching the pre-#1058 default.
+ */
+const ListPipelinesQuerystringSchema = z.object({
+  archived: z.enum(['true', 'false']).optional(),
+});
+
 export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
   const { db } = fastify;
 
@@ -56,7 +78,12 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get('/api/pipelines', async (request) => {
     // #534 — keyset-paginated envelope `{ items, nextCursor }`.
-    return listPipelinesPage(db, request.principal.ownerId, pageArgsFromQuery(request.query));
+    // #1058 — plus the archived selector, parsed ALONGSIDE the pagination args
+    // (the `ListRunsQuerystringSchema` idiom) rather than inside them.
+    const { archived } = ListPipelinesQuerystringSchema.parse(request.query);
+    return listPipelinesPage(db, request.principal.ownerId, pageArgsFromQuery(request.query), {
+      archived: archived === 'true',
+    });
   });
 
   fastify.get<{ Params: { id: string } }>('/api/pipelines/:id', async (request) => {

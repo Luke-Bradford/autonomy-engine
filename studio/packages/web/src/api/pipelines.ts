@@ -185,6 +185,96 @@ export function restorePipeline(id: string): Promise<Pipeline> {
 }
 
 /**
+ * #1058 — ARCHIVE a pipeline (`POST /api/pipelines/:id/archive`, 200). The
+ * soft-delete counterpart to `deletePipeline`, and the only way to retire a
+ * pipeline that has ever run: `DELETE` is refused with a 409 the moment run
+ * history exists, because `pipeline_versions → runs` is `ON DELETE RESTRICT`.
+ * Idempotent — archiving an archived pipeline answers 200 with the same shape.
+ *
+ * The route also returns which triggers it disabled; that is discarded at the
+ * HTTP boundary (`return result.pipeline`), so a caller CANNOT report a count
+ * afterwards. The disclosure therefore belongs in the pre-act confirmation —
+ * see `archiveConfirmMessage`.
+ */
+export function archivePipeline(id: string): Promise<Pipeline> {
+  return apiFetch(`/api/pipelines/${encodeURIComponent(id)}/archive`, {
+    method: 'POST',
+    schema: PipelineSchema,
+  });
+}
+
+/**
+ * The owner's ARCHIVED pipelines (`GET /api/pipelines?archived=true`), page-walked
+ * like `listPipelines`.
+ *
+ * A SEPARATE function rather than a parameter on `listPipelines`, deliberately:
+ * `listPipelines` is the injected `fetchList` seam of `pipelinesStore`, so
+ * widening its signature would change the store's contract for a list the store
+ * must never hold. The store is the LIVE list and is shared with the
+ * simultaneously-mounted Factory Resources pane; archived rows appearing in it
+ * would leak into that pane's tree.
+ */
+export function listArchivedPipelines(signal?: AbortSignal): Promise<Pipeline[]> {
+  return fetchAllPages((cursor) =>
+    apiFetch(`/api/pipelines${pageQuery(cursor, { archived: 'true' })}`, {
+      schema: PipelinePageSchema,
+      signal,
+    }),
+  );
+}
+
+/**
+ * The one thing about archive a reader would otherwise assume WRONGLY:
+ * unarchiving does not re-arm what archiving switched off (`restorePipeline`'s
+ * settled contract — a restore that silently re-armed a nightly schedule would
+ * fire a pipeline the operator had said they were done with).
+ *
+ * A shared constant because TWO surfaces state it — the canvas banner
+ * (`pages/pipeline/PipelineCanvas.tsx`) and this module's archive confirmation
+ * — and two hand-written copies of one contract is exactly the drift
+ * `describeDeleteFailure` exists to prevent. `e2e/archived-pipeline.spec.ts`
+ * asserts on this literal.
+ */
+export const TRIGGERS_STAY_DISABLED_NOTE = 'its triggers stay disabled either way';
+
+/**
+ * What archiving "{name}" actually does, as the operator's confirmation.
+ *
+ * Extracted and exported (the `restoreConfirmMessage` shape) because the SAME
+ * contract is already stated on the canvas banner — "its triggers stay disabled
+ * either way" (`pages/pipeline/PipelineCanvas.tsx`) — and a second hand-written
+ * copy is exactly the drift `describeDeleteFailure` exists to prevent.
+ *
+ * It names four consequences, and the fourth is the one an operator would not
+ * predict: on a git-connected workspace an archived pipeline (and every trigger
+ * bound to its versions) is OMITTED from the serialized set (#666), so the next
+ * Commit stages the DELETION of those files from the branch. Naming a
+ * consequence before the act is the whole difference between an archive and a
+ * surprise — the standard `WorkspaceGitPage` already holds itself to.
+ *
+ * That last clause is phrased CONDITIONALLY ("if this workspace is connected to
+ * git") rather than gated on the real connection state. Reading the state would
+ * mean a workspace-git fetch on a page that otherwise needs none — a request and
+ * a failure mode added to the pipelines list purely to choose between two
+ * wordings. A conditional sentence is honest either way; a page that cannot
+ * answer a question should not pretend to, and it must not stay SILENT on the
+ * consequence just because it cannot cheaply confirm it applies.
+ */
+export function archiveConfirmMessage(name: string): string {
+  return (
+    `Archive pipeline "${name}"?\n\n` +
+    'Its versions and run history are KEPT — this is not a delete. It disappears ' +
+    'from the pipelines list, stops being dispatchable, and every trigger bound ' +
+    'to it is disabled.\n\n' +
+    `You can unarchive it from Show archived, but ${TRIGGERS_STAY_DISABLED_NOTE} — ` +
+    'unarchiving brings the pipeline back editable, not running.\n\n' +
+    'If this workspace is connected to git, an archived pipeline is left out of ' +
+    'the committed set, so your next Commit will delete its file — and its ' +
+    "triggers' files — from the branch."
+  );
+}
+
+/**
  * Save the canvas as a NEW immutable version (`POST /api/pipelines/:id/versions`).
  * A pipeline version is never updated in place — every save is a new row, whose
  * `version` the server auto-increments and whose `catalogVersion` it defaults to

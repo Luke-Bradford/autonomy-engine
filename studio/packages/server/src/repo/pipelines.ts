@@ -113,7 +113,12 @@ export function listPipelines(db: Db, ownerId?: string): Pipeline[] {
  * bounded query, and `listPipelines` stays the unscoped primitive (`ownerId?` →
  * all owners) the repo/portability tests exercise.
  */
-export function listPipelinesPage(db: Db, ownerId: string, args: PageArgs): Paginated<Pipeline> {
+export function listPipelinesPage(
+  db: Db,
+  ownerId: string,
+  args: PageArgs,
+  opts: { archived?: boolean } = {},
+): Paginated<Pipeline> {
   const rows = db
     .select()
     .from(pipelines)
@@ -121,10 +126,17 @@ export function listPipelinesPage(db: Db, ownerId: string, args: PageArgs): Pagi
       and(
         eq(pipelines.ownerId, ownerId),
         // #3 G5a — archived pipelines drop off the default list (they are
-        // soft-deleted). They remain reachable by id (`getPipeline`) for
-        // manage/restore surfaces, and the unscoped `listPipelines` primitive
-        // stays UNfiltered so export/serialize still round-trip them.
-        eq(pipelines.archived, false),
+        // soft-deleted). The unscoped `listPipelines` primitive stays
+        // UNfiltered so export/serialize still round-trip them.
+        //
+        // #1058 — `opts.archived` selects WHICH side of that split to return,
+        // and it is a SELECTOR, not an include-flag: `true` lists the archived
+        // set alone. The default (and an explicit `false`) is unchanged, so
+        // every existing caller keeps live-only. The two readings are exact
+        // complements — neither is a superset of the other — which is what lets
+        // the manage surface offer a way back out of archive by LIST rather
+        // than only by id.
+        eq(pipelines.archived, opts.archived === true),
         args.cursor ? afterCursor(pipelines.createdAt, pipelines.id, args.cursor) : undefined,
       ),
     )

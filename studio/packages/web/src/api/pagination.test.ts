@@ -42,4 +42,30 @@ describe('pageQuery', () => {
     // A base64url cursor is +/=-free, but the helper must still encode safely.
     expect(pageQuery('a b/c')).toBe('?limit=100&cursor=a+b%2Fc');
   });
+
+  it('carries a filter param alongside the pagination keys (#1058)', () => {
+    expect(pageQuery(undefined, { archived: 'true' })).toBe('?archived=true&limit=100');
+    expect(pageQuery('c1', { archived: 'true' })).toBe('?archived=true&limit=100&cursor=c1');
+  });
+
+  it('a filter param CANNOT override the pagination keys', () => {
+    // The docblock claims this, so it is asserted rather than assumed. A caller
+    // that shadowed `limit` would silently shorten or unbound every page, and a
+    // shadowed `cursor` would restart the walk — `fetchAllPages` would then
+    // either loop on a non-advancing cursor or return a truncated list that
+    // reads as the whole one.
+    expect(pageQuery('real', { limit: '1', cursor: 'fake' })).toBe('?limit=100&cursor=real');
+  });
+
+  it('drops a caller cursor on the FIRST page, where there is none to overwrite it', () => {
+    // The case above only proves the guarantee when a real cursor exists to
+    // overwrite the caller's. On the first page `cursor` is undefined and
+    // nothing is written, so an `extra.cursor` would survive from the caller's
+    // params and `fetchAllPages` would start mid-list — returning a truncated
+    // list that reads as the whole one.
+    expect(pageQuery(undefined, { cursor: 'fake' })).toBe('?limit=100');
+    expect(pageQuery(undefined, { archived: 'true', cursor: 'fake' })).toBe(
+      '?archived=true&limit=100',
+    );
+  });
 });

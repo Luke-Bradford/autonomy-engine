@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './client';
 import {
+  archiveConfirmMessage,
+  archivePipeline,
   createPipeline,
   createPipelineVersion,
   deletePipeline,
@@ -9,6 +11,7 @@ import {
   getPipeline,
   latestVersion,
   listAllPipelineVersions,
+  listArchivedPipelines,
   listPipelines,
   listPipelineVersions,
   renamePipeline,
@@ -99,6 +102,53 @@ describe('pipelines API', () => {
     const out = await listPipelines();
     expect(out).toEqual([pipeline]);
     expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines?limit=100');
+  });
+
+  /**
+   * #1058 — the archive verb and the archived list, the two halves that make
+   * retiring a pipeline reachable from the app at all.
+   */
+  describe('#1058 archive', () => {
+    it('archives via POST /api/pipelines/:id/archive, encoding the id', async () => {
+      const archived = { ...pipeline, archived: true };
+      const fetchMock = stubFetch(200, archived);
+      const out = await archivePipeline('pl/1');
+      expect(out).toEqual(archived);
+      expect(fetchMock.mock.calls[0]![0]).toBe('/api/pipelines/pl%2F1/archive');
+      expect(fetchMock.mock.calls[0]![1]!.method).toBe('POST');
+    });
+
+    it('asks for the ARCHIVED set explicitly, and walks its pages', async () => {
+      const gone = { ...pipeline, id: 'pl_gone', archived: true };
+      const alsoGone = { ...pipeline, id: 'pl_gone_2', archived: true };
+      const fetchMock = stubFetchSequence([
+        { status: 200, body: { items: [gone], nextCursor: 'c1' } },
+        { status: 200, body: { items: [alsoGone], nextCursor: null } },
+      ]);
+
+      expect(await listArchivedPipelines()).toEqual([gone, alsoGone]);
+      // The filter must survive onto EVERY page, not just the first — a second
+      // page that dropped it would silently splice the LIVE list into the
+      // archived one.
+      expect(urls(fetchMock)).toEqual([
+        '/api/pipelines?archived=true&limit=100',
+        '/api/pipelines?archived=true&limit=100&cursor=c1',
+      ]);
+    });
+
+    it('names every consequence of archiving, the git one included', () => {
+      const msg = archiveConfirmMessage('My pipeline');
+      expect(msg).toContain('My pipeline');
+      // Not a delete — the fact that makes archive the right answer to a 409.
+      expect(msg).toMatch(/run history are KEPT/i);
+      // The one a reader would otherwise assume wrongly, worded as the canvas
+      // banner words it (`PipelineCanvas`), so the two cannot drift.
+      expect(msg).toContain('triggers stay disabled');
+      // #666 — the widest-blast-radius consequence: the next Commit deletes
+      // the pipeline's file, and its triggers' files, from the branch.
+      expect(msg).toMatch(/git/i);
+      expect(msg).toMatch(/Commit will delete its file/);
+    });
   });
 
   it('lists a pipeline’s versions and encodes the id in the path', async () => {
