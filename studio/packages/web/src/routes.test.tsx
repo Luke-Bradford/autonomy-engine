@@ -25,6 +25,10 @@ vi.mock('./api/runs', async (importActual) => ({
   ...(await importActual<typeof import('./api/runs')>()),
   listRuns: vi.fn().mockResolvedValue([]),
   getRunEvents: vi.fn().mockResolvedValue([]),
+  // #1065 — the run detail page's diagnostics section loads on mount, so it
+  // needs a resolved default here for the same reason as the rest of this
+  // factory: unmocked it reaches a real `fetch` in jsdom.
+  getRunDiagnostics: vi.fn().mockResolvedValue([]),
   // The run detail page reads R1 (`getRunDetail`), which resolves the run AND
   // the version doc its node overlay needs.
   getRunDetail: vi.fn((runId: string) =>

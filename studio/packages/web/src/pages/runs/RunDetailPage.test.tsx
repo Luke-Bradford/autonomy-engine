@@ -27,6 +27,12 @@ vi.mock('../../api/runs', async (importActual) => ({
      default also means every existing test in this file keeps describing a run
      that owes no callback, which is what they all are. */
   listExternalWaits: vi.fn().mockResolvedValue([]),
+  /* #1065, and the #897 reason above applies verbatim — `RunDiagnostics` reads
+     this from a mount effect. `[]` is also the honest default for every existing
+     test in this file: they all describe runs the reducer neutralized nothing
+     on, so the section renders its "nothing to explain" hint and adds no
+     `role="alert"` for their error assertions to trip over. */
+  getRunDiagnostics: vi.fn().mockResolvedValue([]),
   /* Mocked so an un-mocked write cannot reach `fetch`. NOT for the #897 reason
      above, which is specific to a member called from a MOUNT EFFECT: this one is
      only reachable from a click, so no other test in this file can trigger it. */
