@@ -219,9 +219,15 @@ function SecretForm({
     // Two different bodies, and the SHARED schema for each — the rotate body
     // carries the value alone, because the route refuses a name (#1061: the
     // name is the lookup key every stored marker resolves through).
-    const parsed = replacing
-      ? SecretRotateSchema.safeParse({ secret: form.secret })
-      : SecretWriteSchema.safeParse({ name: form.name, secret: form.secret });
+    //
+    // `form.id` is what discriminates, not the parsed body: the rotate body has
+    // no `name` to switch on, so narrowing the union by shape would be reading
+    // the answer off the absence of a field.
+    const { id } = form;
+    const parsed =
+      id === null
+        ? SecretWriteSchema.safeParse({ name: form.name, secret: form.secret })
+        : SecretRotateSchema.safeParse({ secret: form.secret });
     if (!parsed.success) {
       setError(formatZodIssues(parsed.error.issues));
       return;
@@ -229,8 +235,9 @@ function SecretForm({
 
     setSaving(true);
     try {
-      if ('name' in parsed.data) await createSecret(parsed.data);
-      else await rotateSecret(form.id!, parsed.data);
+      await (id === null
+        ? createSecret({ name: form.name, secret: parsed.data.secret })
+        : rotateSecret(id, { secret: parsed.data.secret }));
       // Clear the typed value before handing back. Not a security control —
       // the plaintext has already been in an input's value and in the request
       // body — but a form left populated invites re-submitting the same

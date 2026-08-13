@@ -24,6 +24,7 @@ import { fluentRootReady } from './support/theme';
  *  row from an earlier test would 409 and read as "create is broken". */
 const NAME = 'e2e-1060-vault-key';
 const DUP_NAME = 'e2e-1060-duplicate-key';
+const ROTATE_NAME = 'e2e-1061-rotate-key';
 
 test.describe('#1060 the secrets vault has a front end', () => {
   test('creates a secret, lists it, and deletes it', async ({ page }) => {
@@ -64,6 +65,70 @@ test.describe('#1060 the secrets vault has a front end', () => {
     await page.reload();
     await page.getByRole('heading', { name: 'Secrets' }).waitFor();
     await expect(page.getByRole('button', { name: `Delete ${NAME}`, exact: true })).toHaveCount(0);
+
+    await expectQuiet(page, problems);
+  });
+
+  test('#1061 replaces a value in place — one PATCH, one row, same name', async ({ page }) => {
+    const problems = collectPageProblems(page);
+
+    await page.goto('/#/manage/secrets');
+    await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+    await fluentRootReady(page);
+
+    await page.getByRole('button', { name: 'New secret' }).click();
+    await page.getByLabel('Name').fill(ROTATE_NAME);
+    await page.getByLabel('Value').fill('first-value');
+    await page.getByRole('button', { name: 'Create secret' }).click();
+    await expect(page.getByRole('cell', { name: ROTATE_NAME, exact: true })).toBeVisible();
+
+    try {
+      await page.getByRole('button', { name: `Replace ${ROTATE_NAME}`, exact: true }).click();
+
+      // The name comes through read-only: it is the lookup key, and the route
+      // refuses a rename outright.
+      const nameField = page.getByLabel('Name');
+      await expect(nameField).toHaveValue(ROTATE_NAME);
+      await expect(nameField).toHaveAttribute('readonly', '');
+
+      await page.getByLabel('Value').fill('second-value');
+
+      // The ONLY browser-observable proof that the rotation reached the
+      // server. Everything else on this page — one row, same name, no error —
+      // is equally true of a rotate that silently did nothing, because a
+      // rotation changes no visible field (there is no `updatedAt`, and
+      // `createdAt` is deliberately preserved). That the ciphertext really
+      // moved is the server suite's assertion, not one a browser can make: no
+      // route returns a value, which is the write-only property working.
+      const [patch] = await Promise.all([
+        page.waitForResponse(
+          (r) =>
+            r.request().method() === 'PATCH' &&
+            /\/api\/secrets\/[^/]+$/.test(new URL(r.url()).pathname),
+        ),
+        page.getByRole('button', { name: 'Replace value', exact: true }).click(),
+      ]);
+      expect(patch.status()).toBe(200);
+
+      // A DELETE + POST would satisfy "the row is still there" too, so assert
+      // the shape that distinguishes them: exactly one row of this name, and
+      // it survives a reload (i.e. the server holds it, not React state).
+      await expect(page.getByRole('cell', { name: ROTATE_NAME, exact: true })).toHaveCount(1);
+      await expect(page.getByRole('alert')).toHaveCount(0);
+
+      await page.reload();
+      await page.getByRole('heading', { name: 'Secrets' }).waitFor();
+      await expect(page.getByRole('cell', { name: ROTATE_NAME, exact: true })).toHaveCount(1);
+    } finally {
+      // In a `finally` for the reason the test below states: `reset-state.mjs`
+      // wipes once per RUN, so a row left behind 409s the next attempt's
+      // CREATE and reads as "create is broken".
+      page.once('dialog', (dialog) => void dialog.accept());
+      await page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }).click();
+      await expect(
+        page.getByRole('button', { name: `Delete ${ROTATE_NAME}`, exact: true }),
+      ).toHaveCount(0);
+    }
 
     await expectQuiet(page, problems);
   });

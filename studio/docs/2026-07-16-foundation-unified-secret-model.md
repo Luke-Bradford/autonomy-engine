@@ -116,13 +116,25 @@ node from referencing a connection's private credential by guessing its name.
 
 `POST` (create: write-only plaintext `{name, secret}` → encrypt → row; returns the PUBLIC
 projection, **never the plaintext or the ciphertext**), `GET` (list: public projection only),
-`DELETE`. The public projection is `SecretPublicSchema = { id, name, ownerId, createdAt }` —
+`PATCH` and `DELETE`. The public projection is `SecretPublicSchema = { id, name, ownerId, createdAt }` —
 mirrors `ConnectionPublicSchema.omit({ secretRef })` (`shared/src/schemas/connection.ts:50`) and
 the invariant "must never be reachable from any client-returned schema"
 (`shared/src/schemas/secret.ts` header). `DELETE` must refuse a secret still referenced by a
 connection (the FK is `onDelete: restrict`) OR by any stored pipeline-version sink — the second
 is a soft check (report, don't cascade); a version is immutable, so a dangling `$secret` is a
 run-time `SECRET_NOT_FOUND`, never silent success.
+
+`PATCH /api/secrets/:id` (#1061, added after this section was first written) ROTATES a value in
+place: body `{secret}` only, re-encrypted under the row's existing `id`/`ref`/`name`, returning the
+same public projection. It exists because the alternative — `DELETE` then `POST` under the same
+name — leaves a window in which the name resolves to nothing and any node dispatching inside it
+fails with `SECRET_NOT_FOUND`; a scheduled trigger firing mid-rotation hits it. The body refuses a
+`name` (strict, so a rename is a 400 rather than a silent drop): the name is the key every stored
+`{$secret:name}` marker resolves through and a version is immutable, so a rename would strand those
+markers with no way to repair the version holding them. Because the name cannot move, a rotation
+needs no revalidation of any stored version — the property to preserve if this body is ever
+widened. This mirrors what `PATCH /api/connections/:id` already did for a connection-owned secret,
+through the same `updateSecretCiphertext`.
 
 ### 1.3 Namespace reconciliation with `global_params` (F7)
 
@@ -289,10 +301,12 @@ S1 → S2 → S3 → S4. Source before sink; gate before resolution; resolution 
 
 - **Secrets live only as encrypted ciphertext at rest** (`secrets.ciphertext`, XChaCha20-Poly1305,
   master key resolved from env/keyfile, `secrets/secrets.ts`). No plaintext column, ever.
-- **Plaintext exists only in two transient places:** the `POST /api/secrets` request body (encrypted
-  immediately, never stored/returned/logged) and the dispatch-time side-channel arg to an adapter
-  (never in `ctx`, `preparedInput`, or any event). Both mirror the existing connection-secret
-  discipline.
+- **Plaintext exists only in three transient places:** the `POST /api/secrets` request body, the
+  `PATCH /api/secrets/:id` rotation body (#1061) — both encrypted immediately, never
+  stored/returned/logged — and the dispatch-time side-channel arg to an adapter (never in `ctx`,
+  `preparedInput`, or any event). All three mirror the existing connection-secret discipline.
+  Rotation adds an inbound path, never an outbound one: no route returns a value, so write-only
+  is unchanged.
 - **A stored version and the event log hold only the `{$secret:name}` MARKER** — a pointer, not a
   secret. Safe to persist, export, diff, and log.
 - **The name namespace is owner-scoped** (`UNIQUE(owner_id, name)`); a node cannot reference a

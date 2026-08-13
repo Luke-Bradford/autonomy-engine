@@ -277,11 +277,13 @@ shipped complete server-side with ZERO web callers, while `{"$secret":"<name>"}`
 config resolves against exactly that table at dispatch. So a marker could be authored and the
 secret it names could not be created anywhere in the product.
 
-Shipped as list + create + delete at `#/manage/secrets`, beside Connections. Write-only end to
-end: no route returns a value, `SecretPublicSchema` omits `ciphertext` and `ref`, and the page
-renders a name and a date. There is no update route, so a delete-then-create is how a value is
-rotated — the delete confirmation says so, since it is also what breaks the nodes referencing
-that name.
+Shipped as list + create + replace + delete at `#/manage/secrets`, beside Connections. Write-only
+end to end: no route returns a value, `SecretPublicSchema` omits `ciphertext` and `ref`, and the
+page renders a name and a date. Replace (#1061) rotates the value in place via `PATCH
+/api/secrets/:id`, so the name never stops resolving mid-change; the name itself is read-only there,
+because renaming would strand every stored `{"$secret":"<name>"}` marker. Delete retires the name,
+and its confirmation says what that costs — every node referencing the name fails at dispatch until
+a secret of that name exists again.
 
 Still open, deliberately: a `{$secret}` PICKER in the node config form. `secretHeaders` is a
 `z.record`, which `classify()` has no case for, so it falls through to the generic JSON textarea
