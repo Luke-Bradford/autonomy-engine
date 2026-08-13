@@ -195,6 +195,20 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
     }
   }, []);
 
+  /**
+   * Whether the section is open, readable from an ASYNC callback. `onArchive`
+   * runs across two awaits and must decide "refetch or invalidate" from
+   * whether the section is open when it FINISHES, not when it was clicked —
+   * the user can open or close it in between. Reading the state variable there
+   * closes over the click-time value, which chose `invalidate` for a section
+   * that was open by the time the invalidation landed, leaving it at `idle`
+   * while open: no rows, no error, no "Loading…", and nothing to refetch it.
+   */
+  const showArchivedRef = useRef(showArchived);
+  useEffect(() => {
+    showArchivedRef.current = showArchived;
+  }, [showArchived]);
+
   const onToggleArchived = useCallback(() => {
     const next = !showArchived;
     setShowArchived(next);
@@ -221,13 +235,13 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
         // The row leaves the live list; the archived list it joins is now
         // stale. Refetch it when it is open, invalidate it when it is not.
         await refresh();
-        if (showArchived) await loadArchived();
+        if (showArchivedRef.current) await loadArchived();
         else invalidateArchived();
       } catch (err) {
         setActionMsg(`Could not archive “${p.name}”: ${messageOf(err)}`);
       }
     },
-    [refresh, showArchived, loadArchived, invalidateArchived],
+    [refresh, loadArchived, invalidateArchived],
   );
 
   /**

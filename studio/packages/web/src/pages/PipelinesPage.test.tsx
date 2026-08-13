@@ -88,6 +88,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A load whose completion moment this test controls. Both archived-load race
+ * tests below turn on applying loads in COMPLETION order rather than issue
+ * order, which is only expressible by holding one open.
+ */
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
 describe('PipelinesPage', () => {
   it('shows the empty state after loading', async () => {
     renderPage();
@@ -219,15 +232,8 @@ describe('PipelinesPage', () => {
 
       // Two loads whose completion order is controlled here, because that is
       // the whole defect: they apply in COMPLETION order, not issue order.
-      const deferred = () => {
-        let resolve!: (v: Pipeline[]) => void;
-        const promise = new Promise<Pipeline[]>((r) => {
-          resolve = r;
-        });
-        return { promise, resolve };
-      };
-      const first = deferred();
-      const second = deferred();
+      const first = deferred<Pipeline[]>();
+      const second = deferred<Pipeline[]>();
       listArchivedMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
       renderPage();
@@ -295,6 +301,41 @@ describe('PipelinesPage', () => {
         await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
       ).toBeInTheDocument();
       expect(listArchivedMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('loads the archived set when a REOPEN races an in-flight archive', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+
+      const firstLoad = deferred<Pipeline[]>();
+      listArchivedMock.mockReturnValueOnce(firstLoad.promise);
+      const archiving = deferred<Pipeline>();
+      archiveMock.mockReturnValueOnce(archiving.promise);
+      renderPage();
+
+      // Open (load A starts), close, then archive — which reads `showArchived`
+      // as false at CLICK time and holds that value across its awaits.
+      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole('button', { name: /Hide archived/i }));
+      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+
+      // Reopen while the archive is still in flight. Load A is still 'loading',
+      // so an open that only fetches on the CLICK cannot fetch here.
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+
+      listArchivedMock.mockResolvedValue([pipeline({ name: 'Nightly digest', archived: true })]);
+      archiving.resolve(pipeline({ archived: true }));
+      firstLoad.resolve([]);
+
+      // The archive lands last and invalidates the set. The section is OPEN by
+      // then, so it has to load: otherwise it sits at `idle` while open, which
+      // renders no rows, no error and no "Loading…" — a blank section that
+      // nothing refetches, hiding the pipeline just archived.
+      expect(
+        await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
+      ).toBeInTheDocument();
     });
 
     it('re-reads the archived set after an archive performed while it was closed', async () => {
