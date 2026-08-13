@@ -2455,7 +2455,7 @@ describe('reconcileOnBoot — #1053 a crash-surviving child of a TERMINAL parent
     expect(types(loadEngineEvents(db, child.id))).not.toContain('run.interrupted');
   });
 
-  it('manufactures NO terminal fact for a corrupted `running` child that never started — the row patch is the sweep\'s job', async () => {
+  it("manufactures NO terminal fact for a corrupted `running` child that never started — the row patch is the sweep's job", async () => {
     const { db } = freshDb();
     const parent = seedTerminalLogParent(db);
     // A CORRUPTED row: status `running` with an empty log. The `pending` branch
