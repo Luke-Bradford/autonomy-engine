@@ -92,6 +92,11 @@ export const MAX_SECRET_VALUE_LEN = 16384;
  * INSERT shape, whose `ref` + `ciphertext` are the encrypted RESULT of this
  * body rather than anything a client sends. (`name` does travel through
  * unchanged into it — the two overlap there, they just do not correspond.)
+ *
+ * `SecretRotateBodySchema` below is the second instance of the same argument:
+ * it is DERIVED from this schema rather than declared alongside it, so the
+ * bound on `secret` has exactly one home and a future change to it cannot
+ * apply to create but not to rotate.
  */
 export const SecretWriteBodySchema = z
   .object({
@@ -116,3 +121,28 @@ export const SecretWriteBodySchema = z
   })
   .strict();
 export type SecretWriteBody = z.infer<typeof SecretWriteBodySchema>;
+
+/**
+ * The client-facing body of `PATCH /api/secrets/:id` (#1061) — ROTATION, and
+ * nothing else. The value is replaced in place under the row's existing
+ * `id`/`ref`/`name`, so `{ "$secret": "<name>" }` never stops resolving; the
+ * alternative available before this route existed was DELETE-then-POST, whose
+ * gap is a real window in which every dispatch naming that secret fails with
+ * `secret '<name>' not found` (a scheduled trigger firing mid-rotation hits
+ * it). Mirrors what `PATCH /api/connections/:id` has always done for a
+ * connection-owned secret.
+ *
+ * `name` is DELIBERATELY absent, and `.strict()` (inherited through `.pick`)
+ * makes sending it a loud 400 rather than a silent drop. The name is the
+ * lookup key: a pipeline version is immutable, so a rename would strand every
+ * stored marker naming the old value with no way to repair the version that
+ * holds it. Because the name cannot move, a rotation needs no revalidation of
+ * any stored pipeline version — which is precisely the property to preserve if
+ * anyone is ever tempted to widen this body.
+ *
+ * Derived from `SecretWriteBodySchema` rather than re-declared so the value's
+ * length bound cannot fork from create's (see that schema's docblock for the
+ * standing argument against copies-that-agree-today).
+ */
+export const SecretRotateBodySchema = SecretWriteBodySchema.pick({ secret: true });
+export type SecretRotateBody = z.infer<typeof SecretRotateBodySchema>;
