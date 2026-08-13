@@ -1,6 +1,6 @@
 import { Handle, Position } from '@xyflow/react';
 import type { CSSProperties } from 'react';
-import { sourcePortOffset, type SourcePort } from './ports';
+import { SOURCE_PORT_PITCH, sourcePortOffset, type SourcePort } from './ports';
 
 /**
  * U19 — the outgoing ports, drawn as a labelled column down the node's right
@@ -13,9 +13,11 @@ import { sourcePortOffset, type SourcePort } from './ports';
  * to the width of the word `completion` and move the point every edge attaches
  * to off the port it is drawn at.
  *
- * `top` is set inline rather than in CSS because the offset is a function of the
- * port's index and the column's length, and it must be the SAME function
- * `containerHandles` uses for its stated `y` — see `sourcePortOffset`.
+ * The GEOMETRY is published as custom properties and the stylesheet spends them,
+ * because the offset is a function of the port's index and the column's length
+ * and it must be the SAME function `containerHandles` uses for its stated `y` —
+ * see `sourcePortOffset`. #997 moved it out of an inline `top`; the comment on
+ * `style` below says why.
  *
  * The hue repeats the edge's own variant colour, so the port an edge leaves and
  * the line it draws are the same colour rather than two conventions to learn.
@@ -41,6 +43,13 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
            `sourceHandle` resolution and screen-reader output are untouched. */
         const style = {
           '--port-offset': `${sourcePortOffset(index, ports.length)}px`,
+          /* The PITCH, published for the stylesheet's invisible hit target,
+             which must never grow past one port's share of the column. It is
+             the same number for every port and could have been written into the
+             CSS directly — but then the pitch would have two homes, and the one
+             that matters (`sourcePortOffset`) is here. See `index.css`'s
+             `::after` rule for what goes wrong when the two disagree. */
+          '--port-pitch': `${SOURCE_PORT_PITCH}px`,
         } as CSSProperties;
         const name = port.orphaned ? `${port.label} — not offered by this source` : port.label;
         return (

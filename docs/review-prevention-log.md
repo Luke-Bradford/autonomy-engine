@@ -857,3 +857,56 @@ Corollaries:
 - Same shape as #25 (*the guard your comment ARGUES FOR is the one nothing
   tests*). #25 is about the untested guard; this is about the test that looks like
   it covers one and does not.
+
+## 34. An invisible hit target is a SECOND geometry — and often the one the library actually consults
+
+A spacing constant only guards a gesture if **every element claiming space at
+that spacing respects it** — including the ones with no measurable box.
+
+Measured on the #992/#997 branch. `SOURCE_PORT_PITCH` (14px) spaces a node's
+outcome ports, and two tests guarded it: one pinned `CONNECTION_RADIUS` under
+half the pitch, another measured the rendered dots' gaps in a real browser. Both
+stayed green while the canvas authored the wrong edge.
+
+The change had added a WCAG-motivated 24×24px `::after` to each port — invisible,
+unmeasurable (a pseudo-element has no `getBoundingClientRect`), and larger than
+the pitch it sat on. React Flow does not resolve a drop against its own measured
+handle bounds: `isValidHandle` calls `document.elementFromPoint` and, in its own
+comment, "always want[s] to prioritize the handle below the mouse cursor over the
+closest distance handle" (`@xyflow/system` 0.0.79, index.js:2563-2574). So that
+invisible box, not the dot and not the snap radius, decided every drop.
+
+It bit twice in one property, in both axes:
+
+- **Vertically**, each target reached ±12px into a 14px pitch, so it covered both
+  neighbours. A drag approaching `success` from above crossed `failure`'s target
+  first; `.connectingto { transform: scale(1.6) }` then grew the wrongly-picked
+  port's target over `success`'s own centre, so a pointer finishing EXACTLY on
+  `success` still dropped on `failure`. A duplicate that should have been refused
+  was silently authored as a valid `on failure` edge.
+- **Horizontally**, the same 24px reached outward over the reconnect anchor —
+  which React Flow draws tangent to the dot, so the crescent beyond it is the
+  only grabbable part of a selected edge's end. Pressing the anchor pressed the
+  port instead, turning "pick this edge up" into "start a new connection", which
+  then failed as a self-connect and left the edge untouched.
+
+**Rule: when a constant spaces a gesture, enumerate everything that claims space
+there — drawn or not — and bound each by that constant.** Take all the room there
+is and none belonging to another gesture: the target's height became the pitch
+exactly (targets tile instead of overlapping) and its width grew inward only,
+ending at the dot's outer edge.
+
+Corollaries:
+
+- **Give the constant one home and let the stylesheet spend it.** The pitch lives
+  in TypeScript (`sourcePortOffset`); CSS receives it as `--port-pitch` rather
+  than restating `14px`. An unresolved custom property collapses the box to zero,
+  which fails toward "no enlargement", never toward "reaches a neighbour".
+- **Assert OWNERSHIP, not size.** A size check restates the stylesheet. "A point
+  45% of a pitch from a port resolves to THAT port" says what the size is for,
+  and tracks the constant when it changes.
+- **Read the library's hit-test path before trusting a coordinate.** Two
+  hypotheses failed here on the assumption that a pixel-perfect drop coordinate
+  decides the outcome. What settled it was instrumenting `elementFromPoint` at
+  each step of the drag and then reading `isValidHandle` itself — the comment in
+  the vendored source stated the priority outright.
