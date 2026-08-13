@@ -98,12 +98,53 @@ describe('pipelines publish route (#3 G6c-1 — CAS Publish + active pointer)', 
     expect(event?.payload).toEqual({
       type: 'pipeline.published',
       pipeline: pipeline.resourceId,
+      // #1077 — the human name, captured at WRITE time so the audit log can
+      // name what was published without a read-time join.
+      name: 'P',
       from: null,
       to: v1.id,
       commit: 'commit1',
       blob: 'blob1',
       by: 'local',
     });
+  });
+
+  /**
+   * #1077 — the reason the name is captured on the payload rather than joined
+   * when the page renders, and the only assertion that tells the two apart.
+   *
+   * A read-time join would pass every other test in this file: it would also
+   * put a name in front of the reader. What it would NOT do is keep the entry
+   * TRUE. An audit log records what was so when the act happened, and a join
+   * re-answers the question with today's data — so renaming a pipeline would
+   * silently rewrite what the log says about a publish that already happened.
+   *
+   * So: publish as 'Before', rename to 'After', and the entry must still say
+   * 'Before'. Delete the `name:` field from the publish route and this goes red
+   * on the missing name; switch the implementation to a join and it goes red
+   * here on the rewritten history.
+   */
+  it('records the name the pipeline had WHEN it was published, not its name now', async () => {
+    connectRepo();
+    const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'Before' });
+    const v1 = gitVersion(pipeline.id, 'commit1', 'blob1');
+
+    expect(
+      (await publish(pipeline.id, { toVersionId: v1.id, expectedActiveVersionId: null }))
+        .statusCode,
+    ).toBe(200);
+
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: `/api/pipelines/${pipeline.id}`,
+      payload: { name: 'After' },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().name).toBe('After');
+
+    const items = (await audit()).json().items as { payload: Record<string, unknown> }[];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.payload.name).toBe('Before');
   });
 
   it('GET active is null before any publish (and NOT git-gated)', async () => {

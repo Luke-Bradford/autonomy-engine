@@ -106,6 +106,35 @@ export type ImportAppliedEvent = z.infer<typeof ImportAppliedEventSchema>;
 export const PipelinePublishedEventSchema = z.object({
   type: z.literal('pipeline.published'),
   pipeline: z.string().min(1),
+  /**
+   * #1077 — the pipeline's human name AS IT WAS at publish time, so an audit
+   * reader gets a name rather than a `resourceId`. This brings the variant into
+   * line with its siblings: `pipeline.archived`, `pipeline.restored` and each
+   * `import.applied.archived[]` entry already carry the name they need.
+   *
+   * WRITE-time capture, not a read-time join, and the difference is the whole
+   * point. `name` is `RESOURCE_VOLATILE` — it can change at any time — so
+   * joining the live pipeline row when the page renders would re-answer the
+   * question with TODAY's data, and renaming a pipeline would silently rewrite
+   * what the log says about a publish that already happened. An audit log
+   * records what was so when the act occurred. (A "name as of that commit" also
+   * exists inside the git blob at `blob`, but reading it would put a git read on
+   * the publish path to recover a value the import that minted the version had
+   * already synced onto the row.)
+   *
+   * OPTIONAL, and it must stay optional: rows written before this field existed
+   * are on disk in live workspaces and are re-parsed through this schema. A
+   * required `name` would throw for every one of them — not just in the audit
+   * page but on the CAS publish path and bind-to-active, which both project
+   * through `getActivePublishedVersion`, and in `listWorkspaceEventsPage`, whose
+   * page parse is all-or-nothing (one legacy row would blank the whole log).
+   *
+   * And deliberately NO `.default(...)`: absent means the event genuinely never
+   * carried a name, which a reader is owed honestly as the `resourceId`. A
+   * default would manufacture an absent fact into a plausible-looking one —
+   * the failure #473 was filed for.
+   */
+  name: z.string().min(1).optional(),
   from: z.string().min(1).nullable(),
   to: z.string().min(1),
   commit: z.string().min(1),

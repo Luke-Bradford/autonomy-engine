@@ -312,6 +312,10 @@ export const pipelinesRoutes: FastifyPluginAsync = async (fastify) => {
       appendWorkspaceEvent(db, ownerId, {
         type: 'pipeline.published',
         pipeline: pipeline.resourceId,
+        // #1077 — captured HERE, at write time, so the entry keeps naming what
+        // was published even after the pipeline is renamed. See the schema's
+        // docblock for why a read-time join would be the wrong fact.
+        name: pipeline.name,
         from: expectedActiveVersionId,
         to: toVersionId,
         commit,

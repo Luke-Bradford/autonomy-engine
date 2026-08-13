@@ -29,21 +29,24 @@ function plural(n: number, noun: string): string {
  * front of an operator. An audit surface that can silently under-report an act
  * is worse than one that does not build.
  *
- * NO NAME LOOKUP, and that is a decision rather than an omission. Four of the
- * five payloads carry the human name they need — `pipeline.archived` and
- * `pipeline.restored` have `name`, `import.applied.archived[]` has one per
- * entry, `repo.connected` needs none — so a join would serve only
- * `pipeline.published`, whose payload carries a bare `resourceId`.
+ * NO NAME LOOKUP: every payload now carries the name it needs, so this stays a
+ * PURE function of one event and the page keeps its single request.
  *
- * Naming that one needs BOTH `listPipelines` and `listArchivedPipelines`
- * (`api/pipelines.ts`), because the two are exact complements and an audit log
- * is disproportionately about pipelines that have since been archived — so a
- * live-only join would resolve to nothing for exactly the rows most worth
- * naming. That is two more requests, and two more ways for a read-only page to
- * fail, in service of one variant's cosmetics. It also has a real question
- * inside it that a join quietly answers wrongly: an audit entry naming the
- * pipeline as it is called NOW is not the same fact as what it was called when
- * it was published. #1077 owns both.
+ * #1077 settled the one variant that did not. `pipeline.published` carried a
+ * bare `resourceId`, and the choice was between joining the name here and
+ * capturing it on the payload at write time. Capture won on the FACT, not on
+ * the request count: a join would need both `listPipelines` and
+ * `listArchivedPipelines` (`api/pipelines.ts` — exact complements, and an audit
+ * log is disproportionately about pipelines that have since been archived), but
+ * worse, it would re-answer the question with today's data. `name` is
+ * `RESOURCE_VOLATILE`, so a rename would silently rewrite what the log says
+ * about a publish that already happened. An audit log records what was so when
+ * the act occurred.
+ *
+ * The name is therefore OPTIONAL and this renderer falls back to the
+ * `resourceId` for rows written before the field existed — see
+ * `PipelinePublishedEventSchema`'s docblock for why it can never become a
+ * default.
  *
  * WORDING IS TRUTHFUL TO THE SCHEMA'S OWN SEMANTICS, which are load-bearing and
  * easy to paraphrase into a lie:
@@ -133,7 +136,11 @@ export function describeWorkspaceEvent(event: WorkspaceEvent): WorkspaceEventDes
 
     case 'pipeline.published':
       return {
-        summary: `Published a new active version of pipeline ${event.pipeline}`,
+        // #1077 — the captured name, falling back to the `resourceId` for a row
+        // written before that field existed. The fallback is the honest reading
+        // of an absent name, not a placeholder: the `resourceId` IS the
+        // pipeline's identity, and it is what this line always used to say.
+        summary: `Published a new active version of pipeline ${event.name ?? event.pipeline}`,
         detail:
           event.from === null
             ? `Version ${event.to}, from commit ${shortSha(event.commit)} — the first publish.`

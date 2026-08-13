@@ -581,7 +581,7 @@ READS this projection — deferred so it lands on a stable `getActivePublishedVe
 
 - **The `active` pointer is a PROJECTION, never a stored mutable row** (v2
   "Publish must be EVENT-SOURCED"). A new closed-union variant
-  `pipeline.published{pipeline, from, to, commit, blob, by}` is appended to the
+  `pipeline.published{pipeline, name?, from, to, commit, blob, by}` is appended to the
   `workspace_events` audit log; `getActivePublishedVersion(db, ownerId,
   resourceId)` folds the LATEST such event (by `seq DESC`, the append authority)
   into the current active version. Migration 0029 adds the `(owner_id, type)`
@@ -595,6 +595,13 @@ READS this projection — deferred so it lands on a stable `getActivePublishedVe
   immutable and never standalone-deleted, so a `to`/`from` id cannot dangle within
   its own DB. G6c-2 will resolve trigger → pipeline DB-id → `resourceId` (one
   `getPipeline` hop) to read the projection.
+- **`name` (#1077, added post-G6c-1):** the pipeline's human name AS AT publish
+  time, captured on the payload rather than joined when a reader renders — `name`
+  is `RESOURCE_VOLATILE`, so a join would let a later rename rewrite what the log
+  says about a publish that already happened. OPTIONAL and never defaulted: rows
+  predating the field are live on disk and are re-parsed by this same schema on
+  the CAS path, on bind-to-active and in the all-or-nothing page parse, so a
+  required field would break them all; an absent name renders as the `resourceId`.
 - **CAS Publish** (`POST /api/pipelines/:id/publish`, body `{toVersionId,
   expectedActiveVersionId}`): `expectedActiveVersionId` is the compare-and-set
   expected-previous active (`null` = "expected never-published"), **REQUIRED, not
