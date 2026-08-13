@@ -151,7 +151,10 @@ test.describe('canvas auto-layout (U9)', () => {
     // change caps node width, this goes red HERE and says why, rather than
     // quietly passing as a test of nothing.
     const wideBefore = await at('wide');
-    expect(wideBefore!.width, 'the fixture must render wider than the reserved column').toBeGreaterThan(210);
+    expect(
+      wideBefore!.width,
+      'the fixture must render wider than the reserved column',
+    ).toBeGreaterThan(210);
 
     await page.getByRole('button', { name: 'Arrange', exact: true }).click();
     await viewportSettled(page);
