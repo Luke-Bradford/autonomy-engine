@@ -1,6 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '@autonomy-studio/shared';
+import {
+  createSecret,
+  getConnection,
+  getSecret,
+  getSecretByName,
+  getSecretByRef,
+  listSecrets,
+} from '../../repo/index.js';
+import { decrypt, encrypt } from '../../secrets/secrets.js';
 import { buildTestApp } from '../../__tests__/build-test-app.js';
 
 describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => {
@@ -204,6 +213,218 @@ describe('secrets routes (item 7 / S1 — the standalone secret SOURCE)', () => 
   it('DELETE of an unknown id is a 404', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/secrets/sec_missing' });
     expect(res.statusCode).toBe(404);
+  });
+
+  /**
+   * #1061 — ROTATION. The window this route closes is the whole point: before
+   * it existed, replacing a value meant DELETE + POST, and between those two
+   * calls `{ "$secret": "<name>" }` resolved to nothing, so any node
+   * dispatching in that window failed with `secret '<name>' not found`.
+   *
+   * There is no assertion here of the form "the name never stopped resolving",
+   * because `app.inject` is one synchronous request and such a check would
+   * pass against a delete-then-recreate implementation too — it cannot
+   * discriminate, so it would certify nothing. The property that DOES
+   * discriminate is that the ROW was updated in place: same `id`, same `ref`,
+   * same `createdAt`, one row throughout, with only the ciphertext moving.
+   * That is what these assert.
+   */
+  describe('PATCH /api/secrets/:id — in-place rotation (#1061)', () => {
+    it('replaces the value under the SAME row — id, ref, name and createdAt all survive', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const created = (
+          await app2.inject({
+            method: 'POST',
+            url: '/api/secrets',
+            payload: { name: 'rotate-me', secret: 'first-value' },
+          })
+        ).json();
+        const before = getSecret(app2.db, created.id)!;
+
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${created.id}`,
+          payload: { secret: 'second-value' },
+        });
+        expect(res.statusCode).toBe(200);
+
+        // The response is still the PUBLIC projection — rotation is not a hole
+        // in the write-only property.
+        const body = res.json();
+        expect(body).toEqual({
+          id: created.id,
+          name: 'rotate-me',
+          ownerId: 'local',
+          createdAt: created.createdAt,
+        });
+        expect(JSON.stringify(body)).not.toContain('second-value');
+
+        const after = getSecret(app2.db, created.id)!;
+        // The identity a marker resolves through, unmoved.
+        expect(after.ref).toBe(before.ref);
+        expect(after.name).toBe('rotate-me');
+        expect(after.createdAt).toBe(before.createdAt);
+        // …and the value really did move, to the new plaintext.
+        expect(after.ciphertext).not.toBe(before.ciphertext);
+        expect(after.ciphertext).not.toContain('second-value');
+        await expect(decrypt(after.ciphertext, app2.masterKey)).resolves.toBe('second-value');
+
+        // Exactly one row — a delete-then-recreate would leave a different id
+        // here, and an insert-without-delete a second row.
+        expect(listSecrets(app2.db)).toHaveLength(1);
+        const resolved = getSecretByName(app2.db, 'rotate-me', 'local')!;
+        expect(resolved.id).toBe(created.id);
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('REFUSES a name in the body — rotation may never rename the lookup key', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const created = (
+          await app2.inject({
+            method: 'POST',
+            url: '/api/secrets',
+            payload: { name: 'keep-my-name', secret: 'v1' },
+          })
+        ).json();
+
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${created.id}`,
+          payload: { name: 'renamed', secret: 'v2' },
+        });
+        expect(res.statusCode).toBe(400);
+        // …and it is a REFUSAL, not a silent drop of the extra key: the value
+        // must not have rotated either.
+        const row = getSecret(app2.db, created.id)!;
+        expect(row.name).toBe('keep-my-name');
+        await expect(decrypt(row.ciphertext, app2.masterKey)).resolves.toBe('v1');
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('a body with no value at all is a 400', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const created = (
+          await app2.inject({
+            method: 'POST',
+            url: '/api/secrets',
+            payload: { name: 'needs-a-value', secret: 'v1' },
+          })
+        ).json();
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${created.id}`,
+          payload: {},
+        });
+        expect(res.statusCode).toBe(400);
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('PATCH of an unknown id is a 404', async () => {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/secrets/sec_missing',
+        payload: { secret: 'v' },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('owner scoping: another owner’s secret 404s and is left untouched', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const theirs = createSecret(app2.db, {
+          ref: 'secref_theirs_1061',
+          ciphertext: await encrypt('their-value', app2.masterKey),
+          ownerId: 'someone-else',
+          name: 'not-mine',
+        });
+
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${theirs.id}`,
+          payload: { secret: 'stolen' },
+        });
+        expect(res.statusCode).toBe(404);
+        await expect(
+          decrypt(getSecret(app2.db, theirs.id)!.ciphertext, app2.masterKey),
+        ).resolves.toBe('their-value');
+      } finally {
+        await app2.close();
+      }
+    });
+
+    it('a CONNECTION-owned secret is unreachable here, even though this route could reach the row', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const conn = (
+          await app2.inject({
+            method: 'POST',
+            url: '/api/connections',
+            payload: { name: 'keyed', kind: 'anthropic_api', config: {}, secret: 'conn-value' },
+          })
+        ).json();
+        const ref = getConnection(app2.db, conn.id)!.secretRef!;
+        const connSecret = getSecretByRef(app2.db, ref)!;
+        expect(connSecret.name).toBeNull();
+
+        // A connection's secret is managed through its connection
+        // (`PATCH /api/connections/:id`), never by id here.
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${connSecret.id}`,
+          payload: { secret: 'sideways' },
+        });
+        expect(res.statusCode).toBe(404);
+        await expect(
+          decrypt(getSecretByRef(app2.db, ref)!.ciphertext, app2.masterKey),
+        ).resolves.toBe('conn-value');
+      } finally {
+        await app2.close();
+      }
+    });
+
+    /*
+     * The test above passes on `requireOwned` ALONE — a connection-owned secret
+     * carries `ownerId = null`, so it can never match a principal and is
+     * already unreachable. That makes it silent about the route's SECOND
+     * guard, `name === null`, which the DELETE route documents as
+     * belt-and-braces "even if a future connection-owned secret were ever
+     * stamped with an owner". This test constructs exactly that row, so the
+     * guard is load-bearing somewhere rather than asserted only in prose. A
+     * nameless secret has no `{ "$secret": "<name>" }` marker to rotate for,
+     * and this route addresses standalone secrets only.
+     */
+    it('a nameless secret stamped WITH an owner is still refused — the standalone guard, on its own', async () => {
+      const app2 = await buildTestApp();
+      try {
+        const nameless = createSecret(app2.db, {
+          ref: 'secref_nameless_1061',
+          ciphertext: await encrypt('nameless-value', app2.masterKey),
+          ownerId: 'local',
+          name: null,
+        });
+
+        const res = await app2.inject({
+          method: 'PATCH',
+          url: `/api/secrets/${nameless.id}`,
+          payload: { secret: 'sideways' },
+        });
+        expect(res.statusCode).toBe(404);
+        await expect(
+          decrypt(getSecret(app2.db, nameless.id)!.ciphertext, app2.masterKey),
+        ).resolves.toBe('nameless-value');
+      } finally {
+        await app2.close();
+      }
+    });
   });
 
   describe('pagination (#534)', () => {

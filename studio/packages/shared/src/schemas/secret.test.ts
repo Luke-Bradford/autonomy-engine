@@ -4,6 +4,7 @@ import {
   MAX_SECRET_VALUE_LEN,
   NewSecretSchema,
   SecretPublicSchema,
+  SecretRotateBodySchema,
   SecretSchema,
   SecretWriteBodySchema,
 } from './secret.js';
@@ -101,6 +102,43 @@ describe('SecretWriteBodySchema', () => {
         name: 'a'.repeat(MAX_SECRET_NAME_LEN),
         secret: 'v'.repeat(MAX_SECRET_VALUE_LEN),
       }),
+    ).not.toThrow();
+  });
+});
+
+describe('SecretRotateBodySchema', () => {
+  it('accepts a bare plaintext value', () => {
+    expect(SecretRotateBodySchema.parse({ secret: 'sk_live_rotated' })).toEqual({
+      secret: 'sk_live_rotated',
+    });
+  });
+
+  /*
+   * The load-bearing property of this schema, and the reason it is `.pick`ed
+   * from a STRICT parent rather than declared fresh. `name` is the lookup key
+   * every stored `{ "$secret": "<name>" }` marker resolves through, and a
+   * pipeline version is immutable — so a rename would strand every marker
+   * naming the old value with no way to repair the version. Rotation must
+   * change the VALUE and nothing else, and the boundary is where that is
+   * enforced: a client that sends `name` gets a loud 400, never a silent drop.
+   */
+  it('REFUSES a name — rotation may never rename the lookup key', () => {
+    expect(() => SecretRotateBodySchema.parse({ secret: 'v', name: 'other' })).toThrow();
+  });
+
+  it('is STRICT about the machine-owned fields too', () => {
+    expect(() => SecretRotateBodySchema.parse({ secret: 'v', ownerId: 'someone-else' })).toThrow();
+    expect(() => SecretRotateBodySchema.parse({ secret: 'v', ref: 'secref_1' })).toThrow();
+  });
+
+  it('requires the value, and inherits POST’s bound rather than forking it', () => {
+    expect(() => SecretRotateBodySchema.parse({})).toThrow();
+    expect(() => SecretRotateBodySchema.parse({ secret: '' })).toThrow();
+    expect(() =>
+      SecretRotateBodySchema.parse({ secret: 'v'.repeat(MAX_SECRET_VALUE_LEN + 1) }),
+    ).toThrow();
+    expect(() =>
+      SecretRotateBodySchema.parse({ secret: 'v'.repeat(MAX_SECRET_VALUE_LEN) }),
     ).not.toThrow();
   });
 });
