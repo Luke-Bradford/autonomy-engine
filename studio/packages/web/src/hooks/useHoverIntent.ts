@@ -53,6 +53,33 @@ export function useHoverIntent({
      after the user reached it. */
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /* THE CURRENT STATE, READABLE FROM A CALLBACK — and it exists to keep the
+     callbacks below both pure and stable, which nothing else here can do at
+     once. `enter` has to know whether the region is already open; reading `open`
+     directly would put it in the dependency list and break the stable-identity
+     contract the handlers carry (see `handlers` below), and reading it inside a
+     `setOpen` updater — which is what shipped first — puts a side effect
+     (arming a timer) in a function React requires to be pure. Same rule
+     `FlowCanvas.tsx` records at its own updater.
+
+     PURITY, NOT A BUG FIX, and the distinction is measured rather than assumed.
+     Review raised this as a StrictMode double-invoke leaking a second live
+     timer; it does not reproduce. Counting pending fake timers after one
+     `enter()` under `<StrictMode>` gives exactly ONE both ways, because an
+     updater returning the SAME value takes React's eager-bailout path: it is
+     evaluated once to discover the bail-out and no render is ever scheduled, so
+     the double-invocation that would duplicate the effect never happens. The
+     old code was therefore correct BY ACCIDENT — it depended on a bail-out
+     optimisation to keep an impure updater from running twice. Written this way
+     it does not depend on anything, which is why the behaviour below is
+     unchanged and no test changed with it. */
+  const openNow = useRef(false);
+  /** Set the state and the mirror together — never one without the other. */
+  const settle = useCallback((next: boolean) => {
+    openNow.current = next;
+    setOpen(next);
+  }, []);
+
   const clear = useCallback(() => {
     if (timer.current !== null) {
       clearTimeout(timer.current);
@@ -70,23 +97,21 @@ export function useHoverIntent({
     /* Re-entering an ALREADY open region must not re-arm the dwell — that would
        briefly close nothing but would restart the clock for no reason, and it is
        the state a returning pointer lands in most often. */
-    setOpen((wasOpen) => {
-      if (!wasOpen) timer.current = setTimeout(() => setOpen(true), openDelayMs);
-      return wasOpen;
-    });
-  }, [clear, openDelayMs]);
+    if (openNow.current) return;
+    timer.current = setTimeout(() => settle(true), openDelayMs);
+  }, [clear, settle, openDelayMs]);
 
   const leave = useCallback(() => {
     clear();
-    timer.current = setTimeout(() => setOpen(false), closeDelayMs);
-  }, [clear, closeDelayMs]);
+    timer.current = setTimeout(() => settle(false), closeDelayMs);
+  }, [clear, settle, closeDelayMs]);
 
   /* Focus opens NOW. It also clears a pending close, so focus arriving during
      the grace window (clicking a port collapses no fan) is stable. */
   const focus = useCallback(() => {
     clear();
-    setOpen(true);
-  }, [clear]);
+    settle(true);
+  }, [clear, settle]);
 
   /* STABLE across renders, and that is a contract rather than an optimisation:
      callers subscribe these to an element they do not render — React Flow owns
