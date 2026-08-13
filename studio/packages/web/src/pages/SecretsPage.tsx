@@ -2,19 +2,33 @@ import { useCallback, useEffect, useState } from 'react';
 import { formatZodIssues } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
+  SecretRotateSchema,
   SecretWriteSchema,
   createSecret,
   deleteSecret,
   listSecrets,
+  rotateSecret,
   type NamedSecret,
 } from '../api/secrets';
 import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { formatWhen } from './runs/format';
 
-type FormState = { name: string; secret: string };
+/** `id === null` means creating; otherwise this form REPLACES that secret's
+ *  value (#1061). The `id: string | null` discriminator is the shape
+ *  `ConnectionsPage` and `TriggersPage` already use for create-vs-edit — a
+ *  third shape here would only be a third thing to learn. */
+type FormState = { id: string | null; name: string; secret: string };
 
 function blankForm(): FormState {
-  return { name: '', secret: '' };
+  return { id: null, name: '', secret: '' };
+}
+
+/** Prefills the NAME only. A value is never prefilled because none can be read
+ *  back — and unlike `ConnectionsPage`'s form, a blank value here does NOT mean
+ *  "keep the existing one": rotation exists to change it, so `min(1)` makes
+ *  blank a validation error rather than a silent no-op. */
+function formForReplace(secret: NamedSecret): FormState {
+  return { id: secret.id, name: secret.name, secret: '' };
 }
 
 /**
@@ -29,10 +43,12 @@ function blankForm(): FormState {
  * SECURITY — write-only, end to end. A value travels in one direction only.
  * The server has no route that returns one and `SecretPublicSchema` omits both
  * `ciphertext` and the opaque `ref`, so this page cannot display a secret even
- * if it tried; the list below renders a name and a date. Owner scoping is
+ * if it tried; the list below renders a name and a date. That holds for
+ * REPLACE (#1061) as much as for create: a rotation sends a new value and gets
+ * back the same public projection, never the old one. Owner scoping is
  * entirely the server's (`ownerId` stamped from the principal on create,
- * `requireOwned` on delete) — this page never sends an owner, and the strict
- * write body 400s a client that tries.
+ * `requireOwned` on every by-id route — replace and delete alike) — this page
+ * never sends an owner, and the strict write bodies 400 a client that tries.
  *
  * Every load goes through `refresh`, which is LATEST-WINS. This page is where
  * that guard was first written; #1062 lifted it into `useGuardedLoad` once the
@@ -71,13 +87,16 @@ export function SecretsPage() {
 
   const onDelete = useCallback(
     async (secret: NamedSecret) => {
-      // Deleting is also how a value is ROTATED — there is no update route —
-      // so the confirmation says what breaks rather than only what goes away.
+      // Deleting RETIRES the name, which is a different act from replacing the
+      // value behind it (#1061 gave that its own route and button). What it
+      // costs is the same either way, so the confirmation states it: every node
+      // referencing the name breaks until a secret of that name exists again.
       if (
         !window.confirm(
           `Delete secret "${secret.name}"?\n\n` +
             `Any pipeline node referencing {"$secret":"${secret.name}"} will fail at ` +
-            `dispatch until a secret of that name exists again.`,
+            `dispatch until a secret of that name exists again.\n\n` +
+            `To change its VALUE and keep the name, use Replace instead.`,
         )
       ) {
         return;
@@ -137,6 +156,18 @@ export function SecretsPage() {
                 </td>
                 <td>{formatWhen(secret.createdAt)}</td>
                 <td>
+                  {/* No confirmation dialog on Replace, deliberately. The form
+                      IS the confirmation — it names its target in the heading,
+                      shows the name read-only, and takes an explicit submit —
+                      and a dialog over a form the operator has just filled in
+                      is noise rather than a check. */}
+                  <button
+                    type="button"
+                    onClick={() => setForm(formForReplace(secret))}
+                    aria-label={`Replace ${secret.name}`}
+                  >
+                    Replace
+                  </button>{' '}
                   <button
                     type="button"
                     onClick={() => void onDelete(secret)}
@@ -179,12 +210,18 @@ function SecretForm({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const replacing = form.id !== null;
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
-    const parsed = SecretWriteSchema.safeParse({ name: form.name, secret: form.secret });
+    // Two different bodies, and the SHARED schema for each — the rotate body
+    // carries the value alone, because the route refuses a name (#1061: the
+    // name is the lookup key every stored marker resolves through).
+    const parsed = replacing
+      ? SecretRotateSchema.safeParse({ secret: form.secret })
+      : SecretWriteSchema.safeParse({ name: form.name, secret: form.secret });
     if (!parsed.success) {
       setError(formatZodIssues(parsed.error.issues));
       return;
@@ -192,7 +229,8 @@ function SecretForm({
 
     setSaving(true);
     try {
-      await createSecret(parsed.data);
+      if ('name' in parsed.data) await createSecret(parsed.data);
+      else await rotateSecret(form.id!, parsed.data);
       // Clear the typed value before handing back. Not a security control —
       // the plaintext has already been in an input's value and in the request
       // body — but a form left populated invites re-submitting the same
@@ -225,9 +263,11 @@ function SecretForm({
           ? `Secret names ignore case.`
           : `Secret names ignore case, so “${form.name}” and “${lowered}” are the same name.`;
       setError(
-        err instanceof ApiError && err.status === 409
+        // A rotation cannot conflict — its name is not moving — so this
+        // explanation belongs to the create path only.
+        !replacing && err instanceof ApiError && err.status === 409
           ? `A secret named “${form.name}” already exists. ${caseRule} ` +
-              `Delete the existing one to replace its value.`
+              `Use Replace to change its value.`
           : messageOf(err),
       );
       setSaving(false);
@@ -236,7 +276,7 @@ function SecretForm({
 
   return (
     <form className="connection-form" onSubmit={(e) => void onSubmit(e)} aria-label="Secret form">
-      <h3>New secret</h3>
+      <h3>{replacing ? `Replace value for ${form.name}` : 'New secret'}</h3>
 
       <label>
         Name
@@ -245,6 +285,13 @@ function SecretForm({
           value={form.name}
           onChange={(e) => onChange({ ...form, name: e.target.value })}
           placeholder="the name a node references, e.g. stripe-key"
+          // Read-only rather than absent when replacing: the operator needs to
+          // see WHICH secret is about to change, and the name genuinely cannot
+          // move (the route 400s a rename), so an editable field would only
+          // offer an error. Read-only, not disabled — a disabled input is
+          // skipped by keyboard navigation and by some screen readers, and
+          // this one is information worth reaching.
+          readOnly={replacing}
           required
         />
       </label>
@@ -268,7 +315,7 @@ function SecretForm({
 
       <div className="form-actions">
         <button type="submit" disabled={saving}>
-          {saving ? 'Saving…' : 'Create secret'}
+          {saving ? 'Saving…' : replacing ? 'Replace value' : 'Create secret'}
         </button>
         <button type="button" onClick={onClose} disabled={saving}>
           Cancel

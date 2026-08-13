@@ -14,12 +14,14 @@ vi.mock('../api/secrets', async (importActual) => {
     ...actual,
     listSecrets: vi.fn(),
     createSecret: vi.fn(),
+    rotateSecret: vi.fn(),
     deleteSecret: vi.fn(),
   };
 });
 
 const listMock = vi.mocked(api.listSecrets);
 const createMock = vi.mocked(api.createSecret);
+const rotateMock = vi.mocked(api.rotateSecret);
 const deleteMock = vi.mocked(api.deleteSecret);
 
 /** A promise this test resolves by hand, so a load can be held open across
@@ -192,7 +194,7 @@ describe('SecretsPage', () => {
     expect(alert).toHaveTextContent('A secret named “stripe-key” already exists');
     expect(alert).toHaveTextContent('Secret names ignore case.');
     expect(alert).not.toHaveTextContent('are the same name');
-    expect(alert).toHaveTextContent('Delete the existing one to replace its value.');
+    expect(alert).toHaveTextContent('Use Replace to change its value.');
   });
 
   it('surfaces a NON-conflict create failure as itself, not as a duplicate name', async () => {
@@ -227,8 +229,9 @@ describe('SecretsPage', () => {
   });
 
   it('warns that deleting breaks the nodes referencing that name', async () => {
-    // Delete is also the only way to ROTATE a value (there is no update
-    // route), so the confirmation has to say what it costs.
+    // Deleting is not how a value is rotated any more (#1061 added Replace),
+    // but it is still how a name is retired — and that breaks every node
+    // referencing it, so the confirmation has to say what it costs.
     const user = userEvent.setup();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     listMock.mockResolvedValue([secret()]);
@@ -239,6 +242,96 @@ describe('SecretsPage', () => {
 
     expect(confirmSpy.mock.calls[0]![0]).toContain('{"$secret":"stripe-key"}');
     expect(deleteMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #1061 — REPLACE. Before this existed, changing a value meant deleting the
+   * secret and creating it again under the same name, which leaves a window
+   * where `{ "$secret": "<name>" }` resolves to nothing and any node
+   * dispatching inside it fails. These prove the page reaches the rotate route
+   * instead: a mocked api cannot prove the window is gone (that is the server
+   * suite's job), but it CAN prove the page never takes the delete-then-create
+   * path.
+   */
+  describe('replacing a value in place (#1061)', () => {
+    it('sends only the new value to rotateSecret, and never deletes', async () => {
+      const user = userEvent.setup();
+      rotateMock.mockResolvedValue(secret());
+      listMock.mockResolvedValue([secret()]);
+      renderWithRouter(<SecretsPage />);
+      await screen.findByText('stripe-key');
+
+      await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
+      await user.type(screen.getByLabelText('Value'), 'sk_live_rotated');
+      await user.click(screen.getByRole('button', { name: 'Replace value' }));
+
+      await waitFor(() =>
+        expect(rotateMock).toHaveBeenCalledWith('sec_1', { secret: 'sk_live_rotated' }),
+      );
+      // The whole point: rotation is ONE call. A delete here would reopen the
+      // window this ticket closed.
+      expect(deleteMock).not.toHaveBeenCalled();
+      expect(createMock).not.toHaveBeenCalled();
+      // Two loads: the mount, then the post-mutation refresh.
+      await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+      // The form closes on success.
+      expect(screen.queryByRole('button', { name: 'Replace value' })).not.toBeInTheDocument();
+    });
+
+    it('does not let the name be edited — it is the lookup key, not a field', async () => {
+      const user = userEvent.setup();
+      listMock.mockResolvedValue([secret()]);
+      renderWithRouter(<SecretsPage />);
+      await screen.findByText('stripe-key');
+
+      await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
+
+      // The form names its target (there is no other confirmation step) and
+      // shows the name as read-only: the route refuses a rename with a 400, so
+      // an editable field here would only offer an error.
+      const name = screen.getByLabelText('Name');
+      expect(name).toHaveValue('stripe-key');
+      expect(name).toHaveAttribute('readonly');
+      expect(screen.getByRole('heading', { name: /Replace value for stripe-key/ })).toBeVisible();
+    });
+
+    it('reports a failed rotation without claiming a duplicate name', async () => {
+      const user = userEvent.setup();
+      // A rotation cannot 409 — the name is not changing — so the create
+      // form's duplicate-name explanation must not leak onto this path.
+      rotateMock.mockRejectedValue(new ApiError(500, 'Internal Server Error', undefined));
+      listMock.mockResolvedValue([secret()]);
+      renderWithRouter(<SecretsPage />);
+      await screen.findByText('stripe-key');
+
+      await user.click(screen.getByRole('button', { name: 'Replace stripe-key' }));
+      await user.type(screen.getByLabelText('Value'), 'sk_live_rotated');
+      await user.click(screen.getByRole('button', { name: 'Replace value' }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('Internal Server Error');
+      expect(alert).not.toHaveTextContent(/already exists/);
+      // Still open, so the operator can retry without retyping the name.
+      expect(screen.getByRole('button', { name: 'Replace value' })).toBeInTheDocument();
+    });
+
+    it('creating is still creating — Replace does not capture the New secret button', async () => {
+      const user = userEvent.setup();
+      createMock.mockResolvedValue(secret({ id: 'sec_2', name: 'openai-key' }));
+      listMock.mockResolvedValue([secret()]);
+      renderWithRouter(<SecretsPage />);
+      await screen.findByText('stripe-key');
+
+      await user.click(screen.getByRole('button', { name: 'New secret' }));
+      await user.type(screen.getByLabelText('Name'), 'openai-key');
+      await user.type(screen.getByLabelText('Value'), 'sk_new');
+      await user.click(screen.getByRole('button', { name: 'Create secret' }));
+
+      await waitFor(() =>
+        expect(createMock).toHaveBeenCalledWith({ name: 'openai-key', secret: 'sk_new' }),
+      );
+      expect(rotateMock).not.toHaveBeenCalled();
+    });
   });
 
   it('aborts an in-flight post-mutation refresh when the page unmounts', async () => {
