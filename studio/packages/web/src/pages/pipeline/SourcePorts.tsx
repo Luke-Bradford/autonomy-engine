@@ -1,4 +1,5 @@
 import { Handle, Position } from '@xyflow/react';
+import type { CSSProperties } from 'react';
 import { sourcePortOffset, type SourcePort } from './ports';
 
 /**
@@ -27,7 +28,20 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
   return (
     <>
       {ports.map((port, index) => {
-        const top = `calc(50% + ${sourcePortOffset(index, ports.length)}px)`;
+        /* #997 — the offset is published as a CUSTOM PROPERTY, not as `top`.
+           The stylesheet then owns WHICH position applies: `50%` at rest so
+           every edge appears to leave one point mid-node, `calc(50% + offset)`
+           when the node's `data-ports-expanded` says the fan is out. Writing
+           `top` inline here instead would win over both rules and freeze the
+           ports fanned — the same inline-beats-stylesheet trap `drive.sh`'s
+           `STUDIO_QUOTA_URL` pin records, in CSS.
+
+           The port keeps its `id`, stays MOUNTED and stays in the accessible
+           name at rest: this is a visual collapse, never a structural one, so
+           `sourceHandle` resolution and screen-reader output are untouched. */
+        const style = {
+          '--port-offset': `${sourcePortOffset(index, ports.length)}px`,
+        } as CSSProperties;
         const name = port.orphaned ? `${port.label} — not offered by this source` : port.label;
         return (
           <span key={port.id}>
@@ -35,12 +49,12 @@ export function SourcePorts({ ports }: { ports: readonly SourcePort[] }) {
               type="source"
               id={port.id}
               position={Position.Right}
-              style={{ top }}
+              style={style}
               className={`flow-port flow-port--${port.orphaned ? 'orphaned' : port.condition.on}`}
               title={name}
               aria-label={name}
             />
-            <span className="flow-port-label" style={{ top }} aria-hidden="true">
+            <span className="flow-port-label" style={style} aria-hidden="true">
               {port.label}
             </span>
           </span>
