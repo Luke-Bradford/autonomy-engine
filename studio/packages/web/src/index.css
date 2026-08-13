@@ -1252,21 +1252,61 @@ td button + button {
   overflow: hidden;
 }
 
+/* A node is an ICON AND A NAME on one line, and the row is the whole design.
+ *
+ * It used to be a stacked title with a grey second line repeating a per-node
+ * config state on every box. On a graph of eight that is a wall of text an
+ * operator has to READ to navigate. The glyph is what makes it scannable: the
+ * shape says "this writes a file" before the words are parsed, and the name then
+ * says WHICH one. */
 .flow-node {
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.5rem 0.7rem;
+  padding: 0.5rem 0.75rem;
   min-width: 120px;
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
   color: var(--text);
   font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.flow-node-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.flow-node-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The name takes the remaining width and elides rather than wrapping — a node
+   that grows with its title makes the layout jump as it is renamed. */
+.flow-node-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .flow-node.selected {
   border-color: var(--accent);
+  /* A ring OUTSIDE the border rather than a tinted halo: `palette.test.ts`
+     refuses a colour literal outside the two palette blocks, and a
+     `color-mix()` is one — correctly, since a mixed colour is a third value no
+     theme owns. `outline` takes the token as-is and costs no layout. */
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.flow-node.selected .flow-node-icon {
+  color: var(--accent);
 }
 
 /* ── U19 outcome ports ───────────────────────────────────────────────────────
@@ -1517,13 +1557,45 @@ td button + button {
    look for the reason it shares its shape: a small group of radios inside the
    property panel, one tab stop with arrow-key movement inside it. A second set
    of near-identical rules would be two answers to one question. */
+/* SCOPED TO THE PANEL so it outranks `.property-panel label`, which is a column
+   because most fields in this panel stack their caption above their control. An
+   outcome is not that shape: it is a swatch, a radio and a word that read
+   ACROSS. Without the extra class the panel rule won on specificity (0,1,1
+   against 0,1,0) and each option rendered as a centred three-line stack — a
+   radio, a coloured dot and a word, one per line, which reads as a broken list
+   rather than a picker. `.contract-check` opts out of the same rule for the same
+   reason; this is that idiom, not a new one. */
+.property-panel .edge-outcome,
+.property-panel .call-mode label,
 .edge-outcome,
 .call-mode label {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 0.4rem;
+  justify-content: flex-start;
+  text-align: left;
+  gap: 0.5rem;
   font-size: 0.8rem;
   cursor: pointer;
+  min-height: 1.75rem;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+}
+
+/* The whole row is the target — a 13px radio is not a pointer target on a panel
+   this size. `--panel-2` because that is already this app's raised-row ground
+   and it is defined in BOTH themes, which a hand-mixed rgba would not be. */
+.property-panel .edge-outcome:hover:not(:has(input:disabled)) {
+  background: var(--panel-2);
+}
+
+/* SELECTION IS NOT LEFT TO THE RADIO GLYPH ALONE — the chosen row is carried by
+   ground and weight as well, the same never-colour-alone rule the edge palette
+   follows on the canvas. */
+.property-panel .edge-outcome:has(input:checked) {
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* A taken outcome is shown, not hidden: the operator needs to know the choice
@@ -3275,4 +3347,66 @@ td button + button {
   display: block;
   color: var(--muted);
   font-size: 0.9em;
+}
+
+/* The palette row: glyph, then name, on one line — the same reading order the
+   node on the canvas uses, so the two surfaces teach each other. */
+.activity-toolbox__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.activity-toolbox__icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.activity-toolbox__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The glyph takes the text colour on hover so the row lifts as ONE object,
+   rather than a name brightening beside a grey icon that did not. */
+.activity-toolbox__item:hover .activity-toolbox__icon {
+  color: var(--text);
+}
+
+/* ── The minimap sits BACK ────────────────────────────────────────────────────
+ *
+ * React Flow's default is a solid slab at the pane's bottom-right, and on a
+ * small graph it is the heaviest object on screen — an opaque rectangle
+ * covering whatever node the layout happened to put under it. An orientation aid
+ * must not out-weigh the thing it orients you in.
+ *
+ * Kept rather than dropped because it is the only way to find a node dragged
+ * off-viewport. `usableExtent` in `containerLayout.ts` states the pane area this
+ * occupies so the #785 reveal never lands a box underneath it — THE TWO MUST
+ * AGREE: growing this past that constant puts boxes back under the minimap. */
+.react-flow__minimap {
+  width: 148px;
+  height: 104px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 10px;
+  overflow: hidden;
+}
+
+/* The mask is the "you are here" rectangle. RF paints it as a dark fill over the
+   whole map; against this ground that reads as a second slab, so it becomes an
+   outline instead — the same outline-not-fill rule the container nodes follow. */
+.react-flow__minimap-mask {
+  fill: var(--bg);
+  fill-opacity: 0.55;
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+
+.react-flow__minimap-node {
+  fill: var(--muted);
+  stroke: none;
 }
