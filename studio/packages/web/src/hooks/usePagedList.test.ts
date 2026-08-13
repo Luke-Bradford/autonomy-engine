@@ -11,6 +11,9 @@ import { usePagedList } from './usePagedList';
  */
 
 type Page = Paginated<string>;
+/** The hook's fetcher contract, named so a test can swap one implementation for
+ *  another (scripted → deferred) without the props type narrowing to the first. */
+type Fetcher = (cursor: string | undefined, signal: AbortSignal) => Promise<Page>;
 
 const page = (items: string[], nextCursor: string | null = null): Page => ({ items, nextCursor });
 
@@ -174,8 +177,8 @@ describe('usePagedList (#1076)', () => {
    */
   it('blanks the list when the fetcher changes, and reloads from the first page', async () => {
     const first = scriptedFetcher([page(['a'], 'cur_1'), page(['b'], 'cur_2')]);
-    const { result, rerender } = renderHook(({ f }) => usePagedList(f), {
-      initialProps: { f: first.fetchPage },
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
     });
     await waitFor(() => expect(result.current.items).toEqual(['a']));
     act(() => result.current.loadMore());
@@ -196,8 +199,8 @@ describe('usePagedList (#1076)', () => {
 
   it('drops the previous list’s cursor with it, so Load more cannot resume the wrong query', async () => {
     const first = scriptedFetcher([page(['a'], 'cur_1')]);
-    const { result, rerender } = renderHook(({ f }) => usePagedList(f), {
-      initialProps: { f: first.fetchPage },
+    const { result, rerender } = renderHook(({ f }: { f: Fetcher }) => usePagedList(f), {
+      initialProps: { f: first.fetchPage as Fetcher },
     });
     await waitFor(() => expect(result.current.hasMore).toBe(true));
 

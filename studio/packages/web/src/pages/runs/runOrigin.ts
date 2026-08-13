@@ -77,6 +77,10 @@ export const RUN_TAB_HINT: Record<RunTab, string> = {
   // strip — under any of them `all` is every run of every origin WITHIN the
   // filter. Naming the axis keeps the hint true in both cases instead of making
   // it a claim about the whole list that the filters quietly falsify.
+  // #1083 — and narrower again now the list is PAGED: this counts the runs
+  // LOADED so far, not every run of that origin the workspace holds. The strip
+  // renders an open-ended figure (`12+`) while older pages remain, so the hint
+  // does not have to carry that caveat alone.
   all: 'Every run, whatever started it',
   triggered: 'Started by a trigger, including a manual fire of one',
   manual: 'Runs with no trigger — today, reruns',
