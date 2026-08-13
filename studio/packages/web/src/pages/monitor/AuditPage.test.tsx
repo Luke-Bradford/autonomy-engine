@@ -162,6 +162,27 @@ describe('AuditPage (#1075)', () => {
     expect(screen.queryByText(/Nothing has happened to this workspace yet/)).toBeNull();
   });
 
+  /**
+   * The same rule one step later: a REFRESH that fails over a genuinely empty
+   * log has both sentences available and true — the log was empty as of the
+   * last good read, and this read failed. Printed together the reader cannot
+   * tell which is the news, so the alert wins.
+   */
+  it('does not pair the empty-log notice with a failed refresh', async () => {
+    pageMock.mockResolvedValueOnce(page([]));
+    renderWithRouter(<AuditPage />);
+    await waitFor(() =>
+      expect(screen.getByText(/Nothing has happened to this workspace yet/)).toBeInTheDocument(),
+    );
+
+    pageMock.mockRejectedValueOnce(new Error('network down'));
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh audit log' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Could not load the audit log');
+    expect(screen.queryByText(/Nothing has happened to this workspace yet/)).toBeNull();
+  });
+
   it('reloads on demand', async () => {
     pageMock.mockResolvedValue(page([row(0, 1_000, CONNECT)]));
     renderWithRouter(<AuditPage />);

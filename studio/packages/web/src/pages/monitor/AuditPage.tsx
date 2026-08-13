@@ -83,7 +83,13 @@ export function AuditPage() {
 
       {loading && error === null && <p className="notice">Loading the audit log…</p>}
 
-      {items !== null && items.length === 0 && (
+      {/* Suppressed while an error is showing. Both sentences can be true at
+          once — the log WAS empty as of the last good read, and the refresh
+          then failed — but printed together they read as one confused message,
+          and the reader cannot tell which one is the news. The alert wins: it
+          is the newer fact, and it is the one that says the screen is not
+          current. */}
+      {items !== null && items.length === 0 && error === null && (
         <p role="status" className="notice">
           Nothing has happened to this workspace yet. Connecting a repository, archiving a pipeline
           or applying an import records an entry here.
