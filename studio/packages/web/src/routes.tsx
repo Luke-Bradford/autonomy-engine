@@ -13,6 +13,7 @@ import { TriggersPage } from './pages/TriggersPage';
 import { WorkspaceGitPage } from './pages/WorkspaceGitPage';
 import { RunsPage } from './pages/runs/RunsPage';
 import { AiActivityPage } from './pages/monitor/AiActivityPage';
+import { AuditPage } from './pages/monitor/AuditPage';
 import { RunDetailRoute } from './pages/runs/RunDetailRoute';
 import { LegacyRunRedirect } from './pages/runs/LegacyRunRedirect';
 
@@ -163,6 +164,11 @@ export const ROUTES: RouteObject[] = [
             path: 'ai',
             element: <AiActivityPage />,
             handle: { crumb: sectionLabel('/monitor/ai') } satisfies ShellRouteHandle,
+          },
+          {
+            path: 'audit',
+            element: <AuditPage />,
+            handle: { crumb: sectionLabel('/monitor/audit') } satisfies ShellRouteHandle,
           },
         ],
       },

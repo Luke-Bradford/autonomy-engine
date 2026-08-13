@@ -116,6 +116,12 @@ export const HUBS: readonly Hub[] = [
       // EVERYTHING, what are my connected AIs doing and what is left of my
       // quota", which is what the old prototype dashboard was still kept for.
       { label: 'AI activity', path: '/monitor/ai' },
+      // #1075 — the workspace's own history (#3 G6a's audit log). Under Monitor
+      // rather than Manage, per the overview's T13 "monitor surfaces" line: the
+      // hubs split by act, and an audit log is only ever READ. Its events are
+      // Manage-resource mutations, which is what makes the placement worth
+      // stating rather than leaving to the reader to infer.
+      { label: 'Audit', path: '/monitor/audit' },
     ],
     Icon: PulseRegular,
     IconActive: PulseFilled,
