@@ -356,6 +356,58 @@ describe('PipelinesPage', () => {
         await screen.findByRole('button', { name: 'Unarchive Nightly digest' }),
       ).toBeInTheDocument();
     });
+
+    /**
+     * A SUCCESSFUL archive must never be reported as a failed one. The handler
+     * wraps its follow-up reads in the same try/catch as the mutation, so the
+     * only thing keeping "Could not archive" honest is that neither follow-up
+     * can reject: `pipelinesStore.refresh` says so in its contract, and
+     * `loadArchived` reports its own failure into the section's status.
+     *
+     * Both are non-local to the handler, which is exactly why they are pinned
+     * here — the day either starts rejecting, the operator is told their
+     * archive failed when the row is already gone, and the recovery surface is
+     * the one place that lie is expensive.
+     */
+    it('reports a follow-up READ failure as itself, not as a failed archive', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      listMock.mockResolvedValue([pipeline({ name: 'Nightly digest' })]);
+      renderPage();
+
+      // Section OPEN, so the archive's follow-up takes the `loadArchived` branch.
+      await user.click(await screen.findByRole('button', { name: /Show archived/i }));
+      await waitFor(() => expect(listArchivedMock).toHaveBeenCalledTimes(1));
+
+      // Both follow-up reads fail: the live refresh AND the archived reload.
+      listMock.mockRejectedValue(new Error('live list down'));
+      listArchivedMock.mockRejectedValue(new Error('archived list down'));
+
+      await user.click(screen.getByRole('button', { name: 'Archive Nightly digest' }));
+
+      await waitFor(() => expect(archiveMock).toHaveBeenCalledWith('pl_1'));
+      expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();
+      expect(screen.getByText(/live list down/i)).toBeInTheDocument();
+      // The archive itself SUCCEEDED, so nothing may say otherwise.
+      expect(screen.queryByText(/Could not archive/i)).not.toBeInTheDocument();
+    });
+
+    it('reports a follow-up READ failure as itself, not as a failed unarchive', async () => {
+      const user = userEvent.setup();
+      listArchivedMock.mockResolvedValue([pipeline({ id: 'pl_9', name: 'Retired' })]);
+      renderPage();
+      await screen.findByText(/No pipelines yet/i);
+      await user.click(screen.getByRole('button', { name: /Show archived/i }));
+
+      listMock.mockRejectedValue(new Error('live list down'));
+      listArchivedMock.mockRejectedValue(new Error('archived list down'));
+
+      await user.click(await screen.findByRole('button', { name: 'Unarchive Retired' }));
+
+      await waitFor(() => expect(restoreMock).toHaveBeenCalledWith('pl_9'));
+      expect(await screen.findByText(/Could not load archived pipelines/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Could not unarchive/i)).not.toBeInTheDocument();
+    });
   });
 
   it('deletes a pipeline after confirmation', async () => {
