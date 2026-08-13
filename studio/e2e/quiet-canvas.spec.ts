@@ -232,27 +232,6 @@ test.describe('#1066 — a container collapses its ports too', () => {
   });
 
   /**
-   * The fan must not steal the box's own controls.
-   *
-   * A container's ✕ and ⚙ sit top-right, which is the corner the port column
-   * fans INTO: on an emptied box the `success` port lands 36px above the middle
-   * and its invisible 24px target covers the ✕'s centre. React Flow's handles
-   * carry no `z-index`, so DOM order decided the overlap and `SourcePorts`
-   * renders last — the port won.
-   *
-   * The shape of the failure is why this is asserted directly rather than left
-   * to the spec that found it. Hovering the ✕ for the dwell is what FANS the
-   * ports, so the target that steals the click only arrives once the pointer has
-   * been sitting on the button: the hit-test passes, the button is visibly
-   * hovered, and then mousedown starts a connection. `container-membership.spec`
-   * reports that as an emptied container that can no longer be deleted — #748's
-   * one-way trap reopened, on a box whose only escape hatch this is — which
-   * names the symptom three steps downstream of the cause.
-   *
-   * Read through `elementFromPoint` because that is what decides it: React Flow
-   * resolves a press against the topmost element, not against its own geometry.
-   */
-  /**
    * The fan STAYS open once a container's port has opened it.
    *
    * This is the half of #1066 that reads as a style detail and is not one. A
@@ -292,6 +271,27 @@ test.describe('#1066 — a container collapses its ports too', () => {
     ).toBeGreaterThan(1);
   });
 
+  /**
+   * The fan must not steal the box's own controls.
+   *
+   * A container's ✕ and ⚙ sit top-right, which is the corner the port column
+   * fans INTO: on an emptied box the `success` port lands 36px above the middle
+   * and its invisible 24px target covers the ✕'s centre. React Flow's handles
+   * carry no `z-index`, so DOM order decided the overlap and `SourcePorts`
+   * renders last — the port won.
+   *
+   * The shape of the failure is why this is asserted directly rather than left
+   * to the spec that found it. Hovering the ✕ for the dwell is what FANS the
+   * ports, so the target that steals the click only arrives once the pointer has
+   * been sitting on the button: the hit-test passes, the button is visibly
+   * hovered, and then mousedown starts a connection. `container-membership.spec`
+   * reports that as an emptied container that can no longer be deleted — #748's
+   * one-way trap reopened, on a box whose only escape hatch this is — which
+   * names the symptom three steps downstream of the cause.
+   *
+   * Read through `elementFromPoint` because that is what decides it: React Flow
+   * resolves a press against the topmost element, not against its own geometry.
+   */
   test('its chrome still takes the click once the ports have fanned over it', async ({ page }) => {
     await openSeededCanvas(page, 'container chrome', CONTAINED);
 
