@@ -269,9 +269,16 @@ export interface ReconcileReport {
    *     `interrupted`/`deferred`/`sweptOrphanChildren`). Each is pushed at a
    *     `continue` or at the loop tail — i.e. only once that run's reconcile has
    *     SUCCEEDED. `sweptOrphanChildren` (#1041) keeps the property a different
-   *     way, and deliberately: `sweepOne` pushes to exactly one of it or `failed`
-   *     on every path, because its terminalize call can no-op silently rather
-   *     than throw.
+   *     way, and deliberately. Stated exactly, because the loose version of this
+   *     sentence claimed more than the code does: `sweepOne` reaches AT MOST one
+   *     bucket for a given run, NOT exactly one. Most of its paths report nothing
+   *     at all — a non-empty log, an absent or non-terminal parent — because those
+   *     are not orphans and there is no verdict to record. What IS guaranteed is
+   *     the exclusivity this list is about: an id in `sweptOrphanChildren` is
+   *     never also in `failed`, because the two are the arms of ONE decision, and
+   *     that decision reads the row back rather than trusting the call (the
+   *     terminalize can no-op silently rather than throw). An unreadable row short-
+   *     circuits to `corrupt` before either arm is reached.
    *   - NOT exclusive of `held`/`rearmed`. Those are pushed BEFORE the loop
    *     falls through to `pump`, and they record work already durably committed
    *     (`recoverHeld` armed the alarm row and appended `node.retryScheduled`).
@@ -289,6 +296,16 @@ export interface ReconcileReport {
    * contract, transient — hence lands here. The OTHER permanent class — stored-row
    * CORRUPTION — is #646's `corrupt` bucket below, branched on its typed error
    * before this catch files anything, so the transient-only contract stays true.
+   *
+   * ONE producer does NOT come through that catch, and this doc would otherwise
+   * read as exhaustive: #1041's `sweepOne` pushes `orphan_child_sweep_no_op`
+   * DIRECTLY, when it terminalizes an orphaned child and the row read back says
+   * the patch did not happen. It belongs here rather than in `corrupt` on the
+   * same transient/permanent test the rest of this bucket applies — the only way
+   * to reach it is a read fault swallowed inside `terminalizeInterrupted` (it
+   * logs and returns `void`), and a read fault is the transient class. A row that
+   * is permanently unreadable throws on the re-read instead and is filed
+   * `corrupt`, so the split holds on both sides.
    */
   failed: Array<{ runId: string; reason: string }>;
   /**

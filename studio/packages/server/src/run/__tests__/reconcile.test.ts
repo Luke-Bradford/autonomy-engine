@@ -1985,6 +1985,45 @@ describe('reconcileOnBoot — #1041 an orphaned `pending` child run is swept', (
     expect(getRun(db, child.id)!.status).toBe('interrupted');
   });
 
+  it('QUEUES BEHIND a drive already in flight for the child, rather than sweeping past it', async () => {
+    const { db } = freshDb();
+    const { child } = seedOrphanChild(db);
+    const drives = createRunDrives();
+
+    // The race the lock exists for: a `kick` issued while the boot scan was
+    // resuming this child's parent is ALREADY holding the child's chain when the
+    // sweep reaches it. This stands in for that kick — `serialize` is the same
+    // seam `child.ts` uses, on the same key (the CHILD's run id).
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const inFlight = drives.serialize(child.id, async () => {
+      await held;
+      // What `startRun` does first: the log stops being empty.
+      appendEngineEvent(db, {
+        type: 'run.started',
+        runId: child.id,
+        pipelineVersionId: child.pipelineVersionId,
+        params: {},
+      });
+    });
+
+    // `serialize` REGISTERS SYNCHRONOUSLY (see `RunDrives`), and `reconcileOnBoot`
+    // runs straight through its empty `running` scan into the sweep's own
+    // `serialize` before it yields — so the queue order is settled by the time
+    // this returns, with no timer and nothing to guess at.
+    const booting = reconcileOnBoot({ ...bootDeps(db), drives });
+    release();
+    await inFlight;
+    const report = await booting;
+
+    // FIFO: the drive won, so by the time the sweep ran the log was no longer
+    // empty and it declined. Without the lock the sweep would have read the
+    // empty log first and terminalized a child that was starting.
+    expect(report.sweptOrphanChildren).toEqual([]);
+    expect(report.failed).toEqual([]);
+    expect(getRun(db, child.id)!.status).toBe('pending');
+  });
+
   it('is idempotent — a second boot sweeps nothing', async () => {
     const { db } = freshDb();
     const { child } = seedOrphanChild(db);
