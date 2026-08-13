@@ -590,10 +590,21 @@ const SETTLE_INTERVAL_MS = 100;
 
 /** Where the pointer is parked so nothing is hovered while the point is read. */
 const NEUTRAL_PANE_OFFSET = 30;
+/** How long the pane is waited for before saying it is not there. */
+const PANE_TIMEOUT_MS = 5_000;
 
 export async function edgeMidpoint(page: Page, index = 0): Promise<{ x: number; y: number }> {
-  const pane = await page.locator('.react-flow__pane').boundingBox();
-  if (pane === null) throw new Error('no React Flow pane to park the pointer on');
+  const pane = await page
+    .locator('.react-flow__pane')
+    .boundingBox({ timeout: PANE_TIMEOUT_MS })
+    .catch(() => null);
+  /* Say what is missing, in seconds rather than in the whole test budget. A bare
+     `boundingBox()` waits for the locator until the TEST times out, so a page
+     with no canvas on it fails 30s later as "waiting for
+     locator('.react-flow__pane')" — which reads as a hang, not as a caller that
+     asked for an edge on a page that has none. */
+  if (pane === null)
+    throw new Error('no React Flow pane to park the pointer on before reading an edge midpoint');
   await page.mouse.move(pane.x + NEUTRAL_PANE_OFFSET, pane.y + NEUTRAL_PANE_OFFSET);
 
   const read = () =>

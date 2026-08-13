@@ -38,6 +38,15 @@ test.describe('#1067 — reading an edge midpoint once it has stopped moving', (
     // the first two reads agree on `FANNED`, every read after that is `SETTLED`.
     const expected = await page.evaluate(
       ([fanned, settled]) => {
+        // The helper parks the pointer clear of every node before it reads, and
+        // the pane is what it parks ON — so the fixture has to have one. A
+        // canvas is exactly the page this helper is for; a fixture without a
+        // pane is not a smaller version of that page, it is a different one.
+        const pane = document.createElement('div');
+        pane.className = 'react-flow__pane';
+        pane.style.cssText = 'position:absolute;left:0;top:0;width:400px;height:400px';
+        document.body.appendChild(pane);
+
         const NS = 'http://www.w3.org/2000/svg';
         const svg = document.createElementNS(NS, 'svg');
         svg.setAttribute('width', '400');
