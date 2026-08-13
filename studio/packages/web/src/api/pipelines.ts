@@ -224,6 +224,20 @@ export function listArchivedPipelines(signal?: AbortSignal): Promise<Pipeline[]>
 }
 
 /**
+ * The one thing about archive a reader would otherwise assume WRONGLY:
+ * unarchiving does not re-arm what archiving switched off (`restorePipeline`'s
+ * settled contract — a restore that silently re-armed a nightly schedule would
+ * fire a pipeline the operator had said they were done with).
+ *
+ * A shared constant because TWO surfaces state it — the canvas banner
+ * (`pages/pipeline/PipelineCanvas.tsx`) and this module's archive confirmation
+ * — and two hand-written copies of one contract is exactly the drift
+ * `describeDeleteFailure` exists to prevent. `e2e/archived-pipeline.spec.ts`
+ * asserts on this literal.
+ */
+export const TRIGGERS_STAY_DISABLED_NOTE = 'its triggers stay disabled either way';
+
+/**
  * What archiving "{name}" actually does, as the operator's confirmation.
  *
  * Extracted and exported (the `restoreConfirmMessage` shape) because the SAME
@@ -252,8 +266,8 @@ export function archiveConfirmMessage(name: string): string {
     'Its versions and run history are KEPT — this is not a delete. It disappears ' +
     'from the pipelines list, stops being dispatchable, and every trigger bound ' +
     'to it is disabled.\n\n' +
-    'You can unarchive it from Show archived, but its triggers stay disabled ' +
-    'either way — unarchiving brings the pipeline back editable, not running.\n\n' +
+    `You can unarchive it from Show archived, but ${TRIGGERS_STAY_DISABLED_NOTE} — ` +
+    'unarchiving brings the pipeline back editable, not running.\n\n' +
     'If this workspace is connected to git, an archived pipeline is left out of ' +
     'the committed set, so your next Commit will delete its file — and its ' +
     "triggers' files — from the branch."

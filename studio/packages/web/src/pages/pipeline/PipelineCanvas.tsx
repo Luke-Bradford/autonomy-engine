@@ -40,6 +40,7 @@ import {
   listPipelineVersions,
   publishPipeline,
   restorePipeline,
+  TRIGGERS_STAY_DISABLED_NOTE,
 } from '../../api/pipelines';
 import { listConnections } from '../../api/connections';
 import { ActivityToolbox } from './ActivityToolbox';
@@ -930,9 +931,12 @@ export function PipelineCanvas({
           the act that resolves it. */}
       {archived && (
         <div className="notice-conflict" role="alert">
+          {/* The trailing clause is the SHARED constant, not a second copy:
+              the pipelines-list archive confirmation (#1058) states the same
+              contract, and two hand-written copies would drift. */}
           <p>
-            This pipeline is archived, so saving is refused. Unarchive it to edit again — its
-            triggers stay disabled either way.
+            This pipeline is archived, so saving is refused. Unarchive it to edit again —{' '}
+            {TRIGGERS_STAY_DISABLED_NOTE}.
           </p>
           {unarchiveError !== null && <p>Unarchive failed: {unarchiveError}</p>}
           <div className="form-actions">

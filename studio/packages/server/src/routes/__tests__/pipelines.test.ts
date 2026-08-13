@@ -372,7 +372,10 @@ describe('pipelines routes', () => {
       });
 
       it('is owner-scoped — another owner’s archived pipeline is not listed', async () => {
-        const foreign = createPipeline(app.db, { ownerId: 'someone-else', name: 'ForeignArchived' });
+        const foreign = createPipeline(app.db, {
+          ownerId: 'someone-else',
+          name: 'ForeignArchived',
+        });
         archivePipeline(app.db, foreign.id);
 
         const res = await app.inject({ method: 'GET', url: '/api/pipelines?archived=true' });

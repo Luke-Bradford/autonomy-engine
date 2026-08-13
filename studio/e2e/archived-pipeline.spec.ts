@@ -36,9 +36,12 @@ test.describe('#907 an archived pipeline cannot be saved, and says so', () => {
     const banner = page.getByRole('alert').filter({ hasText: 'This pipeline is archived' });
     await expect(banner).toHaveCount(0);
 
-    // Archive it the way the product does — the API. There is no archive UI
-    // (that is #439 UI work); the state is reachable by API and git import, and
-    // it is the state this ticket is about.
+    // Archived over the API, deliberately, even though #1058 has since given
+    // the pipelines list an Archive button. This spec is the CANVAS narrative:
+    // it is about what an already-archived pipeline does to the editing
+    // surface, and reaching that state through the UI would make every
+    // assertion below depend on the list page too. The list surface has its own
+    // spec (`archive-from-list.spec.ts`).
     const archived = await page.request.post(`/api/pipelines/${pipelineId}/archive`);
     expect(archived.status()).toBe(200);
 

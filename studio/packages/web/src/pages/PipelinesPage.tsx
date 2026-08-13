@@ -336,9 +336,7 @@ export function PipelinesPage({ store = pipelinesStore }: { store?: PipelinesSto
             {/* Gated on a load having SUCCEEDED — an empty list and a failed
                 load are different facts, and this is the section where
                 confusing them tells the operator their pipeline is gone. */}
-            {archivedStatus === 'ready' && archived.length === 0 && (
-              <p>No archived pipelines.</p>
-            )}
+            {archivedStatus === 'ready' && archived.length === 0 && <p>No archived pipelines.</p>}
 
             {archived.length > 0 && (
               <table>

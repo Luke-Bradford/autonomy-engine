@@ -54,10 +54,7 @@ export async function fetchAllPages<T>(
  * encoding. Pagination keys are written last so a caller cannot accidentally
  * override `limit`/`cursor` and break the page walk.
  */
-export function pageQuery(
-  cursor: string | undefined,
-  extra: Record<string, string> = {},
-): string {
+export function pageQuery(cursor: string | undefined, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams(extra);
   params.set('limit', String(MAX_PAGE_SIZE));
   if (cursor !== undefined) params.set('cursor', cursor);
