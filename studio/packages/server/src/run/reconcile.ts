@@ -840,6 +840,12 @@ async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run):
   });
   if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
 
+  // The reason is INERT on this path and is passed only so both producers read
+  // the same: the empty-log guard above has already proven `events.length === 0`,
+  // which is exactly the condition sending `terminalizeInterrupted` down its
+  // row-patch branch — and that branch appends no event, so there is nowhere for
+  // a reason to be recorded. Spelled out because "it passes a reason" otherwise
+  // reads as "a reason is written here".
   terminalizeInterrupted(deps, run.id, 'never_started');
   recordSweep(deps, report, run.id);
 }
