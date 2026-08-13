@@ -13,8 +13,18 @@ import type { Paginated } from '@autonomy-studio/shared';
  */
 
 /** The position of one row in the `created_at ASC, id ASC` total order — what a
- * cursor encodes. Both columns are immutable on these tables, so a cursor never
- * points at a moved row. */
+ * cursor encodes.
+ *
+ * THE ORDERING SCALAR IS IMMUTABLE ON EVERY TABLE BUT ONE, so a cursor points at
+ * a row that has not moved. #1083 added the exception and it is named here
+ * rather than only at the call site, because this is where a future caller reads
+ * the rule: `runs` orders by `started_at`, which `admitQueuedRun` RE-STAMPS when
+ * a queued run is admitted. That walk is still sound, and `listRunSummariesPage`
+ * carries the argument — admission only moves the stamp FORWARD, so under a DESC
+ * walk a row moves toward the head and can be missed, never duplicated. The rule
+ * for anyone adding the next list: a mutable ordering scalar needs that argument
+ * made explicitly for its own direction of travel, not assumed from this one.
+ * The `id` half of the key is a primary key everywhere, so it never moves. */
 export interface CursorKey {
   createdAt: number;
   id: string;

@@ -10,9 +10,11 @@ import {
   type RunSummary,
   type RunLifecyclePatch,
   type RunStatus,
+  type Paginated,
 } from '@autonomy-studio/shared';
 import { pipelines, pipelineVersions, runs, triggers } from '../db/schema.js';
 import { newId } from './ids.js';
+import { beforeCursor, encodeCursor, pageOrderDesc, type PageArgs } from './pagination.js';
 import { isDeterministicRowCorruption } from './row-corruption.js';
 import { aggregateRunCosts } from './run-events.js';
 import type { Db } from './types.js';
@@ -166,14 +168,32 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * silently, and indistinguishably from "you have no reruns". A child run will
  * join them once P3b lands the spawn seam (#796); nothing creates one yet.
  *
- * ORDER is a total, deterministic newest-first (`started_at DESC, rowid DESC`).
- * The tie-break is `rowid`, not `id`: run ids are random nanoids, so ordering a
- * millisecond tie by id would be stable but ARBITRARY — "newest-first" would
- * quietly stop being true exactly at the tie. `rowid` is SQLite's insertion
- * order, so it breaks the tie chronologically, which is what the column claims.
- * Same tie-breaker `nextQueuedRunForTrigger` uses for two fires enqueued in the
- * same millisecond, and QUALIFIED for the same reason: the join makes a bare
- * `rowid` ambiguous.
+ * ORDER is a total, deterministic newest-first (`started_at DESC, id DESC`).
+ *
+ * THE TIE-BREAK MOVED FROM `rowid` TO `id` (#1083), reversing what this docblock
+ * argued before, so the reason is recorded rather than the conclusion swapped.
+ * The old argument was sound on its own terms: run ids are random nanoids, so a
+ * millisecond tie ordered by id is stable but ARBITRARY, where `rowid` is
+ * insertion order and breaks the tie chronologically. What changed is that the
+ * order is now also the KEYSET, and a keyset's columns are encoded into an
+ * opaque cursor the client holds and replays later.
+ *
+ * `rowid` cannot go in that cursor, and the disqualifying reason is not that it
+ * does not fit the payload — it is that IT IS NOT STABLE. This table has a TEXT
+ * primary key, so its rowid is implicit, and SQLite is free to renumber implicit
+ * rowids on `VACUUM`. A cursor minted before a vacuum would then name a
+ * different row afterwards, and the page walk would silently skip or repeat rows
+ * with nothing to detect it. `id` is the primary key: immutable, unique, and
+ * meaningful for exactly as long as the row exists.
+ *
+ * So the property that was lost is narrow and worth stating plainly: two runs
+ * stamped in the SAME MILLISECOND now read back in random-but-stable id order
+ * rather than creation order. Stability — the thing pagination actually needs,
+ * since an unstable tie-break drops and duplicates rows at a page boundary — is
+ * preserved exactly. `nextQueuedRunForTrigger` and `findLiveRerunOf` keep their
+ * `rowid` tie-break and are NOT inconsistent with this: neither is paginated, so
+ * neither mints a cursor, and inside a single query rowid is perfectly stable.
+ *
  * MEASURED, not assumed: on the production path (the route always passes
  * `ownerId`) SQLite picks `runs_owner_id_idx` and sorts through a
  * `USE TEMP B-TREE FOR ORDER BY`; `runs_started_at_idx` is used only for an
@@ -189,8 +209,20 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * `ORDER BY` at all, yet the page consuming it
  * claimed rows arrived "newest-first as the server returns them" — SQLite's row
  * order is an implementation detail, so that was never a promise anything kept.
- * The `id` tie-break makes two runs stamped in the same millisecond stably
- * ordered rather than arbitrarily.
+ *
+ * PAGED (#1083), and the ordering scalar is MUTABLE — the one caveat this walk
+ * carries. `admitQueuedRun` re-stamps `started_at` at admission (deliberately;
+ * its own docblock has the argument), so unlike every other keyset list here the
+ * cursor's ordering column can move under a walk in progress. The consequence is
+ * bounded and one-directional, which is why it is acceptable rather than merely
+ * tolerated: admission only ever moves `started_at` FORWARD, so under `DESC` an
+ * admitted run moves TOWARD THE HEAD — above a cursor that has already been
+ * passed. A run can therefore be MISSED by a walk that is already under way (it
+ * appears on the next refresh, at the top, which is where a just-admitted run
+ * belongs), and can never be DUPLICATED, and can never displace another row.
+ * Nothing else writes the column: it is set once at create, and
+ * `RunLifecyclePatchSchema` is `.strict()` and omits it precisely so that
+ * admission stays the single exception.
  *
  * SECURITY — the ownership proof is the RUN's, exactly as `GET /api/runs/:id/detail`
  * documents. `ownerId` filters the RUNS table; the joined version and pipeline
@@ -202,8 +234,21 @@ export function listRuns(db: Db, filter: ListRunsFilter = {}): Run[] {
  * (owner scoping rides the pipeline FK), and filtering there could only ever
  * DROP one of the caller's own runs from their list.
  */
-export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): RunSummary[] {
+export function listRunSummariesPage(
+  db: Db,
+  filter: ListRunSummariesFilter,
+  args: PageArgs,
+): Paginated<RunSummary> {
   const conditions = listRunsConditions(filter);
+  // The keyset resume, ANDed with the caller's filters rather than replacing
+  // them: a walk stays inside the same filtered set from the first page to the
+  // last. `startedAfter` (the `since` axis) narrows the very column the walk
+  // orders by, which is coherent by construction — it moves the far end of the
+  // range, not the direction of travel.
+  if (args.cursor) {
+    const resume = beforeCursor(runs.startedAt, runs.id, args.cursor);
+    if (resume) conditions.push(resume);
+  }
   // U26 — the one axis that cannot live in `listRunsConditions`: it reads a
   // JOINED column. Expressed over the join this query already makes, exactly as
   // `countActiveRunsForPipeline` does, rather than as a subquery.
@@ -231,28 +276,54 @@ export function listRunSummaries(db: Db, filter: ListRunSummariesFilter = {}): R
       .innerJoin(pipelineVersions, eq(runs.pipelineVersionId, pipelineVersions.id))
       .innerJoin(pipelines, eq(pipelineVersions.pipelineId, pipelines.id))
       .leftJoin(triggers, eq(runs.triggerId, triggers.id));
-    const rows = (conditions.length > 0 ? query.where(and(...conditions)) : query)
-      .orderBy(desc(runs.startedAt), desc(sql`${runs}.rowid`))
+    const fetched = (conditions.length > 0 ? query.where(and(...conditions)) : query)
+      .orderBy(...pageOrderDesc(runs.startedAt, runs.id))
+      // Fetch one extra to PROBE for a next page, the `toPage` contract — so
+      // `nextCursor` is set only when a real next row exists, never a false
+      // "more" and never an empty trailing page.
+      .limit(args.limit + 1)
       .all();
+    /* `toPage` itself is not reusable here, for the same reason
+       `listWorkspaceEventsPage` inlined this split: it is `<T extends CursorKey>`
+       and mints the cursor from a row's `.createdAt`, while our ordering scalar
+       is `startedAt` on a NESTED `row.run`. The one-extra-row split is three
+       lines and direction-agnostic; a second generic helper parameterised by key
+       accessor would be more machinery than the thing it abstracts. */
+    const hasMore = fetched.length > args.limit;
+    const rows = hasMore ? fetched.slice(0, args.limit) : fetched;
+    const boundary = rows[rows.length - 1];
+    /* Costs are aggregated for THIS PAGE's rows only. That falls out of the
+       paging rather than being a separate optimisation, and it is the larger
+       half of what #1083 bounds: the previous read passed every run id the owner
+       had to `aggregateRunCosts`, so the metered-event aggregation grew with the
+       history exactly as the response body did. */
     const costs = aggregateRunCosts(
       tx,
       rows.map((row) => row.run.id),
       filter.ownerId,
     );
-    return rows.map((row) =>
-      RunSummarySchema.parse({
-        ...row.run,
-        pipelineId: row.pipelineId,
-        pipelineName: row.pipelineName,
-        pipelineVersion: row.pipelineVersion,
-        triggerName: row.triggerName,
-        /* A run with no metered events has no aggregate GROUP, and its cost is a
-           genuine zero — nothing was billed. `computeRunCost([])` rather than a
-           hand-written zero object, so the empty value stays the FOLD's own and
-           cannot fall out of step when `RunCost` grows a field. */
-        cost: costs.get(row.run.id) ?? computeRunCost([]),
-      }),
-    );
+    return {
+      items: rows.map((row) =>
+        RunSummarySchema.parse({
+          ...row.run,
+          pipelineId: row.pipelineId,
+          pipelineName: row.pipelineName,
+          pipelineVersion: row.pipelineVersion,
+          triggerName: row.triggerName,
+          /* A run with no metered events has no aggregate GROUP, and its cost is a
+             genuine zero — nothing was billed. `computeRunCost([])` rather than a
+             hand-written zero object, so the empty value stays the FOLD's own and
+             cannot fall out of step when `RunCost` grows a field. */
+          cost: costs.get(row.run.id) ?? computeRunCost([]),
+        }),
+      ),
+      // The cursor's numeric slot carries `startedAt` — the ordering scalar —
+      // matching the `beforeCursor(startedAt, id, …)` predicate above.
+      nextCursor:
+        hasMore && boundary
+          ? encodeCursor({ createdAt: boundary.run.startedAt, id: boundary.run.id })
+          : null,
+    };
   });
 }
 
@@ -432,10 +503,19 @@ export const LIVE_RUN_STATUSES = [
  * doing — with no cancel control in the UI, that is the operator's only handle on
  * it. Backed by `runs_rerun_of_idx`; ordered oldest-first so the answer (and any
  * test asserting it) is stable when a pre-guard database holds several. The
- * tie-break is `rowid`, not `id`, for the reason the neighbouring readers give:
+ * tie-break is `rowid`, not `id`:
  * `startedAt` is a millisecond stamp that several rows can share, and `id` is a
  * random nanoid, so an id tie-break is stable but ARBITRARY — it would pick a
  * different one of two same-millisecond reruns on a different insert order.
+ *
+ * That is the OPPOSITE choice from `listRunSummariesPage`, which moved to `id`
+ * in #1083, and the two are consistent rather than in tension — the difference
+ * is paging, not taste. This query is not paginated: it mints no cursor, so its
+ * ordering never leaves the statement, and within one statement `rowid` is
+ * perfectly stable and genuinely chronological. A cursor by contrast is a
+ * durable handle a client replays later, and an implicit rowid can be renumbered
+ * by `VACUUM` in between. Chronology wins where it is free; stability wins where
+ * the key has to survive the round trip.
  */
 export function findLiveRerunOf(
   db: Db,
