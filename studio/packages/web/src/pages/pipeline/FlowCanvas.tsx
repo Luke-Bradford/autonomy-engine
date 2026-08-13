@@ -21,6 +21,7 @@ import {
   ReactFlow,
   useNodesState,
   useReactFlow,
+  useConnection,
   useStore as useReactFlowStore,
   useStoreApi as useReactFlowStoreApi,
   useUpdateNodeInternals,
@@ -112,6 +113,18 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      no gap to cross and no exit to debounce beyond the hook's own grace. */
   const { open, handlers } = useHoverIntent();
 
+  /* WHILE A CONNECTION IS BEING DRAGGED, every node fans with NO dwell — the
+     ticket's "connecting mode" clause, and it is load-bearing rather than a
+     nicety. A drop happens the moment the pointer ARRIVES over a port, so no
+     dwell can ever elapse: with hover intent alone the ports a drag is aiming
+     for are unreachable by that drag. `connect-validation`'s backwards drag is
+     the proof — it dropped onto a collapsed stack and authored a NEW edge where
+     the duplicate should have been refused, which is a wrong graph, not a
+     cosmetic miss. `useConnection` rather than plumbing a flag through node
+     data, so a gesture does not rebuild the whole nodes array. */
+  const connecting = useConnection((c) => c.inProgress);
+  const expanded = open || connecting;
+
   /* React Flow caches each handle's position in `internals.handleBounds`,
      measured from the DOM once (`getBoundingClientRect`) — it does NOT re-read
      the DOM per frame. Moving the ports in CSS alone therefore fans the DOTS
@@ -130,12 +143,12 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
      `onlyRenderVisibleElements` on, a node outside that unfitted viewport is
      then not rendered AT ALL. It cost `version-history.spec.ts` its third node,
      which reads as "the canvas lost a node" rather than as a measurement race. */
-  const fanned = useRef(open);
+  const fanned = useRef(expanded);
   useEffect(() => {
-    if (fanned.current === open) return;
-    fanned.current = open;
+    if (fanned.current === expanded) return;
+    fanned.current = expanded;
     updateNodeInternals(id);
-  }, [open, id, updateNodeInternals]);
+  }, [expanded, id, updateNodeInternals]);
 
   /* KEYBOARD ARRIVAL IS NOT OBSERVABLE FROM HERE without this. React Flow owns
      the focusable element — `.react-flow__node`, the PARENT of the box below —
@@ -169,7 +182,7 @@ const ActivityNode = memo(function ActivityNode({ id, data, selected }: NodeProp
       /* The stylesheet reads this to choose the ports' geometry and opacity.
          An ATTRIBUTE rather than a class so the e2e spec can assert the state
          directly, and so the collapsed case stays the plain default. */
-      data-ports-expanded={open ? 'true' : 'false'}
+      data-ports-expanded={expanded ? 'true' : 'false'}
       style={{ minHeight: nodeBoxHeight(d.ports.length) }}
       {...handlers}
     >
