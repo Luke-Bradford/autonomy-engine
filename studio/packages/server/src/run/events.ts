@@ -221,3 +221,30 @@ export function terminalFactFromLog(events: EngineEvent[]): RunLifecycleStatus |
   }
   return null;
 }
+
+/**
+ * #1048 — did this run actually START, read from the LOG rather than the row.
+ *
+ * The sibling of `terminalFactFromLog` above and it exists for the same reason:
+ * `runs.status` is a PROJECTION that a crash can leave stale, so a question about
+ * what a run has actually done is answered from the append log (#443). Needs no
+ * pipeline version — deliberately, because `projectRunState` (whose seed state is
+ * `pending` until it folds `run.started`) answers the same question only after a
+ * `resolveDoc` + `buildEngine`, and the boot reconciler asks it about runs whose
+ * doc may be gone.
+ *
+ * WHY IT IS NOT "the log is non-empty", which is the test it replaces.
+ * `startRun` appends `run.triggerContext` BEFORE `run.started` (#5 S12 seeds the
+ * durable trigger context first, `driver.ts`), so the sub-tick crash window has
+ * THREE outcomes, not two: an empty log, a log holding only `run.triggerContext`,
+ * and a log holding `run.started`. Only the third is a run that started. Treating
+ * the second as "started" strands it `pending` forever, holding an
+ * `ACTIVE_RUN_STATUSES` admission slot nothing will ever release.
+ *
+ * Extracted rather than inlined at its one call site because `reconcile.ts`
+ * already asks this question a second way (`state.status === 'pending'`, via the
+ * projection), and two spellings of one predicate is how they drift.
+ */
+export function hasRunStartedFact(events: EngineEvent[]): boolean {
+  return events.some((e) => e.type === 'run.started');
+}

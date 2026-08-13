@@ -279,10 +279,11 @@ export function createRunLauncher(deps: RunLauncherDeps): RunLauncher {
    * The row is created `pending`, then `startRun` flips it to `running` via
    * `run.started` one MICROTASK later (F2c routes the drive through
    * `drives.serialize`). Microtasks drain before any I/O, so the window is
-   * sub-tick. A hard crash (SIGKILL/power-loss) in it could orphan a `pending`
-   * row with no event log that the boot reconciler (which sweeps `running` rows)
-   * would not clear — operator-recoverable; a reconciler `pending`-orphan sweep
-   * is the durable close, a separate follow-up. */
+   * sub-tick. A hard crash (SIGKILL/power-loss) in it orphans a `pending` row
+   * that the `running` scan cannot see. #1048 CLOSED that: `sweepPendingRuns`
+   * (`run/reconcile.ts`) scans `pending` rows too and terminalizes a top-level
+   * one whose log holds no `run.started`, so the admission slot it was holding is
+   * freed at the next boot rather than leaking forever. */
   function launch(
     trigger: Trigger,
     triggerContext: TriggerContext,
