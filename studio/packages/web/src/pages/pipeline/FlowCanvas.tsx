@@ -227,6 +227,24 @@ const ContainerNode = memo(function ContainerNode({ id, data }: NodeProps) {
   const { onFanChange } = d;
   useEffect(() => {
     onFanChange(id, expanded);
+    /* Withdrawn on unmount, so the canvas's fan set stays a statement about
+       boxes that EXIST. Deleting a container while its ports are fanned would
+       otherwise leave its id there with nothing able to remove it, and the set
+       would grow for the life of the session.
+
+       SCOPED HONESTLY: this is about memory, not geometry. Container ids are
+       reused (`loop_1` is minted again once the first is gone), but a remounted
+       box runs this effect and reports its own `false`, so the stale entry
+       prunes itself and the reused id does not come back fanned — MEASURED,
+       after a regression test written for that claim passed against the
+       unfixed code. What remains without the cleanup is the set growing without
+       bound, plus one commit's window before the mount effect flushes.
+
+       The cleanup also runs between every dep change (React tears the previous
+       effect down first), which is harmless: the withdrawal and the new report
+       land in the same commit, so the intermediate `false` never reaches a
+       render. */
+    return () => onFanChange(id, false);
   }, [id, expanded, onFanChange]);
 
   return (

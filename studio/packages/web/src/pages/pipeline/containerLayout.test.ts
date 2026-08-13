@@ -507,8 +507,15 @@ describe('containerHandles — the stated port bounds of a derived box', () => {
        every INCOMING edge to a new height for the duration of a hover — and
        nothing in the ticket, the CSS or the e2e would notice, because they all
        watch the source side. */
-    const target = (fanned: boolean) =>
-      containerHandles(200, 300, ports, fanned).find((h) => h.type === 'target')!;
+    const target = (fanned: boolean) => {
+      const handle = containerHandles(200, 300, ports, fanned).find((h) => h.type === 'target');
+      /* Asserted rather than `!`-ed: a box that stated no target port at all is
+         a real failure of this function — every INCOMING edge would resolve to
+         nothing — and it should read as that, not as a TypeError thrown from a
+         line about the fan. */
+      expect(handle, `no target port stated with fanned=${fanned}`).toBeDefined();
+      return handle!;
+    };
     expect(centreOf(target(false))).toBe(300 / 2);
     expect(target(true)).toEqual(target(false));
   });
