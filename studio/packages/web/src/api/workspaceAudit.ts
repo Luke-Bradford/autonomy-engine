@@ -1,12 +1,23 @@
 import {
   WorkspaceEventRowSchema,
   paginatedResponseSchema,
+  type Paginated,
   type WorkspaceEventRow,
 } from '@autonomy-studio/shared';
 import { apiFetch } from './client';
-import { fetchAllPages, pageQuery } from './pagination';
+import { pageQuery } from './pagination';
 
 const WorkspaceAuditPageSchema = paginatedResponseSchema(WorkspaceEventRowSchema);
+
+/**
+ * How many entries one audit page holds. Deliberately NOT `DEFAULT_PAGE_SIZE`
+ * (50) or `MAX_PAGE_SIZE` (100): those size a TRANSPORT chunk for a caller
+ * reconstructing a whole list, where a bigger page is strictly better. This
+ * number is different in kind — it is how much history a reader is shown before
+ * they ask for more, so it wants to be about a screenful. Exported so the tests
+ * and the e2e spec assert against the real value rather than re-literalling it.
+ */
+export const AUDIT_PAGE_SIZE = 25;
 
 /**
  * #1075 — the client half of the WORKSPACE-AUDIT log (`GET /api/workspace/audit`,
@@ -15,23 +26,23 @@ const WorkspaceAuditPageSchema = paginatedResponseSchema(WorkspaceEventRowSchema
  * `pipeline.archived`, `pipeline.restored`, `import.applied` and
  * `pipeline.published` was written durably and read by no one.
  *
- * ORDER — the server orders ASCENDING (`pageOrder` = `asc(seq), asc(id)` in
- * `repo/pagination.ts`), i.e. oldest first, and there is no descending mode. So
- * this returns the log in APPEND order and the PAGE reverses it for display.
- * `seq` is monotonic per owner, so the reverse of the ascending walk is exactly
- * the descending order — not an approximation of it.
+ * ORDER — #1076. This asks the SERVER for descending order (`?order=desc`,
+ * `repo/pagination.ts`'s `pageOrderDesc`/`beforeCursor`) and returns ONE page,
+ * rather than walking an append-only log to its end and reversing it. The
+ * ordering scalar is `seq`, the per-owner append order, so "descending" here is
+ * exact rather than a wall-clock approximation: two events minted in the same
+ * millisecond still read back in the order they happened.
  *
- * THE COST OF THAT, stated rather than left implicit: rendering the newest
- * events requires walking every page of an append-only log with no retention
- * policy. That is the same full-list contract every sibling wrapper here
- * presents (`listSecrets`, `listConnections`, `listPipelines`), and at
- * `MAX_PAGE_SIZE` rows a page it is one request per 100 events — the log grows
- * at AUTHORING rate (a publish, an archive, an import), not run rate, so it is
- * a bounded cost today and a growing one over a workspace's life. #1076 is the
- * revisit: server-side descending order plus an incremental "load older", which
- * `api/pagination.ts`'s own docblock already anticipates as the point at which
- * a caller consumes `Paginated<T>` directly instead of walking. Revisit when a
- * real workspace's log makes the first paint slow, not before.
+ * WHY THAT MATTERS HERE and not on the sibling wrappers (`listSecrets`,
+ * `listConnections`, `listPipelines`), which do still walk: this is the first
+ * list with NO retention policy at all. It grows at AUTHORING rate — a publish,
+ * an archive, an import — so it is small today, but the walk's cost rises for
+ * the life of a workspace and never falls, and it is paid to render twenty rows.
+ *
+ * `order` GOES ON EVERY REQUEST, first page included. A cursor names a POSITION
+ * and carries no direction, so pairing one with the other order returns a
+ * coherent but different slice and nothing errors — `beforeCursor`'s docblock
+ * has the full argument. One walk, one direction, stated every time.
  *
  * PARSING IS ALL-OR-NOTHING, deliberately. `WorkspaceEventRowSchema` types
  * `payload` as the closed union, so one row of an unrecognised variant throws
@@ -42,11 +53,12 @@ const WorkspaceAuditPageSchema = paginatedResponseSchema(WorkspaceEventRowSchema
  * could not read would present a partial history as a complete one. Do not
  * "fix" this into a per-row soft fallback.
  */
-export function listWorkspaceAudit(signal?: AbortSignal): Promise<WorkspaceEventRow[]> {
-  return fetchAllPages((cursor) =>
-    apiFetch(`/api/workspace/audit${pageQuery(cursor)}`, {
-      schema: WorkspaceAuditPageSchema,
-      signal,
-    }),
-  );
+export function fetchWorkspaceAuditPage(
+  cursor: string | undefined,
+  signal?: AbortSignal,
+): Promise<Paginated<WorkspaceEventRow>> {
+  return apiFetch(`/api/workspace/audit${pageQuery(cursor, { order: 'desc' }, AUDIT_PAGE_SIZE)}`, {
+    schema: WorkspaceAuditPageSchema,
+    signal,
+  });
 }

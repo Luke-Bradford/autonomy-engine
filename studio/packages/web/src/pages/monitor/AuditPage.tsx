@@ -1,7 +1,7 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import type { WorkspaceEventRow } from '@autonomy-studio/shared';
-import { listWorkspaceAudit } from '../../api/workspaceAudit';
-import { usePolledResource } from '../../hooks/usePolledResource';
+import { fetchWorkspaceAuditPage } from '../../api/workspaceAudit';
+import { usePagedList } from '../../hooks/usePagedList';
 import { formatWhen } from '../runs/format';
 import { describeWorkspaceEvent } from './describeWorkspaceEvent';
 
@@ -24,28 +24,30 @@ import { describeWorkspaceEvent } from './describeWorkspaceEvent';
  * audit log is only ever read. It sits beside Runs (what each execution did)
  * and AI activity (what the models did) as the third answer to "what happened".
  *
- * READ-ONLY, so `usePolledResource` rather than `useGuardedLoad`: the two hooks
- * have opposite drop rules and `usePolledResource`'s docblock states the split
- * — it drops the NEW load while one is in flight, which is right for a page
- * with no mutations to race and wrong for a post-mutation refresh. There is no
- * mutation on this page and there never should be; an append-only log with a
- * button that changed it would not be an audit log. No `intervalMs` either:
- * this is the hook's load-on-mount-plus-manual-refresh form. The log only moves
- * when the operator acts elsewhere in the app, so a timer would issue requests
- * for a page that cannot have changed since they last looked at it.
+ * READ-ONLY, and PAGED since #1076. It shipped on `usePolledResource`, which
+ * owns one value a later fetch replaces; this page's value accumulates instead
+ * — a page of newest entries, then older ones on demand — so it uses
+ * `usePagedList`, whose docblock states the split between the three load
+ * shapes. There is still no mutation on this page and there never should be; an
+ * append-only log with a button that changed it would not be an audit log. No
+ * polling either: the log only moves when the operator acts elsewhere in the
+ * app, so a timer would issue requests for a page that cannot have changed
+ * since they last looked at it.
+ *
+ * NEWEST FIRST, DECIDED BY THE SERVER (#1076). This page used to walk the log
+ * to its end and reverse it client-side, because the route was ascending-only.
+ * It now asks for `order=desc` and renders what arrives: the newest page costs
+ * one request no matter how long the history is. The order is exact rather than
+ * approximate in either design — `seq` is the per-owner append order, and it is
+ * `seq` the server sorts on, not the wall-clock `createdAt`.
  */
 export function AuditPage() {
-  const fetcher = useCallback((signal: AbortSignal) => listWorkspaceAudit(signal), []);
-  const { data, error, loading, lastUpdatedAt, refresh } = usePolledResource(fetcher);
-
-  /**
-   * NEWEST FIRST. The server orders ascending and offers no descending mode, so
-   * the api wrapper returns the log in append order and the reversal happens
-   * here. It is exact rather than approximate: `seq` is monotonic per owner, so
-   * reversing the ascending walk IS the descending order — no re-sort on
-   * `createdAt`, whose wall clock is not the log's ordering authority.
-   */
-  const newestFirst = useMemo(() => (data === null ? null : [...data].reverse()), [data]);
+  const fetchPage = useCallback(
+    (cursor: string | undefined, signal: AbortSignal) => fetchWorkspaceAuditPage(cursor, signal),
+    [],
+  );
+  const { items, error, loading, busy, hasMore, lastUpdatedAt, loadMore, refresh } =
+    usePagedList(fetchPage);
 
   return (
     <section aria-labelledby="audit-heading">
@@ -53,11 +55,11 @@ export function AuditPage() {
         <h2 id="audit-heading">Audit</h2>
         {/* Named, like every other refresh control in the app ("Refresh
             quota", "Refresh diagnostics") — a bare "Refresh" makes the reader
-            infer the target. `disabled` only ever bites during the FIRST load
-            (`usePolledResource` never re-arms `loading`), which is exactly when
-            there is nothing yet to refresh and a click would abort the load it
-            was waiting for. */}
-        <button type="button" onClick={refresh} disabled={loading}>
+            infer the target. Disabled while ANY request is in flight, which
+            since #1076 includes a refresh and an older page: `usePagedList` is
+            latest-wins rather than drop-the-new, so a second click would abort
+            and re-issue a request that was already on its way. */}
+        <button type="button" onClick={refresh} disabled={busy}>
           Refresh audit log
         </button>
       </div>
@@ -68,24 +70,33 @@ export function AuditPage() {
         did, and lives under Runs.
       </p>
 
+      {/* The two failures are worded apart because they are different news: one
+          means there is no history on screen, the other means the history on
+          screen is real and merely stops short of where the reader asked. */}
       {error !== null && (
         <p role="alert" className="error">
-          Could not load the audit log: {error}
+          {error.scope === 'more'
+            ? `Could not load older entries: ${error.message}`
+            : `Could not load the audit log: ${error.message}`}
         </p>
       )}
 
-      {loading && newestFirst === null && error === null && (
-        <p className="notice">Loading the audit log…</p>
-      )}
+      {loading && error === null && <p className="notice">Loading the audit log…</p>}
 
-      {newestFirst !== null && newestFirst.length === 0 && (
+      {/* Suppressed while an error is showing. Both sentences can be true at
+          once — the log WAS empty as of the last good read, and the refresh
+          then failed — but printed together they read as one confused message,
+          and the reader cannot tell which one is the news. The alert wins: it
+          is the newer fact, and it is the one that says the screen is not
+          current. */}
+      {items !== null && items.length === 0 && error === null && (
         <p role="status" className="notice">
           Nothing has happened to this workspace yet. Connecting a repository, archiving a pipeline
           or applying an import records an entry here.
         </p>
       )}
 
-      {newestFirst !== null && newestFirst.length > 0 && (
+      {items !== null && items.length > 0 && (
         <table>
           <caption className="visually-hidden">
             Workspace audit log, most recent entry first
@@ -98,11 +109,21 @@ export function AuditPage() {
             </tr>
           </thead>
           <tbody>
-            {newestFirst.map((row) => (
+            {items.map((row) => (
               <AuditRow key={row.id} row={row} />
             ))}
           </tbody>
         </table>
+      )}
+
+      {/* Rendered only when the server said there IS an older page. An
+          always-present button that sometimes did nothing would make the end of
+          the log indistinguishable from a log that had stopped loading — and
+          the end of the history is exactly the fact a reader is checking. */}
+      {hasMore && (
+        <button type="button" onClick={loadMore} disabled={busy}>
+          Load older entries
+        </button>
       )}
 
       {lastUpdatedAt !== null && (

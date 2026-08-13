@@ -10,7 +10,14 @@ import {
 } from '@autonomy-studio/shared';
 import { workspaceEvents } from '../db/schema.js';
 import { newId } from './ids.js';
-import { afterCursor, encodeCursor, pageOrder, type PageArgs } from './pagination.js';
+import {
+  afterCursor,
+  beforeCursor,
+  encodeCursor,
+  pageOrder,
+  pageOrderDesc,
+  type PageArgs,
+} from './pagination.js';
 import type { Db } from './types.js';
 
 /**
@@ -64,33 +71,46 @@ export function appendWorkspaceEvent(
 }
 
 /**
- * One owner's audit log, oldest-first, keyset-paginated. Ordered by `seq` — the
- * authoritative per-owner APPEND order — NOT by the wall-clock `createdAt`:
- * two events minted in the same millisecond would otherwise read back in
- * random-`id` order, wrong for an audit history. It still reuses the shared
- * opaque-cursor codec (`afterCursor`/`pageOrder`/`encodeCursor`): that codec is
- * generic over "an ordering scalar + an id tie-break", so the `CursorKey`'s
- * numeric slot carries `seq` here (seq is already unique per owner, so the id
- * tie-break is redundant but harmless). Only `toPage` is not reused — it mints
- * the cursor from a row's `.createdAt`, but our ordering scalar is `.seq`; the
- * one-extra-row split is inlined instead. Owner-scoped: authentication ≠
- * authorization — every query filters `owner_id`.
+ * One owner's audit log, keyset-paginated, in the direction the caller asks
+ * for. Ordered by `seq` — the authoritative per-owner APPEND order — NOT by the
+ * wall-clock `createdAt`: two events minted in the same millisecond would
+ * otherwise read back in random-`id` order, wrong for an audit history. It
+ * still reuses the shared opaque-cursor codec
+ * (`afterCursor`/`beforeCursor`/`pageOrder`/`pageOrderDesc`/`encodeCursor`):
+ * that codec is generic over "an ordering scalar + an id tie-break", so the
+ * `CursorKey`'s numeric slot carries `seq` here (seq is already unique per
+ * owner, so the id tie-break is redundant but harmless). Only `toPage` is not
+ * reused — it mints the cursor from a row's `.createdAt`, but our ordering
+ * scalar is `.seq`; the one-extra-row split is inlined instead, and is
+ * direction-agnostic. Owner-scoped: authentication ≠ authorization — every
+ * query filters `owner_id`.
+ *
+ * `order` IS REQUIRED, with no default. #1076 added the descending mode for the
+ * Monitor › Audit page, which reads newest-first; the append-order readers
+ * (import provenance, the publish history assertions) want ascending. A default
+ * would let a new call site inherit a direction it never considered, and the
+ * two directions differ in the only way that matters to a reader of a history —
+ * which end of the log they get. Every call site says which it means.
  */
 export function listWorkspaceEventsPage(
   db: Db,
   ownerId: string,
   args: PageArgs,
+  order: 'asc' | 'desc',
 ): Paginated<WorkspaceEventRow> {
+  const resume = order === 'desc' ? beforeCursor : afterCursor;
+  const ordering = order === 'desc' ? pageOrderDesc : pageOrder;
+
   const rows = db
     .select()
     .from(workspaceEvents)
     .where(
       and(
         eq(workspaceEvents.ownerId, ownerId),
-        args.cursor ? afterCursor(workspaceEvents.seq, workspaceEvents.id, args.cursor) : undefined,
+        args.cursor ? resume(workspaceEvents.seq, workspaceEvents.id, args.cursor) : undefined,
       ),
     )
-    .orderBy(...pageOrder(workspaceEvents.seq, workspaceEvents.id))
+    .orderBy(...ordering(workspaceEvents.seq, workspaceEvents.id))
     .limit(args.limit + 1)
     .all()
     .map((row) => WorkspaceEventRowSchema.parse(row));
@@ -101,7 +121,8 @@ export function listWorkspaceEventsPage(
   return {
     items,
     // The cursor's numeric slot carries `seq` (the ordering scalar), matching
-    // the `afterCursor(seq, id, …)` resume predicate above.
+    // the `resume(seq, id, …)` predicate above in EITHER direction — it names a
+    // position, and the direction comes from the caller's `order`.
     nextCursor:
       hasMore && boundary ? encodeCursor({ createdAt: boundary.seq, id: boundary.id }) : null,
   };

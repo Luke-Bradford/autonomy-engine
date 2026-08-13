@@ -113,4 +113,59 @@ describe('workspace-audit route (#3 G6a)', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  /**
+   * #1076 — `?order`. Descending is what lets a newest-first reader take the
+   * newest entries in one request rather than walking an append-only log to its
+   * end; ascending stays the DEFAULT so the route's original contract, and
+   * every existing append-order reader, is unchanged.
+   */
+  describe('?order (#1076 — the descending mode)', () => {
+    /** Three archives → three `pipeline.archived` events, seq 0,1,2 in append order. */
+    async function seedThreeEvents() {
+      for (const name of ['A', 'B', 'C']) {
+        const { id } = createPipeline(app.db, { ownerId: 'local', name });
+        expect((await archive(id)).statusCode).toBe(200);
+      }
+    }
+
+    const seqsOf = (body: { items: { seq: number }[] }) => body.items.map((e) => e.seq);
+
+    it('returns the newest first under order=desc, and paginates OLDER from there', async () => {
+      await seedThreeEvents();
+
+      const page1 = (
+        await app.inject({ method: 'GET', url: '/api/workspace/audit?limit=2&order=desc' })
+      ).json();
+      // The newest two events, without having read the older one first.
+      expect(seqsOf(page1)).toEqual([2, 1]);
+      expect(page1.nextCursor).not.toBeNull();
+
+      const page2 = (
+        await app.inject({
+          method: 'GET',
+          url: `/api/workspace/audit?limit=2&order=desc&cursor=${encodeURIComponent(page1.nextCursor)}`,
+        })
+      ).json();
+      expect(seqsOf(page2)).toEqual([0]);
+      expect(page2.nextCursor).toBeNull();
+    });
+
+    it('defaults to ascending when order is omitted — the contract is unchanged', async () => {
+      await seedThreeEvents();
+
+      const omitted = (await audit()).json();
+      const explicit = (
+        await app.inject({ method: 'GET', url: '/api/workspace/audit?order=asc' })
+      ).json();
+
+      expect(seqsOf(omitted)).toEqual([0, 1, 2]);
+      expect(seqsOf(explicit)).toEqual(seqsOf(omitted));
+    });
+
+    it('rejects an unrecognised order as a 400 — never a silent fallback direction', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/workspace/audit?order=sideways' });
+      expect(res.statusCode).toBe(400);
+    });
+  });
 });

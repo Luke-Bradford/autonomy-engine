@@ -1,7 +1,8 @@
+import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { connections, pipelines, secrets } from '../../db/schema.js';
 import { listConnectionsPage } from '../connections.js';
-import { decodeCursor, encodeCursor, toPage } from '../pagination.js';
+import { beforeCursor, decodeCursor, encodeCursor, pageOrderDesc, toPage } from '../pagination.js';
 import { listPipelinesPage } from '../pipelines.js';
 import { listNamedSecretsPage } from '../secrets.js';
 import { freshDb } from './helpers.js';
@@ -185,5 +186,78 @@ describe('keyset over a created_at tie (the tuple-predicate case)', () => {
     }
     // Tie broken by ascending id, every row exactly once.
     expect(collected).toEqual(['sec_a', 'sec_b', 'sec_c']);
+  });
+});
+
+/**
+ * #1076 — the DESC pair. Driven directly against `secrets` rather than through a
+ * repo wrapper, because the only descending CONSUMER today is the workspace
+ * audit log, whose ordering scalar (`seq`) is unique per owner and therefore
+ * cannot produce the tie this predicate exists to survive. Testing the helper
+ * where a tie is reachable is what makes the tuple form provable rather than
+ * merely asserted in its docblock.
+ */
+describe('beforeCursor + pageOrderDesc (#1076 — the descending pair)', () => {
+  /** One descending page of `secrets`, built the way a repo wrapper builds it. */
+  function descPage(
+    db: ReturnType<typeof freshDb>['db'],
+    cursor: ReturnType<typeof decodeCursor> | undefined,
+    limit: number,
+  ) {
+    return db
+      .select()
+      .from(secrets)
+      .where(
+        and(
+          eq(secrets.ownerId, 'local'),
+          cursor ? beforeCursor(secrets.createdAt, secrets.id, cursor) : undefined,
+        ),
+      )
+      .orderBy(...pageOrderDesc(secrets.createdAt, secrets.id))
+      .limit(limit)
+      .all();
+  }
+
+  it('walks a created_at tie backwards by id — no gap, no overlap', () => {
+    const { db } = freshDb();
+    const rows = ['sec_a', 'sec_b', 'sec_c'].map((id, i) => ({
+      id,
+      ref: `ref-${id}`,
+      ciphertext: `blob-${id}`,
+      ownerId: 'local',
+      name: `n-${i}`,
+      createdAt: 1000,
+    }));
+    db.insert(secrets).values(rows).run();
+
+    // One row at a time, resuming from the cursor each page: the boundary is
+    // crossed twice, which is where a naive `id < i` or `created_at < c`
+    // predicate drops or duplicates a row.
+    const collected: string[] = [];
+    let cursor: ReturnType<typeof decodeCursor> | undefined;
+    for (let page = 0; page < 10; page++) {
+      const items = descPage(db, cursor, 1);
+      if (items.length === 0) break;
+      for (const s of items) collected.push(s.id);
+      const last = items[items.length - 1]!;
+      cursor = { createdAt: last.createdAt, id: last.id };
+    }
+
+    expect(collected).toEqual(['sec_c', 'sec_b', 'sec_a']);
+  });
+
+  it('orders by the scalar first and only then by id — a newer row wins a lower id', () => {
+    const { db } = freshDb();
+    // `sec_a` sorts FIRST by id but LAST by created_at. A `pageOrderDesc` that
+    // put the id tie-break first (or kept either column ascending) would put it
+    // somewhere other than the end.
+    db.insert(secrets)
+      .values([
+        { id: 'sec_a', ref: 'r1', ciphertext: 'b1', ownerId: 'local', name: 'a', createdAt: 100 },
+        { id: 'sec_z', ref: 'r2', ciphertext: 'b2', ownerId: 'local', name: 'z', createdAt: 200 },
+      ])
+      .run();
+
+    expect(descPage(db, undefined, 10).map((s) => s.id)).toEqual(['sec_z', 'sec_a']);
   });
 });
