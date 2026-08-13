@@ -15,6 +15,7 @@ import {
 } from '../api/connections';
 import { downloadTextFile, exportFileName } from '../api/download';
 import { exportConnection } from '../api/portability';
+import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { ImportPanel } from './ImportPanel';
 
 const KINDS = ConnectionKindSchema.options;
@@ -52,35 +53,38 @@ export function ConnectionsPage() {
   const [connections, setConnections] = useState<ConnectionPublic[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
+  const guardedLoad = useGuardedLoad();
 
-  // Refetch after a mutation (delete / save). Called only from event handlers,
-  // never synchronously inside an effect — so its setState is safe.
-  const refresh = useCallback(async () => {
-    try {
-      const list = await listConnections();
-      setConnections(list);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+  // The ONE load path: the mount effect below and every post-mutation refetch
+  // (delete / save / import) go through it. That is what ORDERS them — #1062:
+  // the New connection button is not gated behind the list having arrived, so a
+  // create could complete while the initial load was still in flight, and the
+  // mount load would then land second and write the list as it was before the
+  // connection existed. `useGuardedLoad` drops the superseded answer; it also
+  // owns the AbortController that used to live in this effect, and declines to
+  // start a refresh at all once the page has unmounted.
+  //
+  // Failures are caught here rather than by the caller: a refresh failure after
+  // e.g. a create — where the form has already closed — still has to reach
+  // `loadError` instead of being swallowed by the gone form's handler. The
+  // message is the bare `err.message` this page has always shown.
+  const refresh = useCallback(
+    () =>
+      guardedLoad(listConnections, {
+        onData: (list) => {
+          setConnections(list);
+          setLoadError(null);
+        },
+        onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
+      }),
+    [guardedLoad],
+  );
 
-  // Initial load: the promise-callback form keeps setState off the synchronous
-  // effect body (React's `set-state-in-effect` guidance) and lets the cleanup
-  // abort an in-flight request on unmount.
+  // `refresh` is stable (so is the runner it closes over), so this is the
+  // initial load and nothing more.
   useEffect(() => {
-    const controller = new AbortController();
-    listConnections(controller.signal)
-      .then((list) => {
-        setConnections(list);
-        setLoadError(null);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
-      });
-    return () => controller.abort();
-  }, []);
+    void refresh();
+  }, [refresh]);
 
   /**
    * Save the connection's export envelope to disk (#959). The fetch happens

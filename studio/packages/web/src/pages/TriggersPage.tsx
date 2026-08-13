@@ -41,6 +41,7 @@ import {
 import { listAllPipelineVersions } from '../api/pipelines';
 import { runDetailPath } from './runs/runPath';
 import { pipelinePath } from './author/pipelinePath';
+import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { usePolledResource } from '../hooks/usePolledResource';
 import { readPublishState } from './pipeline/publishState';
 import { activeVersionLabel } from './pipeline/versionHistory';
@@ -216,6 +217,7 @@ export function TriggersPage() {
   // The run id of the most recent successful "Fire now", so we can offer a
   // one-click jump to its live monitor (the last step of the MVP-bar flow).
   const [watchRunId, setWatchRunId] = useState<string | null>(null);
+  const guardedLoad = useGuardedLoad();
   const [webhookSecret, setWebhookSecret] = useState<{
     triggerName: string;
     secret: string;
@@ -253,35 +255,48 @@ export function TriggersPage() {
     [],
   );
 
-  // Refetch after a mutation. Catches internally (rather than relying on a
-  // caller's try/catch) so a refresh failure after e.g. a create — where the
-  // form has already unmounted — still surfaces as `loadError` instead of being
-  // swallowed by the gone form's handler.
-  const refresh = useCallback(async () => {
-    try {
-      const list = await listTriggers();
-      setTriggers(list);
-      setLoadError(null);
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+  // The ONE load path: the mount effect below and every post-mutation refetch
+  // go through it. That is what ORDERS them — #1062: the New trigger button is
+  // not gated behind the list having arrived, so a create could complete while
+  // the initial load was still in flight, and the mount load would then land
+  // second and write the list as it was before the trigger existed.
+  //
+  // It reloads the BINDINGS as well as the triggers, and that is load-bearing
+  // rather than incidental. `useGuardedLoad`'s ticket is monotonic across every
+  // load one instance guards, so pointing it at a triggers-only refresh AND a
+  // triggers-plus-bindings mount load would make the refresh supersede the
+  // mount result WHOLE: `bindings` and `pipelines` are written nowhere else, so
+  // they would stay empty for the rest of the page's life with no retry path —
+  // every bound row reading as a raw version id, the version picker offering
+  // nothing, bind-to-active permanently disabled. One fetcher, one counter, one
+  // group of state that moves together. The cost is that each mutation re-pays
+  // `listAllPipelineVersions` (N+1 by design, at MVP scale); the gain beyond
+  // correctness is that a version minted elsewhere since mount now shows up.
+  //
+  // Failures are caught here rather than by the caller (as they were before) so
+  // a refresh failure after e.g. a create — where the form has already
+  // unmounted — still surfaces as `loadError` instead of being swallowed by the
+  // gone form's handler. Both halves land or neither does, exactly as the
+  // `Promise.all` this replaces behaved.
+  const refresh = useCallback(
+    () =>
+      guardedLoad((signal) => Promise.all([listTriggers(signal), loadBindings(signal)]), {
+        onData: ([list, opts]) => {
+          setTriggers(list);
+          setBindings(opts.options);
+          setPipelines(opts.pipelines);
+          setLoadError(null);
+        },
+        onError: (err) => setLoadError(err instanceof Error ? err.message : String(err)),
+      }),
+    [guardedLoad, loadBindings],
+  );
 
+  // `refresh` is stable (so are the runner and `loadBindings` it closes over),
+  // so this is the initial load and nothing more.
   useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([listTriggers(controller.signal), loadBindings(controller.signal)])
-      .then(([list, opts]) => {
-        setTriggers(list);
-        setBindings(opts.options);
-        setPipelines(opts.pipelines);
-        setLoadError(null);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : String(err));
-      });
-    return () => controller.abort();
-  }, [loadBindings]);
+    void refresh();
+  }, [refresh]);
 
   const labelFor = useCallback(
     (versionId: string | null): string => {

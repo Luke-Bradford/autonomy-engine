@@ -27,6 +27,12 @@ import { messageOf } from '../api/client';
  * the request was ISSUED, so the UI's "as of" is literally true even for a
  * response that was in flight across the whole hidden period.
  *
+ * NOT THE HOOK FOR A LIST THAT RELOADS AFTER A MUTATION — use `useGuardedLoad`.
+ * The two sit side by side with OPPOSITE drop rules, and picking the wrong one
+ * is silent: this hook drops the NEW load while one is in flight, which is right
+ * for a poller and exactly wrong for a post-mutation refresh, because the
+ * refresh is the load that must win. That one drops the stale ANSWER instead.
+ *
  * THE FETCHER MUST BE MEMOIZED (`useCallback`). It is a dependency of the effect
  * below, which is what makes a fetcher that closes over changed state — a new
  * window, a new filter — actually refetch rather than keep serving the old

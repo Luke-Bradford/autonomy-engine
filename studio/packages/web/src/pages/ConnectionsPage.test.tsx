@@ -38,6 +38,16 @@ vi.mock('../api/portability', async (importActual) => ({
   importEnvelope: vi.fn(),
 }));
 
+/** A promise this test resolves by hand, so a load can be held open across
+ *  other interactions and answered out of order. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 const listMock = vi.mocked(api.listConnections);
 const createMock = vi.mocked(api.createConnection);
 const updateMock = vi.mocked(api.updateConnection);
@@ -122,6 +132,37 @@ describe('ConnectionsPage', () => {
     expect(await screen.findByText('Prod key')).toBeInTheDocument();
   });
 
+  it('does not let the MOUNT load overwrite the list a create just refreshed', async () => {
+    // #1062 — the New connection button is not gated behind the list having
+    // arrived, so a create can complete while the initial load is still in
+    // flight. Without a latest-wins guard the mount load lands second and
+    // writes a list taken BEFORE the connection existed: the new row appears
+    // and then silently vanishes.
+    const user = userEvent.setup();
+    const mountLoad = deferred<ConnectionPublic[]>();
+    listMock.mockReturnValueOnce(mountLoad.promise);
+    createMock.mockResolvedValue(conn({ name: 'Prod key' }));
+    renderWithRouter(<ConnectionsPage />);
+
+    // The mount load is held open; the form is reachable regardless.
+    await user.click(screen.getByRole('button', { name: 'New connection' }));
+    await user.type(screen.getByLabelText('Name'), 'Prod key');
+    await user.type(screen.getByLabelText('Secret'), 'sk-secret');
+
+    // The post-create refresh resolves FIRST, with the connection present.
+    listMock.mockResolvedValue([conn({ name: 'Prod key' })]);
+    await user.click(screen.getByRole('button', { name: 'Create connection' }));
+    expect(await screen.findByText('Prod key')).toBeInTheDocument();
+
+    // ...and only now does the stale mount load answer, with the empty list it
+    // was always going to return.
+    mountLoad.resolve([]);
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('Prod key')).toBeInTheDocument();
+    expect(screen.queryByText(/No connections yet/i)).not.toBeInTheDocument();
+  });
+
   it('rejects invalid config JSON without calling the API', async () => {
     const user = userEvent.setup();
     renderWithRouter(<ConnectionsPage />);
@@ -177,10 +218,20 @@ describe('ConnectionsPage', () => {
     expect(body.secret).toBe('sk-new');
   });
 
-  it('threads an AbortSignal into the initial load', async () => {
+  it('threads an AbortSignal into EVERY load, the post-mutation refresh included', async () => {
+    // Both load paths share the mount controller (#1062), so a refresh left in
+    // flight when the operator navigates away is abortable too — it is not only
+    // the initial load that is.
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    listMock.mockResolvedValue([conn({ name: 'Doomed' })]);
     renderWithRouter(<ConnectionsPage />);
-    await screen.findByText(/No connections yet/i);
+    await screen.findByText('Doomed');
     expect(listMock).toHaveBeenCalledWith(expect.any(AbortSignal));
+
+    await user.click(screen.getByRole('button', { name: 'Delete Doomed' }));
+    await waitFor(() => expect(listMock).toHaveBeenCalledTimes(2));
+    expect(listMock.mock.calls[1]![0]).toEqual(expect.any(AbortSignal));
   });
 
   it('deletes a connection after confirmation', async () => {

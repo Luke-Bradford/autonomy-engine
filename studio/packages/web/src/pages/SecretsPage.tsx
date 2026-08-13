@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { formatZodIssues } from '@autonomy-studio/shared';
 import { ApiError, messageOf } from '../api/client';
 import {
@@ -8,6 +8,7 @@ import {
   listSecrets,
   type NamedSecret,
 } from '../api/secrets';
+import { useGuardedLoad } from '../hooks/useGuardedLoad';
 import { formatWhen } from './runs/format';
 
 type FormState = { name: string; secret: string };
@@ -33,85 +34,40 @@ function blankForm(): FormState {
  * `requireOwned` on delete) — this page never sends an owner, and the strict
  * write body 400s a client that tries.
  *
- * Every load goes through `load`, which is LATEST-WINS (`pipelinesStore`'s
- * `latestLoad` is the precedent). An earlier draft argued no guard was needed
- * because the only concurrent load was the mount effect, "aborted on unmount".
- * That was wrong, and cheaply so: the New secret button is not gated behind
- * the list having arrived, so an operator can create a secret while the MOUNT
- * load is still in flight. If the post-create refresh resolves first, the
- * mount load then lands and overwrites it with a list taken before the secret
- * existed — the new row appears and then silently vanishes, on the one surface
- * that exists to confirm it was stored. Two quick deletes reach the same state
- * from the other direction. `abort()` does not cover this: it fires on
- * unmount, and the component is still very much mounted.
+ * Every load goes through `refresh`, which is LATEST-WINS. This page is where
+ * that guard was first written; #1062 lifted it into `useGuardedLoad` once the
+ * same race was found on Connections and Triggers, which had copied the shape
+ * without it. The hook's docblock carries the full argument — in short, the New
+ * secret button is not gated behind the list having arrived, so an operator can
+ * create a secret while the MOUNT load is still in flight, and the mount load
+ * would then land second and overwrite it with a list taken before the secret
+ * existed.
  */
 export function SecretsPage() {
   const [secrets, setSecrets] = useState<NamedSecret[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
-  const latestLoad = useRef(0);
-  const mountAbort = useRef<AbortController | null>(null);
+  const guardedLoad = useGuardedLoad();
 
-  /**
-   * The ONE load path. Every caller takes a ticket; a response whose ticket is
-   * no longer the newest is dropped rather than written, on the failure branch
-   * as well as the success one — a stale REJECTION would otherwise replace a
-   * good list with an error banner just as convincingly.
-   */
-  const load = useCallback((signal?: AbortSignal) => {
-    const ticket = ++latestLoad.current;
-    // The promise-callback form, not `async`/`await`: it keeps every setState
-    // inside a callback rather than in the synchronous body of the mount
-    // effect below, which is what the `set-state-in-effect` rule requires.
-    return listSecrets(signal)
-      .then((list) => {
-        if (ticket !== latestLoad.current) return;
-        setSecrets(list);
-        setLoadError(null);
-      })
-      .catch((err: unknown) => {
-        if (signal?.aborted || ticket !== latestLoad.current) return;
-        setLoadError(`Could not load secrets: ${messageOf(err)}`);
-      });
-  }, []);
+  /** The ONE load path — the mount effect below and every post-mutation
+   *  refetch. The hook owns the ticket and the mount `AbortController`. */
+  const refresh = useCallback(
+    () =>
+      guardedLoad(listSecrets, {
+        onData: (list) => {
+          setSecrets(list);
+          setLoadError(null);
+        },
+        onError: (err) => setLoadError(`Could not load secrets: ${messageOf(err)}`),
+      }),
+    [guardedLoad],
+  );
 
-  // Refetch after a mutation. Called only from event handlers, never
-  // synchronously inside an effect — so its setState is safe.
-  //
-  // It shares the MOUNT's controller rather than going unguarded: an operator
-  // who deletes a secret and immediately navigates away leaves this request in
-  // flight, and its settle path would otherwise still run `setSecrets` against
-  // a component that no longer exists. React 18 makes that a no-op rather than
-  // a warning, so the cost is not a visible bug — it is that one of the two
-  // load paths is guarded and the other is not, which is exactly the kind of
-  // asymmetry the next reader has to re-derive.
-  //
-  // A NULL ref is not "no controller available", it is proof the cleanup below
-  // has already run — i.e. the component is gone. That happens whenever the
-  // mutation itself was still awaiting at unmount, so the refresh had not yet
-  // been called to capture a signal. Starting an unabortable request for a
-  // component that no longer exists is strictly worse than not starting one:
-  // there is nobody left to show the result to. So skip, rather than fall back
-  // to an unguarded load — which keeps the invariant TOTAL (no load ever runs
-  // without the mount controller) instead of true only for the timings tested.
-  const refresh = useCallback(() => {
-    const controller = mountAbort.current;
-    if (!controller) return Promise.resolve();
-    return load(controller.signal);
-  }, [load]);
-
+  // `refresh` is stable (so is the runner it closes over), so this is the
+  // initial load and nothing more.
   useEffect(() => {
-    // Created per effect RUN, not once per component: StrictMode mounts, tears
-    // down and remounts, so a controller hoisted into the ref's initial value
-    // would arrive at the second mount already aborted and fail every load.
-    const controller = new AbortController();
-    mountAbort.current = controller;
-    void load(controller.signal);
-    return () => {
-      controller.abort();
-      if (mountAbort.current === controller) mountAbort.current = null;
-    };
-  }, [load]);
+    void refresh();
+  }, [refresh]);
 
   const onDelete = useCallback(
     async (secret: NamedSecret) => {
