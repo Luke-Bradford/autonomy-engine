@@ -77,8 +77,9 @@ test.describe('#1067 — reading an edge midpoint once it has stopped moving', (
     // race would have returned" are only the same claim while the two points
     // are far apart — and a future fixture edit could quietly move them together.
     const missBy = Math.hypot(point.x - expected.fanned.x, point.y - expected.fanned.y);
-    expect(missBy, 'the helper returned the pre-move point — the settle did not hold').toBeGreaterThan(
-      10,
-    );
+    expect(
+      missBy,
+      'the helper returned the pre-move point — the settle did not hold',
+    ).toBeGreaterThan(10);
   });
 });
