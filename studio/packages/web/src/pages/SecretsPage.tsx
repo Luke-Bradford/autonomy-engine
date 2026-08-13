@@ -243,10 +243,21 @@ function SecretForm({
       // collision there is not a state a client can provoke or realistically
       // reach; treating it as the name is the right call for a message, not an
       // oversight.
+      //
+      // The case clause ILLUSTRATES the rule by contrasting two spellings, which
+      // only illustrates anything when the two spellings differ. On a name the
+      // operator already typed in lower case it degrades to «“stripe-key” and
+      // “stripe-key” are the same name» — redundant where it was meant to be
+      // explanatory. State the rule without the example in that case; the rule
+      // is what makes the conflict actionable, the example is only its garnish.
+      const lowered = form.name.toLowerCase();
+      const caseRule =
+        form.name === lowered
+          ? `Secret names ignore case.`
+          : `Secret names ignore case, so “${form.name}” and “${lowered}” are the same name.`;
       setError(
         err instanceof ApiError && err.status === 409
-          ? `A secret named “${form.name}” already exists. Secret names ignore case, so ` +
-              `“${form.name}” and “${form.name.toLowerCase()}” are the same name. ` +
+          ? `A secret named “${form.name}” already exists. ${caseRule} ` +
               `Delete the existing one to replace its value.`
           : messageOf(err),
       );

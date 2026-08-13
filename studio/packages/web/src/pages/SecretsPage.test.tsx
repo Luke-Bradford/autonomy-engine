@@ -166,8 +166,33 @@ describe('SecretsPage', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('A secret named “Stripe-Key” already exists');
-    expect(alert).toHaveTextContent(/ignore case/);
+    expect(alert).toHaveTextContent('“Stripe-Key” and “stripe-key” are the same name');
     expect(alert).not.toHaveTextContent('The request conflicts with existing data.');
+  });
+
+  it('states the case rule WITHOUT the two-spelling example when the name is already lower case', async () => {
+    // The example contrasts the typed name with its lower-cased form, so on an
+    // already-lower-case name it would read «“stripe-key” and “stripe-key” are
+    // the same name» — the sentence that is supposed to EXPLAIN the collision
+    // instead reads as a typo. The rule still has to be stated; only the
+    // example drops.
+    const user = userEvent.setup();
+    createMock.mockRejectedValue(
+      new ApiError(409, 'The request conflicts with existing data.', undefined),
+    );
+    renderWithRouter(<SecretsPage />);
+    await screen.findByText(/No secrets yet/);
+
+    await user.click(screen.getByRole('button', { name: 'New secret' }));
+    await user.type(screen.getByLabelText('Name'), 'stripe-key');
+    await user.type(screen.getByLabelText('Value'), 'sk_live_123');
+    await user.click(screen.getByRole('button', { name: 'Create secret' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('A secret named “stripe-key” already exists');
+    expect(alert).toHaveTextContent('Secret names ignore case.');
+    expect(alert).not.toHaveTextContent('are the same name');
+    expect(alert).toHaveTextContent('Delete the existing one to replace its value.');
   });
 
   it('surfaces a NON-conflict create failure as itself, not as a duplicate name', async () => {
