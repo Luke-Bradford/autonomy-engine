@@ -330,6 +330,57 @@ describe('pipelines routes', () => {
       expect(getRes.json().archived).toBe(true);
     });
 
+    /**
+     * #1058 — `GET /api/pipelines?archived=true`, the list surface that makes
+     * the way back reachable. `PaginationQuerySchema` is deliberately NOT
+     * strict (it ignores unknown keys), so this filter needs its own parse or
+     * a typo would silently return the LIVE list while reading as the archived
+     * one — the fail-open direction.
+     */
+    describe('#1058 — GET /api/pipelines?archived=true', () => {
+      it('lists exactly the archived pipelines, and the default stays live-only', async () => {
+        const live = createPipeline(app.db, { ownerId: 'local', name: 'FilterLive' });
+        const gone = createPipeline(app.db, { ownerId: 'local', name: 'FilterArchived' });
+        archivePipeline(app.db, gone.id);
+
+        const ids = async (query: string): Promise<string[]> => {
+          const res = await app.inject({ method: 'GET', url: `/api/pipelines${query}` });
+          expect(res.statusCode).toBe(200);
+          return res.json().items.map((p: { id: string }) => p.id);
+        };
+
+        const archived = await ids('?archived=true');
+        expect(archived).toContain(gone.id);
+        expect(archived).not.toContain(live.id);
+
+        // Complements, both ways — so neither reading is a superset of the other.
+        for (const q of ['', '?archived=false']) {
+          const listed = await ids(q);
+          expect(listed).toContain(live.id);
+          expect(listed).not.toContain(gone.id);
+        }
+      });
+
+      it('refuses a junk value with a 400 rather than silently listing the live set', async () => {
+        // `yes` specifically: zod 4's `z.stringbool()` ACCEPTS it as true, and
+        // `z.coerce.boolean()` maps even the string "false" to true. Both would
+        // turn a typo into a wrong-but-plausible answer.
+        for (const bad of ['yes', '1', '']) {
+          const res = await app.inject({ method: 'GET', url: `/api/pipelines?archived=${bad}` });
+          expect(res.statusCode, `archived=${bad} should be a 400`).toBe(400);
+        }
+      });
+
+      it('is owner-scoped — another owner’s archived pipeline is not listed', async () => {
+        const foreign = createPipeline(app.db, { ownerId: 'someone-else', name: 'ForeignArchived' });
+        archivePipeline(app.db, foreign.id);
+
+        const res = await app.inject({ method: 'GET', url: '/api/pipelines?archived=true' });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().items.map((p: { id: string }) => p.id)).not.toContain(foreign.id);
+      });
+    });
+
     it('is idempotent (a second archive still 200s)', async () => {
       const pipeline = createPipeline(app.db, { ownerId: 'local', name: 'ArchiveTwice' });
       const first = await app.inject({
