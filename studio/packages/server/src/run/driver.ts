@@ -1271,8 +1271,21 @@ const isTerminalRow = (status: string): boolean =>
  * This is the one producer that could append a terminal event AFTER an accepted
  * terminal event — the exact invariant `terminalFactFromLog` rests on. Keep it
  * that way.
+ *
+ * `reason` is what the appended `run.interrupted` RECORDS, and it is a parameter
+ * rather than the hardcoded `drive_failed` because #1048 gave this function a
+ * second caller with a different story: the boot sweep terminalizes a run that
+ * NEVER STARTED, where no drive existed to fail. The reason is durable and is
+ * what an operator reads off the run, so inheriting `drive_failed` there would
+ * have minted a false fact — the same objection `terminalizeUnresolvable`
+ * (`reconcile.ts`) was written to avoid. The default keeps every existing
+ * drive-path caller unchanged.
  */
-export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): void {
+export function terminalizeInterrupted(
+  deps: TerminalizeDeps,
+  runId: string,
+  reason = 'drive_failed',
+): void {
   const { db } = deps;
   const patchRow = (): void => {
     const run = getRun(db, runId);
@@ -1309,7 +1322,7 @@ export function terminalizeInterrupted(deps: TerminalizeDeps, runId: string): vo
   }
   // Non-terminal log: record the terminal fact in the LOG first (no doc
   // needed), so the log stays authoritative even if the fold below can't run.
-  const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason: 'drive_failed' };
+  const interrupted: EngineEvent = { type: 'run.interrupted', runId, reason };
   let appended: ReturnType<typeof appendEngineEvent>;
   try {
     appended = appendEngineEvent(db, interrupted, deps.bus);

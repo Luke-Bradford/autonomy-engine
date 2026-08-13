@@ -27,6 +27,7 @@ import type { RunDrives } from './drives.js';
 import {
   appendAndFold,
   appendEngineEvent,
+  hasRunStartedFact,
   loadEngineEvents,
   RunLogUnparseableError,
   terminalFactFromLog,
@@ -267,15 +268,18 @@ export interface ReconcileReport {
    *
    * EXCLUSIVITY — exact, because it is easy to state too strongly:
    *   - Exclusive of the VERDICT buckets (`resumed`/`finalized`/`resynced`/
-   *     `interrupted`/`deferred`/`sweptOrphanChildren`). Each is pushed at a
+   *     `interrupted`/`deferred`/`sweptOrphans`). Each is pushed at a
    *     `continue` or at the loop tail — i.e. only once that run's reconcile has
-   *     SUCCEEDED. `sweptOrphanChildren` (#1041) keeps the property a different
+   *     SUCCEEDED. `sweptOrphans` (#1041, #1048) keeps the property a different
    *     way, and deliberately. Stated exactly, because the loose version of this
    *     sentence claimed more than the code does: `sweepOne` reaches AT MOST one
-   *     bucket for a given run, NOT exactly one. Most of its paths report nothing
-   *     at all — a non-empty log, an absent or non-terminal parent — because those
-   *     are not orphans and there is no verdict to record. What IS guaranteed is
-   *     the exclusivity this list is about: an id in `sweptOrphanChildren` is
+   *     bucket for a given run, NOT exactly one. Several of its paths report
+   *     nothing at all — a `pending` child with a log, an absent or non-terminal
+   *     parent — because those are not orphans and there is no verdict to record.
+   *     (#1048 narrowed that list: a run whose log HAS `run.started` is no longer
+   *     a silent skip, it is delegated to `reconcileOne` and reported by whichever
+   *     VERDICT bucket that reaches. Still at most one bucket per run.) What IS
+   *     guaranteed is the exclusivity this list is about: an id in `sweptOrphans` is
    *     never also in `failed`, because the two are the arms of ONE decision, and
    *     that decision reads the row back rather than trusting the call (the
    *     terminalize can no-op silently rather than throw). An unreadable row short-
@@ -299,9 +303,9 @@ export interface ReconcileReport {
    * before this catch files anything, so the transient-only contract stays true.
    *
    * ONE producer does NOT come through that catch, and this doc would otherwise
-   * read as exhaustive: #1041's `sweepOne` pushes `orphan_child_sweep_no_op`
-   * DIRECTLY, when it terminalizes an orphaned child and the row read back says
-   * the patch did not happen. It belongs here rather than in `corrupt` on the
+   * read as exhaustive: the boot sweep's `recordSweep` (#1041, #1048) pushes
+   * `orphan_sweep_no_op` DIRECTLY, when it terminalizes an orphan — child or
+   * top-level — and the row read back says the patch did not happen. It belongs here rather than in `corrupt` on the
    * same transient/permanent test the rest of this bucket applies — the only way
    * to reach it is a read fault swallowed inside `terminalizeInterrupted` (it
    * logs and returns `void`), and a read fault is the transient class. A row that
@@ -330,20 +334,32 @@ export interface ReconcileReport {
    */
   corrupt: Array<{ runId: string; reason: string }>;
   /**
-   * #1041 — `call_pipeline` CHILD rows terminalized because nothing could ever
-   * drive them: `status: 'pending'`, a non-null `parentRunId`, an EMPTY log, and
-   * a parent that has already reached a terminal ROW status. See
-   * `sweepOrphanedChildren` for how they arise and why the predicate is what it
-   * is.
+   * Runs terminalized by the boot sweep because they NEVER STARTED (no
+   * `run.started` in the log) and nothing could ever drive them. TWO producers,
+   * and — following the `interrupted` bucket above — they are not the same story:
+   *   - #1041, a `call_pipeline` CHILD: non-null `parentRunId`, an EMPTY log, and
+   *     a parent already at a terminal ROW status, so no `startChild` can be
+   *     re-emitted; and
+   *   - #1048, a TOP-LEVEL row (`parentRunId === null`): stranded by a crash
+   *     between `createRun`/`admitQueuedRun` and its drive.
+   * See `sweepPendingRuns` for how each arises and why its predicate is what it is.
    *
    * A SEPARATE bucket rather than a fourth producer of `interrupted`, because
    * that bucket's contract is not just its count: its docblock rests on
-   * `run.interrupted.reason` telling an operator WHICH producer fired. A swept
-   * orphan has no `run.interrupted` event to carry a reason — it never started,
-   * so there is no log to record one in — and filing it there would leave an id
-   * whose reason is unreadable. The bucket name IS the reason here.
+   * `run.interrupted.reason` telling an operator WHICH producer fired.
+   *
+   * #1048 NARROWED the second half of that argument, which used to read "a swept
+   * orphan has no `run.interrupted` event to carry a reason … the bucket name IS
+   * the reason here". That is no longer true of every member: a top-level orphan
+   * whose log holds `run.triggerContext` alone is non-empty, so
+   * `terminalizeInterrupted` appends a real `run.interrupted{reason:
+   * 'never_started'}` for it. The bucket still earns its separateness on the
+   * FIRST half — an id filed under `interrupted` whose reason an operator cannot
+   * read is worse than one filed under a bucket whose name states it — but the
+   * reason is now readable for some members and absent for others, and a reader
+   * must not assume either.
    */
-  sweptOrphanChildren: string[];
+  sweptOrphans: string[];
 }
 
 /**
@@ -516,7 +532,7 @@ export function emptyReconcileReport(): ReconcileReport {
     rearmed: [],
     failed: [],
     corrupt: [],
-    sweptOrphanChildren: [],
+    sweptOrphans: [],
   };
 }
 
@@ -639,7 +655,7 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
   // It must also stay BEFORE `index.ts`'s `recoverQueued`: the sweep frees
   // per-pipeline admission slots and publishes no event, so nothing else would
   // turn them into admissions until the next boot.
-  await sweepOrphanedChildren(deps, report);
+  await sweepPendingRuns(deps, report);
 
   return report;
 }
@@ -686,34 +702,60 @@ export async function reconcileOnBoot(deps: ReconcileDeps): Promise<ReconcileRep
  * would spawn a `returnToParent` microtask per swept child at boot, each one
  * only to no-op against an already-terminal parent.
  *
+ * #1048 WIDENED THIS SWEEP FROM CHILDREN TO EVERY `pending` ROW, and replaced
+ * the "empty log" test with "no `run.started` in the log". Both halves matter:
+ *
+ *   - THE PREDICATE. `startRun` appends `run.triggerContext` BEFORE `run.started`
+ *     (#5 S12, `driver.ts`), so the crash window has THREE outcomes, not two: an
+ *     empty log, a `run.triggerContext`-only log, and a log with `run.started`.
+ *     "Non-empty log" conflates the middle one — a run that never started — with
+ *     the last. `hasRunStartedFact` is the honest test, and #443 is why it is
+ *     asked of the LOG rather than of `runs.status` (the row is the projection a
+ *     crash leaves stale; that staleness IS this defect).
+ *   - THE SCOPE. A run whose log HAS `run.started` is not an orphan at all: it is
+ *     a crash survivor whose ROW sync was lost, indistinguishable from a
+ *     `running` row except in the projection. It is handed to `reconcileOne` —
+ *     the `running` scan's own unit — so it resyncs / interrupts / resumes by the
+ *     SAME rules. Terminalizing it instead would make the verdict depend on which
+ *     sub-tick the crash landed in, which is not a semantics anyone chose.
+ *
+ * WHY A TOP-LEVEL ORPHAN NEEDS NO PARENT-EQUIVALENT GUARD. For a child, "nothing
+ * can drive this" is proven by the terminal parent. For a top-level row the same
+ * property is STRUCTURAL, not merely a fact about boot ordering — every path that
+ * drives a top-level run is barred from this one by construction:
+ *   - `launch` (`launcher.ts`) and `reseed` mint a FRESH row id and drive that;
+ *     they can never name a row already in this scan's snapshot (`listParsedRuns`
+ *     materialises its ids before the loop).
+ *   - the queue drain drives only what `admitQueuedRun` returns, and that UPDATE
+ *     is guarded `where status = 'queued'` — a row this sweep has already
+ *     terminalized fails the guard and returns `null`.
+ *   - the durable-alarm handler and the external-wait service drive a run that
+ *     ARMED an alarm/wait, which only a started run can have done — excluded by
+ *     the `run.started` test above.
+ *   - a drive genuinely in flight is excluded by the drive lock (see `sweepOne`).
+ * Boot ordering (`reconcileOnBoot` is awaited before the launcher, the queue
+ * drain and the alarm timer exist) makes this belt-and-braces rather than the
+ * argument. That distinction is deliberate: #796 falsified an
+ * ordering-only "it is provably the only pump source at boot" claim in this very
+ * file, so the guard here is written to survive a reordering.
+ *
  * DELIBERATE NON-GOALS, so the next reader does not assume wider cover:
- *   - a `pending` child with a NON-EMPTY log (a crash between `startRun`'s
- *     `run.started` append and its row sync) is stranded identically and leaks
- *     the same slot. `terminalizeInterrupted` would in fact handle it (its
- *     append-then-sync branch), so the empty-log guard is a SCOPE choice, not a
- *     correctness one — that case is a resumable run, not a never-started one,
- *     and deciding whether to resume or terminalize it is its own ticket (#1048).
- *   - a top-level (`parentRunId === null`) `pending` orphan, same ticket.
+ *   - the CHILD branch keeps #1041's EMPTY-log test rather than adopting
+ *     `hasRunStartedFact`. Not an inconsistency: a child is started with no
+ *     trigger context (`driver.ts` — "a child `call_pipeline` run passes none"),
+ *     so a `run.triggerContext`-only log is unreachable for one and the two
+ *     predicates coincide. The narrower test is kept because it is the one #1041
+ *     proved safe against a concurrent `kick`.
  *   - a child whose parent ROW is missing entirely: left alone. An absent parent
  *     is unreadable state, not a terminal fact, and #646's posture for
  *     unreadable state is to leave it for attention rather than mint a verdict.
+ *   - a boot with NO executor: a started-but-unsynced run routed to
+ *     `reconcileOne` lands in `deferred` and stays `pending`, so its slot is
+ *     freed on the next executor-bearing boot rather than this one.
  */
-async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileReport): Promise<void> {
-  for (const child of listParsedRuns(
-    deps.db,
-    { status: 'pending' },
-    reportUnparseableRow(report),
-  )) {
-    const parentRunId = child.parentRunId;
-    // TYPE-NARROWING first, behaviour second, and worth saying which: removing
-    // this line does not change what the sweep does (a `null` id finds no row,
-    // so the `parent === null` skip below catches it anyway) — it is here so
-    // `sweepOne` can take a `string`, and it saves a pointless read per
-    // top-level `pending` row. The top-level case is a stated non-goal above.
-    if (parentRunId === null) continue;
-    await underFaultBoundary(deps, report, child.id, () =>
-      sweepOne(deps, report, child, parentRunId),
-    );
+async function sweepPendingRuns(deps: ReconcileDeps, report: ReconcileReport): Promise<void> {
+  for (const run of listParsedRuns(deps.db, { status: 'pending' }, reportUnparseableRow(report))) {
+    await underFaultBoundary(deps, report, run.id, () => sweepOne(deps, report, run));
   }
 }
 
@@ -729,13 +771,47 @@ async function sweepOrphanedChildren(deps: ReconcileDeps, report: ReconcileRepor
  * starting anything (its log-only check could not see a row patch that appends
  * no event).
  */
-async function sweepOne(
-  deps: ReconcileDeps,
-  report: ReconcileReport,
-  child: Run,
-  parentRunId: string,
-): Promise<void> {
-  if (loadEngineEvents(deps.db, child.id).length > 0) return;
+async function sweepOne(deps: ReconcileDeps, report: ReconcileReport, run: Run): Promise<void> {
+  const events = loadEngineEvents(deps.db, run.id);
+
+  // #1048 — the run STARTED; only its row sync was lost. Not an orphan: a crash
+  // survivor, and `reconcileOne` is the `running` scan's unit for exactly that.
+  // It re-reads the log itself (a second load, accepted: the alternative is
+  // widening its signature to take events it would otherwise own, and at this
+  // scale one extra read per stranded row is not worth that coupling).
+  //
+  // A CHILD lands here too, terminal parent or not, and that is a decision with
+  // a cost worth naming: resuming it re-dispatches real, billable activities
+  // whose `returnToParent` will no-op against an already-terminal parent. It is
+  // taken because the `running` scan ALREADY resumes a `running` child of a
+  // terminal parent — it applies no parent test — so freezing one here would
+  // make the verdict turn on which sub-tick the crash hit. Whether a
+  // crash-surviving child of a dead parent should be resumed AT ALL is a real
+  // question, but it is the `running` scan's question first and is filed
+  // separately rather than answered asymmetrically here.
+  if (hasRunStartedFact(events)) {
+    await reconcileOne(deps, report, run);
+    return;
+  }
+
+  // #1048 — a TOP-LEVEL row that never started. No parent exists to key the
+  // "nothing will ever drive this" test on, and none is needed: every driver of
+  // a top-level run is structurally barred from this row (see `sweepPendingRuns`).
+  if (run.parentRunId === null) {
+    // `never_started` rather than `terminalizeInterrupted`'s `drive_failed`
+    // default — no drive existed to fail. Written only when the log is non-empty
+    // (a `run.triggerContext`-only strand); an empty log takes that function's
+    // row-patch branch, which appends nothing at all.
+    terminalizeInterrupted(deps, run.id, 'never_started');
+    recordSweep(deps, report, run.id);
+    return;
+  }
+  const parentRunId = run.parentRunId;
+
+  // #1041's CHILD branch, predicate unchanged. The empty-log test rather than
+  // `hasRunStartedFact` above: for a child the two coincide (no trigger context),
+  // and this is the one proved safe against a concurrent `kick`.
+  if (events.length > 0) return;
 
   // The PARENT row is arbitrary stored state THIS scan never parsed (it selects
   // `pending`, and an orphaning parent is terminal), so this read must classify
@@ -764,21 +840,31 @@ async function sweepOne(
   });
   if (parent === null || !TERMINAL_RUN_ROW_STATUS.has(parent.status)) return;
 
-  terminalizeInterrupted(deps, child.id);
+  terminalizeInterrupted(deps, run.id, 'never_started');
+  recordSweep(deps, report, run.id);
+}
 
-  // `terminalizeInterrupted` returns void and SWALLOWS a read fault (it logs and
-  // returns), and `ReconcileDeps` deliberately carries no logger — so a silent
-  // no-op would otherwise be reported here as a sweep that happened. Report what
-  // the row actually says, not what was attempted.
-  //
-  // UNGUARDED, unlike the parent read above: this run IS the one the fault
-  // boundary is keyed on, so it already classifies a throw here correctly and
-  // under the right id. Only the parent needed a local reader.
-  const swept = getRun(deps.db, child.id);
+/**
+ * Report what the ROW actually says after a sweep, not what was attempted.
+ *
+ * `terminalizeInterrupted` returns void and SWALLOWS a read fault (it logs and
+ * returns), and `ReconcileDeps` deliberately carries no logger — so without this
+ * re-read a silent no-op would be reported as a sweep that happened.
+ *
+ * UNGUARDED, unlike `sweepOne`'s parent read: the run being swept IS the id the
+ * fault boundary is keyed on, so it already classifies a throw here correctly and
+ * under the right id. Only the parent needed a local reader.
+ *
+ * Shared by both producers (#1048) rather than duplicated per branch — the
+ * verify-then-report step is the same obligation whichever predicate reached it,
+ * and the `failed` reason stays one string so a boot log stays greppable.
+ */
+function recordSweep(deps: ReconcileDeps, report: ReconcileReport, runId: string): void {
+  const swept = getRun(deps.db, runId);
   if (swept !== null && TERMINAL_RUN_ROW_STATUS.has(swept.status)) {
-    report.sweptOrphanChildren.push(child.id);
+    report.sweptOrphans.push(runId);
   } else {
-    report.failed.push({ runId: child.id, reason: 'orphan_child_sweep_no_op' });
+    report.failed.push({ runId, reason: 'orphan_sweep_no_op' });
   }
 }
 
@@ -913,6 +999,17 @@ export async function reconcileOne(
   // A re-sync, not an assertion: `pending` is a LEGITIMATE state, so syncing the
   // row to it is the truthful verdict. Throwing instead would file a healthy row
   // under `failed`.
+  //
+  // #1048 — WHAT HAPPENS NEXT, because this branch now has a successor and the
+  // two must not be read as contradicting each other. `sweepPendingRuns` runs
+  // AFTER this scan and takes its OWN snapshot, so a row this branch writes back
+  // to `pending` is picked up by it, found to hold no `run.started`, and — if it
+  // is top-level — terminalized in the SAME boot. That is not this branch being
+  // overruled. `pending` is the truthful answer to "what does the log project
+  // to"; `interrupted` is the truthful answer to "can anything ever drive this",
+  // a different question and the one the admission-slot leak turns on. Such a run
+  // therefore appears in `resynced` AND in `sweptOrphans` — the one documented
+  // case of a single run reaching two verdict buckets in one report.
   //
   // Pinned by the two `run.started`-less tests in `reconcile.test.ts`, which
   // fail if this branch is removed — so it cannot bit-rot silently.
