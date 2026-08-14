@@ -30,7 +30,7 @@
  * be tracked, which is the problem this is here to remove.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,15 +40,82 @@ const SERVICE_REPO = join(SERVICE_HOME, 'repo');
 const SERVICE_STUDIO = join(SERVICE_REPO, 'studio');
 const BUILT_SHA = join(SERVICE_HOME, 'built.sha');
 const LAUNCHD_LABEL = 'com.autonomy.studio-server';
+/** Held for the duration of a refresh — see `withLock`. */
+const REFRESH_LOCK = join(SERVICE_HOME, 'refresh.lock');
 /** The address the launchd plist binds. Stated here so `status` can probe it. */
 const SERVICE_URL = 'http://127.0.0.1:8788';
 
+/**
+ * A failure this script REPORTS, as against one it lets escape as a stack trace.
+ *
+ * The whole value of these two commands is that they say what happened; a raw
+ * `execFileSync` throw prints a spawn trace with the command buried in it, which
+ * is worse than the four manual steps this replaces.
+ */
+class ServiceError extends Error {}
+
 function run(cmd, args, cwd) {
-  return execFileSync(cmd, args, {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+  try {
+    return execFileSync(cmd, args, {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (err) {
+    /* `stderr` is where git and pnpm say what is actually wrong; the Error's own
+       message is only ever "Command failed". */
+    const detail = String(err.stderr ?? '').trim() || err.message;
+    throw new ServiceError(`${cmd} ${args.join(' ')} failed:\n${detail}`);
+  }
+}
+
+/**
+ * Run `body` holding an exclusive lock, so two refreshes cannot overlap.
+ *
+ * NOT paranoia: `refresh` runs `pnpm install` and `pnpm build` against one
+ * directory, and two of those at once corrupt `node_modules` and `dist` in ways
+ * that surface later as an unrelated-looking build failure. The second caller is
+ * already foreseeable — #1080's applet exposes Refresh as a menu item, next to a
+ * human who can also run `pnpm service:refresh`.
+ *
+ * `wx` is the mutex: an exclusive create is atomic, so the loser of a race gets
+ * `EEXIST` rather than both proceeding. The PID is written INTO the lock so a
+ * stale one — a refresh killed mid-build, which leaves the file behind — can be
+ * told from a live one and taken over, rather than wedging every future refresh
+ * until someone deletes a file they have never heard of.
+ */
+async function withLock(body) {
+  try {
+    writeFileSync(REFRESH_LOCK, `${String(process.pid)}\n`, { flag: 'wx' });
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    const holder = Number(readFileSync(REFRESH_LOCK, 'utf8').trim());
+    if (Number.isInteger(holder) && holder > 0 && alive(holder)) {
+      throw new ServiceError(
+        `another refresh is already running (pid ${String(holder)}).\n` +
+          `Wait for it, or if it is gone: rm ${REFRESH_LOCK}`,
+      );
+    }
+    console.log(`taking over a stale lock from pid ${readFileSync(REFRESH_LOCK, 'utf8').trim()}`);
+    writeFileSync(REFRESH_LOCK, `${String(process.pid)}\n`);
+  }
+  try {
+    return await body();
+  } finally {
+    rmSync(REFRESH_LOCK, { force: true });
+  }
+}
+
+/** Whether a pid is still around. `signal 0` tests without delivering anything. */
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    /* EPERM means it exists and belongs to someone else — still alive, and still
+       a reason not to run a second build over the top of it. */
+    return err.code === 'EPERM';
+  }
 }
 
 /** What the RUNNING process says about itself — the only authority on "served". */
@@ -109,6 +176,10 @@ async function refresh() {
     console.error(`no service installed at ${SERVICE_REPO}`);
     return 1;
   }
+  return withLock(doRefresh);
+}
+
+async function doRefresh() {
   /* A DIRTY CHECKOUT IS A REFUSAL, not something to fast-forward over. Anything
      uncommitted there was put there by a person, and a `git checkout main` on
      top of it is the destructive move this repo has already paid for twice. */
@@ -120,7 +191,18 @@ async function refresh() {
 
   console.log('fetching…');
   run('git', ['fetch', 'origin', '--quiet'], SERVICE_REPO);
-  run('git', ['switch', 'main'], SERVICE_REPO);
+  /* `switch main` assumes a LOCAL main exists, and it need not: a detached HEAD
+     from a previous manual intervention is exactly the state someone reaches for
+     this command in, and there it threw a spawn trace instead of the reported
+     failure every other path here gives. `-c … --track` creates it from the
+     remote the first time; plain `switch` is used once it exists so the tracking
+     branch is never silently re-pointed. */
+  const hasMain = run('git', ['branch', '--list', 'main'], SERVICE_REPO) !== '';
+  run(
+    'git',
+    hasMain ? ['switch', 'main'] : ['switch', '-c', 'main', '--track', 'origin/main'],
+    SERVICE_REPO,
+  );
   /* `--ff-only`: the service tracks main and never merges. A refresh that needed
      a merge commit would mean the checkout had diverged, which is a thing to
      look at, not to resolve automatically. */
@@ -164,10 +246,18 @@ async function refresh() {
 }
 
 const [, , command = 'status'] = process.argv;
-const exit =
-  command === 'refresh'
-    ? await refresh()
-    : command === 'status'
-      ? await status()
-      : (console.error(`unknown command '${command}' — use status or refresh`), 1);
+let exit = 1;
+try {
+  exit =
+    command === 'refresh'
+      ? await refresh()
+      : command === 'status'
+        ? await status()
+        : (console.error(`unknown command '${command}' — use status or refresh`), 1);
+} catch (err) {
+  /* A REPORTED failure prints its message; anything else is a bug in this
+     script and keeps its stack, because that is what a stack is for. */
+  if (err instanceof ServiceError) console.error(`\n  ! ${err.message}`);
+  else throw err;
+}
 process.exit(exit);
