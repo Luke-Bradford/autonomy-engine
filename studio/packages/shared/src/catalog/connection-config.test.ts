@@ -5,8 +5,10 @@ import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
   agentConnectionConfigSchema,
+  connectionConfigAdvisory,
   connectionConfigSchema,
   fsConnectionConfigSchema,
+  looksAbsolutePath,
 } from './connection-config.js';
 
 describe('connection config catalog', () => {
@@ -53,6 +55,39 @@ describe('connection config catalog', () => {
     // package, so this schema owns the SHAPE and `connectors/fs.ts` refines it.
     // Asserted rather than left implicit: if someone later adds the check here,
     // the server's refine becomes dead code and this says where to look.
+    // The form is NOT left blind by this — `connectionConfigAdvisory` below
+    // carries the warning that the schema cannot.
     expect(fsConnectionConfigSchema.safeParse({ roots: ['relative/path'] }).success).toBe(true);
+  });
+
+  describe('connectionConfigAdvisory', () => {
+    it('says nothing about a config the kind accepts', () => {
+      expect(connectionConfigAdvisory('fs', { roots: ['/tmp'] })).toBeNull();
+      expect(connectionConfigAdvisory('agent_cli', { command: 'claude' })).toBeNull();
+    });
+
+    it('reports what the schema refuses', () => {
+      expect(connectionConfigAdvisory('agent_cli', {})).toMatch(/command/);
+    });
+
+    it('reports a RELATIVE fs root, which the shared schema cannot', () => {
+      // The whole reason this function exists rather than a bare `safeParse`:
+      // the absolute-root check is the server's (`node:path`), so without this
+      // clause the one path-safety-relevant key in the catalog would be the
+      // only one the form said nothing about.
+      expect(fsConnectionConfigSchema.safeParse({ roots: ['relative/path'] }).success).toBe(true);
+      expect(connectionConfigAdvisory('fs', { roots: ['relative/path'] })).toMatch(
+        /every fs root must be an absolute path \(relative\/path\)/,
+      );
+    });
+
+    it('never warns about a path the server would accept', () => {
+      // Permissive on purpose — a false alarm is worse than a quiet miss here,
+      // because the server check runs regardless.
+      expect(looksAbsolutePath('/var/tmp')).toBe(true);
+      expect(looksAbsolutePath('C:\\Users\\me')).toBe(true);
+      expect(looksAbsolutePath('relative/path')).toBe(false);
+      expect(looksAbsolutePath('./relative')).toBe(false);
+    });
   });
 });

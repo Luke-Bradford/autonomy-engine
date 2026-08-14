@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CONNECTION_KINDS,
   CONNECTION_SECRET_USE,
+  connectionConfigAdvisory,
   connectionConfigSchema,
   connectionKindRequiresSecret,
   formatZodIssues,
@@ -358,8 +359,11 @@ function ConnectionForm({
       if (!assembled.ok) return null; // the per-field message already says this
       candidate = assembled.owned;
     }
-    const parsed = connectionConfigSchema(form.kind).safeParse(candidate);
-    return parsed.success ? null : formatZodIssues(parsed.error.issues);
+    // The kind's own rules, INCLUDING the ones its shared schema cannot carry:
+    // `fs`'s absolute-root check lives in the server adapter (`node:path`), so
+    // a schema-only advisory would say nothing about the one path-safety key in
+    // the catalog — the exact silent-until-dispatch failure this ticket ends.
+    return connectionConfigAdvisory(form.kind, candidate);
   }, [jsonMode, form.config, form.jsonText, form.kind, form.inputs, fields]);
 
   /** Switch kinds WITHOUT discarding anything typed or stored. */

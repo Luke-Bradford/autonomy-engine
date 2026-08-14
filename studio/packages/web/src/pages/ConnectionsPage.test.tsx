@@ -335,6 +335,23 @@ describe('ConnectionsPage', () => {
     expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
   });
 
+  it('warns about a RELATIVE fs root, which the shared schema does not refuse', async () => {
+    const user = userEvent.setup();
+    listMock.mockResolvedValue([
+      conn({ name: 'Fs rel', kind: 'fs', config: { roots: ['relative/path'] } }),
+    ]);
+    renderWithRouter(<ConnectionsPage />);
+    await screen.findByText('Fs rel');
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const form = screen.getByRole('form', { name: 'Connection form' });
+    // The absolute-root check is the SERVER's (`node:path`), so a schema-only
+    // advisory would say nothing about the one path-safety key in the catalog.
+    expect(within(form).getByText(/every fs root must be an absolute path/)).toBeInTheDocument();
+    // Still advisory: the server stores this row today.
+    expect(within(form).getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
   it('edits a connection and leaves the secret blank by default', async () => {
     const user = userEvent.setup();
     listMock.mockResolvedValue([conn({ name: 'Editable' })]);

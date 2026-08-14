@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MAX_RETRY_INTERVAL_SECONDS } from '../schemas/pipeline.js';
+import { formatZodIssues } from '../schemas/zod-issues.js';
 import { ConnectionKindSchema, type ConnectionKind } from '../schemas/connection.js';
 import { AGENT_TASK_ACTIVITY_TYPE, LLM_CALL_ACTIVITY_TYPE } from './types.js';
 
@@ -369,6 +370,58 @@ export const CONNECTION_SECRET_USE: Record<ConnectionKind, string> = {
   http: 'Sent as an `Authorization: Bearer` header, under any header the request sets itself.',
   fs: 'Not used by this kind — an fs connection is credential-less; `roots` is its guard.',
 };
+
+/**
+ * Advisory-only: does this look like an absolute path?
+ *
+ * NOT the authority — `connectors/fs.ts` runs `node:path`'s platform-aware
+ * `isAbsolute` and that is what actually refuses a dispatch. This exists so the
+ * authoring form can WARN about a relative root, which the shared schema
+ * deliberately cannot (see this module's docblock).
+ *
+ * Deliberately PERMISSIVE: it accepts a Windows drive prefix as well as a
+ * POSIX leading slash, so it never warns about a path the server would accept.
+ * An advisory that cries wolf is worse than one that occasionally stays quiet —
+ * the server check is still there either way.
+ */
+export function looksAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+/**
+ * What a kind's own rules say about a config, as ONE operator-facing string —
+ * or `null` when there is nothing to say.
+ *
+ * Advisory, never a gate: `routes/connections.ts` runs no per-kind validation,
+ * so every shape this reports is one the server stores TODAY. It exists so the
+ * authoring form can say it BEFORE dispatch rather than after.
+ *
+ * Lives here rather than in the form because it is the schema's own knowledge,
+ * and because the `fs` clause below is the OTHER HALF of the divergence this
+ * module documents: the shared schema cannot carry the absolute-root check, so
+ * without this the one path-safety-relevant key in the whole catalog would be
+ * the only one the form said nothing about.
+ */
+export function connectionConfigAdvisory(
+  kind: ConnectionKind,
+  config: Record<string, unknown>,
+): string | null {
+  const notes: string[] = [];
+
+  const parsed = CONNECTION_CONFIG_SCHEMAS[kind].safeParse(config);
+  if (!parsed.success) notes.push(formatZodIssues(parsed.error.issues));
+
+  if (kind === 'fs' && Array.isArray(config.roots)) {
+    const relative = config.roots.filter(
+      (root): root is string => typeof root === 'string' && !looksAbsolutePath(root),
+    );
+    if (relative.length > 0) {
+      notes.push(`roots: every fs root must be an absolute path (${relative.join(', ')})`);
+    }
+  }
+
+  return notes.length === 0 ? null : notes.join('; ');
+}
 
 /** The connection-config schema for `kind`. Total over the kind enum. */
 export function connectionConfigSchema(kind: ConnectionKind): z.ZodObject {
