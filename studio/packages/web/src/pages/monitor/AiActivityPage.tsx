@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import {
   type AiActivitySnapshot,
+  type ExternalAgentActivity,
   type LiveRunCounts,
   type RunSince,
 } from '@autonomy-studio/shared';
@@ -10,6 +11,7 @@ import { costFigure, costHeadline, tokenSummary } from '../runs/costReading';
 import { RUN_SINCE_LABEL, RUN_SINCE_OPTIONS, isRunSince } from '../runs/runFilters';
 import { formatElapsed, formatWhen } from '../runs/format';
 import { TokenFlowChart } from './TokenFlowChart';
+import { reportedActivitySummary, reportedTokenSummary } from './reportedActivity';
 import {
   QUOTA_STALE_AFTER_MS,
   formatPct,
@@ -243,9 +245,90 @@ function QuotaPanel() {
   );
 }
 
+/**
+ * #988 — what agents studio did NOT launch have reported.
+ *
+ * A section of its own, below studio's own figures and summed into none of
+ * them. The separation is the point of the ticket: the panel above meters
+ * pipeline runs studio dispatched, so it read `0` while the autonomy loop that
+ * builds studio was spending the operator's weekly window — honest numbers about
+ * a scope nothing on the page had stated.
+ */
+function ReportedActivityPanel({ external }: { external: ExternalAgentActivity }) {
+  return (
+    <section aria-labelledby="reported-activity-heading" className="reported-activity">
+      <h3 id="reported-activity-heading">Reported by external agents</h3>
+
+      {external.invocations === 0 ? (
+        /* Not merely "nothing here": an empty section on a monitoring page reads
+           as "nothing is happening", and the whole defect was a reader drawing
+           exactly that conclusion from a number that meant something narrower.
+           So the empty state states the SCOPE and the mechanism — studio is told,
+           it does not look. */
+        <p className="notice">
+          No external agent has reported activity in this window. Agents studio did not launch — the
+          autonomy build loop, or any other CLI running beside it — report in through{' '}
+          <code>POST /api/monitor/external-activity</code>; studio does not watch processes it did
+          not start.
+        </p>
+      ) : (
+        <>
+          <p className="reported-activity-summary">{reportedActivitySummary(external)}</p>
+          <table className="ai-model-table">
+            <caption className="visually-hidden">
+              Reported invocations by source, agent and model
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Source</th>
+                <th scope="col">Agent</th>
+                <th scope="col">Model</th>
+                <th scope="col">Invocations</th>
+                <th scope="col">Running</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Last started</th>
+              </tr>
+            </thead>
+            <tbody>
+              {external.reporters.map((r) => (
+                <tr key={`${r.source}/${r.agent}/${r.model ?? ''}`}>
+                  <td>{r.source}</td>
+                  <td>{r.agent}</td>
+                  {/* A model the reporter did not name is said to be unknown, never
+                      blanked: an empty cell reads as "no model", which is a claim. */}
+                  <td>{r.model ?? 'not reported'}</td>
+                  <td>{r.invocations}</td>
+                  <td>{r.inFlight}</td>
+                  <td>{reportedTokenSummary(r.tokens, r.invocations)}</td>
+                  <td>{formatWhen(r.lastAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {external.truncated && (
+            /* The counts above are computed ungrouped, so they still describe the
+               whole window — only the breakdown is a prefix. Said out loud
+               because a silently-cut table reads as the complete picture. */
+            <p className="notice">
+              Showing the busiest reporters only; the figures above cover every reporter in this
+              window.
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
-  const { models, totals, agentCli, runs } = snapshot;
-  const nothing = models.length === 0 && agentCli.invocations === 0;
+  const { models, totals, agentCli, runs, external } = snapshot;
+  /* #988 — reported activity counts toward "did anything happen". Without it
+     this notice claims the window was idle while the reported table below it
+     lists live invocations — the ticket's own symptom in a second form. The
+     CHART and the model table stay gated on the metered rows alone (below):
+     they plot billed exchanges, and reported work contributes none. */
+  const nothing = models.length === 0 && agentCli.invocations === 0 && external.invocations === 0;
+  const noMeteredActivity = models.length === 0 && agentCli.invocations === 0;
 
   return (
     <>
@@ -293,16 +376,22 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
         </div>
       </dl>
 
-      {nothing ? (
+      {nothing && (
         <p role="status" className="notice">
           No AI or agent activity in this window.
         </p>
-      ) : (
+      )}
+
+      {!noMeteredActivity && (
         <>
-          {/* Inside the SAME `nothing` guard as the table, deliberately: a
-              window with no activity would otherwise render a row of zero-height
-              bars on a baseline, which states "no tokens" where the notice
-              states "nothing happened" — and those are different claims. */}
+          {/* Gated on the METERED rows, not on `nothing`, deliberately: a window
+              with no activity would otherwise render a row of zero-height bars on
+              a baseline, which states "no tokens" where the notice states
+              "nothing happened" — and those are different claims. #988 split the
+              two guards because reported activity now makes the notice false
+              without making this chart any less empty: reported work is billed to
+              no connection and plots no bar, so drawing a flat axis beside a
+              table of live invocations would be that same false "no tokens". */}
           <TokenFlowChart
             series={snapshot.series}
             windowStart={snapshot.windowStart}
@@ -355,6 +444,8 @@ function ActivityPanel({ snapshot }: { snapshot: AiActivitySnapshot }) {
           </>
         )}
       </p>
+
+      <ReportedActivityPanel external={external} />
     </>
   );
 }
@@ -396,9 +487,15 @@ export function AiActivityPage() {
         </label>
       </div>
 
+      {/* #988 — the scope is now STATED. This page read "AI activity" and meant
+          "AI activity studio itself dispatched", which is a narrower claim than
+          its own title, and an operator watching the autonomy loop fire read the
+          resulting zeros as "nothing is happening anywhere". Naming the actor is
+          the fix; the section at the bottom is where everything else reports. */}
       <p className="page-hint">
-        What your connected AIs and agent CLIs have actually been doing, across every run —
-        including runs still in flight. Refreshes itself every few seconds.
+        What your connected AIs and agent CLIs have been doing in THIS workspace's runs — including
+        runs still in flight. Agents studio did not launch report in separately, below. Refreshes
+        itself every few seconds.
       </p>
 
       {error !== null && (

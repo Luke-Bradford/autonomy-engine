@@ -2563,6 +2563,16 @@ EOF
   quota_poll_memo_clear
   log "fire $fires exited $rc"
 
+  # #988 -- tell studio what this fire spent. `/monitor/ai` can only see AI use
+  # studio itself dispatched, so the operator's one monitoring page read all
+  # zeros while this loop was burning their weekly window. The loop reports IN;
+  # studio never reaches out to inspect processes it did not launch.
+  #
+  # BEST-EFFORT and structurally unable to fail the loop: the script returns 0 on
+  # every path, and this call is `|| true` anyway. A monitoring nicety must never
+  # be able to stop the loop from engineering (the rule `board.sh` already holds).
+  bash "$INFRA/report_fire_usage.sh" >/dev/null 2>&1 || true
+
   if [ "$rc" != "0" ]; then
     # LIMIT vs BREAK: a usage/rate limit is a PAUSE (back off, retry -- never a
     # stop); a non-limit failure with auth good is a real BREAK (count it).

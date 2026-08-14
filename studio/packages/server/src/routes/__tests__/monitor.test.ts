@@ -185,3 +185,112 @@ describe('GET /api/monitor/ai-activity', () => {
     expect(body.runs).toEqual({ pending: 0, queued: 0, running: 0, waiting: 0 });
   });
 });
+
+/**
+ * #988 — `POST /api/monitor/external-activity`, the ingest seam.
+ *
+ * The repo suite owns the merge/window/retention arithmetic; these own the
+ * ROUTE's decisions: what it refuses, what status it answers, and that a report
+ * reaches the read surface without being folded into studio's own figures.
+ */
+describe('POST /api/monitor/external-activity', () => {
+  const body = (over: Record<string, unknown> = {}) => ({
+    source: 'studio-build-loop',
+    externalId: 'fire-77',
+    agent: 'claude',
+    startedAt: Date.now() - 60_000,
+    ...over,
+  });
+
+  const post = async (app: FastifyInstance, payload: Record<string, unknown>) =>
+    await app.inject({ method: 'POST', url: '/api/monitor/external-activity', payload });
+
+  it('answers 201 on first sight and 200 on a re-report of the same invocation', async () => {
+    const { app } = await makeApp();
+
+    const first = await post(app, body());
+    const second = await post(app, body({ endedAt: Date.now(), outcome: 'completed' }));
+
+    expect(first.statusCode).toBe(201);
+    expect(first.json().created).toBe(true);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().created).toBe(false);
+    // One row, not two — the id is the proof, not merely the count.
+    expect(second.json().id).toBe(first.json().id);
+  });
+
+  it('reaches the read surface without being summed into studio’s own figures', async () => {
+    const { app } = await makeApp();
+    await post(app, body({ inputTokens: 11, outputTokens: 22 }));
+
+    const res = await app.inject({ method: 'GET', url: '/api/monitor/ai-activity' });
+    const snapshot = AiActivitySnapshotSchema.parse(res.json());
+
+    expect(snapshot.external.invocations).toBe(1);
+    expect(snapshot.external.inFlight).toBe(1);
+    expect(snapshot.external.tokens.inputTokens).toBe(11);
+    // THE separation this ticket turns on: reported tokens are not studio spend.
+    expect(snapshot.totals.inputTokens).toBe(0);
+    expect(snapshot.totals.responseCount).toBe(0);
+    expect(snapshot.models).toEqual([]);
+    expect(snapshot.agentCli.invocations).toBe(0);
+  });
+
+  it('refuses a source or agent that is not a slug', async () => {
+    const { app } = await makeApp();
+
+    // A newline would break the row it renders into; a leading dot is not a name.
+    expect((await post(app, body({ source: 'build\nloop' }))).statusCode).toBe(400);
+    expect((await post(app, body({ agent: '.claude' }))).statusCode).toBe(400);
+    expect((await post(app, body({ source: 'studio-build-loop.2_a' }))).statusCode).toBe(201);
+  });
+
+  it('refuses an invocation that ended before it started', async () => {
+    const { app } = await makeApp();
+    const startedAt = Date.now();
+
+    const res = await post(app, body({ startedAt, endedAt: startedAt - 1, outcome: 'completed' }));
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  /**
+   * A settled outcome with no end stamp is a contradiction, and refusing it is
+   * what lets `endedAt === null` be the single trustworthy in-flight signal.
+   */
+  it('refuses a settled outcome with no end stamp', async () => {
+    const { app } = await makeApp();
+
+    expect((await post(app, body({ outcome: 'completed' }))).statusCode).toBe(400);
+    expect((await post(app, body({ outcome: 'unknown' }))).statusCode).toBe(201);
+  });
+
+  it('refuses an unknown field rather than silently dropping it', async () => {
+    const { app } = await makeApp();
+
+    // `.strict()` — a reporter sending `cost` must be told studio does not take
+    // it, not have it quietly discarded.
+    expect((await post(app, body({ costUsd: 1.23 }))).statusCode).toBe(400);
+  });
+
+  /**
+   * An unbounded future start stamp is a row that is INVISIBLE (the window
+   * excludes anything starting after now) yet occupies the table — and one that
+   * keeps being re-reported never expires either.
+   */
+  it('refuses a start stamp far in the future, while tolerating real clock skew', async () => {
+    const { app } = await makeApp();
+
+    const skewed = await post(app, body({ externalId: 'skewed', startedAt: Date.now() + 60_000 }));
+    const absurd = await post(app, body({ externalId: 'absurd', startedAt: Date.now() + 864e5 }));
+
+    expect(skewed.statusCode).toBe(201);
+    expect(absurd.statusCode).toBe(400);
+  });
+
+  it('refuses a negative token count', async () => {
+    const { app } = await makeApp();
+
+    expect((await post(app, body({ inputTokens: -1 }))).statusCode).toBe(400);
+  });
+});

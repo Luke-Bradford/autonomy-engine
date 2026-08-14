@@ -135,6 +135,14 @@ jobs:
         # fixture driver outlived its case (#821) -- a leak is now RED, not silent.
         run: bash loop/test_quota_guard.sh
 
+      - name: Fire-usage reporter tests
+        # #988. Sources the REAL reporter and drives it against fixture fire
+        # logs with `curl` stubbed to capture the body, so it makes no network
+        # call and spends no tokens. Its cases are mostly REFUSALS and NULLs: a
+        # reporter that always produces a confident number is the bug, since
+        # zeros for unmeasured work are what this whole surface refuses.
+        run: bash loop/test_report_fire_usage.sh
+
       - name: Studio-server LaunchAgent installer tests
         # Sources the REAL installer and asserts on the plist it renders. HOME is
         # redirected to a temp dir and launchctl/pnpm/git/curl are PATH stubs, so

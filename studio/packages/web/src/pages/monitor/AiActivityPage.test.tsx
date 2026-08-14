@@ -1,6 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import type { AiActivitySnapshot, RunCost, TokenSeriesBucket } from '@autonomy-studio/shared';
+import type {
+  AiActivitySnapshot,
+  ExternalAgentActivity,
+  ExternalReporterActivity,
+  RunCost,
+  TokenSeriesBucket,
+} from '@autonomy-studio/shared';
 import * as monitorApi from '../../api/monitor';
 import { AiActivityPage } from './AiActivityPage';
 
@@ -30,6 +36,51 @@ function cost(over: Partial<RunCost> = {}): RunCost {
   };
 }
 
+/** #988 — reported external activity, defaulting to "nobody reported anything". */
+function externalActivity(over: Partial<ExternalAgentActivity> = {}): ExternalAgentActivity {
+  return {
+    invocations: 0,
+    completed: 0,
+    notCompleted: 0,
+    unknown: 0,
+    inFlight: 0,
+    lastAt: null,
+    tokens: {
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      measuredInvocations: 0,
+    },
+    truncated: false,
+    reporters: [],
+    ...over,
+  };
+}
+
+/** One reported (source, agent, model) group. */
+function reporter(over: Partial<ExternalReporterActivity> = {}): ExternalReporterActivity {
+  return {
+    source: 'studio-build-loop',
+    agent: 'claude',
+    model: 'claude-opus-5',
+    invocations: 1,
+    completed: 1,
+    notCompleted: 0,
+    unknown: 0,
+    inFlight: 0,
+    lastAt: 1_785_999_000_000,
+    tokens: {
+      inputTokens: 12,
+      outputTokens: 34,
+      cacheReadTokens: 56,
+      cacheCreationTokens: 78,
+      measuredInvocations: 1,
+    },
+    ...over,
+  };
+}
+
 function snapshot(over: Partial<AiActivitySnapshot> = {}): AiActivitySnapshot {
   return {
     generatedAt: 1_786_000_000_000,
@@ -38,6 +89,7 @@ function snapshot(over: Partial<AiActivitySnapshot> = {}): AiActivitySnapshot {
     runs: { pending: 0, queued: 0, running: 0, waiting: 0 },
     models: [],
     agentCli: { invocations: 0, completed: 0, notCompleted: 0, lastAt: null },
+    external: externalActivity(),
     totals: cost(),
     series: { bucketMs: 300_000, buckets: [] },
     ...over,
@@ -728,6 +780,211 @@ describe('AiActivityPage', () => {
       await waitFor(() => expect(screen.getByText('gpt-5')).toBeTruthy());
       const row = screen.getByText('gpt-5').closest('tr');
       expect(row?.textContent).toContain('4,000 in · output not reported');
+    });
+  });
+
+  /**
+   * #988 — activity REPORTED BY agents studio did not launch. The page metered
+   * only studio's own pipeline runs, so it read all zeros while the autonomy
+   * build loop was mid-fire; these pin the section that closes that, and the
+   * scope wording that makes the numbers above it honest.
+   */
+  describe('reported external activity', () => {
+    it('explains the ingest seam rather than leaving the section blank', async () => {
+      activityMock.mockResolvedValue(snapshot());
+
+      render(<AiActivityPage />);
+
+      await waitFor(() =>
+        expect(screen.getByText(/No external agent has reported activity/)).toBeInTheDocument(),
+      );
+      // An empty monitoring section reads as "nothing is happening ANYWHERE",
+      // which is the misreading this ticket is about — so it must state the
+      // direction: studio is told, it does not look.
+      const notice = screen.getByText(/No external agent has reported activity/);
+      expect(notice.textContent).toContain('does not watch processes it did not start');
+    });
+
+    it('renders a reported group with its source, agent, model and tokens', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 1,
+            completed: 1,
+            reporters: [reporter()],
+            tokens: {
+              inputTokens: 12,
+              outputTokens: 34,
+              cacheReadTokens: 56,
+              cacheCreationTokens: 78,
+              measuredInvocations: 1,
+            },
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() => expect(screen.getByText('studio-build-loop')).toBeInTheDocument());
+      const row = screen.getByText('studio-build-loop').closest('tr');
+      expect(row?.textContent).toContain('claude-opus-5');
+      expect(row?.textContent).toContain('12 in · 34 out · 56 cached');
+    });
+
+    /**
+     * THE ticket's symptom in its second form. The window notice was gated on
+     * the metered rows alone, so a window whose only AI use was reported would
+     * have declared itself idle directly above a table of live invocations.
+     */
+    it('does not call the window idle when only external activity was reported', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 2,
+            inFlight: 1,
+            unknown: 1,
+            completed: 1,
+            reporters: [reporter({ invocations: 2, inFlight: 1, unknown: 1 })],
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() => expect(screen.getByText('studio-build-loop')).toBeInTheDocument());
+      expect(screen.queryByText('No AI or agent activity in this window.')).toBeNull();
+    });
+
+    /**
+     * The live answer leads. "Is my agent working right now" is the question the
+     * section was added for, so a summary opening with a historical count would
+     * bury it.
+     */
+    it('leads with what is running now, and states the whole partition', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 3,
+            completed: 1,
+            notCompleted: 1,
+            unknown: 1,
+            inFlight: 1,
+            reporters: [reporter({ invocations: 3, completed: 1, notCompleted: 1, unknown: 1 })],
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText(
+            '1 of 3 reported invocations running now — 1 completed, 1 did not, 1 unknown.',
+          ),
+        ).toBeInTheDocument(),
+      );
+    });
+
+    it('reads unmeasured reported tokens as not reported, never as a zero', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 1,
+            unknown: 1,
+            inFlight: 1,
+            reporters: [
+              reporter({
+                completed: 0,
+                unknown: 1,
+                inFlight: 1,
+                tokens: {
+                  inputTokens: null,
+                  outputTokens: null,
+                  cacheReadTokens: null,
+                  cacheCreationTokens: null,
+                  measuredInvocations: 0,
+                },
+              }),
+            ],
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() => expect(screen.getByText('studio-build-loop')).toBeInTheDocument());
+      const row = screen.getByText('studio-build-loop').closest('tr');
+      // The exact short reading, not merely a substring: 'input not reported ·
+      // output not reported' would also contain 'not reported' while proving the
+      // collapse never happened.
+      expect(row?.textContent).toContain('not reported');
+      expect(row?.textContent).not.toContain('input not reported');
+      expect(row?.textContent).not.toContain('0 in');
+    });
+
+    it('says the breakdown is a prefix when the server truncated it', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 99,
+            completed: 99,
+            truncated: true,
+            reporters: [reporter({ invocations: 99, completed: 99 })],
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() =>
+        expect(screen.getByText(/Showing the busiest reporters only/)).toBeInTheDocument(),
+      );
+    });
+
+    /**
+     * #28 in the prevention log: a signal must NAME the actor it measures. The
+     * page said "AI activity" and meant "AI activity studio dispatched".
+     */
+    it('states whose activity the figures above cover', async () => {
+      activityMock.mockResolvedValue(snapshot());
+
+      render(<AiActivityPage />);
+
+      await waitFor(() => expect(screen.getByText(/in THIS workspace's runs/)).toBeInTheDocument());
+    });
+    /**
+     * A group is MANY invocations, so "some reported" is a state a single row
+     * cannot have. Two of five fires reporting tokens must not render as a
+     * confident total for all five.
+     */
+    it('says how many of a group’s invocations were measured when only some were', async () => {
+      activityMock.mockResolvedValue(
+        snapshot({
+          external: externalActivity({
+            invocations: 5,
+            completed: 5,
+            reporters: [
+              reporter({
+                invocations: 5,
+                completed: 5,
+                tokens: {
+                  inputTokens: 12,
+                  outputTokens: 34,
+                  cacheReadTokens: null,
+                  cacheCreationTokens: null,
+                  measuredInvocations: 2,
+                },
+              }),
+            ],
+          }),
+        }),
+      );
+
+      render(<AiActivityPage />);
+
+      await waitFor(() => expect(screen.getByText('studio-build-loop')).toBeInTheDocument());
+      const row = screen.getByText('studio-build-loop').closest('tr');
+      expect(row?.textContent).toContain('2 of 5 measured');
     });
   });
 });

@@ -38,6 +38,18 @@ cd "$REPO" || { echo "FATAL: worktree $REPO missing" >>"$LOG" 2>&1; exit 1; }
 echo "=== studio-build-loop fire $TS START (repo=$REPO) ===" >>"$LOG"
 git fetch origin --quiet >>"$LOG" 2>&1
 
+# #988 -- announce the fire to studio BEFORE it runs. A fire takes up to ~90
+# minutes, and `/monitor/ai` can only show what it has been told, so reporting
+# only on the way out would leave the operator's one monitoring page blank for
+# the whole time the loop is spending their weekly window -- which is exactly
+# the symptom #988 was filed about. This is the ONLY place that knows the fire's
+# id before the fire: `$TS` names the log `drive.sh` reports the totals for
+# afterwards, and both reports carry it, so studio sees one invocation.
+#
+# BEST-EFFORT: the script returns 0 on every path and this is `|| true` besides.
+# A monitoring nicety must never be able to stop a fire.
+bash "$INFRA/report_fire_usage.sh" --start "$LOG" >/dev/null 2>&1 || true
+
 claude -p "$(cat "$PROMPT")" \
   --model opus \
   --effort high \

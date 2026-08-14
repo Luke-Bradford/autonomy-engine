@@ -3,6 +3,7 @@ import {
   runCostFromAggregates,
   type AgentCliActivity,
   type AiModelActivity,
+  type ExternalAgentActivity,
   type LiveRunCounts,
   type MeteredAggregates,
   type RunCost,
@@ -10,6 +11,7 @@ import {
 } from '@autonomy-studio/shared';
 import { runEvents, runs } from '../db/schema.js';
 import { meteredAggregateColumns } from './run-events.js';
+import { aggregateExternalAgentActivity } from './external-agent-activity.js';
 import { LIVE_RUN_STATUSES } from './runs.js';
 import type { Db } from './types.js';
 
@@ -60,6 +62,9 @@ export interface AiActivityFilter {
 export interface AiActivityAggregate {
   models: AiModelActivity[];
   agentCli: AgentCliActivity;
+  /** #988 — AI use REPORTED BY agents studio did not launch. Read in the SAME
+   * snapshot as everything else here, and deliberately summed into nothing. */
+  external: ExternalAgentActivity;
   totals: RunCost;
   runs: LiveRunCounts;
   series: TokenSeries;
@@ -206,9 +211,20 @@ export function aggregateAiActivity(db: Db, filter: AiActivityFilter): AiActivit
       .groupBy(bucketStartExpr(filter.bucketMs, lastBucketStart(filter)))
       .all();
 
+    // (E) #988 — activity REPORTED BY agents studio did not launch. Read from
+    // the SAME transaction as (A)-(D) so the reported section and studio's own
+    // figures describe one instant, and summed into NONE of them: see
+    // `ExternalAgentActivitySchema` for why reported tokens are not studio spend.
+    const external = aggregateExternalAgentActivity(tx, {
+      sinceMs: filter.sinceMs,
+      nowMs: filter.nowMs,
+      ownerId: filter.ownerId,
+    });
+
     return {
       models,
       agentCli,
+      external,
       totals: runCostFromAggregates(summed),
       runs: runCounts,
       series: buildSeries(bucketRows, filter),

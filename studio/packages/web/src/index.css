@@ -3097,6 +3097,20 @@ td button + button {
   margin-top: 0.75rem;
 }
 
+/* #988 — the reported-activity section. Set apart from studio's own figures by
+   a rule rather than by a heading alone: the whole defect was a reader taking
+   one panel's numbers to cover everything, so the boundary between "what studio
+   ran" and "what reported in" should be visible, not merely stated. */
+.reported-activity {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.reported-activity-summary {
+  color: var(--muted);
+}
+
 .ai-window-picker {
   color: var(--muted);
   font-size: 0.9rem;
